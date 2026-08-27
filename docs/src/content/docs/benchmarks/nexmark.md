@@ -29,3 +29,5 @@ Run the Docker-backed integration profile with:
 ```shell
 mvn -pl streamfusion-nexmark-benchmarks -am -Pbenchmark-integration verify
 ```
+
+The benchmark is intentionally opt-in and does not run in the normal pull-request or push workflow. It provisions Kafka and runs both engines, so it should be invoked for deliberate performance and integration validation rather than for unrelated changes.

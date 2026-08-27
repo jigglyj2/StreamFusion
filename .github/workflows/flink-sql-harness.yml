@@ -41,7 +41,7 @@ jobs:
           -am
 
       - name: Run StreamFusion SQL parity harness
-        run: mvn --batch-mode --update-snapshots verify
+        run: mvn --batch-mode --update-snapshots --threads 1C verify
 
       - name: Download the Flink runner distribution
         shell: bash
@@ -55,9 +55,3 @@ jobs:
 
       - name: Submit a job with the installed StreamFusion JAR
         run: dev/integration/run-flink-runner-test.sh "$FLINK_RUNNER_HOME"
-
-      - name: Run Kafka-in/Kafka-out Nexmark integration
-        run: >-
-          mvn --batch-mode --update-snapshots -pl streamfusion-nexmark-benchmarks -am
-          -Pbenchmark-integration -Dit.test=LocalNexmarkBenchmarkIT
-          -Dsurefire.skipAfterFailureCount=1 verify
