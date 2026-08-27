@@ -39,6 +39,18 @@ the handoff between adjacent native operators must not serialize or copy whole b
 An operator may allocate output buffers when its computation inherently requires them.
 Cross the JVM/native boundary only at the edges of the fused native plan.
 
+"Fused" means one native plan with zero-copy handoff, not kernel fusion or concurrent
+mutation of a batch. Follow Comet's vectorized execution model: each DataFusion physical
+operator consumes an Arrow batch and completes its operation before the next operator
+consumes the resulting batch (for example, calc -> calc -> calc). Keep operator stages
+independently observable and testable.
+
+Build the native physical-plan and expression tree on the Java planner side and encode
+it as a versioned Protocol Buffers contract for Rust to decode and lower to DataFusion,
+following Comet's operator protobuf model. Protobuf is the control/plan format; Arrow C
+Data/C Stream remains the batch transport. Reject unknown or semantically unsupported
+messages with an EXPLAIN fallback reason rather than approximating Flink behavior.
+
 Account all StreamFusion native memory, including DataFusion and custom Rust data
 structures, through Flink's existing managed/off-heap memory model. StreamFusion must
 not introduce a separate deployment-time memory budget: existing Flink TaskManager
@@ -64,6 +76,12 @@ batches through JNI or Java. Never expose Rust's unstable ABI across module boun
 ## Testing Guidelines
 
 Exact byte to byte parity with Flink's result set is paramount. Add our own tests to ensure this, use normal Flink processing when we can't achieve it. Hook into existing Flink SQL targets where possible.
+
+Every operator, expression, connector, and execution-boundary implementation must add
+StreamFusion-owned generated parity tests that run identical inputs through Flink and
+StreamFusion and compare the complete changelog byte-for-byte. Also run the corresponding
+Flink SQL harness tests wherever they can exercise the changed behavior. Generated parity
+tests supplement upstream Flink coverage; neither test layer replaces the other.
 
 The Kafka-in/Kafka-out, exactly-once Nexmark comparison against unmodified Flink is
 our north-star benchmark. Optimize its four state-backend/mini-batch cases while

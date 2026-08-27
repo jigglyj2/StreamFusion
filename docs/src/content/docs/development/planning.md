@@ -32,6 +32,43 @@ StreamFusion follows the execution shape used by Apache DataFusion Comet:
 
 This is a **zero-copy handoff** guarantee between adjacent Rust operators. It is not a claim that every operator is allocation-free: a projection can often reuse input arrays, while a sort, join, aggregation, or computed expression may necessarily create new output buffers. What is forbidden is serialization, RowData conversion, or defensive copying merely to pass an existing Arrow batch from one native operator to the next.
 
+Here, **fused** describes the shared native plan boundary; it does not mean kernel
+fusion or concurrent operations over one batch. StreamFusion follows Comet's
+vectorized model. Each physical operator consumes a batch and completes before its
+parent consumes the output: a chain of three calc nodes remains calc → calc → calc.
+The stages use ordinary DataFusion execution operators and remain separately visible
+for metrics, diagnostics, and parity tests.
+
+## Protobuf plan handoff
+
+StreamFusion follows Comet's split between plan transport and data transport. The Java
+planner constructs a typed tree of native operators, expressions, schemas, and semantic
+options, serializes that tree with Protocol Buffers, and passes the bytes to the native
+runtime. Rust decodes the message and lowers each node to a DataFusion `ExecutionPlan`
+or a custom StreamFusion operator.
+
+Only the root of a connected native block needs to carry the serialized tree. The
+protobuf schema is a versioned compatibility contract, not a serialization of Flink or
+DataFusion implementation classes. Every field that affects Flink semantics—types,
+nullability, overflow and error behavior, time zones, collations, changelog mode, and
+operator-specific options—must be represented explicitly. Rust must reject an unknown
+version, operator, expression, enum, or required semantic option; the Java planner then
+keeps the whole plan on Flink and reports the reason through EXPLAIN.
+
+Protocol Buffers carries control data only. Arrow C Data and C Stream interfaces carry
+runtime batches, so plan serialization does not introduce a per-batch Java/native copy.
+
+The initial implementation order is deliberately narrow:
+
+1. identity calc, proving protobuf, JNI, Arrow, lifecycle, and byte parity end to end;
+2. column selection and reordering;
+3. boolean filtering with SQL null semantics;
+4. literals and individually allow-listed scalar expressions.
+
+Unsupported expressions reject the calc and therefore the complete plan. More complex
+stateless operators come only after this path passes generated parity cases and the
+corresponding Flink SQL harness coverage.
+
 ## Eligibility algorithm
 
 The planner walks the complete candidate plan and records a StreamFusion implementation or a rejection reason for every node:
