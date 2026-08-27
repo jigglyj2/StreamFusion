@@ -71,7 +71,13 @@ realignment into its C Data import path. StreamFusion uses Arrow 59 or newer and
 tests alignment explicitly because allocator and vector layouts remain cross-language
 contracts.
 
-The RowData-to-Arrow materializer and Arrow-backed RowData view must share this
+The first fixed-width implementation follows PyFlink's `ArrowReader`: a reusable
+`ColumnarRowData` selects a row ID over a `VectorizedColumnBatch`, whose Flink column
+vectors directly read Arrow vectors. This avoids allocating a Java row for every
+native result. Its current JNI adapter explicitly materializes a zero-offset `int[]`;
+that copy is transitional and will be replaced by Arrow C Data import/export.
+
+The RowData-to-Arrow materializer and Arrow-backed RowData view share this
 normalization layer. Tests cover non-zero-offset fixed-width, UTF-8/binary, list, map,
 struct, nullable, dictionary, and decimal arrays, and verify that every producer release
 callback runs exactly once.

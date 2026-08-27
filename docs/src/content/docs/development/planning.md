@@ -18,7 +18,7 @@ Sources and sinks are the only boundary exceptions. A connector may eventually s
 
 Creating this Java view must not copy row payloads. A native boundary implementation may still need to materialize Arrow column buffers once when a source is genuinely row-based—row and column memory layouts cannot be relabeled into one another. If a connector already owns Arrow-compatible columnar buffers, its view should import or retain those buffers instead. The sink side follows the inverse ownership protocol through the same boundary abstraction.
 
-The runtime view implementation, Arrow materialization, memory ownership, batching, changelog handling, and checkpoint integration remain TODO. Consequently, no production SQL plan is accelerated yet.
+The first `INT` boundary now follows PyFlink's lightweight model: `ColumnarRowData` moves a reusable row index over Flink column vectors backed by Arrow vectors. It proves batching, row-view behavior, changelog-kind preservation, and native calc execution. General type coverage, managed-memory allocation, Arrow C Data ownership, and checkpoint-aware native state remain TODO.
 
 ## Native batch pipeline
 
@@ -60,9 +60,9 @@ runtime batches, so plan serialization does not introduce a per-batch Java/nativ
 
 The initial implementation order is deliberately narrow:
 
-1. identity calc, proving protobuf, JNI, Arrow, lifecycle, and byte parity end to end;
-2. column selection and reordering;
-3. boolean filtering with SQL null semantics;
+1. integer projection and `>=` filtering, proving protobuf, JNI, Arrow row views, lifecycle, and byte parity end to end;
+2. column selection and reordering across general schemas;
+3. boolean filtering with complete SQL null semantics;
 4. literals and individually allow-listed scalar expressions.
 
 Unsupported expressions reject the calc and therefore the complete plan. More complex
@@ -93,7 +93,7 @@ Operator rejections:
 - StreamExecGroupAggregate [INTERNAL]: retractable SUM is not implemented
 ```
 
-The plan-level reason explains why acceleration was rejected. Each operator-level entry identifies the Flink operator that could not be replaced and gives its specific reason. Until Flink-plan conversion is connected to the new eligibility model, live SQL explanations state that conversion, boundary views, and native Arrow materialization are not implemented.
+The plan-level reason explains why acceleration was rejected. Each operator-level entry identifies the Flink operator that could not be replaced and gives its specific reason. The current live explanation is still conservative and reports fallback while operator-level eligibility diagnostics are being connected to physical translation. Tests therefore prove acceleration with an execution counter in addition to byte parity; plan text is not used as proof.
 
 ## Flink runner integration test
 
@@ -105,4 +105,4 @@ flink run -t local \
   streamfusion-flink-runner-tests.jar
 ```
 
-The submitted job executes SQL and fails unless exactly one StreamFusion planner was created and that planner translated the job. This tests process classloading and JAR installation in addition to SQL behavior. Future integration artifacts—native libraries, connector JARs, and more complex submitted jobs—belong in this same runner-level path.
+The submitted job executes an integer filter/projection and fails unless exactly one StreamFusion planner was created, the planner translated the job, and at least one DataFusion calc batch executed through JNI. This tests process classloading, native-library packaging, and JAR installation in addition to result behavior. Future integration artifacts—connector JARs and more complex submitted jobs—belong in this same runner-level path.
