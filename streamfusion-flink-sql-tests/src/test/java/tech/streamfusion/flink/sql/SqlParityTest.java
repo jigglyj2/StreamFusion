@@ -63,6 +63,19 @@ class SqlParityTest {
         assertParity(BATCH_SQL, false);
     }
 
+    @Test
+    void explainStatesWhyCurrentPlanFallsBack() {
+        System.setProperty(
+                StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY, StreamFusionPlannerFactory.class.getName());
+        TableEnvironment tableEnvironment = TableEnvironment.create(EnvironmentSettings.inStreamingMode());
+
+        assertThat(tableEnvironment.explainSql(STREAMING_CALC_SQL))
+                .contains("== StreamFusion Acceleration ==")
+                .contains("Accelerated: no")
+                .contains("Flink plan conversion to StreamFusion physical operators is not implemented")
+                .contains("RowData-to-Arrow and Arrow-to-RowData transposes are TODO skeletons");
+    }
+
     @ParameterizedTest(name = "{0}")
     @MethodSource("streamingSqlCases")
     void acceleratedStreamingExecutionMatchesFlinkByteForByte(String ignoredName, String sql) throws Exception {

@@ -51,7 +51,7 @@ final class StreamFusionPlanner implements Planner {
 
     @Override
     public String explain(List<Operation> operations, ExplainFormat format, ExplainDetail... extraDetails) {
-        return delegate.explain(operations, format, extraDetails);
+        return appendCurrentPlanningStatus(delegate.explain(operations, format, extraDetails));
     }
 
     @Override
@@ -73,7 +73,7 @@ final class StreamFusionPlanner implements Planner {
 
     @Override
     public String explainPlan(InternalPlan plan, ExplainDetail... extraDetails) {
-        return delegate.explainPlan(plan, extraDetails);
+        return appendCurrentPlanningStatus(delegate.explainPlan(plan, extraDetails));
     }
 
     static int translatedPlanCount() {
@@ -82,5 +82,18 @@ final class StreamFusionPlanner implements Planner {
 
     static void resetMetrics() {
         TRANSLATED_PLANS.set(0);
+    }
+
+    private static String appendCurrentPlanningStatus(String flinkExplanation) {
+        return flinkExplanation
+                + System.lineSeparator()
+                + System.lineSeparator()
+                + "== StreamFusion Acceleration =="
+                + System.lineSeparator()
+                + "Accelerated: no"
+                + System.lineSeparator()
+                + "Plan reason: Flink plan conversion to StreamFusion physical operators is not implemented."
+                + System.lineSeparator()
+                + "Boundary reason: RowData-to-Arrow and Arrow-to-RowData transposes are TODO skeletons.";
     }
 }
