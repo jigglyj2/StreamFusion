@@ -20,6 +20,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import java.util.stream.Stream;
 import org.apache.flink.api.common.RuntimeExecutionMode;
 import org.apache.flink.configuration.ExecutionOptions;
@@ -102,14 +105,23 @@ class SqlParityTest {
         try (CloseableIterator<Row> rows = result.collect();
                 ByteArrayOutputStream bytes = new ByteArrayOutputStream();
                 DataOutputStream output = new DataOutputStream(bytes)) {
+            List<byte[]> encodedRows = new ArrayList<>();
             while (rows.hasNext()) {
                 Row resultRow = rows.next();
                 byte[] row = (resultRow.getKind().shortString() + resultRow).getBytes(StandardCharsets.UTF_8);
+                encodedRows.add(row);
+            }
+            encodedRows.sort(SqlParityTest::compareUnsigned);
+            for (byte[] row : encodedRows) {
                 output.writeInt(row.length);
                 output.write(row);
             }
             output.flush();
             return bytes.toByteArray();
         }
+    }
+
+    private static int compareUnsigned(byte[] left, byte[] right) {
+        return Arrays.compareUnsigned(left, right);
     }
 }
