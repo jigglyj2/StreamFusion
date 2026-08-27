@@ -20,6 +20,7 @@ import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
+import tech.streamfusion.proto.plan.v1.ComparisonOperator;
 
 /** Reflection entry point called by the small Flink planner patch for eligible calc nodes. */
 public final class StreamFusionCalcTranslator {
@@ -37,11 +38,9 @@ public final class StreamFusionCalcTranslator {
 
         List<Integer> inputIndexes =
                 projections.stream().map(StreamFusionCalcTranslator::inputIndex).collect(Collectors.toList());
-        Integer conditionInputIndex =
-                condition == null ? null : inputIndex(((List<?>) invoke(condition, "getOperands")).get(0));
-        Integer minimum = minimumValue(condition, conditionInputIndex == null ? -1 : conditionInputIndex);
+        StreamFusionIntComparison comparison = comparison(condition);
         StreamFusionIdentityCalcOperator operator =
-                new StreamFusionIdentityCalcOperator(inputType, outputType, inputIndexes, conditionInputIndex, minimum);
+                new StreamFusionIdentityCalcOperator(inputType, outputType, inputIndexes, comparison);
         OneInputTransformation<RowData, RowData> transformation = new OneInputTransformation<>(
                 input,
                 "streamfusion-identity-calc",
@@ -76,14 +75,9 @@ public final class StreamFusionCalcTranslator {
         if (condition == null) {
             return true;
         }
-        List<?> operands = (List<?>) invoke(condition, "getOperands");
-        if (operands.size() != 2) {
-            return false;
-        }
-        int conditionInputIndex = inputIndex(operands.get(0));
-        return conditionInputIndex >= 0
-                && inputType.getTypeAt(conditionInputIndex).getTypeRoot() == LogicalTypeRoot.INTEGER
-                && minimumValue(condition, conditionInputIndex) != null;
+        StreamFusionIntComparison comparison = comparison(condition);
+        return comparison != null
+                && inputType.getTypeAt(comparison.inputIndex()).getTypeRoot() == LogicalTypeRoot.INTEGER;
     }
 
     private static boolean isSupportedProjectionType(LogicalTypeRoot type) {
@@ -94,19 +88,57 @@ public final class StreamFusionCalcTranslator {
                 || type == LogicalTypeRoot.VARCHAR;
     }
 
-    private static Integer minimumValue(Object condition, int inputIndex) {
+    private static StreamFusionIntComparison comparison(Object condition) {
         if (condition == null) {
             return null;
         }
-        if (!"GREATER_THAN_OR_EQUAL".equals(invoke(condition, "getKind").toString())) {
+        ComparisonOperator operator =
+                comparisonOperator(invoke(condition, "getKind").toString());
+        if (operator == null) {
             return null;
         }
         List<?> operands = (List<?>) invoke(condition, "getOperands");
-        if (operands.size() != 2 || inputIndex(operands.get(0)) != inputIndex) {
+        if (operands.size() != 2) {
             return null;
         }
-        Object value = invoke(operands.get(1), "getValueAs", Class.class, Integer.class);
+        int leftInput = inputIndex(operands.get(0));
+        int rightInput = inputIndex(operands.get(1));
+        Integer leftLiteral = integerLiteral(operands.get(0));
+        Integer rightLiteral = integerLiteral(operands.get(1));
+        if (leftInput >= 0 && rightLiteral != null) {
+            return new StreamFusionIntComparison(leftInput, rightLiteral, operator, true);
+        }
+        if (rightInput >= 0 && leftLiteral != null) {
+            return new StreamFusionIntComparison(rightInput, leftLiteral, operator, false);
+        }
+        return null;
+    }
+
+    private static Integer integerLiteral(Object expression) {
+        if (!expression.getClass().getSimpleName().equals("RexLiteral")) {
+            return null;
+        }
+        Object value = invoke(expression, "getValueAs", Class.class, Integer.class);
         return value instanceof Integer ? (Integer) value : null;
+    }
+
+    private static ComparisonOperator comparisonOperator(String kind) {
+        switch (kind) {
+            case "EQUALS":
+                return ComparisonOperator.COMPARISON_OPERATOR_EQUAL;
+            case "NOT_EQUALS":
+                return ComparisonOperator.COMPARISON_OPERATOR_NOT_EQUAL;
+            case "LESS_THAN":
+                return ComparisonOperator.COMPARISON_OPERATOR_LESS_THAN;
+            case "LESS_THAN_OR_EQUAL":
+                return ComparisonOperator.COMPARISON_OPERATOR_LESS_THAN_OR_EQUAL;
+            case "GREATER_THAN":
+                return ComparisonOperator.COMPARISON_OPERATOR_GREATER_THAN;
+            case "GREATER_THAN_OR_EQUAL":
+                return ComparisonOperator.COMPARISON_OPERATOR_GREATER_THAN_OR_EQUAL;
+            default:
+                return null;
+        }
     }
 
     private static int inputIndex(Object expression) {

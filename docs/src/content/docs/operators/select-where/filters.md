@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-**Current status:** One integer comparison shape is accelerated.
+**Current status:** Simple integer comparisons are accelerated.
 
 ## SQL example
 
@@ -17,10 +17,11 @@ WHERE id >= 100;
 
 ## Acceleration and fallback
 
-The supported predicate is `INT_COLUMN >= INTEGER_LITERAL`. The filtered column does
-not need to appear in the projection. A null input produces SQL unknown and is removed
-by `WHERE`, matching Flink. Other comparisons, compound boolean predicates, functions,
-and non-integer operands currently fall back to Flink.
+The supported predicates are `=`, `<>`, `<`, `<=`, `>`, and `>=` between an `INT`
+column and an integer literal. Either operand order is accepted, and the filtered column
+does not need to appear in the projection. A null input produces SQL unknown and is
+removed by `WHERE`, matching Flink. Column-to-column comparisons, compound boolean
+predicates, functions, and non-integer operands currently fall back to Flink.
 
 ## Implementation
 

@@ -98,6 +98,36 @@ fn create_expression(
                 )?,
             )))
         }
+        Some(proto::expression::Expression::Comparison(comparison)) => {
+            let operator = match comparison.operator() {
+                proto::ComparisonOperator::Equal => Operator::Eq,
+                proto::ComparisonOperator::NotEqual => Operator::NotEq,
+                proto::ComparisonOperator::LessThan => Operator::Lt,
+                proto::ComparisonOperator::LessThanOrEqual => Operator::LtEq,
+                proto::ComparisonOperator::GreaterThan => Operator::Gt,
+                proto::ComparisonOperator::GreaterThanOrEqual => Operator::GtEq,
+                proto::ComparisonOperator::Unspecified => {
+                    return Err(DataFusionError::Plan(
+                        "comparison operator is unspecified".to_string(),
+                    ));
+                }
+            };
+            Ok(Arc::new(BinaryExpr::new(
+                create_expression(
+                    comparison.left.as_ref().ok_or_else(|| {
+                        DataFusionError::Plan("comparison left operand is empty".to_string())
+                    })?,
+                    schema,
+                )?,
+                operator,
+                create_expression(
+                    comparison.right.as_ref().ok_or_else(|| {
+                        DataFusionError::Plan("comparison right operand is empty".to_string())
+                    })?,
+                    schema,
+                )?,
+            )))
+        }
         None => Err(DataFusionError::Plan("expression is empty".to_string())),
     }
 }

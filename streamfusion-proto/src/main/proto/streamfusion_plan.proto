@@ -32,6 +32,7 @@ message Expression {
     InputReference input_reference = 1;
     IntegerLiteral integer_literal = 2;
     GreaterThanOrEqual greater_than_or_equal = 3;
+    Comparison comparison = 4;
   }
 }
 
@@ -42,6 +43,22 @@ message IntegerLiteral {
 message GreaterThanOrEqual {
   Expression left = 1;
   Expression right = 2;
+}
+
+message Comparison {
+  Expression left = 1;
+  Expression right = 2;
+  ComparisonOperator operator = 3;
+}
+
+enum ComparisonOperator {
+  COMPARISON_OPERATOR_UNSPECIFIED = 0;
+  COMPARISON_OPERATOR_EQUAL = 1;
+  COMPARISON_OPERATOR_NOT_EQUAL = 2;
+  COMPARISON_OPERATOR_LESS_THAN = 3;
+  COMPARISON_OPERATOR_LESS_THAN_OR_EQUAL = 4;
+  COMPARISON_OPERATOR_GREATER_THAN = 5;
+  COMPARISON_OPERATOR_GREATER_THAN_OR_EQUAL = 6;
 }
 
 message InputReference {

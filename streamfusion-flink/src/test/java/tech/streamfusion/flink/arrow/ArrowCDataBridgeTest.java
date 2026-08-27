@@ -26,6 +26,8 @@ import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.VarCharType;
 import org.junit.jupiter.api.Test;
 import tech.streamfusion.proto.plan.v1.Calc;
+import tech.streamfusion.proto.plan.v1.Comparison;
+import tech.streamfusion.proto.plan.v1.ComparisonOperator;
 import tech.streamfusion.proto.plan.v1.EmptyType;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.GreaterThanOrEqual;
@@ -67,6 +69,20 @@ class ArrowCDataBridgeTest {
         }
     }
 
+    @Test
+    void executesGenericEqualityThroughTheCDataBoundary() {
+        RowType rowType = RowType.of(new IntType(false));
+        List<RowData> rows = List.of(GenericRowData.of(1), GenericRowData.of(2), GenericRowData.of(3));
+
+        try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+                ArrowRowDataBatch input = ArrowRowDataBatch.transpose(rows, rowType, allocator);
+                ArrowRowDataBatch output = ArrowCDataBridge.execute(
+                        comparisonPlan(ComparisonOperator.COMPARISON_OPERATOR_EQUAL), input, rowType, allocator)) {
+            assertThat(output.size()).isOne();
+            assertThat(output.rowView(0).getInt(0)).isEqualTo(2);
+        }
+    }
+
     private static GenericRowData row(int id, String text, long decimal, String arrayValue) {
         return GenericRowData.of(
                 id,
@@ -93,6 +109,33 @@ class ArrowCDataBridgeTest {
                                 .setRight(Expression.newBuilder()
                                         .setIntegerLiteral(
                                                 IntegerLiteral.newBuilder().setValue(minimum)))))
+                .build();
+        return NativePlan.newBuilder()
+                .setProtocolVersion(1)
+                .setRoot(Operator.newBuilder().setCalc(calc))
+                .build()
+                .toByteArray();
+    }
+
+    private static byte[] comparisonPlan(ComparisonOperator operator) {
+        LogicalType integer = LogicalType.newBuilder()
+                .setNullable(false)
+                .setInteger(EmptyType.getDefaultInstance())
+                .build();
+        Expression reference = Expression.newBuilder()
+                .setInputReference(InputReference.newBuilder().setIndex(0).setType(integer))
+                .build();
+        Expression literal = Expression.newBuilder()
+                .setIntegerLiteral(IntegerLiteral.newBuilder().setValue(2))
+                .build();
+        Calc calc = Calc.newBuilder()
+                .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
+                .addProjections(reference)
+                .setCondition(Expression.newBuilder()
+                        .setComparison(Comparison.newBuilder()
+                                .setLeft(reference)
+                                .setRight(literal)
+                                .setOperator(operator)))
                 .build();
         return NativePlan.newBuilder()
                 .setProtocolVersion(1)

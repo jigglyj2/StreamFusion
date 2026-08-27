@@ -23,9 +23,9 @@ import org.apache.flink.types.RowKind;
 import tech.streamfusion.flink.arrow.ArrowCDataBridge;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.proto.plan.v1.Calc;
+import tech.streamfusion.proto.plan.v1.Comparison;
 import tech.streamfusion.proto.plan.v1.EmptyType;
 import tech.streamfusion.proto.plan.v1.Expression;
-import tech.streamfusion.proto.plan.v1.GreaterThanOrEqual;
 import tech.streamfusion.proto.plan.v1.Input;
 import tech.streamfusion.proto.plan.v1.InputReference;
 import tech.streamfusion.proto.plan.v1.IntegerLiteral;
@@ -38,8 +38,7 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
         implements OneInputStreamOperator<RowData, RowData>, BoundedOneInput {
     private static final int BATCH_SIZE = 1024;
     private final List<Integer> inputIndexes;
-    private final Integer conditionInputIndex;
-    private final Integer minimum;
+    private final StreamFusionIntComparison condition;
     private final RowType inputType;
     private final RowType outputType;
     private final RowDataSerializer serializer;
@@ -48,18 +47,13 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
     private final List<RowKind> rowKinds = new ArrayList<>(BATCH_SIZE);
 
     StreamFusionIdentityCalcOperator(
-            RowType inputType,
-            RowType outputType,
-            List<Integer> inputIndexes,
-            Integer conditionInputIndex,
-            Integer minimum) {
+            RowType inputType, RowType outputType, List<Integer> inputIndexes, StreamFusionIntComparison condition) {
         this.inputType = inputType;
         this.outputType = outputType;
         this.inputIndexes = inputIndexes;
-        this.conditionInputIndex = conditionInputIndex;
-        this.minimum = minimum;
+        this.condition = condition;
         this.serializer = new RowDataSerializer(inputType);
-        this.serializedPlan = createPlan(inputType, inputIndexes, conditionInputIndex, minimum);
+        this.serializedPlan = createPlan(inputType, inputIndexes, condition);
     }
 
     @Override
@@ -88,9 +82,7 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
         }
         List<RowKind> outputRowKinds = new ArrayList<>(rows.size());
         for (int index = 0; index < rows.size(); index++) {
-            if (minimum == null
-                    || (!rows.get(index).isNullAt(conditionInputIndex)
-                            && rows.get(index).getInt(conditionInputIndex) >= minimum)) {
+            if (condition == null || condition.test(rows.get(index))) {
                 outputRowKinds.add(rowKinds.get(index));
             }
         }
@@ -113,19 +105,22 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
     }
 
     private static byte[] createPlan(
-            RowType inputType, List<Integer> inputIndexes, Integer conditionInputIndex, Integer minimum) {
+            RowType inputType, List<Integer> inputIndexes, StreamFusionIntComparison condition) {
         Calc.Builder calc = Calc.newBuilder().setInput(Operator.newBuilder().setInput(Input.newBuilder()));
         for (int inputIndex : inputIndexes) {
             calc.addProjections(inputReference(inputIndex, logicalType(inputType, inputIndex)));
         }
-        if (minimum != null) {
-            LogicalType integer = logicalType(inputType, conditionInputIndex);
+        if (condition != null) {
+            LogicalType integer = logicalType(inputType, condition.inputIndex());
+            Expression input = inputReference(condition.inputIndex(), integer);
+            Expression literal = Expression.newBuilder()
+                    .setIntegerLiteral(IntegerLiteral.newBuilder().setValue(condition.literal()))
+                    .build();
             calc.setCondition(Expression.newBuilder()
-                    .setGreaterThanOrEqual(GreaterThanOrEqual.newBuilder()
-                            .setLeft(inputReference(conditionInputIndex, integer))
-                            .setRight(Expression.newBuilder()
-                                    .setIntegerLiteral(
-                                            IntegerLiteral.newBuilder().setValue(minimum)))));
+                    .setComparison(Comparison.newBuilder()
+                            .setLeft(condition.inputOnLeft() ? input : literal)
+                            .setRight(condition.inputOnLeft() ? literal : input)
+                            .setOperator(condition.operator())));
         }
         return NativePlan.newBuilder()
                 .setProtocolVersion(1)

@@ -90,6 +90,29 @@ class SqlParityTest {
                 Arguments.of("filter-on-unprojected-int", FILTER_ON_UNPROJECTED_COLUMN_SQL));
     }
 
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("nativeComparisonCases")
+    void nativeIntegerComparisonsMatchFlinkByteForByte(
+            String ignoredName, String predicate, boolean nativeExecutionExpected) throws Exception {
+        String sql = "SELECT id FROM (VALUES (1), (2), (3)) AS input(id) WHERE " + predicate;
+        assertParity(sql, true);
+
+        if (nativeExecutionExpected) {
+            assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        }
+    }
+
+    private static Stream<Arguments> nativeComparisonCases() {
+        return Stream.of(
+                Arguments.of("equal-constant-folded-by-flink", "id = 2", false),
+                Arguments.of("not-equal", "id <> 2", true),
+                Arguments.of("less-than", "id < 2", true),
+                Arguments.of("less-than-or-equal", "id <= 2", true),
+                Arguments.of("greater-than", "id > 2", true),
+                Arguments.of("greater-than-or-equal", "id >= 2", true),
+                Arguments.of("literal-on-left", "2 < id", true));
+    }
+
     @Test
     void explainStatesWhyCurrentPlanFallsBack() {
         System.setProperty(
