@@ -36,6 +36,7 @@ import tech.streamfusion.proto.plan.v1.InputReference;
 import tech.streamfusion.proto.plan.v1.IntegerLiteral;
 import tech.streamfusion.proto.plan.v1.LogicalType;
 import tech.streamfusion.proto.plan.v1.NativePlan;
+import tech.streamfusion.proto.plan.v1.NullCheck;
 import tech.streamfusion.proto.plan.v1.Operator;
 
 class ArrowCDataBridgeTest {
@@ -101,6 +102,19 @@ class ArrowCDataBridgeTest {
             assertThat(row.getDecimal(1, 10, 2).toBigDecimal()).isEqualByComparingTo("7.25");
             assertThat(row.getString(2).toString()).isEqualTo("seven");
             assertThat(row.getInt(3)).isEqualTo(7);
+        }
+    }
+
+    @Test
+    void filtersNullsThroughDataFusion() {
+        RowType rowType = RowType.of(new IntType());
+        List<RowData> rows = List.of(GenericRowData.of(1), GenericRowData.of((Object) null), GenericRowData.of(3));
+
+        try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+                ArrowRowDataBatch input = ArrowRowDataBatch.transpose(rows, rowType, allocator);
+                ArrowRowDataBatch output = ArrowCDataBridge.execute(nullCheckPlan(false), input, rowType, allocator)) {
+            assertThat(output.size()).isOne();
+            assertThat(output.rowView(0).isNullAt(0)).isTrue();
         }
     }
 
@@ -171,6 +185,24 @@ class ArrowCDataBridgeTest {
             calc.addProjections(Expression.newBuilder()
                     .setInputReference(InputReference.newBuilder().setIndex(inputIndex)));
         }
+        return NativePlan.newBuilder()
+                .setProtocolVersion(1)
+                .setRoot(Operator.newBuilder().setCalc(calc))
+                .build()
+                .toByteArray();
+    }
+
+    private static byte[] nullCheckPlan(boolean negated) {
+        Expression reference = Expression.newBuilder()
+                .setInputReference(InputReference.newBuilder().setIndex(0))
+                .build();
+        Calc calc = Calc.newBuilder()
+                .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
+                .addProjections(reference)
+                .setCondition(Expression.newBuilder()
+                        .setNullCheck(
+                                NullCheck.newBuilder().setOperand(reference).setNegated(negated)))
+                .build();
         return NativePlan.newBuilder()
                 .setProtocolVersion(1)
                 .setRoot(Operator.newBuilder().setCalc(calc))

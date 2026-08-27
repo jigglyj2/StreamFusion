@@ -11,6 +11,7 @@ use std::sync::Arc;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::Operator;
 use datafusion::physical_expr::expressions::{BinaryExpr, Column, Literal};
+use datafusion::physical_expr::expressions::{IsNotNullExpr, IsNullExpr};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::projection::ProjectionExec;
@@ -140,6 +141,19 @@ fn create_expression(
                     schema,
                 )?,
             )))
+        }
+        Some(proto::expression::Expression::NullCheck(null_check)) => {
+            let operand = create_expression(
+                null_check.operand.as_ref().ok_or_else(|| {
+                    DataFusionError::Plan("null-check operand is empty".to_string())
+                })?,
+                schema,
+            )?;
+            if null_check.negated {
+                Ok(Arc::new(IsNotNullExpr::new(operand)))
+            } else {
+                Ok(Arc::new(IsNullExpr::new(operand)))
+            }
         }
         None => Err(DataFusionError::Plan("expression is empty".to_string())),
     }

@@ -9,12 +9,15 @@
  */
 package tech.streamfusion.flink.calc;
 
-import java.io.Serializable;
 import org.apache.flink.table.data.RowData;
+import tech.streamfusion.proto.plan.v1.Comparison;
 import tech.streamfusion.proto.plan.v1.ComparisonOperator;
+import tech.streamfusion.proto.plan.v1.Expression;
+import tech.streamfusion.proto.plan.v1.InputReference;
+import tech.streamfusion.proto.plan.v1.IntegerLiteral;
 
 /** Supported integer comparison, including the original SQL operand order. */
-final class StreamFusionIntComparison implements Serializable {
+final class StreamFusionIntComparison implements StreamFusionCondition {
     private static final long serialVersionUID = 1L;
     private final int inputIndex;
     private final int literal;
@@ -44,7 +47,8 @@ final class StreamFusionIntComparison implements Serializable {
         return inputOnLeft;
     }
 
-    boolean test(RowData row) {
+    @Override
+    public boolean test(RowData row) {
         if (row.isNullAt(inputIndex)) {
             return false;
         }
@@ -66,5 +70,21 @@ final class StreamFusionIntComparison implements Serializable {
             default:
                 throw new IllegalStateException("Unsupported comparison operator " + operator);
         }
+    }
+
+    @Override
+    public Expression expression() {
+        Expression input = Expression.newBuilder()
+                .setInputReference(InputReference.newBuilder().setIndex(inputIndex))
+                .build();
+        Expression literalExpression = Expression.newBuilder()
+                .setIntegerLiteral(IntegerLiteral.newBuilder().setValue(literal))
+                .build();
+        return Expression.newBuilder()
+                .setComparison(Comparison.newBuilder()
+                        .setLeft(inputOnLeft ? input : literalExpression)
+                        .setRight(inputOnLeft ? literalExpression : input)
+                        .setOperator(operator))
+                .build();
     }
 }

@@ -143,6 +143,17 @@ class SqlParityTest {
                 Arguments.of("literal-on-left", "2 < id", true));
     }
 
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("nativeNullPredicateCases")
+    void nativeNullPredicatesMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {
+        String sql = "SELECT id FROM (VALUES (1), (CAST(NULL AS INT)), (3)) AS input(id) WHERE " + predicate;
+        assertParity(sql, true);
+    }
+
+    private static Stream<Arguments> nativeNullPredicateCases() {
+        return Stream.of(Arguments.of("is-null", "id IS NULL"), Arguments.of("is-not-null", "id IS NOT NULL"));
+    }
+
     @Test
     void explainStatesWhyCurrentPlanFallsBack() {
         System.setProperty(

@@ -44,9 +44,9 @@ public final class StreamFusionCalcTranslator {
         for (Object projection : projections) {
             nativeProjections.add(projectionExpression(projection, inputType));
         }
-        StreamFusionIntComparison comparison = comparison(condition);
+        StreamFusionCondition nativeCondition = condition(condition, inputType);
         StreamFusionIdentityCalcOperator operator =
-                new StreamFusionIdentityCalcOperator(inputType, outputType, nativeProjections, comparison);
+                new StreamFusionIdentityCalcOperator(inputType, outputType, nativeProjections, nativeCondition);
         OneInputTransformation<RowData, RowData> transformation = new OneInputTransformation<>(
                 input,
                 "streamfusion-identity-calc",
@@ -85,9 +85,39 @@ public final class StreamFusionCalcTranslator {
         if (condition == null) {
             return true;
         }
+        return condition(condition, inputType) != null;
+    }
+
+    private static StreamFusionCondition condition(Object condition, RowType inputType) {
+        if (condition == null) {
+            return null;
+        }
         StreamFusionIntComparison comparison = comparison(condition);
-        return comparison != null
-                && inputType.getTypeAt(comparison.inputIndex()).getTypeRoot() == LogicalTypeRoot.INTEGER;
+        if (comparison != null) {
+            return comparison.inputIndex() < inputType.getFieldCount()
+                            && inputType.getTypeAt(comparison.inputIndex()).getTypeRoot() == LogicalTypeRoot.INTEGER
+                    ? comparison
+                    : null;
+        }
+        String kind = invoke(condition, "getKind").toString();
+        if (!"IS_NULL".equals(kind) && !"IS_NOT_NULL".equals(kind)) {
+            return null;
+        }
+        List<?> operands = (List<?>) invoke(condition, "getOperands");
+        if (operands.size() != 1) {
+            return null;
+        }
+        int inputIndex = inputIndex(operands.get(0));
+        if (inputIndex < 0
+                || inputIndex >= inputType.getFieldCount()
+                || !isSupportedProjectionType(inputType.getTypeAt(inputIndex).getTypeRoot())) {
+            return null;
+        }
+        return new StreamFusionNullCondition(
+                inputIndex,
+                "IS_NOT_NULL".equals(kind),
+                StreamFusionIdentityCalcOperator.inputReference(
+                        inputIndex, StreamFusionIdentityCalcOperator.logicalType(inputType, inputIndex)));
     }
 
     private static Expression projectionExpression(Object expression, RowType inputType) {

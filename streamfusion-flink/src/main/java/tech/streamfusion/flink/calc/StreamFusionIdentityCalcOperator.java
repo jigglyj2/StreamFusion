@@ -23,13 +23,11 @@ import org.apache.flink.types.RowKind;
 import tech.streamfusion.flink.arrow.ArrowCDataBridge;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.proto.plan.v1.Calc;
-import tech.streamfusion.proto.plan.v1.Comparison;
 import tech.streamfusion.proto.plan.v1.DecimalType;
 import tech.streamfusion.proto.plan.v1.EmptyType;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.Input;
 import tech.streamfusion.proto.plan.v1.InputReference;
-import tech.streamfusion.proto.plan.v1.IntegerLiteral;
 import tech.streamfusion.proto.plan.v1.LogicalType;
 import tech.streamfusion.proto.plan.v1.NativePlan;
 import tech.streamfusion.proto.plan.v1.Operator;
@@ -39,7 +37,7 @@ import tech.streamfusion.proto.plan.v1.PrecisionType;
 final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowData>
         implements OneInputStreamOperator<RowData, RowData>, BoundedOneInput {
     private static final int BATCH_SIZE = 1024;
-    private final StreamFusionIntComparison condition;
+    private final StreamFusionCondition condition;
     private final RowType inputType;
     private final RowType outputType;
     private final RowDataSerializer serializer;
@@ -48,7 +46,7 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
     private final List<RowKind> rowKinds = new ArrayList<>(BATCH_SIZE);
 
     StreamFusionIdentityCalcOperator(
-            RowType inputType, RowType outputType, List<Expression> projections, StreamFusionIntComparison condition) {
+            RowType inputType, RowType outputType, List<Expression> projections, StreamFusionCondition condition) {
         this.inputType = inputType;
         this.outputType = outputType;
         this.condition = condition;
@@ -104,21 +102,11 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
         rowKinds.clear();
     }
 
-    private static byte[] createPlan(
-            RowType inputType, List<Expression> projections, StreamFusionIntComparison condition) {
+    private static byte[] createPlan(RowType inputType, List<Expression> projections, StreamFusionCondition condition) {
         Calc.Builder calc = Calc.newBuilder().setInput(Operator.newBuilder().setInput(Input.newBuilder()));
         calc.addAllProjections(projections);
         if (condition != null) {
-            LogicalType integer = logicalType(inputType, condition.inputIndex());
-            Expression input = inputReference(condition.inputIndex(), integer);
-            Expression literal = Expression.newBuilder()
-                    .setIntegerLiteral(IntegerLiteral.newBuilder().setValue(condition.literal()))
-                    .build();
-            calc.setCondition(Expression.newBuilder()
-                    .setComparison(Comparison.newBuilder()
-                            .setLeft(condition.inputOnLeft() ? input : literal)
-                            .setRight(condition.inputOnLeft() ? literal : input)
-                            .setOperator(condition.operator())));
+            calc.setCondition(condition.expression());
         }
         return NativePlan.newBuilder()
                 .setProtocolVersion(1)

@@ -34,6 +34,7 @@ message Expression {
     GreaterThanOrEqual greater_than_or_equal = 3;
     Comparison comparison = 4;
     Arithmetic arithmetic = 5;
+    NullCheck null_check = 6;
   }
 }
 
@@ -73,6 +74,11 @@ enum ArithmeticOperator {
   ARITHMETIC_OPERATOR_ADD = 1;
   ARITHMETIC_OPERATOR_SUBTRACT = 2;
   ARITHMETIC_OPERATOR_MULTIPLY = 3;
+}
+
+message NullCheck {
+  Expression operand = 1;
+  bool negated = 2;
 }
 
 message InputReference {
