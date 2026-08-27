@@ -52,6 +52,15 @@ connector and client setting to the native library's equivalent. If a setting or
 semantics cannot be represented exactly, keep that boundary on the Flink implementation
 and report the fallback reason; never silently use a native-client default.
 
+Keep an operator's or connector's Rust implementation in the optional Maven module
+that owns that integration, including its platform-specific native artifacts. Do not
+grow a central native crate with optional integration code. Load independently packaged
+native components through a versioned C ABI modeled on ADBC: a stable initialization
+entry point negotiates an ABI version and returns a function table with opaque handles.
+Exchange columnar data between native components directly through the Arrow C Data and
+C Stream interfaces, including their release callbacks; do not route native-to-native
+batches through JNI or Java. Never expose Rust's unstable ABI across module boundaries.
+
 ## Testing Guidelines
 
 Exact byte to byte parity with Flink's result set is paramount. Add our own tests to ensure this, use normal Flink processing when we can't achieve it. Hook into existing Flink SQL targets where possible.

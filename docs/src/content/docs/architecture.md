@@ -37,4 +37,9 @@ operators share the managed-memory budget assigned by Flink; StreamFusion does n
 create a separate off-heap allowance. See [Memory and configuration](./development/memory-and-configuration/)
 for the accounting bridge, configuration policy, and native connector fallback rules.
 
+Optional operators and connectors own and package their Rust implementations. A
+versioned C ABI discovers those native components, while the Arrow C Data and C Stream
+interfaces carry batches directly between them. See [Native modules and ABI](./development/native-modules/)
+for packaging, compatibility, and ownership requirements.
+
 The project is organized as optional Maven modules corresponding to these extension points. Java packages and Maven coordinates use the `tech.streamfusion` namespace.
