@@ -7,7 +7,7 @@ sidebar:
 
 **Current status:** Not accelerated; executed by Flink.
 
-**Can it be accelerated?** Yes.
+**Future acceleration target:** Yes.
 
 ## SQL example
 
@@ -24,4 +24,3 @@ Accelerate after a compatible window operation when rank bounds and ordering are
 Use custom per-window ordered state, releasing it according to Flink watermarks. Batch rank updates to avoid emitting unchanged rows.
 
 See the [Flink 2.3 Window Top-N documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/window-topn/).
-

@@ -7,7 +7,7 @@ sidebar:
 
 **Current status:** Not accelerated; executed by Flink.
 
-**Can it be accelerated?** Not directly. A CTE is a planning construct rather than a runtime operator.
+**Future acceleration target:** Not directly. A CTE is a planning construct rather than a runtime operator.
 
 ## SQL example
 
@@ -24,4 +24,3 @@ Flink expands and optimizes the CTE. StreamFusion may accelerate eligible operat
 No native CTE implementation is planned. Keeping name resolution and expansion in Flink avoids duplicating planner behavior.
 
 See the [Flink 2.3 WITH clause documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/with/).
-

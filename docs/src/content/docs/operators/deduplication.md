@@ -7,7 +7,7 @@ sidebar:
 
 **Current status:** Not accelerated; executed by Flink.
 
-**Can it be accelerated?** Yes.
+**Future acceleration target:** Yes.
 
 ## SQL example
 
@@ -24,4 +24,3 @@ Accelerate Flink's recognized first-row or last-row deduplication pattern when k
 Keep only the selected row and ordering value per key in custom Rust state. Avoid materializing a full Top-N structure.
 
 See the [Flink 2.3 Deduplication documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/deduplication/).
-

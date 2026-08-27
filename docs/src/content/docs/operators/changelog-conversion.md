@@ -7,7 +7,7 @@ sidebar:
 
 **Current status:** Not accelerated; executed by Flink.
 
-**Can it be accelerated?** Not currently a compute target.
+**Future acceleration target:** Not currently a compute target.
 
 ## SQL example
 
@@ -24,4 +24,3 @@ FROM_CHANGELOG and TO_CHANGELOG remain in Flink. Adjacent relational operators m
 Preserve Flink RowKind and operation mappings at the boundary. Native execution must never collapse updates or deletes into append-only rows.
 
 See the [Flink 2.3 Changelog conversion documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/changelog/).
-

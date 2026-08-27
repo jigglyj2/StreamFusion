@@ -7,7 +7,7 @@ sidebar:
 
 **Current status:** Not accelerated; executed by Flink.
 
-**Can it be accelerated?** Yes.
+**Future acceleration target:** Yes.
 
 ## SQL example
 
@@ -24,4 +24,3 @@ Accelerate when every projection, predicate, cast, and scalar function has Flink
 Lower Calc/projection/filter nodes to DataFusion physical expressions over Arrow batches. Fuse projection and filtering where profitable and preserve Flink's logical types and three-valued Boolean semantics.
 
 See the [Flink 2.3 SELECT & WHERE documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/select/).
-

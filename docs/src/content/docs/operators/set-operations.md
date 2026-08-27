@@ -7,7 +7,7 @@ sidebar:
 
 **Current status:** Not accelerated; executed by Flink.
 
-**Can it be accelerated?** Yes, by operation.
+**Future acceleration target:** Yes, by operation.
 
 ## SQL example
 
@@ -24,4 +24,3 @@ UNION ALL can usually pass through accelerated batches. UNION DISTINCT, INTERSEC
 Use DataFusion set operations for bounded data. Streaming distinct/intersection/difference require custom reference-counted keyed state coordinated with Flink checkpoints.
 
 See the [Flink 2.3 Set operations documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/set-ops/).
-

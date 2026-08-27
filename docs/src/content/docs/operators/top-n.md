@@ -7,7 +7,7 @@ sidebar:
 
 **Current status:** Not accelerated; executed by Flink.
 
-**Can it be accelerated?** Yes.
+**Future acceleration target:** Yes.
 
 ## SQL example
 
@@ -24,4 +24,3 @@ Accelerate recognized Flink Top-N patterns when partition/order keys, rank range
 Maintain a compact ordered structure per key in custom Rust code and emit only changed ranks. Apply Flink's no-ranking-output optimization when the rank column is not consumed.
 
 See the [Flink 2.3 Top-N documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/topn/).
-

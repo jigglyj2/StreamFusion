@@ -7,7 +7,7 @@ sidebar:
 
 **Current status:** Not accelerated; executed by Flink.
 
-**Can it be accelerated?** For bounded inputs.
+**Future acceleration target:** For bounded inputs.
 
 ## SQL example
 
@@ -24,4 +24,3 @@ Accelerate global or partitioned sorting only when the input is bounded and sort
 Use DataFusion's parallel sort and spill-capable execution. Flink retains distribution and boundedness decisions.
 
 See the [Flink 2.3 ORDER BY documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/orderby/).
-

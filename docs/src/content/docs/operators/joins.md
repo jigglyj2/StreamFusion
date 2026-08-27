@@ -7,7 +7,7 @@ sidebar:
 
 **Current status:** Not accelerated; executed by Flink.
 
-**Can it be accelerated?** Yes, depending on join type.
+**Future acceleration target:** Yes, depending on join type.
 
 ## SQL example
 
@@ -24,4 +24,3 @@ Bounded equi-joins are strong DataFusion candidates. Streaming regular, interval
 Use DataFusion hash/sort-merge joins for bounded relations. Use custom Rust keyed state for streaming and interval joins; retain Flink for lookup calls and temporal semantics until a native path can reproduce them.
 
 See the [Flink 2.3 Joins documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/joins/).
-

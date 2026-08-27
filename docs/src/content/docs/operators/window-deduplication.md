@@ -7,7 +7,7 @@ sidebar:
 
 **Current status:** Not accelerated; executed by Flink.
 
-**Can it be accelerated?** Yes.
+**Future acceleration target:** Yes.
 
 ## SQL example
 
@@ -24,4 +24,3 @@ Accelerate recognized window-deduplication patterns over supported window TVFs a
 Keep one candidate per key and window in custom Rust state, then finalize and clean state using Flink watermark progress.
 
 See the [Flink 2.3 Window deduplication documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/window-deduplication/).
-

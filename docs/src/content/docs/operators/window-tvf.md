@@ -7,7 +7,7 @@ sidebar:
 
 **Current status:** Not accelerated; executed by Flink.
 
-**Can it be accelerated?** Yes.
+**Future acceleration target:** Yes.
 
 ## SQL example
 
@@ -24,4 +24,3 @@ TUMBLE, HOP, CUMULATE, and SESSION can accelerate after timestamp, watermark, of
 Use custom Rust window assignment because streaming watermarks and Flink window metadata are outside DataFusion's batch execution model. Emit Flink-compatible window_start, window_end, and window_time columns.
 
 See the [Flink 2.3 Windowing TVFs documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/window-tvf/).
-

@@ -7,7 +7,7 @@ sidebar:
 
 **Current status:** Not accelerated; executed by Flink.
 
-**Can it be accelerated?** Yes.
+**Future acceleration target:** Yes.
 
 ## SQL example
 
@@ -24,4 +24,3 @@ Accelerate only supported ROWS/RANGE frames, order keys, aggregates, and input c
 Use custom ordered keyed state for the streaming frame and DataFusion aggregate kernels where useful. DataFusion alone does not provide Flink's incremental changelog and watermark behavior.
 
 See the [Flink 2.3 OVER aggregation documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/over-agg/).
-

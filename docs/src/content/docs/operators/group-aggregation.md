@@ -7,7 +7,7 @@ sidebar:
 
 **Current status:** Not accelerated; executed by Flink.
 
-**Can it be accelerated?** Yes.
+**Future acceleration target:** Yes.
 
 ## SQL example
 
@@ -24,4 +24,3 @@ Accelerate supported grouping keys and aggregate functions when accumulator, ret
 Use DataFusion aggregate kernels where their semantics match. A streaming wrapper maintains keyed accumulators in Rust while Flink owns checkpoint and recovery coordination; mini-batching can amortize state access.
 
 See the [Flink 2.3 Group aggregation documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/group-agg/).
-

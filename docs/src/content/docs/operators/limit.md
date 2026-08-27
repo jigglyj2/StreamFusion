@@ -7,7 +7,7 @@ sidebar:
 
 **Current status:** Not accelerated; executed by Flink.
 
-**Can it be accelerated?** For bounded inputs.
+**Future acceleration target:** For bounded inputs.
 
 ## SQL example
 
@@ -24,4 +24,3 @@ Accelerate when Flink identifies a bounded input and early termination does not 
 Lower to DataFusion Limit and stop producing Arrow batches after the requested row count.
 
 See the [Flink 2.3 LIMIT documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/limit/).
-

@@ -7,7 +7,7 @@ sidebar:
 
 **Current status:** Not accelerated; executed by Flink.
 
-**Can it be accelerated?** No; it is catalog and planning behavior.
+**Future acceleration target:** No; it is catalog and planning behavior.
 
 ## SQL example
 
@@ -24,4 +24,3 @@ Flink resolves the historical table snapshot. StreamFusion may accelerate eligib
 No Rust implementation. This stays in Flink to preserve connector, catalog, time-zone, and planning semantics.
 
 See the [Flink 2.3 Time travel documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/time-travel/).
-

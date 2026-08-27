@@ -7,7 +7,7 @@ sidebar:
 
 **Current status:** Not accelerated; executed by Flink.
 
-**Can it be accelerated?** Yes.
+**Future acceleration target:** Yes.
 
 ## SQL example
 
@@ -24,4 +24,3 @@ Accelerate supported window TVFs and aggregates when watermark, lateness, time-z
 Combine custom window/state management with DataFusion aggregate kernels. Batch records by key and window while retaining Flink-compatible cleanup and output timing.
 
 See the [Flink 2.3 Window aggregation documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/window-agg/).
-

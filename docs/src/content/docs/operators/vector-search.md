@@ -7,7 +7,7 @@ sidebar:
 
 **Current status:** Not accelerated; executed by Flink.
 
-**Can it be accelerated?** Potentially.
+**Future acceleration target:** Potentially.
 
 ## SQL example
 
@@ -24,4 +24,3 @@ Accelerate when vector type, distance metric, Top-K semantics, connector/index b
 Use DataFusion vector expressions or custom SIMD/index kernels over Arrow arrays. Keep connector-managed index access in Flink unless the native implementation preserves its consistency model.
 
 See the [Flink 2.3 Vector search documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/vector-search/).
-

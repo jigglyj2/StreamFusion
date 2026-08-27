@@ -7,7 +7,7 @@ sidebar:
 
 **Current status:** Not accelerated; executed by Flink.
 
-**Can it be accelerated?** Potentially, with custom execution.
+**Future acceleration target:** Potentially, with custom execution.
 
 ## SQL example
 
@@ -24,4 +24,3 @@ Only explicitly supported MATCH_RECOGNIZE patterns, quantifiers, measures, navig
 DataFusion has no equivalent streaming CEP engine. Acceleration would require a custom Rust NFA with Flink-compatible match selection, event-time timers, and state snapshots.
 
 See the [Flink 2.3 Pattern recognition documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/match_recognize/).
-

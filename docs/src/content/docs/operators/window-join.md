@@ -7,7 +7,7 @@ sidebar:
 
 **Current status:** Not accelerated; executed by Flink.
 
-**Can it be accelerated?** Yes.
+**Future acceleration target:** Yes.
 
 ## SQL example
 
@@ -24,4 +24,3 @@ Accelerate when both inputs use compatible windowing TVFs and the equality/windo
 Use custom per-window hash state and close it from Flink watermarks. DataFusion hash kernels may accelerate matching within a window, but lifecycle and changelog emission remain streaming-specific.
 
 See the [Flink 2.3 Window join documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/window-join/).
-
