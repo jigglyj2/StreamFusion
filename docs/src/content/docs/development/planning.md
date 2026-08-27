@@ -5,6 +5,14 @@ description: StreamFusion's whole-plan eligibility and fallback contract.
 
 StreamFusion uses an **all-or-nothing** planning rule. A plan is accelerated only when every internal relational node is replaced by a StreamFusion physical operator. StreamFusion does not create mixed Flink/StreamFusion execution islands inside a plan.
 
+Like Comet, StreamFusion performs this selection with a physical-plan rule and distinct
+accelerator nodes. Flink first builds its normal exec graph. The StreamFusion graph
+processor proves whole-plan eligibility and replaces eligible `StreamExecCalc` nodes
+with `StreamFusionExecCalc` nodes. The original Flink nodes are neither modified nor
+given native execution branches; if eligibility fails, the original graph is returned
+unchanged. Each StreamFusion exec node then creates its corresponding StreamFusion
+runtime operator.
+
 ```text
 Flink source
   → lightweight RowData Arrow batch view
@@ -18,7 +26,7 @@ Sources and sinks are the only boundary exceptions. A connector may eventually s
 
 Creating this Java view must not copy row payloads. A native boundary implementation may still need to materialize Arrow column buffers once when a source is genuinely row-based—row and column memory layouts cannot be relabeled into one another. If a connector already owns Arrow-compatible columnar buffers, its view should import or retain those buffers instead. The sink side follows the inverse ownership protocol through the same boundary abstraction.
 
-The first `INT` boundary now follows PyFlink's lightweight model: `ColumnarRowData` moves a reusable row index over Flink column vectors backed by Arrow vectors. It proves batching, row-view behavior, changelog-kind preservation, and native calc execution. General type coverage, managed-memory allocation, Arrow C Data ownership, and checkpoint-aware native state remain TODO.
+The Arrow boundary follows PyFlink's lightweight model: `ColumnarRowData` moves a reusable row index over Flink column vectors backed by Arrow vectors. Its implemented type matrix includes compatible scalar, temporal, decimal128, string, binary, array, map, nested-row, and null types. Flink managed-memory allocation, Arrow C Data ownership, and checkpoint-aware native state remain TODO.
 
 ## Native batch pipeline
 
@@ -97,7 +105,7 @@ The plan-level reason explains why acceleration was rejected. Each operator-leve
 
 ## Flink runner integration test
 
-The process-level integration test builds a standalone SQL job JAR and installs the `streamfusion-flink` JAR into the `lib/` directory of an Apache Flink 2.3 distribution. It also replaces the distribution's table API JAR with the matching artifact containing the minimal planner-factory hook. The test then submits the job through the real CLI:
+The process-level integration test builds a standalone SQL job JAR and installs the `streamfusion-flink` JAR into the `lib/` directory of an Apache Flink 2.3 distribution. It also installs the separate StreamFusion planner extension into Flink's isolated planner loader and applies the minimal generic planner-extension hooks. It does not replace any Flink exec node or runtime operator class. The test then submits the job through the real CLI:
 
 ```shell
 flink run -t local \
@@ -105,4 +113,4 @@ flink run -t local \
   streamfusion-flink-runner-tests.jar
 ```
 
-The submitted job executes an integer filter/projection and fails unless exactly one StreamFusion planner was created, the planner translated the job, and at least one DataFusion calc batch executed through JNI. This tests process classloading, native-library packaging, and JAR installation in addition to result behavior. Future integration artifacts—connector JARs and more complex submitted jobs—belong in this same runner-level path.
+The submitted job executes an eligible integer filter/projection and fails unless exactly one StreamFusion planner was created, a `StreamFusionExecCalc` selected the native runtime, and at least one DataFusion calc batch executed through JNI. It then executes an unsupported arithmetic calc and proves that the result comes from Flink without incrementing the native counter. This tests acceleration selection, unchanged fallback, process classloading, native-library packaging, and JAR installation. Future integration artifacts—connector JARs and more complex submitted jobs—belong in this same runner-level path.

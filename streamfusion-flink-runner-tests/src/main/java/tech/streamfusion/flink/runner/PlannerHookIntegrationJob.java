@@ -58,6 +58,21 @@ public final class PlannerHookIntegrationJob {
         if (StreamFusionPlannerFactory.nativeCalcBatchCount() == 0) {
             throw new IllegalStateException("The submitted job did not execute a native calc batch");
         }
+        long acceleratedBatches = StreamFusionPlannerFactory.nativeCalcBatchCount();
+        List<Integer> fallbackValues = new ArrayList<>();
+        try (CloseableIterator<Row> rows = tables.executeSql("SELECT id + 1 FROM (VALUES (1), (2)) AS input(id)")
+                .collect()) {
+            while (rows.hasNext()) {
+                fallbackValues.add((Integer) rows.next().getField(0));
+            }
+        }
+        fallbackValues.sort(Integer::compareTo);
+        if (!fallbackValues.equals(List.of(2, 3))) {
+            throw new IllegalStateException("Unexpected Flink fallback result: " + fallbackValues);
+        }
+        if (StreamFusionPlannerFactory.nativeCalcBatchCount() != acceleratedBatches) {
+            throw new IllegalStateException("An unsupported calc unexpectedly ran in StreamFusion");
+        }
 
         System.out.println(SUCCESS_MARKER
                 + " planners="
@@ -65,6 +80,7 @@ public final class PlannerHookIntegrationJob {
                 + " translations="
                 + StreamFusionPlannerFactory.translatedPlanCount()
                 + " nativeCalcBatches="
-                + StreamFusionPlannerFactory.nativeCalcBatchCount());
+                + StreamFusionPlannerFactory.nativeCalcBatchCount()
+                + " fallback=verified");
     }
 }
