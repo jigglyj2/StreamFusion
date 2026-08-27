@@ -51,6 +51,13 @@ following Comet's operator protobuf model. Protobuf is the control/plan format; 
 Data/C Stream remains the batch transport. Reject unknown or semantically unsupported
 messages with an EXPLAIN fallback reason rather than approximating Flink behavior.
 
+Treat DataFusion Comet as the primary architectural reference for planner work and
+communication between JVM operators and native operators. Follow its model of planner
+rules selecting distinct accelerator exec nodes while leaving the engine's original
+nodes available for fallback; do not add acceleration branches inside Flink operators.
+Also follow Comet's protobuf plan communication, Arrow batch transport, ownership, and
+metric propagation patterns unless Flink semantics require a documented difference.
+
 Account all StreamFusion native memory, including DataFusion and custom Rust data
 structures, through Flink's existing managed/off-heap memory model. StreamFusion must
 not introduce a separate deployment-time memory budget: existing Flink TaskManager
