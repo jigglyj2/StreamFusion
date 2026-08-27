@@ -15,6 +15,28 @@ to ADBC's JNI library packaging. Unsupported operating-system or architecture
 combinations must be detected before planning an accelerated job and produce a clear
 fallback reason.
 
+## Release CPU and platform matrix
+
+Routine pull-request CI builds only the native library needed by its test runner. The
+release-only workflow builds optimized Rust libraries on separate GitHub-hosted Linux
+and macOS runners and assembles them into a platform resource JAR:
+
+| Platform | Packaged CPU variants |
+| --- | --- |
+| Linux x86-64 | x86-64-v2 baseline, x86-64-v3 (AVX2), x86-64-v4 (AVX-512) |
+| Linux ARM64 | Native feature set of the ARM64 release runner |
+| macOS x86-64 | Native feature set of the Intel macOS release runner |
+| macOS ARM64 | Native feature set of the Apple Silicon release runner |
+
+The Linux x86-64 loader reads the host CPU flags and tries v4, v3, then v2. It never
+loads a binary above the detected ISA level. macOS and Linux ARM64 select by operating
+system and architecture. Each resource includes build metadata declaring its Rust
+`target-cpu`; release artifacts include a SHA-256 checksum.
+
+This follows Comet's platform-specific `.so`/`.dylib` resource packaging while making
+x86 SIMD baselines explicit. These expensive variants run only for a manually invoked
+native-release workflow or a published GitHub release, never for ordinary changes.
+
 ## Stable component ABI
 
 Rust does not provide a stable ABI, so independently packaged components must not

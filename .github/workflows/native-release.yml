@@ -1,0 +1,131 @@
+name: Native release artifacts
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build-native:
+    name: ${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.tier }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            os: linux
+            arch: x86_64
+            tier: v2
+            target_cpu: x86-64-v2
+            library: libstreamfusion_native.so
+          - runner: ubuntu-24.04
+            os: linux
+            arch: x86_64
+            tier: v3
+            target_cpu: x86-64-v3
+            library: libstreamfusion_native.so
+          - runner: ubuntu-24.04
+            os: linux
+            arch: x86_64
+            tier: v4
+            target_cpu: x86-64-v4
+            library: libstreamfusion_native.so
+          - runner: ubuntu-22.04-arm
+            os: linux
+            arch: aarch64
+            tier: native
+            target_cpu: native
+            library: libstreamfusion_native.so
+          - runner: macos-15-intel
+            os: darwin
+            arch: x86_64
+            tier: native
+            target_cpu: native
+            library: libstreamfusion_native.dylib
+          - runner: macos-15
+            os: darwin
+            arch: aarch64
+            tier: native
+            target_cpu: native
+            library: libstreamfusion_native.dylib
+
+    steps:
+      - name: Check out StreamFusion
+        uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        shell: bash
+        run: |
+          rust_version=$(mvn help:evaluate -Dexpression=rust.version -q -DforceStdout)
+          rustup toolchain install "$rust_version" --profile minimal
+          rustup default "$rust_version"
+
+      - name: Build optimized native library
+        shell: bash
+        env:
+          RUSTFLAGS: -C target-cpu=${{ matrix.target_cpu }}
+        run: cargo build --manifest-path streamfusion-native/Cargo.toml --release --locked
+
+      - name: Stage platform resource
+        shell: bash
+        run: |
+          resource_dir="native-stage/META-INF/native/${{ matrix.os }}/${{ matrix.arch }}/${{ matrix.tier }}"
+          mkdir -p "$resource_dir"
+          cp "streamfusion-native/target/release/${{ matrix.library }}" "$resource_dir/"
+          printf '%s\n' \
+            'os=${{ matrix.os }}' \
+            'arch=${{ matrix.arch }}' \
+            'cpu-tier=${{ matrix.tier }}' \
+            'rust-target-cpu=${{ matrix.target_cpu }}' \
+            > "$resource_dir/build.properties"
+
+      - name: Upload native resource
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.tier }}
+          path: native-stage/
+          if-no-files-found: error
+
+  assemble-native-jar:
+    name: Assemble platform JAR
+    needs: build-native
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out StreamFusion
+        uses: actions/checkout@v4
+
+      - name: Download native resources
+        uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          path: native-stage
+          merge-multiple: true
+
+      - name: Assemble and checksum JAR
+        shell: bash
+        run: |
+          version=$(mvn help:evaluate -Dexpression=revision -q -DforceStdout)
+          artifact="streamfusion-native-platforms-${version}.jar"
+          jar --create --file "$artifact" -C native-stage .
+          sha256sum "$artifact" > "${artifact}.sha256"
+          echo "NATIVE_ARTIFACT=$artifact" >> "$GITHUB_ENV"
+
+      - name: Upload assembled JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: streamfusion-native-platforms
+          path: |
+            ${{ env.NATIVE_ARTIFACT }}
+            ${{ env.NATIVE_ARTIFACT }}.sha256
+          if-no-files-found: error
+
+      - name: Attach artifacts to GitHub release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: gh release upload "${{ github.event.release.tag_name }}" "$NATIVE_ARTIFACT" "${NATIVE_ARTIFACT}.sha256" --clobber
