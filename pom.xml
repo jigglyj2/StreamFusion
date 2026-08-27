@@ -6,7 +6,7 @@
 
     <groupId>tech.streamfusion</groupId>
     <artifactId>streamfusion-parent</artifactId>
-    <version>0.1.0-SNAPSHOT</version>
+    <version>${revision}</version>
     <packaging>pom</packaging>
 
     <name>StreamFusion</name>
@@ -18,11 +18,16 @@
     </modules>
 
     <properties>
+        <revision>0.1.0-SNAPSHOT</revision>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.compiler.release>11</maven.compiler.release>
         <flink.version>2.3.0</flink.version>
         <junit.version>5.13.4</junit.version>
         <assertj.version>3.27.4</assertj.version>
+        <maven.compiler.plugin.version>3.14.0</maven.compiler.plugin.version>
+        <maven.surefire.plugin.version>3.5.3</maven.surefire.plugin.version>
+        <spotless.maven.plugin.version>2.44.3</spotless.maven.plugin.version>
+        <palantir.java.format.version>2.50.0</palantir.java.format.version>
     </properties>
 
     <dependencyManagement>
@@ -66,12 +71,12 @@
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-compiler-plugin</artifactId>
-                    <version>3.14.0</version>
+                    <version>${maven.compiler.plugin.version}</version>
                 </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-surefire-plugin</artifactId>
-                    <version>3.5.3</version>
+                    <version>${maven.surefire.plugin.version}</version>
                     <configuration>
                         <useModulePath>false</useModulePath>
                     </configuration>
@@ -79,11 +84,11 @@
                 <plugin>
                     <groupId>com.diffplug.spotless</groupId>
                     <artifactId>spotless-maven-plugin</artifactId>
-                    <version>2.44.3</version>
+                    <version>${spotless.maven.plugin.version}</version>
                     <configuration>
                         <java>
                             <palantirJavaFormat>
-                                <version>2.50.0</version>
+                                <version>${palantir.java.format.version}</version>
                             </palantirJavaFormat>
                             <formatAnnotations/>
                         </java>
