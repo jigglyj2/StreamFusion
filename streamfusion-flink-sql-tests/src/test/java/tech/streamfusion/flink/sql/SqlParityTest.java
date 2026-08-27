@@ -173,6 +173,23 @@ class SqlParityTest {
                 Arguments.of("nested", "(id >= 2 AND payload <= 4) OR id = 1"));
     }
 
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("nativeBooleanColumnCases")
+    void nativeBooleanColumnsMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {
+        String sql = "SELECT id FROM (VALUES (1, TRUE), (2, FALSE), (3, TRUE)) AS input(id, enabled) WHERE "
+                + predicate;
+        assertParity(sql, true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    private static Stream<Arguments> nativeBooleanColumnCases() {
+        return Stream.of(
+                Arguments.of("boolean-column", "enabled"),
+                Arguments.of("negated-boolean-column", "NOT enabled"),
+                Arguments.of("boolean-column-and-comparison", "enabled AND id >= 2"));
+    }
+
     @Test
     void explainStatesWhyCurrentPlanFallsBack() {
         System.setProperty(

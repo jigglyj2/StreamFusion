@@ -30,6 +30,10 @@ Supported comparisons and null checks can be recursively composed with `AND`, `O
 `NOT`. StreamFusion preserves SQL's three-valued boolean logic: true, false, and unknown
 remain distinct throughout the expression, and `WHERE` retains only true rows.
 
+A direct `BOOLEAN` column is also a supported condition, including inside a compound
+tree or beneath `NOT`. Nullable boolean columns preserve unknown rather than coercing
+null to false within the expression.
+
 ## Implementation
 
 Java encodes the comparison as a protobuf expression. Rust lowers it to DataFusion

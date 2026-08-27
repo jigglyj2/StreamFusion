@@ -93,6 +93,16 @@ public final class StreamFusionCalcTranslator {
         if (condition == null) {
             return null;
         }
+        int directInputIndex = inputIndex(condition);
+        if (directInputIndex >= 0
+                && directInputIndex < inputType.getFieldCount()
+                && inputType.getTypeAt(directInputIndex).getTypeRoot() == LogicalTypeRoot.BOOLEAN) {
+            return new StreamFusionBooleanColumnCondition(
+                    directInputIndex,
+                    StreamFusionIdentityCalcOperator.inputReference(
+                            directInputIndex,
+                            StreamFusionIdentityCalcOperator.logicalType(inputType, directInputIndex)));
+        }
         StreamFusionIntComparison comparison = comparison(condition);
         if (comparison != null) {
             return comparison.inputIndex() < inputType.getFieldCount()

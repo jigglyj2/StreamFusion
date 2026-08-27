@@ -45,4 +45,17 @@ class StreamFusionBooleanConditionTest {
         assertThat(StreamFusionBooleanCondition.not(unknown).evaluate(nullRow)).isNull();
         assertThat(StreamFusionBooleanCondition.not(unknown).test(nullRow)).isFalse();
     }
+
+    @Test
+    void readsNullableBooleanColumnsAsThreeValuedConditions() {
+        Expression reference = Expression.newBuilder()
+                .setInputReference(InputReference.newBuilder().setIndex(0))
+                .build();
+        StreamFusionCondition condition = new StreamFusionBooleanColumnCondition(0, reference);
+
+        assertThat(condition.evaluate(GenericRowData.of(true))).isTrue();
+        assertThat(condition.evaluate(GenericRowData.of(false))).isFalse();
+        assertThat(condition.evaluate(GenericRowData.of((Object) null))).isNull();
+        assertThat(condition.test(GenericRowData.of((Object) null))).isFalse();
+    }
 }
