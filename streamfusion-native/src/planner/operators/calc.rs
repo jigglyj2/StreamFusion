@@ -181,14 +181,14 @@ fn create_expression(
                 )?,
             )))
         }
-        Some(proto::expression::Expression::BooleanNot(boolean)) => Ok(Arc::new(NotExpr::new(
-            create_expression(
+        Some(proto::expression::Expression::BooleanNot(boolean)) => {
+            Ok(Arc::new(NotExpr::new(create_expression(
                 boolean.operand.as_ref().ok_or_else(|| {
                     DataFusionError::Plan("boolean NOT operand is empty".to_string())
                 })?,
                 schema,
-            )?,
-        ))),
+            )?)))
+        }
         None => Err(DataFusionError::Plan("expression is empty".to_string())),
     }
 }
