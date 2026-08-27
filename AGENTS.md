@@ -19,6 +19,8 @@ Add once configured. Use palantir java format.
 Use `tech.streamfusion` for Java packages and Maven coordinates. Keep commits small and
 logically focused so each change can be reviewed and reverted independently.
 
+Do not add to or modify `README.md` for now. Keep it empty until this instruction is removed.
+
 ## Testing Guidelines
 
 Exact byte to byte parity with Flink's result set is paramount. Add our own tests to ensure this, use normal Flink processing when we can't achieve it. Hook into existing Flink SQL targets where possible.
