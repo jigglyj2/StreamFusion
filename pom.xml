@@ -15,6 +15,7 @@
     <modules>
         <module>streamfusion-flink</module>
         <module>streamfusion-flink-sql-tests</module>
+        <module>streamfusion-flink-runner-tests</module>
         <module>streamfusion-nexmark-benchmarks</module>
     </modules>
 
