@@ -46,3 +46,15 @@ Operator rejections:
 ```
 
 The plan-level reason explains why acceleration was rejected. Each operator-level entry identifies the Flink operator that could not be replaced and gives its specific reason. Until Flink-plan conversion is connected to the new eligibility model, live SQL explanations state that conversion and the boundary transposes are not implemented.
+
+## Flink runner integration test
+
+The process-level integration test builds a standalone SQL job JAR and installs the `streamfusion-flink` JAR into the `lib/` directory of an Apache Flink 2.3 distribution. It also replaces the distribution's table API JAR with the matching artifact containing the minimal planner-factory hook. The test then submits the job through the real CLI:
+
+```shell
+flink run -t local \
+  -c tech.streamfusion.flink.runner.PlannerHookIntegrationJob \
+  streamfusion-flink-runner-tests.jar
+```
+
+The submitted job executes SQL and fails unless exactly one StreamFusion planner was created and that planner translated the job. This tests process classloading and JAR installation in addition to SQL behavior. Future integration artifacts—native libraries, connector JARs, and more complex submitted jobs—belong in this same runner-level path.

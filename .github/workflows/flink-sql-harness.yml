@@ -43,6 +43,19 @@ jobs:
       - name: Run StreamFusion SQL parity harness
         run: mvn --batch-mode --update-snapshots verify
 
+      - name: Download the Flink runner distribution
+        shell: bash
+        run: |
+          flink_version=$(mvn help:evaluate -Dexpression=flink.version -q -DforceStdout)
+          curl --fail --location --silent --show-error \
+            "https://archive.apache.org/dist/flink/flink-${flink_version}/flink-${flink_version}-bin-scala_2.12.tgz" \
+            --output flink-runner.tgz
+          tar -xzf flink-runner.tgz
+          echo "FLINK_RUNNER_HOME=$PWD/flink-${flink_version}" >> "$GITHUB_ENV"
+
+      - name: Submit a job with the installed StreamFusion JAR
+        run: dev/integration/run-flink-runner-test.sh "$FLINK_RUNNER_HOME"
+
       - name: Run Kafka-in/Kafka-out Nexmark integration
         run: >-
           mvn --batch-mode --update-snapshots -pl streamfusion-nexmark-benchmarks -am
