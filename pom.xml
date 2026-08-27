@@ -71,6 +71,11 @@
                 <version>${arrow.java.version}</version>
             </dependency>
             <dependency>
+                <groupId>org.apache.arrow</groupId>
+                <artifactId>arrow-c-data</artifactId>
+                <version>${arrow.java.version}</version>
+            </dependency>
+            <dependency>
                 <groupId>org.apache.beam</groupId>
                 <artifactId>beam-sdks-java-nexmark</artifactId>
                 <version>${beam.version}</version>
@@ -152,6 +157,7 @@
                     <version>${maven.surefire.plugin.version}</version>
                     <configuration>
                         <useModulePath>false</useModulePath>
+                        <argLine>--add-opens=java.base/java.nio=ALL-UNNAMED</argLine>
                         <forkCount>1C</forkCount>
                         <reuseForks>true</reuseForks>
                         <properties>

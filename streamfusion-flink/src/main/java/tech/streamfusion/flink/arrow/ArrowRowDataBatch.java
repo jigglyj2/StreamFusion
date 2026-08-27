@@ -59,6 +59,10 @@ public final class ArrowRowDataBatch implements AutoCloseable {
         }
     }
 
+    static ArrowRowDataBatch wrap(VectorSchemaRoot root, RowType rowType) {
+        return new ArrowRowDataBatch(null, false, root, rowType);
+    }
+
     /** Returns the reusable row view used by PyFlink's Arrow reader model. */
     public RowData rowView(int rowId) {
         if (rowId < 0 || rowId >= size()) {

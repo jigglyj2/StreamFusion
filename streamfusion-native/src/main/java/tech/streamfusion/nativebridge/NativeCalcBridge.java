@@ -21,10 +21,16 @@ public final class NativeCalcBridge {
 
     private NativeCalcBridge() {}
 
-    public static int[] executeIdentity(byte[] serializedPlan, int[] values) {
-        int[] result = executeIntIdentity(serializedPlan, values);
+    public static long executeArrow(
+            byte[] serializedPlan,
+            long inputArrayAddress,
+            long inputSchemaAddress,
+            long outputArrayAddress,
+            long outputSchemaAddress) {
+        long rows = executeArrowBatch(
+                serializedPlan, inputArrayAddress, inputSchemaAddress, outputArrayAddress, outputSchemaAddress);
         EXECUTED_BATCHES.incrementAndGet();
-        return result;
+        return rows;
     }
 
     public static long executedBatchCount() {
@@ -35,5 +41,10 @@ public final class NativeCalcBridge {
         EXECUTED_BATCHES.set(0);
     }
 
-    private static native int[] executeIntIdentity(byte[] serializedPlan, int[] values);
+    private static native long executeArrowBatch(
+            byte[] serializedPlan,
+            long inputArrayAddress,
+            long inputSchemaAddress,
+            long outputArrayAddress,
+            long outputSchemaAddress);
 }

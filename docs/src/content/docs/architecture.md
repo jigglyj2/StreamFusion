@@ -38,11 +38,12 @@ precision, strings and binary values, arrays, maps, nested rows, and nulls. Slic
 vectors are rebased to offset zero before crossing into Java because Java consumers do
 not consistently preserve Arrow slice offsets.
 
-Arrow C Data owns the cross-language contract. Java package shading does not change its
-memory layouts, pointer values, or release callback ABI. StreamFusion nevertheless keeps
-allocator ownership and release responsibility explicit: exactly one side releases each
-exported structure, and the allocator supplied by Flink remains alive until every imported
-view has closed.
+Arrow C Data owns the cross-language contract. StreamFusion keeps one coherent,
+unrelocated Arrow Java implementation: although Java package shading cannot change C
+struct layouts or pointers, it does change the class names expected by Arrow Java's JNI
+wrapper symbols. Allocator ownership and release responsibility remain explicit: exactly
+one side releases each exported structure, and the allocator supplied by Flink remains
+alive until every imported view has closed.
 
 Zero-copy applies to the handoff of an existing batch. Operators remain free to allocate new result buffers when the operation itself requires new data, such as aggregation, sorting, joining, or evaluating a computed expression.
 

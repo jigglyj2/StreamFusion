@@ -54,7 +54,8 @@ jar --update --file "${installed_api_jars[0]}" \
   mkdir -p org/apache/flink/table/planner/delegation
   cp "$flink_source_home/flink-table/flink-table-planner/target/classes/org/apache/flink/table/planner/delegation/PlannerBase.class" \
     org/apache/flink/table/planner/delegation/
-  zip -dq flink-table-planner.jar META-INF/versions/9/module-info.class
+  # The runner directory may already have been prepared by an earlier local invocation.
+  zip -dq flink-table-planner.jar META-INF/versions/9/module-info.class || true
   jar --update --file flink-table-planner.jar \
     org/apache/flink/table/planner/delegation/PlannerBase.class
   jar --update --file flink-table-planner.jar \

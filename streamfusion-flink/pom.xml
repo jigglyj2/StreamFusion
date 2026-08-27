@@ -27,6 +27,10 @@
             <artifactId>arrow-memory-netty</artifactId>
         </dependency>
         <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>arrow-c-data</artifactId>
+        </dependency>
+        <dependency>
             <groupId>org.apache.flink</groupId>
             <artifactId>flink-table-planner_2.12</artifactId>
             <scope>provided</scope>
@@ -55,10 +59,6 @@
                         <configuration>
                             <createDependencyReducedPom>false</createDependencyReducedPom>
                             <relocations>
-                                <relocation>
-                                    <pattern>org.apache.arrow</pattern>
-                                    <shadedPattern>tech.streamfusion.shaded.org.apache.arrow</shadedPattern>
-                                </relocation>
                                 <relocation>
                                     <pattern>io.netty</pattern>
                                     <shadedPattern>tech.streamfusion.shaded.io.netty</shadedPattern>

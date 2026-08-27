@@ -36,7 +36,8 @@ public final class StreamFusionCalcTranslator {
 
         int inputIndex = inputIndex(projections.get(0));
         Integer minimum = minimumValue(condition, inputIndex);
-        StreamFusionIdentityCalcOperator operator = new StreamFusionIdentityCalcOperator(inputIndex, minimum);
+        StreamFusionIdentityCalcOperator operator =
+                new StreamFusionIdentityCalcOperator(inputType, outputType, inputIndex, minimum);
         OneInputTransformation<RowData, RowData> transformation = new OneInputTransformation<>(
                 input,
                 "streamfusion-identity-calc",

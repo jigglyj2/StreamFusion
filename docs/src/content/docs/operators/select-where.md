@@ -21,6 +21,6 @@ StreamFusion currently accelerates a calc only when it projects one non-null `IN
 
 ## Implementation
 
-Java serializes the calc as protobuf. Rust lowers it to a DataFusion `FilterExec`, when needed, followed by `ProjectionExec`. The first boundary implementation batches Flink `RowData` into an Arrow `IntVector`; output is exposed as a reusable `ColumnarRowData` over an Arrow-backed Flink column vector rather than allocating a `GenericRowData` per result. JNI still rebases the current integer vector to a zero-offset Java array while the Arrow C Data boundary is implemented.
+Java serializes the calc as protobuf. Rust lowers it to a DataFusion `FilterExec`, when needed, followed by `ProjectionExec`. The boundary transposes each Flink `RowData` batch into Arrow vectors, exports it through the Arrow C Data interface, and imports the native result into reusable `ColumnarRowData` views. JNI carries only C Data structure addresses and never materializes the batch as Java primitive arrays.
 
 See the [Flink 2.3 SELECT & WHERE documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/select/).
