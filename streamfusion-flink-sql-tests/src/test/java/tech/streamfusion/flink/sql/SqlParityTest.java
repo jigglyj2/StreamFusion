@@ -25,6 +25,7 @@ import org.apache.flink.configuration.ExecutionOptions;
 import org.apache.flink.table.api.EnvironmentSettings;
 import org.apache.flink.table.api.TableEnvironment;
 import org.apache.flink.table.api.TableResult;
+import org.apache.flink.table.api.config.ExecutionConfigOptions;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.CloseableIterator;
 import org.junit.jupiter.api.AfterEach;
@@ -32,10 +33,14 @@ import org.junit.jupiter.api.Test;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
 
 class SqlParityTest {
-    private static final String SQL = "SELECT id, UPPER(name), amount * 2 "
+    private static final String BATCH_SQL = "SELECT id, UPPER(name), amount * 2 "
             + "FROM (VALUES (2, 'beta', 2.50), (1, 'alpha', 1.25), "
             + "(3, CAST(NULL AS STRING), CAST(NULL AS DECIMAL(10, 2)))) "
             + "AS orders(id, name, amount) WHERE id >= 1 ORDER BY id";
+    private static final String STREAMING_SQL = "SELECT id, UPPER(name), amount * 2 "
+            + "FROM (VALUES (1, 'alpha', 1.25), (2, 'beta', 2.50), "
+            + "(3, CAST(NULL AS STRING), CAST(NULL AS DECIMAL(10, 2)))) "
+            + "AS orders(id, name, amount) WHERE id >= 2";
 
     @AfterEach
     void clearPlannerOverride() {
@@ -45,15 +50,24 @@ class SqlParityTest {
 
     @Test
     void acceleratedExecutionMatchesFlinkByteForByte() throws Exception {
-        byte[] flinkResult = execute(false);
-        byte[] streamFusionResult = execute(true);
+        assertParity(BATCH_SQL, false);
+    }
+
+    @Test
+    void acceleratedStreamingExecutionMatchesFlinkByteForByte() throws Exception {
+        assertParity(STREAMING_SQL, true);
+    }
+
+    private static void assertParity(String sql, boolean streaming) throws Exception {
+        byte[] flinkResult = execute(sql, streaming, false);
+        byte[] streamFusionResult = execute(sql, streaming, true);
 
         assertThat(StreamFusionPlannerFactory.createdPlannerCount()).isEqualTo(1);
         assertThat(StreamFusionPlannerFactory.translatedPlanCount()).isGreaterThan(0);
         assertThat(streamFusionResult).isEqualTo(flinkResult);
     }
 
-    private static byte[] execute(boolean streamFusionEnabled) throws Exception {
+    private static byte[] execute(String sql, boolean streaming, boolean streamFusionEnabled) throws Exception {
         if (streamFusionEnabled) {
             System.setProperty(
                     StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY, StreamFusionPlannerFactory.class.getName());
@@ -62,16 +76,21 @@ class SqlParityTest {
             StreamFusionPlannerFactory.resetMetrics();
         }
 
-        TableEnvironment tableEnvironment = TableEnvironment.create(
-                EnvironmentSettings.newInstance().inBatchMode().build());
-        tableEnvironment.getConfig().getConfiguration().set(ExecutionOptions.RUNTIME_MODE, RuntimeExecutionMode.BATCH);
+        EnvironmentSettings settings = streaming
+                ? EnvironmentSettings.newInstance().inStreamingMode().build()
+                : EnvironmentSettings.newInstance().inBatchMode().build();
+        RuntimeExecutionMode runtimeMode = streaming ? RuntimeExecutionMode.STREAMING : RuntimeExecutionMode.BATCH;
+        TableEnvironment tableEnvironment = TableEnvironment.create(settings);
+        tableEnvironment.getConfig().getConfiguration().set(ExecutionOptions.RUNTIME_MODE, runtimeMode);
+        tableEnvironment.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
 
-        TableResult result = tableEnvironment.executeSql(SQL);
+        TableResult result = tableEnvironment.executeSql(sql);
         try (CloseableIterator<Row> rows = result.collect();
                 ByteArrayOutputStream bytes = new ByteArrayOutputStream();
                 DataOutputStream output = new DataOutputStream(bytes)) {
             while (rows.hasNext()) {
-                byte[] row = rows.next().toString().getBytes(StandardCharsets.UTF_8);
+                Row resultRow = rows.next();
+                byte[] row = (resultRow.getKind().shortString() + resultRow).getBytes(StandardCharsets.UTF_8);
                 output.writeInt(row.length);
                 output.write(row);
             }
