@@ -5,11 +5,11 @@ sidebar:
   order: 1
 ---
 
-This matrix follows the query operations documented by Flink 2.3, including the specialized operations with their own reference pages. **StreamFusion does not accelerate any operator yet.** It currently provides a planner integration point only, so Flink plans and executes every operator normally.
+This matrix follows the query operations documented by Flink 2.3, including the specialized operations with their own reference pages. Support is conservative: an unsupported expression causes the containing Calc, and therefore the all-or-nothing StreamFusion plan, to remain on Flink.
 
 | Operator | Accelerated today? | Future acceleration target | Intended implementation |
 | --- | --- | --- | --- |
-| [SELECT & WHERE](select-where/) | **No** | Yes | DataFusion expressions, projections, and filters |
+| [SELECT & WHERE](select-where/) | **Partial** | Yes | DataFusion projections and filters |
 | [SELECT DISTINCT](select-distinct/) | **No** | Yes | DataFusion distinct or native keyed state |
 | [WITH](with/) | **No** | Not directly | Inlined by Flink; accelerate resulting operators |
 | [Windowing TVFs](window-tvf/) | **No** | Yes | Native window assignment compatible with Flink |
@@ -31,4 +31,4 @@ This matrix follows the query operations documented by Flink 2.3, including the 
 | [Model inference](model-inference/) | **No** | Provider-dependent | Native provider integration only when parity is proven |
 | [Vector search](vector-search/) | **No** | Potentially | DataFusion/custom vector kernels when connector semantics permit |
 
-The future-target column describes architectural possibilities, not implemented support. Each linked page defines the proposed eligibility boundary and expected fallback behavior.
+The future-target column describes architectural possibilities, not implemented support. Each linked page defines current eligibility, fallback behavior, SQL syntax, and implementation details.

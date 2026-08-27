@@ -37,7 +37,8 @@ import tech.streamfusion.proto.plan.v1.Operator;
 final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowData>
         implements OneInputStreamOperator<RowData, RowData>, BoundedOneInput {
     private static final int BATCH_SIZE = 1024;
-    private final int inputIndex;
+    private final List<Integer> inputIndexes;
+    private final Integer conditionInputIndex;
     private final Integer minimum;
     private final RowType inputType;
     private final RowType outputType;
@@ -46,13 +47,19 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
     private final List<RowData> rows = new ArrayList<>(BATCH_SIZE);
     private final List<RowKind> rowKinds = new ArrayList<>(BATCH_SIZE);
 
-    StreamFusionIdentityCalcOperator(RowType inputType, RowType outputType, int inputIndex, Integer minimum) {
+    StreamFusionIdentityCalcOperator(
+            RowType inputType,
+            RowType outputType,
+            List<Integer> inputIndexes,
+            Integer conditionInputIndex,
+            Integer minimum) {
         this.inputType = inputType;
         this.outputType = outputType;
-        this.inputIndex = inputIndex;
+        this.inputIndexes = inputIndexes;
+        this.conditionInputIndex = conditionInputIndex;
         this.minimum = minimum;
         this.serializer = new RowDataSerializer(inputType);
-        this.serializedPlan = createPlan(inputIndex, minimum);
+        this.serializedPlan = createPlan(inputType, inputIndexes, conditionInputIndex, minimum);
     }
 
     @Override
@@ -81,7 +88,9 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
         }
         List<RowKind> outputRowKinds = new ArrayList<>(rows.size());
         for (int index = 0; index < rows.size(); index++) {
-            if (minimum == null || rows.get(index).getInt(inputIndex) >= minimum) {
+            if (minimum == null
+                    || (!rows.get(index).isNullAt(conditionInputIndex)
+                            && rows.get(index).getInt(conditionInputIndex) >= minimum)) {
                 outputRowKinds.add(rowKinds.get(index));
             }
         }
@@ -103,18 +112,17 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
         rowKinds.clear();
     }
 
-    private static byte[] createPlan(int inputIndex, Integer minimum) {
-        LogicalType integer = LogicalType.newBuilder()
-                .setNullable(false)
-                .setInteger(EmptyType.getDefaultInstance())
-                .build();
-        Calc.Builder calc = Calc.newBuilder()
-                .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
-                .addProjections(inputReference(inputIndex, integer));
+    private static byte[] createPlan(
+            RowType inputType, List<Integer> inputIndexes, Integer conditionInputIndex, Integer minimum) {
+        Calc.Builder calc = Calc.newBuilder().setInput(Operator.newBuilder().setInput(Input.newBuilder()));
+        for (int inputIndex : inputIndexes) {
+            calc.addProjections(inputReference(inputIndex, logicalType(inputType, inputIndex)));
+        }
         if (minimum != null) {
+            LogicalType integer = logicalType(inputType, conditionInputIndex);
             calc.setCondition(Expression.newBuilder()
                     .setGreaterThanOrEqual(GreaterThanOrEqual.newBuilder()
-                            .setLeft(inputReference(inputIndex, integer))
+                            .setLeft(inputReference(conditionInputIndex, integer))
                             .setRight(Expression.newBuilder()
                                     .setIntegerLiteral(
                                             IntegerLiteral.newBuilder().setValue(minimum)))));
@@ -124,6 +132,24 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
                 .setRoot(Operator.newBuilder().setCalc(calc))
                 .build()
                 .toByteArray();
+    }
+
+    private static LogicalType logicalType(RowType inputType, int inputIndex) {
+        org.apache.flink.table.types.logical.LogicalType flinkType = inputType.getTypeAt(inputIndex);
+        LogicalType.Builder type = LogicalType.newBuilder().setNullable(flinkType.isNullable());
+        switch (flinkType.getTypeRoot()) {
+            case INTEGER:
+                return type.setInteger(EmptyType.getDefaultInstance()).build();
+            case BIGINT:
+                return type.setBigint(EmptyType.getDefaultInstance()).build();
+            case BOOLEAN:
+                return type.setBoolean(EmptyType.getDefaultInstance()).build();
+            case CHAR:
+            case VARCHAR:
+                return type.setVarchar(EmptyType.getDefaultInstance()).build();
+            default:
+                throw new IllegalArgumentException("Unsupported projection type " + flinkType);
+        }
     }
 
     private static Expression inputReference(int inputIndex, LogicalType type) {

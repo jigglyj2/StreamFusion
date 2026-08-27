@@ -52,6 +52,11 @@ class SqlParityTest {
             + "FROM (VALUES ('a', 1), ('b', 2), ('a', 3)) AS orders(category, amount) "
             + "GROUP BY category";
     private static final String IDENTITY_CALC_SQL = "SELECT id FROM (VALUES (1), (2), (3)) AS input(id) WHERE id >= 2";
+    private static final String MULTI_COLUMN_PROJECTION_SQL = "SELECT name, enabled, id "
+            + "FROM (VALUES (1, 'one', TRUE), (2, 'two', FALSE)) "
+            + "AS input(id, name, enabled) WHERE id >= 1";
+    private static final String FILTER_ON_UNPROJECTED_COLUMN_SQL =
+            "SELECT name, id " + "FROM (VALUES (1, 'one'), (2, 'two')) AS input(id, name) WHERE id >= 2";
 
     @AfterEach
     void clearPlannerOverride() {
@@ -69,6 +74,20 @@ class SqlParityTest {
         assertParity(IDENTITY_CALC_SQL, true);
 
         assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("nativeProjectionCases")
+    void nativeInputReferenceProjectionsMatchFlinkByteForByte(String ignoredName, String sql) throws Exception {
+        assertParity(sql, true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    private static Stream<Arguments> nativeProjectionCases() {
+        return Stream.of(
+                Arguments.of("multi-column-reordered-types", MULTI_COLUMN_PROJECTION_SQL),
+                Arguments.of("filter-on-unprojected-int", FILTER_ON_UNPROJECTED_COLUMN_SQL));
     }
 
     @Test

@@ -12,6 +12,7 @@ package tech.streamfusion.flink.calc;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.List;
+import java.util.stream.Collectors;
 import org.apache.flink.api.dag.Transformation;
 import org.apache.flink.core.memory.ManagedMemoryUseCase;
 import org.apache.flink.streaming.api.transformations.OneInputTransformation;
@@ -30,14 +31,17 @@ public final class StreamFusionCalcTranslator {
             RowType outputType,
             List<?> projections,
             Object condition) {
-        if (!isIntegerCalc(inputType, outputType, projections, condition)) {
+        if (!isSupportedCalc(inputType, outputType, projections, condition)) {
             return null;
         }
 
-        int inputIndex = inputIndex(projections.get(0));
-        Integer minimum = minimumValue(condition, inputIndex);
+        List<Integer> inputIndexes =
+                projections.stream().map(StreamFusionCalcTranslator::inputIndex).collect(Collectors.toList());
+        Integer conditionInputIndex =
+                condition == null ? null : inputIndex(((List<?>) invoke(condition, "getOperands")).get(0));
+        Integer minimum = minimumValue(condition, conditionInputIndex == null ? -1 : conditionInputIndex);
         StreamFusionIdentityCalcOperator operator =
-                new StreamFusionIdentityCalcOperator(inputType, outputType, inputIndex, minimum);
+                new StreamFusionIdentityCalcOperator(inputType, outputType, inputIndexes, conditionInputIndex, minimum);
         OneInputTransformation<RowData, RowData> transformation = new OneInputTransformation<>(
                 input,
                 "streamfusion-identity-calc",
@@ -50,19 +54,44 @@ public final class StreamFusionCalcTranslator {
     }
 
     public static boolean canTranslate(RowType inputType, RowType outputType, List<?> projections, Object condition) {
-        return isIntegerCalc(inputType, outputType, projections, condition);
+        return isSupportedCalc(inputType, outputType, projections, condition);
     }
 
-    private static boolean isIntegerCalc(RowType inputType, RowType outputType, List<?> projections, Object condition) {
-        if (outputType.getFieldCount() != 1 || projections.size() != 1 || inputIndex(projections.get(0)) < 0) {
+    private static boolean isSupportedCalc(
+            RowType inputType, RowType outputType, List<?> projections, Object condition) {
+        if (projections.isEmpty()
+                || outputType.getFieldCount() != projections.size()
+                || projections.stream().anyMatch(expression -> inputIndex(expression) < 0)) {
             return false;
         }
-        int inputIndex = inputIndex(projections.get(0));
-        return (condition == null || minimumValue(condition, inputIndex) != null)
-                && inputType.getTypeAt(inputIndex).getTypeRoot() == LogicalTypeRoot.INTEGER
-                && outputType.getTypeAt(0).getTypeRoot() == LogicalTypeRoot.INTEGER
-                && !inputType.getTypeAt(inputIndex).isNullable()
-                && !outputType.getTypeAt(0).isNullable();
+        for (int outputIndex = 0; outputIndex < projections.size(); outputIndex++) {
+            int inputIndex = inputIndex(projections.get(outputIndex));
+            if (inputIndex >= inputType.getFieldCount()
+                    || !isSupportedProjectionType(
+                            inputType.getTypeAt(inputIndex).getTypeRoot())
+                    || !inputType.getTypeAt(inputIndex).equals(outputType.getTypeAt(outputIndex))) {
+                return false;
+            }
+        }
+        if (condition == null) {
+            return true;
+        }
+        List<?> operands = (List<?>) invoke(condition, "getOperands");
+        if (operands.size() != 2) {
+            return false;
+        }
+        int conditionInputIndex = inputIndex(operands.get(0));
+        return conditionInputIndex >= 0
+                && inputType.getTypeAt(conditionInputIndex).getTypeRoot() == LogicalTypeRoot.INTEGER
+                && minimumValue(condition, conditionInputIndex) != null;
+    }
+
+    private static boolean isSupportedProjectionType(LogicalTypeRoot type) {
+        return type == LogicalTypeRoot.INTEGER
+                || type == LogicalTypeRoot.BIGINT
+                || type == LogicalTypeRoot.BOOLEAN
+                || type == LogicalTypeRoot.CHAR
+                || type == LogicalTypeRoot.VARCHAR;
     }
 
     private static Integer minimumValue(Object condition, int inputIndex) {
