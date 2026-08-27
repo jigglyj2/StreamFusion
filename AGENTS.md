@@ -24,3 +24,12 @@ Do not add to or modify `README.md` for now. Keep it empty until this instructio
 ## Testing Guidelines
 
 Exact byte to byte parity with Flink's result set is paramount. Add our own tests to ensure this, use normal Flink processing when we can't achieve it. Hook into existing Flink SQL targets where possible.
+
+The Kafka-in/Kafka-out, exactly-once Nexmark comparison against unmodified Flink is
+our north-star benchmark. Optimize its four state-backend/mini-batch cases while
+keeping the code simple and avoiding substantial divergence from Flink's result
+parity and architecture.
+
+Immediately before each commit, run Palantir Java formatting and only the unit tests
+relevant to that commit. Treat this like a focused commit hook; do not spend time
+running unrelated test suites.
