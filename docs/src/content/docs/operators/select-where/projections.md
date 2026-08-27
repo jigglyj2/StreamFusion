@@ -23,14 +23,18 @@ StreamFusion can select, reorder, omit, or repeat direct input columns of these 
 - `CHAR`, `VARCHAR`, `BINARY`, and `VARBINARY`
 - `DECIMAL`, `DATE`, `TIME`, `TIMESTAMP`, and `TIMESTAMP_LTZ`
 
-Precision, scale, fixed width, and nullability are preserved. Every projection in the
-Calc must be a direct input-column reference; literals, arithmetic, casts, and functions
+Precision, scale, fixed width, and nullability are preserved. Computed `INT` projections
+also support integer literals and recursively nested addition, subtraction, and
+multiplication.
+
+Division, remainder, unary arithmetic, arithmetic on other types, casts, and functions
 currently fall back to Flink. The Calc also falls back if its filter is unsupported.
 
 ## Implementation
 
-Java encodes each input reference and its Flink logical type in the protobuf plan. Rust
-maps the references to DataFusion `Column` expressions in a `ProjectionExec`. DataFusion
-shares the referenced Arrow buffers when no computation requires a new result buffer.
+Java recursively encodes input references, literals, and arithmetic in the protobuf
+plan. Rust maps them to DataFusion `Column`, `Literal`, and `BinaryExpr` expressions in a
+`ProjectionExec`. DataFusion shares referenced Arrow buffers for direct projections and
+allocates a result vector when arithmetic produces new values.
 
 See the [Flink SELECT-clause documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/select/#select-clause).

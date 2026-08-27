@@ -39,7 +39,6 @@ import tech.streamfusion.proto.plan.v1.PrecisionType;
 final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowData>
         implements OneInputStreamOperator<RowData, RowData>, BoundedOneInput {
     private static final int BATCH_SIZE = 1024;
-    private final List<Integer> inputIndexes;
     private final StreamFusionIntComparison condition;
     private final RowType inputType;
     private final RowType outputType;
@@ -49,13 +48,12 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
     private final List<RowKind> rowKinds = new ArrayList<>(BATCH_SIZE);
 
     StreamFusionIdentityCalcOperator(
-            RowType inputType, RowType outputType, List<Integer> inputIndexes, StreamFusionIntComparison condition) {
+            RowType inputType, RowType outputType, List<Expression> projections, StreamFusionIntComparison condition) {
         this.inputType = inputType;
         this.outputType = outputType;
-        this.inputIndexes = inputIndexes;
         this.condition = condition;
         this.serializer = new RowDataSerializer(inputType);
-        this.serializedPlan = createPlan(inputType, inputIndexes, condition);
+        this.serializedPlan = createPlan(inputType, projections, condition);
     }
 
     @Override
@@ -107,11 +105,9 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
     }
 
     private static byte[] createPlan(
-            RowType inputType, List<Integer> inputIndexes, StreamFusionIntComparison condition) {
+            RowType inputType, List<Expression> projections, StreamFusionIntComparison condition) {
         Calc.Builder calc = Calc.newBuilder().setInput(Operator.newBuilder().setInput(Input.newBuilder()));
-        for (int inputIndex : inputIndexes) {
-            calc.addProjections(inputReference(inputIndex, logicalType(inputType, inputIndex)));
-        }
+        calc.addAllProjections(projections);
         if (condition != null) {
             LogicalType integer = logicalType(inputType, condition.inputIndex());
             Expression input = inputReference(condition.inputIndex(), integer);
@@ -131,7 +127,7 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
                 .toByteArray();
     }
 
-    private static LogicalType logicalType(RowType inputType, int inputIndex) {
+    static LogicalType logicalType(RowType inputType, int inputIndex) {
         org.apache.flink.table.types.logical.LogicalType flinkType = inputType.getTypeAt(inputIndex);
         LogicalType.Builder type = LogicalType.newBuilder().setNullable(flinkType.isNullable());
         switch (flinkType.getTypeRoot()) {
@@ -184,7 +180,7 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
         }
     }
 
-    private static Expression inputReference(int inputIndex, LogicalType type) {
+    static Expression inputReference(int inputIndex, LogicalType type) {
         return Expression.newBuilder()
                 .setInputReference(
                         InputReference.newBuilder().setIndex(inputIndex).setType(type))

@@ -67,6 +67,8 @@ class SqlParityTest {
             + "AS input(id, tiny_value, small_value, big_value, float_value, double_value, boolean_value, "
             + "char_value, varchar_value, binary_value, varbinary_value, decimal_value, date_value, "
             + "time_value, timestamp_value) WHERE id >= 1";
+    private static final String INTEGER_ARITHMETIC_SQL = "SELECT id + 10, id - 1, id * 3, "
+            + "(id + 2) * (id - 1), 7 FROM (VALUES (1), (2), (3)) AS input(id) WHERE id >= 1";
 
     @AfterEach
     void clearPlannerOverride() {
@@ -102,6 +104,20 @@ class SqlParityTest {
                 Arguments.of("multi-column-reordered-types", MULTI_COLUMN_PROJECTION_SQL, true),
                 Arguments.of("filter-on-unprojected-int", FILTER_ON_UNPROJECTED_COLUMN_SQL, true),
                 Arguments.of("casts-force-whole-plan-fallback", SCALAR_TYPE_PROJECTION_SQL, false));
+    }
+
+    @Test
+    void nativeIntegerArithmeticMatchesFlinkByteForByte() throws Exception {
+        assertParity(INTEGER_ARITHMETIC_SQL, true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    @Test
+    void unsupportedIntegerDivisionFallsBackAndMatchesFlinkByteForByte() throws Exception {
+        assertParity("SELECT id / 2 FROM (VALUES (1), (2), (3)) AS input(id) WHERE id >= 1", true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
     }
 
     @ParameterizedTest(name = "{0}")

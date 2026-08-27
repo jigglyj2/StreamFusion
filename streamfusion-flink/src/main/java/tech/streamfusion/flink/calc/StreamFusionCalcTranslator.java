@@ -11,8 +11,8 @@ package tech.streamfusion.flink.calc;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.stream.Collectors;
 import org.apache.flink.api.dag.Transformation;
 import org.apache.flink.core.memory.ManagedMemoryUseCase;
 import org.apache.flink.streaming.api.transformations.OneInputTransformation;
@@ -20,7 +20,11 @@ import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
+import tech.streamfusion.proto.plan.v1.Arithmetic;
+import tech.streamfusion.proto.plan.v1.ArithmeticOperator;
 import tech.streamfusion.proto.plan.v1.ComparisonOperator;
+import tech.streamfusion.proto.plan.v1.Expression;
+import tech.streamfusion.proto.plan.v1.IntegerLiteral;
 
 /** Reflection entry point called by the small Flink planner patch for eligible calc nodes. */
 public final class StreamFusionCalcTranslator {
@@ -36,11 +40,13 @@ public final class StreamFusionCalcTranslator {
             return null;
         }
 
-        List<Integer> inputIndexes =
-                projections.stream().map(StreamFusionCalcTranslator::inputIndex).collect(Collectors.toList());
+        List<Expression> nativeProjections = new ArrayList<>(projections.size());
+        for (Object projection : projections) {
+            nativeProjections.add(projectionExpression(projection, inputType));
+        }
         StreamFusionIntComparison comparison = comparison(condition);
         StreamFusionIdentityCalcOperator operator =
-                new StreamFusionIdentityCalcOperator(inputType, outputType, inputIndexes, comparison);
+                new StreamFusionIdentityCalcOperator(inputType, outputType, nativeProjections, comparison);
         OneInputTransformation<RowData, RowData> transformation = new OneInputTransformation<>(
                 input,
                 "streamfusion-identity-calc",
@@ -58,17 +64,21 @@ public final class StreamFusionCalcTranslator {
 
     private static boolean isSupportedCalc(
             RowType inputType, RowType outputType, List<?> projections, Object condition) {
-        if (projections.isEmpty()
-                || outputType.getFieldCount() != projections.size()
-                || projections.stream().anyMatch(expression -> inputIndex(expression) < 0)) {
+        if (projections.isEmpty() || outputType.getFieldCount() != projections.size()) {
             return false;
         }
         for (int outputIndex = 0; outputIndex < projections.size(); outputIndex++) {
-            int inputIndex = inputIndex(projections.get(outputIndex));
-            if (inputIndex >= inputType.getFieldCount()
-                    || !isSupportedProjectionType(
-                            inputType.getTypeAt(inputIndex).getTypeRoot())
-                    || !inputType.getTypeAt(inputIndex).equals(outputType.getTypeAt(outputIndex))) {
+            Object projection = projections.get(outputIndex);
+            int inputIndex = inputIndex(projection);
+            if (inputIndex >= 0) {
+                if (inputIndex >= inputType.getFieldCount()
+                        || !isSupportedProjectionType(
+                                inputType.getTypeAt(inputIndex).getTypeRoot())
+                        || !inputType.getTypeAt(inputIndex).equals(outputType.getTypeAt(outputIndex))) {
+                    return false;
+                }
+            } else if (outputType.getTypeAt(outputIndex).getTypeRoot() != LogicalTypeRoot.INTEGER
+                    || projectionExpression(projection, inputType) == null) {
                 return false;
             }
         }
@@ -78,6 +88,54 @@ public final class StreamFusionCalcTranslator {
         StreamFusionIntComparison comparison = comparison(condition);
         return comparison != null
                 && inputType.getTypeAt(comparison.inputIndex()).getTypeRoot() == LogicalTypeRoot.INTEGER;
+    }
+
+    private static Expression projectionExpression(Object expression, RowType inputType) {
+        int inputIndex = inputIndex(expression);
+        if (inputIndex >= 0) {
+            if (inputIndex >= inputType.getFieldCount()) {
+                return null;
+            }
+            return StreamFusionIdentityCalcOperator.inputReference(
+                    inputIndex, StreamFusionIdentityCalcOperator.logicalType(inputType, inputIndex));
+        }
+        Integer literal = integerLiteral(expression);
+        if (literal != null) {
+            return Expression.newBuilder()
+                    .setIntegerLiteral(IntegerLiteral.newBuilder().setValue(literal))
+                    .build();
+        }
+        ArithmeticOperator operator =
+                arithmeticOperator(invoke(expression, "getKind").toString());
+        if (operator == null) {
+            return null;
+        }
+        List<?> operands = (List<?>) invoke(expression, "getOperands");
+        if (operands.size() != 2) {
+            return null;
+        }
+        Expression left = projectionExpression(operands.get(0), inputType);
+        Expression right = projectionExpression(operands.get(1), inputType);
+        if (left == null || right == null) {
+            return null;
+        }
+        return Expression.newBuilder()
+                .setArithmetic(
+                        Arithmetic.newBuilder().setLeft(left).setRight(right).setOperator(operator))
+                .build();
+    }
+
+    private static ArithmeticOperator arithmeticOperator(String kind) {
+        switch (kind) {
+            case "PLUS":
+                return ArithmeticOperator.ARITHMETIC_OPERATOR_ADD;
+            case "MINUS":
+                return ArithmeticOperator.ARITHMETIC_OPERATOR_SUBTRACT;
+            case "TIMES":
+                return ArithmeticOperator.ARITHMETIC_OPERATOR_MULTIPLY;
+            default:
+                return null;
+        }
     }
 
     private static boolean isSupportedProjectionType(LogicalTypeRoot type) {

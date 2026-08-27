@@ -34,25 +34,11 @@ pub(crate) fn create(
     let expressions = calc
         .projections
         .iter()
-        .map(|expression| {
-            let reference = match expression.expression.as_ref() {
-                Some(proto::expression::Expression::InputReference(reference)) => reference,
-                _ => {
-                    return Err(DataFusionError::Plan(
-                        "only input-reference projections are supported".to_string(),
-                    ));
-                }
-            };
-            let index = reference.index as usize;
-            let field = child_schema.fields().get(index).ok_or_else(|| {
-                DataFusionError::Plan(format!(
-                    "projection input index {index} is outside the {}-column input schema",
-                    child_schema.fields().len()
-                ))
-            })?;
+        .enumerate()
+        .map(|(index, expression)| {
             Ok((
-                Arc::new(Column::new(field.name(), index)) as _,
-                field.name().to_string(),
+                create_expression(expression, child_schema.as_ref())?,
+                format!("projection_{index}"),
             ))
         })
         .collect::<Result<Vec<_>>>()?;
@@ -123,6 +109,33 @@ fn create_expression(
                 create_expression(
                     comparison.right.as_ref().ok_or_else(|| {
                         DataFusionError::Plan("comparison right operand is empty".to_string())
+                    })?,
+                    schema,
+                )?,
+            )))
+        }
+        Some(proto::expression::Expression::Arithmetic(arithmetic)) => {
+            let operator = match arithmetic.operator() {
+                proto::ArithmeticOperator::Add => Operator::Plus,
+                proto::ArithmeticOperator::Subtract => Operator::Minus,
+                proto::ArithmeticOperator::Multiply => Operator::Multiply,
+                proto::ArithmeticOperator::Unspecified => {
+                    return Err(DataFusionError::Plan(
+                        "arithmetic operator is unspecified".to_string(),
+                    ));
+                }
+            };
+            Ok(Arc::new(BinaryExpr::new(
+                create_expression(
+                    arithmetic.left.as_ref().ok_or_else(|| {
+                        DataFusionError::Plan("arithmetic left operand is empty".to_string())
+                    })?,
+                    schema,
+                )?,
+                operator,
+                create_expression(
+                    arithmetic.right.as_ref().ok_or_else(|| {
+                        DataFusionError::Plan("arithmetic right operand is empty".to_string())
                     })?,
                     schema,
                 )?,

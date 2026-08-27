@@ -60,14 +60,14 @@ public final class PlannerHookIntegrationJob {
         }
         long acceleratedBatches = StreamFusionPlannerFactory.nativeCalcBatchCount();
         List<Integer> fallbackValues = new ArrayList<>();
-        try (CloseableIterator<Row> rows = tables.executeSql("SELECT id + 1 FROM (VALUES (1), (2)) AS input(id)")
+        try (CloseableIterator<Row> rows = tables.executeSql("SELECT -id FROM (VALUES (1), (2)) AS input(id)")
                 .collect()) {
             while (rows.hasNext()) {
                 fallbackValues.add((Integer) rows.next().getField(0));
             }
         }
         fallbackValues.sort(Integer::compareTo);
-        if (!fallbackValues.equals(List.of(2, 3))) {
+        if (!fallbackValues.equals(List.of(-2, -1))) {
             throw new IllegalStateException("Unexpected Flink fallback result: " + fallbackValues);
         }
         if (StreamFusionPlannerFactory.nativeCalcBatchCount() != acceleratedBatches) {

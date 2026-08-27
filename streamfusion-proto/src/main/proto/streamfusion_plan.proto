@@ -33,6 +33,7 @@ message Expression {
     IntegerLiteral integer_literal = 2;
     GreaterThanOrEqual greater_than_or_equal = 3;
     Comparison comparison = 4;
+    Arithmetic arithmetic = 5;
   }
 }
 
@@ -59,6 +60,19 @@ enum ComparisonOperator {
   COMPARISON_OPERATOR_LESS_THAN_OR_EQUAL = 4;
   COMPARISON_OPERATOR_GREATER_THAN = 5;
   COMPARISON_OPERATOR_GREATER_THAN_OR_EQUAL = 6;
+}
+
+message Arithmetic {
+  Expression left = 1;
+  Expression right = 2;
+  ArithmeticOperator operator = 3;
+}
+
+enum ArithmeticOperator {
+  ARITHMETIC_OPERATOR_UNSPECIFIED = 0;
+  ARITHMETIC_OPERATOR_ADD = 1;
+  ARITHMETIC_OPERATOR_SUBTRACT = 2;
+  ARITHMETIC_OPERATOR_MULTIPLY = 3;
 }
 
 message InputReference {
