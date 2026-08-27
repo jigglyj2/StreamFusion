@@ -53,3 +53,84 @@ index a4a22ca8a13..60e99bb18af 100644
 +
      private PlannerFactoryUtil() {}
  }
+diff --git a/flink-table/flink-table-planner/src/main/java/org/apache/flink/table/planner/plan/nodes/exec/common/CommonExecCalc.java b/flink-table/flink-table-planner/src/main/java/org/apache/flink/table/planner/plan/nodes/exec/common/CommonExecCalc.java
+index cf389655031..1765821a14f 100644
+--- a/flink-table/flink-table-planner/src/main/java/org/apache/flink/table/planner/plan/nodes/exec/common/CommonExecCalc.java
++++ b/flink-table/flink-table-planner/src/main/java/org/apache/flink/table/planner/plan/nodes/exec/common/CommonExecCalc.java
+@@ -42,6 +42,8 @@ import org.apache.calcite.rex.RexNode;
+ 
+ import javax.annotation.Nullable;
+ 
++import java.lang.reflect.InvocationTargetException;
++import java.lang.reflect.Method;
+ import java.util.List;
+ import java.util.Optional;
+ 
+@@ -52,6 +54,9 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
+ public abstract class CommonExecCalc extends ExecNodeBase<RowData>
+         implements SingleTransformationTranslator<RowData> {
+ 
++    private static final String STREAMFUSION_CALC_TRANSLATOR_PROPERTY =
++            "tech.streamfusion.flink.calc.translator";
++
+     public static final String CALC_TRANSFORMATION = "calc";
+ 
+     public static final String FIELD_NAME_PROJECTION = "projection";
+@@ -92,6 +97,15 @@ public abstract class CommonExecCalc extends ExecNodeBase<RowData>
+         final ExecEdge inputEdge = getInputEdges().get(0);
+         final Transformation<RowData> inputTransform =
+                 (Transformation<RowData>) inputEdge.translateToPlan(planner);
++        final Transformation<RowData> streamFusionTransform =
++                tryTranslateWithStreamFusion(
++                        planner,
++                        inputTransform,
++                        (RowType) inputEdge.getOutputType(),
++                        (RowType) getOutputType());
++        if (streamFusionTransform != null) {
++            return streamFusionTransform;
++        }
+         final CodeGeneratorContext ctx =
+                 new CodeGeneratorContext(config, planner.getFlinkContext().getClassLoader())
+                         .setOperatorBaseClass(operatorBaseClass);
+@@ -113,4 +127,41 @@ public abstract class CommonExecCalc extends ExecNodeBase<RowData>
+                 inputTransform.getParallelism(),
+                 false);
+     }
++
++    @SuppressWarnings("unchecked")
++    private Transformation<RowData> tryTranslateWithStreamFusion(
++            PlannerBase planner,
++            Transformation<RowData> inputTransform,
++            RowType inputType,
++            RowType outputType) {
++        final String translatorClass = System.getProperty(STREAMFUSION_CALC_TRANSLATOR_PROPERTY);
++        if (translatorClass == null || translatorClass.isBlank()) {
++            return null;
++        }
++        try {
++            final Class<?> translator =
++                    Class.forName(
++                            translatorClass, true, planner.getFlinkContext().getClassLoader());
++            final Method translate =
++                    translator.getMethod(
++                            "translate",
++                            Transformation.class,
++                            RowType.class,
++                            RowType.class,
++                            List.class,
++                            RexNode.class);
++            return (Transformation<RowData>)
++                    translate.invoke(
++                            null, inputTransform, inputType, outputType, projection, condition);
++        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
++            throw new IllegalStateException(
++                    "Could not invoke StreamFusion calc translator " + translatorClass, e);
++        } catch (InvocationTargetException e) {
++            final Throwable cause = e.getCause();
++            if (cause instanceof RuntimeException) {
++                throw (RuntimeException) cause;
++            }
++            throw new IllegalStateException("StreamFusion calc translation failed", cause);
++        }
++    }
+ }
