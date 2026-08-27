@@ -12,9 +12,8 @@ package tech.streamfusion.flink.planner;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import org.junit.jupiter.api.Test;
-import tech.streamfusion.flink.operator.ArrowToRowDataSinkTransposeOperator;
 import tech.streamfusion.flink.operator.DummyStreamFusionOperator;
-import tech.streamfusion.flink.operator.RowDataToArrowSourceTransposeOperator;
+import tech.streamfusion.flink.operator.FlinkRowDataArrowBatchView;
 import tech.streamfusion.flink.planner.StreamFusionPlanNode.Role;
 
 class StreamFusionPlanAnalyzerTest {
@@ -22,12 +21,10 @@ class StreamFusionPlanAnalyzerTest {
 
     @Test
     void acceptsOnlyWhenEveryNodeHasStreamFusionCoverage() {
-        StreamFusionPlanNode source =
-                StreamFusionPlanNode.supported("KafkaSource", Role.SOURCE, new RowDataToArrowSourceTransposeOperator());
+        StreamFusionPlanNode source = StreamFusionPlanNode.supported("KafkaSource", Role.SOURCE, batchView());
         StreamFusionPlanNode calc = StreamFusionPlanNode.supported(
                 "StreamExecCalc", Role.INTERNAL, new DummyStreamFusionOperator("StreamFusionDummyCalc"), source);
-        StreamFusionPlanNode sink =
-                StreamFusionPlanNode.supported("KafkaSink", Role.SINK, new ArrowToRowDataSinkTransposeOperator(), calc);
+        StreamFusionPlanNode sink = StreamFusionPlanNode.supported("KafkaSink", Role.SINK, batchView(), calc);
 
         StreamFusionPlanDecision decision = analyzer.analyze(sink);
 
@@ -39,14 +36,12 @@ class StreamFusionPlanAnalyzerTest {
 
     @Test
     void rejectsWholePlanAndExplainsEveryUnsupportedOperator() {
-        StreamFusionPlanNode source =
-                StreamFusionPlanNode.supported("KafkaSource", Role.SOURCE, new RowDataToArrowSourceTransposeOperator());
+        StreamFusionPlanNode source = StreamFusionPlanNode.supported("KafkaSource", Role.SOURCE, batchView());
         StreamFusionPlanNode calc = StreamFusionPlanNode.unsupported(
                 "StreamExecCalc", Role.INTERNAL, "scalar function JSON_VALUE is not implemented", source);
         StreamFusionPlanNode aggregate = StreamFusionPlanNode.unsupported(
                 "StreamExecGroupAggregate", Role.INTERNAL, "retractable SUM is not implemented", calc);
-        StreamFusionPlanNode sink = StreamFusionPlanNode.supported(
-                "KafkaSink", Role.SINK, new ArrowToRowDataSinkTransposeOperator(), aggregate);
+        StreamFusionPlanNode sink = StreamFusionPlanNode.supported("KafkaSink", Role.SINK, batchView(), aggregate);
 
         StreamFusionPlanDecision decision = analyzer.analyze(sink);
 
@@ -63,17 +58,36 @@ class StreamFusionPlanAnalyzerTest {
     @Test
     void rejectsUncoveredSourceOrSinkBoundary() {
         StreamFusionPlanNode source = StreamFusionPlanNode.unsupported(
-                "CustomSource", Role.SOURCE, "no StreamFusion source or RowData-to-Arrow transpose");
+                "CustomSource", Role.SOURCE, "no StreamFusion source or RowData Arrow batch view");
         StreamFusionPlanNode internal = StreamFusionPlanNode.supported(
                 "StreamExecCalc", Role.INTERNAL, new DummyStreamFusionOperator("StreamFusionDummyCalc"), source);
         StreamFusionPlanNode sink = StreamFusionPlanNode.unsupported(
-                "CustomSink", Role.SINK, "no StreamFusion sink or Arrow-to-RowData transpose", internal);
+                "CustomSink", Role.SINK, "no StreamFusion sink or RowData Arrow batch view", internal);
 
         StreamFusionPlanDecision decision = analyzer.analyze(sink);
 
         assertThat(decision.acceleratesWholePlan()).isFalse();
         assertThat(decision.explain())
-                .contains("CustomSource [SOURCE]: no StreamFusion source or RowData-to-Arrow transpose")
-                .contains("CustomSink [SINK]: no StreamFusion sink or Arrow-to-RowData transpose");
+                .contains("CustomSource [SOURCE]: no StreamFusion source or RowData Arrow batch view")
+                .contains("CustomSink [SINK]: no StreamFusion sink or RowData Arrow batch view");
+    }
+
+    private static FlinkRowDataArrowBatchView batchView() {
+        return new FlinkRowDataArrowBatchView() {
+            @Override
+            public String name() {
+                return "FlinkRowDataArrowBatchView";
+            }
+
+            @Override
+            public int rowCount() {
+                return 0;
+            }
+
+            @Override
+            public org.apache.flink.table.data.RowData rowData(int ordinal) {
+                throw new IndexOutOfBoundsException(ordinal);
+            }
+        };
     }
 }

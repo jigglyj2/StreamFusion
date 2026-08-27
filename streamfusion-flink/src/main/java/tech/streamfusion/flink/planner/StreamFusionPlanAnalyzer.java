@@ -22,7 +22,7 @@ public final class StreamFusionPlanAnalyzer {
 
     private static void collectRejections(
             StreamFusionPlanNode node, List<StreamFusionPlanDecision.Rejection> rejections) {
-        if (node.streamFusionOperator() == null) {
+        if (node.streamFusionImplementation() == null) {
             rejections.add(
                     new StreamFusionPlanDecision.Rejection(node.flinkOperator(), node.role(), node.rejectionReason()));
         }

@@ -11,7 +11,7 @@ package tech.streamfusion.flink.planner;
 
 import java.util.List;
 import java.util.Objects;
-import tech.streamfusion.flink.operator.StreamFusionPhysicalOperator;
+import tech.streamfusion.flink.operator.StreamFusionPlanImplementation;
 
 /** Planner-neutral representation used while deciding whether a whole plan can be replaced. */
 public final class StreamFusionPlanNode {
@@ -23,22 +23,22 @@ public final class StreamFusionPlanNode {
 
     private final String flinkOperator;
     private final Role role;
-    private final StreamFusionPhysicalOperator streamFusionOperator;
+    private final StreamFusionPlanImplementation streamFusionImplementation;
     private final String rejectionReason;
     private final List<StreamFusionPlanNode> inputs;
 
     private StreamFusionPlanNode(
             String flinkOperator,
             Role role,
-            StreamFusionPhysicalOperator streamFusionOperator,
+            StreamFusionPlanImplementation streamFusionImplementation,
             String rejectionReason,
             List<StreamFusionPlanNode> inputs) {
         this.flinkOperator = Objects.requireNonNull(flinkOperator, "flinkOperator");
         this.role = Objects.requireNonNull(role, "role");
-        this.streamFusionOperator = streamFusionOperator;
+        this.streamFusionImplementation = streamFusionImplementation;
         this.rejectionReason = rejectionReason;
         this.inputs = List.copyOf(inputs);
-        if ((streamFusionOperator == null) == (rejectionReason == null)) {
+        if ((streamFusionImplementation == null) == (rejectionReason == null)) {
             throw new IllegalArgumentException("A node must have exactly one operator or rejection reason");
         }
     }
@@ -46,9 +46,9 @@ public final class StreamFusionPlanNode {
     public static StreamFusionPlanNode supported(
             String flinkOperator,
             Role role,
-            StreamFusionPhysicalOperator streamFusionOperator,
+            StreamFusionPlanImplementation streamFusionImplementation,
             StreamFusionPlanNode... inputs) {
-        return new StreamFusionPlanNode(flinkOperator, role, streamFusionOperator, null, List.of(inputs));
+        return new StreamFusionPlanNode(flinkOperator, role, streamFusionImplementation, null, List.of(inputs));
     }
 
     public static StreamFusionPlanNode unsupported(
@@ -64,8 +64,8 @@ public final class StreamFusionPlanNode {
         return role;
     }
 
-    StreamFusionPhysicalOperator streamFusionOperator() {
-        return streamFusionOperator;
+    StreamFusionPlanImplementation streamFusionImplementation() {
+        return streamFusionImplementation;
     }
 
     String rejectionReason() {

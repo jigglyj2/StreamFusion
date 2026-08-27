@@ -94,6 +94,6 @@ final class StreamFusionPlanner implements Planner {
                 + System.lineSeparator()
                 + "Plan reason: Flink plan conversion to StreamFusion physical operators is not implemented."
                 + System.lineSeparator()
-                + "Boundary reason: RowData-to-Arrow and Arrow-to-RowData transposes are TODO skeletons.";
+                + "Boundary reason: Flink RowData Arrow batch views and native materialization are TODO.";
     }
 }

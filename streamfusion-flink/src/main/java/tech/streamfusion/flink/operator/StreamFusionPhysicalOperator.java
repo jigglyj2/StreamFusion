@@ -16,6 +16,4 @@
 package tech.streamfusion.flink.operator;
 
 /** A physical operator selected by the StreamFusion planner. */
-public interface StreamFusionPhysicalOperator {
-    String name();
-}
+public interface StreamFusionPhysicalOperator extends StreamFusionPlanImplementation {}

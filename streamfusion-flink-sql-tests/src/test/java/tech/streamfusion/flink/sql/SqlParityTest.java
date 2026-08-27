@@ -73,7 +73,7 @@ class SqlParityTest {
                 .contains("== StreamFusion Acceleration ==")
                 .contains("Accelerated: no")
                 .contains("Flink plan conversion to StreamFusion physical operators is not implemented")
-                .contains("RowData-to-Arrow and Arrow-to-RowData transposes are TODO skeletons");
+                .contains("Flink RowData Arrow batch views and native materialization are TODO");
     }
 
     @ParameterizedTest(name = "{0}")
