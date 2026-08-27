@@ -27,6 +27,12 @@ coverage, fallback conditions, or other user-visible functionality changes. Keep
 operator status pages explicit about current support; do not document planned work as
 implemented.
 
+StreamFusion plan replacement is all-or-nothing. Accelerate a plan only when every
+internal node has a StreamFusion physical operator. Sources and sinks are the only
+exceptions and must use a StreamFusion connector operator or an explicit RowData-to-Arrow
+or Arrow-to-RowData boundary transpose. EXPLAIN output must state why the whole plan fell
+back and give a reason for every operator that prevented acceleration.
+
 ## Testing Guidelines
 
 Exact byte to byte parity with Flink's result set is paramount. Add our own tests to ensure this, use normal Flink processing when we can't achieve it. Hook into existing Flink SQL targets where possible.
