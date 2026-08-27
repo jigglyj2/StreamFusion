@@ -12,6 +12,17 @@ Structure this project like Flink. We should have different optional maven modul
 
 Add once configured.
 
+Use the Rust development profile for ordinary implementation iteration and focused
+tests when optimization does not affect the behavior under test. Release JARs,
+distribution artifacts, and every benchmark measurement must compile Rust with the
+release profile; never publish or compare benchmark results from a development build.
+
+Release and benchmark native builds should enable the newest CPU instruction sets
+available on their declared target (for local benchmarking, use the build machine's
+native CPU feature set). Published artifacts must record and enforce their CPU baseline,
+and architecture-specific binaries must be packaged separately so an optimized binary
+is never silently loaded on an incompatible host.
+
 ## Coding Style & Naming Conventions
 
 Add once configured. Use palantir java format.
