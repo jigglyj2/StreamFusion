@@ -30,3 +30,11 @@ Kafka sink for updating queries. An upsert sink table must declare a non-enforce
 primary key matching the query's stable unique key. If a query has no stable unique
 key in its output, adapt its output schema to retain that key rather than inventing
 one or silently collapsing distinct rows.
+
+## Direct SQL job
+
+The benchmark's Flink job is implemented by `NexmarkSqlJob`. It loads the selected
+SQL from `src/main/resources/nexmark`, creates bounded Kafka input and exactly-once
+Kafka output tables, configures the hashmap state backend with mini-batching disabled,
+and waits for the Flink job to finish. The five arguments are the Kafka bootstrap
+address, input topic, output topic, query name, and `flink` or `streamfusion` engine.

@@ -23,6 +23,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.compiler.release>11</maven.compiler.release>
         <flink.version>2.3.0</flink.version>
+        <flink.kafka.connector.version>5.0.0-2.2</flink.kafka.connector.version>
         <junit.version>5.13.4</junit.version>
         <assertj.version>3.27.4</assertj.version>
         <maven.compiler.plugin.version>3.14.0</maven.compiler.plugin.version>
@@ -34,6 +35,21 @@
 
     <dependencyManagement>
         <dependencies>
+            <dependency>
+                <groupId>org.apache.flink</groupId>
+                <artifactId>flink-connector-kafka</artifactId>
+                <version>${flink.kafka.connector.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.flink</groupId>
+                <artifactId>flink-json</artifactId>
+                <version>${flink.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.flink</groupId>
+                <artifactId>flink-connector-base</artifactId>
+                <version>${flink.version}</version>
+            </dependency>
             <dependency>
                 <groupId>org.apache.flink</groupId>
                 <artifactId>flink-streaming-java</artifactId>
