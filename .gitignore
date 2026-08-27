@@ -2,3 +2,6 @@ target/
 .streamfusion-git/
 .idea/
 *.iml
+docs/.astro/
+docs/dist/
+docs/node_modules/
