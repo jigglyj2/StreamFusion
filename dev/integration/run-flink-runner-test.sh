@@ -15,7 +15,7 @@ if [[ ${#installed_api_jars[@]} -ne 1 ]]; then
   echo "Expected exactly one Flink table API JAR, found ${#installed_api_jars[@]}" >&2
   exit 1
 fi
-patched_api_jar="$project_root/flink/flink-table/flink-table-api-java/target/$(basename "${installed_api_jars[0]}")"
+patched_api_jar="$project_root/flink/flink-table/flink-table-api-java-uber/target/$(basename "${installed_api_jars[0]}")"
 
 if [[ ${#streamfusion_jars[@]} -ne 1 ]]; then
   echo "Expected exactly one StreamFusion JAR, found ${#streamfusion_jars[@]}" >&2

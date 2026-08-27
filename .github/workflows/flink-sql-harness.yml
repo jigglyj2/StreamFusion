@@ -37,7 +37,7 @@ jobs:
         working-directory: flink
         run: >-
           ./mvnw install -DskipTests -Dfast -Pskip-webui-build -T1C
-          -pl flink-table/flink-table-api-java,flink-table/flink-table-planner
+          -pl flink-table/flink-table-api-java-uber,flink-table/flink-table-planner
           -am
 
       - name: Run StreamFusion SQL parity harness
