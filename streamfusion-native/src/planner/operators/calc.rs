@@ -11,7 +11,7 @@ use std::sync::Arc;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::Operator;
 use datafusion::physical_expr::expressions::{BinaryExpr, Column, Literal};
-use datafusion::physical_expr::expressions::{IsNotNullExpr, IsNullExpr};
+use datafusion::physical_expr::expressions::{IsNotNullExpr, IsNullExpr, NotExpr};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::projection::ProjectionExec;
@@ -155,6 +155,40 @@ fn create_expression(
                 Ok(Arc::new(IsNullExpr::new(operand)))
             }
         }
+        Some(proto::expression::Expression::BooleanBinary(boolean)) => {
+            let operator = match boolean.operator() {
+                proto::BooleanOperator::And => Operator::And,
+                proto::BooleanOperator::Or => Operator::Or,
+                proto::BooleanOperator::Unspecified => {
+                    return Err(DataFusionError::Plan(
+                        "boolean operator is unspecified".to_string(),
+                    ));
+                }
+            };
+            Ok(Arc::new(BinaryExpr::new(
+                create_expression(
+                    boolean.left.as_ref().ok_or_else(|| {
+                        DataFusionError::Plan("boolean left operand is empty".to_string())
+                    })?,
+                    schema,
+                )?,
+                operator,
+                create_expression(
+                    boolean.right.as_ref().ok_or_else(|| {
+                        DataFusionError::Plan("boolean right operand is empty".to_string())
+                    })?,
+                    schema,
+                )?,
+            )))
+        }
+        Some(proto::expression::Expression::BooleanNot(boolean)) => Ok(Arc::new(NotExpr::new(
+            create_expression(
+                boolean.operand.as_ref().ok_or_else(|| {
+                    DataFusionError::Plan("boolean NOT operand is empty".to_string())
+                })?,
+                schema,
+            )?,
+        ))),
         None => Err(DataFusionError::Plan("expression is empty".to_string())),
     }
 }

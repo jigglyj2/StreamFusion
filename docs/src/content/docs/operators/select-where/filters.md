@@ -26,11 +26,15 @@ predicates, functions, and non-integer operands currently fall back to Flink.
 `IS NULL` and `IS NOT NULL` are supported over direct input columns of every scalar type
 listed on the [projection coverage page](../projections/).
 
+Supported comparisons and null checks can be recursively composed with `AND`, `OR`, and
+`NOT`. StreamFusion preserves SQL's three-valued boolean logic: true, false, and unknown
+remain distinct throughout the expression, and `WHERE` retains only true rows.
+
 ## Implementation
 
 Java encodes the comparison as a protobuf expression. Rust lowers it to DataFusion
-`Column`, `Literal`, `BinaryExpr`, `IsNullExpr`, and `IsNotNullExpr` nodes inside a
-`FilterExec`. The following `ProjectionExec` consumes its Arrow batches directly. A
+`Column`, `Literal`, `BinaryExpr`, `NotExpr`, `IsNullExpr`, and `IsNotNullExpr` nodes
+inside a `FilterExec`. The following `ProjectionExec` consumes its Arrow batches directly. A
 paired serializable Java evaluator retains the original Flink `RowKind` for each row
 that survives native filtering.
 

@@ -22,6 +22,7 @@ import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.proto.plan.v1.Arithmetic;
 import tech.streamfusion.proto.plan.v1.ArithmeticOperator;
+import tech.streamfusion.proto.plan.v1.BooleanOperator;
 import tech.streamfusion.proto.plan.v1.ComparisonOperator;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.IntegerLiteral;
@@ -100,6 +101,29 @@ public final class StreamFusionCalcTranslator {
                     : null;
         }
         String kind = invoke(condition, "getKind").toString();
+        if ("AND".equals(kind) || "OR".equals(kind)) {
+            List<?> operands = (List<?>) invoke(condition, "getOperands");
+            if (operands.size() != 2) {
+                return null;
+            }
+            StreamFusionCondition left = condition(operands.get(0), inputType);
+            StreamFusionCondition right = condition(operands.get(1), inputType);
+            if (left == null || right == null) {
+                return null;
+            }
+            return StreamFusionBooleanCondition.binary(
+                    left,
+                    right,
+                    "AND".equals(kind) ? BooleanOperator.BOOLEAN_OPERATOR_AND : BooleanOperator.BOOLEAN_OPERATOR_OR);
+        }
+        if ("NOT".equals(kind)) {
+            List<?> operands = (List<?>) invoke(condition, "getOperands");
+            if (operands.size() != 1) {
+                return null;
+            }
+            StreamFusionCondition operand = condition(operands.get(0), inputType);
+            return operand == null ? null : StreamFusionBooleanCondition.not(operand);
+        }
         if (!"IS_NULL".equals(kind) && !"IS_NOT_NULL".equals(kind)) {
             return null;
         }

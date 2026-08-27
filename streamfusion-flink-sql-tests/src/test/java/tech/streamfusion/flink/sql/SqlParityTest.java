@@ -124,7 +124,7 @@ class SqlParityTest {
     @MethodSource("nativeComparisonCases")
     void nativeIntegerComparisonsMatchFlinkByteForByte(
             String ignoredName, String predicate, boolean nativeExecutionExpected) throws Exception {
-        String sql = "SELECT id FROM (VALUES (1), (2), (3)) AS input(id) WHERE " + predicate;
+        String sql = "SELECT id FROM (VALUES (1), (2), (3), (4), (5)) AS input(id) WHERE " + predicate;
         assertParity(sql, true);
 
         if (nativeExecutionExpected) {
@@ -152,6 +152,25 @@ class SqlParityTest {
 
     private static Stream<Arguments> nativeNullPredicateCases() {
         return Stream.of(Arguments.of("is-null", "id IS NULL"), Arguments.of("is-not-null", "id IS NOT NULL"));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("nativeBooleanPredicateCases")
+    void nativeBooleanPredicatesMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {
+        String sql = "SELECT id FROM (VALUES (1, 5), (2, 4), (3, 3), (4, 2), (5, 1)) "
+                + "AS input(id, payload) WHERE "
+                + predicate;
+        assertParity(sql, true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    private static Stream<Arguments> nativeBooleanPredicateCases() {
+        return Stream.of(
+                Arguments.of("and", "id >= 2 AND payload < 5"),
+                Arguments.of("or", "id < 2 OR id > 2"),
+                Arguments.of("not", "NOT (id >= 2 AND id <= 2)"),
+                Arguments.of("nested", "(id >= 2 AND payload <= 4) OR id = 1"));
     }
 
     @Test

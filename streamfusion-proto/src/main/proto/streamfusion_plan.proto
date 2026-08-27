@@ -35,6 +35,8 @@ message Expression {
     Comparison comparison = 4;
     Arithmetic arithmetic = 5;
     NullCheck null_check = 6;
+    BooleanBinary boolean_binary = 7;
+    BooleanNot boolean_not = 8;
   }
 }
 
@@ -79,6 +81,22 @@ enum ArithmeticOperator {
 message NullCheck {
   Expression operand = 1;
   bool negated = 2;
+}
+
+message BooleanBinary {
+  Expression left = 1;
+  Expression right = 2;
+  BooleanOperator operator = 3;
+}
+
+enum BooleanOperator {
+  BOOLEAN_OPERATOR_UNSPECIFIED = 0;
+  BOOLEAN_OPERATOR_AND = 1;
+  BOOLEAN_OPERATOR_OR = 2;
+}
+
+message BooleanNot {
+  Expression operand = 1;
 }
 
 message InputReference {

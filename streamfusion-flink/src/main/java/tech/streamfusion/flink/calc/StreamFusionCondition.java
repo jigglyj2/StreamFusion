@@ -15,7 +15,11 @@ import tech.streamfusion.proto.plan.v1.Expression;
 
 /** Serializable Java evaluator paired with its native protobuf expression. */
 interface StreamFusionCondition extends Serializable {
-    boolean test(RowData row);
+    Boolean evaluate(RowData row);
+
+    default boolean test(RowData row) {
+        return Boolean.TRUE.equals(evaluate(row));
+    }
 
     Expression expression();
 }

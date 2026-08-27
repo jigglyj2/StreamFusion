@@ -27,7 +27,7 @@ final class StreamFusionNullCondition implements StreamFusionCondition {
     }
 
     @Override
-    public boolean test(RowData row) {
+    public Boolean evaluate(RowData row) {
         boolean isNull = row.isNullAt(inputIndex);
         return expression.getNullCheck().getNegated() ? !isNull : isNull;
     }

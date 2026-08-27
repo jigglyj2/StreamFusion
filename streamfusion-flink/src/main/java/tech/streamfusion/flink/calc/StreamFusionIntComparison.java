@@ -48,9 +48,9 @@ final class StreamFusionIntComparison implements StreamFusionCondition {
     }
 
     @Override
-    public boolean test(RowData row) {
+    public Boolean evaluate(RowData row) {
         if (row.isNullAt(inputIndex)) {
-            return false;
+            return null;
         }
         int left = inputOnLeft ? row.getInt(inputIndex) : literal;
         int right = inputOnLeft ? literal : row.getInt(inputIndex);
