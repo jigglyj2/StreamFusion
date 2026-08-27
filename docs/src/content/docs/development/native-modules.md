@@ -53,6 +53,29 @@ integration at the plan boundary, not as a relay between native components. The 
 may wrap or retain an Arrow batch, but it must not serialize, materialize as `RowData`,
 or copy the whole batch merely because execution crosses a module boundary.
 
+### Slices at the Java boundary
+
+Arrow's C interfaces can describe arrays with non-zero logical offsets, but Java vector
+consumers do not uniformly preserve the semantics of every sliced layout. In particular,
+validity bitmaps, variable-width value offsets, and nested child offsets may refer to a
+larger parent allocation. A native batch handed to Java must therefore be normalized to
+a zero-based Java-safe view. Fixed-width buffers may often remain shared with adjusted
+metadata; variable-width and nested offset buffers must be rebased when Java cannot
+index them correctly. Only the incompatible metadata or buffers should be copied.
+
+This follows Comet's practical boundary behavior: its Java vectors use Arrow Java
+`TransferPair.splitAndTransfer` when creating slices, producing vectors that Java can
+consume from index zero before export/import. On native import, Comet also had to align
+JVM-produced buffers for types such as `Decimal128`; Arrow 59 incorporates that
+realignment into its C Data import path. StreamFusion uses Arrow 59 or newer and still
+tests alignment explicitly because allocator and vector layouts remain cross-language
+contracts.
+
+The RowData-to-Arrow materializer and Arrow-backed RowData view must share this
+normalization layer. Tests cover non-zero-offset fixed-width, UTF-8/binary, list, map,
+struct, nullable, dictionary, and decimal arrays, and verify that every producer release
+callback runs exactly once.
+
 ABI-level tests must cover version negotiation, schema compatibility, end-of-stream,
 errors, cancellation, and exactly-once release of streams and arrays. Integration tests
 must also prove that separately packaged components can be loaded together and exchange

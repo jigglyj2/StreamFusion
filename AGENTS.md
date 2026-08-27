@@ -78,6 +78,15 @@ split expression conversion, state, algorithms, or other coherent responsibiliti
 an operator-specific submodule; do not accumulate unrelated operators or a large
 monolithic planner implementation in one file.
 
+Use the Arrow C Data and C Stream interfaces for production Java/Rust batch transfer,
+with explicit producer-owned release callbacks. Treat sliced arrays as a compatibility
+boundary: before exposing Rust-produced slices to Arrow Java or a RowData view, normalize
+them to a zero-based Java-safe representation and rebase variable-width or nested offsets
+when required. Preserve zero-copy buffers when Java can represent the slice correctly;
+copy only the buffers whose offsets/alignment cannot be represented safely. Add boundary
+tests for sliced fixed-width, variable-width, nested, nullable, dictionary, and decimal
+vectors, including non-zero offsets and exactly-once release behavior.
+
 ## Testing Guidelines
 
 Exact byte to byte parity with Flink's result set is paramount. Add our own tests to ensure this, use normal Flink processing when we can't achieve it. Hook into existing Flink SQL targets where possible.
