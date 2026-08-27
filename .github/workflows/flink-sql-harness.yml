@@ -42,3 +42,9 @@ jobs:
 
       - name: Run StreamFusion SQL parity harness
         run: mvn --batch-mode --update-snapshots verify
+
+      - name: Run Kafka-in/Kafka-out Nexmark integration
+        run: >-
+          mvn --batch-mode --update-snapshots -pl streamfusion-nexmark-benchmarks -am
+          -Pbenchmark-integration -Dit.test=LocalNexmarkBenchmarkIT
+          -Dsurefire.skipAfterFailureCount=1 verify

@@ -30,6 +30,7 @@
         <assertj.version>3.27.4</assertj.version>
         <maven.compiler.plugin.version>3.14.0</maven.compiler.plugin.version>
         <maven.surefire.plugin.version>3.5.3</maven.surefire.plugin.version>
+        <maven.failsafe.plugin.version>3.5.3</maven.failsafe.plugin.version>
         <spotless.maven.plugin.version>2.44.3</spotless.maven.plugin.version>
         <palantir.java.format.version>2.50.0</palantir.java.format.version>
         <maven.jar.plugin.version>3.4.2</maven.jar.plugin.version>
