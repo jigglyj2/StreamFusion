@@ -1,0 +1,44 @@
+name: Flink SQL harness
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  flink-sql-harness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out StreamFusion
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17 with Maven cache
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+
+      - name: Check out Apache Flink 2.3.0
+        uses: actions/checkout@v4
+        with:
+          repository: apache/flink
+          ref: release-2.3.0
+          path: flink
+
+      - name: Apply the StreamFusion planner patch
+        working-directory: flink
+        run: git apply --check ../dev/flink/2.3.0-planner-factory.patch && git apply ../dev/flink/2.3.0-planner-factory.patch
+
+      - name: Install patched Flink planner artifacts
+        working-directory: flink
+        run: >-
+          ./mvnw install -DskipTests -Dfast -Pskip-webui-build -T1C
+          -pl flink-table/flink-table-api-java,flink-table/flink-table-planner
+          -am
+
+      - name: Run StreamFusion SQL parity harness
+        run: mvn --batch-mode --update-snapshots verify
