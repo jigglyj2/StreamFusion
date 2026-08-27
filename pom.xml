@@ -24,6 +24,8 @@
         <maven.compiler.release>11</maven.compiler.release>
         <flink.version>2.3.0</flink.version>
         <flink.kafka.connector.version>5.0.0-2.2</flink.kafka.connector.version>
+        <beam.version>2.75.0</beam.version>
+        <testcontainers.version>1.21.4</testcontainers.version>
         <junit.version>5.13.4</junit.version>
         <assertj.version>3.27.4</assertj.version>
         <maven.compiler.plugin.version>3.14.0</maven.compiler.plugin.version>
@@ -35,6 +37,16 @@
 
     <dependencyManagement>
         <dependencies>
+            <dependency>
+                <groupId>org.apache.beam</groupId>
+                <artifactId>beam-sdks-java-nexmark</artifactId>
+                <version>${beam.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>kafka</artifactId>
+                <version>${testcontainers.version}</version>
+            </dependency>
             <dependency>
                 <groupId>org.apache.flink</groupId>
                 <artifactId>flink-connector-kafka</artifactId>

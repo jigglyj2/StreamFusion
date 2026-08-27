@@ -38,6 +38,7 @@ public final class NexmarkSqlJob {
         config.set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
 
         tables.executeSql(sourceDdl(bootstrap, inputTopic));
+        createViews(tables);
         tables.executeSql(sinkDdl(bootstrap, outputTopic));
         tables.executeSql(loadQuery(query)).await();
     }
@@ -51,17 +52,30 @@ public final class NexmarkSqlJob {
     }
 
     private static String sourceDdl(String bootstrap, String topic) {
-        return "CREATE TABLE bid (auction BIGINT, bidder BIGINT, price BIGINT, `dateTime` STRING, extra STRING) WITH ("
+        return "CREATE TABLE nexmark_events (event_type INT, "
+                + "person ROW<id BIGINT, name STRING, emailAddress STRING, creditCard STRING, city STRING, state STRING, `dateTime` TIMESTAMP(3), extra STRING>, "
+                + "auction ROW<id BIGINT, itemName STRING, description STRING, initialBid BIGINT, reserve BIGINT, `dateTime` TIMESTAMP(3), expires TIMESTAMP(3), seller BIGINT, category BIGINT, extra STRING>, "
+                + "bid ROW<auction BIGINT, bidder BIGINT, price BIGINT, channel STRING, url STRING, `dateTime` TIMESTAMP(3), extra STRING>) WITH ("
                 + "'connector'='kafka','topic'='" + topic + "','properties.bootstrap.servers'='" + bootstrap
                 + "','properties.group.id'='streamfusion-nexmark','scan.startup.mode'='earliest-offset',"
-                + "'scan.bounded.mode'='latest-offset','format'='json')";
+                + "'scan.bounded.mode'='latest-offset','format'='json',"
+                + "'json.timestamp-format.standard'='ISO-8601')";
+    }
+
+    private static void createViews(TableEnvironment tables) {
+        tables.executeSql(
+                "CREATE VIEW person AS SELECT person.id, person.name, person.emailAddress, person.creditCard, person.city, person.state, person.`dateTime`, person.extra FROM nexmark_events WHERE event_type=0");
+        tables.executeSql(
+                "CREATE VIEW auction AS SELECT auction.id, auction.itemName, auction.description, auction.initialBid, auction.reserve, auction.`dateTime`, auction.expires, auction.seller, auction.category, auction.extra FROM nexmark_events WHERE event_type=1");
+        tables.executeSql(
+                "CREATE VIEW bid AS SELECT bid.auction, bid.bidder, bid.price, bid.channel, bid.url, bid.`dateTime`, bid.extra FROM nexmark_events WHERE event_type=2");
     }
 
     private static String sinkDdl(String bootstrap, String topic) {
-        return "CREATE TABLE nexmark_output (auction BIGINT, bidder BIGINT, price BIGINT, `dateTime` STRING, extra STRING) WITH ("
+        return "CREATE TABLE nexmark_output (auction BIGINT, bidder BIGINT, price BIGINT, `dateTime` TIMESTAMP(3), extra STRING) WITH ("
                 + "'connector'='kafka','topic'='" + topic + "','properties.bootstrap.servers'='" + bootstrap
                 + "','format'='json','sink.delivery-guarantee'='exactly-once',"
                 + "'properties.transaction.timeout.ms'='60000',"
-                + "'sink.transactional-id-prefix'='streamfusion-nexmark-')";
+                + "'sink.transactional-id-prefix'='streamfusion-nexmark-" + topic + "-')";
     }
 }
