@@ -55,11 +55,16 @@ public final class PlannerHookIntegrationJob {
         if (StreamFusionPlannerFactory.translatedPlanCount() == 0) {
             throw new IllegalStateException("The StreamFusion planner did not translate the submitted job");
         }
+        if (StreamFusionPlannerFactory.nativeCalcBatchCount() == 0) {
+            throw new IllegalStateException("The submitted job did not execute a native calc batch");
+        }
 
         System.out.println(SUCCESS_MARKER
                 + " planners="
                 + StreamFusionPlannerFactory.createdPlannerCount()
                 + " translations="
-                + StreamFusionPlannerFactory.translatedPlanCount());
+                + StreamFusionPlannerFactory.translatedPlanCount()
+                + " nativeCalcBatches="
+                + StreamFusionPlannerFactory.nativeCalcBatchCount());
     }
 }
