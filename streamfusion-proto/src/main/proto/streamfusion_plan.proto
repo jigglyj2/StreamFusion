@@ -30,7 +30,18 @@ message Calc {
 message Expression {
   oneof expression {
     InputReference input_reference = 1;
+    IntegerLiteral integer_literal = 2;
+    GreaterThanOrEqual greater_than_or_equal = 3;
   }
+}
+
+message IntegerLiteral {
+  int32 value = 1;
+}
+
+message GreaterThanOrEqual {
+  Expression left = 1;
+  Expression right = 2;
 }
 
 message InputReference {

@@ -21,16 +21,19 @@ import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.table.delegation.Planner;
 import org.apache.flink.table.delegation.PlannerFactory;
 import org.apache.flink.table.planner.delegation.DefaultPlannerFactory;
+import tech.streamfusion.nativebridge.NativeCalcBridge;
 
 /** Entry point loaded by the StreamFusion Flink planner patch. */
 public final class StreamFusionPlannerFactory implements PlannerFactory {
     public static final String FACTORY_CLASS_PROPERTY = "tech.streamfusion.flink.planner.factory";
+    public static final String CALC_TRANSLATOR_CLASS_PROPERTY = "tech.streamfusion.flink.calc.translator";
 
     private static final AtomicInteger CREATED_PLANNERS = new AtomicInteger();
 
     @Override
     public Planner create(Context context) {
         CREATED_PLANNERS.incrementAndGet();
+        System.setProperty(CALC_TRANSLATOR_CLASS_PROPERTY, "tech.streamfusion.flink.calc.StreamFusionCalcTranslator");
         return new StreamFusionPlanner(new DefaultPlannerFactory().create(context));
     }
 
@@ -57,8 +60,14 @@ public final class StreamFusionPlannerFactory implements PlannerFactory {
         return StreamFusionPlanner.translatedPlanCount();
     }
 
+    public static long nativeCalcBatchCount() {
+        return NativeCalcBridge.executedBatchCount();
+    }
+
     public static void resetMetrics() {
         CREATED_PLANNERS.set(0);
         StreamFusionPlanner.resetMetrics();
+        NativeCalcBridge.resetMetrics();
+        System.clearProperty(CALC_TRANSLATOR_CLASS_PROPERTY);
     }
 }

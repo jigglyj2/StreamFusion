@@ -51,6 +51,7 @@ class SqlParityTest {
     private static final String STREAMING_AGGREGATE_SQL = "SELECT category, COUNT(*), SUM(amount) "
             + "FROM (VALUES ('a', 1), ('b', 2), ('a', 3)) AS orders(category, amount) "
             + "GROUP BY category";
+    private static final String IDENTITY_CALC_SQL = "SELECT id FROM (VALUES (1), (2), (3)) AS input(id) WHERE id >= 2";
 
     @AfterEach
     void clearPlannerOverride() {
@@ -61,6 +62,13 @@ class SqlParityTest {
     @Test
     void acceleratedExecutionMatchesFlinkByteForByte() throws Exception {
         assertParity(BATCH_SQL, false);
+    }
+
+    @Test
+    void boundedIdentityCalcRunsNativelyAndMatchesFlinkByteForByte() throws Exception {
+        assertParity(IDENTITY_CALC_SQL, true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
     }
 
     @Test
