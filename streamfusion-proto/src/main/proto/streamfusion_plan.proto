@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+package streamfusion.plan.v1;
+
+option java_multiple_files = true;
+option java_package = "tech.streamfusion.proto.plan.v1";
+
+message NativePlan {
+  uint32 protocol_version = 1;
+  Operator root = 2;
+}
+
+message Operator {
+  oneof operator {
+    Input input = 1;
+    Calc calc = 2;
+  }
+}
+
+message Input {
+  Schema schema = 1;
+}
+
+message Calc {
+  Operator input = 1;
+  repeated Expression projections = 2;
+  optional Expression condition = 3;
+}
+
+message Expression {
+  oneof expression {
+    InputReference input_reference = 1;
+  }
+}
+
+message InputReference {
+  uint32 index = 1;
+  LogicalType type = 2;
+}
+
+message Schema {
+  repeated Field fields = 1;
+}
+
+message Field {
+  string name = 1;
+  LogicalType type = 2;
+}
+
+message LogicalType {
+  bool nullable = 1;
+  oneof type {
+    EmptyType integer = 2;
+    EmptyType bigint = 3;
+    EmptyType boolean = 4;
+    EmptyType varchar = 5;
+  }
+}
+
+message EmptyType {}
