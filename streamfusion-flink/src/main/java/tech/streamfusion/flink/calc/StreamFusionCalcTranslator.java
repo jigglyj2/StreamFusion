@@ -82,10 +82,21 @@ public final class StreamFusionCalcTranslator {
 
     private static boolean isSupportedProjectionType(LogicalTypeRoot type) {
         return type == LogicalTypeRoot.INTEGER
+                || type == LogicalTypeRoot.TINYINT
+                || type == LogicalTypeRoot.SMALLINT
                 || type == LogicalTypeRoot.BIGINT
+                || type == LogicalTypeRoot.FLOAT
+                || type == LogicalTypeRoot.DOUBLE
                 || type == LogicalTypeRoot.BOOLEAN
                 || type == LogicalTypeRoot.CHAR
-                || type == LogicalTypeRoot.VARCHAR;
+                || type == LogicalTypeRoot.VARCHAR
+                || type == LogicalTypeRoot.BINARY
+                || type == LogicalTypeRoot.VARBINARY
+                || type == LogicalTypeRoot.DECIMAL
+                || type == LogicalTypeRoot.DATE
+                || type == LogicalTypeRoot.TIME_WITHOUT_TIME_ZONE
+                || type == LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE
+                || type == LogicalTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE;
     }
 
     private static StreamFusionIntComparison comparison(Object condition) {

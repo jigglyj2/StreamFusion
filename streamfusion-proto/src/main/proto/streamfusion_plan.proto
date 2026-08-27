@@ -82,7 +82,26 @@ message LogicalType {
     EmptyType bigint = 3;
     EmptyType boolean = 4;
     EmptyType varchar = 5;
+    EmptyType tinyint = 6;
+    EmptyType smallint = 7;
+    EmptyType float = 8;
+    EmptyType double = 9;
+    EmptyType binary = 10;
+    EmptyType date = 11;
+    PrecisionType time = 12;
+    PrecisionType timestamp = 13;
+    PrecisionType timestamp_ltz = 14;
+    DecimalType decimal = 15;
   }
 }
 
 message EmptyType {}
+
+message PrecisionType {
+  uint32 precision = 1;
+}
+
+message DecimalType {
+  uint32 precision = 1;
+  uint32 scale = 2;
+}

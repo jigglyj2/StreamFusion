@@ -17,11 +17,15 @@ WHERE id >= 1;
 
 ## Acceleration and fallback
 
-StreamFusion can select, reorder, omit, or repeat columns of type `INT`, `BIGINT`,
-`BOOLEAN`, `CHAR`, or `VARCHAR`. Nullability is preserved. Every projection in the Calc
-must be a direct input-column reference; literals, arithmetic, casts, functions, and
-aliases whose underlying expression is not a direct reference currently fall back to
-Flink. The Calc also falls back if its filter is unsupported.
+StreamFusion can select, reorder, omit, or repeat direct input columns of these types:
+
+- `BOOLEAN`, `TINYINT`, `SMALLINT`, `INT`, `BIGINT`, `FLOAT`, and `DOUBLE`
+- `CHAR`, `VARCHAR`, `BINARY`, and `VARBINARY`
+- `DECIMAL`, `DATE`, `TIME`, `TIMESTAMP`, and `TIMESTAMP_LTZ`
+
+Precision, scale, fixed width, and nullability are preserved. Every projection in the
+Calc must be a direct input-column reference; literals, arithmetic, casts, and functions
+currently fall back to Flink. The Calc also falls back if its filter is unsupported.
 
 ## Implementation
 

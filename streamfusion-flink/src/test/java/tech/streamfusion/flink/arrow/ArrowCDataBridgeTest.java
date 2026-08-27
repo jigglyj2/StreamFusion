@@ -83,6 +83,27 @@ class ArrowCDataBridgeTest {
         }
     }
 
+    @Test
+    void projectsAndReordersCompatibleColumnsThroughDataFusion() {
+        RowType inputType = RowType.of(
+                new IntType(false), new VarCharType(), new DecimalType(10, 2), new ArrayType(new VarCharType()));
+        RowType outputType = RowType.of(
+                new ArrayType(new VarCharType()), new DecimalType(10, 2), new VarCharType(), new IntType(false));
+
+        try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+                ArrowRowDataBatch input =
+                        ArrowRowDataBatch.transpose(List.of(row(7, "seven", 725, "nested")), inputType, allocator);
+                ArrowRowDataBatch output =
+                        ArrowCDataBridge.execute(projectionPlan(3, 2, 1, 0), input, outputType, allocator)) {
+            assertThat(output.size()).isOne();
+            RowData row = output.rowView(0);
+            assertThat(row.getArray(0).getString(0).toString()).isEqualTo("nested");
+            assertThat(row.getDecimal(1, 10, 2).toBigDecimal()).isEqualByComparingTo("7.25");
+            assertThat(row.getString(2).toString()).isEqualTo("seven");
+            assertThat(row.getInt(3)).isEqualTo(7);
+        }
+    }
+
     private static GenericRowData row(int id, String text, long decimal, String arrayValue) {
         return GenericRowData.of(
                 id,
@@ -137,6 +158,19 @@ class ArrowCDataBridgeTest {
                                 .setRight(literal)
                                 .setOperator(operator)))
                 .build();
+        return NativePlan.newBuilder()
+                .setProtocolVersion(1)
+                .setRoot(Operator.newBuilder().setCalc(calc))
+                .build()
+                .toByteArray();
+    }
+
+    private static byte[] projectionPlan(int... inputIndexes) {
+        Calc.Builder calc = Calc.newBuilder().setInput(Operator.newBuilder().setInput(Input.newBuilder()));
+        for (int inputIndex : inputIndexes) {
+            calc.addProjections(Expression.newBuilder()
+                    .setInputReference(InputReference.newBuilder().setIndex(inputIndex)));
+        }
         return NativePlan.newBuilder()
                 .setProtocolVersion(1)
                 .setRoot(Operator.newBuilder().setCalc(calc))

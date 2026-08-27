@@ -57,6 +57,16 @@ class SqlParityTest {
             + "AS input(id, name, enabled) WHERE id >= 1";
     private static final String FILTER_ON_UNPROJECTED_COLUMN_SQL =
             "SELECT name, id " + "FROM (VALUES (1, 'one'), (2, 'two')) AS input(id, name) WHERE id >= 2";
+    private static final String SCALAR_TYPE_PROJECTION_SQL = "SELECT tiny_value, small_value, big_value, "
+            + "float_value, double_value, boolean_value, char_value, varchar_value, binary_value, "
+            + "varbinary_value, decimal_value, date_value, time_value, timestamp_value FROM (VALUES (1, "
+            + "CAST(2 AS TINYINT), CAST(3 AS SMALLINT), CAST(4 AS BIGINT), CAST(1.5 AS FLOAT), "
+            + "CAST(2.5 AS DOUBLE), TRUE, CAST('abc' AS CHAR(3)), CAST('text' AS VARCHAR(8)), "
+            + "CAST(X'0102' AS BINARY(2)), CAST(X'0304' AS VARBINARY(4)), CAST(12.34 AS DECIMAL(10, 2)), "
+            + "DATE '2026-08-27', TIME '12:34:56.123', TIMESTAMP '2026-08-27 12:34:56.123')) "
+            + "AS input(id, tiny_value, small_value, big_value, float_value, double_value, boolean_value, "
+            + "char_value, varchar_value, binary_value, varbinary_value, decimal_value, date_value, "
+            + "time_value, timestamp_value) WHERE id >= 1";
 
     @AfterEach
     void clearPlannerOverride() {
@@ -78,16 +88,20 @@ class SqlParityTest {
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("nativeProjectionCases")
-    void nativeInputReferenceProjectionsMatchFlinkByteForByte(String ignoredName, String sql) throws Exception {
+    void nativeInputReferenceProjectionsMatchFlinkByteForByte(
+            String ignoredName, String sql, boolean nativeExecutionExpected) throws Exception {
         assertParity(sql, true);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        if (nativeExecutionExpected) {
+            assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        }
     }
 
     private static Stream<Arguments> nativeProjectionCases() {
         return Stream.of(
-                Arguments.of("multi-column-reordered-types", MULTI_COLUMN_PROJECTION_SQL),
-                Arguments.of("filter-on-unprojected-int", FILTER_ON_UNPROJECTED_COLUMN_SQL));
+                Arguments.of("multi-column-reordered-types", MULTI_COLUMN_PROJECTION_SQL, true),
+                Arguments.of("filter-on-unprojected-int", FILTER_ON_UNPROJECTED_COLUMN_SQL, true),
+                Arguments.of("casts-force-whole-plan-fallback", SCALAR_TYPE_PROJECTION_SQL, false));
     }
 
     @ParameterizedTest(name = "{0}")
