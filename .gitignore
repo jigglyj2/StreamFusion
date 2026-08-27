@@ -1,4 +1,5 @@
 target/
+streamfusion-native/target/
 .streamfusion-git/
 .idea/
 *.iml

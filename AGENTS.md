@@ -73,6 +73,11 @@ Exchange columnar data between native components directly through the Arrow C Da
 C Stream interfaces, including their release callbacks; do not route native-to-native
 batches through JNI or Java. Never expose Rust's unstable ABI across module boundaries.
 
+Give every native operator its own Rust source file. When an operator becomes complex,
+split expression conversion, state, algorithms, or other coherent responsibilities into
+an operator-specific submodule; do not accumulate unrelated operators or a large
+monolithic planner implementation in one file.
+
 ## Testing Guidelines
 
 Exact byte to byte parity with Flink's result set is paramount. Add our own tests to ensure this, use normal Flink processing when we can't achieve it. Hook into existing Flink SQL targets where possible.

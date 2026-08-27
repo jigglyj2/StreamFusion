@@ -1,0 +1,19 @@
+[package]
+name = "streamfusion-native"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.94"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+arrow = { version = "59.2.0", features = ["ffi"] }
+datafusion = { version = "55.0.0", default-features = false }
+prost = "0.14.4"
+
+[dev-dependencies]
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread"] }
+
+[build-dependencies]
+prost-build = "0.14.4"
+protoc-bin-vendored = "3.2.0"
