@@ -25,6 +25,7 @@ class NexmarkBenchmarkTest {
                 .containsSubsequence("--checkpointing-mode", "EXACTLY_ONCE")
                 .containsSubsequence("--source", "kafka")
                 .containsSubsequence("--sink", "kafka")
+                .containsSubsequence("--changelog-sink", "upsert-kafka")
                 .containsSubsequence("--state-backend", "hashmap")
                 .containsSubsequence("--mini-batch", "false");
     }

@@ -7,6 +7,7 @@ environment-specific assumptions in the benchmark.
 
 The executable receives `--engine`, `--state-backend`, `--mini-batch`,
 `--checkpointing-mode EXACTLY_ONCE`, `--source kafka`, `--sink kafka`,
+`--changelog-sink upsert-kafka`,
 `--kafka-bootstrap`, `--nexmark-home`, and `--queries`. It must print:
 
 ```
@@ -24,5 +25,8 @@ java -jar target/streamfusion-nexmark-benchmarks-0.1.0-SNAPSHOT.jar \
   --output benchmarks.txt
 ```
 
-The selected queries must support an append-only Kafka sink. The default `q0,q1`
-pair does; changelog queries require an upsert-capable sink adapter.
+The executor should use the regular Kafka sink for append-only queries and the upsert
+Kafka sink for updating queries. An upsert sink table must declare a non-enforced
+primary key matching the query's stable unique key. If a query has no stable unique
+key in its output, adapt its output schema to retain that key rather than inventing
+one or silently collapsing distinct rows.

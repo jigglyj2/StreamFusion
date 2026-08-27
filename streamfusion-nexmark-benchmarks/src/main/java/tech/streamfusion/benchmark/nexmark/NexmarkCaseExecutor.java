@@ -50,6 +50,8 @@ final class NexmarkCaseExecutor {
                 "kafka",
                 "--sink",
                 "kafka",
+                "--changelog-sink",
+                "upsert-kafka",
                 "--kafka-bootstrap",
                 bootstrapServers,
                 "--nexmark-home",
