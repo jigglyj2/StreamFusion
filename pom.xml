@@ -15,6 +15,7 @@
     <modules>
         <module>streamfusion-flink</module>
         <module>streamfusion-flink-sql-tests</module>
+        <module>streamfusion-nexmark-benchmarks</module>
     </modules>
 
     <properties>
@@ -28,6 +29,7 @@
         <maven.surefire.plugin.version>3.5.3</maven.surefire.plugin.version>
         <spotless.maven.plugin.version>2.44.3</spotless.maven.plugin.version>
         <palantir.java.format.version>2.50.0</palantir.java.format.version>
+        <maven.jar.plugin.version>3.4.2</maven.jar.plugin.version>
     </properties>
 
     <dependencyManagement>
@@ -68,6 +70,11 @@
     <build>
         <pluginManagement>
             <plugins>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-jar-plugin</artifactId>
+                    <version>${maven.jar.plugin.version}</version>
+                </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-compiler-plugin</artifactId>
