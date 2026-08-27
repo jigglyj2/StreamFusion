@@ -15,9 +15,9 @@ import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
 import org.apache.flink.streaming.api.operators.BoundedOneInput;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
-import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.types.RowKind;
+import tech.streamfusion.flink.arrow.ArrowIntBatch;
 import tech.streamfusion.nativebridge.NativeCalcBridge;
 import tech.streamfusion.proto.plan.v1.Calc;
 import tech.streamfusion.proto.plan.v1.EmptyType;
@@ -71,7 +71,10 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
             return;
         }
         int[] input = values.stream().mapToInt(Integer::intValue).toArray();
-        int[] result = NativeCalcBridge.executeIdentity(serializedPlan, input);
+        int[] result;
+        try (ArrowIntBatch inputBatch = ArrowIntBatch.fromRebasedArray(input)) {
+            result = NativeCalcBridge.executeIdentity(serializedPlan, inputBatch.toRebasedArray());
+        }
         List<RowKind> outputRowKinds = new ArrayList<>(result.length);
         for (int index = 0; index < values.size(); index++) {
             if (minimum == null || values.get(index) >= minimum) {
@@ -82,10 +85,12 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
             throw new IllegalStateException(
                     "Native calc returned " + result.length + " rows, expected " + outputRowKinds.size());
         }
-        for (int index = 0; index < result.length; index++) {
-            GenericRowData row = GenericRowData.of(result[index]);
-            row.setRowKind(outputRowKinds.get(index));
-            output.collect(new StreamRecord<>(row));
+        try (ArrowIntBatch outputBatch = ArrowIntBatch.fromRebasedArray(result)) {
+            for (int index = 0; index < result.length; index++) {
+                RowData row = outputBatch.rowView(index);
+                row.setRowKind(outputRowKinds.get(index));
+                output.collect(new StreamRecord<>(row));
+            }
         }
         values.clear();
         rowKinds.clear();

@@ -45,6 +45,7 @@
         <rust.version>1.94.0</rust.version>
         <datafusion.version>55.0.0</datafusion.version>
         <arrow.rust.version>59.2.0</arrow.rust.version>
+        <arrow.java.version>19.0.0</arrow.java.version>
         <prost.version>0.14.4</prost.version>
         <tokio.version>1.53.1</tokio.version>
         <protoc.bin.vendored.version>3.2.0</protoc.bin.vendored.version>
@@ -57,6 +58,16 @@
                 <groupId>com.google.protobuf</groupId>
                 <artifactId>protobuf-java</artifactId>
                 <version>${protobuf.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.arrow</groupId>
+                <artifactId>arrow-vector</artifactId>
+                <version>${arrow.java.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.arrow</groupId>
+                <artifactId>arrow-memory-netty</artifactId>
+                <version>${arrow.java.version}</version>
             </dependency>
             <dependency>
                 <groupId>org.apache.beam</groupId>
