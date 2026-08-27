@@ -11,6 +11,7 @@ export default defineConfig({
       social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/jigglyj2/StreamFusion' }],
       sidebar: [
         { label: 'Overview', items: [{ label: 'Introduction', slug: 'index' }, { label: 'Architecture', slug: 'architecture' }] },
+        { label: 'Operators', autogenerate: { directory: 'operators' } },
         { label: 'Development', items: [{ label: 'SQL test harness', slug: 'development/sql-harness' }, { label: 'Planner integration', slug: 'development/planner-integration' }] },
         { label: 'Performance', items: [{ label: 'Nexmark benchmarks', slug: 'benchmarks/nexmark' }] }
       ]

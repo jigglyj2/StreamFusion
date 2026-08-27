@@ -21,6 +21,12 @@ logically focused so each change can be reviewed and reverted independently.
 
 Do not add to or modify `README.md` for now. Keep it empty until this instruction is removed.
 
+The Starlight site under `docs/` is the canonical user-facing documentation. Update it
+in the same change whenever behavior, configuration, compatibility, acceleration
+coverage, fallback conditions, or other user-visible functionality changes. Keep the
+operator status pages explicit about current support; do not document planned work as
+implemented.
+
 ## Testing Guidelines
 
 Exact byte to byte parity with Flink's result set is paramount. Add our own tests to ensure this, use normal Flink processing when we can't achieve it. Hook into existing Flink SQL targets where possible.
