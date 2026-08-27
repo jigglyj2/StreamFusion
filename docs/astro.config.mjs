@@ -12,7 +12,7 @@ export default defineConfig({
       sidebar: [
         { label: 'Overview', items: [{ label: 'Introduction', slug: 'index' }, { label: 'Architecture', slug: 'architecture' }] },
         { label: 'Operators', autogenerate: { directory: 'operators' } },
-        { label: 'Development', items: [{ label: 'Planning', slug: 'development/planning' }, { label: 'SQL test harness', slug: 'development/sql-harness' }, { label: 'Planner integration', slug: 'development/planner-integration' }] },
+        { label: 'Development', items: [{ label: 'Planning', slug: 'development/planning' }, { label: 'Memory and configuration', slug: 'development/memory-and-configuration' }, { label: 'SQL test harness', slug: 'development/sql-harness' }, { label: 'Planner integration', slug: 'development/planner-integration' }] },
         { label: 'Performance', items: [{ label: 'Nexmark benchmarks', slug: 'benchmarks/nexmark' }] }
       ]
     })

@@ -39,6 +39,19 @@ the handoff between adjacent native operators must not serialize or copy whole b
 An operator may allocate output buffers when its computation inherently requires them.
 Cross the JVM/native boundary only at the edges of the fused native plan.
 
+Account all StreamFusion native memory, including DataFusion and custom Rust data
+structures, through Flink's existing managed/off-heap memory model. StreamFusion must
+not introduce a separate deployment-time memory budget: existing Flink TaskManager
+managed-memory size/fraction and consumer-weight settings govern its allocation. Do
+not add StreamFusion deployment toggles when an equivalent Flink setting exists. A
+StreamFusion-specific feature gate is acceptable only when users must explicitly opt
+into behavior that may not be byte-identical to Flink.
+
+When implementing a native source or sink, translate every relevant Java/Flink
+connector and client setting to the native library's equivalent. If a setting or its
+semantics cannot be represented exactly, keep that boundary on the Flink implementation
+and report the fallback reason; never silently use a native-client default.
+
 ## Testing Guidelines
 
 Exact byte to byte parity with Flink's result set is paramount. Add our own tests to ensure this, use normal Flink processing when we can't achieve it. Hook into existing Flink SQL targets where possible.

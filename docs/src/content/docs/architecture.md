@@ -32,4 +32,9 @@ Adjacent Rust operators form one native DataFusion execution-plan tree and pass 
 
 Zero-copy applies to the handoff of an existing batch. Operators remain free to allocate new result buffers when the operation itself requires new data, such as aggregation, sorting, joining, or evaluating a computed expression.
 
+Native allocations remain part of Flink's resource model. DataFusion and custom Rust
+operators share the managed-memory budget assigned by Flink; StreamFusion does not
+create a separate off-heap allowance. See [Memory and configuration](./development/memory-and-configuration/)
+for the accounting bridge, configuration policy, and native connector fallback rules.
+
 The project is organized as optional Maven modules corresponding to these extension points. Java packages and Maven coordinates use the `tech.streamfusion` namespace.
