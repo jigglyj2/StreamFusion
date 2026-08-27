@@ -15,6 +15,12 @@
     <dependencies>
         <dependency>
             <groupId>tech.streamfusion</groupId>
+            <artifactId>streamfusion-flink-planner</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>tech.streamfusion</groupId>
             <artifactId>streamfusion-flink</artifactId>
             <version>${project.version}</version>
         </dependency>

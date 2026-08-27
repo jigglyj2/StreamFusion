@@ -20,21 +20,25 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.table.delegation.Planner;
 import org.apache.flink.table.delegation.PlannerFactory;
-import org.apache.flink.table.planner.delegation.DefaultPlannerFactory;
 import tech.streamfusion.nativebridge.NativeCalcBridge;
 
 /** Entry point loaded by the StreamFusion Flink planner patch. */
 public final class StreamFusionPlannerFactory implements PlannerFactory {
     public static final String FACTORY_CLASS_PROPERTY = "tech.streamfusion.flink.planner.factory";
-    public static final String CALC_TRANSLATOR_CLASS_PROPERTY = "tech.streamfusion.flink.calc.translator";
+    public static final String EXEC_GRAPH_PROCESSOR_PROPERTY = "tech.streamfusion.flink.exec-graph.processor";
 
     private static final AtomicInteger CREATED_PLANNERS = new AtomicInteger();
 
     @Override
     public Planner create(Context context) {
+        throw new UnsupportedOperationException("StreamFusion decorates Flink's planner after creation");
+    }
+
+    public static Planner decorate(Planner planner) {
         CREATED_PLANNERS.incrementAndGet();
-        System.setProperty(CALC_TRANSLATOR_CLASS_PROPERTY, "tech.streamfusion.flink.calc.StreamFusionCalcTranslator");
-        return new StreamFusionPlanner(new DefaultPlannerFactory().create(context));
+        System.setProperty(
+                EXEC_GRAPH_PROCESSOR_PROPERTY, "tech.streamfusion.flink.planner.StreamFusionExecGraphProcessor");
+        return new StreamFusionPlanner(planner);
     }
 
     @Override
@@ -68,6 +72,6 @@ public final class StreamFusionPlannerFactory implements PlannerFactory {
         CREATED_PLANNERS.set(0);
         StreamFusionPlanner.resetMetrics();
         NativeCalcBridge.resetMetrics();
-        System.clearProperty(CALC_TRANSLATOR_CLASS_PROPERTY);
+        System.clearProperty(EXEC_GRAPH_PROCESSOR_PROPERTY);
     }
 }

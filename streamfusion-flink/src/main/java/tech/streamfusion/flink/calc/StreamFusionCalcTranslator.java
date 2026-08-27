@@ -9,12 +9,9 @@
  */
 package tech.streamfusion.flink.calc;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.util.List;
-import org.apache.calcite.rex.RexCall;
-import org.apache.calcite.rex.RexInputRef;
-import org.apache.calcite.rex.RexLiteral;
-import org.apache.calcite.rex.RexNode;
-import org.apache.calcite.sql.SqlKind;
 import org.apache.flink.api.dag.Transformation;
 import org.apache.flink.core.memory.ManagedMemoryUseCase;
 import org.apache.flink.streaming.api.transformations.OneInputTransformation;
@@ -31,13 +28,13 @@ public final class StreamFusionCalcTranslator {
             Transformation<RowData> input,
             RowType inputType,
             RowType outputType,
-            List<RexNode> projections,
-            RexNode condition) {
+            List<?> projections,
+            Object condition) {
         if (!isIntegerCalc(inputType, outputType, projections, condition)) {
             return null;
         }
 
-        int inputIndex = ((RexInputRef) projections.get(0)).getIndex();
+        int inputIndex = inputIndex(projections.get(0));
         Integer minimum = minimumValue(condition, inputIndex);
         StreamFusionIdentityCalcOperator operator = new StreamFusionIdentityCalcOperator(inputIndex, minimum);
         OneInputTransformation<RowData, RowData> transformation = new OneInputTransformation<>(
@@ -51,34 +48,58 @@ public final class StreamFusionCalcTranslator {
         return transformation;
     }
 
-    private static boolean isIntegerCalc(
-            RowType inputType, RowType outputType, List<RexNode> projections, RexNode condition) {
-        if (outputType.getFieldCount() != 1
-                || projections.size() != 1
-                || !(projections.get(0) instanceof RexInputRef)) {
+    public static boolean canTranslate(RowType inputType, RowType outputType, List<?> projections, Object condition) {
+        return isIntegerCalc(inputType, outputType, projections, condition);
+    }
+
+    private static boolean isIntegerCalc(RowType inputType, RowType outputType, List<?> projections, Object condition) {
+        if (outputType.getFieldCount() != 1 || projections.size() != 1 || inputIndex(projections.get(0)) < 0) {
             return false;
         }
-        RexInputRef reference = (RexInputRef) projections.get(0);
-        return (condition == null || minimumValue(condition, reference.getIndex()) != null)
-                && inputType.getTypeAt(reference.getIndex()).getTypeRoot() == LogicalTypeRoot.INTEGER
+        int inputIndex = inputIndex(projections.get(0));
+        return (condition == null || minimumValue(condition, inputIndex) != null)
+                && inputType.getTypeAt(inputIndex).getTypeRoot() == LogicalTypeRoot.INTEGER
                 && outputType.getTypeAt(0).getTypeRoot() == LogicalTypeRoot.INTEGER
-                && !inputType.getTypeAt(reference.getIndex()).isNullable()
+                && !inputType.getTypeAt(inputIndex).isNullable()
                 && !outputType.getTypeAt(0).isNullable();
     }
 
-    private static Integer minimumValue(RexNode condition, int inputIndex) {
+    private static Integer minimumValue(Object condition, int inputIndex) {
         if (condition == null) {
             return null;
         }
-        if (!(condition instanceof RexCall) || condition.getKind() != SqlKind.GREATER_THAN_OR_EQUAL) {
+        if (!"GREATER_THAN_OR_EQUAL".equals(invoke(condition, "getKind").toString())) {
             return null;
         }
-        List<RexNode> operands = ((RexCall) condition).getOperands();
-        if (!(operands.get(0) instanceof RexInputRef)
-                || ((RexInputRef) operands.get(0)).getIndex() != inputIndex
-                || !(operands.get(1) instanceof RexLiteral)) {
+        List<?> operands = (List<?>) invoke(condition, "getOperands");
+        if (operands.size() != 2 || inputIndex(operands.get(0)) != inputIndex) {
             return null;
         }
-        return ((RexLiteral) operands.get(1)).getValueAs(Integer.class);
+        Object value = invoke(operands.get(1), "getValueAs", Class.class, Integer.class);
+        return value instanceof Integer ? (Integer) value : null;
+    }
+
+    private static int inputIndex(Object expression) {
+        if (!expression.getClass().getSimpleName().equals("RexInputRef")) {
+            return -1;
+        }
+        Object index = invoke(expression, "getIndex");
+        return index instanceof Integer ? (Integer) index : -1;
+    }
+
+    private static Object invoke(Object target, String methodName) {
+        return invoke(target, methodName, null, null);
+    }
+
+    private static Object invoke(Object target, String methodName, Class<?> parameterType, Object argument) {
+        try {
+            Method method = parameterType == null
+                    ? target.getClass().getMethod(methodName)
+                    : target.getClass().getMethod(methodName, parameterType);
+            return parameterType == null ? method.invoke(target) : method.invoke(target, argument);
+        } catch (NoSuchMethodException | IllegalAccessException | InvocationTargetException exception) {
+            throw new IllegalStateException(
+                    "Could not inspect planner expression " + target.getClass().getName(), exception);
+        }
     }
 }

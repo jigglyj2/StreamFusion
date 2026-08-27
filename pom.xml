@@ -15,6 +15,7 @@
     <modules>
         <module>streamfusion-proto</module>
         <module>streamfusion-native</module>
+        <module>streamfusion-flink-planner</module>
         <module>streamfusion-flink</module>
         <module>streamfusion-flink-sql-tests</module>
         <module>streamfusion-flink-runner-tests</module>

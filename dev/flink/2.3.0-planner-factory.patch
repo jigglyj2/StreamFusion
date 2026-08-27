@@ -1,10 +1,14 @@
 diff --git a/flink-table/flink-table-api-java/src/main/java/org/apache/flink/table/factories/PlannerFactoryUtil.java b/flink-table/flink-table-api-java/src/main/java/org/apache/flink/table/factories/PlannerFactoryUtil.java
-index a4a22ca8a13..60e99bb18af 100644
+index 835ad253573..bc3ed412785 100644
 --- a/flink-table/flink-table-api-java/src/main/java/org/apache/flink/table/factories/PlannerFactoryUtil.java
 +++ b/flink-table/flink-table-api-java/src/main/java/org/apache/flink/table/factories/PlannerFactoryUtil.java
-@@ -30,8 +30,10 @@ import org.apache.flink.table.delegation.PlannerFactory.DefaultPlannerContext;
+@@ -29,9 +29,14 @@ import org.apache.flink.table.delegation.PlannerFactory.Context;
+ import org.apache.flink.table.delegation.PlannerFactory.DefaultPlannerContext;
  import org.apache.flink.table.module.ModuleManager;
  
++import java.lang.reflect.InvocationTargetException;
++import java.lang.reflect.Method;
++
  /** Utility for discovering and instantiating {@link PlannerFactory}. */
  @Internal
  public class PlannerFactoryUtil {
@@ -13,124 +17,58 @@ index a4a22ca8a13..60e99bb18af 100644
  
      /** Discovers a planner factory and creates a planner instance. */
      public static Planner createPlanner(
-@@ -42,10 +44,6 @@ public class PlannerFactoryUtil {
-             CatalogManager catalogManager,
-             FunctionCatalog functionCatalog) {
--        final PlannerFactory plannerFactory =
--                FactoryUtil.discoverFactory(
--                        Thread.currentThread().getContextClassLoader(),
--                        PlannerFactory.class,
--                        PlannerFactory.DEFAULT_IDENTIFIER);
-+        final PlannerFactory plannerFactory = discoverPlannerFactory();
- 
-         final Context context =
-                 new DefaultPlannerContext(
-@@ -58,5 +54,27 @@ public class PlannerFactoryUtil {
-         return plannerFactory.create(context);
-     }
- 
-+    private static PlannerFactory discoverPlannerFactory() {
-+        final ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
-+        final String plannerFactoryClass = System.getProperty(PLANNER_FACTORY_PROPERTY);
-+        if (plannerFactoryClass == null || plannerFactoryClass.isBlank()) {
-+            return FactoryUtil.discoverFactory(
-+                    classLoader, PlannerFactory.class, PlannerFactory.DEFAULT_IDENTIFIER);
-+        }
-+
-+        try {
-+            return Class.forName(plannerFactoryClass, true, classLoader)
-+                    .asSubclass(PlannerFactory.class)
-+                    .getDeclaredConstructor()
-+                    .newInstance();
-+        } catch (ReflectiveOperationException e) {
-+            throw new IllegalStateException(
-+                    String.format(
-+                            "Could not create planner factory '%s' configured by system property '%s'.",
-+                            plannerFactoryClass, PLANNER_FACTORY_PROPERTY),
-+                    e);
-+        }
+@@ -55,7 +60,28 @@ public class PlannerFactoryUtil {
+                         moduleManager,
+                         catalogManager,
+                         functionCatalog);
+-        return plannerFactory.create(context);
++        return decoratePlanner(plannerFactory.create(context));
 +    }
 +
-     private PlannerFactoryUtil() {}
- }
-diff --git a/flink-table/flink-table-planner/src/main/java/org/apache/flink/table/planner/plan/nodes/exec/common/CommonExecCalc.java b/flink-table/flink-table-planner/src/main/java/org/apache/flink/table/planner/plan/nodes/exec/common/CommonExecCalc.java
-index cf389655031..1765821a14f 100644
---- a/flink-table/flink-table-planner/src/main/java/org/apache/flink/table/planner/plan/nodes/exec/common/CommonExecCalc.java
-+++ b/flink-table/flink-table-planner/src/main/java/org/apache/flink/table/planner/plan/nodes/exec/common/CommonExecCalc.java
-@@ -42,6 +42,8 @@ import org.apache.calcite.rex.RexNode;
- 
- import javax.annotation.Nullable;
- 
-+import java.lang.reflect.InvocationTargetException;
-+import java.lang.reflect.Method;
- import java.util.List;
- import java.util.Optional;
- 
-@@ -52,6 +54,9 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
- public abstract class CommonExecCalc extends ExecNodeBase<RowData>
-         implements SingleTransformationTranslator<RowData> {
- 
-+    private static final String STREAMFUSION_CALC_TRANSLATOR_PROPERTY =
-+            "tech.streamfusion.flink.calc.translator";
-+
-     public static final String CALC_TRANSFORMATION = "calc";
- 
-     public static final String FIELD_NAME_PROJECTION = "projection";
-@@ -92,6 +97,15 @@ public abstract class CommonExecCalc extends ExecNodeBase<RowData>
-         final ExecEdge inputEdge = getInputEdges().get(0);
-         final Transformation<RowData> inputTransform =
-                 (Transformation<RowData>) inputEdge.translateToPlan(planner);
-+        final Transformation<RowData> streamFusionTransform =
-+                tryTranslateWithStreamFusion(
-+                        planner,
-+                        inputTransform,
-+                        (RowType) inputEdge.getOutputType(),
-+                        (RowType) getOutputType());
-+        if (streamFusionTransform != null) {
-+            return streamFusionTransform;
-+        }
-         final CodeGeneratorContext ctx =
-                 new CodeGeneratorContext(config, planner.getFlinkContext().getClassLoader())
-                         .setOperatorBaseClass(operatorBaseClass);
-@@ -113,4 +127,41 @@ public abstract class CommonExecCalc extends ExecNodeBase<RowData>
-                 inputTransform.getParallelism(),
-                 false);
-     }
-+
-+    @SuppressWarnings("unchecked")
-+    private Transformation<RowData> tryTranslateWithStreamFusion(
-+            PlannerBase planner,
-+            Transformation<RowData> inputTransform,
-+            RowType inputType,
-+            RowType outputType) {
-+        final String translatorClass = System.getProperty(STREAMFUSION_CALC_TRANSLATOR_PROPERTY);
-+        if (translatorClass == null || translatorClass.isBlank()) {
-+            return null;
++    private static Planner decoratePlanner(Planner planner) {
++        final String decoratorClass = System.getProperty(PLANNER_FACTORY_PROPERTY);
++        if (decoratorClass == null || decoratorClass.isBlank()) {
++            return planner;
 +        }
 +        try {
-+            final Class<?> translator =
++            final Method decorate =
 +                    Class.forName(
-+                            translatorClass, true, planner.getFlinkContext().getClassLoader());
-+            final Method translate =
-+                    translator.getMethod(
-+                            "translate",
-+                            Transformation.class,
-+                            RowType.class,
-+                            RowType.class,
-+                            List.class,
-+                            RexNode.class);
-+            return (Transformation<RowData>)
-+                    translate.invoke(
-+                            null, inputTransform, inputType, outputType, projection, condition);
++                                    decoratorClass,
++                                    true,
++                                    Thread.currentThread().getContextClassLoader())
++                            .getMethod("decorate", Planner.class);
++            return (Planner) decorate.invoke(null, planner);
 +        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
 +            throw new IllegalStateException(
-+                    "Could not invoke StreamFusion calc translator " + translatorClass, e);
++                    "Could not invoke planner decorator " + decoratorClass, e);
 +        } catch (InvocationTargetException e) {
-+            final Throwable cause = e.getCause();
-+            if (cause instanceof RuntimeException) {
-+                throw (RuntimeException) cause;
-+            }
-+            throw new IllegalStateException("StreamFusion calc translation failed", cause);
++            throw new IllegalStateException("Planner decoration failed", e.getCause());
 +        }
+     }
+ 
+     private PlannerFactoryUtil() {}
+diff --git a/flink-table/flink-table-planner/src/main/scala/org/apache/flink/table/planner/delegation/PlannerBase.scala b/flink-table/flink-table-planner/src/main/scala/org/apache/flink/table/planner/delegation/PlannerBase.scala
+index fe17d1f29d8..354eb3160e5 100644
+--- a/flink-table/flink-table-planner/src/main/scala/org/apache/flink/table/planner/delegation/PlannerBase.scala
++++ b/flink-table/flink-table-planner/src/main/scala/org/apache/flink/table/planner/delegation/PlannerBase.scala
+@@ -433,7 +433,19 @@ abstract class PlannerBase(
+     // process the graph
+     val context = new ProcessorContext(this)
+     val processors = getExecNodeGraphProcessors
+-    processors.foldLeft(execGraph)((graph, processor) => processor.process(graph, context))
++    val flinkGraph =
++      processors.foldLeft(execGraph)((graph, processor) => processor.process(graph, context))
++    val processorClass = System.getProperty("tech.streamfusion.flink.exec-graph.processor")
++    if (processorClass == null || processorClass.isBlank) {
++      flinkGraph
++    } else {
++      Class
++        .forName(processorClass, true, getClass.getClassLoader)
++        .asSubclass(classOf[ExecNodeGraphProcessor])
++        .getDeclaredConstructor()
++        .newInstance()
++        .process(flinkGraph, context)
 +    }
- }
+   }
+ 
+   def getExecNodeGraphProcessors: Seq[ExecNodeGraphProcessor]
