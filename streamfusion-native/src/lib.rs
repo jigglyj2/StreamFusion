@@ -9,6 +9,7 @@
 use datafusion::error::{DataFusionError, Result};
 use prost::Message;
 
+mod jni_bridge;
 pub mod planner;
 
 pub mod proto {

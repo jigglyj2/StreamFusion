@@ -6,13 +6,18 @@ rust-version = "1.94"
 license = "Apache-2.0"
 publish = false
 
+[lib]
+crate-type = ["cdylib", "rlib"]
+
 [dependencies]
 arrow = { version = "59.2.0", features = ["ffi"] }
 datafusion = { version = "55.0.0", default-features = false }
+jni = "0.22.4"
 prost = "0.14.4"
+tokio = { version = "1.53.1", features = ["rt"] }
 
 [dev-dependencies]
-tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.53.1", features = ["macros", "rt", "rt-multi-thread"] }
 
 [build-dependencies]
 prost-build = "0.14.4"

@@ -47,6 +47,7 @@
         <prost.version>0.14.4</prost.version>
         <tokio.version>1.53.1</tokio.version>
         <protoc.bin.vendored.version>3.2.0</protoc.bin.vendored.version>
+        <jni.rust.version>0.22.4</jni.rust.version>
     </properties>
 
     <dependencyManagement>
