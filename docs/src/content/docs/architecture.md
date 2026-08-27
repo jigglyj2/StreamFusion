@@ -30,6 +30,20 @@ Flink operators             Native execution operators
 
 Adjacent Rust operators form one native DataFusion execution-plan tree and pass Arrow record batches directly through native batch streams. Arrow's reference-counted arrays allow an operator to hand the next operator the same underlying buffers without serializing or copying the batch. JVM/native conversion happens only at the outer edges of the fused native plan through lightweight batch views and an Arrow C Stream-style ownership boundary.
 
+At an input boundary, StreamFusion transposes Flink internal `RowData` into Arrow vectors.
+At an output boundary, Flink reads those vectors through reusable `RowData`, `ArrayData`,
+`MapData`, and nested-row views; values are not copied back into `GenericRowData`. The
+boundary supports Flink's Arrow-compatible scalar types, decimal128, every temporal
+precision, strings and binary values, arrays, maps, nested rows, and nulls. Sliced Arrow
+vectors are rebased to offset zero before crossing into Java because Java consumers do
+not consistently preserve Arrow slice offsets.
+
+Arrow C Data owns the cross-language contract. Java package shading does not change its
+memory layouts, pointer values, or release callback ABI. StreamFusion nevertheless keeps
+allocator ownership and release responsibility explicit: exactly one side releases each
+exported structure, and the allocator supplied by Flink remains alive until every imported
+view has closed.
+
 Zero-copy applies to the handoff of an existing batch. Operators remain free to allocate new result buffers when the operation itself requires new data, such as aggregation, sorting, joining, or evaluating a computed expression.
 
 Native allocations remain part of Flink's resource model. DataFusion and custom Rust
