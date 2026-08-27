@@ -1,0 +1,55 @@
+diff --git a/flink-table/flink-table-api-java/src/main/java/org/apache/flink/table/factories/PlannerFactoryUtil.java b/flink-table/flink-table-api-java/src/main/java/org/apache/flink/table/factories/PlannerFactoryUtil.java
+index a4a22ca8a13..60e99bb18af 100644
+--- a/flink-table/flink-table-api-java/src/main/java/org/apache/flink/table/factories/PlannerFactoryUtil.java
++++ b/flink-table/flink-table-api-java/src/main/java/org/apache/flink/table/factories/PlannerFactoryUtil.java
+@@ -30,8 +30,10 @@ import org.apache.flink.table.delegation.PlannerFactory.DefaultPlannerContext;
+ import org.apache.flink.table.module.ModuleManager;
+ 
+ /** Utility for discovering and instantiating {@link PlannerFactory}. */
+ @Internal
+ public class PlannerFactoryUtil {
++    private static final String PLANNER_FACTORY_PROPERTY =
++            "tech.streamfusion.flink.planner.factory";
+ 
+     /** Discovers a planner factory and creates a planner instance. */
+     public static Planner createPlanner(
+@@ -42,10 +44,6 @@ public class PlannerFactoryUtil {
+             CatalogManager catalogManager,
+             FunctionCatalog functionCatalog) {
+-        final PlannerFactory plannerFactory =
+-                FactoryUtil.discoverFactory(
+-                        Thread.currentThread().getContextClassLoader(),
+-                        PlannerFactory.class,
+-                        PlannerFactory.DEFAULT_IDENTIFIER);
++        final PlannerFactory plannerFactory = discoverPlannerFactory();
+ 
+         final Context context =
+                 new DefaultPlannerContext(
+@@ -58,5 +54,27 @@ public class PlannerFactoryUtil {
+         return plannerFactory.create(context);
+     }
+ 
++    private static PlannerFactory discoverPlannerFactory() {
++        final ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
++        final String plannerFactoryClass = System.getProperty(PLANNER_FACTORY_PROPERTY);
++        if (plannerFactoryClass == null || plannerFactoryClass.isBlank()) {
++            return FactoryUtil.discoverFactory(
++                    classLoader, PlannerFactory.class, PlannerFactory.DEFAULT_IDENTIFIER);
++        }
++
++        try {
++            return Class.forName(plannerFactoryClass, true, classLoader)
++                    .asSubclass(PlannerFactory.class)
++                    .getDeclaredConstructor()
++                    .newInstance();
++        } catch (ReflectiveOperationException e) {
++            throw new IllegalStateException(
++                    String.format(
++                            "Could not create planner factory '%s' configured by system property '%s'.",
++                            plannerFactoryClass, PLANNER_FACTORY_PROPERTY),
++                    e);
++        }
++    }
++
+     private PlannerFactoryUtil() {}
+ }
