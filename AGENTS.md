@@ -29,9 +29,15 @@ implemented.
 
 StreamFusion plan replacement is all-or-nothing. Accelerate a plan only when every
 internal node has a StreamFusion physical operator. Sources and sinks are the only
-exceptions and must use a StreamFusion connector operator or an explicit RowData-to-Arrow
-or Arrow-to-RowData boundary transpose. EXPLAIN output must state why the whole plan fell
-back and give a reason for every operator that prevented acceleration.
+exceptions and must use a StreamFusion connector or a lightweight Flink RowData Arrow
+batch view. EXPLAIN output must state why the whole plan fell back and give a reason for
+every operator that prevented acceleration.
+
+Fuse adjacent Rust operators into one native DataFusion execution-plan tree. They must
+exchange Arrow `RecordBatch` streams directly using shared, reference-counted buffers;
+the handoff between adjacent native operators must not serialize or copy whole batches.
+An operator may allocate output buffers when its computation inherently requires them.
+Cross the JVM/native boundary only at the edges of the fused native plan.
 
 ## Testing Guidelines
 

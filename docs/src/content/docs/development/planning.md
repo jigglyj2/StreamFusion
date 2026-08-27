@@ -7,26 +7,37 @@ StreamFusion uses an **all-or-nothing** planning rule. A plan is accelerated onl
 
 ```text
 Flink source
-  → RowData-to-Arrow boundary
+  → lightweight RowData Arrow batch view
   → StreamFusion operator
   → StreamFusion operator
-  → Arrow-to-RowData boundary
+  → lightweight RowData Arrow batch view
   → Flink sink
 ```
 
-Sources and sinks are the only boundary exceptions. A connector may eventually supply a native StreamFusion source or sink. Otherwise, the planner requires an explicit transpose:
+Sources and sinks are the only boundary exceptions. A connector may eventually supply a native StreamFusion source or sink. Otherwise, it supplies a `FlinkRowDataArrowBatchView`: a lightweight interface that describes a batch and exposes its Flink `RowData` without making the boundary itself a physical transpose operator.
 
-- `StreamFusionRowDataToArrow` converts records produced by a Flink source into native Arrow batches.
-- `StreamFusionArrowToRowData` converts native Arrow batches back into records accepted by a Flink sink.
+Creating this Java view must not copy row payloads. A native boundary implementation may still need to materialize Arrow column buffers once when a source is genuinely row-based—row and column memory layouts cannot be relabeled into one another. If a connector already owns Arrow-compatible columnar buffers, its view should import or retain those buffers instead. The sink side follows the inverse ownership protocol through the same boundary abstraction.
 
-Both transpose operators are currently planning skeletons. Their runtime conversion, memory ownership, batching, changelog handling, and checkpoint integration remain TODO. Consequently, no production SQL plan is accelerated yet.
+The runtime view implementation, Arrow materialization, memory ownership, batching, changelog handling, and checkpoint integration remain TODO. Consequently, no production SQL plan is accelerated yet.
+
+## Native batch pipeline
+
+StreamFusion follows the execution shape used by Apache DataFusion Comet:
+
+1. Consecutive native operators are fused into one native plan rather than alternating between JVM and Rust operators.
+2. The native plan is lowered to a DataFusion `ExecutionPlan` tree.
+3. Parent and child operators communicate through `SendableRecordBatchStream`-style streams of Arrow `RecordBatch` values.
+4. Arrow arrays retain their buffers through reference-counted ownership, so passing a batch to the next native operator copies only lightweight batch/ownership metadata—not column buffers.
+5. JVM input crosses once at the native-plan edge using an Arrow C Stream-style boundary; output crosses once at the other edge.
+
+This is a **zero-copy handoff** guarantee between adjacent Rust operators. It is not a claim that every operator is allocation-free: a projection can often reuse input arrays, while a sort, join, aggregation, or computed expression may necessarily create new output buffers. What is forbidden is serialization, RowData conversion, or defensive copying merely to pass an existing Arrow batch from one native operator to the next.
 
 ## Eligibility algorithm
 
 The planner walks the complete candidate plan and records a StreamFusion implementation or a rejection reason for every node:
 
 1. Every internal node must map to a StreamFusion physical operator.
-2. Every source and sink must map to a native StreamFusion connector or the appropriate transpose boundary.
+2. Every source and sink must map to a native StreamFusion connector or a Flink RowData Arrow batch view.
 3. Any rejected node rejects the entire plan.
 4. A rejected plan is delegated unchanged to Flink.
 
@@ -45,7 +56,7 @@ Operator rejections:
 - StreamExecGroupAggregate [INTERNAL]: retractable SUM is not implemented
 ```
 
-The plan-level reason explains why acceleration was rejected. Each operator-level entry identifies the Flink operator that could not be replaced and gives its specific reason. Until Flink-plan conversion is connected to the new eligibility model, live SQL explanations state that conversion and the boundary transposes are not implemented.
+The plan-level reason explains why acceleration was rejected. Each operator-level entry identifies the Flink operator that could not be replaced and gives its specific reason. Until Flink-plan conversion is connected to the new eligibility model, live SQL explanations state that conversion, boundary views, and native Arrow materialization are not implemented.
 
 ## Flink runner integration test
 
