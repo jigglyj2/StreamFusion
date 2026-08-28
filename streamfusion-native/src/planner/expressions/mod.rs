@@ -73,6 +73,7 @@ pub(crate) mod string_ascii;
 pub(crate) mod string_chr;
 pub(crate) mod string_count_support;
 pub(crate) mod string_ends_with;
+pub(crate) mod string_init_cap;
 pub(crate) mod string_left;
 pub(crate) mod string_position;
 pub(crate) mod string_repeat;

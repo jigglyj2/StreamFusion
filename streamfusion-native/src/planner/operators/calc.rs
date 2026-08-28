@@ -299,6 +299,13 @@ pub(super) fn create_expression(
                 .ok_or_else(|| DataFusionError::Plan("REVERSE operand is empty".to_string()))?;
             expressions::string_reverse::create(create_expression(operand, schema)?, schema)
         }
+        Some(proto::expression::Expression::StringInitCap(init_cap)) => {
+            let operand = init_cap
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("INITCAP operand is empty".to_string()))?;
+            expressions::string_init_cap::create(create_expression(operand, schema)?, schema)
+        }
         Some(proto::expression::Expression::HyperbolicSine(sine)) => {
             let operand = sine
                 .operand

@@ -344,6 +344,11 @@ using DataFusion's vectorized Unicode reverse kernel. Both engines reverse Unico
 so supplementary characters remain intact while combining marks retain their independent code
 point behavior. Generated parity coverage includes ASCII, multilingual text, supplementary
 characters, combining marks, embedded NUL bytes, empty strings, and nulls.
+`INITCAP(value)` is accelerated for supported `VARCHAR` expressions in projections and filters.
+StreamFusion uses a dedicated vectorized expression instead of DataFusion's Unicode-aware
+`initcap`: Flink defines words and case conversion using ASCII `[A-Za-z0-9]` only, with every
+other character acting as a word boundary. Generated parity coverage includes mixed case, digits,
+punctuation, non-ASCII boundaries, empty strings, and nulls.
 `ENDSWITH(value, suffix)` is accelerated in projections and filters when both arguments are
 supported `VARCHAR` expressions. Both literal and computed suffixes lower to DataFusion's
 vectorized UTF-8 predicate, including empty suffixes, Unicode text, and null propagation.

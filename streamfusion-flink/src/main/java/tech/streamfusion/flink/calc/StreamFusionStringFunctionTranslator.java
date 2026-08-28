@@ -16,6 +16,7 @@ import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.proto.plan.v1.CharacterFromCode;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.StringAscii;
+import tech.streamfusion.proto.plan.v1.StringInitCap;
 import tech.streamfusion.proto.plan.v1.StringLeft;
 import tech.streamfusion.proto.plan.v1.StringPosition;
 import tech.streamfusion.proto.plan.v1.StringRepeat;
@@ -169,6 +170,27 @@ final class StreamFusionStringFunctionTranslator extends StreamFusionComplexType
                 ? null
                 : Expression.newBuilder()
                         .setStringReverse(StringReverse.newBuilder().setOperand(operand))
+                        .build();
+    }
+
+    static Expression initCap(Object expression, RowType inputType, LogicalType expectedType) {
+        if (!"INITCAP".equals(functionName(expression)) || expectedType.getTypeRoot() != LogicalTypeRoot.VARCHAR) {
+            return null;
+        }
+        java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
+        if (operands.size() != 1) {
+            return null;
+        }
+        LogicalType operandType = logicalType(operands.get(0), inputType);
+        if (operandType == null || operandType.getTypeRoot() != LogicalTypeRoot.VARCHAR) {
+            return null;
+        }
+        Expression operand =
+                StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, operandType);
+        return operand == null
+                ? null
+                : Expression.newBuilder()
+                        .setStringInitCap(StringInitCap.newBuilder().setOperand(operand))
                         .build();
     }
 
