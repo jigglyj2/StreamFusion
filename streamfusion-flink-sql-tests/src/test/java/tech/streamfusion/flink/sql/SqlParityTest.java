@@ -1239,6 +1239,35 @@ class SqlParityTest {
                 Arguments.of("nested", "CONCAT(LOWER(metric), UPPER(metric))"));
     }
 
+    @ParameterizedTest(name = "LIKE {0}")
+    @MethodSource("nativeLikeCases")
+    void nativeLikeMatchesFlinkByteForByte(String ignoredName, String predicate) throws Exception {
+        assertDataStreamParity(
+                "SELECT metric FROM like_input WHERE " + predicate,
+                Types.STRING,
+                Arrays.asList(
+                        Row.of(""),
+                        Row.of("ab"),
+                        Row.of("abc"),
+                        Row.of("z😀x"),
+                        Row.of("a_c"),
+                        Row.of("a.c"),
+                        Row.of("你好"),
+                        Row.of((Object) null)),
+                "like_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    private static Stream<Arguments> nativeLikeCases() {
+        return Stream.of(
+                Arguments.of("prefix", "metric LIKE 'ab%'"),
+                Arguments.of("Unicode wildcard", "metric LIKE '%😀_'"),
+                Arguments.of("single wildcard", "metric LIKE 'a_c'"),
+                Arguments.of("literal regex punctuation", "metric LIKE 'a.c'"),
+                Arguments.of("negated", "metric NOT LIKE '%x%'"));
+    }
+
     @ParameterizedTest(name = "VARBINARY {0}")
     @MethodSource("nativeVarbinaryDataStreamRangeCases")
     void nativeVarbinaryDataStreamRangesMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {

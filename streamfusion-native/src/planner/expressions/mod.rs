@@ -14,6 +14,7 @@ pub(crate) mod coalesce;
 pub(crate) mod concat;
 pub(crate) mod conditional;
 pub(crate) mod floor;
+pub(crate) mod like;
 pub(crate) mod lower;
 pub(crate) mod null_literal;
 pub(crate) mod sign;

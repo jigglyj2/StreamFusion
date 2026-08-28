@@ -63,6 +63,7 @@ message Expression {
     Lower lower = 32;
     Upper upper = 33;
     Concat concat = 34;
+    Like like = 35;
   }
 }
 
@@ -110,6 +111,11 @@ message Upper {
 
 message Concat {
   repeated Expression arguments = 1;
+}
+
+message Like {
+  Expression operand = 1;
+  string pattern = 2;
 }
 
 message NullLiteral {

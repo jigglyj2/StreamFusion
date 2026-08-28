@@ -104,10 +104,17 @@ ordinary comparisons, plus matching boolean column pairs. Unlike `=` and `<>`, t
 always return a non-null boolean and treat two nulls as not distinct.
 This includes matching `TINYINT` and `SMALLINT` column pairs; no widening cast is inserted.
 
+`LIKE` and `NOT LIKE` are accelerated for direct `VARCHAR` columns and literal patterns
+without an explicit escape sequence. `%` matches any sequence of characters and `_` matches
+one character, including Unicode code points; null input remains unknown and is filtered out.
+Dynamic patterns, fixed-width `CHAR`, backslash-containing patterns, and explicit `ESCAPE`
+clauses cause whole-Calc fallback until their coercion and escape rules have dedicated parity
+coverage.
+
 ## Implementation
 
 Java encodes literal or column operands as protobuf expressions. Rust lowers them to DataFusion
-`Column`, `Literal`, `BinaryExpr`, `NotExpr`, `IsNullExpr`, and `IsNotNullExpr` nodes
+`Column`, `Literal`, `BinaryExpr`, `LikeExpr`, `NotExpr`, `IsNullExpr`, and `IsNotNullExpr` nodes
 inside a `FilterExec`. The following `ProjectionExec` consumes its Arrow batches directly. A
 paired serializable Java evaluator retains the original Flink `RowKind` for each row
 that survives native filtering.

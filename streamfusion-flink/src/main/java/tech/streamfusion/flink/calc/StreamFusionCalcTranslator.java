@@ -168,6 +168,26 @@ public final class StreamFusionCalcTranslator {
         if (comparison != null) {
             return comparison;
         }
+        if ("LIKE".equals(functionName(condition))) {
+            List<?> operands = (List<?>) invoke(condition, "getOperands");
+            if (operands.size() != 2) {
+                return null;
+            }
+            int inputIndex = inputIndex(operands.get(0));
+            String pattern = literal(operands.get(1), String.class);
+            if (inputIndex < 0
+                    || inputIndex >= inputType.getFieldCount()
+                    || inputType.getTypeAt(inputIndex).getTypeRoot() != LogicalTypeRoot.VARCHAR
+                    || pattern == null
+                    || pattern.indexOf('\\') >= 0) {
+                return null;
+            }
+            return new StreamFusionLikeCondition(
+                    inputIndex,
+                    pattern,
+                    StreamFusionIdentityCalcOperator.inputReference(
+                            inputIndex, StreamFusionIdentityCalcOperator.logicalType(inputType, inputIndex)));
+        }
         String kind = invoke(condition, "getKind").toString();
         if ("SEARCH".equals(kind)) {
             return search(condition, inputType);

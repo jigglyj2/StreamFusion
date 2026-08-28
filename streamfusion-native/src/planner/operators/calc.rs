@@ -176,6 +176,13 @@ fn create_expression(
                 .collect::<Result<Vec<_>>>()?;
             expressions::concat::create(arguments, schema)
         }
+        Some(proto::expression::Expression::Like(like)) => {
+            let operand = like
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("LIKE operand is empty".to_string()))?;
+            expressions::like::create(create_expression(operand, schema)?, &like.pattern, schema)
+        }
         Some(proto::expression::Expression::DateLiteral(literal)) => Ok(Arc::new(Literal::new(
             ScalarValue::Date32(Some(literal.epoch_day)),
         ))),
