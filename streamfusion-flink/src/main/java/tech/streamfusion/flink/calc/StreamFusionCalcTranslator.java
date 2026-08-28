@@ -656,7 +656,8 @@ public final class StreamFusionCalcTranslator {
                 || type == LogicalTypeRoot.DECIMAL
                 || type == LogicalTypeRoot.DATE
                 || type == LogicalTypeRoot.TIME_WITHOUT_TIME_ZONE
-                || type == LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE;
+                || type == LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE
+                || type == LogicalTypeRoot.VARCHAR;
     }
 
     private static StreamFusionCondition searchComparison(
@@ -698,6 +699,9 @@ public final class StreamFusionCalcTranslator {
                 TimestampData timestamp = TimestampData.fromLocalDateTime(
                         LocalDateTime.parse(endpoint.toString().replace(' ', 'T')));
                 return new StreamFusionTimestampComparison(inputIndex, timestamp, timestampPrecision, operator, true);
+            case VARCHAR:
+                return new StreamFusionStringComparison(
+                        inputIndex, invoke(endpoint, "getValue").toString(), operator, true);
             default:
                 return null;
         }

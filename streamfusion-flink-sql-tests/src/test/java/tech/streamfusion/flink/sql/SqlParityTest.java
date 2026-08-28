@@ -939,6 +939,24 @@ class SqlParityTest {
                         "metric IN (TIMESTAMP '1969-12-31 23:59:59.999', " + "TIMESTAMP '2030-01-01 00:00:00.000')"));
     }
 
+    @ParameterizedTest(name = "VARCHAR {0}")
+    @MethodSource("nativeVarcharDataStreamRangeCases")
+    void nativeVarcharDataStreamRangesMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {
+        assertDataStreamParity(
+                "SELECT metric FROM varchar_input WHERE " + predicate,
+                Types.STRING,
+                Arrays.asList(Row.of("alpha"), Row.of("beta"), Row.of("delta"), Row.of("zeta"), Row.of((Object) null)),
+                "varchar_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    private static Stream<Arguments> nativeVarcharDataStreamRangeCases() {
+        return Stream.of(
+                Arguments.of("between", "metric BETWEEN 'beta' AND 'delta'"),
+                Arguments.of("in", "metric IN ('alpha', 'delta', 'zeta')"));
+    }
+
     @ParameterizedTest(name = "{0}")
     @MethodSource("nativeBooleanColumnCases")
     void nativeBooleanColumnsMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {

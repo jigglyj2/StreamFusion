@@ -19,7 +19,8 @@ import tech.streamfusion.proto.plan.v1.StringLiteral;
 /** Ordered comparison between a character-string input column and literal. */
 final class StreamFusionStringComparison extends StreamFusionOrderedComparison {
     private static final long serialVersionUID = 1L;
-    private final StringData literal;
+    private final String literal;
+    private transient StringData literalData;
 
     StreamFusionStringComparison(int inputIndex, String literal, ComparisonOperator operator, boolean inputOnLeft) {
         super(
@@ -29,7 +30,7 @@ final class StreamFusionStringComparison extends StreamFusionOrderedComparison {
                 Expression.newBuilder()
                         .setStringLiteral(StringLiteral.newBuilder().setValue(literal))
                         .build());
-        this.literal = StringData.fromString(literal);
+        this.literal = literal;
     }
 
     StreamFusionStringComparison(
@@ -43,6 +44,9 @@ final class StreamFusionStringComparison extends StreamFusionOrderedComparison {
 
     @Override
     protected int compareInputToLiteral(RowData row) {
-        return row.getString(inputIndex()).compareTo(literal);
+        if (literalData == null) {
+            literalData = StringData.fromString(literal);
+        }
+        return row.getString(inputIndex()).compareTo(literalData);
     }
 }
