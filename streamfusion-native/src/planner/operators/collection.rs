@@ -229,6 +229,24 @@ pub(super) fn create(
             )?,
             schema,
         ),
+        StringReplace(replace) => expressions::string_replace::create(
+            create_expression(
+                required(&replace.value, "string replace is missing its value")?,
+                schema,
+            )?,
+            create_expression(
+                required(&replace.search, "string replace is missing its search")?,
+                schema,
+            )?,
+            create_expression(
+                required(
+                    &replace.replacement,
+                    "string replace is missing its replacement",
+                )?,
+                schema,
+            )?,
+            schema,
+        ),
         ArrayDistinct(distinct) => expressions::array_distinct::create(
             create_expression(
                 required(&distinct.array, "array distinct is missing its array")?,

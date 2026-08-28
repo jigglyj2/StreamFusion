@@ -93,6 +93,7 @@ message Expression {
     MapKeys map_keys = 62;
     MapValues map_values = 63;
     MapEntries map_entries = 64;
+    StringReplace string_replace = 65;
   }
 }
 
@@ -222,6 +223,12 @@ message MapValues {
 
 message MapEntries {
   Expression map = 1;
+}
+
+message StringReplace {
+  Expression value = 1;
+  Expression search = 2;
+  Expression replacement = 3;
 }
 
 message Coalesce {

@@ -278,6 +278,11 @@ optional nonnegative literal length. Positions are one-based and count Unicode c
 zero length, starts beyond the value, empty strings, and nulls preserve Flink behavior.
 Dynamic indices, zero or negative starts, negative lengths, binary strings, and `CHAR` fall
 back because Flink's negative-position rule differs from DataFusion's PostgreSQL semantics.
+`REPLACE(value, search, replacement)` is accelerated when all three arguments are supported
+`VARCHAR` expressions. It uses DataFusion's vectorized replacement kernel and supports literal
+or computed search and replacement strings, repeated matches, Unicode text, empty strings, and
+null propagation. Binary strings and fixed-width `CHAR` remain on Flink pending their distinct
+type semantics.
 
 Cast approval is table-driven. Java maps an explicitly approved Flink source/target pair
 to a stable protobuf cast kind; Rust independently verifies that kind against the actual
