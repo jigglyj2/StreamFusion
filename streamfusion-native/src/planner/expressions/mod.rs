@@ -7,3 +7,4 @@
 //     http://www.apache.org/licenses/LICENSE-2.0
 
 pub(crate) mod cast;
+mod wrapping_cast;

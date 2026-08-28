@@ -11,6 +11,7 @@ package tech.streamfusion.flink.arrow;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.ArrayList;
 import java.util.List;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.VectorSchemaRoot;
@@ -208,6 +209,27 @@ class ArrowCDataBridgeTest {
                 assertThat(Double.doubleToLongBits(output.rowView(index).getDouble(0)))
                         .isEqualTo(Double.doubleToLongBits((double) values.get(index)));
             }
+        }
+    }
+
+    @Test
+    void narrowsIntegerToSmallintWithFlinkOverflowParity() {
+        RowType inputType = RowType.of(new IntType(true));
+        RowType outputType = RowType.of(new SmallIntType(true));
+        List<Integer> values = List.of(Integer.MIN_VALUE, -32769, -32768, -1, 0, 32767, 32768, Integer.MAX_VALUE);
+        List<RowData> rows = new ArrayList<>(values.stream()
+                .map(value -> (RowData) GenericRowData.of(value))
+                .collect(java.util.stream.Collectors.toList()));
+        rows.add(GenericRowData.of((Object) null));
+
+        try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+                ArrowRowDataBatch input = ArrowRowDataBatch.transpose(rows, inputType, allocator);
+                ArrowRowDataBatch output =
+                        ArrowCDataBridge.execute(integerToSmallintPlan(), input, outputType, allocator)) {
+            for (int index = 0; index < values.size(); index++) {
+                assertThat(output.rowView(index).getShort(0)).isEqualTo((short) (int) values.get(index));
+            }
+            assertThat(output.rowView(values.size()).isNullAt(0)).isTrue();
         }
     }
 
@@ -585,6 +607,20 @@ class ArrowCDataBridgeTest {
                 0,
                 LogicalType.newBuilder().setDouble(EmptyType.getDefaultInstance()),
                 CastKind.CAST_KIND_FLOAT_TO_DOUBLE);
+        return NativePlan.newBuilder()
+                .setProtocolVersion(1)
+                .setRoot(Operator.newBuilder().setCalc(calc))
+                .build()
+                .toByteArray();
+    }
+
+    private static byte[] integerToSmallintPlan() {
+        Calc.Builder calc = Calc.newBuilder().setInput(Operator.newBuilder().setInput(Input.newBuilder()));
+        addCast(
+                calc,
+                0,
+                LogicalType.newBuilder().setSmallint(EmptyType.getDefaultInstance()),
+                CastKind.CAST_KIND_INTEGER_TO_SMALLINT);
         return NativePlan.newBuilder()
                 .setProtocolVersion(1)
                 .setRoot(Operator.newBuilder().setCalc(calc))

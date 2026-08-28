@@ -61,6 +61,7 @@ final class StreamFusionCastSupport {
         approve(casts, LogicalTypeRoot.SMALLINT, LogicalTypeRoot.DOUBLE, CastKind.CAST_KIND_SMALLINT_TO_DOUBLE);
         approve(casts, LogicalTypeRoot.INTEGER, LogicalTypeRoot.DOUBLE, CastKind.CAST_KIND_INTEGER_TO_DOUBLE);
         approve(casts, LogicalTypeRoot.FLOAT, LogicalTypeRoot.DOUBLE, CastKind.CAST_KIND_FLOAT_TO_DOUBLE);
+        approve(casts, LogicalTypeRoot.INTEGER, LogicalTypeRoot.SMALLINT, CastKind.CAST_KIND_INTEGER_TO_SMALLINT);
         casts.replaceAll((ignored, targets) -> Collections.unmodifiableMap(targets));
         return Collections.unmodifiableMap(casts);
     }

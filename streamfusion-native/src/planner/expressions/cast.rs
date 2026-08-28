@@ -13,6 +13,7 @@ use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_expr::expressions::CastExpr;
 use datafusion::physical_expr::PhysicalExpr;
 
+use crate::planner::expressions::wrapping_cast::Int32ToInt16WrappingExpr;
 use crate::proto;
 
 pub(crate) fn create(
@@ -28,6 +29,9 @@ pub(crate) fn create(
             "cast kind {:?} requires {approved_source} to {approved_target}, got {actual_source} to {declared_target}",
             cast.kind()
         )));
+    }
+    if cast.kind() == proto::CastKind::IntegerToSmallint {
+        return Ok(Arc::new(Int32ToInt16WrappingExpr::new(operand)));
     }
     Ok(Arc::new(CastExpr::new(operand, approved_target, None)))
 }
@@ -46,6 +50,7 @@ fn approved_types(kind: proto::CastKind) -> Result<(DataType, DataType)> {
         proto::CastKind::SmallintToDouble => Ok((DataType::Int16, DataType::Float64)),
         proto::CastKind::IntegerToDouble => Ok((DataType::Int32, DataType::Float64)),
         proto::CastKind::FloatToDouble => Ok((DataType::Float32, DataType::Float64)),
+        proto::CastKind::IntegerToSmallint => Ok((DataType::Int32, DataType::Int16)),
         proto::CastKind::Unspecified => Err(DataFusionError::Plan(
             "cast kind is unspecified or unknown".to_string(),
         )),
