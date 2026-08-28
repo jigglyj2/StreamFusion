@@ -30,6 +30,40 @@ import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 
 class ComplexTypeAccessParityTest extends SqlParityTestSupport {
     @Test
+    void arrayElementsMatchFlinkByteForByte() throws Exception {
+        assertDataStreamParity(
+                "SELECT metric[1], metric[2], metric[4] FROM array_input",
+                Types.OBJECT_ARRAY(Types.INT),
+                DataTypes.ARRAY(DataTypes.INT()),
+                Arrays.asList(
+                        Row.of((Object) new Integer[] {1, null, 3}),
+                        Row.of((Object) new Integer[] {4}),
+                        Row.of((Object) new Integer[] {}),
+                        Row.of((Object) null)),
+                "array_input");
+
+        assertNativeCalcRan();
+    }
+
+    @Test
+    void rowFieldsInsideArraysMatchFlinkByteForByte() throws Exception {
+        TypeInformation<Row> rowType = Types.ROW_NAMED(new String[] {"label", "amount"}, Types.STRING, Types.INT);
+        assertDataStreamParity(
+                "SELECT metric[1].label, metric[2].amount FROM array_of_rows_input",
+                Types.OBJECT_ARRAY(rowType),
+                DataTypes.ARRAY(DataTypes.ROW(
+                        DataTypes.FIELD("label", DataTypes.STRING()), DataTypes.FIELD("amount", DataTypes.INT()))),
+                Arrays.asList(
+                        Row.of((Object) new Row[] {Row.of("x", 7), Row.of("y", null)}),
+                        Row.of((Object) new Row[] {Row.of("z", 9)}),
+                        Row.of((Object) new Row[] {}),
+                        Row.of((Object) null)),
+                "array_of_rows_input");
+
+        assertNativeCalcRan();
+    }
+
+    @Test
     void rowFieldsMatchFlinkByteForByte() throws Exception {
         assertDataStreamParity(
                 "SELECT metric.label, metric.amount FROM row_input",
