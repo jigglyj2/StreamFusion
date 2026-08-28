@@ -71,6 +71,7 @@ message Expression {
     MapElement map_element = 40;
     Cardinality cardinality = 41;
     ArrayContains array_contains = 42;
+    ArrayReverse array_reverse = 43;
   }
 }
 
@@ -96,6 +97,10 @@ message Cardinality {
 message ArrayContains {
   Expression array = 1;
   Expression needle = 2;
+}
+
+message ArrayReverse {
+  Expression array = 1;
 }
 
 message Coalesce {

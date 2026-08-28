@@ -9,6 +9,7 @@
 pub(crate) mod absolute_value;
 pub(crate) mod array_contains;
 pub(crate) mod array_element;
+pub(crate) mod array_reverse;
 pub(crate) mod cardinality;
 pub(crate) mod cast;
 pub(crate) mod ceiling;

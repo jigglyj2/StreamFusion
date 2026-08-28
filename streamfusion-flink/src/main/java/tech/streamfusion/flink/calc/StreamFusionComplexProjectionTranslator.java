@@ -22,6 +22,7 @@ import org.apache.flink.table.types.logical.MapType;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.proto.plan.v1.ArrayContains;
 import tech.streamfusion.proto.plan.v1.ArrayElement;
+import tech.streamfusion.proto.plan.v1.ArrayReverse;
 import tech.streamfusion.proto.plan.v1.Cardinality;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.MapElement;
@@ -183,6 +184,28 @@ final class StreamFusionComplexProjectionTranslator extends StreamFusionRexSuppo
                 : Expression.newBuilder()
                         .setArrayContains(
                                 ArrayContains.newBuilder().setArray(array).setNeedle(needle))
+                        .build();
+    }
+
+    static Expression arrayReverse(Object expression, RowType inputType, LogicalType expectedType) {
+        if (!"ARRAY_REVERSE".equals(functionName(expression)) || !(expectedType instanceof ArrayType)) {
+            return null;
+        }
+        java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
+        if (operands.size() != 1) {
+            return null;
+        }
+        LogicalType operandType = logicalType(operands.get(0), inputType);
+        if (!(operandType instanceof ArrayType)
+                || !operandType.copy(expectedType.isNullable()).equals(expectedType)) {
+            return null;
+        }
+        Expression array =
+                StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, operandType);
+        return array == null
+                ? null
+                : Expression.newBuilder()
+                        .setArrayReverse(ArrayReverse.newBuilder().setArray(array))
                         .build();
     }
 

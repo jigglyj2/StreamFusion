@@ -115,6 +115,12 @@ fn create_expression(
                 schema,
             )
         }
+        Some(proto::expression::Expression::ArrayReverse(reverse)) => {
+            let array = reverse.array.as_ref().ok_or_else(|| {
+                DataFusionError::Plan("array reverse is missing its array".into())
+            })?;
+            expressions::array_reverse::create(create_expression(array, schema)?, schema)
+        }
         Some(proto::expression::Expression::IntegerLiteral(literal)) => Ok(Arc::new(Literal::new(
             ScalarValue::Int32(Some(literal.value)),
         ))),
