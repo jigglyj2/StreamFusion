@@ -75,10 +75,14 @@ public final class StreamFusionArrayUnnestTranslator {
             return "UNNEST input " + inputType.getFieldNames().get(index) + " is not an ARRAY";
         }
         LogicalType element = ((ArrayType) collection).getElementType();
-        if (!isScalarBoundaryType(element.getTypeRoot())) {
+        if (!isSupportedElement(element)) {
             return "array UNNEST element type " + element + " is not yet supported";
         }
-        int appendedFields = withOrdinality ? 2 : 1;
+        if ("LEFT".equals(joinName) && element instanceof RowType) {
+            return "left array UNNEST of ROW is not yet supported";
+        }
+        int elementFields = element instanceof RowType ? ((RowType) element).getFieldCount() : 1;
+        int appendedFields = elementFields + (withOrdinality ? 1 : 0);
         if (outputType.getFieldCount() != inputType.getFieldCount() + appendedFields) {
             return "array UNNEST output must append its element"
                     + (withOrdinality ? " and ordinality" : "")
@@ -89,12 +93,25 @@ public final class StreamFusionArrayUnnestTranslator {
                 return "array UNNEST output does not preserve input field " + field + " exactly";
             }
         }
-        LogicalType expectedElement = "LEFT".equals(joinName) ? element.copy(true) : element;
-        if (!expectedElement.equals(outputType.getTypeAt(inputType.getFieldCount()))) {
-            return "array UNNEST output element type does not match its ARRAY element type";
+        if (element instanceof RowType) {
+            RowType row = (RowType) element;
+            for (int field = 0; field < row.getFieldCount(); field++) {
+                LogicalType expected = row.getTypeAt(field)
+                        .copy("LEFT".equals(joinName)
+                                || element.isNullable()
+                                || row.getTypeAt(field).isNullable());
+                if (!expected.equals(outputType.getTypeAt(inputType.getFieldCount() + field))) {
+                    return "array UNNEST output field " + field + " does not match its ROW element field";
+                }
+            }
+        } else {
+            LogicalType expectedElement = "LEFT".equals(joinName) ? element.copy(true) : element;
+            if (!expectedElement.equals(outputType.getTypeAt(inputType.getFieldCount()))) {
+                return "array UNNEST output element type does not match its ARRAY element type";
+            }
         }
         if (withOrdinality) {
-            LogicalType ordinality = outputType.getTypeAt(inputType.getFieldCount() + 1);
+            LogicalType ordinality = outputType.getTypeAt(inputType.getFieldCount() + elementFields);
             boolean expectedNullable = "LEFT".equals(joinName);
             if (ordinality.getTypeRoot() != LogicalTypeRoot.INTEGER || ordinality.isNullable() != expectedNullable) {
                 return "array UNNEST ordinality must be " + (expectedNullable ? "a nullable" : "a non-null") + " INT";
@@ -140,6 +157,18 @@ public final class StreamFusionArrayUnnestTranslator {
             default:
                 return false;
         }
+    }
+
+    private static boolean isSupportedElement(LogicalType element) {
+        if (isScalarBoundaryType(element.getTypeRoot())) {
+            return true;
+        }
+        if (!(element instanceof RowType)) {
+            return false;
+        }
+        RowType row = (RowType) element;
+        return row.getFieldCount() > 0
+                && row.getChildren().stream().allMatch(child -> isScalarBoundaryType(child.getTypeRoot()));
     }
 
     private static Object invoke(Object target, String methodName) {

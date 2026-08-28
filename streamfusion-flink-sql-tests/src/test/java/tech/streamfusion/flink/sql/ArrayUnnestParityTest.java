@@ -161,6 +161,26 @@ class ArrayUnnestParityTest extends SqlParityTestSupport {
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 
+    @Test
+    void nativeArrayOfRowsUnnestFlattensFieldsAndPreservesNullElements() throws Exception {
+        assertDataStreamParity(
+                "SELECT label, amount FROM row_array_unnest_input "
+                        + "CROSS JOIN UNNEST(metric) AS expanded(label, amount)",
+                Types.OBJECT_ARRAY(Types.ROW_NAMED(new String[] {"label", "amount"}, Types.STRING, Types.INT)),
+                DataTypes.ARRAY(DataTypes.ROW(
+                        DataTypes.FIELD("label", DataTypes.STRING()), DataTypes.FIELD("amount", DataTypes.INT()))),
+                Arrays.asList(
+                        Row.of((Object) new Row[] {Row.of("alpha", 1), Row.of("你好", null), null}),
+                        Row.of((Object) new Row[] {}),
+                        Row.of((Object) null)),
+                "row_array_unnest_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isEqualTo(1);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
     private static byte[] executeChangelog(java.util.List<Row> rows, boolean streamFusionEnabled) throws Exception {
         if (streamFusionEnabled) {
             System.setProperty(

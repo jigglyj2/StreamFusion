@@ -9,11 +9,15 @@
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema};
-use datafusion::common::{NullHandling, UnnestOptions};
+use datafusion::common::{DFSchema, NullHandling, UnnestOptions};
 use datafusion::error::{DataFusionError, Result};
-use datafusion::physical_expr::expressions::Column;
+use datafusion::logical_expr::execution_props::ExecutionProps;
+use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
+use datafusion::physical_expr::create_physical_expr;
+use datafusion::physical_expr::expressions::{is_not_null, Column};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::execution_plan::ExecutionPlan;
+use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::unnest::{ListUnnest, UnnestExec};
 
@@ -116,13 +120,83 @@ pub(crate) fn create(
     } else {
         NullHandling::Drop
     };
-    Ok(Arc::new(UnnestExec::new(
+    let unnested = Arc::new(UnnestExec::new(
         projected,
         list_columns,
         vec![],
         output_schema,
         UnnestOptions::new().with_null_handling(null_handling),
-    )?))
+    )?);
+    flatten_struct_element(
+        unnested,
+        visible_field_count,
+        unnest.with_ordinality,
+        unnest.preserve_empty,
+    )
+}
+
+fn flatten_struct_element(
+    unnested: Arc<dyn ExecutionPlan>,
+    visible_field_count: usize,
+    with_ordinality: bool,
+    preserve_empty: bool,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let schema = unnested.schema();
+    let DataType::Struct(fields) = schema.field(visible_field_count).data_type() else {
+        return Ok(unnested);
+    };
+    let fields = fields.clone();
+    if preserve_empty {
+        return Err(DataFusionError::Plan(
+            "left array UNNEST of ROW is not yet supported".to_string(),
+        ));
+    }
+    let unnested: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(
+        is_not_null(Arc::new(Column::new(VALUE_COLUMN, visible_field_count)))?,
+        unnested,
+    )?);
+    let schema = unnested.schema();
+    let mut projection = schema
+        .fields()
+        .iter()
+        .take(visible_field_count)
+        .enumerate()
+        .map(|(index, field)| {
+            (
+                Arc::new(Column::new(field.name(), index)) as Arc<dyn PhysicalExpr>,
+                field.name().clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let df_schema = DFSchema::try_from(Arc::clone(&schema))?;
+    for field in &fields {
+        let logical = datafusion_functions::expr_fn::get_field(
+            datafusion::logical_expr::col(VALUE_COLUMN),
+            field.name().as_str(),
+        );
+        projection.push((
+            create_physical_expr(
+                &logical,
+                &df_schema,
+                &ExecutionProps::default(),
+                &PhysicalPlanningContext::default(),
+            )?,
+            field.name().clone(),
+        ));
+    }
+    let ordinal_index = visible_field_count + 1;
+    if with_ordinality {
+        projection.push((
+            Arc::new(Column::new(ORDINALITY_COLUMN, ordinal_index)),
+            ORDINALITY_COLUMN.to_string(),
+        ));
+    }
+    let input_row_index = ordinal_index + usize::from(with_ordinality);
+    projection.push((
+        Arc::new(Column::new(INPUT_ROW_COLUMN, input_row_index)),
+        INPUT_ROW_COLUMN.to_string(),
+    ));
+    Ok(Arc::new(ProjectionExec::try_new(projection, unnested)?))
 }
 
 #[cfg(test)]
