@@ -26,6 +26,7 @@ import org.apache.flink.table.types.logical.ArrayType;
 import org.apache.flink.table.types.logical.BigIntType;
 import org.apache.flink.table.types.logical.BinaryType;
 import org.apache.flink.table.types.logical.BooleanType;
+import org.apache.flink.table.types.logical.CharType;
 import org.apache.flink.table.types.logical.DecimalType;
 import org.apache.flink.table.types.logical.DoubleType;
 import org.apache.flink.table.types.logical.FloatType;
@@ -60,6 +61,7 @@ import tech.streamfusion.proto.plan.v1.LogicalType;
 import tech.streamfusion.proto.plan.v1.NativePlan;
 import tech.streamfusion.proto.plan.v1.NullCheck;
 import tech.streamfusion.proto.plan.v1.Operator;
+import tech.streamfusion.proto.plan.v1.StringLiteral;
 import tech.streamfusion.proto.plan.v1.TimeLiteral;
 import tech.streamfusion.proto.plan.v1.TimestampLiteral;
 import tech.streamfusion.proto.plan.v1.TruthTest;
@@ -404,6 +406,23 @@ class ArrowCDataBridgeTest {
     }
 
     @Test
+    void comparesFixedWidthCharactersThroughTheCDataBoundary() {
+        RowType rowType = RowType.of(new CharType(false, 5));
+        List<RowData> rows = List.of(
+                GenericRowData.of(StringData.fromString("a    ")),
+                GenericRowData.of(StringData.fromString("m    ")),
+                GenericRowData.of(StringData.fromString("東京   ")));
+
+        try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+                ArrowRowDataBatch input = ArrowRowDataBatch.transpose(rows, rowType, allocator);
+                ArrowRowDataBatch output = ArrowCDataBridge.execute(charComparisonPlan(), input, rowType, allocator)) {
+            assertThat(output.size()).isEqualTo(2);
+            assertThat(output.rowView(0).getString(0).toString()).isEqualTo("m    ");
+            assertThat(output.rowView(1).getString(0).toString()).isEqualTo("東京   ");
+        }
+    }
+
+    @Test
     void projectsAndReordersCompatibleColumnsThroughDataFusion() {
         RowType inputType = RowType.of(
                 new IntType(false), new VarCharType(), new DecimalType(10, 2), new ArrayType(new VarCharType()));
@@ -606,6 +625,33 @@ class ArrowCDataBridgeTest {
                                 .setLeft(reference)
                                 .setRight(literal)
                                 .setOperator(operator)))
+                .build();
+        return NativePlan.newBuilder()
+                .setProtocolVersion(1)
+                .setRoot(Operator.newBuilder().setCalc(calc))
+                .build()
+                .toByteArray();
+    }
+
+    private static byte[] charComparisonPlan() {
+        LogicalType character = LogicalType.newBuilder()
+                .setNullable(false)
+                .setVarchar(EmptyType.getDefaultInstance())
+                .build();
+        Expression reference = Expression.newBuilder()
+                .setInputReference(InputReference.newBuilder().setIndex(0).setType(character))
+                .build();
+        Expression literal = Expression.newBuilder()
+                .setStringLiteral(StringLiteral.newBuilder().setValue("m    "))
+                .build();
+        Calc calc = Calc.newBuilder()
+                .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
+                .addProjections(reference)
+                .setCondition(Expression.newBuilder()
+                        .setComparison(Comparison.newBuilder()
+                                .setLeft(reference)
+                                .setRight(literal)
+                                .setOperator(ComparisonOperator.COMPARISON_OPERATOR_GREATER_THAN_OR_EQUAL)))
                 .build();
         return NativePlan.newBuilder()
                 .setProtocolVersion(1)

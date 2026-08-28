@@ -14,6 +14,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.util.stream.Stream;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.StringData;
+import org.apache.flink.table.data.binary.BinaryStringData;
+import org.apache.flink.table.types.logical.CharType;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.VarCharType;
 import org.junit.jupiter.api.Test;
@@ -61,6 +63,38 @@ class StreamFusionStringComparisonTest {
                 .isEqualTo(expected);
     }
 
+    @Test
+    void generatedFixedWidthCharacterComparisonsMatchFlink() {
+        String[] values = {"     ", "a    ", "z    ", "é    ", "東京   ", "😀    "};
+        for (String left : values) {
+            for (String right : values) {
+                GenericRowData row = GenericRowData.of(StringData.fromString(left), StringData.fromString(right));
+                int flinkComparison = BinaryStringData.fromString(left).compareTo(BinaryStringData.fromString(right));
+                int width = BinaryStringData.fromString(right).numChars();
+
+                for (ComparisonOperator operator : orderedOperators()) {
+                    boolean expected = evaluateComparison(flinkComparison, operator);
+                    assertThat(new StreamFusionColumnComparison(0, 1, new CharType(5), operator).evaluate(row))
+                            .isEqualTo(expected);
+                    assertThat(new StreamFusionStringComparison(0, right, width, operator, true).evaluate(row))
+                            .isEqualTo(expected);
+                }
+            }
+        }
+        assertThat(StreamFusionColumnComparison.supports(LogicalTypeRoot.CHAR)).isTrue();
+    }
+
+    @Test
+    void validatesCharWidthByUnicodeCharactersRatherThanUtf16Units() {
+        assertThat(new StreamFusionStringComparison(0, "😀 ", 2, ComparisonOperator.COMPARISON_OPERATOR_EQUAL, true)
+                        .evaluate(GenericRowData.of(StringData.fromString("😀 "))))
+                .isTrue();
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> new StreamFusionStringComparison(
+                        0, "😀 ", 3, ComparisonOperator.COMPARISON_OPERATOR_EQUAL, true))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("CHAR(3) literal has 2 characters");
+    }
+
     private static Stream<Arguments> orderedCases() {
         return Stream.of(
                 Arguments.of("", "alpha", ComparisonOperator.COMPARISON_OPERATOR_LESS_THAN, true),
@@ -80,5 +114,35 @@ class StreamFusionStringComparisonTest {
 
     private static StringData stringData(String value) {
         return value == null ? null : StringData.fromString(value);
+    }
+
+    private static ComparisonOperator[] orderedOperators() {
+        return new ComparisonOperator[] {
+            ComparisonOperator.COMPARISON_OPERATOR_EQUAL,
+            ComparisonOperator.COMPARISON_OPERATOR_NOT_EQUAL,
+            ComparisonOperator.COMPARISON_OPERATOR_LESS_THAN,
+            ComparisonOperator.COMPARISON_OPERATOR_LESS_THAN_OR_EQUAL,
+            ComparisonOperator.COMPARISON_OPERATOR_GREATER_THAN,
+            ComparisonOperator.COMPARISON_OPERATOR_GREATER_THAN_OR_EQUAL
+        };
+    }
+
+    private static boolean evaluateComparison(int comparison, ComparisonOperator operator) {
+        switch (operator) {
+            case COMPARISON_OPERATOR_EQUAL:
+                return comparison == 0;
+            case COMPARISON_OPERATOR_NOT_EQUAL:
+                return comparison != 0;
+            case COMPARISON_OPERATOR_LESS_THAN:
+                return comparison < 0;
+            case COMPARISON_OPERATOR_LESS_THAN_OR_EQUAL:
+                return comparison <= 0;
+            case COMPARISON_OPERATOR_GREATER_THAN:
+                return comparison > 0;
+            case COMPARISON_OPERATOR_GREATER_THAN_OR_EQUAL:
+                return comparison >= 0;
+            default:
+                throw new IllegalArgumentException("Not an ordered operator: " + operator);
+        }
     }
 }

@@ -583,11 +583,21 @@ public final class StreamFusionCalcTranslator {
                     ? null
                     : new StreamFusionDoubleComparison(inputIndex, literal, operator, inputOnLeft);
         }
-        if (type == LogicalTypeRoot.VARCHAR) {
+        if (type == LogicalTypeRoot.CHAR || type == LogicalTypeRoot.VARCHAR) {
             String literal = literal(literalExpression, String.class);
-            return literal == null
-                    ? null
-                    : new StreamFusionStringComparison(inputIndex, literal, operator, inputOnLeft);
+            if (literal == null) {
+                return null;
+            }
+            if (type == LogicalTypeRoot.CHAR) {
+                int length =
+                        ((org.apache.flink.table.types.logical.CharType) inputType.getTypeAt(inputIndex)).getLength();
+                return org.apache.flink.table.data.binary.BinaryStringData.fromString(literal)
+                                        .numChars()
+                                == length
+                        ? new StreamFusionStringComparison(inputIndex, literal, length, operator, inputOnLeft)
+                        : null;
+            }
+            return new StreamFusionStringComparison(inputIndex, literal, operator, inputOnLeft);
         }
         if (type == LogicalTypeRoot.BINARY || type == LogicalTypeRoot.VARBINARY) {
             byte[] literal = literal(literalExpression, byte[].class);

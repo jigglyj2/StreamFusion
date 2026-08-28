@@ -42,6 +42,7 @@ final class StreamFusionColumnComparison implements StreamFusionCondition {
                 || root == LogicalTypeRoot.SMALLINT
                 || root == LogicalTypeRoot.INTEGER
                 || root == LogicalTypeRoot.BIGINT
+                || root == LogicalTypeRoot.CHAR
                 || root == LogicalTypeRoot.VARCHAR
                 || root == LogicalTypeRoot.BINARY
                 || root == LogicalTypeRoot.VARBINARY
@@ -97,6 +98,7 @@ final class StreamFusionColumnComparison implements StreamFusionCondition {
                 return Integer.compare(row.getInt(leftIndex), row.getInt(rightIndex));
             case BIGINT:
                 return Long.compare(row.getLong(leftIndex), row.getLong(rightIndex));
+            case CHAR:
             case VARCHAR:
                 return row.getString(leftIndex).compareTo(row.getString(rightIndex));
             case BINARY:
