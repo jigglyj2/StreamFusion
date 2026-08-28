@@ -290,6 +290,28 @@ pub(super) fn create(
             )?,
             schema,
         ),
+        StringLeft(left) => expressions::string_left::create(
+            create_expression(
+                required(&left.value, "string left is missing its value")?,
+                schema,
+            )?,
+            create_expression(
+                required(&left.count, "string left is missing its count")?,
+                schema,
+            )?,
+            schema,
+        ),
+        StringRight(right) => expressions::string_right::create(
+            create_expression(
+                required(&right.value, "string right is missing its value")?,
+                schema,
+            )?,
+            create_expression(
+                required(&right.count, "string right is missing its count")?,
+                schema,
+            )?,
+            schema,
+        ),
         ArrayDistinct(distinct) => expressions::array_distinct::create(
             create_expression(
                 required(&distinct.array, "array distinct is missing its array")?,

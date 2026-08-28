@@ -15,9 +15,11 @@ import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.StringAscii;
+import tech.streamfusion.proto.plan.v1.StringLeft;
 import tech.streamfusion.proto.plan.v1.StringPosition;
 import tech.streamfusion.proto.plan.v1.StringRepeat;
 import tech.streamfusion.proto.plan.v1.StringReplace;
+import tech.streamfusion.proto.plan.v1.StringRight;
 
 /** String scalar functions whose operands can remain ordinary native expressions. */
 final class StreamFusionStringFunctionTranslator extends StreamFusionComplexTypeSupport {
@@ -109,6 +111,38 @@ final class StreamFusionStringFunctionTranslator extends StreamFusionComplexType
                 ? null
                 : Expression.newBuilder()
                         .setStringAscii(StringAscii.newBuilder().setValue(value))
+                        .build();
+    }
+
+    static Expression edge(Object expression, RowType inputType, LogicalType expectedType) {
+        String function = functionName(expression);
+        if (!("LEFT".equals(function) || "RIGHT".equals(function))
+                || expectedType.getTypeRoot() != LogicalTypeRoot.VARCHAR) {
+            return null;
+        }
+        java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
+        if (operands.size() != 2) {
+            return null;
+        }
+        LogicalType valueType = logicalType(operands.get(0), inputType);
+        LogicalType countType = logicalType(operands.get(1), inputType);
+        if (valueType == null
+                || valueType.getTypeRoot() != LogicalTypeRoot.VARCHAR
+                || countType == null
+                || countType.getTypeRoot() != LogicalTypeRoot.INTEGER) {
+            return null;
+        }
+        Expression value = StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, valueType);
+        Expression count = StreamFusionProjectionTranslator.projectionExpression(operands.get(1), inputType, countType);
+        if (value == null || count == null) {
+            return null;
+        }
+        return "LEFT".equals(function)
+                ? Expression.newBuilder()
+                        .setStringLeft(StringLeft.newBuilder().setValue(value).setCount(count))
+                        .build()
+                : Expression.newBuilder()
+                        .setStringRight(StringRight.newBuilder().setValue(value).setCount(count))
                         .build();
     }
 }

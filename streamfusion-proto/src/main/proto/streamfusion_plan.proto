@@ -98,6 +98,8 @@ message Expression {
     StringEndsWith string_ends_with = 67;
     StringPosition string_position = 68;
     StringAscii string_ascii = 69;
+    StringLeft string_left = 70;
+    StringRight string_right = 71;
   }
 }
 
@@ -252,6 +254,16 @@ message StringPosition {
 
 message StringAscii {
   Expression value = 1;
+}
+
+message StringLeft {
+  Expression value = 1;
+  Expression count = 2;
+}
+
+message StringRight {
+  Expression value = 1;
+  Expression count = 2;
 }
 
 message Coalesce {
