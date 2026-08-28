@@ -54,12 +54,7 @@ impl PhysicalExpr for ArrayOrdinalityExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let value = self.array.evaluate(batch)?;
-        let ColumnarValue::Array(array) = value else {
-            return Err(DataFusionError::Execution(
-                "array UNNEST ordinality requires an array column".to_string(),
-            ));
-        };
+        let array = self.array.evaluate(batch)?.into_array(batch.num_rows())?;
         let lists = array.as_any().downcast_ref::<ListArray>().ok_or_else(|| {
             DataFusionError::Execution("array UNNEST ordinality expected List input".to_string())
         })?;

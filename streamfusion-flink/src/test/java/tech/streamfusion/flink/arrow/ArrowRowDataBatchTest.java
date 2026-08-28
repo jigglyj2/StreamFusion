@@ -34,6 +34,7 @@ import org.apache.flink.table.types.logical.DoubleType;
 import org.apache.flink.table.types.logical.FloatType;
 import org.apache.flink.table.types.logical.IntType;
 import org.apache.flink.table.types.logical.LocalZonedTimestampType;
+import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.MapType;
 import org.apache.flink.table.types.logical.MultisetType;
 import org.apache.flink.table.types.logical.NullType;
@@ -68,6 +69,18 @@ class ArrowRowDataBatchTest {
             new MapType(new VarCharType(false, VarCharType.MAX_LENGTH), new IntType()),
             NESTED_TYPE,
             new NullType());
+
+    @Test
+    void preservesRowCountForZeroColumnBatches() {
+        RowType emptyType = RowType.of(new LogicalType[0]);
+
+        try (ArrowRowDataBatch batch =
+                ArrowRowDataBatch.transpose(List.of(new GenericRowData(0), new GenericRowData(0)), emptyType)) {
+            assertThat(batch.size()).isEqualTo(2);
+            assertThat(batch.root().getFieldVectors()).isEmpty();
+            assertThat(batch.rowView(1).getArity()).isZero();
+        }
+    }
 
     @Test
     void roundTripsEverySupportedFlinkLogicalTypeThroughArrowViews() {
