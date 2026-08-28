@@ -182,6 +182,13 @@ pub(super) fn create_expression(
                 .ok_or_else(|| DataFusionError::Plan("TAN operand is empty".to_string()))?;
             expressions::tangent::create(create_expression(operand, schema)?, schema)
         }
+        Some(proto::expression::Expression::Cotangent(cotangent)) => {
+            let operand = cotangent
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("COT operand is empty".to_string()))?;
+            expressions::cotangent::create(create_expression(operand, schema)?, schema)
+        }
         Some(proto::expression::Expression::HyperbolicSine(sine)) => {
             let operand = sine
                 .operand

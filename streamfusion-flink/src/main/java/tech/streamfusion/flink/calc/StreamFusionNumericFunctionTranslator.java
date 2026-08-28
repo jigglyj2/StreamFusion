@@ -20,6 +20,7 @@ import tech.streamfusion.proto.plan.v1.ArcTangent;
 import tech.streamfusion.proto.plan.v1.ArcTangent2;
 import tech.streamfusion.proto.plan.v1.Ceiling;
 import tech.streamfusion.proto.plan.v1.Cosine;
+import tech.streamfusion.proto.plan.v1.Cotangent;
 import tech.streamfusion.proto.plan.v1.Degrees;
 import tech.streamfusion.proto.plan.v1.DoubleLiteral;
 import tech.streamfusion.proto.plan.v1.Exponential;
@@ -92,6 +93,9 @@ final class StreamFusionNumericFunctionTranslator extends StreamFusionRexSupport
             if ("TAN".equals(function)) {
                 return unary(expression, inputType, expectedType, UnaryKind.TANGENT);
             }
+            if ("COT".equals(function)) {
+                return unary(expression, inputType, expectedType, UnaryKind.COTANGENT);
+            }
             if ("SINH".equals(function)) {
                 return unary(expression, inputType, expectedType, UnaryKind.HYPERBOLIC_SINE);
             }
@@ -157,6 +161,9 @@ final class StreamFusionNumericFunctionTranslator extends StreamFusionRexSupport
             case TANGENT:
                 return result.setTangent(Tangent.newBuilder().setOperand(operand))
                         .build();
+            case COTANGENT:
+                return result.setCotangent(Cotangent.newBuilder().setOperand(operand))
+                        .build();
             case HYPERBOLIC_SINE:
                 return result.setHyperbolicSine(HyperbolicSine.newBuilder().setOperand(operand))
                         .build();
@@ -215,6 +222,7 @@ final class StreamFusionNumericFunctionTranslator extends StreamFusionRexSupport
         SINE,
         COSINE,
         TANGENT,
+        COTANGENT,
         HYPERBOLIC_SINE,
         HYPERBOLIC_TANGENT,
         ARC_SINE,

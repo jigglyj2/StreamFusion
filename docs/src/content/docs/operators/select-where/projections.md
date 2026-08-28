@@ -263,6 +263,8 @@ literals that can compose with other projections and predicates without a per-ro
 `SIN`, `COS`, and `TAN` are accelerated for numeric operands after Flink coerces them to `DOUBLE`.
 Each remains a distinct protobuf expression and DataFusion vectorized operator; parity coverage
 includes signed zero, infinities, NaN, and nulls.
+`COT` is accelerated as a distinct DataFusion vector expression after the same `DOUBLE` coercion.
+Parity coverage includes signed zero, multiples of pi, infinities, NaN, and nulls.
 `SINH` and `TANH` are accelerated under the same `DOUBLE` coercion contract and remain distinct
 native stages. Generated parity coverage includes finite values, overflow, signed zero, infinities,
 NaN, and nulls. `COSH` stays on Flink with an explicit EXPLAIN reason because DataFusion's kernel

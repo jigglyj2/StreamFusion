@@ -113,6 +113,7 @@ message Expression {
     Degrees degrees = 82;
     Radians radians = 83;
     ArcTangent2 arc_tangent2 = 84;
+    Cotangent cotangent = 85;
   }
 }
 
@@ -330,6 +331,10 @@ message Radians {
 message ArcTangent2 {
   Expression y = 1;
   Expression x = 2;
+}
+
+message Cotangent {
+  Expression operand = 1;
 }
 
 message Coalesce {
