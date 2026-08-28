@@ -265,6 +265,39 @@ class ArrowCDataBridgeTest {
     }
 
     @Test
+    void narrowsBigintWithFlinkOverflowParity() {
+        RowType inputType = RowType.of(new BigIntType(true));
+        RowType outputType = RowType.of(new TinyIntType(true), new SmallIntType(true), new IntType(true));
+        List<Long> values = List.of(
+                Long.MIN_VALUE,
+                (long) Integer.MIN_VALUE - 1,
+                (long) Integer.MIN_VALUE,
+                -1L,
+                0L,
+                (long) Integer.MAX_VALUE,
+                (long) Integer.MAX_VALUE + 1,
+                Long.MAX_VALUE);
+        List<RowData> rows = new ArrayList<>(values.stream()
+                .map(value -> (RowData) GenericRowData.of(value))
+                .collect(java.util.stream.Collectors.toList()));
+        rows.add(GenericRowData.of((Object) null));
+
+        try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+                ArrowRowDataBatch input = ArrowRowDataBatch.transpose(rows, inputType, allocator);
+                ArrowRowDataBatch output =
+                        ArrowCDataBridge.execute(bigintNarrowingPlan(), input, outputType, allocator)) {
+            for (int index = 0; index < values.size(); index++) {
+                assertThat(output.rowView(index).getByte(0)).isEqualTo((byte) (long) values.get(index));
+                assertThat(output.rowView(index).getShort(1)).isEqualTo((short) (long) values.get(index));
+                assertThat(output.rowView(index).getInt(2)).isEqualTo((int) (long) values.get(index));
+            }
+            assertThat(output.rowView(values.size()).isNullAt(0)).isTrue();
+            assertThat(output.rowView(values.size()).isNullAt(1)).isTrue();
+            assertThat(output.rowView(values.size()).isNullAt(2)).isTrue();
+        }
+    }
+
+    @Test
     void importsAnEmptyNativeResultWithoutLeakingItsSchemaOrBuffers() {
         RowType rowType = RowType.of(new IntType(false));
 
@@ -671,6 +704,30 @@ class ArrowCDataBridgeTest {
                 0,
                 LogicalType.newBuilder().setTinyint(EmptyType.getDefaultInstance()),
                 CastKind.CAST_KIND_SMALLINT_TO_TINYINT);
+        return NativePlan.newBuilder()
+                .setProtocolVersion(1)
+                .setRoot(Operator.newBuilder().setCalc(calc))
+                .build()
+                .toByteArray();
+    }
+
+    private static byte[] bigintNarrowingPlan() {
+        Calc.Builder calc = Calc.newBuilder().setInput(Operator.newBuilder().setInput(Input.newBuilder()));
+        addCast(
+                calc,
+                0,
+                LogicalType.newBuilder().setTinyint(EmptyType.getDefaultInstance()),
+                CastKind.CAST_KIND_BIGINT_TO_TINYINT);
+        addCast(
+                calc,
+                0,
+                LogicalType.newBuilder().setSmallint(EmptyType.getDefaultInstance()),
+                CastKind.CAST_KIND_BIGINT_TO_SMALLINT);
+        addCast(
+                calc,
+                0,
+                LogicalType.newBuilder().setInteger(EmptyType.getDefaultInstance()),
+                CastKind.CAST_KIND_BIGINT_TO_INTEGER);
         return NativePlan.newBuilder()
                 .setProtocolVersion(1)
                 .setRoot(Operator.newBuilder().setCalc(calc))

@@ -35,6 +35,9 @@ pub(crate) fn create(
         proto::CastKind::SmallintToTinyint
             | proto::CastKind::IntegerToTinyint
             | proto::CastKind::IntegerToSmallint
+            | proto::CastKind::BigintToTinyint
+            | proto::CastKind::BigintToSmallint
+            | proto::CastKind::BigintToInteger
     ) {
         return Ok(Arc::new(SignedIntegerWrappingCastExpr::new(
             operand,
@@ -62,6 +65,9 @@ fn approved_types(kind: proto::CastKind) -> Result<(DataType, DataType)> {
         proto::CastKind::IntegerToSmallint => Ok((DataType::Int32, DataType::Int16)),
         proto::CastKind::IntegerToTinyint => Ok((DataType::Int32, DataType::Int8)),
         proto::CastKind::SmallintToTinyint => Ok((DataType::Int16, DataType::Int8)),
+        proto::CastKind::BigintToTinyint => Ok((DataType::Int64, DataType::Int8)),
+        proto::CastKind::BigintToSmallint => Ok((DataType::Int64, DataType::Int16)),
+        proto::CastKind::BigintToInteger => Ok((DataType::Int64, DataType::Int32)),
         proto::CastKind::Unspecified => Err(DataFusionError::Plan(
             "cast kind is unspecified or unknown".to_string(),
         )),

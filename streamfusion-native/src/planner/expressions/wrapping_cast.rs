@@ -9,7 +9,7 @@
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use arrow::array::{Int16Array, Int32Array, Int8Array};
+use arrow::array::{Int16Array, Int32Array, Int64Array, Int8Array};
 use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion::error::{DataFusionError, Result};
@@ -105,6 +105,39 @@ impl PhysicalExpr for SignedIntegerWrappingCastExpr {
                         integers.iter().map(|value| value.map(|value| value as i16)),
                     ))))
                 }
+                (DataType::Int64, DataType::Int8) => {
+                    let integers =
+                        array.as_any().downcast_ref::<Int64Array>().ok_or_else(|| {
+                            DataFusionError::Execution(
+                                "wrapping cast expected Int64 input".to_string(),
+                            )
+                        })?;
+                    Ok(ColumnarValue::Array(Arc::new(Int8Array::from_iter(
+                        integers.iter().map(|value| value.map(|value| value as i8)),
+                    ))))
+                }
+                (DataType::Int64, DataType::Int16) => {
+                    let integers =
+                        array.as_any().downcast_ref::<Int64Array>().ok_or_else(|| {
+                            DataFusionError::Execution(
+                                "wrapping cast expected Int64 input".to_string(),
+                            )
+                        })?;
+                    Ok(ColumnarValue::Array(Arc::new(Int16Array::from_iter(
+                        integers.iter().map(|value| value.map(|value| value as i16)),
+                    ))))
+                }
+                (DataType::Int64, DataType::Int32) => {
+                    let integers =
+                        array.as_any().downcast_ref::<Int64Array>().ok_or_else(|| {
+                            DataFusionError::Execution(
+                                "wrapping cast expected Int64 input".to_string(),
+                            )
+                        })?;
+                    Ok(ColumnarValue::Array(Arc::new(Int32Array::from_iter(
+                        integers.iter().map(|value| value.map(|value| value as i32)),
+                    ))))
+                }
                 _ => Err(DataFusionError::Execution(format!(
                     "unsupported wrapping cast from {} to {}",
                     self.source, self.target
@@ -124,6 +157,21 @@ impl PhysicalExpr for SignedIntegerWrappingCastExpr {
                 ))),
                 _ => Err(DataFusionError::Execution(format!(
                     "unsupported Int32 wrapping cast target {}",
+                    self.target
+                ))),
+            },
+            ColumnarValue::Scalar(ScalarValue::Int64(value)) => match self.target {
+                DataType::Int8 => Ok(ColumnarValue::Scalar(ScalarValue::Int8(
+                    value.map(|value| value as i8),
+                ))),
+                DataType::Int16 => Ok(ColumnarValue::Scalar(ScalarValue::Int16(
+                    value.map(|value| value as i16),
+                ))),
+                DataType::Int32 => Ok(ColumnarValue::Scalar(ScalarValue::Int32(
+                    value.map(|value| value as i32),
+                ))),
+                _ => Err(DataFusionError::Execution(format!(
+                    "unsupported Int64 wrapping cast target {}",
                     self.target
                 ))),
             },

@@ -50,7 +50,8 @@ Exactly representable integer-to-floating projections are accelerated: `TINYINT`
 `BIGINT` to floating-point types remain on Flink because they can round integer values.
 `FLOAT` to `DOUBLE` is also accelerated and preserves every finite value, signed zero,
 infinity, and NaN. The narrowing `DOUBLE` to `FLOAT` cast remains on Flink.
-`SMALLINT` to `TINYINT` and `INT` to `TINYINT` or `SMALLINT` are accelerated with Flink's two's-complement wrapping behavior for
+`SMALLINT` to `TINYINT`, `INT` to `TINYINT` or `SMALLINT`, and `BIGINT` to
+`TINYINT`, `SMALLINT`, or `INT` are accelerated with Flink's two's-complement wrapping behavior for
 out-of-range values. StreamFusion uses a custom vectorized Rust expression because
 DataFusion's standard cast rejects those values instead of matching Flink.
 Constant `TIME` values preserve their declared precision and millisecond-of-day value.
