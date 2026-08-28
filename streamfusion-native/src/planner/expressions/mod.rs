@@ -17,6 +17,7 @@ pub(crate) mod array_except;
 pub(crate) mod array_intersect;
 pub(crate) mod array_position;
 pub(crate) mod array_prepend;
+pub(crate) mod array_remove;
 pub(crate) mod array_reverse;
 pub(crate) mod array_union;
 pub(crate) mod cardinality;

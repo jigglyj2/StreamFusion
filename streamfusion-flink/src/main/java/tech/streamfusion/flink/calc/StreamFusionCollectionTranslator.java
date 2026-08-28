@@ -19,6 +19,7 @@ import tech.streamfusion.proto.plan.v1.ArrayConcat;
 import tech.streamfusion.proto.plan.v1.ArrayContains;
 import tech.streamfusion.proto.plan.v1.ArrayPosition;
 import tech.streamfusion.proto.plan.v1.ArrayPrepend;
+import tech.streamfusion.proto.plan.v1.ArrayRemove;
 import tech.streamfusion.proto.plan.v1.ArrayReverse;
 import tech.streamfusion.proto.plan.v1.Cardinality;
 import tech.streamfusion.proto.plan.v1.Expression;
@@ -44,6 +45,12 @@ final class StreamFusionCollectionTranslator extends StreamFusionComplexTypeSupp
             if (needle != null && needle.isNullable()) {
                 return "ARRAY_CONTAINS with a nullable needle stays on Flink because Flink searches for null "
                         + "while DataFusion returns null without searching";
+            }
+        }
+        if ("ARRAY_REMOVE".equals(function) && operands.size() == 2) {
+            LogicalType needle = logicalType(operands.get(1), inputType);
+            if (needle != null && needle.isNullable()) {
+                return "ARRAY_REMOVE with a nullable needle stays on Flink because Flink removes null elements while DataFusion returns null";
             }
         }
         return null;
@@ -200,6 +207,30 @@ final class StreamFusionCollectionTranslator extends StreamFusionComplexTypeSupp
                 : Expression.newBuilder()
                         .setArrayPosition(
                                 ArrayPosition.newBuilder().setArray(array).setNeedle(needle))
+                        .build();
+    }
+
+    static Expression arrayRemove(Object expression, RowType inputType, LogicalType expectedType) {
+        if (!"ARRAY_REMOVE".equals(functionName(expression)) || !(expectedType instanceof ArrayType)) {
+            return null;
+        }
+        java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
+        if (operands.size() != 2) {
+            return null;
+        }
+        LogicalType arrayType = logicalType(operands.get(0), inputType);
+        LogicalType needleType = logicalType(operands.get(1), inputType);
+        if (!(arrayType instanceof ArrayType) || needleType == null || needleType.isNullable()) {
+            return null;
+        }
+        LogicalType elementType = ((ArrayType) arrayType).getElementType();
+        Expression array = StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, arrayType);
+        Expression needle = StreamFusionProjectionTranslator.projectionExpression(
+                operands.get(1), inputType, elementType.copy(false));
+        return array == null || needle == null
+                ? null
+                : Expression.newBuilder()
+                        .setArrayRemove(ArrayRemove.newBuilder().setArray(array).setNeedle(needle))
                         .build();
     }
 

@@ -81,6 +81,7 @@ message Expression {
     ArrayIntersect array_intersect = 50;
     ArrayConstructor array_constructor = 51;
     ArrayExcept array_except = 52;
+    ArrayRemove array_remove = 53;
   }
 }
 
@@ -152,6 +153,11 @@ message ArrayConstructor {
 message ArrayExcept {
   Expression left = 1;
   Expression right = 2;
+}
+
+message ArrayRemove {
+  Expression array = 1;
+  Expression needle = 2;
 }
 
 message Coalesce {

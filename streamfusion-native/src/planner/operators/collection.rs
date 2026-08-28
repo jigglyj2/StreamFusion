@@ -105,6 +105,14 @@ pub(super) fn create(
             schema,
             expressions::array_position::create,
         ),
+        ArrayRemove(remove) => binary(
+            &remove.array,
+            &remove.needle,
+            "array remove is missing its array",
+            "array remove is missing its needle",
+            schema,
+            expressions::array_remove::create,
+        ),
         ArrayDistinct(distinct) => expressions::array_distinct::create(
             create_expression(
                 required(&distinct.array, "array distinct is missing its array")?,
