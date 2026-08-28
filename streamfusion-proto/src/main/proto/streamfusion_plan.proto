@@ -14,6 +14,7 @@ message Operator {
   oneof operator {
     Input input = 1;
     Calc calc = 2;
+    ArrayUnnest array_unnest = 3;
   }
 }
 
@@ -25,6 +26,11 @@ message Calc {
   Operator input = 1;
   repeated Expression projections = 2;
   optional Expression condition = 3;
+}
+
+message ArrayUnnest {
+  Operator input = 1;
+  uint32 array_index = 2;
 }
 
 message Expression {

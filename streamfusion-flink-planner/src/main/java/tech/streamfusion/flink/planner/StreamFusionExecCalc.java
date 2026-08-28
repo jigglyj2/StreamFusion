@@ -62,7 +62,12 @@ public final class StreamFusionExecCalc extends CommonExecCalc implements Stream
     protected Transformation<RowData> translateToPlanInternal(PlannerBase planner, ExecNodeConfig config) {
         List<StreamFusionExecCalc> chain = adjacentChain(this);
         ExecEdge inputEdge = chain.get(0).getInputEdges().get(0);
-        Transformation<RowData> input = (Transformation<RowData>) inputEdge.translateToPlan(planner);
+        StreamFusionExecArrayUnnest fusedUnnest = inputEdge.getSource() instanceof StreamFusionExecArrayUnnest
+                ? (StreamFusionExecArrayUnnest) inputEdge.getSource()
+                : null;
+        ExecEdge boundaryEdge =
+                fusedUnnest == null ? inputEdge : fusedUnnest.getInputEdges().get(0);
+        Transformation<RowData> input = (Transformation<RowData>) boundaryEdge.translateToPlan(planner);
         List<RowType> inputTypes = new ArrayList<>(chain.size());
         List<RowType> outputTypes = new ArrayList<>(chain.size());
         List<List<RexNode>> projections = new ArrayList<>(chain.size());
@@ -76,10 +81,35 @@ public final class StreamFusionExecCalc extends CommonExecCalc implements Stream
         try {
             Class<?> translator = Class.forName(
                     TRANSLATOR_CLASS, true, planner.getFlinkContext().getClassLoader());
-            Method translate = translator.getMethod(
-                    "translateChain", Transformation.class, List.class, List.class, List.class, List.class);
-            Transformation<RowData> result = (Transformation<RowData>)
-                    translate.invoke(null, input, inputTypes, outputTypes, projections, conditions);
+            Method translate;
+            Transformation<RowData> result;
+            if (fusedUnnest == null) {
+                translate = translator.getMethod(
+                        "translateChain", Transformation.class, List.class, List.class, List.class, List.class);
+                result = (Transformation<RowData>)
+                        translate.invoke(null, input, inputTypes, outputTypes, projections, conditions);
+            } else {
+                translate = translator.getMethod(
+                        "translateArrayUnnestChain",
+                        Transformation.class,
+                        RowType.class,
+                        RowType.class,
+                        Object.class,
+                        List.class,
+                        List.class,
+                        List.class,
+                        List.class);
+                result = (Transformation<RowData>) translate.invoke(
+                        null,
+                        input,
+                        (RowType) boundaryEdge.getOutputType(),
+                        (RowType) fusedUnnest.getOutputType(),
+                        fusedUnnest.streamFusionInvocation(),
+                        inputTypes,
+                        outputTypes,
+                        projections,
+                        conditions);
+            }
             if (result == null) {
                 throw new IllegalStateException("A selected StreamFusion calc failed translation");
             }

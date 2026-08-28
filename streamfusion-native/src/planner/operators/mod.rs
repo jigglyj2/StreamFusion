@@ -6,6 +6,7 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
+pub(super) mod array_unnest;
 pub(super) mod calc;
 mod collection;
 pub(super) mod input;

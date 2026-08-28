@@ -17,6 +17,7 @@ import org.apache.flink.streaming.api.transformations.OneInputTransformation;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
 import org.apache.flink.table.types.logical.RowType;
+import tech.streamfusion.flink.unnest.StreamFusionArrayUnnestTranslator;
 import tech.streamfusion.proto.plan.v1.Expression;
 
 /** Reflection entry point called by the small Flink planner patch for eligible calc nodes. */
@@ -77,6 +78,60 @@ public final class StreamFusionCalcTranslator extends StreamFusionExpressionTran
         OneInputTransformation<RowData, RowData> transformation = new OneInputTransformation<>(
                 input,
                 "streamfusion-calc-chain[" + inputTypes.size() + "]",
+                operator,
+                InternalTypeInfo.of(outputType),
+                input.getParallelism(),
+                false);
+        transformation.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
+        return transformation;
+    }
+
+    /** Fuses an array UNNEST and every immediately following Calc into one native plan. */
+    public static Transformation<RowData> translateArrayUnnestChain(
+            Transformation<RowData> input,
+            RowType boundaryInputType,
+            RowType unnestOutputType,
+            Object invocation,
+            List<RowType> inputTypes,
+            List<RowType> outputTypes,
+            List<List<?>> projectionStages,
+            List<?> conditions) {
+        if (StreamFusionArrayUnnestTranslator.unsupportedReason(
+                        boundaryInputType, unnestOutputType, "INNER", invocation, null)
+                != null) {
+            return null;
+        }
+        if (inputTypes.isEmpty() || !inputTypes.get(0).equals(unnestOutputType)) {
+            throw new IllegalArgumentException("The first Calc input must equal the fused UNNEST output");
+        }
+        List<List<Expression>> nativeProjectionStages = new ArrayList<>(projectionStages.size());
+        List<Expression> nativeConditions = new ArrayList<>(conditions.size());
+        for (int stage = 0; stage < inputTypes.size(); stage++) {
+            RowType stageInputType = inputTypes.get(stage);
+            RowType stageOutputType = outputTypes.get(stage);
+            List<?> stageProjections = projectionStages.get(stage);
+            if (unsupportedReason(stageInputType, stageOutputType, stageProjections, conditions.get(stage)) != null) {
+                return null;
+            }
+            List<Expression> nativeProjections = new ArrayList<>(stageProjections.size());
+            for (int outputIndex = 0; outputIndex < stageProjections.size(); outputIndex++) {
+                nativeProjections.add(projectionExpression(
+                        stageProjections.get(outputIndex), stageInputType, stageOutputType.getTypeAt(outputIndex)));
+            }
+            nativeProjectionStages.add(nativeProjections);
+            nativeConditions.add(conditionExpression(conditions.get(stage), stageInputType));
+        }
+        RowType outputType = outputTypes.get(outputTypes.size() - 1);
+        StreamFusionIdentityCalcOperator operator = new StreamFusionIdentityCalcOperator(
+                boundaryInputType,
+                outputType,
+                StreamFusionArrayUnnestTranslator.arrayIndex(invocation),
+                unnestOutputType.getFieldCount(),
+                nativeProjectionStages,
+                nativeConditions);
+        OneInputTransformation<RowData, RowData> transformation = new OneInputTransformation<>(
+                input,
+                "streamfusion-array-unnest-calc-chain[" + inputTypes.size() + "]",
                 operator,
                 InternalTypeInfo.of(outputType),
                 input.getParallelism(),

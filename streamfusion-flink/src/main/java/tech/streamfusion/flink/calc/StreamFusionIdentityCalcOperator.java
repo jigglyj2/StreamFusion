@@ -23,6 +23,7 @@ import org.apache.flink.types.RowKind;
 import tech.streamfusion.flink.arrow.ArrowCDataBridge;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.NativeCalcResult;
+import tech.streamfusion.proto.plan.v1.ArrayUnnest;
 import tech.streamfusion.proto.plan.v1.Calc;
 import tech.streamfusion.proto.plan.v1.CollectionType;
 import tech.streamfusion.proto.plan.v1.DecimalType;
@@ -58,6 +59,19 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
         this.outputType = outputType;
         this.serializer = new RowDataSerializer(inputType);
         this.serializedPlan = createPlan(inputType, projectionStages, conditions);
+    }
+
+    StreamFusionIdentityCalcOperator(
+            RowType boundaryInputType,
+            RowType outputType,
+            int arrayUnnestIndex,
+            int unnestOutputFieldCount,
+            List<List<Expression>> projectionStages,
+            List<Expression> conditions) {
+        this.inputType = boundaryInputType;
+        this.outputType = outputType;
+        this.serializer = new RowDataSerializer(boundaryInputType);
+        this.serializedPlan = createPlan(arrayUnnestIndex, unnestOutputFieldCount, projectionStages, conditions);
     }
 
     @Override
@@ -106,6 +120,28 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
     static byte[] createPlan(RowType inputType, List<List<Expression>> projectionStages, List<Expression> conditions) {
         Operator operator = Operator.newBuilder().setInput(Input.newBuilder()).build();
         int stageInputFieldCount = inputType.getFieldCount();
+        return createPlan(operator, stageInputFieldCount, projectionStages, conditions);
+    }
+
+    private static byte[] createPlan(
+            int arrayUnnestIndex,
+            int unnestOutputFieldCount,
+            List<List<Expression>> projectionStages,
+            List<Expression> conditions) {
+        Operator input = Operator.newBuilder().setInput(Input.newBuilder()).build();
+        Operator operator = Operator.newBuilder()
+                .setArrayUnnest(ArrayUnnest.newBuilder().setInput(input).setArrayIndex(arrayUnnestIndex))
+                .build();
+        return createPlan(operator, unnestOutputFieldCount, projectionStages, conditions);
+    }
+
+    private static byte[] createPlan(
+            Operator initialOperator,
+            int initialFieldCount,
+            List<List<Expression>> projectionStages,
+            List<Expression> conditions) {
+        Operator operator = initialOperator;
+        int stageInputFieldCount = initialFieldCount;
         for (int stage = 0; stage < projectionStages.size(); stage++) {
             List<Expression> projections = projectionStages.get(stage);
             Calc.Builder calc = Calc.newBuilder().setInput(operator).addAllProjections(projections);

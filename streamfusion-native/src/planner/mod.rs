@@ -43,6 +43,15 @@ fn create_operator(
             )?;
             operators::calc::create(calc, child)
         }
+        Some(proto::operator::Operator::ArrayUnnest(unnest)) => {
+            let child = create_operator(
+                unnest.input.as_ref().ok_or_else(|| {
+                    DataFusionError::Plan("array unnest has no input".to_string())
+                })?,
+                external_input,
+            )?;
+            operators::array_unnest::create(unnest, child)
+        }
         None => Err(DataFusionError::Plan(
             "StreamFusion operator is empty".to_string(),
         )),

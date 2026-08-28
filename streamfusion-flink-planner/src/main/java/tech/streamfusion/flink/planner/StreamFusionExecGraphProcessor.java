@@ -20,15 +20,19 @@ import org.apache.flink.table.planner.plan.nodes.exec.ExecEdge;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNode;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeGraph;
 import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecCalc;
+import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecCorrelate;
 import org.apache.flink.table.planner.plan.nodes.exec.processor.ExecNodeGraphProcessor;
 import org.apache.flink.table.planner.plan.nodes.exec.processor.ProcessorContext;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecCalc;
+import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecCorrelate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecUnion;
 import org.apache.flink.table.types.logical.RowType;
 
 /** All-or-nothing physical rule modelled after Comet's distinct accelerator exec nodes. */
 public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProcessor {
     private static final String TRANSLATOR_CLASS = "tech.streamfusion.flink.calc.StreamFusionCalcTranslator";
+    private static final String UNNEST_TRANSLATOR_CLASS =
+            "tech.streamfusion.flink.unnest.StreamFusionArrayUnnestTranslator";
 
     @Override
     public ExecNodeGraph process(ExecNodeGraph graph, ProcessorContext context) {
@@ -57,6 +61,11 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             return;
         } else if (node instanceof StreamExecCalc) {
             String reason = unsupportedReason((StreamExecCalc) node, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
+        } else if (node instanceof StreamExecCorrelate) {
+            String reason = unsupportedReason((StreamExecCorrelate) node, context);
             if (reason != null) {
                 rejections.add(nodePath + "\n" + reason);
             }
@@ -100,6 +109,21 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     .collect(Collectors.toList()));
             return replacement;
         }
+        if (node instanceof StreamExecCorrelate) {
+            StreamExecCorrelate correlate = (StreamExecCorrelate) node;
+            StreamFusionExecArrayUnnest replacement = new StreamFusionExecArrayUnnest(
+                    correlate.getPersistedConfig(),
+                    (org.apache.flink.table.runtime.operators.join.FlinkJoinType)
+                            field(correlate, CommonExecCorrelate.class, "joinType"),
+                    (org.apache.calcite.rex.RexCall) field(correlate, CommonExecCorrelate.class, "invocation"),
+                    correlate.getInputProperties().get(0),
+                    (RowType) correlate.getOutputType(),
+                    "StreamFusionArrayUnnest");
+            replacement.setInputEdges(correlate.getInputEdges().stream()
+                    .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                    .collect(Collectors.toList()));
+            return replacement;
+        }
         for (int index = 0; index < node.getInputEdges().size(); index++) {
             ExecEdge edge = node.getInputEdges().get(index);
             node.replaceInputEdge(index, copyEdge(edge, convert(edge.getSource()), node));
@@ -138,22 +162,48 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         }
     }
 
+    private String unsupportedReason(StreamExecCorrelate correlate, ProcessorContext context) {
+        ExecEdge input = correlate.getInputEdges().get(0);
+        Object joinType = field(correlate, CommonExecCorrelate.class, "joinType");
+        Object invocation = field(correlate, CommonExecCorrelate.class, "invocation");
+        Object condition = field(correlate, CommonExecCorrelate.class, "condition");
+        try {
+            Class<?> translator = Class.forName(
+                    UNNEST_TRANSLATOR_CLASS,
+                    true,
+                    context.getPlanner().getFlinkContext().getClassLoader());
+            Method method = translator.getMethod(
+                    "unsupportedReason", RowType.class, RowType.class, Object.class, Object.class, Object.class);
+            return (String) method.invoke(
+                    null,
+                    (RowType) input.getOutputType(),
+                    (RowType) correlate.getOutputType(),
+                    joinType,
+                    invocation,
+                    condition);
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
+            throw new IllegalStateException("Could not inspect StreamFusion array UNNEST support", e);
+        } catch (InvocationTargetException e) {
+            throw new IllegalStateException("StreamFusion array UNNEST support inspection failed", e.getCause());
+        }
+    }
+
     @SuppressWarnings("unchecked")
     private static List<RexNode> projection(StreamExecCalc calc) {
-        return (List<RexNode>) field(calc, "projection");
+        return (List<RexNode>) field(calc, CommonExecCalc.class, "projection");
     }
 
     private static RexNode condition(StreamExecCalc calc) {
-        return (RexNode) field(calc, "condition");
+        return (RexNode) field(calc, CommonExecCalc.class, "condition");
     }
 
-    private static Object field(StreamExecCalc calc, String name) {
+    private static Object field(Object node, Class<?> declaringClass, String name) {
         try {
-            Field field = CommonExecCalc.class.getDeclaredField(name);
+            Field field = declaringClass.getDeclaredField(name);
             field.setAccessible(true);
-            return field.get(calc);
+            return field.get(node);
         } catch (NoSuchFieldException | IllegalAccessException e) {
-            throw new IllegalStateException("Could not read Flink calc " + name, e);
+            throw new IllegalStateException("Could not read Flink exec node " + name, e);
         }
     }
 }
