@@ -31,6 +31,7 @@ import tech.streamfusion.proto.plan.v1.Floor;
 import tech.streamfusion.proto.plan.v1.HyperbolicSine;
 import tech.streamfusion.proto.plan.v1.HyperbolicTangent;
 import tech.streamfusion.proto.plan.v1.NaturalLogarithm;
+import tech.streamfusion.proto.plan.v1.Power;
 import tech.streamfusion.proto.plan.v1.Radians;
 import tech.streamfusion.proto.plan.v1.Sign;
 import tech.streamfusion.proto.plan.v1.Sine;
@@ -47,6 +48,15 @@ final class StreamFusionNumericFunctionTranslator extends StreamFusionRexSupport
         }
         if ("LOG2".equals(functionName(expression))) {
             return "LOG2 stays on Flink because DataFusion differs from Flink by one ULP for finite DOUBLE inputs";
+        }
+        if ("POWER".equals(functionName(expression)) && hasNoArgMethod(expression, "getOperands")) {
+            List<?> operands = (List<?>) invoke(expression, "getOperands");
+            if (operands.size() == 2) {
+                Double exponent = literal(operands.get(1), Double.class);
+                if (exponent == null || exponent < 0.0d) {
+                    return "POWER stays on Flink unless its exponent is a nonnegative DOUBLE literal because DataFusion errors on zero raised to a negative power";
+                }
+            }
         }
         return null;
     }
@@ -71,8 +81,20 @@ final class StreamFusionNumericFunctionTranslator extends StreamFusionRexSupport
         }
         if ("POWER".equals(function) && operands.size() == 2 && expectedType.getTypeRoot() == LogicalTypeRoot.DOUBLE) {
             Double exponent = literal(operands.get(1), Double.class);
+            if (exponent == null || exponent < 0.0d) {
+                return null;
+            }
             if (exponent != null && Double.compare(exponent, 0.5d) == 0) {
                 return unary(expression, inputType, expectedType, UnaryKind.SQUARE_ROOT);
+            }
+            Expression baseExpression =
+                    StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, expectedType);
+            Expression exponentExpression =
+                    StreamFusionProjectionTranslator.projectionExpression(operands.get(1), inputType, expectedType);
+            if (baseExpression != null && exponentExpression != null) {
+                return Expression.newBuilder()
+                        .setPower(Power.newBuilder().setBase(baseExpression).setExponent(exponentExpression))
+                        .build();
             }
         }
         if ("ATAN2".equals(function) && operands.size() == 2 && expectedType.getTypeRoot() == LogicalTypeRoot.DOUBLE) {

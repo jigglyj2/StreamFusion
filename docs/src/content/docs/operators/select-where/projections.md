@@ -275,6 +275,11 @@ single-argument base-10 convention. `LOG(base, value)` preserves Flink's argumen
 and lowers to DataFusion's arbitrary-base vector expression. Invalid bases and values retain
 IEEE-754 infinity and NaN behavior. `LOG2` stays on Flink with an explicit EXPLAIN reason because
 DataFusion differs from Flink by one ULP for finite inputs such as `10.0`.
+`POWER(base, exponent)` is accelerated when Flink assigns a `DOUBLE` result and the exponent is a
+provably nonnegative `DOUBLE` literal. The special exponent `0.5` continues to lower to the
+parity-approved square-root expression; other approved exponents use DataFusion's vectorized power
+kernel. Negative and dynamic exponents stay on Flink with an EXPLAIN reason because DataFusion
+raises an error for zero to a negative power while Flink returns IEEE infinity.
 `SINH` and `TANH` are accelerated under the same `DOUBLE` coercion contract and remain distinct
 native stages. Generated parity coverage includes finite values, overflow, signed zero, infinities,
 NaN, and nulls. `COSH` stays on Flink with an explicit EXPLAIN reason because DataFusion's kernel

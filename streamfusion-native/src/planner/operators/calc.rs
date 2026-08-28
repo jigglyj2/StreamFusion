@@ -218,6 +218,20 @@ pub(super) fn create_expression(
                 schema,
             )
         }
+        Some(proto::expression::Expression::Power(power)) => {
+            let base = power
+                .base
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("POWER base operand is empty".to_string()))?;
+            let exponent = power.exponent.as_ref().ok_or_else(|| {
+                DataFusionError::Plan("POWER exponent operand is empty".to_string())
+            })?;
+            expressions::power::create(
+                create_expression(base, schema)?,
+                create_expression(exponent, schema)?,
+                schema,
+            )
+        }
         Some(proto::expression::Expression::HyperbolicSine(sine)) => {
             let operand = sine
                 .operand
