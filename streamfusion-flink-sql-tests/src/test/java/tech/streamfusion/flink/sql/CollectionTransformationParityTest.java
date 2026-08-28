@@ -27,6 +27,38 @@ import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 
 class CollectionTransformationParityTest extends SqlParityTestSupport {
     @Test
+    void arrayAppendAndPrependMatchFlinkForPrimitiveElements() throws Exception {
+        assertDataStreamParity(
+                "SELECT ARRAY_APPEND(metric, 9), ARRAY_APPEND(metric, CAST(NULL AS INT)), "
+                        + "ARRAY_PREPEND(metric, 0), ARRAY_PREPEND(metric, CAST(NULL AS INT)) FROM array_input",
+                Types.OBJECT_ARRAY(Types.INT),
+                DataTypes.ARRAY(DataTypes.INT()),
+                Arrays.asList(
+                        Row.of((Object) new Integer[] {1, 2, null}), Row.of((Object) new Integer[] {}), Row.of((Object)
+                                null)),
+                "array_input");
+
+        assertNativeCalcRan();
+    }
+
+    @Test
+    void arrayAppendAndPrependComposeWithNestedRowAccess() throws Exception {
+        assertDataStreamParity(
+                "SELECT ARRAY_APPEND(metric, metric[1]), ARRAY_PREPEND(metric, metric[2]) " + "FROM row_array_input",
+                Types.OBJECT_ARRAY(Types.ROW_NAMED(new String[] {"label", "amount"}, Types.STRING, Types.INT)),
+                DataTypes.ARRAY(DataTypes.ROW(
+                        DataTypes.FIELD("label", DataTypes.STRING()), DataTypes.FIELD("amount", DataTypes.INT()))),
+                Arrays.asList(
+                        Row.of((Object) new Row[] {Row.of("a", 1), Row.of("b", null)}),
+                        Row.of((Object) new Row[] {Row.of("c", 3)}),
+                        Row.of((Object) new Row[] {}),
+                        Row.of((Object) null)),
+                "row_array_input");
+
+        assertNativeCalcRan();
+    }
+
+    @Test
     void arrayReverseMatchesFlinkForPrimitiveElements() throws Exception {
         assertDataStreamParity(
                 "SELECT ARRAY_REVERSE(metric) FROM array_input",
