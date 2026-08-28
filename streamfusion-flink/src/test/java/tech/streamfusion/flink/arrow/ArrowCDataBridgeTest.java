@@ -213,6 +213,36 @@ class ArrowCDataBridgeTest {
     }
 
     @Test
+    void narrowsDoubleToFloatWithFlinkCastParity() {
+        RowType inputType = RowType.of(new DoubleType(false));
+        RowType outputType = RowType.of(new FloatType(false));
+        List<Double> values = List.of(
+                Double.NEGATIVE_INFINITY,
+                -Double.MAX_VALUE,
+                -(double) Float.MAX_VALUE,
+                -0.0d,
+                0.0d,
+                1.0000000596046448d,
+                (double) Float.MAX_VALUE,
+                Double.MAX_VALUE,
+                Double.POSITIVE_INFINITY,
+                Double.NaN);
+        List<RowData> rows = values.stream()
+                .map(value -> (RowData) GenericRowData.of(value))
+                .collect(java.util.stream.Collectors.toList());
+
+        try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+                ArrowRowDataBatch input = ArrowRowDataBatch.transpose(rows, inputType, allocator);
+                ArrowRowDataBatch output =
+                        ArrowCDataBridge.execute(doubleToFloatPlan(), input, outputType, allocator)) {
+            for (int index = 0; index < values.size(); index++) {
+                assertThat(Float.floatToIntBits(output.rowView(index).getFloat(0)))
+                        .isEqualTo(Float.floatToIntBits((float) (double) values.get(index)));
+            }
+        }
+    }
+
+    @Test
     void narrowsIntegerWithFlinkOverflowParity() {
         RowType inputType = RowType.of(new IntType(true));
         RowType outputType = RowType.of(new TinyIntType(true), new SmallIntType(true));
@@ -700,6 +730,20 @@ class ArrowCDataBridgeTest {
                 0,
                 LogicalType.newBuilder().setDouble(EmptyType.getDefaultInstance()),
                 CastKind.CAST_KIND_FLOAT_TO_DOUBLE);
+        return NativePlan.newBuilder()
+                .setProtocolVersion(1)
+                .setRoot(Operator.newBuilder().setCalc(calc))
+                .build()
+                .toByteArray();
+    }
+
+    private static byte[] doubleToFloatPlan() {
+        Calc.Builder calc = Calc.newBuilder().setInput(Operator.newBuilder().setInput(Input.newBuilder()));
+        addCast(
+                calc,
+                0,
+                LogicalType.newBuilder().setFloat(EmptyType.getDefaultInstance()),
+                CastKind.CAST_KIND_DOUBLE_TO_FLOAT);
         return NativePlan.newBuilder()
                 .setProtocolVersion(1)
                 .setRoot(Operator.newBuilder().setCalc(calc))

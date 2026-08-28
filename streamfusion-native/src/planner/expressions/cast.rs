@@ -65,6 +65,7 @@ fn approved_types(kind: proto::CastKind) -> Result<(DataType, DataType)> {
         proto::CastKind::BigintToFloat => Ok((DataType::Int64, DataType::Float32)),
         proto::CastKind::BigintToDouble => Ok((DataType::Int64, DataType::Float64)),
         proto::CastKind::FloatToDouble => Ok((DataType::Float32, DataType::Float64)),
+        proto::CastKind::DoubleToFloat => Ok((DataType::Float64, DataType::Float32)),
         proto::CastKind::IntegerToSmallint => Ok((DataType::Int32, DataType::Int16)),
         proto::CastKind::IntegerToTinyint => Ok((DataType::Int32, DataType::Int8)),
         proto::CastKind::SmallintToTinyint => Ok((DataType::Int16, DataType::Int8)),

@@ -66,6 +66,7 @@ final class StreamFusionCastSupport {
         approve(casts, LogicalTypeRoot.BIGINT, LogicalTypeRoot.FLOAT, CastKind.CAST_KIND_BIGINT_TO_FLOAT);
         approve(casts, LogicalTypeRoot.BIGINT, LogicalTypeRoot.DOUBLE, CastKind.CAST_KIND_BIGINT_TO_DOUBLE);
         approve(casts, LogicalTypeRoot.FLOAT, LogicalTypeRoot.DOUBLE, CastKind.CAST_KIND_FLOAT_TO_DOUBLE);
+        approve(casts, LogicalTypeRoot.DOUBLE, LogicalTypeRoot.FLOAT, CastKind.CAST_KIND_DOUBLE_TO_FLOAT);
         approve(casts, LogicalTypeRoot.INTEGER, LogicalTypeRoot.SMALLINT, CastKind.CAST_KIND_INTEGER_TO_SMALLINT);
         approve(casts, LogicalTypeRoot.INTEGER, LogicalTypeRoot.TINYINT, CastKind.CAST_KIND_INTEGER_TO_TINYINT);
         approve(casts, LogicalTypeRoot.SMALLINT, LogicalTypeRoot.TINYINT, CastKind.CAST_KIND_SMALLINT_TO_TINYINT);

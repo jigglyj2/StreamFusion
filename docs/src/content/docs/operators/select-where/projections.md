@@ -48,8 +48,9 @@ Lossless signed-integer widening projections are accelerated: `TINYINT` to `SMAL
 Integer-to-floating projections are accelerated for every signed integer source and
 `FLOAT` or `DOUBLE` target. Wider integer inputs use the same IEEE-754 rounding as Flink;
 parity coverage includes the `FLOAT` and `DOUBLE` precision cliffs and integer extrema.
-`FLOAT` to `DOUBLE` is also accelerated and preserves every finite value, signed zero,
-infinity, and NaN. The narrowing `DOUBLE` to `FLOAT` cast remains on Flink.
+`FLOAT` to `DOUBLE` and `DOUBLE` to `FLOAT` are accelerated. Narrowing uses Flink's
+IEEE-754 rounding and preserves signed zero and NaN behavior; magnitudes beyond the
+`FLOAT` range become positive or negative infinity as they do in Flink.
 `SMALLINT` to `TINYINT`, `INT` to `TINYINT` or `SMALLINT`, and `BIGINT` to
 `TINYINT`, `SMALLINT`, or `INT` are accelerated with Flink's two's-complement wrapping behavior for
 out-of-range values. StreamFusion uses a custom vectorized Rust expression because

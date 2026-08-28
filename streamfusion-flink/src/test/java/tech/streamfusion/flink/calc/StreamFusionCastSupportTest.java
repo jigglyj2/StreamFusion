@@ -43,7 +43,7 @@ class StreamFusionCastSupportTest {
                 Arguments.of(LogicalTypeRoot.BIGINT, LogicalTypeRoot.FLOAT, CastKind.CAST_KIND_BIGINT_TO_FLOAT),
                 Arguments.of(LogicalTypeRoot.BIGINT, LogicalTypeRoot.DOUBLE, CastKind.CAST_KIND_BIGINT_TO_DOUBLE),
                 Arguments.of(LogicalTypeRoot.FLOAT, LogicalTypeRoot.DOUBLE, CastKind.CAST_KIND_FLOAT_TO_DOUBLE),
-                Arguments.of(LogicalTypeRoot.DOUBLE, LogicalTypeRoot.FLOAT, CastKind.CAST_KIND_UNSPECIFIED),
+                Arguments.of(LogicalTypeRoot.DOUBLE, LogicalTypeRoot.FLOAT, CastKind.CAST_KIND_DOUBLE_TO_FLOAT),
                 Arguments.of(LogicalTypeRoot.INTEGER, LogicalTypeRoot.SMALLINT, CastKind.CAST_KIND_INTEGER_TO_SMALLINT),
                 Arguments.of(LogicalTypeRoot.INTEGER, LogicalTypeRoot.TINYINT, CastKind.CAST_KIND_INTEGER_TO_TINYINT),
                 Arguments.of(LogicalTypeRoot.SMALLINT, LogicalTypeRoot.TINYINT, CastKind.CAST_KIND_SMALLINT_TO_TINYINT),
