@@ -297,6 +297,19 @@ public final class StreamFusionCalcTranslator {
                             .setUnaryMinus(UnaryMinus.newBuilder().setOperand(operand))
                             .build();
         }
+        if ("DIVIDE".equals(kind)) {
+            if (operands.size() != 2) {
+                return null;
+            }
+            boolean nonzeroLiteralDivisor = expectedType == LogicalTypeRoot.INTEGER
+                    ? integerLiteral(operands.get(1)) != null && integerLiteral(operands.get(1)) != 0
+                    : expectedType == LogicalTypeRoot.BIGINT
+                            && longLiteral(operands.get(1)) != null
+                            && longLiteral(operands.get(1)) != 0;
+            if (!nonzeroLiteralDivisor) {
+                return null;
+            }
+        }
         ArithmeticOperator operator = arithmeticOperator(kind);
         if (operator == null) {
             return null;
@@ -365,6 +378,9 @@ public final class StreamFusionCalcTranslator {
                             .setUnaryMinus(UnaryMinus.newBuilder().setOperand(operand))
                             .build();
         }
+        if ("DIVIDE".equals(kind)) {
+            return null;
+        }
         ArithmeticOperator operator = arithmeticOperator(kind);
         if (operator == null) {
             return null;
@@ -391,6 +407,8 @@ public final class StreamFusionCalcTranslator {
                 return ArithmeticOperator.ARITHMETIC_OPERATOR_SUBTRACT;
             case "TIMES":
                 return ArithmeticOperator.ARITHMETIC_OPERATOR_MULTIPLY;
+            case "DIVIDE":
+                return ArithmeticOperator.ARITHMETIC_OPERATOR_DIVIDE;
             default:
                 return null;
         }

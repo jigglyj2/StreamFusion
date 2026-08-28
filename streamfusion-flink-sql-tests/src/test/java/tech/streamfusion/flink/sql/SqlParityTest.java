@@ -355,8 +355,28 @@ class SqlParityTest {
     }
 
     @Test
-    void unsupportedIntegerDivisionFallsBackAndMatchesFlinkByteForByte() throws Exception {
-        assertParity("SELECT id / 2 FROM (VALUES (1), (2), (3)) AS input(id) WHERE id >= 1", true);
+    void nativeIntegerDivisionByNonzeroLiteralMatchesFlinkByteForByte() throws Exception {
+        assertParity("SELECT id / 2, id / -2 FROM (VALUES (-7), (-1), (0), (1), (7)) AS input(id)", true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    @Test
+    void nativeBigintDivisionByNonzeroLiteralMatchesFlinkByteForByte() throws Exception {
+        assertParity(
+                "SELECT id / 2147483648, id / -2147483648 "
+                        + "FROM (VALUES (-9223372036854775807), (-2147483649), (0), "
+                        + "(2147483649), (9223372036854775807)) AS input(id)",
+                true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    @Test
+    void divisionByColumnFallsBackAndMatchesFlinkByteForByte() throws Exception {
+        assertParity(
+                "SELECT numerator / denominator FROM (VALUES (4, 2), (9, 3)) " + "AS input(numerator, denominator)",
+                true);
 
         assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
     }
