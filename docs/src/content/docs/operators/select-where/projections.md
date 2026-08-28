@@ -27,9 +27,11 @@ StreamFusion can select, reorder, omit, or repeat direct input columns of these 
 
 Complex types are currently accelerated as direct input references: they may be selected,
 reordered, omitted, or repeated, but their contents cannot yet be constructed, accessed, or
-transformed natively. Nested field access, collection element access, complex literals,
-`MULTISET`, and collection functions fall back with the whole Calc. Nested child types,
-field names, ordering, nullability, and Arrow offsets are preserved across the native plan.
+transformed natively. Typed `NULL` literals are also accelerated for `ARRAY`, `MAP`, and
+`ROW`, including recursively nested arrays and rows. Nested field access, collection element
+access, non-null complex literals, `MULTISET`, and collection functions fall back with the
+whole Calc. Nested child types, field names, ordering, nullability, and Arrow offsets are
+preserved across the native plan.
 
 Precision, scale, fixed width, and nullability are preserved. Constant `TINYINT` and
 `SMALLINT` projections are accelerated across their complete value ranges. Computed `INT`, `BIGINT`,
@@ -75,10 +77,12 @@ expressions that require a planner-inserted cast still fall back with the whole 
 Direct hexadecimal binary literals are accelerated with their exact byte sequence and
 fixed width. Cast-derived and computed binary expressions remain on Flink.
 Typed `NULL` literals are accelerated for the supported scalar projection types except
-`TIMESTAMP_LTZ`. The protobuf carries the declared type, including `CHAR(n)` and `BINARY(n)`
-width, so
+`TIMESTAMP_LTZ`, and for `ARRAY`, `MAP`, and `ROW`. The protobuf carries the complete
+recursive declared type, including `CHAR(n)` and `BINARY(n)` width, so
 DataFusion materializes a correctly typed all-null Arrow vector rather than an untyped
-Arrow `Null` vector.
+Arrow `Null` vector. Arrow requires map keys to be non-nullable, so StreamFusion normalizes
+that schema bit while preserving the Flink map container and value nullability; a null map
+contains no keys and therefore cannot expose a semantic difference.
 `COALESCE` is accelerated when it has at least two arguments and every argument can be
 lowered as the same supported Flink result type. Nullability and left-to-right first-non-null
 selection are preserved; an unsupported argument causes the whole Calc to fall back.
