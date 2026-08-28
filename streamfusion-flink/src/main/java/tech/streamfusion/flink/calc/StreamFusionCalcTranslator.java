@@ -575,6 +575,12 @@ public final class StreamFusionCalcTranslator {
                     ? null
                     : new StreamFusionStringComparison(inputIndex, literal, operator, inputOnLeft);
         }
+        if (type == LogicalTypeRoot.VARBINARY) {
+            byte[] literal = literal(literalExpression, byte[].class);
+            return literal == null
+                    ? null
+                    : new StreamFusionBinaryComparison(inputIndex, literal, operator, inputOnLeft);
+        }
         if (type == LogicalTypeRoot.DATE) {
             Integer epochDay = integerLiteral(literalExpression);
             return epochDay == null

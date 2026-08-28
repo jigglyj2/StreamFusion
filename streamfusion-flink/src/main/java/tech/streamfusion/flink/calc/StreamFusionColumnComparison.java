@@ -9,6 +9,7 @@
  */
 package tech.streamfusion.flink.calc;
 
+import java.util.Arrays;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.types.logical.DecimalType;
 import org.apache.flink.table.types.logical.LogicalType;
@@ -42,6 +43,7 @@ final class StreamFusionColumnComparison implements StreamFusionCondition {
                 || root == LogicalTypeRoot.INTEGER
                 || root == LogicalTypeRoot.BIGINT
                 || root == LogicalTypeRoot.VARCHAR
+                || root == LogicalTypeRoot.VARBINARY
                 || root == LogicalTypeRoot.DATE
                 || root == LogicalTypeRoot.TIME_WITHOUT_TIME_ZONE
                 || root == LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE
@@ -96,6 +98,8 @@ final class StreamFusionColumnComparison implements StreamFusionCondition {
                 return Long.compare(row.getLong(leftIndex), row.getLong(rightIndex));
             case VARCHAR:
                 return row.getString(leftIndex).compareTo(row.getString(rightIndex));
+            case VARBINARY:
+                return Arrays.compareUnsigned(row.getBinary(leftIndex), row.getBinary(rightIndex));
             case TIMESTAMP_WITHOUT_TIME_ZONE:
                 int timestampPrecision = ((TimestampType) type).getPrecision();
                 return row.getTimestamp(leftIndex, timestampPrecision)

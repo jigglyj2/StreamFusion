@@ -32,8 +32,8 @@ The same six predicates support direct, exactly matching column pairs for `TINYI
 `SMALLINT`, `INTEGER`, `BIGINT`, `VARCHAR`, `DECIMAL`, `DATE`, `TIME`, and
 `TIMESTAMP WITHOUT TIME ZONE`. Decimal precision
 and scale and temporal precision must match on both sides. Direct `BOOLEAN` pairs support
-`=` and `<>`. A null on either side produces SQL unknown. Floating-point, `CHAR`, binary,
-mismatched, and planner-cast column pairs currently
+`=` and `<>`. A null on either side produces SQL unknown. Floating-point, `CHAR`, fixed-width
+`BINARY`, mismatched, and planner-cast column pairs currently
 fall back to Flink.
 
 The same six predicates support `DATE` columns compared with `DATE` literals, including
@@ -44,6 +44,11 @@ Direct `VARCHAR` columns support all six ordered comparisons against a direct st
 literal or an exactly matching `VARCHAR` column. Ordering is binary UTF-8, including for
 empty and non-ASCII strings. `CHAR` remains on Flink because its padding semantics need
 separate parity coverage.
+
+Direct `VARBINARY` columns support all six ordered comparisons against a direct binary
+literal or an exactly matching `VARBINARY` column. Bytes compare lexicographically as
+unsigned values, and shorter equal-prefix values sort first. Fixed-width `BINARY` remains
+on Flink pending padding and width parity coverage.
 
 `TIME` comparisons preserve Flink's millisecond-of-day representation. The protobuf also
 carries the declared precision so Rust creates the matching Arrow `Time32` or `Time64`
