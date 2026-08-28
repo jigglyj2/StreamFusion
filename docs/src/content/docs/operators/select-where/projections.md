@@ -168,6 +168,10 @@ null if either input array is null. Rust lowers it to DataFusion's vectorized se
 Planner-coerced compositions whose operand type Calcite cannot currently expose—such as an
 `ARRAY_APPEND` directly nested inside a union—still cause whole-Calc fallback instead of
 guessing the coerced element type.
+`ARRAY_INTERSECT` is accelerated for the same compatible array shapes, including nested rows.
+It returns each value present in both inputs at most once in left-input order, treats null as a
+set value, and returns null if either array is null. The implementation directly uses
+DataFusion's vectorized intersection kernel and keeps the result inside the native plan.
 
 Rust lowers `COALESCE` to DataFusion's vectorized `CaseExpr`: each argument except the last
 becomes an `IS NOT NULL` branch and the last argument is the fallback value.
