@@ -17,6 +17,7 @@ import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.proto.plan.v1.ArrayAppend;
 import tech.streamfusion.proto.plan.v1.ArrayConcat;
 import tech.streamfusion.proto.plan.v1.ArrayContains;
+import tech.streamfusion.proto.plan.v1.ArrayJoin;
 import tech.streamfusion.proto.plan.v1.ArrayMaximum;
 import tech.streamfusion.proto.plan.v1.ArrayMinimum;
 import tech.streamfusion.proto.plan.v1.ArrayPosition;
@@ -63,6 +64,14 @@ final class StreamFusionCollectionTranslator extends StreamFusionComplexTypeSupp
                 if (element == LogicalTypeRoot.FLOAT || element == LogicalTypeRoot.DOUBLE) {
                     return "floating-point ARRAY_MIN and ARRAY_MAX stay on Flink because Flink and DataFusion order NaN differently";
                 }
+            }
+        }
+        if ("ARRAY_JOIN".equals(function) && (operands.size() == 2 || operands.size() == 3)) {
+            if (literal(operands.get(1), String.class) == null) {
+                return "ARRAY_JOIN stays on Flink unless its delimiter is a non-null literal because DataFusion applies one delimiter to the whole batch";
+            }
+            if (operands.size() == 3 && literal(operands.get(2), String.class) == null) {
+                return "ARRAY_JOIN stays on Flink unless its null replacement is a non-null literal because DataFusion applies one replacement to the whole batch";
             }
         }
         return null;
@@ -271,6 +280,45 @@ final class StreamFusionCollectionTranslator extends StreamFusionComplexTypeSupp
                 : Expression.newBuilder()
                         .setArrayMaximum(ArrayMaximum.newBuilder().setArray(array))
                         .build();
+    }
+
+    static Expression arrayJoin(Object expression, RowType inputType, LogicalType expectedType) {
+        if (!"ARRAY_JOIN".equals(functionName(expression)) || expectedType.getTypeRoot() != LogicalTypeRoot.VARCHAR) {
+            return null;
+        }
+        java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
+        if (operands.size() < 2 || operands.size() > 3) {
+            return null;
+        }
+        LogicalType arrayType = logicalType(operands.get(0), inputType);
+        if (!(arrayType instanceof ArrayType)
+                || ((ArrayType) arrayType).getElementType().getTypeRoot() != LogicalTypeRoot.VARCHAR) {
+            return null;
+        }
+        String delimiter = literal(operands.get(1), String.class);
+        if (delimiter == null) {
+            return null;
+        }
+        String replacement = operands.size() == 3 ? literal(operands.get(2), String.class) : null;
+        if (operands.size() == 3 && replacement == null) {
+            return null;
+        }
+        Expression array = StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, arrayType);
+        if (array == null) {
+            return null;
+        }
+        ArrayJoin.Builder join = ArrayJoin.newBuilder().setArray(array).setDelimiter(stringLiteral(delimiter));
+        if (replacement != null) {
+            join.setNullReplacement(stringLiteral(replacement));
+        }
+        return Expression.newBuilder().setArrayJoin(join).build();
+    }
+
+    private static Expression stringLiteral(String value) {
+        return Expression.newBuilder()
+                .setStringLiteral(tech.streamfusion.proto.plan.v1.StringLiteral.newBuilder()
+                        .setValue(value))
+                .build();
     }
 
     private static boolean supportsArrayExtremum(LogicalTypeRoot type) {

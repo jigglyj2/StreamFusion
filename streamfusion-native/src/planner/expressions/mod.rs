@@ -15,6 +15,7 @@ pub(crate) mod array_distinct;
 pub(crate) mod array_element;
 pub(crate) mod array_except;
 pub(crate) mod array_intersect;
+pub(crate) mod array_join;
 pub(crate) mod array_maximum;
 pub(crate) mod array_minimum;
 pub(crate) mod array_position;

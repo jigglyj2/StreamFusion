@@ -166,6 +166,12 @@ DataFusion's remove-all kernel returns null instead.
 arrays produce null. Rust uses DataFusion's vectorized extrema kernels. `FLOAT` and `DOUBLE`
 arrays stay on Flink with an EXPLAIN reason because Flink and DataFusion order `NaN` differently;
 generated edge coverage includes `NaN`, infinities, and signed zero to enforce that fallback.
+`ARRAY_JOIN` is accelerated for `VARCHAR` arrays when its delimiter and optional null replacement
+are non-null literals. It lowers directly to DataFusion's vectorized `array_to_string` expression,
+which skips null elements when no replacement is supplied and substitutes the requested text when
+one is supplied. Null arrays, empty arrays, empty delimiters, and empty replacements preserve Flink
+behavior. Dynamic or null delimiter/replacement arguments stay on Flink with an EXPLAIN reason
+because DataFusion applies those controls once per batch rather than once per row.
 `ARRAY_DISTINCT` is accelerated for Arrow-compatible element types, including nested `ROW`
 elements. It preserves the first occurrence order, retains at most one null element, and
 preserves null and empty arrays. Rust lowers it directly to DataFusion's vectorized set kernel;

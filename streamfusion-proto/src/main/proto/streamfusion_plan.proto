@@ -84,6 +84,7 @@ message Expression {
     ArrayRemove array_remove = 53;
     ArrayMinimum array_minimum = 54;
     ArrayMaximum array_maximum = 55;
+    ArrayJoin array_join = 56;
   }
 }
 
@@ -168,6 +169,12 @@ message ArrayMinimum {
 
 message ArrayMaximum {
   Expression array = 1;
+}
+
+message ArrayJoin {
+  Expression array = 1;
+  Expression delimiter = 2;
+  optional Expression null_replacement = 3;
 }
 
 message Coalesce {

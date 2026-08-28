@@ -127,6 +127,22 @@ pub(super) fn create(
             )?,
             schema,
         ),
+        ArrayJoin(join) => {
+            let mut arguments = vec![
+                create_expression(
+                    required(&join.array, "array join is missing its array")?,
+                    schema,
+                )?,
+                create_expression(
+                    required(&join.delimiter, "array join is missing its delimiter")?,
+                    schema,
+                )?,
+            ];
+            if let Some(replacement) = &join.null_replacement {
+                arguments.push(create_expression(replacement, schema)?);
+            }
+            expressions::array_join::create(arguments, schema)
+        }
         ArrayDistinct(distinct) => expressions::array_distinct::create(
             create_expression(
                 required(&distinct.array, "array distinct is missing its array")?,

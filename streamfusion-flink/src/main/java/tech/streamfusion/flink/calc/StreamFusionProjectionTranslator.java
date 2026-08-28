@@ -110,6 +110,10 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
         if (arrayExtremum != null) {
             return arrayExtremum;
         }
+        Expression arrayJoin = StreamFusionCollectionTranslator.arrayJoin(expression, inputType, expectedType);
+        if (arrayJoin != null) {
+            return arrayJoin;
+        }
         Expression arrayDistinct =
                 StreamFusionCollectionSetTranslator.arrayDistinct(expression, inputType, expectedType);
         if (arrayDistinct != null) {
