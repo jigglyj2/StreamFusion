@@ -121,6 +121,33 @@ fn create_expression(
             })?;
             expressions::array_reverse::create(create_expression(array, schema)?, schema)
         }
+        Some(proto::expression::Expression::ArrayAppend(append)) => {
+            let array = append
+                .array
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("array append is missing its array".into()))?;
+            let element = append.element.as_ref().ok_or_else(|| {
+                DataFusionError::Plan("array append is missing its element".into())
+            })?;
+            expressions::array_append::create(
+                create_expression(array, schema)?,
+                create_expression(element, schema)?,
+                schema,
+            )
+        }
+        Some(proto::expression::Expression::ArrayPrepend(prepend)) => {
+            let array = prepend.array.as_ref().ok_or_else(|| {
+                DataFusionError::Plan("array prepend is missing its array".into())
+            })?;
+            let element = prepend.element.as_ref().ok_or_else(|| {
+                DataFusionError::Plan("array prepend is missing its element".into())
+            })?;
+            expressions::array_prepend::create(
+                create_expression(array, schema)?,
+                create_expression(element, schema)?,
+                schema,
+            )
+        }
         Some(proto::expression::Expression::IntegerLiteral(literal)) => Ok(Arc::new(Literal::new(
             ScalarValue::Int32(Some(literal.value)),
         ))),

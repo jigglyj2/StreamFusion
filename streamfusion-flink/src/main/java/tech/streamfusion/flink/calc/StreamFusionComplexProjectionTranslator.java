@@ -20,8 +20,10 @@ import org.apache.flink.table.types.logical.ArrayType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.MapType;
 import org.apache.flink.table.types.logical.RowType;
+import tech.streamfusion.proto.plan.v1.ArrayAppend;
 import tech.streamfusion.proto.plan.v1.ArrayContains;
 import tech.streamfusion.proto.plan.v1.ArrayElement;
+import tech.streamfusion.proto.plan.v1.ArrayPrepend;
 import tech.streamfusion.proto.plan.v1.ArrayReverse;
 import tech.streamfusion.proto.plan.v1.Cardinality;
 import tech.streamfusion.proto.plan.v1.Expression;
@@ -207,6 +209,61 @@ final class StreamFusionComplexProjectionTranslator extends StreamFusionRexSuppo
                 : Expression.newBuilder()
                         .setArrayReverse(ArrayReverse.newBuilder().setArray(array))
                         .build();
+    }
+
+    static Expression arrayAppend(Object expression, RowType inputType, LogicalType expectedType) {
+        java.util.List<?> operands = collectionAndElementOperands(expression, "ARRAY_APPEND", expectedType);
+        if (operands == null) {
+            return null;
+        }
+        Expression array = collectionOperand(operands.get(0), inputType);
+        Expression element = collectionElementOperand(operands.get(0), operands.get(1), inputType, expectedType);
+        return array == null || element == null
+                ? null
+                : Expression.newBuilder()
+                        .setArrayAppend(ArrayAppend.newBuilder().setArray(array).setElement(element))
+                        .build();
+    }
+
+    static Expression arrayPrepend(Object expression, RowType inputType, LogicalType expectedType) {
+        java.util.List<?> operands = collectionAndElementOperands(expression, "ARRAY_PREPEND", expectedType);
+        if (operands == null) {
+            return null;
+        }
+        Expression array = collectionOperand(operands.get(0), inputType);
+        Expression element = collectionElementOperand(operands.get(0), operands.get(1), inputType, expectedType);
+        return array == null || element == null
+                ? null
+                : Expression.newBuilder()
+                        .setArrayPrepend(
+                                ArrayPrepend.newBuilder().setArray(array).setElement(element))
+                        .build();
+    }
+
+    private static java.util.List<?> collectionAndElementOperands(
+            Object expression, String function, LogicalType expectedType) {
+        if (!function.equals(functionName(expression)) || !(expectedType instanceof ArrayType)) {
+            return null;
+        }
+        java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
+        return operands.size() == 2 ? operands : null;
+    }
+
+    private static Expression collectionOperand(Object operand, RowType inputType) {
+        LogicalType operandType = logicalType(operand, inputType);
+        return operandType instanceof ArrayType
+                ? StreamFusionProjectionTranslator.projectionExpression(operand, inputType, operandType)
+                : null;
+    }
+
+    private static Expression collectionElementOperand(
+            Object arrayOperand, Object elementOperand, RowType inputType, LogicalType expectedType) {
+        LogicalType arrayType = logicalType(arrayOperand, inputType);
+        if (!(arrayType instanceof ArrayType) || !(expectedType instanceof ArrayType)) {
+            return null;
+        }
+        LogicalType expectedElement = ((ArrayType) expectedType).getElementType();
+        return StreamFusionProjectionTranslator.projectionExpression(elementOperand, inputType, expectedElement);
     }
 
     static Expression structField(Object expression, RowType inputType, LogicalType expectedType) {

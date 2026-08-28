@@ -7,8 +7,10 @@
 //     http://www.apache.org/licenses/LICENSE-2.0
 
 pub(crate) mod absolute_value;
+pub(crate) mod array_append;
 pub(crate) mod array_contains;
 pub(crate) mod array_element;
+pub(crate) mod array_prepend;
 pub(crate) mod array_reverse;
 pub(crate) mod cardinality;
 pub(crate) mod cast;

@@ -72,6 +72,8 @@ message Expression {
     Cardinality cardinality = 41;
     ArrayContains array_contains = 42;
     ArrayReverse array_reverse = 43;
+    ArrayAppend array_append = 44;
+    ArrayPrepend array_prepend = 45;
   }
 }
 
@@ -101,6 +103,16 @@ message ArrayContains {
 
 message ArrayReverse {
   Expression array = 1;
+}
+
+message ArrayAppend {
+  Expression array = 1;
+  Expression element = 2;
+}
+
+message ArrayPrepend {
+  Expression array = 1;
+  Expression element = 2;
 }
 
 message Coalesce {
