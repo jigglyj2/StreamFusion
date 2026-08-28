@@ -890,6 +890,28 @@ class SqlParityTest {
                 Arguments.of("in", "metric IN (DATE '1969-12-31', DATE '2026-08-28')"));
     }
 
+    @ParameterizedTest(name = "TIME {0}")
+    @MethodSource("nativeTimeDataStreamRangeCases")
+    void nativeTimeDataStreamRangesMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {
+        assertDataStreamParity(
+                "SELECT metric FROM time_input WHERE " + predicate,
+                Types.SQL_TIME,
+                Arrays.asList(
+                        Row.of(java.sql.Time.valueOf("00:00:00")),
+                        Row.of(java.sql.Time.valueOf("08:30:00")),
+                        Row.of(java.sql.Time.valueOf("17:45:00")),
+                        Row.of(java.sql.Time.valueOf("23:59:59"))),
+                "time_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    private static Stream<Arguments> nativeTimeDataStreamRangeCases() {
+        return Stream.of(
+                Arguments.of("between", "metric BETWEEN TIME '08:30:00' AND TIME '17:45:00'"),
+                Arguments.of("in", "metric IN (TIME '00:00:00', TIME '23:59:59')"));
+    }
+
     @ParameterizedTest(name = "{0}")
     @MethodSource("nativeBooleanColumnCases")
     void nativeBooleanColumnsMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {

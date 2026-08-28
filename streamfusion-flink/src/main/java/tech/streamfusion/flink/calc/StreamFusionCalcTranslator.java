@@ -15,6 +15,7 @@ import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.List;
 import org.apache.flink.api.dag.Transformation;
@@ -653,7 +654,8 @@ public final class StreamFusionCalcTranslator {
                 || type == LogicalTypeRoot.INTEGER
                 || type == LogicalTypeRoot.BIGINT
                 || type == LogicalTypeRoot.DECIMAL
-                || type == LogicalTypeRoot.DATE;
+                || type == LogicalTypeRoot.DATE
+                || type == LogicalTypeRoot.TIME_WITHOUT_TIME_ZONE;
     }
 
     private static StreamFusionCondition searchComparison(
@@ -685,6 +687,11 @@ public final class StreamFusionCalcTranslator {
                         Math.toIntExact(LocalDate.parse(endpoint.toString()).toEpochDay()),
                         operator,
                         true);
+            case TIME_WITHOUT_TIME_ZONE:
+                int precision = ((TimeType) inputType.getTypeAt(inputIndex)).getPrecision();
+                int millisecondOfDay =
+                        Math.toIntExact(LocalTime.parse(endpoint.toString()).toNanoOfDay() / 1_000_000);
+                return new StreamFusionTimeComparison(inputIndex, millisecondOfDay, precision, operator, true);
             default:
                 return null;
         }
