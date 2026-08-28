@@ -175,6 +175,19 @@ fn create_expression(
             })?;
             expressions::array_distinct::create(create_expression(array, schema)?, schema)
         }
+        Some(proto::expression::Expression::ArrayUnion(union)) => {
+            let left = union.left.as_ref().ok_or_else(|| {
+                DataFusionError::Plan("array union is missing its left array".into())
+            })?;
+            let right = union.right.as_ref().ok_or_else(|| {
+                DataFusionError::Plan("array union is missing its right array".into())
+            })?;
+            expressions::array_union::create(
+                create_expression(left, schema)?,
+                create_expression(right, schema)?,
+                schema,
+            )
+        }
         Some(proto::expression::Expression::IntegerLiteral(literal)) => Ok(Arc::new(Literal::new(
             ScalarValue::Int32(Some(literal.value)),
         ))),

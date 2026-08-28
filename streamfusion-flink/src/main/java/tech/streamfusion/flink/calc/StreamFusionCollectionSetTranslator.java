@@ -13,6 +13,7 @@ import org.apache.flink.table.types.logical.ArrayType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.proto.plan.v1.ArrayDistinct;
+import tech.streamfusion.proto.plan.v1.ArrayUnion;
 import tech.streamfusion.proto.plan.v1.Expression;
 
 /** Array set functions kept separate from collection transformation and search functions. */
@@ -37,6 +38,25 @@ final class StreamFusionCollectionSetTranslator extends StreamFusionComplexTypeS
                 ? null
                 : Expression.newBuilder()
                         .setArrayDistinct(ArrayDistinct.newBuilder().setArray(array))
+                        .build();
+    }
+
+    static Expression arrayUnion(Object expression, RowType inputType, LogicalType expectedType) {
+        if (!"ARRAY_UNION".equals(functionName(expression)) || !(expectedType instanceof ArrayType)) {
+            return null;
+        }
+        java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
+        if (operands.size() != 2) {
+            return null;
+        }
+        Expression left =
+                StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, expectedType);
+        Expression right =
+                StreamFusionProjectionTranslator.projectionExpression(operands.get(1), inputType, expectedType);
+        return left == null || right == null
+                ? null
+                : Expression.newBuilder()
+                        .setArrayUnion(ArrayUnion.newBuilder().setLeft(left).setRight(right))
                         .build();
     }
 }

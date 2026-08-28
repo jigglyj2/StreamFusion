@@ -77,6 +77,7 @@ message Expression {
     ArrayConcat array_concat = 46;
     ArrayPosition array_position = 47;
     ArrayDistinct array_distinct = 48;
+    ArrayUnion array_union = 49;
   }
 }
 
@@ -129,6 +130,11 @@ message ArrayPosition {
 
 message ArrayDistinct {
   Expression array = 1;
+}
+
+message ArrayUnion {
+  Expression left = 1;
+  Expression right = 2;
 }
 
 message Coalesce {
