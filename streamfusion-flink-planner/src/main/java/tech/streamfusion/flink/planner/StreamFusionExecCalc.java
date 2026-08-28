@@ -62,11 +62,12 @@ public final class StreamFusionExecCalc extends CommonExecCalc implements Stream
     protected Transformation<RowData> translateToPlanInternal(PlannerBase planner, ExecNodeConfig config) {
         List<StreamFusionExecCalc> chain = adjacentChain(this);
         ExecEdge inputEdge = chain.get(0).getInputEdges().get(0);
-        StreamFusionExecArrayUnnest fusedUnnest = inputEdge.getSource() instanceof StreamFusionExecArrayUnnest
-                ? (StreamFusionExecArrayUnnest) inputEdge.getSource()
-                : null;
-        ExecEdge boundaryEdge =
-                fusedUnnest == null ? inputEdge : fusedUnnest.getInputEdges().get(0);
+        List<StreamFusionExecArrayUnnest> fusedUnnests = inputEdge.getSource() instanceof StreamFusionExecArrayUnnest
+                ? StreamFusionExecArrayUnnest.adjacentChain((StreamFusionExecArrayUnnest) inputEdge.getSource())
+                : Collections.emptyList();
+        ExecEdge boundaryEdge = fusedUnnests.isEmpty()
+                ? inputEdge
+                : fusedUnnests.get(0).getInputEdges().get(0);
         Transformation<RowData> input = (Transformation<RowData>) boundaryEdge.translateToPlan(planner);
         List<RowType> inputTypes = new ArrayList<>(chain.size());
         List<RowType> outputTypes = new ArrayList<>(chain.size());
@@ -83,19 +84,29 @@ public final class StreamFusionExecCalc extends CommonExecCalc implements Stream
                     TRANSLATOR_CLASS, true, planner.getFlinkContext().getClassLoader());
             Method translate;
             Transformation<RowData> result;
-            if (fusedUnnest == null) {
+            if (fusedUnnests.isEmpty()) {
                 translate = translator.getMethod(
                         "translateChain", Transformation.class, List.class, List.class, List.class, List.class);
                 result = (Transformation<RowData>)
                         translate.invoke(null, input, inputTypes, outputTypes, projections, conditions);
             } else {
+                List<RowType> unnestInputTypes = new ArrayList<>(fusedUnnests.size());
+                List<RowType> unnestOutputTypes = new ArrayList<>(fusedUnnests.size());
+                List<Object> joinTypes = new ArrayList<>(fusedUnnests.size());
+                List<Object> invocations = new ArrayList<>(fusedUnnests.size());
+                for (StreamFusionExecArrayUnnest unnest : fusedUnnests) {
+                    unnestInputTypes.add((RowType) unnest.getInputEdges().get(0).getOutputType());
+                    unnestOutputTypes.add((RowType) unnest.getOutputType());
+                    joinTypes.add(unnest.streamFusionJoinType());
+                    invocations.add(unnest.streamFusionInvocation());
+                }
                 translate = translator.getMethod(
-                        "translateArrayUnnestChain",
+                        "translateArrayUnnestChains",
                         Transformation.class,
-                        RowType.class,
-                        RowType.class,
-                        Object.class,
-                        Object.class,
+                        List.class,
+                        List.class,
+                        List.class,
+                        List.class,
                         List.class,
                         List.class,
                         List.class,
@@ -103,10 +114,10 @@ public final class StreamFusionExecCalc extends CommonExecCalc implements Stream
                 result = (Transformation<RowData>) translate.invoke(
                         null,
                         input,
-                        (RowType) boundaryEdge.getOutputType(),
-                        (RowType) fusedUnnest.getOutputType(),
-                        fusedUnnest.streamFusionJoinType(),
-                        fusedUnnest.streamFusionInvocation(),
+                        unnestInputTypes,
+                        unnestOutputTypes,
+                        joinTypes,
+                        invocations,
                         inputTypes,
                         outputTypes,
                         projections,

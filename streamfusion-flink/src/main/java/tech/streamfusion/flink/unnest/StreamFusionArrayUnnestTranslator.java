@@ -35,24 +35,60 @@ public final class StreamFusionArrayUnnestTranslator {
 
     public static Transformation<RowData> translate(
             Transformation<RowData> input, RowType inputType, RowType outputType, Object joinType, Object invocation) {
-        String rejection = unsupportedReason(inputType, outputType, joinType, invocation, null);
-        if (rejection != null) {
-            return null;
+        return translateChain(
+                input,
+                java.util.Collections.singletonList(inputType),
+                java.util.Collections.singletonList(outputType),
+                java.util.Collections.singletonList(joinType),
+                java.util.Collections.singletonList(invocation));
+    }
+
+    /** Translates adjacent collection expansions into one JVM operator and nested native plan. */
+    public static Transformation<RowData> translateChain(
+            Transformation<RowData> input,
+            List<RowType> inputTypes,
+            List<RowType> outputTypes,
+            List<?> joinTypes,
+            List<?> invocations) {
+        int stageCount = inputTypes.size();
+        if (stageCount == 0
+                || outputTypes.size() != stageCount
+                || joinTypes.size() != stageCount
+                || invocations.size() != stageCount) {
+            throw new IllegalArgumentException("A native UNNEST chain must contain equally sized, non-empty stages");
         }
-        int arrayIndex = arrayIndex(invocation);
+        List<Integer> arrayIndexes = new java.util.ArrayList<>(stageCount);
+        List<Boolean> withOrdinalities = new java.util.ArrayList<>(stageCount);
+        List<Boolean> preserveEmpty = new java.util.ArrayList<>(stageCount);
+        List<UnnestCollection> collections = new java.util.ArrayList<>(stageCount);
+        List<Expression> collectionExpressions = new java.util.ArrayList<>(stageCount);
+        for (int stage = 0; stage < stageCount; stage++) {
+            RowType stageInput = inputTypes.get(stage);
+            RowType stageOutput = outputTypes.get(stage);
+            Object joinType = joinTypes.get(stage);
+            Object invocation = invocations.get(stage);
+            if (unsupportedReason(stageInput, stageOutput, joinType, invocation, null) != null) {
+                return null;
+            }
+            arrayIndexes.add(arrayIndex(invocation));
+            withOrdinalities.add(withOrdinality(invocation));
+            preserveEmpty.add(isLeft(joinType));
+            collections.add(collection(stageInput, invocation));
+            collectionExpressions.add(collectionExpression(stageInput, invocation));
+        }
         StreamFusionArrayUnnestOperator operator = new StreamFusionArrayUnnestOperator(
-                inputType,
-                outputType,
-                arrayIndex,
-                withOrdinality(invocation),
-                isLeft(joinType),
-                collection(inputType, invocation),
-                collectionExpression(inputType, invocation));
+                inputTypes.get(0),
+                outputTypes.get(stageCount - 1),
+                arrayIndexes,
+                withOrdinalities,
+                preserveEmpty,
+                collections,
+                collectionExpressions);
         OneInputTransformation<RowData, RowData> transformation = new OneInputTransformation<>(
                 input,
-                "streamfusion-array-unnest",
+                "streamfusion-array-unnest-chain[" + stageCount + "]",
                 operator,
-                InternalTypeInfo.of(outputType),
+                InternalTypeInfo.of(outputTypes.get(stageCount - 1)),
                 input.getParallelism(),
                 false);
         transformation.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
@@ -192,6 +228,10 @@ public final class StreamFusionArrayUnnestTranslator {
         LogicalType element = multiset.getElementType();
         if (element.isNullable()) {
             return "multiset UNNEST nullable elements are not yet supported by the Arrow map boundary";
+        }
+        if (element instanceof ArrayType) {
+            return "multiset UNNEST array elements are not accelerated because Flink map serialization "
+                    + "can reorder array keys and change observable ordinality";
         }
         if (!isSupportedArrayElement(element)) {
             return "multiset UNNEST element type " + element + " is not yet supported";

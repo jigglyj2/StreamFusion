@@ -50,20 +50,49 @@ final class StreamFusionArrayUnnestOperator extends AbstractStreamOperator<RowDa
             boolean preserveEmpty,
             UnnestCollection collection,
             Expression collectionExpression) {
+        this(
+                inputType,
+                outputType,
+                java.util.Collections.singletonList(arrayIndex),
+                java.util.Collections.singletonList(withOrdinality),
+                java.util.Collections.singletonList(preserveEmpty),
+                java.util.Collections.singletonList(collection),
+                java.util.Collections.singletonList(collectionExpression));
+    }
+
+    StreamFusionArrayUnnestOperator(
+            RowType inputType,
+            RowType outputType,
+            List<Integer> arrayIndexes,
+            List<Boolean> withOrdinalities,
+            List<Boolean> preserveEmpty,
+            List<UnnestCollection> collections,
+            List<Expression> collectionExpressions) {
         this.inputType = inputType;
         this.outputType = outputType;
         this.serializer = new RowDataSerializer(inputType);
-        Operator input = Operator.newBuilder().setInput(Input.newBuilder()).build();
-        ArrayUnnest.Builder unnest = ArrayUnnest.newBuilder()
-                .setInput(input)
-                .setArrayIndex(arrayIndex)
-                .setWithOrdinality(withOrdinality)
-                .setPreserveEmpty(preserveEmpty)
-                .setCollection(collection);
-        if (collectionExpression != null) {
-            unnest.setCollectionExpression(collectionExpression);
+        int stageCount = arrayIndexes.size();
+        if (stageCount == 0
+                || withOrdinalities.size() != stageCount
+                || preserveEmpty.size() != stageCount
+                || collections.size() != stageCount
+                || collectionExpressions.size() != stageCount) {
+            throw new IllegalArgumentException("A native UNNEST chain must contain equally sized, non-empty stages");
         }
-        Operator root = Operator.newBuilder().setArrayUnnest(unnest).build();
+        Operator root = Operator.newBuilder().setInput(Input.newBuilder()).build();
+        for (int stage = 0; stage < stageCount; stage++) {
+            ArrayUnnest.Builder unnest = ArrayUnnest.newBuilder()
+                    .setInput(root)
+                    .setArrayIndex(arrayIndexes.get(stage))
+                    .setWithOrdinality(withOrdinalities.get(stage))
+                    .setPreserveEmpty(preserveEmpty.get(stage))
+                    .setCollection(collections.get(stage));
+            Expression expression = collectionExpressions.get(stage);
+            if (expression != null) {
+                unnest.setCollectionExpression(expression);
+            }
+            root = Operator.newBuilder().setArrayUnnest(unnest).build();
+        }
         this.serializedPlan = NativePlan.newBuilder()
                 .setProtocolVersion(1)
                 .setRoot(root)

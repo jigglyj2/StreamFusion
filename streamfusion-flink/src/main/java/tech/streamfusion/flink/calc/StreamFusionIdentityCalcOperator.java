@@ -73,16 +73,40 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
             int unnestOutputFieldCount,
             List<List<Expression>> projectionStages,
             List<Expression> conditions) {
+        this(
+                boundaryInputType,
+                outputType,
+                java.util.Collections.singletonList(arrayUnnestIndex),
+                java.util.Collections.singletonList(withOrdinality),
+                java.util.Collections.singletonList(preserveEmpty),
+                java.util.Collections.singletonList(collection),
+                java.util.Collections.singletonList(collectionExpression),
+                java.util.Collections.singletonList(unnestOutputFieldCount),
+                projectionStages,
+                conditions);
+    }
+
+    StreamFusionIdentityCalcOperator(
+            RowType boundaryInputType,
+            RowType outputType,
+            List<Integer> arrayUnnestIndexes,
+            List<Boolean> withOrdinalities,
+            List<Boolean> preserveEmpty,
+            List<UnnestCollection> collections,
+            List<Expression> collectionExpressions,
+            List<Integer> unnestOutputFieldCounts,
+            List<List<Expression>> projectionStages,
+            List<Expression> conditions) {
         this.inputType = boundaryInputType;
         this.outputType = outputType;
         this.serializer = new RowDataSerializer(boundaryInputType);
         this.serializedPlan = createPlan(
-                arrayUnnestIndex,
-                withOrdinality,
+                arrayUnnestIndexes,
+                withOrdinalities,
                 preserveEmpty,
-                collection,
-                collectionExpression,
-                unnestOutputFieldCount,
+                collections,
+                collectionExpressions,
+                unnestOutputFieldCounts,
                 projectionStages,
                 conditions);
     }
@@ -137,26 +161,38 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
     }
 
     private static byte[] createPlan(
-            int arrayUnnestIndex,
-            boolean withOrdinality,
-            boolean preserveEmpty,
-            UnnestCollection collection,
-            Expression collectionExpression,
-            int unnestOutputFieldCount,
+            List<Integer> arrayUnnestIndexes,
+            List<Boolean> withOrdinalities,
+            List<Boolean> preserveEmpty,
+            List<UnnestCollection> collections,
+            List<Expression> collectionExpressions,
+            List<Integer> unnestOutputFieldCounts,
             List<List<Expression>> projectionStages,
             List<Expression> conditions) {
-        Operator input = Operator.newBuilder().setInput(Input.newBuilder()).build();
-        ArrayUnnest.Builder unnest = ArrayUnnest.newBuilder()
-                .setInput(input)
-                .setArrayIndex(arrayUnnestIndex)
-                .setWithOrdinality(withOrdinality)
-                .setPreserveEmpty(preserveEmpty)
-                .setCollection(collection);
-        if (collectionExpression != null) {
-            unnest.setCollectionExpression(collectionExpression);
+        int stageCount = arrayUnnestIndexes.size();
+        if (stageCount == 0
+                || withOrdinalities.size() != stageCount
+                || preserveEmpty.size() != stageCount
+                || collections.size() != stageCount
+                || collectionExpressions.size() != stageCount
+                || unnestOutputFieldCounts.size() != stageCount) {
+            throw new IllegalArgumentException("A fused UNNEST chain must contain equally sized, non-empty stages");
         }
-        Operator operator = Operator.newBuilder().setArrayUnnest(unnest).build();
-        return createPlan(operator, unnestOutputFieldCount, projectionStages, conditions);
+        Operator operator = Operator.newBuilder().setInput(Input.newBuilder()).build();
+        for (int stage = 0; stage < stageCount; stage++) {
+            ArrayUnnest.Builder unnest = ArrayUnnest.newBuilder()
+                    .setInput(operator)
+                    .setArrayIndex(arrayUnnestIndexes.get(stage))
+                    .setWithOrdinality(withOrdinalities.get(stage))
+                    .setPreserveEmpty(preserveEmpty.get(stage))
+                    .setCollection(collections.get(stage));
+            Expression expression = collectionExpressions.get(stage);
+            if (expression != null) {
+                unnest.setCollectionExpression(expression);
+            }
+            operator = Operator.newBuilder().setArrayUnnest(unnest).build();
+        }
+        return createPlan(operator, unnestOutputFieldCounts.get(stageCount - 1), projectionStages, conditions);
     }
 
     private static byte[] createPlan(

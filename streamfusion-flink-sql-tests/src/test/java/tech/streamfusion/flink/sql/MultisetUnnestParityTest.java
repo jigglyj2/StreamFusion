@@ -14,7 +14,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import org.apache.flink.api.common.typeinfo.Types;
+import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.table.api.DataTypes;
+import org.apache.flink.table.api.Schema;
+import org.apache.flink.table.api.Table;
+import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.types.Row;
 import org.junit.jupiter.api.Test;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
@@ -89,34 +94,29 @@ class MultisetUnnestParityTest extends SqlParityTestSupport {
     }
 
     @Test
-    void nativeMultisetUnnestRepeatsScalarArrayElementsAsWholeValues() throws Exception {
+    void scalarArrayMultisetUnnestFallsBackWhenKeyOrderingIsNotParitySafe() {
         LinkedHashMap<Integer[], Integer> populated = new LinkedHashMap<>();
         populated.put(new Integer[] {1, null, 3}, 2);
         populated.put(new Integer[] {}, 1);
-        java.util.List<Row> inputs =
-                Arrays.asList(Row.of(populated), Row.of(new LinkedHashMap<>()), Row.of((Object) null));
         org.apache.flink.api.common.typeinfo.TypeInformation<java.util.Map<Integer[], Integer>> externalType =
                 Types.MAP(Types.OBJECT_ARRAY(Types.INT), Types.INT);
         org.apache.flink.table.types.DataType logicalType =
                 DataTypes.MULTISET(DataTypes.ARRAY(DataTypes.INT()).notNull());
 
-        assertDataStreamParity(
-                "SELECT item, ord_idx FROM array_multiset_unnest_input "
-                        + "CROSS JOIN UNNEST(metric) WITH ORDINALITY AS expanded(item, ord_idx)",
-                externalType,
-                logicalType,
-                inputs,
-                "array_multiset_unnest_input");
+        System.setProperty(
+                StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY, StreamFusionPlannerFactory.class.getName());
+        StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();
+        StreamTableEnvironment tables = StreamTableEnvironment.create(environment);
+        DataStream<Row> input =
+                environment.fromData(Row.of(populated)).returns(Types.ROW_NAMED(new String[] {"metric"}, externalType));
+        Table table = tables.fromDataStream(
+                input, Schema.newBuilder().column("metric", logicalType).build());
+        tables.createTemporaryView("array_multiset_unnest_input", table);
 
-        assertDataStreamParity(
-                "SELECT item, ord_idx FROM left_array_multiset_unnest_input "
-                        + "LEFT JOIN UNNEST(metric) WITH ORDINALITY AS expanded(item, ord_idx) ON TRUE",
-                externalType,
-                logicalType,
-                inputs,
-                "left_array_multiset_unnest_input");
-
-        assertNativeExecution();
+        assertThat(tables.explainSql("SELECT item, ord_idx FROM array_multiset_unnest_input "
+                        + "CROSS JOIN UNNEST(metric) WITH ORDINALITY AS expanded(item, ord_idx)"))
+                .contains("Flink map serialization can reorder array keys")
+                .contains("Accelerated: no");
     }
 
     @Test

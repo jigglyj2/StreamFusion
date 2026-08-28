@@ -103,12 +103,59 @@ public final class StreamFusionCalcTranslator extends StreamFusionExpressionTran
             List<RowType> outputTypes,
             List<List<?>> projectionStages,
             List<?> conditions) {
-        if (StreamFusionArrayUnnestTranslator.unsupportedReason(
-                        boundaryInputType, unnestOutputType, joinType, invocation, null)
-                != null) {
-            return null;
+        return translateArrayUnnestChains(
+                input,
+                java.util.Collections.singletonList(boundaryInputType),
+                java.util.Collections.singletonList(unnestOutputType),
+                java.util.Collections.singletonList(joinType),
+                java.util.Collections.singletonList(invocation),
+                inputTypes,
+                outputTypes,
+                projectionStages,
+                conditions);
+    }
+
+    /** Fuses adjacent UNNEST stages and every immediately following Calc into one native plan. */
+    public static Transformation<RowData> translateArrayUnnestChains(
+            Transformation<RowData> input,
+            List<RowType> unnestInputTypes,
+            List<RowType> unnestOutputTypes,
+            List<?> joinTypes,
+            List<?> invocations,
+            List<RowType> inputTypes,
+            List<RowType> outputTypes,
+            List<List<?>> projectionStages,
+            List<?> conditions) {
+        int unnestCount = unnestInputTypes.size();
+        if (unnestCount == 0
+                || unnestOutputTypes.size() != unnestCount
+                || joinTypes.size() != unnestCount
+                || invocations.size() != unnestCount) {
+            throw new IllegalArgumentException("A fused UNNEST chain must contain equally sized, non-empty stages");
         }
-        if (inputTypes.isEmpty() || !inputTypes.get(0).equals(unnestOutputType)) {
+        List<Integer> arrayIndexes = new ArrayList<>(unnestCount);
+        List<Boolean> withOrdinalities = new ArrayList<>(unnestCount);
+        List<Boolean> preserveEmpty = new ArrayList<>(unnestCount);
+        List<tech.streamfusion.proto.plan.v1.UnnestCollection> collections = new ArrayList<>(unnestCount);
+        List<Expression> collectionExpressions = new ArrayList<>(unnestCount);
+        List<Integer> unnestOutputFieldCounts = new ArrayList<>(unnestCount);
+        for (int stage = 0; stage < unnestCount; stage++) {
+            RowType stageInput = unnestInputTypes.get(stage);
+            RowType stageOutput = unnestOutputTypes.get(stage);
+            Object joinType = joinTypes.get(stage);
+            Object invocation = invocations.get(stage);
+            if (StreamFusionArrayUnnestTranslator.unsupportedReason(stageInput, stageOutput, joinType, invocation, null)
+                    != null) {
+                return null;
+            }
+            arrayIndexes.add(StreamFusionArrayUnnestTranslator.arrayIndex(invocation));
+            withOrdinalities.add(StreamFusionArrayUnnestTranslator.withOrdinality(invocation));
+            preserveEmpty.add(StreamFusionArrayUnnestTranslator.isLeft(joinType));
+            collections.add(StreamFusionArrayUnnestTranslator.collection(stageInput, invocation));
+            collectionExpressions.add(StreamFusionArrayUnnestTranslator.collectionExpression(stageInput, invocation));
+            unnestOutputFieldCounts.add(stageOutput.getFieldCount());
+        }
+        if (inputTypes.isEmpty() || !inputTypes.get(0).equals(unnestOutputTypes.get(unnestCount - 1))) {
             throw new IllegalArgumentException("The first Calc input must equal the fused UNNEST output");
         }
         List<List<Expression>> nativeProjectionStages = new ArrayList<>(projectionStages.size());
@@ -130,14 +177,14 @@ public final class StreamFusionCalcTranslator extends StreamFusionExpressionTran
         }
         RowType outputType = outputTypes.get(outputTypes.size() - 1);
         StreamFusionIdentityCalcOperator operator = new StreamFusionIdentityCalcOperator(
-                boundaryInputType,
+                unnestInputTypes.get(0),
                 outputType,
-                StreamFusionArrayUnnestTranslator.arrayIndex(invocation),
-                StreamFusionArrayUnnestTranslator.withOrdinality(invocation),
-                StreamFusionArrayUnnestTranslator.isLeft(joinType),
-                StreamFusionArrayUnnestTranslator.collection(boundaryInputType, invocation),
-                StreamFusionArrayUnnestTranslator.collectionExpression(boundaryInputType, invocation),
-                unnestOutputType.getFieldCount(),
+                arrayIndexes,
+                withOrdinalities,
+                preserveEmpty,
+                collections,
+                collectionExpressions,
+                unnestOutputFieldCounts,
                 nativeProjectionStages,
                 nativeConditions);
         OneInputTransformation<RowData, RowData> transformation = new OneInputTransformation<>(
