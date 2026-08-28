@@ -67,12 +67,18 @@ message Expression {
     StartsWith starts_with = 36;
     Substring substring = 37;
     StructField struct_field = 38;
+    ArrayElement array_element = 39;
   }
 }
 
 message StructField {
   Expression operand = 1;
   string field_name = 2;
+}
+
+message ArrayElement {
+  Expression array = 1;
+  int64 index = 2;
 }
 
 message Coalesce {

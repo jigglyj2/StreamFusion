@@ -809,6 +809,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "datafusion-functions-nested"
+version = "55.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "91173fdb5c0ff2a41169a8ffa1b385b8844f18728747bb0a37e35ad7d5772a4f"
+dependencies = [
+ "arrow",
+ "arrow-ord",
+ "datafusion-common",
+ "datafusion-doc",
+ "datafusion-execution",
+ "datafusion-expr",
+ "datafusion-expr-common",
+ "datafusion-functions",
+ "datafusion-functions-aggregate",
+ "datafusion-functions-aggregate-common",
+ "datafusion-macros",
+ "datafusion-physical-expr-common",
+ "hashbrown 0.17.1",
+ "itertools 0.15.0",
+ "itoa",
+ "log",
+ "memchr",
+]
+
+[[package]]
 name = "datafusion-functions-table"
 version = "55.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2196,6 +2221,7 @@ dependencies = [
  "arrow",
  "datafusion",
  "datafusion-functions",
+ "datafusion-functions-nested",
  "jni",
  "prost",
  "prost-build",

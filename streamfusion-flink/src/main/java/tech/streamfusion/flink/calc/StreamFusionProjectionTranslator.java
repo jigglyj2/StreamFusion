@@ -60,6 +60,11 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
         if (structField != null) {
             return structField;
         }
+        Expression arrayElement =
+                StreamFusionComplexProjectionTranslator.arrayElement(expression, inputType, expectedType);
+        if (arrayElement != null) {
+            return arrayElement;
+        }
         if (isNullLiteral(expression) && supportsNullLiteral(expectedType.getTypeRoot())) {
             return Expression.newBuilder()
                     .setNullLiteral(NullLiteral.newBuilder()

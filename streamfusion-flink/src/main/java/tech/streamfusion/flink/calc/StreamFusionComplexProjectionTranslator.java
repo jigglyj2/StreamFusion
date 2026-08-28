@@ -16,14 +16,51 @@
 package tech.streamfusion.flink.calc;
 
 import java.util.LinkedList;
+import org.apache.flink.table.types.logical.ArrayType;
 import org.apache.flink.table.types.logical.LogicalType;
+import org.apache.flink.table.types.logical.MapType;
 import org.apache.flink.table.types.logical.RowType;
+import tech.streamfusion.proto.plan.v1.ArrayElement;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.StructField;
 
 /** Complex-type expressions kept separate from the scalar Calc translator. */
 final class StreamFusionComplexProjectionTranslator extends StreamFusionRexSupport {
     private StreamFusionComplexProjectionTranslator() {}
+
+    static Expression arrayElement(Object expression, RowType inputType, LogicalType expectedType) {
+        if (!"ITEM"
+                .equals(
+                        hasNoArgMethod(expression, "getKind")
+                                ? invoke(expression, "getKind").toString()
+                                : "")) {
+            return null;
+        }
+        java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
+        if (operands.size() != 2) {
+            return null;
+        }
+        LogicalType collectionType = logicalType(operands.get(0), inputType);
+        if (!(collectionType instanceof ArrayType)) {
+            return null;
+        }
+        LogicalType elementType = ((ArrayType) collectionType).getElementType();
+        if (!elementType.copy(expectedType.isNullable()).equals(expectedType)) {
+            return null;
+        }
+        Integer index = integerLiteral(operands.get(1));
+        if (index == null || index <= 0) {
+            return null;
+        }
+        Expression array =
+                StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, collectionType);
+        return array == null
+                ? null
+                : Expression.newBuilder()
+                        .setArrayElement(
+                                ArrayElement.newBuilder().setArray(array).setIndex(index))
+                        .build();
+    }
 
     static Expression structField(Object expression, RowType inputType, LogicalType expectedType) {
         if (!"RexFieldAccess".equals(expression.getClass().getSimpleName())) {
@@ -36,14 +73,14 @@ final class StreamFusionComplexProjectionTranslator extends StreamFusionRexSuppo
             fields.addFirst(invoke(base, "getField"));
             base = invoke(base, "getReferenceExpr");
         }
-        int inputIndex = inputIndex(base);
-        if (inputIndex < 0 || inputIndex >= inputType.getFieldCount()) {
+        LogicalType currentType = logicalType(base, inputType);
+        if (currentType == null) {
             return null;
         }
-
-        LogicalType currentType = inputType.getTypeAt(inputIndex);
-        Expression current = StreamFusionIdentityCalcOperator.inputReference(
-                inputIndex, StreamFusionIdentityCalcOperator.logicalType(currentType));
+        Expression current = StreamFusionProjectionTranslator.projectionExpression(base, inputType, currentType);
+        if (current == null) {
+            return null;
+        }
         for (Object field : fields) {
             if (!(currentType instanceof RowType)) {
                 return null;
@@ -60,5 +97,36 @@ final class StreamFusionComplexProjectionTranslator extends StreamFusionRexSuppo
             currentType = rowField.getType();
         }
         return currentType.copy(expectedType.isNullable()).equals(expectedType) ? current : null;
+    }
+
+    private static LogicalType logicalType(Object expression, RowType inputType) {
+        int inputIndex = inputIndex(expression);
+        if (inputIndex >= 0 && inputIndex < inputType.getFieldCount()) {
+            return inputType.getTypeAt(inputIndex);
+        }
+        if ("RexFieldAccess".equals(expression.getClass().getSimpleName())) {
+            LogicalType parent = logicalType(invoke(expression, "getReferenceExpr"), inputType);
+            int fieldIndex = (int) invoke(invoke(expression, "getField"), "getIndex");
+            return parent instanceof RowType && fieldIndex >= 0 && fieldIndex < ((RowType) parent).getFieldCount()
+                    ? ((RowType) parent).getTypeAt(fieldIndex)
+                    : null;
+        }
+        String kind = hasNoArgMethod(expression, "getKind")
+                ? invoke(expression, "getKind").toString()
+                : "";
+        if ("ITEM".equals(kind)) {
+            java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
+            if (operands.isEmpty()) {
+                return null;
+            }
+            LogicalType collection = logicalType(operands.get(0), inputType);
+            if (collection instanceof ArrayType) {
+                return ((ArrayType) collection).getElementType();
+            }
+            if (collection instanceof MapType) {
+                return ((MapType) collection).getValueType();
+            }
+        }
+        return StreamFusionExpressionTranslator.expressionLogicalType(expression);
     }
 }

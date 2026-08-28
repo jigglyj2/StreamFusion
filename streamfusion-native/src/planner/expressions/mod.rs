@@ -7,6 +7,7 @@
 //     http://www.apache.org/licenses/LICENSE-2.0
 
 pub(crate) mod absolute_value;
+pub(crate) mod array_element;
 pub(crate) mod cast;
 pub(crate) mod ceiling;
 pub(crate) mod character_length;
