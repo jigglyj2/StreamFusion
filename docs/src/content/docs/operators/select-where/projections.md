@@ -37,7 +37,7 @@ the declared map types; present values, present null values, absent keys, and nu
 Flink's scalar result. `CARDINALITY` is accelerated for maps and non-nested arrays, returning
 an `INT` count or null for a null collection. Nested-array cardinality remains on Flink because
 Flink counts the outer array while DataFusion recursively counts leaf elements. Zero, negative,
-and computed array indexes, non-null complex literals,
+and computed array indexes, non-null `MAP` and `ROW` literals,
 `MULTISET`, and collection functions not explicitly listed below still fall back with the whole Calc. Nested child types, field names,
 ordering, nullability, and Arrow offsets are preserved across the native plan.
 
@@ -172,6 +172,12 @@ guessing the coerced element type.
 It returns each value present in both inputs at most once in left-input order, treats null as a
 set value, and returns null if either array is null. The implementation directly uses
 DataFusion's vectorized intersection kernel and keeps the result inside the native plan.
+Non-empty `ARRAY[...]` value constructors are accelerated when every element is an otherwise
+supported expression of Flink's resolved common element type. This includes arrays containing
+dynamic scalar values, arrays, or rows. Java serializes each element independently and Rust
+lowers the constructor to DataFusion's vectorized `make_array`; no materialized collection is
+sent through protobuf. Empty constructors remain on Flink with an EXPLAIN reason because
+DataFusion's untyped `List<Null>` result cannot preserve Flink's declared element type.
 
 Rust lowers `COALESCE` to DataFusion's vectorized `CaseExpr`: each argument except the last
 becomes an `IS NOT NULL` branch and the last argument is the fallback value.
