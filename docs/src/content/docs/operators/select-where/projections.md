@@ -35,6 +35,8 @@ Constant `TIMESTAMP WITHOUT TIME ZONE` values preserve their local calendar valu
 sub-millisecond nanoseconds without applying a session or JVM timezone.
 Direct constant character literals are encoded as UTF-8 and accelerated. Character
 expressions that require a planner-inserted cast still fall back with the whole Calc.
+Direct hexadecimal binary literals are accelerated with their exact byte sequence and
+fixed width. Cast-derived and computed binary expressions remain on Flink.
 
 Division, remainder, unary arithmetic, non-decimal mixed-width arithmetic, non-finite
 floating-point literals, arithmetic on other types, casts, and functions currently fall

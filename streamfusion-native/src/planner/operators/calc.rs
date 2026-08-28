@@ -155,6 +155,27 @@ fn create_expression(
         Some(proto::expression::Expression::StringLiteral(literal)) => Ok(Arc::new(Literal::new(
             ScalarValue::Utf8(Some(literal.value.clone())),
         ))),
+        Some(proto::expression::Expression::BinaryLiteral(literal)) => {
+            let value = literal.value.clone();
+            let scalar = if literal.fixed_width {
+                let length = i32::try_from(literal.length).map_err(|_| {
+                    DataFusionError::Plan(format!(
+                        "BINARY length {} exceeds Arrow FixedSizeBinary",
+                        literal.length
+                    ))
+                })?;
+                if length <= 0 || value.len() != length as usize {
+                    return Err(DataFusionError::Plan(format!(
+                        "BINARY({length}) literal has {} bytes",
+                        value.len()
+                    )));
+                }
+                ScalarValue::FixedSizeBinary(length, Some(value))
+            } else {
+                ScalarValue::Binary(Some(value))
+            };
+            Ok(Arc::new(Literal::new(scalar)))
+        }
         Some(proto::expression::Expression::GreaterThanOrEqual(comparison)) => {
             Ok(Arc::new(BinaryExpr::new(
                 create_expression(

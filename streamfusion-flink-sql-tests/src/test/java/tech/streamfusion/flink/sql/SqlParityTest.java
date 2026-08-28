@@ -164,6 +164,14 @@ class SqlParityTest {
     }
 
     @Test
+    void nativeBinaryLiteralProjectionsMatchFlinkByteForByte() throws Exception {
+        String sql = "SELECT X'00', X'0102', X'80FF' " + "FROM (VALUES (1), (2)) AS input(id) WHERE id >= 1";
+        assertParity(sql, true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    @Test
     void nativeBigintArithmeticMatchesFlinkByteForByte() throws Exception {
         assertParity(BIGINT_ARITHMETIC_SQL, true);
 

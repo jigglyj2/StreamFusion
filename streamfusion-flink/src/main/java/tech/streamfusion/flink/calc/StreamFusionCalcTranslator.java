@@ -9,6 +9,7 @@
  */
 package tech.streamfusion.flink.calc;
 
+import com.google.protobuf.ByteString;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.math.BigDecimal;
@@ -28,6 +29,7 @@ import org.apache.flink.table.types.logical.TimeType;
 import org.apache.flink.table.types.logical.TimestampType;
 import tech.streamfusion.proto.plan.v1.Arithmetic;
 import tech.streamfusion.proto.plan.v1.ArithmeticOperator;
+import tech.streamfusion.proto.plan.v1.BinaryLiteral;
 import tech.streamfusion.proto.plan.v1.BooleanLiteral;
 import tech.streamfusion.proto.plan.v1.BooleanOperator;
 import tech.streamfusion.proto.plan.v1.ComparisonOperator;
@@ -108,7 +110,9 @@ public final class StreamFusionCalcTranslator {
                                 && outputRoot != LogicalTypeRoot.TIME_WITHOUT_TIME_ZONE
                                 && outputRoot != LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE
                                 && outputRoot != LogicalTypeRoot.CHAR
-                                && outputRoot != LogicalTypeRoot.VARCHAR)
+                                && outputRoot != LogicalTypeRoot.VARCHAR
+                                && outputRoot != LogicalTypeRoot.BINARY
+                                && outputRoot != LogicalTypeRoot.VARBINARY)
                         || projectionExpression(projection, inputType, outputRoot) == null) {
                     return false;
                 }
@@ -195,7 +199,18 @@ public final class StreamFusionCalcTranslator {
             return StreamFusionIdentityCalcOperator.inputReference(
                     inputIndex, StreamFusionIdentityCalcOperator.logicalType(inputType, inputIndex));
         }
-        if (expectedType == LogicalTypeRoot.CHAR || expectedType == LogicalTypeRoot.VARCHAR) {
+        if (expectedType == LogicalTypeRoot.BINARY || expectedType == LogicalTypeRoot.VARBINARY) {
+            byte[] literal = literal(expression, byte[].class);
+            int length = (int) invoke(invoke(expression, "getType"), "getPrecision");
+            if (literal != null && length >= literal.length) {
+                return Expression.newBuilder()
+                        .setBinaryLiteral(BinaryLiteral.newBuilder()
+                                .setValue(ByteString.copyFrom(literal))
+                                .setFixedWidth(expectedType == LogicalTypeRoot.BINARY)
+                                .setLength(length))
+                        .build();
+            }
+        } else if (expectedType == LogicalTypeRoot.CHAR || expectedType == LogicalTypeRoot.VARCHAR) {
             String literal = literal(expression, String.class);
             if (literal != null) {
                 return Expression.newBuilder()
