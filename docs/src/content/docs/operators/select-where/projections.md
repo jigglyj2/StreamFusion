@@ -32,8 +32,10 @@ Typed `NULL` literals are accelerated for `ARRAY`, `MAP`, and `ROW`, including r
 nested arrays and rows. One-based `ARRAY` access is accelerated for positive integer literal
 indexes; a null array, null element, or index beyond the array length produces null. The
 selected element may itself be complex, so expressions such as `rows[1].name` are supported.
-Zero, negative, and computed indexes, map access, non-null complex literals, `MULTISET`, and
-other collection functions still fall back with the whole Calc. Nested child types, field names,
+Map lookup is accelerated when both the map and key are otherwise supported expressions of
+the declared map types; present values, present null values, absent keys, and null maps match
+Flink's scalar result. Zero, negative, and computed array indexes, non-null complex literals,
+`MULTISET`, and other collection functions still fall back with the whole Calc. Nested child types, field names,
 ordering, nullability, and Arrow offsets are preserved across the native plan.
 
 Precision, scale, fixed width, and nullability are preserved. Constant `TINYINT` and
@@ -117,6 +119,10 @@ Positive literal array indexes are encoded as `INT64` in the protobuf and lowere
 DataFusion's vectorized `array_element`, which has the same one-based and out-of-range-null
 behavior. StreamFusion deliberately rejects the remaining index shapes until their Flink
 semantics have dedicated parity coverage.
+DataFusion's `map_extract` returns a one-element nullable list rather than Flink's scalar map
+value. StreamFusion follows Comet's composition model and immediately applies
+`array_element(..., 1)` within the same native expression tree, producing the Flink scalar
+shape without crossing the JVM boundary.
 
 Rust lowers `COALESCE` to DataFusion's vectorized `CaseExpr`: each argument except the last
 becomes an `IS NOT NULL` branch and the last argument is the fallback value.
