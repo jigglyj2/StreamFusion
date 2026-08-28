@@ -13,6 +13,7 @@ import org.apache.flink.table.types.logical.IntType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
+import tech.streamfusion.proto.plan.v1.CharacterFromCode;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.StringAscii;
 import tech.streamfusion.proto.plan.v1.StringLeft;
@@ -123,6 +124,29 @@ final class StreamFusionStringFunctionTranslator extends StreamFusionComplexType
                         .build();
     }
 
+    static Expression chr(Object expression, RowType inputType, LogicalType expectedType) {
+        if (!"CHR".equals(functionName(expression))
+                || (expectedType.getTypeRoot() != LogicalTypeRoot.CHAR
+                        && expectedType.getTypeRoot() != LogicalTypeRoot.VARCHAR)) {
+            return null;
+        }
+        java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
+        if (operands.size() != 1) {
+            return null;
+        }
+        LogicalType operandType = logicalType(operands.get(0), inputType);
+        if (operandType == null || !supportsChr(operandType.getTypeRoot())) {
+            return null;
+        }
+        Expression operand =
+                StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, operandType);
+        return operand == null
+                ? null
+                : Expression.newBuilder()
+                        .setChr(CharacterFromCode.newBuilder().setOperand(operand))
+                        .build();
+    }
+
     static Expression edge(Object expression, RowType inputType, LogicalType expectedType) {
         String function = functionName(expression);
         if (!("LEFT".equals(function) || "RIGHT".equals(function))
@@ -153,5 +177,12 @@ final class StreamFusionStringFunctionTranslator extends StreamFusionComplexType
                 : Expression.newBuilder()
                         .setStringRight(StringRight.newBuilder().setValue(value).setCount(count))
                         .build();
+    }
+
+    private static boolean supportsChr(LogicalTypeRoot type) {
+        return type == LogicalTypeRoot.TINYINT
+                || type == LogicalTypeRoot.SMALLINT
+                || type == LogicalTypeRoot.INTEGER
+                || type == LogicalTypeRoot.BIGINT;
     }
 }

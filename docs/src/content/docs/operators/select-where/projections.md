@@ -366,6 +366,12 @@ Flink returns its first UTF-8 byte sign-extended with Java byte semantics, rathe
 code point; StreamFusion therefore uses a focused vectorized compatibility expression instead
 of DataFusion's differing `ascii` kernel. Empty strings return zero and nulls remain null.
 Fixed-width `CHAR` remains on Flink.
+`CHR(code)` is accelerated for signed integer expressions in projections and filters. Flink does
+not interpret `code` as a Unicode scalar: negative values produce the empty string and nonnegative
+values become the Java character represented by only their low eight bits. A focused Rust
+expression preserves those rules instead of using DataFusion's Unicode-oriented `chr` kernel.
+Generated parity coverage includes negative values, zero, byte boundaries, wrapped values,
+integer extrema, and nulls.
 `HEX(value)` is accelerated for signed integer and `VARCHAR` expressions. Java records a distinct
 protobuf expression; Rust widens signed integers to `INT64` before DataFusion's hexadecimal kernel
 so negative values retain Flink's 64-bit two's-complement representation. Text is encoded from its
@@ -377,6 +383,10 @@ DataFusion's padded Base64 kernel. Generated parity coverage includes arbitrary 
 UTF-8 text, nulls, and long values immediately below and above 76 encoded characters to ensure
 Flink 2.3's unwrapped output is preserved. Fixed-width `CHAR` remains on Flink pending
 padding-specific parity coverage.
+`FROM_BASE64(value)` remains on Flink. Flink declares a `VARCHAR` result but permits decoded bytes
+that are not valid UTF-8, while Arrow UTF-8 arrays require every value to be valid. StreamFusion
+therefore cannot decide safely from the plan whether the boundary is representable, and EXPLAIN
+reports this invariant mismatch instead of making acceleration data-dependent.
 `MD5(value)` is accelerated for `VARCHAR`, `BINARY`, and `VARBINARY` expressions. DataFusion's
 vectorized digest kernel hashes the original UTF-8 or binary bytes and returns Flink-compatible
 lowercase hexadecimal text. Generated parity coverage includes empty values, arbitrary binary

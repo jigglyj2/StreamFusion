@@ -124,6 +124,7 @@ message Expression {
     ShaDigest sha_digest = 93;
     Sha1 sha1 = 94;
     Sha2Dynamic sha2_dynamic = 95;
+    CharacterFromCode chr = 96;
   }
 }
 
@@ -397,6 +398,10 @@ message Sha1 {
 message Sha2Dynamic {
   Expression operand = 1;
   Expression bit_length = 2;
+}
+
+message CharacterFromCode {
+  Expression operand = 1;
 }
 
 message Coalesce {

@@ -28,6 +28,9 @@ final class StreamFusionBinaryFunctionTranslator extends StreamFusionComplexType
 
     static String failureReason(Object expression) {
         String function = functionName(expression);
+        if ("FROM_BASE64".equals(function)) {
+            return "FROM_BASE64 stays on Flink because decoded bytes are not guaranteed to satisfy Arrow's UTF-8 invariant for the declared VARCHAR result";
+        }
         if ("SHA2".equals(function)) {
             return "SHA2 stays on Flink when a non-null literal digest length is not one of 224, 256, 384, and 512 so Flink preserves initialization-time failure";
         }

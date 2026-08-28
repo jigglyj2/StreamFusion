@@ -70,6 +70,7 @@ pub(crate) mod split;
 pub(crate) mod square_root;
 pub(crate) mod starts_with;
 pub(crate) mod string_ascii;
+pub(crate) mod string_chr;
 pub(crate) mod string_count_support;
 pub(crate) mod string_ends_with;
 pub(crate) mod string_left;

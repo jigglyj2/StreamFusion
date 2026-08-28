@@ -285,6 +285,13 @@ pub(super) fn create_expression(
                 schema,
             )
         }
+        Some(proto::expression::Expression::Chr(chr)) => {
+            let operand = chr
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("CHR operand is empty".to_string()))?;
+            expressions::string_chr::create(create_expression(operand, schema)?, schema)
+        }
         Some(proto::expression::Expression::HyperbolicSine(sine)) => {
             let operand = sine
                 .operand

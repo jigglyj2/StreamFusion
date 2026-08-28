@@ -506,6 +506,7 @@ abstract class StreamFusionExpressionTranslator extends StreamFusionProjectionTr
     private static boolean isFixedDigest(Object expression) {
         String function = functionName(expression);
         return "MD5".equals(function)
+                || "CHR".equals(function)
                 || "SHA1".equals(function)
                 || "SHA224".equals(function)
                 || "SHA256".equals(function)
