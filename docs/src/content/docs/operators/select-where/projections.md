@@ -150,6 +150,12 @@ native array functions. Empty inputs contribute no elements. StreamFusion adds a
 around DataFusion's vectorized concatenation because Flink returns null when any input array is
 null, while DataFusion otherwise skips null arrays. The concatenated batch remains inside the
 fused native plan until its output boundary.
+`ARRAY_POSITION` is accelerated when its array and search value otherwise lower natively. It
+returns the first one-based match, `0` when no non-null element matches, and null when either
+the array or search value is null. StreamFusion wraps DataFusion's vectorized search with an
+input-null guard and converts DataFusion's missing-match null to Flink's `INT` zero. This follows
+the same semantic-adapter model as Comet's array-position implementation while retaining the
+upstream DataFusion kernel.
 
 Rust lowers `COALESCE` to DataFusion's vectorized `CaseExpr`: each argument except the last
 becomes an `IS NOT NULL` branch and the last argument is the fallback value.
