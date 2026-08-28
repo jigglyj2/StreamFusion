@@ -28,11 +28,11 @@ literals until their ordering and equality semantics are proven identical across
 Arrow, and DataFusion. Planner-inserted casts that obscure the direct column/literal
 shape also cause the whole Calc to fall back.
 
-The same six predicates support direct, exactly matching column pairs for `INTEGER`,
-`BIGINT`, `DECIMAL`, `DATE`, `TIME`, and `TIMESTAMP WITHOUT TIME ZONE`. Decimal precision
+The same six predicates support direct, exactly matching column pairs for `TINYINT`,
+`SMALLINT`, `INTEGER`, `BIGINT`, `DECIMAL`, `DATE`, `TIME`, and `TIMESTAMP WITHOUT TIME ZONE`. Decimal precision
 and scale and temporal precision must match on both sides. Direct `BOOLEAN` pairs support
-`=` and `<>`. A null on either side produces SQL unknown. `TINYINT`, `SMALLINT`,
-floating-point, character, binary, mismatched, and planner-cast column pairs currently
+`=` and `<>`. A null on either side produces SQL unknown. Floating-point, character,
+binary, mismatched, and planner-cast column pairs currently
 fall back to Flink.
 
 The same six predicates support `DATE` columns compared with `DATE` literals, including
