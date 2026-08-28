@@ -70,8 +70,10 @@ The plan carries the signed unscaled integer, precision, and scale; Rust validat
 before constructing a DataFusion `Decimal128` scalar. Comparisons that require planner
 rescaling or exceed Flink's decimal range fall back rather than rounding.
 
-`IS NULL` and `IS NOT NULL` are supported over direct input columns of every scalar type
-listed on the [projection coverage page](../projections/).
+`IS NULL` and `IS NOT NULL` are supported over direct input columns of every scalar and
+complex type listed on the [projection coverage page](../projections/). For `ARRAY`, `MAP`,
+and `ROW`, the predicate checks the top-level value; nested child nulls do not make the
+container null.
 For a direct boolean input, `IS UNKNOWN` is accelerated through the same null-check path.
 `IS NOT UNKNOWN` is not yet claimed because Flink normalizes that form differently before
 physical planning.

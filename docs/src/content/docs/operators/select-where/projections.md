@@ -23,6 +23,13 @@ StreamFusion can select, reorder, omit, or repeat direct input columns of these 
 - `BOOLEAN`, `TINYINT`, `SMALLINT`, `INT`, `BIGINT`, `FLOAT`, and `DOUBLE`
 - `CHAR`, `VARCHAR`, `BINARY`, and `VARBINARY`
 - `DECIMAL`, `DATE`, `TIME`, `TIMESTAMP`, and `TIMESTAMP_LTZ`
+- `ARRAY`, `MAP`, and `ROW`, recursively containing Arrow-compatible types
+
+Complex types are currently accelerated as direct input references: they may be selected,
+reordered, omitted, or repeated, but their contents cannot yet be constructed, accessed, or
+transformed natively. Nested field access, collection element access, complex literals,
+`MULTISET`, and collection functions fall back with the whole Calc. Nested child types,
+field names, ordering, nullability, and Arrow offsets are preserved across the native plan.
 
 Precision, scale, fixed width, and nullability are preserved. Constant `TINYINT` and
 `SMALLINT` projections are accelerated across their complete value ranges. Computed `INT`, `BIGINT`,
@@ -91,8 +98,9 @@ filter is unsupported.
 Java recursively encodes input references, literals, and arithmetic in the protobuf
 plan through the same typed serializer used by filters, following Comet's single
 expression-to-protobuf model. Rust maps them to DataFusion `Column`, `Literal`, and `BinaryExpr` expressions in a
-`ProjectionExec`. DataFusion shares referenced Arrow buffers for direct projections and
-allocates a result vector when arithmetic produces new values.
+`ProjectionExec`. DataFusion shares referenced Arrow buffers for direct projections,
+including the parent and child buffers of arrays, maps, and rows, and allocates a result
+vector when arithmetic produces new values.
 
 Rust lowers `COALESCE` to DataFusion's vectorized `CaseExpr`: each argument except the last
 becomes an `IS NOT NULL` branch and the last argument is the fallback value.
