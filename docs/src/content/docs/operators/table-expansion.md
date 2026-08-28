@@ -12,9 +12,10 @@ scalar-field row keys and scalar, scalar-array, or row values composed of scalar
 is accelerated, with or without ordinality. The same forms accelerate multisets of supported
 non-null scalar, scalar-array, or row elements composed of scalars and scalar arrays. Arrays whose
 elements are scalar arrays are also accelerated, with each inner array remaining one output value.
-Computed array operands, including `ARRAY[...]` and supported array functions, are accelerated when
-the complete expression is supported by StreamFusion Calc. Nested row fields containing supported
-arrays use the same expression path. Other table functions and expansion forms fall back to Flink.
+Computed collection operands are accelerated when their complete expression is supported by
+StreamFusion Calc. This includes `ARRAY[...]`, supported array and map functions, and nested row
+fields containing supported arrays, maps, or multisets. Other table functions and expansion forms
+fall back to Flink.
 
 ## SQL example
 
@@ -46,8 +47,8 @@ and the input row's changelog `RowKind` are preserved. Null and empty arrays pro
 StreamFusion accelerates the operation when all of the following are true:
 
 - Flink planned an inner/cross or left correlate around its built-in `$UNNEST_ROWS$` function.
-- The function has one operand: either a direct `ARRAY`, `MAP`, or `MULTISET` field, or an
-  `ARRAY` expression that the Calc expression translator supports exactly.
+- The function has one `ARRAY`, `MAP`, or `MULTISET` operand that is either a direct field or an
+  expression the Calc expression translator supports exactly.
 - The element is a supported scalar Arrow boundary type, including numeric, boolean, character,
   binary, decimal, date, time, and timestamp values; a non-empty `ROW` composed of those types and
   scalar arrays; or an `ARRAY` of one of those scalar types.
@@ -64,8 +65,8 @@ into its named fields and omit null row elements, matching Flink. For supported 
 the synthetic row also has a null position when ordinality is requested. Map expansion preserves
 the paired key and value arrays and assigns positions in Flink's stored `MapData` entry order; SQL
 map ordering is not otherwise guaranteed. In left expansion of arrays of rows, null and empty
-collections still produce exactly one synthetic all-null row. Computed map and multiset operands,
-unsupported computed array expressions, rows containing maps, multisets, or arrays nested more than one level, arrays
+collections still produce exactly one synthetic all-null row. Unsupported computed collection
+expressions, rows containing maps, multisets, or arrays nested more than one level, arrays
 nested more than one level, maps with collection keys or collection values outside the documented
 scalar-array shapes,
 nullable row-array elements with ordinality, multisets with nullable elements or collections nested more than one level,

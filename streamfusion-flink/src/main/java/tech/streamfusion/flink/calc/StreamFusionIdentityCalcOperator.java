@@ -254,6 +254,13 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
                                 .setKeyType(logicalType(map.getKeyType()))
                                 .setValueType(logicalType(map.getValueType())))
                         .build();
+            case MULTISET:
+                org.apache.flink.table.types.logical.MultisetType multiset =
+                        (org.apache.flink.table.types.logical.MultisetType) flinkType;
+                return type.setMap(MapType.newBuilder()
+                                .setKeyType(logicalType(multiset.getElementType()))
+                                .setValueType(logicalType(new org.apache.flink.table.types.logical.IntType(false))))
+                        .build();
             case ROW:
                 org.apache.flink.table.types.logical.RowType row =
                         (org.apache.flink.table.types.logical.RowType) flinkType;

@@ -87,11 +87,13 @@ public final class StreamFusionArrayUnnestTranslator {
         }
         LogicalType collection = collectionType(inputType, invocation);
         if (!directField) {
-            if (collection.getTypeRoot() != LogicalTypeRoot.ARRAY) {
-                return "computed collection UNNEST currently supports only ARRAY expressions";
+            if (collection.getTypeRoot() != LogicalTypeRoot.ARRAY
+                    && collection.getTypeRoot() != LogicalTypeRoot.MAP
+                    && collection.getTypeRoot() != LogicalTypeRoot.MULTISET) {
+                return "computed UNNEST operand is not ARRAY, MAP, or MULTISET";
             }
             if (StreamFusionCalcTranslator.operatorExpression(operand, inputType, collection) == null) {
-                return "computed ARRAY operand " + operand
+                return "computed " + collection.getTypeRoot() + " operand " + operand
                         + " has an expression that StreamFusion Calc cannot translate exactly";
             }
         }
