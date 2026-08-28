@@ -41,6 +41,7 @@ import tech.streamfusion.proto.plan.v1.ByteLiteral;
 import tech.streamfusion.proto.plan.v1.Cast;
 import tech.streamfusion.proto.plan.v1.CastKind;
 import tech.streamfusion.proto.plan.v1.Ceiling;
+import tech.streamfusion.proto.plan.v1.CharacterLength;
 import tech.streamfusion.proto.plan.v1.Coalesce;
 import tech.streamfusion.proto.plan.v1.ComparisonOperator;
 import tech.streamfusion.proto.plan.v1.Conditional;
@@ -315,6 +316,18 @@ public final class StreamFusionCalcTranslator {
                     ? null
                     : Expression.newBuilder()
                             .setSign(Sign.newBuilder().setOperand(operand))
+                            .build();
+        }
+        if ("CHAR_LENGTH".equals(functionName(expression)) || "CHARACTER_LENGTH".equals(functionName(expression))) {
+            List<?> operands = (List<?>) invoke(expression, "getOperands");
+            if (expectedType.getTypeRoot() != LogicalTypeRoot.INTEGER || operands.size() != 1) {
+                return null;
+            }
+            Expression operand = projectionExpression(operands.get(0), inputType, LogicalTypeRoot.VARCHAR);
+            return operand == null
+                    ? null
+                    : Expression.newBuilder()
+                            .setCharacterLength(CharacterLength.newBuilder().setOperand(operand))
                             .build();
         }
         return projectionExpression(expression, inputType, expectedType.getTypeRoot());

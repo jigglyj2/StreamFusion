@@ -147,6 +147,13 @@ fn create_expression(
                 .ok_or_else(|| DataFusionError::Plan("SIGN operand is empty".to_string()))?;
             expressions::sign::create(create_expression(operand, schema)?, schema)
         }
+        Some(proto::expression::Expression::CharacterLength(character_length)) => {
+            let operand = character_length
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("CHAR_LENGTH operand is empty".to_string()))?;
+            expressions::character_length::create(create_expression(operand, schema)?, schema)
+        }
         Some(proto::expression::Expression::DateLiteral(literal)) => Ok(Arc::new(Literal::new(
             ScalarValue::Date32(Some(literal.epoch_day)),
         ))),

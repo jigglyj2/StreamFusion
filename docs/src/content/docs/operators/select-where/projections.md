@@ -110,6 +110,10 @@ and decimal inputs lower to ordered DataFusion comparisons and a `CASE`. Floatin
 inputs first preserve either signed zero through a `CASE`, then use DataFusion `signum` for
 nonzero values so NaN is retained. `TINYINT` and `SMALLINT` remain fallback because Flink 2.3
 currently generates uncompilable Java for those calls, preventing a byte-parity contract.
+`CHAR_LENGTH` and `CHARACTER_LENGTH` are accelerated for `VARCHAR` operands. DataFusion's
+Unicode kernel counts UTF-8 code points, matching Flink for ASCII, multibyte text, emoji,
+combining marks, embedded NUL characters, empty strings, and nulls. `CHAR` operands remain
+fallback until fixed-width padding semantics have dedicated coverage.
 
 Cast approval is table-driven. Java maps an explicitly approved Flink source/target pair
 to a stable protobuf cast kind; Rust independently verifies that kind against the actual

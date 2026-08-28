@@ -9,6 +9,7 @@
 pub(crate) mod absolute_value;
 pub(crate) mod cast;
 pub(crate) mod ceiling;
+pub(crate) mod character_length;
 pub(crate) mod coalesce;
 pub(crate) mod conditional;
 pub(crate) mod floor;

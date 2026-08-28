@@ -59,6 +59,7 @@ message Expression {
     Ceiling ceiling = 28;
     Floor floor = 29;
     Sign sign = 30;
+    CharacterLength character_length = 31;
   }
 }
 
@@ -89,6 +90,10 @@ message Floor {
 }
 
 message Sign {
+  Expression operand = 1;
+}
+
+message CharacterLength {
   Expression operand = 1;
 }
 

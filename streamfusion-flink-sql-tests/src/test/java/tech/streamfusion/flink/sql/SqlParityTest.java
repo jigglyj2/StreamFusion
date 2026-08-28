@@ -42,6 +42,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
 
 class SqlParityTest {
@@ -1176,6 +1177,25 @@ class SqlParityTest {
         return nativeAbsoluteValueDataStreamCases()
                 .filter(arguments -> !"tinyint".equals(arguments.get()[0])
                         && !"smallint".equals(arguments.get()[0]));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"CHAR_LENGTH", "CHARACTER_LENGTH"})
+    void nativeCharacterLengthMatchesFlinkByteForByte(String function) throws Exception {
+        assertDataStreamParity(
+                "SELECT " + function + "(metric) FROM character_length_input",
+                Types.STRING,
+                Arrays.asList(
+                        Row.of(""),
+                        Row.of("StreamFusion"),
+                        Row.of("你好"),
+                        Row.of("😀"),
+                        Row.of("e\u0301"),
+                        Row.of("a\u0000b"),
+                        Row.of((Object) null)),
+                "character_length_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
     }
 
     @ParameterizedTest(name = "VARBINARY {0}")
