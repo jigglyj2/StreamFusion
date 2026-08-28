@@ -169,6 +169,12 @@ fn create_expression(
                 schema,
             )
         }
+        Some(proto::expression::Expression::ArrayDistinct(distinct)) => {
+            let array = distinct.array.as_ref().ok_or_else(|| {
+                DataFusionError::Plan("array distinct is missing its array".into())
+            })?;
+            expressions::array_distinct::create(create_expression(array, schema)?, schema)
+        }
         Some(proto::expression::Expression::IntegerLiteral(literal)) => Ok(Arc::new(Literal::new(
             ScalarValue::Int32(Some(literal.value)),
         ))),

@@ -76,6 +76,7 @@ message Expression {
     ArrayPrepend array_prepend = 45;
     ArrayConcat array_concat = 46;
     ArrayPosition array_position = 47;
+    ArrayDistinct array_distinct = 48;
   }
 }
 
@@ -124,6 +125,10 @@ message ArrayConcat {
 message ArrayPosition {
   Expression array = 1;
   Expression needle = 2;
+}
+
+message ArrayDistinct {
+  Expression array = 1;
 }
 
 message Coalesce {

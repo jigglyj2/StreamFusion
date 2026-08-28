@@ -17,6 +17,7 @@ import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.proto.plan.v1.ArrayAppend;
 import tech.streamfusion.proto.plan.v1.ArrayConcat;
 import tech.streamfusion.proto.plan.v1.ArrayContains;
+import tech.streamfusion.proto.plan.v1.ArrayDistinct;
 import tech.streamfusion.proto.plan.v1.ArrayPosition;
 import tech.streamfusion.proto.plan.v1.ArrayPrepend;
 import tech.streamfusion.proto.plan.v1.ArrayReverse;
@@ -200,6 +201,27 @@ final class StreamFusionCollectionTranslator extends StreamFusionComplexTypeSupp
                 : Expression.newBuilder()
                         .setArrayPosition(
                                 ArrayPosition.newBuilder().setArray(array).setNeedle(needle))
+                        .build();
+    }
+
+    static Expression arrayDistinct(Object expression, RowType inputType, LogicalType expectedType) {
+        if (!"ARRAY_DISTINCT".equals(functionName(expression)) || !(expectedType instanceof ArrayType)) {
+            return null;
+        }
+        java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
+        if (operands.size() != 1) {
+            return null;
+        }
+        LogicalType operandType = logicalType(operands.get(0), inputType);
+        if (!(operandType instanceof ArrayType)) {
+            return null;
+        }
+        Expression array =
+                StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, operandType);
+        return array == null
+                ? null
+                : Expression.newBuilder()
+                        .setArrayDistinct(ArrayDistinct.newBuilder().setArray(array))
                         .build();
     }
 
