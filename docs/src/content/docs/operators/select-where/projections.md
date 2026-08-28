@@ -302,6 +302,10 @@ StreamFusion inserts a native count-normalization expression because DataFusion 
 negative count as exclusion while Flink returns the empty string; zero and negative counts are
 therefore clamped to zero before the vectorized DataFusion kernel. Nulls propagate and counts
 beyond the string length return the complete value. Fixed-width `CHAR` remains on Flink.
+`LPAD` and `RPAD` stay on Flink with an explicit EXPLAIN reason. Flink measures and truncates
+UTF-16 code units, whereas DataFusion uses Unicode code points; truncation can split a surrogate
+pair and produce a value that Arrow UTF-8 cannot represent. Supporting only ASCII would make
+acceleration data-dependent, so StreamFusion defers the entire operators for now.
 `OCTET_LENGTH` and `BIT_LENGTH` are not StreamFusion operators because Flink 2.3 rejects their
 character and binary SQL overloads during validation. StreamFusion does not expose unreachable
 Calcite runtime behavior as an extension.

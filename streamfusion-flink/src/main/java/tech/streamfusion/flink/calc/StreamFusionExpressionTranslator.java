@@ -79,6 +79,9 @@ abstract class StreamFusionExpressionTranslator extends StreamFusionProjectionTr
         if (complexFailure == null) {
             complexFailure = StreamFusionCollectionTranslator.failureReason(expression, inputType);
         }
+        if (complexFailure == null) {
+            complexFailure = StreamFusionStringFunctionTranslator.failureReason(expression);
+        }
         if (complexFailure != null) {
             return path + "/" + expressionName(expression) + ": " + complexFailure + " (" + expression + ")";
         }

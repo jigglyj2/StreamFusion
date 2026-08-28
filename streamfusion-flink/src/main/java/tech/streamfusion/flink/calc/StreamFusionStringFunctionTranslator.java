@@ -25,6 +25,15 @@ import tech.streamfusion.proto.plan.v1.StringRight;
 final class StreamFusionStringFunctionTranslator extends StreamFusionComplexTypeSupport {
     private StreamFusionStringFunctionTranslator() {}
 
+    static String failureReason(Object expression) {
+        String function = functionName(expression);
+        if ("LPAD".equals(function) || "RPAD".equals(function)) {
+            return function
+                    + " stays on Flink because Flink measures and truncates UTF-16 code units while DataFusion measures Unicode code points; truncating a supplementary character can also create a value Arrow UTF-8 cannot represent";
+        }
+        return null;
+    }
+
     static Expression replace(Object expression, RowType inputType, LogicalType expectedType) {
         if (!"REPLACE".equals(functionName(expression)) || expectedType.getTypeRoot() != LogicalTypeRoot.VARCHAR) {
             return null;
