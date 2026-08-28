@@ -82,7 +82,9 @@ remain distinct throughout the expression, and `WHERE` retains only true rows.
 
 A direct `BOOLEAN` column is also a supported condition, including inside a compound
 tree or beneath `NOT`. Nullable boolean columns preserve unknown rather than coercing
-null to false within the expression.
+null to false within the expression. Comparisons such as `flag = TRUE`, `TRUE = flag`,
+and their `FALSE` or `<>` equivalents are accelerated when Flink normalizes them to
+the same direct or negated boolean expression.
 
 The null-safe boolean predicates `IS TRUE`, `IS FALSE`, `IS NOT TRUE`, and `IS NOT FALSE`
 are accelerated over any supported boolean expression.

@@ -803,7 +803,11 @@ class SqlParityTest {
         return Stream.of(
                 Arguments.of("boolean-column", "enabled"),
                 Arguments.of("negated-boolean-column", "NOT enabled"),
-                Arguments.of("boolean-column-and-comparison", "enabled AND id >= 2"));
+                Arguments.of("boolean-column-and-comparison", "enabled AND id >= 2"),
+                Arguments.of("equal-true", "enabled = TRUE"),
+                Arguments.of("true-equal", "TRUE = enabled"),
+                Arguments.of("not-equal-false", "enabled <> FALSE"),
+                Arguments.of("false-not-equal", "FALSE <> enabled"));
     }
 
     @Test
