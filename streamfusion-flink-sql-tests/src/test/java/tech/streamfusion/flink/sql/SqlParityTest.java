@@ -145,6 +145,17 @@ class SqlParityTest {
     }
 
     @Test
+    void nativeTimestampLiteralProjectionsMatchFlinkByteForByte() throws Exception {
+        String sql = "SELECT TIMESTAMP '1969-12-31 23:59:59.999999999', "
+                + "TIMESTAMP '1970-01-01 00:00:00', "
+                + "TIMESTAMP '2026-08-27 12:34:56.123456789' "
+                + "FROM (VALUES (1), (2)) AS input(id) WHERE id >= 1";
+        assertParity(sql, true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    @Test
     void nativeBigintArithmeticMatchesFlinkByteForByte() throws Exception {
         assertParity(BIGINT_ARITHMETIC_SQL, true);
 

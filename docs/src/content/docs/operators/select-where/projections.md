@@ -31,6 +31,8 @@ intermediate results. Signed integer overflow follows Flink's wrapping semantics
 Floating-point literals must be finite. Constant `TRUE` and `FALSE` projections are also
 accelerated, as are constant `DATE` values, including dates before the Unix epoch.
 Constant `TIME` values preserve their declared precision and millisecond-of-day value.
+Constant `TIMESTAMP WITHOUT TIME ZONE` values preserve their local calendar value and
+sub-millisecond nanoseconds without applying a session or JVM timezone.
 
 Division, remainder, unary arithmetic, non-decimal mixed-width arithmetic, non-finite
 floating-point literals, arithmetic on other types, casts, and functions currently fall
