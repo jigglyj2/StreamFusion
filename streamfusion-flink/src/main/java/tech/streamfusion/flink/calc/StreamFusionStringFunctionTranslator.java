@@ -32,6 +32,9 @@ final class StreamFusionStringFunctionTranslator extends StreamFusionComplexType
             return function
                     + " stays on Flink because Flink measures and truncates UTF-16 code units while DataFusion measures Unicode code points; truncating a supplementary character can also create a value Arrow UTF-8 cannot represent";
         }
+        if ("OVERLAY".equals(function)) {
+            return "OVERLAY stays on Flink because Flink indexes UTF-16 code units and can produce an unpaired surrogate that Arrow UTF-8 cannot represent";
+        }
         return null;
     }
 

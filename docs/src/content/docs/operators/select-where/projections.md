@@ -366,6 +366,10 @@ Flink returns its first UTF-8 byte sign-extended with Java byte semantics, rathe
 code point; StreamFusion therefore uses a focused vectorized compatibility expression instead
 of DataFusion's differing `ascii` kernel. Empty strings return zero and nulls remain null.
 Fixed-width `CHAR` remains on Flink.
+`OVERLAY(value PLACING replacement FROM start [FOR length])` remains on Flink. Flink indexes and
+slices UTF-16 code units, so a start or length can bisect a supplementary character and create an
+unpaired surrogate that Arrow UTF-8 cannot represent. Since safety depends on each row's contents
+and indices, StreamFusion falls back for the whole plan and reports this reason through EXPLAIN.
 `CHR(code)` is accelerated for signed integer expressions in projections and filters. Flink does
 not interpret `code` as a Unicode scalar: negative values produce the empty string and nonnegative
 values become the Java character represented by only their low eight bits. A focused Rust
