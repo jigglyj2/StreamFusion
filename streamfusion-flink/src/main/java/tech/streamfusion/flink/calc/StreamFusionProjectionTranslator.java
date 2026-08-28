@@ -187,6 +187,10 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
         if (stringChr != null) {
             return stringChr;
         }
+        Expression stringReverse = StreamFusionStringFunctionTranslator.reverse(expression, inputType, expectedType);
+        if (stringReverse != null) {
+            return stringReverse;
+        }
         Expression stringEdge = StreamFusionStringFunctionTranslator.edge(expression, inputType, expectedType);
         if (stringEdge != null) {
             return stringEdge;

@@ -77,6 +77,7 @@ pub(crate) mod string_left;
 pub(crate) mod string_position;
 pub(crate) mod string_repeat;
 pub(crate) mod string_replace;
+pub(crate) mod string_reverse;
 pub(crate) mod string_right;
 pub(crate) mod struct_field;
 pub(crate) mod substring;

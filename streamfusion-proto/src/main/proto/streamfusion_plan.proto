@@ -125,6 +125,7 @@ message Expression {
     Sha1 sha1 = 94;
     Sha2Dynamic sha2_dynamic = 95;
     CharacterFromCode chr = 96;
+    StringReverse string_reverse = 97;
   }
 }
 
@@ -401,6 +402,10 @@ message Sha2Dynamic {
 }
 
 message CharacterFromCode {
+  Expression operand = 1;
+}
+
+message StringReverse {
   Expression operand = 1;
 }
 

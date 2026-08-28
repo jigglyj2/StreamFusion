@@ -20,6 +20,7 @@ import tech.streamfusion.proto.plan.v1.StringLeft;
 import tech.streamfusion.proto.plan.v1.StringPosition;
 import tech.streamfusion.proto.plan.v1.StringRepeat;
 import tech.streamfusion.proto.plan.v1.StringReplace;
+import tech.streamfusion.proto.plan.v1.StringReverse;
 import tech.streamfusion.proto.plan.v1.StringRight;
 
 /** String scalar functions whose operands can remain ordinary native expressions. */
@@ -147,6 +148,27 @@ final class StreamFusionStringFunctionTranslator extends StreamFusionComplexType
                 ? null
                 : Expression.newBuilder()
                         .setChr(CharacterFromCode.newBuilder().setOperand(operand))
+                        .build();
+    }
+
+    static Expression reverse(Object expression, RowType inputType, LogicalType expectedType) {
+        if (!"REVERSE".equals(functionName(expression)) || expectedType.getTypeRoot() != LogicalTypeRoot.VARCHAR) {
+            return null;
+        }
+        java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
+        if (operands.size() != 1) {
+            return null;
+        }
+        LogicalType operandType = logicalType(operands.get(0), inputType);
+        if (operandType == null || operandType.getTypeRoot() != LogicalTypeRoot.VARCHAR) {
+            return null;
+        }
+        Expression operand =
+                StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, operandType);
+        return operand == null
+                ? null
+                : Expression.newBuilder()
+                        .setStringReverse(StringReverse.newBuilder().setOperand(operand))
                         .build();
     }
 

@@ -339,6 +339,11 @@ type semantics.
 including computed counts. StreamFusion widens the count inside the native plan for DataFusion's
 vectorized kernel; zero and negative counts produce the empty string as in Flink, while null
 values or counts produce null. Fixed-width `CHAR` remains on Flink.
+`REVERSE(value)` is accelerated for supported `VARCHAR` expressions in projections and filters
+using DataFusion's vectorized Unicode reverse kernel. Both engines reverse Unicode scalar values,
+so supplementary characters remain intact while combining marks retain their independent code
+point behavior. Generated parity coverage includes ASCII, multilingual text, supplementary
+characters, combining marks, embedded NUL bytes, empty strings, and nulls.
 `ENDSWITH(value, suffix)` is accelerated in projections and filters when both arguments are
 supported `VARCHAR` expressions. Both literal and computed suffixes lower to DataFusion's
 vectorized UTF-8 predicate, including empty suffixes, Unicode text, and null propagation.
