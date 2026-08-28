@@ -18,6 +18,7 @@ import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.Hexadecimal;
 import tech.streamfusion.proto.plan.v1.Md5;
 import tech.streamfusion.proto.plan.v1.Sha1;
+import tech.streamfusion.proto.plan.v1.Sha2Dynamic;
 import tech.streamfusion.proto.plan.v1.ShaAlgorithm;
 import tech.streamfusion.proto.plan.v1.ShaDigest;
 
@@ -28,7 +29,7 @@ final class StreamFusionBinaryFunctionTranslator extends StreamFusionComplexType
     static String failureReason(Object expression) {
         String function = functionName(expression);
         if ("SHA2".equals(function)) {
-            return "SHA2 stays on Flink when its digest length is null, dynamic, or not one of 224, 256, 384, and 512";
+            return "SHA2 stays on Flink when a non-null literal digest length is not one of 224, 256, 384, and 512 so Flink preserves initialization-time failure";
         }
         if (shaAlgorithm(function) != null) {
             return function + " input or result type is not parity-approved";
@@ -168,6 +169,34 @@ final class StreamFusionBinaryFunctionTranslator extends StreamFusionComplexType
                 ? null
                 : Expression.newBuilder()
                         .setShaDigest(ShaDigest.newBuilder().setOperand(operand).setAlgorithm(algorithm))
+                        .build();
+    }
+
+    static Expression sha2Dynamic(Object expression, RowType inputType, LogicalType expectedType) {
+        if (!"SHA2".equals(functionName(expression)) || expectedType.getTypeRoot() != LogicalTypeRoot.VARCHAR) {
+            return null;
+        }
+        List<?> operands = (List<?>) invoke(expression, "getOperands");
+        if (operands.size() != 2 || integerLiteral(operands.get(1)) != null) {
+            return null;
+        }
+        LogicalType operandType = logicalType(operands.get(0), inputType);
+        LogicalType bitLengthType = logicalType(operands.get(1), inputType);
+        if (operandType == null
+                || operandType.getTypeRoot() != LogicalTypeRoot.VARCHAR
+                || bitLengthType == null
+                || bitLengthType.getTypeRoot() != LogicalTypeRoot.INTEGER) {
+            return null;
+        }
+        Expression operand =
+                StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, operandType);
+        Expression bitLength =
+                StreamFusionProjectionTranslator.projectionExpression(operands.get(1), inputType, bitLengthType);
+        return operand == null || bitLength == null
+                ? null
+                : Expression.newBuilder()
+                        .setSha2Dynamic(
+                                Sha2Dynamic.newBuilder().setOperand(operand).setBitLength(bitLength))
                         .build();
     }
 

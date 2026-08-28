@@ -123,6 +123,7 @@ message Expression {
     Md5 md5 = 92;
     ShaDigest sha_digest = 93;
     Sha1 sha1 = 94;
+    Sha2Dynamic sha2_dynamic = 95;
   }
 }
 
@@ -391,6 +392,11 @@ enum ShaAlgorithm {
 
 message Sha1 {
   Expression operand = 1;
+}
+
+message Sha2Dynamic {
+  Expression operand = 1;
+  Expression bit_length = 2;
 }
 
 message Coalesce {

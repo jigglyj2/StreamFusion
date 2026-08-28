@@ -270,6 +270,21 @@ pub(super) fn create_expression(
                 .ok_or_else(|| DataFusionError::Plan("SHA1 operand is empty".to_string()))?;
             expressions::sha1::create(create_expression(operand, schema)?, schema)
         }
+        Some(proto::expression::Expression::Sha2Dynamic(sha2)) => {
+            let operand = sha2
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("SHA2 operand is empty".to_string()))?;
+            let bit_length = sha2
+                .bit_length
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("SHA2 bit length is empty".to_string()))?;
+            expressions::sha2_dynamic::create(
+                create_expression(operand, schema)?,
+                create_expression(bit_length, schema)?,
+                schema,
+            )
+        }
         Some(proto::expression::Expression::HyperbolicSine(sine)) => {
             let operand = sine
                 .operand

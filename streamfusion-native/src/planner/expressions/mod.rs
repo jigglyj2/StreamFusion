@@ -62,6 +62,7 @@ pub(crate) mod power;
 pub(crate) mod radians;
 pub(crate) mod row_constructor;
 pub(crate) mod sha1;
+pub(crate) mod sha2_dynamic;
 pub(crate) mod sha_digest;
 pub(crate) mod sign;
 pub(crate) mod sine;

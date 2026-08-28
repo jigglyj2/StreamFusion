@@ -391,8 +391,11 @@ UTF-8 value with RustCrypto and emits the same lowercase hexadecimal representat
 projection and filter parity coverage includes empty strings, multilingual text, embedded NUL
 bytes, and null propagation. `SHA2(value, bit_length)` is accelerated when `bit_length` is a
 non-null literal equal to `224`, `256`, `384`, or `512`, reusing the same protobuf and DataFusion
-digest paths as the named functions. Null, invalid, and dynamic lengths remain on Flink with an
-explicit EXPLAIN fallback reason pending their distinct initialization and per-row error semantics.
+digest paths as the named functions. Dynamic `INTEGER` lengths use an isolated vectorized Rust
+expression that selects the digest per row; null values or lengths produce null and unsupported
+runtime lengths fail the job as in Flink. Unsupported non-null literals remain on Flink because
+Flink rejects them during operator initialization rather than row evaluation, and EXPLAIN states
+that distinction.
 
 Cast approval is table-driven. Java maps an explicitly approved Flink source/target pair
 to a stable protobuf cast kind; Rust independently verifies that kind against the actual

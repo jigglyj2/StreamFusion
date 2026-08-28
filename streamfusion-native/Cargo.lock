@@ -2399,6 +2399,7 @@ dependencies = [
  "prost-build",
  "protoc-bin-vendored",
  "sha1",
+ "sha2",
  "tokio",
 ]
 
