@@ -5,7 +5,8 @@ sidebar:
   order: 2
 ---
 
-**Current status:** Simple numeric, decimal, date, time, and local timestamp comparisons are accelerated.
+**Current status:** Simple numeric, decimal, variable-width string and binary, date, time,
+and local timestamp comparisons are accelerated.
 
 ## SQL example
 
@@ -83,10 +84,10 @@ null to false within the expression.
 The null-safe boolean predicates `IS TRUE`, `IS FALSE`, `IS NOT TRUE`, and `IS NOT FALSE`
 are accelerated over any supported boolean expression.
 
-`IS DISTINCT FROM` and `IS NOT DISTINCT FROM` are accelerated for the same numeric and
-temporal column/literal and matching column/column types as ordinary comparisons, plus
-matching boolean column pairs. Unlike `=` and `<>`, they always return a non-null boolean
-and treat two nulls as not distinct.
+`IS DISTINCT FROM` and `IS NOT DISTINCT FROM` are accelerated for the same numeric,
+`VARCHAR`, `VARBINARY`, and temporal column/literal and matching column/column types as
+ordinary comparisons, plus matching boolean column pairs. Unlike `=` and `<>`, they
+always return a non-null boolean and treat two nulls as not distinct.
 This includes matching `TINYINT` and `SMALLINT` column pairs; no widening cast is inserted.
 
 ## Implementation
