@@ -31,6 +31,7 @@ import tech.streamfusion.proto.plan.v1.ArithmeticOperator;
 import tech.streamfusion.proto.plan.v1.BooleanLiteral;
 import tech.streamfusion.proto.plan.v1.BooleanOperator;
 import tech.streamfusion.proto.plan.v1.ComparisonOperator;
+import tech.streamfusion.proto.plan.v1.DateLiteral;
 import tech.streamfusion.proto.plan.v1.DecimalLiteral;
 import tech.streamfusion.proto.plan.v1.DoubleLiteral;
 import tech.streamfusion.proto.plan.v1.Expression;
@@ -99,7 +100,8 @@ public final class StreamFusionCalcTranslator {
                                 && outputRoot != LogicalTypeRoot.FLOAT
                                 && outputRoot != LogicalTypeRoot.DOUBLE
                                 && outputRoot != LogicalTypeRoot.DECIMAL
-                                && outputRoot != LogicalTypeRoot.BOOLEAN)
+                                && outputRoot != LogicalTypeRoot.BOOLEAN
+                                && outputRoot != LogicalTypeRoot.DATE)
                         || projectionExpression(projection, inputType, outputRoot) == null) {
                     return false;
                 }
@@ -186,7 +188,14 @@ public final class StreamFusionCalcTranslator {
             return StreamFusionIdentityCalcOperator.inputReference(
                     inputIndex, StreamFusionIdentityCalcOperator.logicalType(inputType, inputIndex));
         }
-        if (expectedType == LogicalTypeRoot.BOOLEAN) {
+        if (expectedType == LogicalTypeRoot.DATE) {
+            Integer epochDay = integerLiteral(expression);
+            if (epochDay != null) {
+                return Expression.newBuilder()
+                        .setDateLiteral(DateLiteral.newBuilder().setEpochDay(epochDay))
+                        .build();
+            }
+        } else if (expectedType == LogicalTypeRoot.BOOLEAN) {
             Boolean literal = literal(expression, Boolean.class);
             if (literal != null) {
                 return Expression.newBuilder()

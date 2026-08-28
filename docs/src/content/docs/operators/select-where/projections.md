@@ -29,7 +29,7 @@ addition, subtraction, and multiplication. Decimal operands retain the precision
 scale assigned to each expression by Flink's planner, including the precision growth of
 intermediate results. Signed integer overflow follows Flink's wrapping semantics.
 Floating-point literals must be finite. Constant `TRUE` and `FALSE` projections are also
-accelerated.
+accelerated, as are constant `DATE` values, including dates before the Unix epoch.
 
 Division, remainder, unary arithmetic, non-decimal mixed-width arithmetic, non-finite
 floating-point literals, arithmetic on other types, casts, and functions currently fall
