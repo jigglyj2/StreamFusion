@@ -96,6 +96,12 @@ fn create_expression(
                 schema,
             )
         }
+        Some(proto::expression::Expression::Cardinality(cardinality)) => {
+            let collection = cardinality.collection.as_ref().ok_or_else(|| {
+                DataFusionError::Plan("cardinality is missing its collection".into())
+            })?;
+            expressions::cardinality::create(create_expression(collection, schema)?, schema)
+        }
         Some(proto::expression::Expression::IntegerLiteral(literal)) => Ok(Arc::new(Literal::new(
             ScalarValue::Int32(Some(literal.value)),
         ))),

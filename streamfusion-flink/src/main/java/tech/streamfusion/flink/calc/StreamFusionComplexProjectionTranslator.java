@@ -21,6 +21,7 @@ import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.MapType;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.proto.plan.v1.ArrayElement;
+import tech.streamfusion.proto.plan.v1.Cardinality;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.MapElement;
 import tech.streamfusion.proto.plan.v1.StructField;
@@ -28,6 +29,34 @@ import tech.streamfusion.proto.plan.v1.StructField;
 /** Complex-type expressions kept separate from the scalar Calc translator. */
 final class StreamFusionComplexProjectionTranslator extends StreamFusionRexSupport {
     private StreamFusionComplexProjectionTranslator() {}
+
+    static String failureReason(Object expression, RowType inputType) {
+        String function = functionName(expression);
+        java.util.List<?> operands = hasNoArgMethod(expression, "getOperands")
+                ? (java.util.List<?>) invoke(expression, "getOperands")
+                : java.util.Collections.emptyList();
+        if ("CARDINALITY".equals(function) && operands.size() == 1) {
+            LogicalType collection = logicalType(operands.get(0), inputType);
+            if (collection instanceof ArrayType && ((ArrayType) collection).getElementType() instanceof ArrayType) {
+                return "nested ARRAY CARDINALITY stays on Flink because DataFusion recursively counts leaf "
+                        + "elements while Flink counts the outer array";
+            }
+        }
+        String kind = hasNoArgMethod(expression, "getKind")
+                ? invoke(expression, "getKind").toString()
+                : "";
+        if ("ITEM".equals(kind) && operands.size() == 2) {
+            LogicalType collection = logicalType(operands.get(0), inputType);
+            if (collection instanceof ArrayType) {
+                Integer index = integerLiteral(operands.get(1));
+                if (index == null || index <= 0) {
+                    return "ARRAY access requires a positive integer literal index; zero, negative, and "
+                            + "computed indexes have not passed Flink parity coverage";
+                }
+            }
+        }
+        return null;
+    }
 
     static Expression arrayElement(Object expression, RowType inputType, LogicalType expectedType) {
         if (!"ITEM"
@@ -91,6 +120,31 @@ final class StreamFusionComplexProjectionTranslator extends StreamFusionRexSuppo
                 ? null
                 : Expression.newBuilder()
                         .setMapElement(MapElement.newBuilder().setMap(map).setKey(key))
+                        .build();
+    }
+
+    static Expression cardinality(Object expression, RowType inputType, LogicalType expectedType) {
+        if (!"CARDINALITY".equals(functionName(expression))
+                || expectedType.getTypeRoot() != org.apache.flink.table.types.logical.LogicalTypeRoot.INTEGER) {
+            return null;
+        }
+        java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
+        if (operands.size() != 1) {
+            return null;
+        }
+        LogicalType collectionType = logicalType(operands.get(0), inputType);
+        if (!(collectionType instanceof ArrayType) && !(collectionType instanceof MapType)) {
+            return null;
+        }
+        if (collectionType instanceof ArrayType && ((ArrayType) collectionType).getElementType() instanceof ArrayType) {
+            return null;
+        }
+        Expression collection =
+                StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, collectionType);
+        return collection == null
+                ? null
+                : Expression.newBuilder()
+                        .setCardinality(Cardinality.newBuilder().setCollection(collection))
                         .build();
     }
 

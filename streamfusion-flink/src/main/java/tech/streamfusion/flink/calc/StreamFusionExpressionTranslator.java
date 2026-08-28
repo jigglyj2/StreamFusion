@@ -66,6 +66,10 @@ abstract class StreamFusionExpressionTranslator extends StreamFusionProjectionTr
         if (translated != null) {
             return null;
         }
+        String complexFailure = StreamFusionComplexProjectionTranslator.failureReason(expression, inputType);
+        if (complexFailure != null) {
+            return path + "/" + expressionName(expression) + ": " + complexFailure + " (" + expression + ")";
+        }
         if (hasNoArgMethod(expression, "getKind")
                 && "SEARCH".equals(invoke(expression, "getKind").toString())) {
             return path + "/SEARCH: search argument shape or endpoint type is not parity-approved (" + expression + ")";
