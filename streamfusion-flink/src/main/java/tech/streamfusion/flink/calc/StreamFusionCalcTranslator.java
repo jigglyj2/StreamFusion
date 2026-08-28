@@ -480,7 +480,9 @@ public final class StreamFusionCalcTranslator {
                             inputType.getTypeAt(leftInput).getTypeRoot())
                     || (inputType.getTypeAt(leftInput).getTypeRoot() == LogicalTypeRoot.BOOLEAN
                             && operator != ComparisonOperator.COMPARISON_OPERATOR_EQUAL
-                            && operator != ComparisonOperator.COMPARISON_OPERATOR_NOT_EQUAL)) {
+                            && operator != ComparisonOperator.COMPARISON_OPERATOR_NOT_EQUAL
+                            && operator != ComparisonOperator.COMPARISON_OPERATOR_IS_DISTINCT_FROM
+                            && operator != ComparisonOperator.COMPARISON_OPERATOR_IS_NOT_DISTINCT_FROM)) {
                 return null;
             }
             return new StreamFusionColumnComparison(leftInput, rightInput, inputType.getTypeAt(leftInput), operator);
@@ -618,6 +620,10 @@ public final class StreamFusionCalcTranslator {
                 return ComparisonOperator.COMPARISON_OPERATOR_GREATER_THAN;
             case "GREATER_THAN_OR_EQUAL":
                 return ComparisonOperator.COMPARISON_OPERATOR_GREATER_THAN_OR_EQUAL;
+            case "IS_DISTINCT_FROM":
+                return ComparisonOperator.COMPARISON_OPERATOR_IS_DISTINCT_FROM;
+            case "IS_NOT_DISTINCT_FROM":
+                return ComparisonOperator.COMPARISON_OPERATOR_IS_NOT_DISTINCT_FROM;
             default:
                 return null;
         }

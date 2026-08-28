@@ -157,6 +157,19 @@ class SqlParityTest {
     }
 
     @Test
+    void nativeNullSafeComparisonProjectionsMatchFlinkByteForByte() throws Exception {
+        String sql = "SELECT id IS DISTINCT FROM 2, id IS NOT DISTINCT FROM 2, "
+                + "left_id IS DISTINCT FROM right_id, left_id IS NOT DISTINCT FROM right_id, "
+                + "left_flag IS DISTINCT FROM right_flag, left_flag IS NOT DISTINCT FROM right_flag "
+                + "FROM (VALUES (1, 1, 2, TRUE, FALSE), (2, 2, 2, TRUE, TRUE), "
+                + "(3, 3, 2, FALSE, FALSE)) "
+                + "AS input(id, left_id, right_id, left_flag, right_flag)";
+        assertParity(sql, true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    @Test
     void nativeDateLiteralProjectionsMatchFlinkByteForByte() throws Exception {
         String sql = "SELECT DATE '1969-12-31', DATE '1970-01-01', DATE '2026-08-27' "
                 + "FROM (VALUES (1), (2)) AS input(id) WHERE id >= 1";

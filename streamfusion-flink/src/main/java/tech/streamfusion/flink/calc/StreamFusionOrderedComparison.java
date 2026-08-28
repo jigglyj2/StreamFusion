@@ -40,7 +40,9 @@ abstract class StreamFusionOrderedComparison implements StreamFusionCondition {
     @Override
     public final Boolean evaluate(RowData row) {
         if (row.isNullAt(inputIndex)) {
-            return null;
+            return operator == ComparisonOperator.COMPARISON_OPERATOR_IS_DISTINCT_FROM
+                    ? true
+                    : operator == ComparisonOperator.COMPARISON_OPERATOR_IS_NOT_DISTINCT_FROM ? false : null;
         }
         int comparison = compareInputToLiteral(row);
         if (!inputOnLeft) {
@@ -59,6 +61,10 @@ abstract class StreamFusionOrderedComparison implements StreamFusionCondition {
                 return comparison > 0;
             case COMPARISON_OPERATOR_GREATER_THAN_OR_EQUAL:
                 return comparison >= 0;
+            case COMPARISON_OPERATOR_IS_DISTINCT_FROM:
+                return comparison != 0;
+            case COMPARISON_OPERATOR_IS_NOT_DISTINCT_FROM:
+                return comparison == 0;
             default:
                 throw new IllegalStateException("Unsupported comparison operator " + operator);
         }

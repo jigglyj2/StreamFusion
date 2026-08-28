@@ -237,6 +237,8 @@ fn create_expression(
                 proto::ComparisonOperator::LessThanOrEqual => Operator::LtEq,
                 proto::ComparisonOperator::GreaterThan => Operator::Gt,
                 proto::ComparisonOperator::GreaterThanOrEqual => Operator::GtEq,
+                proto::ComparisonOperator::IsDistinctFrom => Operator::IsDistinctFrom,
+                proto::ComparisonOperator::IsNotDistinctFrom => Operator::IsNotDistinctFrom,
                 proto::ComparisonOperator::Unspecified => {
                     return Err(DataFusionError::Plan(
                         "comparison operator is unspecified".to_string(),

@@ -98,6 +98,25 @@ class ArrowCDataBridgeTest {
     }
 
     @Test
+    void nullSafeComparisonsReturnNonNullResultsForNullableIntegers() {
+        RowType inputType = RowType.of(new IntType(true));
+        RowType outputType = RowType.of(new BooleanType(false), new BooleanType(false));
+        List<RowData> rows = List.of(GenericRowData.of((Object) null), GenericRowData.of(2), GenericRowData.of(3));
+
+        try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+                ArrowRowDataBatch input = ArrowRowDataBatch.transpose(rows, inputType, allocator);
+                ArrowRowDataBatch output =
+                        ArrowCDataBridge.execute(nullSafeComparisonPlan(), input, outputType, allocator)) {
+            assertThat(output.rowView(0).getBoolean(0)).isTrue();
+            assertThat(output.rowView(0).getBoolean(1)).isFalse();
+            assertThat(output.rowView(1).getBoolean(0)).isFalse();
+            assertThat(output.rowView(1).getBoolean(1)).isTrue();
+            assertThat(output.rowView(2).getBoolean(0)).isTrue();
+            assertThat(output.rowView(2).getBoolean(1)).isFalse();
+        }
+    }
+
+    @Test
     void importsAnEmptyNativeResultWithoutLeakingItsSchemaOrBuffers() {
         RowType rowType = RowType.of(new IntType(false));
 
@@ -359,6 +378,30 @@ class ArrowCDataBridgeTest {
                 TruthTestOperator.TRUTH_TEST_OPERATOR_IS_NOT_FALSE)) {
             calc.addProjections(Expression.newBuilder()
                     .setTruthTest(TruthTest.newBuilder().setOperand(reference).setOperator(operator)));
+        }
+        return NativePlan.newBuilder()
+                .setProtocolVersion(1)
+                .setRoot(Operator.newBuilder().setCalc(calc))
+                .build()
+                .toByteArray();
+    }
+
+    private static byte[] nullSafeComparisonPlan() {
+        Expression reference = Expression.newBuilder()
+                .setInputReference(InputReference.newBuilder().setIndex(0))
+                .build();
+        Expression literal = Expression.newBuilder()
+                .setIntegerLiteral(IntegerLiteral.newBuilder().setValue(2))
+                .build();
+        Calc.Builder calc = Calc.newBuilder().setInput(Operator.newBuilder().setInput(Input.newBuilder()));
+        for (ComparisonOperator operator : List.of(
+                ComparisonOperator.COMPARISON_OPERATOR_IS_DISTINCT_FROM,
+                ComparisonOperator.COMPARISON_OPERATOR_IS_NOT_DISTINCT_FROM)) {
+            calc.addProjections(Expression.newBuilder()
+                    .setComparison(Comparison.newBuilder()
+                            .setLeft(reference)
+                            .setRight(literal)
+                            .setOperator(operator)));
         }
         return NativePlan.newBuilder()
                 .setProtocolVersion(1)

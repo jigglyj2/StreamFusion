@@ -47,7 +47,15 @@ final class StreamFusionColumnComparison implements StreamFusionCondition {
 
     @Override
     public Boolean evaluate(RowData row) {
-        if (row.isNullAt(leftIndex) || row.isNullAt(rightIndex)) {
+        boolean leftNull = row.isNullAt(leftIndex);
+        boolean rightNull = row.isNullAt(rightIndex);
+        if (operator == ComparisonOperator.COMPARISON_OPERATOR_IS_DISTINCT_FROM) {
+            return leftNull != rightNull || (!leftNull && compare(row) != 0);
+        }
+        if (operator == ComparisonOperator.COMPARISON_OPERATOR_IS_NOT_DISTINCT_FROM) {
+            return leftNull == rightNull && (leftNull || compare(row) == 0);
+        }
+        if (leftNull || rightNull) {
             return null;
         }
         int comparison = compare(row);
