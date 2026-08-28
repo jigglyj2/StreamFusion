@@ -96,6 +96,11 @@ split expression conversion, state, algorithms, or other coherent responsibiliti
 an operator-specific submodule; do not accumulate unrelated operators or a large
 monolithic planner implementation in one file.
 
+Keep Java and Rust source and test files focused on one coherent responsibility. Split
+operator families, expression families, protocol fixtures, and shared test machinery
+into appropriately named files before they become megafiles; do not grow catch-all
+translator, bridge, or parity-test classes.
+
 Use the Arrow C Data and C Stream interfaces for production Java/Rust batch transfer,
 with explicit producer-owned release callbacks. Treat sliced arrays as a compatibility
 boundary: before exposing Rust-produced slices to Arrow Java or a RowData view, normalize
