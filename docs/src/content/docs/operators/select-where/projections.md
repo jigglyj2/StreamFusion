@@ -63,6 +63,10 @@ Direct constant character literals are encoded as UTF-8 and accelerated. Charact
 expressions that require a planner-inserted cast still fall back with the whole Calc.
 Direct hexadecimal binary literals are accelerated with their exact byte sequence and
 fixed width. Cast-derived and computed binary expressions remain on Flink.
+Typed `NULL` literals are accelerated for the supported scalar projection types except
+fixed-width `BINARY(n)` and `TIMESTAMP_LTZ`. The protobuf carries the declared type so
+DataFusion materializes a correctly typed all-null Arrow vector rather than an untyped
+Arrow `Null` vector.
 
 Division or remainder by zero or a non-literal divisor, decimal and floating-point
 division and remainder, unary plus, non-decimal mixed-width arithmetic, non-finite

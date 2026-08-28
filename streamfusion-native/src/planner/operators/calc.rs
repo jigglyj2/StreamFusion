@@ -86,6 +86,9 @@ fn create_expression(
         Some(proto::expression::Expression::DoubleLiteral(literal)) => Ok(Arc::new(Literal::new(
             ScalarValue::Float64(Some(literal.value)),
         ))),
+        Some(proto::expression::Expression::NullLiteral(literal)) => {
+            expressions::null_literal::create(literal)
+        }
         Some(proto::expression::Expression::DateLiteral(literal)) => Ok(Arc::new(Literal::new(
             ScalarValue::Date32(Some(literal.epoch_day)),
         ))),

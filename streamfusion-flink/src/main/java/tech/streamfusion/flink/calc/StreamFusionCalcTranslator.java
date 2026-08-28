@@ -45,6 +45,7 @@ import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.FloatLiteral;
 import tech.streamfusion.proto.plan.v1.IntegerLiteral;
 import tech.streamfusion.proto.plan.v1.LongLiteral;
+import tech.streamfusion.proto.plan.v1.NullLiteral;
 import tech.streamfusion.proto.plan.v1.ShortLiteral;
 import tech.streamfusion.proto.plan.v1.StringLiteral;
 import tech.streamfusion.proto.plan.v1.TimeLiteral;
@@ -67,10 +68,8 @@ public final class StreamFusionCalcTranslator {
 
         List<Expression> nativeProjections = new ArrayList<>(projections.size());
         for (int outputIndex = 0; outputIndex < projections.size(); outputIndex++) {
-            nativeProjections.add(projectionExpression(
-                    projections.get(outputIndex),
-                    inputType,
-                    outputType.getTypeAt(outputIndex).getTypeRoot()));
+            nativeProjections.add(
+                    projectionExpression(projections.get(outputIndex), inputType, outputType.getTypeAt(outputIndex)));
         }
         StreamFusionCondition nativeCondition = condition(condition, inputType);
         StreamFusionIdentityCalcOperator operator =
@@ -122,7 +121,7 @@ public final class StreamFusionCalcTranslator {
                                 && outputRoot != LogicalTypeRoot.VARCHAR
                                 && outputRoot != LogicalTypeRoot.BINARY
                                 && outputRoot != LogicalTypeRoot.VARBINARY)
-                        || projectionExpression(projection, inputType, outputRoot) == null) {
+                        || projectionExpression(projection, inputType, outputType.getTypeAt(outputIndex)) == null) {
                     return false;
                 }
             }
@@ -208,6 +207,17 @@ public final class StreamFusionCalcTranslator {
                 "IS_NOT_NULL".equals(kind),
                 StreamFusionIdentityCalcOperator.inputReference(
                         inputIndex, StreamFusionIdentityCalcOperator.logicalType(inputType, inputIndex)));
+    }
+
+    private static Expression projectionExpression(
+            Object expression, RowType inputType, org.apache.flink.table.types.logical.LogicalType expectedType) {
+        if (isNullLiteral(expression) && supportsNullLiteral(expectedType.getTypeRoot())) {
+            return Expression.newBuilder()
+                    .setNullLiteral(NullLiteral.newBuilder()
+                            .setType(StreamFusionIdentityCalcOperator.logicalType(expectedType)))
+                    .build();
+        }
+        return projectionExpression(expression, inputType, expectedType.getTypeRoot());
     }
 
     private static Expression projectionExpression(Object expression, RowType inputType, LogicalTypeRoot expectedType) {
@@ -676,6 +686,27 @@ public final class StreamFusionCalcTranslator {
         }
         Object value = invoke(expression, "getValueAs", Class.class, literalType);
         return literalType.isInstance(value) ? literalType.cast(value) : null;
+    }
+
+    private static boolean isNullLiteral(Object expression) {
+        return expression.getClass().getSimpleName().equals("RexLiteral") && invoke(expression, "getValue") == null;
+    }
+
+    private static boolean supportsNullLiteral(LogicalTypeRoot type) {
+        return type == LogicalTypeRoot.TINYINT
+                || type == LogicalTypeRoot.SMALLINT
+                || type == LogicalTypeRoot.INTEGER
+                || type == LogicalTypeRoot.BIGINT
+                || type == LogicalTypeRoot.FLOAT
+                || type == LogicalTypeRoot.DOUBLE
+                || type == LogicalTypeRoot.BOOLEAN
+                || type == LogicalTypeRoot.CHAR
+                || type == LogicalTypeRoot.VARCHAR
+                || type == LogicalTypeRoot.VARBINARY
+                || type == LogicalTypeRoot.DECIMAL
+                || type == LogicalTypeRoot.DATE
+                || type == LogicalTypeRoot.TIME_WITHOUT_TIME_ZONE
+                || type == LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE;
     }
 
     private static TimestampData timestampLiteral(Object expression) {

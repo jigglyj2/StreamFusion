@@ -52,4 +52,17 @@ class NativePlanTest {
                         .getIndex())
                 .isZero();
     }
+
+    @Test
+    void typedNullLiteralRoundTripsThroughProtobuf() throws Exception {
+        LogicalType decimalType = LogicalType.newBuilder()
+                .setNullable(true)
+                .setDecimal(DecimalType.newBuilder().setPrecision(20).setScale(4))
+                .build();
+        Expression expression = Expression.newBuilder()
+                .setNullLiteral(NullLiteral.newBuilder().setType(decimalType))
+                .build();
+
+        assertThat(Expression.parseFrom(expression.toByteArray())).isEqualTo(expression);
+    }
 }

@@ -116,7 +116,10 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
     }
 
     static LogicalType logicalType(RowType inputType, int inputIndex) {
-        org.apache.flink.table.types.logical.LogicalType flinkType = inputType.getTypeAt(inputIndex);
+        return logicalType(inputType.getTypeAt(inputIndex));
+    }
+
+    static LogicalType logicalType(org.apache.flink.table.types.logical.LogicalType flinkType) {
         LogicalType.Builder type = LogicalType.newBuilder().setNullable(flinkType.isNullable());
         switch (flinkType.getTypeRoot()) {
             case TINYINT:

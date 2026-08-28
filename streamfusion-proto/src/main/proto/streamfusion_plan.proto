@@ -52,7 +52,12 @@ message Expression {
     UnaryMinus unary_minus = 21;
     TruthTest truth_test = 22;
     Cast cast = 23;
+    NullLiteral null_literal = 24;
   }
+}
+
+message NullLiteral {
+  LogicalType type = 1;
 }
 
 message IntegerLiteral {

@@ -164,6 +164,33 @@ class SqlParityTest {
                                 + "FROM (VALUES (1), (2)) AS input(id) WHERE id >= 1"));
     }
 
+    @ParameterizedTest(name = "NULL AS {0}")
+    @MethodSource("typedNullProjectionTypes")
+    void nativeTypedNullProjectionsMatchFlinkByteForByte(String type) throws Exception {
+        String sql = "SELECT CAST(NULL AS " + type + ") FROM (VALUES (1), (2)) AS input(id) WHERE id >= 1";
+        assertParity(sql, true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    private static Stream<String> typedNullProjectionTypes() {
+        return Stream.of(
+                "TINYINT",
+                "SMALLINT",
+                "INT",
+                "BIGINT",
+                "FLOAT",
+                "DOUBLE",
+                "BOOLEAN",
+                "CHAR(5)",
+                "VARCHAR(12)",
+                "VARBINARY(8)",
+                "DECIMAL(20, 4)",
+                "DATE",
+                "TIME(6)",
+                "TIMESTAMP(9)");
+    }
+
     @Test
     void nativeBooleanExpressionProjectionsMatchFlinkByteForByte() throws Exception {
         String sql = "SELECT NOT left_flag, left_flag AND right_flag, left_flag OR right_flag, "
