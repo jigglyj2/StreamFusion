@@ -7,13 +7,20 @@ StreamFusion uses an **all-or-nothing** planning rule. A plan is accelerated onl
 
 Like Comet, StreamFusion performs this selection with a physical-plan rule and distinct
 accelerator nodes. Flink first builds its normal exec graph. The StreamFusion graph
-processor proves whole-plan eligibility and replaces eligible `StreamExecCalc` nodes
-with `StreamFusionExecCalc` nodes. The original Flink nodes are neither modified nor
+processor proves whole-plan eligibility and replaces eligible `StreamExecCalc` and
+`StreamExecUnion` nodes with distinct `StreamFusionExecCalc` and
+`StreamFusionExecUnion` nodes. The original Flink nodes are neither modified nor
 given native execution branches; if eligibility fails, the original graph is returned
 unchanged. At translation time, the outermost `StreamFusionExecCalc` collects every
 adjacent StreamFusion Calc below it, preserves their input-to-output order, and creates
 one Flink runtime operator for the connected chain. A non-StreamFusion node ends the
 chain and therefore defines a native-plan boundary.
+
+Streaming `UNION ALL` is a deliberate exception to native lowering, but not to physical
+coverage. Flink defines it as zero-work topology wiring, so `StreamFusionExecUnion`
+preserves the `UnionTransformation` instead of introducing a DataFusion merge operator.
+This keeps Flink in control of watermarks, barriers, scheduling, and input interleaving;
+accelerated native blocks remain on the union's individual branches.
 
 ```text
 Flink source

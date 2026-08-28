@@ -18,7 +18,7 @@ This matrix follows the query operations documented by Flink 2.3, including the 
 | [OVER aggregation](over-aggregation/) | **No** | Yes | Native ordered state and aggregate kernels |
 | [Joins](joins/) | **No** | By join type | DataFusion batch joins or custom streaming state |
 | [Window joins](window-join/) | **No** | Yes | Custom window-aware streaming join |
-| [Set operations](set-operations/) | **No** | By operation | DataFusion set kernels or native keyed state |
+| [Set operations](set-operations/) | **Partial** (`UNION ALL`) | By operation | Flink-compatible union wiring; DataFusion or native keyed state for future operations |
 | [ORDER BY](order-by/) | **No** | Bounded inputs | DataFusion sort |
 | [LIMIT](limit/) | **No** | Bounded inputs | DataFusion limit |
 | [Top-N](top-n/) | **No** | Yes | Custom keyed ranking state |
