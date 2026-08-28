@@ -183,6 +183,17 @@ fn create_expression(
                 .ok_or_else(|| DataFusionError::Plan("LIKE operand is empty".to_string()))?;
             expressions::like::create(create_expression(operand, schema)?, &like.pattern, schema)
         }
+        Some(proto::expression::Expression::StartsWith(starts_with)) => {
+            let operand = starts_with
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("STARTS_WITH operand is empty".to_string()))?;
+            expressions::starts_with::create(
+                create_expression(operand, schema)?,
+                &starts_with.prefix,
+                schema,
+            )
+        }
         Some(proto::expression::Expression::DateLiteral(literal)) => Ok(Arc::new(Literal::new(
             ScalarValue::Date32(Some(literal.epoch_day)),
         ))),

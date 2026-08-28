@@ -1268,6 +1268,27 @@ class SqlParityTest {
                 Arguments.of("negated", "metric NOT LIKE '%x%'"));
     }
 
+    @ParameterizedTest(name = "STARTS_WITH {0}")
+    @ValueSource(strings = {"", "ab", "😀", "%", "_", "你好"})
+    void nativeStartsWithMatchesFlinkByteForByte(String prefix) throws Exception {
+        String escapedPrefix = prefix.replace("'", "''");
+        assertDataStreamParity(
+                "SELECT metric FROM starts_with_input WHERE STARTSWITH(metric, '" + escapedPrefix + "')",
+                Types.STRING,
+                Arrays.asList(
+                        Row.of(""),
+                        Row.of("ab"),
+                        Row.of("abc"),
+                        Row.of("😀x"),
+                        Row.of("%literal"),
+                        Row.of("_literal"),
+                        Row.of("你好世界"),
+                        Row.of((Object) null)),
+                "starts_with_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
     @ParameterizedTest(name = "VARBINARY {0}")
     @MethodSource("nativeVarbinaryDataStreamRangeCases")
     void nativeVarbinaryDataStreamRangesMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {

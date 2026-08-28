@@ -64,6 +64,7 @@ message Expression {
     Upper upper = 33;
     Concat concat = 34;
     Like like = 35;
+    StartsWith starts_with = 36;
   }
 }
 
@@ -116,6 +117,11 @@ message Concat {
 message Like {
   Expression operand = 1;
   string pattern = 2;
+}
+
+message StartsWith {
+  Expression operand = 1;
+  string prefix = 2;
 }
 
 message NullLiteral {

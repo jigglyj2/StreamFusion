@@ -111,6 +111,11 @@ Dynamic patterns, fixed-width `CHAR`, backslash-containing patterns, and explici
 clauses cause whole-Calc fallback until their coercion and escape rules have dedicated parity
 coverage.
 
+`STARTSWITH` is accelerated for a direct `VARCHAR` column and a literal prefix. Prefix
+characters are matched literally (including `%` and `_`), an empty prefix matches every
+non-null string, and a null input remains unknown. Dynamic prefixes, `CHAR`, and binary
+arguments currently fall back pending separate type-specific coverage.
+
 ## Implementation
 
 Java encodes literal or column operands as protobuf expressions. Rust lowers them to DataFusion

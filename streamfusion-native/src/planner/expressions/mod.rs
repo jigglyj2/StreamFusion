@@ -18,5 +18,6 @@ pub(crate) mod like;
 pub(crate) mod lower;
 pub(crate) mod null_literal;
 pub(crate) mod sign;
+pub(crate) mod starts_with;
 pub(crate) mod upper;
 mod wrapping_cast;
