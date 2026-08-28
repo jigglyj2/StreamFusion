@@ -36,6 +36,7 @@ pub(crate) mod lower;
 pub(crate) mod map_element;
 pub(crate) mod null_literal;
 pub(crate) mod sign;
+pub(crate) mod split;
 pub(crate) mod starts_with;
 pub(crate) mod struct_field;
 pub(crate) mod substring;

@@ -143,6 +143,14 @@ pub(super) fn create(
             }
             expressions::array_join::create(arguments, schema)
         }
+        Split(split) => binary(
+            &split.value,
+            &split.delimiter,
+            "split is missing its value",
+            "split is missing its delimiter",
+            schema,
+            expressions::split::create,
+        ),
         ArrayDistinct(distinct) => expressions::array_distinct::create(
             create_expression(
                 required(&distinct.array, "array distinct is missing its array")?,

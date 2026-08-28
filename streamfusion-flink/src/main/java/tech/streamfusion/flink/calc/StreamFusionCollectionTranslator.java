@@ -26,6 +26,7 @@ import tech.streamfusion.proto.plan.v1.ArrayRemove;
 import tech.streamfusion.proto.plan.v1.ArrayReverse;
 import tech.streamfusion.proto.plan.v1.Cardinality;
 import tech.streamfusion.proto.plan.v1.Expression;
+import tech.streamfusion.proto.plan.v1.Split;
 
 /** Collection functions kept separate from complex access-path translation. */
 final class StreamFusionCollectionTranslator extends StreamFusionComplexTypeSupport {
@@ -72,6 +73,15 @@ final class StreamFusionCollectionTranslator extends StreamFusionComplexTypeSupp
             }
             if (operands.size() == 3 && literal(operands.get(2), String.class) == null) {
                 return "ARRAY_JOIN stays on Flink unless its null replacement is a non-null literal because DataFusion applies one replacement to the whole batch";
+            }
+        }
+        if ("SPLIT".equals(function) && operands.size() == 2) {
+            String delimiter = literal(operands.get(1), String.class);
+            if (delimiter == null) {
+                return "SPLIT stays on Flink unless its delimiter is a non-null literal";
+            }
+            if (delimiter.isEmpty()) {
+                return "SPLIT with an empty delimiter stays on Flink because Flink splits into Unicode characters while DataFusion retains the whole string";
             }
         }
         return null;
@@ -312,6 +322,34 @@ final class StreamFusionCollectionTranslator extends StreamFusionComplexTypeSupp
             join.setNullReplacement(stringLiteral(replacement));
         }
         return Expression.newBuilder().setArrayJoin(join).build();
+    }
+
+    static Expression split(Object expression, RowType inputType, LogicalType expectedType) {
+        if (!"SPLIT".equals(functionName(expression)) || !(expectedType instanceof ArrayType)) {
+            return null;
+        }
+        ArrayType resultType = (ArrayType) expectedType;
+        if (resultType.getElementType().getTypeRoot() != LogicalTypeRoot.VARCHAR) {
+            return null;
+        }
+        java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
+        if (operands.size() != 2) {
+            return null;
+        }
+        LogicalType valueType = logicalType(operands.get(0), inputType);
+        String delimiter = literal(operands.get(1), String.class);
+        if (valueType == null
+                || valueType.getTypeRoot() != LogicalTypeRoot.VARCHAR
+                || delimiter == null
+                || delimiter.isEmpty()) {
+            return null;
+        }
+        Expression value = StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, valueType);
+        return value == null
+                ? null
+                : Expression.newBuilder()
+                        .setSplit(Split.newBuilder().setValue(value).setDelimiter(stringLiteral(delimiter)))
+                        .build();
     }
 
     private static Expression stringLiteral(String value) {

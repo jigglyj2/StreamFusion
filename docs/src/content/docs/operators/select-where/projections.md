@@ -172,6 +172,11 @@ which skips null elements when no replacement is supplied and substitutes the re
 one is supplied. Null arrays, empty arrays, empty delimiters, and empty replacements preserve Flink
 behavior. Dynamic or null delimiter/replacement arguments stay on Flink with an EXPLAIN reason
 because DataFusion applies those controls once per batch rather than once per row.
+`SPLIT` is accelerated for `VARCHAR` values with a nonempty, non-null literal delimiter. Rust
+lowers it to DataFusion's vectorized `string_to_array` expression, preserving leading, trailing,
+and consecutive empty fields as well as null input strings. Empty delimiters stay on Flink with
+an EXPLAIN reason because Flink splits the input into Unicode characters while DataFusion retains
+it as one element; null and dynamic delimiters also remain on Flink for now.
 `ARRAY_DISTINCT` is accelerated for Arrow-compatible element types, including nested `ROW`
 elements. It preserves the first occurrence order, retains at most one null element, and
 preserves null and empty arrays. Rust lowers it directly to DataFusion's vectorized set kernel;

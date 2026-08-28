@@ -85,6 +85,7 @@ message Expression {
     ArrayMinimum array_minimum = 54;
     ArrayMaximum array_maximum = 55;
     ArrayJoin array_join = 56;
+    Split split = 57;
   }
 }
 
@@ -175,6 +176,11 @@ message ArrayJoin {
   Expression array = 1;
   Expression delimiter = 2;
   optional Expression null_replacement = 3;
+}
+
+message Split {
+  Expression value = 1;
+  Expression delimiter = 2;
 }
 
 message Coalesce {
