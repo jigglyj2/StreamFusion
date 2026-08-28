@@ -21,6 +21,7 @@ import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.StringData;
 import org.apache.flink.table.data.TimestampData;
 import org.apache.flink.table.types.logical.ArrayType;
+import org.apache.flink.table.types.logical.BooleanType;
 import org.apache.flink.table.types.logical.DecimalType;
 import org.apache.flink.table.types.logical.DoubleType;
 import org.apache.flink.table.types.logical.FloatType;
@@ -52,6 +53,8 @@ import tech.streamfusion.proto.plan.v1.NullCheck;
 import tech.streamfusion.proto.plan.v1.Operator;
 import tech.streamfusion.proto.plan.v1.TimeLiteral;
 import tech.streamfusion.proto.plan.v1.TimestampLiteral;
+import tech.streamfusion.proto.plan.v1.TruthTest;
+import tech.streamfusion.proto.plan.v1.TruthTestOperator;
 
 class ArrowCDataBridgeTest {
     @Test
@@ -69,6 +72,28 @@ class ArrowCDataBridgeTest {
             assertThat(output.size()).isEqualTo(2);
             assertThat(output.rowView(0).getInt(0)).isEqualTo(2);
             assertThat(output.rowView(1).getInt(0)).isEqualTo(3);
+        }
+    }
+
+    @Test
+    void truthTestsReturnNonNullResultsForNullableBooleans() {
+        RowType inputType = RowType.of(new BooleanType(true));
+        RowType outputType = RowType.of(
+                new BooleanType(false), new BooleanType(false), new BooleanType(false), new BooleanType(false));
+        List<RowData> rows =
+                List.of(GenericRowData.of(true), GenericRowData.of(false), GenericRowData.of((Object) null));
+
+        try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+                ArrowRowDataBatch input = ArrowRowDataBatch.transpose(rows, inputType, allocator);
+                ArrowRowDataBatch output = ArrowCDataBridge.execute(truthTestPlan(), input, outputType, allocator)) {
+            assertThat(output.rowView(0).getBoolean(0)).isTrue();
+            assertThat(output.rowView(0).getBoolean(1)).isFalse();
+            assertThat(output.rowView(1).getBoolean(0)).isFalse();
+            assertThat(output.rowView(1).getBoolean(1)).isTrue();
+            assertThat(output.rowView(2).getBoolean(0)).isFalse();
+            assertThat(output.rowView(2).getBoolean(1)).isFalse();
+            assertThat(output.rowView(2).getBoolean(2)).isTrue();
+            assertThat(output.rowView(2).getBoolean(3)).isTrue();
         }
     }
 
@@ -314,6 +339,26 @@ class ArrowCDataBridgeTest {
         for (int inputIndex : inputIndexes) {
             calc.addProjections(Expression.newBuilder()
                     .setInputReference(InputReference.newBuilder().setIndex(inputIndex)));
+        }
+        return NativePlan.newBuilder()
+                .setProtocolVersion(1)
+                .setRoot(Operator.newBuilder().setCalc(calc))
+                .build()
+                .toByteArray();
+    }
+
+    private static byte[] truthTestPlan() {
+        Expression reference = Expression.newBuilder()
+                .setInputReference(InputReference.newBuilder().setIndex(0))
+                .build();
+        Calc.Builder calc = Calc.newBuilder().setInput(Operator.newBuilder().setInput(Input.newBuilder()));
+        for (TruthTestOperator operator : List.of(
+                TruthTestOperator.TRUTH_TEST_OPERATOR_IS_TRUE,
+                TruthTestOperator.TRUTH_TEST_OPERATOR_IS_FALSE,
+                TruthTestOperator.TRUTH_TEST_OPERATOR_IS_NOT_TRUE,
+                TruthTestOperator.TRUTH_TEST_OPERATOR_IS_NOT_FALSE)) {
+            calc.addProjections(Expression.newBuilder()
+                    .setTruthTest(TruthTest.newBuilder().setOperand(reference).setOperator(operator)));
         }
         return NativePlan.newBuilder()
                 .setProtocolVersion(1)

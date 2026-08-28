@@ -66,6 +66,9 @@ A direct `BOOLEAN` column is also a supported condition, including inside a comp
 tree or beneath `NOT`. Nullable boolean columns preserve unknown rather than coercing
 null to false within the expression.
 
+The null-safe boolean predicates `IS TRUE`, `IS FALSE`, `IS NOT TRUE`, and `IS NOT FALSE`
+are accelerated over any supported boolean expression.
+
 ## Implementation
 
 Java encodes literal or column operands as protobuf expressions. Rust lowers them to DataFusion

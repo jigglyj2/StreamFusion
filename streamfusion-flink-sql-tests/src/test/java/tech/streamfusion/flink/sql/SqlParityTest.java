@@ -148,6 +148,15 @@ class SqlParityTest {
     }
 
     @Test
+    void nativeBooleanTruthTestsMatchFlinkByteForByte() throws Exception {
+        String sql = "SELECT flag IS TRUE, flag IS FALSE, flag IS NOT TRUE, flag IS NOT FALSE "
+                + "FROM (VALUES (TRUE), (FALSE)) AS input(flag)";
+        assertParity(sql, true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    @Test
     void nativeDateLiteralProjectionsMatchFlinkByteForByte() throws Exception {
         String sql = "SELECT DATE '1969-12-31', DATE '1970-01-01', DATE '2026-08-27' "
                 + "FROM (VALUES (1), (2)) AS input(id) WHERE id >= 1";

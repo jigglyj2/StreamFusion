@@ -50,6 +50,7 @@ message Expression {
     StringLiteral string_literal = 19;
     BinaryLiteral binary_literal = 20;
     UnaryMinus unary_minus = 21;
+    TruthTest truth_test = 22;
   }
 }
 
@@ -114,6 +115,19 @@ message BinaryLiteral {
 
 message UnaryMinus {
   Expression operand = 1;
+}
+
+message TruthTest {
+  Expression operand = 1;
+  TruthTestOperator operator = 2;
+}
+
+enum TruthTestOperator {
+  TRUTH_TEST_OPERATOR_UNSPECIFIED = 0;
+  TRUTH_TEST_OPERATOR_IS_TRUE = 1;
+  TRUTH_TEST_OPERATOR_IS_FALSE = 2;
+  TRUTH_TEST_OPERATOR_IS_NOT_TRUE = 3;
+  TRUTH_TEST_OPERATOR_IS_NOT_FALSE = 4;
 }
 
 message GreaterThanOrEqual {

@@ -35,6 +35,8 @@ Boolean projections can recursively compose direct boolean columns and constants
 `NOT`, `AND`, and `OR` using SQL's three-valued logic. Every comparison and null-check
 shape listed on the [filter coverage page](./filters/) can also be projected as a boolean
 value instead of being used by `WHERE`.
+Null-safe `IS TRUE`, `IS FALSE`, `IS NOT TRUE`, and `IS NOT FALSE` expressions are
+accelerated and always produce a non-null boolean result.
 `INT` and `BIGINT` division is accelerated when the divisor is a direct nonzero literal;
 signed results truncate exactly as Flink does. `MOD` remainder supports the same types
 and divisor restriction. A planner representation that wraps a negative `BIGINT` divisor

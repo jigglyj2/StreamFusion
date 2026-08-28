@@ -184,6 +184,30 @@ fn create_expression(
                 operand, schema,
             )?)))
         }
+        Some(proto::expression::Expression::TruthTest(test)) => {
+            let operand = create_expression(
+                test.operand.as_ref().ok_or_else(|| {
+                    DataFusionError::Plan("truth test operand is empty".to_string())
+                })?,
+                schema,
+            )?;
+            let (operator, expected) = match test.operator() {
+                proto::TruthTestOperator::IsTrue => (Operator::IsNotDistinctFrom, true),
+                proto::TruthTestOperator::IsFalse => (Operator::IsNotDistinctFrom, false),
+                proto::TruthTestOperator::IsNotTrue => (Operator::IsDistinctFrom, true),
+                proto::TruthTestOperator::IsNotFalse => (Operator::IsDistinctFrom, false),
+                proto::TruthTestOperator::Unspecified => {
+                    return Err(DataFusionError::Plan(
+                        "truth test operator is unspecified".to_string(),
+                    ))
+                }
+            };
+            Ok(Arc::new(BinaryExpr::new(
+                operand,
+                operator,
+                Arc::new(Literal::new(ScalarValue::Boolean(Some(expected)))),
+            )))
+        }
         Some(proto::expression::Expression::GreaterThanOrEqual(comparison)) => {
             Ok(Arc::new(BinaryExpr::new(
                 create_expression(

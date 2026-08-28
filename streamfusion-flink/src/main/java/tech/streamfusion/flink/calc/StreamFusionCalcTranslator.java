@@ -171,6 +171,17 @@ public final class StreamFusionCalcTranslator {
             StreamFusionCondition operand = condition(operands.get(0), inputType);
             return operand == null ? null : StreamFusionBooleanCondition.not(operand);
         }
+        if ("IS_TRUE".equals(kind)
+                || "IS_FALSE".equals(kind)
+                || "IS_NOT_TRUE".equals(kind)
+                || "IS_NOT_FALSE".equals(kind)) {
+            List<?> operands = (List<?>) invoke(condition, "getOperands");
+            if (operands.size() != 1) {
+                return null;
+            }
+            StreamFusionCondition operand = condition(operands.get(0), inputType);
+            return operand == null ? null : StreamFusionTruthTestCondition.create(kind, operand);
+        }
         if (!"IS_NULL".equals(kind) && !"IS_NOT_NULL".equals(kind)) {
             return null;
         }
