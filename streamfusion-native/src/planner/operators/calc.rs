@@ -161,6 +161,27 @@ pub(super) fn create_expression(
                 .ok_or_else(|| DataFusionError::Plan("EXP operand is empty".to_string()))?;
             expressions::exponential::create(create_expression(operand, schema)?, schema)
         }
+        Some(proto::expression::Expression::Sine(sine)) => {
+            let operand = sine
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("SIN operand is empty".to_string()))?;
+            expressions::sine::create(create_expression(operand, schema)?, schema)
+        }
+        Some(proto::expression::Expression::Cosine(cosine)) => {
+            let operand = cosine
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("COS operand is empty".to_string()))?;
+            expressions::cosine::create(create_expression(operand, schema)?, schema)
+        }
+        Some(proto::expression::Expression::Tangent(tangent)) => {
+            let operand = tangent
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("TAN operand is empty".to_string()))?;
+            expressions::tangent::create(create_expression(operand, schema)?, schema)
+        }
         Some(proto::expression::Expression::CharacterLength(character_length)) => {
             let operand = character_length
                 .operand

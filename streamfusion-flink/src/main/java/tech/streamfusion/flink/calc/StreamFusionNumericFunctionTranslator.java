@@ -15,12 +15,15 @@ import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.proto.plan.v1.AbsoluteValue;
 import tech.streamfusion.proto.plan.v1.Ceiling;
+import tech.streamfusion.proto.plan.v1.Cosine;
 import tech.streamfusion.proto.plan.v1.DoubleLiteral;
 import tech.streamfusion.proto.plan.v1.Exponential;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.Floor;
 import tech.streamfusion.proto.plan.v1.Sign;
+import tech.streamfusion.proto.plan.v1.Sine;
 import tech.streamfusion.proto.plan.v1.SquareRoot;
+import tech.streamfusion.proto.plan.v1.Tangent;
 
 /** Translates numeric scalar functions into the native expression protocol. */
 final class StreamFusionNumericFunctionTranslator extends StreamFusionRexSupport {
@@ -52,6 +55,17 @@ final class StreamFusionNumericFunctionTranslator extends StreamFusionRexSupport
         }
         if ("EXP".equals(function) && operands.size() == 1 && expectedType.getTypeRoot() == LogicalTypeRoot.DOUBLE) {
             return unary(expression, inputType, expectedType, UnaryKind.EXPONENTIAL);
+        }
+        if (operands.size() == 1 && expectedType.getTypeRoot() == LogicalTypeRoot.DOUBLE) {
+            if ("SIN".equals(function)) {
+                return unary(expression, inputType, expectedType, UnaryKind.SINE);
+            }
+            if ("COS".equals(function)) {
+                return unary(expression, inputType, expectedType, UnaryKind.COSINE);
+            }
+            if ("TAN".equals(function)) {
+                return unary(expression, inputType, expectedType, UnaryKind.TANGENT);
+            }
         }
         if (("PI".equals(function) || "E".equals(function))
                 && operands.isEmpty()
@@ -89,6 +103,13 @@ final class StreamFusionNumericFunctionTranslator extends StreamFusionRexSupport
             case EXPONENTIAL:
                 return result.setExponential(Exponential.newBuilder().setOperand(operand))
                         .build();
+            case SINE:
+                return result.setSine(Sine.newBuilder().setOperand(operand)).build();
+            case COSINE:
+                return result.setCosine(Cosine.newBuilder().setOperand(operand)).build();
+            case TANGENT:
+                return result.setTangent(Tangent.newBuilder().setOperand(operand))
+                        .build();
             default:
                 throw new IllegalStateException("Unknown numeric unary function " + kind);
         }
@@ -121,6 +142,9 @@ final class StreamFusionNumericFunctionTranslator extends StreamFusionRexSupport
         FLOOR,
         SIGN,
         SQUARE_ROOT,
-        EXPONENTIAL
+        EXPONENTIAL,
+        SINE,
+        COSINE,
+        TANGENT
     }
 }

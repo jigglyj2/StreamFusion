@@ -260,6 +260,9 @@ overflow as well as signed zero, infinities, NaN, and nulls.
 `PI()` and `E()` are accelerated as exact `DOUBLE` constants. The Java planner records the same
 IEEE-754 values used by Flink directly in protobuf, and native Calc treats them as DataFusion
 literals that can compose with other projections and predicates without a per-row function call.
+`SIN`, `COS`, and `TAN` are accelerated for numeric operands after Flink coerces them to `DOUBLE`.
+Each remains a distinct protobuf expression and DataFusion vectorized operator; parity coverage
+includes signed zero, infinities, NaN, and nulls.
 `CEIL` and `FLOOR` are accelerated for signed integers, `FLOAT`, and `DOUBLE`. Integer
 inputs are already integral and remain zero-copy references;
 floating-point inputs use DataFusion's vectorized math functions. Decimal and temporal forms

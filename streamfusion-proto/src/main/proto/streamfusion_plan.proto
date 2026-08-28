@@ -102,6 +102,9 @@ message Expression {
     StringRight string_right = 71;
     SquareRoot square_root = 72;
     Exponential exponential = 73;
+    Sine sine = 74;
+    Cosine cosine = 75;
+    Tangent tangent = 76;
   }
 }
 
@@ -273,6 +276,18 @@ message SquareRoot {
 }
 
 message Exponential {
+  Expression operand = 1;
+}
+
+message Sine {
+  Expression operand = 1;
+}
+
+message Cosine {
+  Expression operand = 1;
+}
+
+message Tangent {
   Expression operand = 1;
 }
 
