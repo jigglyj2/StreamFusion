@@ -655,7 +655,8 @@ public final class StreamFusionCalcTranslator {
                 || type == LogicalTypeRoot.BIGINT
                 || type == LogicalTypeRoot.DECIMAL
                 || type == LogicalTypeRoot.DATE
-                || type == LogicalTypeRoot.TIME_WITHOUT_TIME_ZONE;
+                || type == LogicalTypeRoot.TIME_WITHOUT_TIME_ZONE
+                || type == LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE;
     }
 
     private static StreamFusionCondition searchComparison(
@@ -692,6 +693,11 @@ public final class StreamFusionCalcTranslator {
                 int millisecondOfDay =
                         Math.toIntExact(LocalTime.parse(endpoint.toString()).toNanoOfDay() / 1_000_000);
                 return new StreamFusionTimeComparison(inputIndex, millisecondOfDay, precision, operator, true);
+            case TIMESTAMP_WITHOUT_TIME_ZONE:
+                int timestampPrecision = ((TimestampType) inputType.getTypeAt(inputIndex)).getPrecision();
+                TimestampData timestamp = TimestampData.fromLocalDateTime(
+                        LocalDateTime.parse(endpoint.toString().replace(' ', 'T')));
+                return new StreamFusionTimestampComparison(inputIndex, timestamp, timestampPrecision, operator, true);
             default:
                 return null;
         }

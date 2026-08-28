@@ -912,6 +912,33 @@ class SqlParityTest {
                 Arguments.of("in", "metric IN (TIME '00:00:00', TIME '23:59:59')"));
     }
 
+    @ParameterizedTest(name = "TIMESTAMP {0}")
+    @MethodSource("nativeTimestampDataStreamRangeCases")
+    void nativeTimestampDataStreamRangesMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {
+        assertDataStreamParity(
+                "SELECT metric FROM timestamp_input WHERE " + predicate,
+                Types.SQL_TIMESTAMP,
+                Arrays.asList(
+                        Row.of(java.sql.Timestamp.valueOf("1969-12-31 23:59:59.999")),
+                        Row.of(java.sql.Timestamp.valueOf("1970-01-01 00:00:00.000")),
+                        Row.of(java.sql.Timestamp.valueOf("2026-08-28 12:34:56.123")),
+                        Row.of(java.sql.Timestamp.valueOf("2030-01-01 00:00:00.000"))),
+                "timestamp_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    private static Stream<Arguments> nativeTimestampDataStreamRangeCases() {
+        return Stream.of(
+                Arguments.of(
+                        "between",
+                        "metric BETWEEN TIMESTAMP '1970-01-01 00:00:00.000' AND "
+                                + "TIMESTAMP '2026-08-28 12:34:56.123'"),
+                Arguments.of(
+                        "in",
+                        "metric IN (TIMESTAMP '1969-12-31 23:59:59.999', " + "TIMESTAMP '2030-01-01 00:00:00.000')"));
+    }
+
     @ParameterizedTest(name = "{0}")
     @MethodSource("nativeBooleanColumnCases")
     void nativeBooleanColumnsMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {
