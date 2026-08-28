@@ -129,6 +129,11 @@ shape without crossing the JVM boundary.
 Flat-array and map `CARDINALITY` lower to DataFusion's vectorized nested-type function. Its
 unsigned result is safely narrowed to Flink's `INT`: Arrow list and map offsets cap a single
 row's collection length within the signed 32-bit range.
+`ARRAY_CONTAINS` is accelerated in projections and filters when its needle is provably
+non-null and both arguments otherwise lower natively. Null arrays yield null, and null elements
+do not prevent a non-null needle from matching another element. Nullable needles remain on
+Flink with an EXPLAIN reason: Flink treats a null needle as a search for a null element, whereas
+DataFusion returns null without searching the array.
 
 Rust lowers `COALESCE` to DataFusion's vectorized `CaseExpr`: each argument except the last
 becomes an `IS NOT NULL` branch and the last argument is the fallback value.
