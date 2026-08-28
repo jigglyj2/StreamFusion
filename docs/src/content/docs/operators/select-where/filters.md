@@ -57,6 +57,9 @@ rescaling or exceed Flink's decimal range fall back rather than rounding.
 
 `IS NULL` and `IS NOT NULL` are supported over direct input columns of every scalar type
 listed on the [projection coverage page](../projections/).
+For a direct boolean input, `IS UNKNOWN` is accelerated through the same null-check path.
+`IS NOT UNKNOWN` is not yet claimed because Flink normalizes that form differently before
+physical planning.
 
 Supported comparisons and null checks can be recursively composed with `AND`, `OR`, and
 `NOT`. StreamFusion preserves SQL's three-valued boolean logic: true, false, and unknown

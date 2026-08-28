@@ -692,6 +692,21 @@ class SqlParityTest {
     }
 
     @ParameterizedTest(name = "{0}")
+    @MethodSource("nativeUnknownPredicateCases")
+    void nativeUnknownPredicatesMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {
+        String sql = "SELECT id FROM (VALUES (1, TRUE), (2, FALSE), (3, CAST(NULL AS BOOLEAN))) "
+                + "AS input(id, flag) WHERE "
+                + predicate;
+        assertParity(sql, true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    private static Stream<Arguments> nativeUnknownPredicateCases() {
+        return Stream.of(Arguments.of("is-unknown", "flag IS UNKNOWN"));
+    }
+
+    @ParameterizedTest(name = "{0}")
     @MethodSource("nativeBooleanPredicateCases")
     void nativeBooleanPredicatesMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {
         String sql = "SELECT id FROM (VALUES (1, 5), (2, 4), (3, 3), (4, 2), (5, 1)) "
