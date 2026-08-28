@@ -96,7 +96,7 @@ pub(crate) fn create(
         output_fields.push(Arc::new(Field::new(
             ORDINALITY_COLUMN,
             DataType::Int32,
-            false,
+            unnest.preserve_empty,
         )));
     }
     output_fields.push(Arc::clone(&child_schema.fields()[visible_field_count]));

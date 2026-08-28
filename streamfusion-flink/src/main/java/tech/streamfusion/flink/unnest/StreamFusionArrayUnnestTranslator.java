@@ -59,9 +59,6 @@ public final class StreamFusionArrayUnnestTranslator {
         }
         String functionName = String.valueOf(invoke(invoke(invocation, "getOperator"), "getName"));
         boolean withOrdinality = "$UNNEST_ROWS_WITH_ORDINALITY$1".equals(functionName);
-        if ("LEFT".equals(joinName) && withOrdinality) {
-            return "left array UNNEST WITH ORDINALITY is not yet supported";
-        }
         if (!"$UNNEST_ROWS$1".equals(functionName) && !withOrdinality) {
             return "table function " + functionName + " is not StreamFusion array UNNEST";
         }
@@ -98,8 +95,9 @@ public final class StreamFusionArrayUnnestTranslator {
         }
         if (withOrdinality) {
             LogicalType ordinality = outputType.getTypeAt(inputType.getFieldCount() + 1);
-            if (ordinality.getTypeRoot() != LogicalTypeRoot.INTEGER || ordinality.isNullable()) {
-                return "array UNNEST ordinality must be a non-null INT";
+            boolean expectedNullable = "LEFT".equals(joinName);
+            if (ordinality.getTypeRoot() != LogicalTypeRoot.INTEGER || ordinality.isNullable() != expectedNullable) {
+                return "array UNNEST ordinality must be " + (expectedNullable ? "a nullable" : "a non-null") + " INT";
             }
         }
         return null;

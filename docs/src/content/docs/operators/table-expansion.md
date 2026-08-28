@@ -5,9 +5,9 @@ sidebar:
   order: 12
 ---
 
-**Current status:** inner/cross `UNNEST`, with or without `WITH ORDINALITY`, and left
-`UNNEST` without ordinality over directly referenced arrays of supported scalar values are
-accelerated. Other table functions and expansion forms fall back to Flink.
+**Current status:** inner/cross and left `UNNEST`, with or without `WITH ORDINALITY`, over directly
+referenced arrays of supported scalar values are accelerated. Other table functions and expansion
+forms fall back to Flink.
 
 ## SQL example
 
@@ -36,10 +36,11 @@ StreamFusion accelerates the operation when all of the following are true:
 1-based `INT` position, restarting at one for every input array.
 
 `LEFT JOIN UNNEST(array) ON TRUE` retains one null-extended result for a null or empty array and
-otherwise emits the same ordered elements as the inner form. Left UNNEST with ordinality,
-computed array operands, arrays of rows or nested collections, maps, multisets, user-defined
-table functions, and correlate conditions currently fall back. EXPLAIN identifies the rejected
-join form, function shape, operand, or element type and then reports whole-plan fallback.
+otherwise emits the same ordered elements as the inner form. With ordinality, that synthetic row
+also has a null position. Computed array operands, arrays of rows or nested collections, maps,
+multisets, user-defined table functions, and correlate conditions currently fall back. EXPLAIN
+identifies the rejected join form, function shape, operand, or element type and then reports
+whole-plan fallback.
 
 ## Implementation
 
