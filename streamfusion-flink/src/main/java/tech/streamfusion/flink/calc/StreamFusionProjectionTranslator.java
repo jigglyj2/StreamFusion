@@ -69,28 +69,23 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
         if (mapElement != null) {
             return mapElement;
         }
-        Expression cardinality =
-                StreamFusionComplexProjectionTranslator.cardinality(expression, inputType, expectedType);
+        Expression cardinality = StreamFusionCollectionTranslator.cardinality(expression, inputType, expectedType);
         if (cardinality != null) {
             return cardinality;
         }
-        Expression arrayContains =
-                StreamFusionComplexProjectionTranslator.arrayContains(expression, inputType, expectedType);
+        Expression arrayContains = StreamFusionCollectionTranslator.arrayContains(expression, inputType, expectedType);
         if (arrayContains != null) {
             return arrayContains;
         }
-        Expression arrayReverse =
-                StreamFusionComplexProjectionTranslator.arrayReverse(expression, inputType, expectedType);
+        Expression arrayReverse = StreamFusionCollectionTranslator.arrayReverse(expression, inputType, expectedType);
         if (arrayReverse != null) {
             return arrayReverse;
         }
-        Expression arrayAppend =
-                StreamFusionComplexProjectionTranslator.arrayAppend(expression, inputType, expectedType);
+        Expression arrayAppend = StreamFusionCollectionTranslator.arrayAppend(expression, inputType, expectedType);
         if (arrayAppend != null) {
             return arrayAppend;
         }
-        Expression arrayPrepend =
-                StreamFusionComplexProjectionTranslator.arrayPrepend(expression, inputType, expectedType);
+        Expression arrayPrepend = StreamFusionCollectionTranslator.arrayPrepend(expression, inputType, expectedType);
         if (arrayPrepend != null) {
             return arrayPrepend;
         }

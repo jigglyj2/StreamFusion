@@ -67,6 +67,9 @@ abstract class StreamFusionExpressionTranslator extends StreamFusionProjectionTr
             return null;
         }
         String complexFailure = StreamFusionComplexProjectionTranslator.failureReason(expression, inputType);
+        if (complexFailure == null) {
+            complexFailure = StreamFusionCollectionTranslator.failureReason(expression, inputType);
+        }
         if (complexFailure != null) {
             return path + "/" + expressionName(expression) + ": " + complexFailure + " (" + expression + ")";
         }
@@ -234,7 +237,7 @@ abstract class StreamFusionExpressionTranslator extends StreamFusionProjectionTr
                 return search;
             }
         }
-        Expression arrayContains = StreamFusionComplexProjectionTranslator.arrayContains(
+        Expression arrayContains = StreamFusionCollectionTranslator.arrayContains(
                 expression, inputType, new org.apache.flink.table.types.logical.BooleanType(true));
         if (arrayContains != null) {
             return arrayContains;
