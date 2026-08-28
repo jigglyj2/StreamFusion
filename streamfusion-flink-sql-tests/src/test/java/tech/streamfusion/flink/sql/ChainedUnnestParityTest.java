@@ -12,6 +12,7 @@ package tech.streamfusion.flink.sql;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.types.Row;
@@ -53,6 +54,30 @@ class ChainedUnnestParityTest extends SqlParityTestSupport {
                         Row.of((Object) new Integer[][] {}),
                         Row.of((Object) null)),
                 "direct_chained_array_unnest_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isEqualTo(1);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
+    @Test
+    void adjacentMapAndArrayUnnestsUseOneNativePlan() throws Exception {
+        LinkedHashMap<String, Integer[]> populated = new LinkedHashMap<>();
+        populated.put("first", new Integer[] {1, null});
+        populated.put("empty", new Integer[] {});
+        populated.put("second", new Integer[] {3, 4});
+
+        assertDataStreamParity(
+                "SELECT map_key, map_pos, item, array_pos FROM chained_map_array_unnest_input "
+                        + "CROSS JOIN UNNEST(metric) WITH ORDINALITY "
+                        + "AS map_values(map_key, inner_array, map_pos) "
+                        + "CROSS JOIN UNNEST(inner_array) WITH ORDINALITY "
+                        + "AS array_values(item, array_pos)",
+                Types.MAP(Types.STRING, Types.OBJECT_ARRAY(Types.INT)),
+                DataTypes.MAP(DataTypes.STRING().notNull(), DataTypes.ARRAY(DataTypes.INT())),
+                Arrays.asList(Row.of(populated), Row.of(new LinkedHashMap<>()), Row.of((Object) null)),
+                "chained_map_array_unnest_input");
 
         assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())
