@@ -118,6 +118,10 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
         if (split != null) {
             return split;
         }
+        Expression arraySort = StreamFusionCollectionTranslator.arraySort(expression, inputType, expectedType);
+        if (arraySort != null) {
+            return arraySort;
+        }
         Expression arrayDistinct =
                 StreamFusionCollectionSetTranslator.arrayDistinct(expression, inputType, expectedType);
         if (arrayDistinct != null) {

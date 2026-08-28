@@ -177,6 +177,14 @@ lowers it to DataFusion's vectorized `string_to_array` expression, preserving le
 and consecutive empty fields as well as null input strings. Empty delimiters stay on Flink with
 an EXPLAIN reason because Flink splits the input into Unicode characters while DataFusion retains
 it as one element; null and dynamic delimiters also remain on Flink for now.
+`ARRAY_SORT` is accelerated for arrays of `TINYINT`, `SMALLINT`, `INT`, `BIGINT`, `DECIMAL`,
+`VARCHAR`, and `DATE` when its optional ascending and null-first controls are non-null boolean
+literals. StreamFusion converts Flink's boolean controls to DataFusion's `ASC`/`DESC` and
+`NULLS FIRST`/`NULLS LAST` options and invokes its vectorized array-sort kernel. The one-argument
+form defaults to ascending with nulls first; the two-argument form puts nulls first when ascending
+and last when descending, matching Flink. Floating-point arrays stay on Flink because NaN and
+signed-zero ordering is not yet parity-approved; dynamic or null controls also produce an explicit
+EXPLAIN fallback.
 `ARRAY_DISTINCT` is accelerated for Arrow-compatible element types, including nested `ROW`
 elements. It preserves the first occurrence order, retains at most one null element, and
 preserves null and empty arrays. Rust lowers it directly to DataFusion's vectorized set kernel;

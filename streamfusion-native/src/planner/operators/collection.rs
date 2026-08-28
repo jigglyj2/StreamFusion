@@ -151,6 +151,15 @@ pub(super) fn create(
             schema,
             expressions::split::create,
         ),
+        ArraySort(sort) => expressions::array_sort::create(
+            create_expression(
+                required(&sort.array, "array sort is missing its array")?,
+                schema,
+            )?,
+            sort.ascending,
+            sort.null_first,
+            schema,
+        ),
         ArrayDistinct(distinct) => expressions::array_distinct::create(
             create_expression(
                 required(&distinct.array, "array distinct is missing its array")?,

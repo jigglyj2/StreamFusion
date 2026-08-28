@@ -22,6 +22,7 @@ pub(crate) mod array_position;
 pub(crate) mod array_prepend;
 pub(crate) mod array_remove;
 pub(crate) mod array_reverse;
+pub(crate) mod array_sort;
 pub(crate) mod array_union;
 pub(crate) mod cardinality;
 pub(crate) mod cast;

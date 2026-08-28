@@ -24,6 +24,7 @@ import tech.streamfusion.proto.plan.v1.ArrayPosition;
 import tech.streamfusion.proto.plan.v1.ArrayPrepend;
 import tech.streamfusion.proto.plan.v1.ArrayRemove;
 import tech.streamfusion.proto.plan.v1.ArrayReverse;
+import tech.streamfusion.proto.plan.v1.ArraySort;
 import tech.streamfusion.proto.plan.v1.Cardinality;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.Split;
@@ -82,6 +83,19 @@ final class StreamFusionCollectionTranslator extends StreamFusionComplexTypeSupp
             }
             if (delimiter.isEmpty()) {
                 return "SPLIT with an empty delimiter stays on Flink because Flink splits into Unicode characters while DataFusion retains the whole string";
+            }
+        }
+        if ("ARRAY_SORT".equals(function) && !operands.isEmpty()) {
+            LogicalType array = logicalType(operands.get(0), inputType);
+            if (array instanceof ArrayType
+                    && !supportsArrayOrdering(
+                            ((ArrayType) array).getElementType().getTypeRoot())) {
+                return "ARRAY_SORT stays on Flink for element types whose ordering is not parity-approved; floating-point NaN ordering is intentionally excluded";
+            }
+            for (int index = 1; index < operands.size(); index++) {
+                if (literal(operands.get(index), Boolean.class) == null) {
+                    return "ARRAY_SORT stays on Flink unless its ascending and null-order controls are non-null boolean literals";
+                }
             }
         }
         return null;
@@ -352,6 +366,36 @@ final class StreamFusionCollectionTranslator extends StreamFusionComplexTypeSupp
                         .build();
     }
 
+    static Expression arraySort(Object expression, RowType inputType, LogicalType expectedType) {
+        if (!"ARRAY_SORT".equals(functionName(expression)) || !(expectedType instanceof ArrayType)) {
+            return null;
+        }
+        java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
+        if (operands.isEmpty() || operands.size() > 3) {
+            return null;
+        }
+        LogicalType arrayType = logicalType(operands.get(0), inputType);
+        if (!(arrayType instanceof ArrayType)
+                || !supportsArrayOrdering(
+                        ((ArrayType) arrayType).getElementType().getTypeRoot())) {
+            return null;
+        }
+        Boolean ascending = operands.size() >= 2 ? literal(operands.get(1), Boolean.class) : Boolean.TRUE;
+        Boolean nullFirst = operands.size() == 3 ? literal(operands.get(2), Boolean.class) : ascending;
+        if (ascending == null || nullFirst == null) {
+            return null;
+        }
+        Expression array = StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, arrayType);
+        return array == null
+                ? null
+                : Expression.newBuilder()
+                        .setArraySort(ArraySort.newBuilder()
+                                .setArray(array)
+                                .setAscending(ascending)
+                                .setNullFirst(nullFirst))
+                        .build();
+    }
+
     private static Expression stringLiteral(String value) {
         return Expression.newBuilder()
                 .setStringLiteral(tech.streamfusion.proto.plan.v1.StringLiteral.newBuilder()
@@ -367,6 +411,10 @@ final class StreamFusionCollectionTranslator extends StreamFusionComplexTypeSupp
                 || type == LogicalTypeRoot.DECIMAL
                 || type == LogicalTypeRoot.VARCHAR
                 || type == LogicalTypeRoot.DATE;
+    }
+
+    private static boolean supportsArrayOrdering(LogicalTypeRoot type) {
+        return supportsArrayExtremum(type);
     }
 
     private static java.util.List<?> collectionAndElementOperands(
