@@ -78,6 +78,7 @@ message Expression {
     ArrayPosition array_position = 47;
     ArrayDistinct array_distinct = 48;
     ArrayUnion array_union = 49;
+    ArrayIntersect array_intersect = 50;
   }
 }
 
@@ -133,6 +134,11 @@ message ArrayDistinct {
 }
 
 message ArrayUnion {
+  Expression left = 1;
+  Expression right = 2;
+}
+
+message ArrayIntersect {
   Expression left = 1;
   Expression right = 2;
 }

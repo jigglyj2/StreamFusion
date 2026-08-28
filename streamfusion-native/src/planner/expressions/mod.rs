@@ -12,6 +12,7 @@ pub(crate) mod array_concat;
 pub(crate) mod array_contains;
 pub(crate) mod array_distinct;
 pub(crate) mod array_element;
+pub(crate) mod array_intersect;
 pub(crate) mod array_position;
 pub(crate) mod array_prepend;
 pub(crate) mod array_reverse;

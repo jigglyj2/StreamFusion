@@ -188,6 +188,19 @@ fn create_expression(
                 schema,
             )
         }
+        Some(proto::expression::Expression::ArrayIntersect(intersect)) => {
+            let left = intersect.left.as_ref().ok_or_else(|| {
+                DataFusionError::Plan("array intersect is missing its left array".into())
+            })?;
+            let right = intersect.right.as_ref().ok_or_else(|| {
+                DataFusionError::Plan("array intersect is missing its right array".into())
+            })?;
+            expressions::array_intersect::create(
+                create_expression(left, schema)?,
+                create_expression(right, schema)?,
+                schema,
+            )
+        }
         Some(proto::expression::Expression::IntegerLiteral(literal)) => Ok(Arc::new(Literal::new(
             ScalarValue::Int32(Some(literal.value)),
         ))),
