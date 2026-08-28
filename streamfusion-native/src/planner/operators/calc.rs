@@ -444,36 +444,22 @@ pub(super) fn create_expression(
             )))
         }
         Some(proto::expression::Expression::Comparison(comparison)) => {
-            let operator = match comparison.operator() {
-                proto::ComparisonOperator::Equal => Operator::Eq,
-                proto::ComparisonOperator::NotEqual => Operator::NotEq,
-                proto::ComparisonOperator::LessThan => Operator::Lt,
-                proto::ComparisonOperator::LessThanOrEqual => Operator::LtEq,
-                proto::ComparisonOperator::GreaterThan => Operator::Gt,
-                proto::ComparisonOperator::GreaterThanOrEqual => Operator::GtEq,
-                proto::ComparisonOperator::IsDistinctFrom => Operator::IsDistinctFrom,
-                proto::ComparisonOperator::IsNotDistinctFrom => Operator::IsNotDistinctFrom,
-                proto::ComparisonOperator::Unspecified => {
-                    return Err(DataFusionError::Plan(
-                        "comparison operator is unspecified".to_string(),
-                    ));
-                }
-            };
-            Ok(Arc::new(BinaryExpr::new(
+            expressions::comparison::create(
                 create_expression(
                     comparison.left.as_ref().ok_or_else(|| {
                         DataFusionError::Plan("comparison left operand is empty".to_string())
                     })?,
                     schema,
                 )?,
-                operator,
                 create_expression(
                     comparison.right.as_ref().ok_or_else(|| {
                         DataFusionError::Plan("comparison right operand is empty".to_string())
                     })?,
                     schema,
                 )?,
-            )))
+                comparison.operator(),
+                schema,
+            )
         }
         Some(proto::expression::Expression::Arithmetic(arithmetic)) => {
             let operator = match arithmetic.operator() {

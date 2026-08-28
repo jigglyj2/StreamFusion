@@ -273,6 +273,10 @@ StreamFusion's byte-parity contract.
 NaN results, along with endpoints, signed zero, infinities, and nulls.
 `DEGREES` and `RADIANS` are accelerated through DataFusion's vectorized angle-conversion kernels.
 They accept Flink-coerced `DOUBLE` inputs and preserve signed zero, infinities, NaN, and nulls.
+Parity-approved scalar expressions can participate in numeric comparison filters when Calcite keeps
+an integral literal beside a `DOUBLE` expression; StreamFusion widens the literal to `DOUBLE` in the
+protobuf tree. Native floating comparisons explicitly mask NaN for equality and ordered operators,
+preserving Flink/Java comparison semantics rather than DataFusion's total NaN ordering.
 `CEIL` and `FLOOR` are accelerated for signed integers, `FLOAT`, and `DOUBLE`. Integer
 inputs are already integral and remain zero-copy references;
 floating-point inputs use DataFusion's vectorized math functions. Decimal and temporal forms

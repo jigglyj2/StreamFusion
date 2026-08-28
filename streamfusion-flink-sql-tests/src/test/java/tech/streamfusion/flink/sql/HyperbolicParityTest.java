@@ -57,4 +57,17 @@ class HyperbolicParityTest extends SqlParityTestSupport {
         assertThat(tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics.explain())
                 .contains("differs from Flink by one ULP");
     }
+
+    @Test
+    void nativeHyperbolicFunctionComposesWithComparisonFilter() throws Exception {
+        assertDataStreamParity(
+                "SELECT metric FROM hyperbolic_filter_input WHERE TANH(metric) > 0",
+                Types.DOUBLE,
+                INPUTS,
+                "hyperbolic_filter_input");
+
+        assertThat(tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics.explain())
+                .contains("Accelerated: yes");
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
 }

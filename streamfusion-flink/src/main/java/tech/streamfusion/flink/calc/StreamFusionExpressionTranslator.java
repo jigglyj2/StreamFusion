@@ -18,6 +18,7 @@ import org.apache.flink.table.data.TimestampData;
 import org.apache.flink.table.types.logical.BinaryType;
 import org.apache.flink.table.types.logical.CharType;
 import org.apache.flink.table.types.logical.DecimalType;
+import org.apache.flink.table.types.logical.DoubleType;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.TimeType;
@@ -434,14 +435,12 @@ abstract class StreamFusionExpressionTranslator extends StreamFusionProjectionTr
             Object leftExpression, Object rightExpression, ComparisonOperator operator, RowType inputType) {
         org.apache.flink.table.types.logical.LogicalType leftType = expressionLogicalType(leftExpression);
         org.apache.flink.table.types.logical.LogicalType rightType = expressionLogicalType(rightExpression);
-        if (leftType == null
-                || rightType == null
-                || leftType.getTypeRoot() != rightType.getTypeRoot()
-                || !supportsRecursiveComparison(leftType.getTypeRoot(), operator)) {
+        org.apache.flink.table.types.logical.LogicalType comparisonType = comparisonType(leftType, rightType);
+        if (comparisonType == null || !supportsRecursiveComparison(comparisonType.getTypeRoot(), operator)) {
             return null;
         }
-        Expression left = projectionExpression(leftExpression, inputType, leftType);
-        Expression right = projectionExpression(rightExpression, inputType, rightType);
+        Expression left = projectionExpression(leftExpression, inputType, comparisonType);
+        Expression right = projectionExpression(rightExpression, inputType, comparisonType);
         if (left == null || right == null) {
             return null;
         }
@@ -449,6 +448,30 @@ abstract class StreamFusionExpressionTranslator extends StreamFusionProjectionTr
                 .setComparison(
                         Comparison.newBuilder().setLeft(left).setRight(right).setOperator(operator))
                 .build();
+    }
+
+    private static org.apache.flink.table.types.logical.LogicalType comparisonType(
+            org.apache.flink.table.types.logical.LogicalType leftType,
+            org.apache.flink.table.types.logical.LogicalType rightType) {
+        if (leftType == null || rightType == null) {
+            return null;
+        }
+        if (leftType.getTypeRoot() == rightType.getTypeRoot()) {
+            return leftType;
+        }
+        if ((leftType.getTypeRoot() == LogicalTypeRoot.DOUBLE && isExactNonDecimalNumeric(rightType.getTypeRoot()))
+                || (rightType.getTypeRoot() == LogicalTypeRoot.DOUBLE
+                        && isExactNonDecimalNumeric(leftType.getTypeRoot()))) {
+            return new DoubleType(leftType.isNullable() || rightType.isNullable());
+        }
+        return null;
+    }
+
+    private static boolean isExactNonDecimalNumeric(LogicalTypeRoot type) {
+        return type == LogicalTypeRoot.TINYINT
+                || type == LogicalTypeRoot.SMALLINT
+                || type == LogicalTypeRoot.INTEGER
+                || type == LogicalTypeRoot.BIGINT;
     }
 
     protected static boolean supportsRecursiveComparison(LogicalTypeRoot type, ComparisonOperator operator) {
