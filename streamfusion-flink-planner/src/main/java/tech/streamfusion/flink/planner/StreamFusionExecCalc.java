@@ -60,17 +60,8 @@ public final class StreamFusionExecCalc extends CommonExecCalc implements Stream
     @SuppressWarnings("unchecked")
     @Override
     protected Transformation<RowData> translateToPlanInternal(PlannerBase planner, ExecNodeConfig config) {
-        List<StreamFusionExecCalc> chain = new ArrayList<>();
-        StreamFusionExecCalc current = this;
-        ExecEdge inputEdge;
-        while (true) {
-            chain.add(0, current);
-            inputEdge = current.getInputEdges().get(0);
-            if (!(inputEdge.getSource() instanceof StreamFusionExecCalc)) {
-                break;
-            }
-            current = (StreamFusionExecCalc) inputEdge.getSource();
-        }
+        List<StreamFusionExecCalc> chain = adjacentChain(this);
+        ExecEdge inputEdge = chain.get(0).getInputEdges().get(0);
         Transformation<RowData> input = (Transformation<RowData>) inputEdge.translateToPlan(planner);
         List<RowType> inputTypes = new ArrayList<>(chain.size());
         List<RowType> outputTypes = new ArrayList<>(chain.size());
@@ -97,6 +88,19 @@ public final class StreamFusionExecCalc extends CommonExecCalc implements Stream
             throw new IllegalStateException("Could not invoke the StreamFusion calc runtime", e);
         } catch (InvocationTargetException e) {
             throw new IllegalStateException("StreamFusion calc translation failed", e.getCause());
+        }
+    }
+
+    static List<StreamFusionExecCalc> adjacentChain(StreamFusionExecCalc root) {
+        List<StreamFusionExecCalc> chain = new ArrayList<>();
+        StreamFusionExecCalc current = root;
+        while (true) {
+            chain.add(0, current);
+            ExecEdge inputEdge = current.getInputEdges().get(0);
+            if (!(inputEdge.getSource() instanceof StreamFusionExecCalc)) {
+                return chain;
+            }
+            current = (StreamFusionExecCalc) inputEdge.getSource();
         }
     }
 }

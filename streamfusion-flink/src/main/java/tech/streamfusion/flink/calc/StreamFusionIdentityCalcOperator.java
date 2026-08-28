@@ -100,8 +100,7 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
         rowKinds.clear();
     }
 
-    private static byte[] createPlan(
-            RowType inputType, List<List<Expression>> projectionStages, List<Expression> conditions) {
+    static byte[] createPlan(RowType inputType, List<List<Expression>> projectionStages, List<Expression> conditions) {
         Operator operator = Operator.newBuilder().setInput(Input.newBuilder()).build();
         int stageInputFieldCount = inputType.getFieldCount();
         for (int stage = 0; stage < projectionStages.size(); stage++) {
