@@ -957,6 +957,38 @@ class SqlParityTest {
                 Arguments.of("in", "metric IN ('alpha', 'delta', 'zeta')"));
     }
 
+    @ParameterizedTest(name = "COALESCE {0}")
+    @MethodSource("nativeCoalesceDataStreamCases")
+    void nativeCoalesceMatchesFlinkByteForByte(
+            String ignoredName, String sql, TypeInformation<?> type, List<Row> rows, String tableName)
+            throws Exception {
+        assertDataStreamParity(sql, type, rows, tableName);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    private static Stream<Arguments> nativeCoalesceDataStreamCases() {
+        return Stream.of(
+                Arguments.of(
+                        "integer",
+                        "SELECT COALESCE(metric, 99) FROM coalesce_int_input",
+                        Types.INT,
+                        Arrays.asList(Row.of(1), Row.of((Object) null), Row.of(3)),
+                        "coalesce_int_input"),
+                Arguments.of(
+                        "nested-null-integer",
+                        "SELECT COALESCE(CAST(NULL AS INT), metric, 99) FROM coalesce_int_input",
+                        Types.INT,
+                        Arrays.asList(Row.of(1), Row.of((Object) null), Row.of(3)),
+                        "coalesce_int_input"),
+                Arguments.of(
+                        "varchar",
+                        "SELECT COALESCE(metric, 'fallback') FROM coalesce_string_input",
+                        Types.STRING,
+                        Arrays.asList(Row.of("alpha"), Row.of((Object) null), Row.of("zeta")),
+                        "coalesce_string_input"));
+    }
+
     @ParameterizedTest(name = "VARBINARY {0}")
     @MethodSource("nativeVarbinaryDataStreamRangeCases")
     void nativeVarbinaryDataStreamRangesMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {

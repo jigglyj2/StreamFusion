@@ -89,6 +89,14 @@ fn create_expression(
         Some(proto::expression::Expression::NullLiteral(literal)) => {
             expressions::null_literal::create(literal)
         }
+        Some(proto::expression::Expression::Coalesce(coalesce)) => {
+            let arguments = coalesce
+                .arguments
+                .iter()
+                .map(|argument| create_expression(argument, schema))
+                .collect::<Result<Vec<_>>>()?;
+            expressions::coalesce::create(arguments)
+        }
         Some(proto::expression::Expression::DateLiteral(literal)) => Ok(Arc::new(Literal::new(
             ScalarValue::Date32(Some(literal.epoch_day)),
         ))),

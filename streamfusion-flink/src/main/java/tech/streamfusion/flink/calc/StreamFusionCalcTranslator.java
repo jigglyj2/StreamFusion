@@ -39,6 +39,7 @@ import tech.streamfusion.proto.plan.v1.BooleanOperator;
 import tech.streamfusion.proto.plan.v1.ByteLiteral;
 import tech.streamfusion.proto.plan.v1.Cast;
 import tech.streamfusion.proto.plan.v1.CastKind;
+import tech.streamfusion.proto.plan.v1.Coalesce;
 import tech.streamfusion.proto.plan.v1.ComparisonOperator;
 import tech.streamfusion.proto.plan.v1.DateLiteral;
 import tech.streamfusion.proto.plan.v1.DecimalLiteral;
@@ -221,6 +222,21 @@ public final class StreamFusionCalcTranslator {
                     .setNullLiteral(NullLiteral.newBuilder()
                             .setType(StreamFusionIdentityCalcOperator.logicalType(expectedType)))
                     .build();
+        }
+        if ("COALESCE".equals(functionName(expression))) {
+            List<?> operands = (List<?>) invoke(expression, "getOperands");
+            if (operands.size() < 2) {
+                return null;
+            }
+            Coalesce.Builder coalesce = Coalesce.newBuilder();
+            for (Object operand : operands) {
+                Expression argument = projectionExpression(operand, inputType, expectedType);
+                if (argument == null) {
+                    return null;
+                }
+                coalesce.addArguments(argument);
+            }
+            return Expression.newBuilder().setCoalesce(coalesce).build();
         }
         return projectionExpression(expression, inputType, expectedType.getTypeRoot());
     }
@@ -580,6 +596,14 @@ public final class StreamFusionCalcTranslator {
         } catch (NoSuchMethodException ignored) {
             return false;
         }
+    }
+
+    private static String functionName(Object expression) {
+        if (!hasNoArgMethod(expression, "getOperands") || !hasNoArgMethod(expression, "getOperator")) {
+            return null;
+        }
+        Object operator = invoke(expression, "getOperator");
+        return hasNoArgMethod(operator, "getName") ? invoke(operator, "getName").toString() : null;
     }
 
     private static StreamFusionCondition search(Object condition, RowType inputType) {
