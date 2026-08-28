@@ -119,6 +119,13 @@ fn create_expression(
             })?;
             expressions::conditional::create(branches, create_expression(else_value, schema)?)
         }
+        Some(proto::expression::Expression::AbsoluteValue(absolute)) => {
+            let operand = absolute
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("ABS operand is empty".to_string()))?;
+            expressions::absolute_value::create(create_expression(operand, schema)?, schema)
+        }
         Some(proto::expression::Expression::DateLiteral(literal)) => Ok(Arc::new(Literal::new(
             ScalarValue::Date32(Some(literal.epoch_day)),
         ))),

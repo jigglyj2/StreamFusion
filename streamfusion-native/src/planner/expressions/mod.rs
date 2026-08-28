@@ -6,6 +6,7 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
+pub(crate) mod absolute_value;
 pub(crate) mod cast;
 pub(crate) mod coalesce;
 pub(crate) mod conditional;

@@ -55,6 +55,7 @@ message Expression {
     NullLiteral null_literal = 24;
     Coalesce coalesce = 25;
     Conditional conditional = 26;
+    AbsoluteValue absolute_value = 27;
   }
 }
 
@@ -70,6 +71,10 @@ message Conditional {
 message WhenThen {
   Expression when = 1;
   Expression then = 2;
+}
+
+message AbsoluteValue {
+  Expression operand = 1;
 }
 
 message NullLiteral {

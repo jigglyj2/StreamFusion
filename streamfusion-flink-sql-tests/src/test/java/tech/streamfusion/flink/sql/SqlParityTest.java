@@ -1010,6 +1010,82 @@ class SqlParityTest {
                 Arguments.of("if", "IF(metric IS NULL, 99, metric + 1)"));
     }
 
+    @ParameterizedTest(name = "ABS {0}")
+    @MethodSource("nativeAbsoluteValueDataStreamCases")
+    void nativeAbsoluteValueMatchesFlinkByteForByte(
+            String ignoredName, TypeInformation<?> type, List<Row> rows, String tableName) throws Exception {
+        assertDataStreamParity("SELECT ABS(metric) FROM " + tableName, type, rows, tableName);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    private static Stream<Arguments> nativeAbsoluteValueDataStreamCases() {
+        return Stream.of(
+                Arguments.of(
+                        "tinyint",
+                        Types.BYTE,
+                        Arrays.asList(
+                                Row.of(Byte.MIN_VALUE),
+                                Row.of((byte) -7),
+                                Row.of((byte) 0),
+                                Row.of((byte) 7),
+                                Row.of((Object) null)),
+                        "abs_tinyint_input"),
+                Arguments.of(
+                        "smallint",
+                        Types.SHORT,
+                        Arrays.asList(
+                                Row.of(Short.MIN_VALUE),
+                                Row.of((short) -7),
+                                Row.of((short) 0),
+                                Row.of((short) 7),
+                                Row.of((Object) null)),
+                        "abs_smallint_input"),
+                Arguments.of(
+                        "integer",
+                        Types.INT,
+                        Arrays.asList(
+                                Row.of(Integer.MIN_VALUE), Row.of(-7), Row.of(0), Row.of(7), Row.of((Object) null)),
+                        "abs_int_input"),
+                Arguments.of(
+                        "bigint",
+                        Types.LONG,
+                        Arrays.asList(
+                                Row.of(Long.MIN_VALUE), Row.of(-7L), Row.of(0L), Row.of(7L), Row.of((Object) null)),
+                        "abs_bigint_input"),
+                Arguments.of(
+                        "float",
+                        Types.FLOAT,
+                        Arrays.asList(
+                                Row.of(Float.NEGATIVE_INFINITY),
+                                Row.of(-7.5f),
+                                Row.of(-0.0f),
+                                Row.of(0.0f),
+                                Row.of(Float.NaN),
+                                Row.of((Object) null)),
+                        "abs_float_input"),
+                Arguments.of(
+                        "double",
+                        Types.DOUBLE,
+                        Arrays.asList(
+                                Row.of(Double.NEGATIVE_INFINITY),
+                                Row.of(-7.5d),
+                                Row.of(-0.0d),
+                                Row.of(0.0d),
+                                Row.of(Double.NaN),
+                                Row.of((Object) null)),
+                        "abs_double_input"),
+                Arguments.of(
+                        "decimal",
+                        Types.BIG_DEC,
+                        Arrays.asList(
+                                Row.of(new java.math.BigDecimal("-12345678901234567890.123456789012345678")),
+                                Row.of(new java.math.BigDecimal("-0.000000000000000000")),
+                                Row.of(new java.math.BigDecimal("7.500000000000000000")),
+                                Row.of((Object) null)),
+                        "abs_decimal_input"));
+    }
+
     @ParameterizedTest(name = "VARBINARY {0}")
     @MethodSource("nativeVarbinaryDataStreamRangeCases")
     void nativeVarbinaryDataStreamRangesMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {

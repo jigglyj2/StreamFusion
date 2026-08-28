@@ -31,6 +31,7 @@ import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.TimeType;
 import org.apache.flink.table.types.logical.TimestampType;
+import tech.streamfusion.proto.plan.v1.AbsoluteValue;
 import tech.streamfusion.proto.plan.v1.Arithmetic;
 import tech.streamfusion.proto.plan.v1.ArithmeticOperator;
 import tech.streamfusion.proto.plan.v1.BinaryLiteral;
@@ -265,7 +266,29 @@ public final class StreamFusionCalcTranslator {
                             .setConditional(conditional.setElseValue(elseValue))
                             .build();
         }
+        if ("ABS".equals(functionName(expression))) {
+            List<?> operands = (List<?>) invoke(expression, "getOperands");
+            if (operands.size() != 1 || !isNumeric(expectedType.getTypeRoot())) {
+                return null;
+            }
+            Expression operand = projectionExpression(operands.get(0), inputType, expectedType);
+            return operand == null
+                    ? null
+                    : Expression.newBuilder()
+                            .setAbsoluteValue(AbsoluteValue.newBuilder().setOperand(operand))
+                            .build();
+        }
         return projectionExpression(expression, inputType, expectedType.getTypeRoot());
+    }
+
+    private static boolean isNumeric(LogicalTypeRoot type) {
+        return type == LogicalTypeRoot.TINYINT
+                || type == LogicalTypeRoot.SMALLINT
+                || type == LogicalTypeRoot.INTEGER
+                || type == LogicalTypeRoot.BIGINT
+                || type == LogicalTypeRoot.FLOAT
+                || type == LogicalTypeRoot.DOUBLE
+                || type == LogicalTypeRoot.DECIMAL;
     }
 
     private static Expression projectionExpression(Object expression, RowType inputType, LogicalTypeRoot expectedType) {

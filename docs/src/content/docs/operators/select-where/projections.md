@@ -81,8 +81,8 @@ is required. Any unsupported condition or branch causes whole-Calc fallback.
 
 Integer division or remainder by zero or a non-literal divisor, decimal division and
 remainder, floating-point remainder, unary plus, non-decimal mixed-width arithmetic, non-finite
-floating-point literals, arithmetic on other types, casts, and functions currently fall
-back to Flink, except for the lossless casts listed above. The Calc also falls back if its
+floating-point literals, arithmetic on other types, casts, and unlisted functions currently
+fall back to Flink, except for the lossless casts and functions listed above. The Calc also falls back if its
 filter is unsupported.
 
 ## Implementation
@@ -96,6 +96,10 @@ Rust lowers `COALESCE` to DataFusion's vectorized `CaseExpr`: each argument exce
 becomes an `IS NOT NULL` branch and the last argument is the fallback value.
 `CASE` and `IF` use the same DataFusion expression with explicit ordered condition/result
 branches and an `ELSE` expression.
+`ABS` is accelerated for supported numeric operands. Floating-point and decimal inputs use
+DataFusion's vectorized math function. Signed integers use a vectorized DataFusion `CASE`
+around StreamFusion's wrapping unary minus so Flink's minimum-value behavior is preserved.
+Parity coverage includes signed integer minima, nulls, infinities, NaN, and signed zero.
 
 Cast approval is table-driven. Java maps an explicitly approved Flink source/target pair
 to a stable protobuf cast kind; Rust independently verifies that kind against the actual
