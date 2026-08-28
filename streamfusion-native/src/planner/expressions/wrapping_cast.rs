@@ -18,31 +18,39 @@ use datafusion::physical_expr::PhysicalExpr;
 use datafusion::scalar::ScalarValue;
 
 #[derive(Debug, Eq)]
-pub(crate) struct Int32WrappingCastExpr {
+pub(crate) struct SignedIntegerWrappingCastExpr {
     operand: Arc<dyn PhysicalExpr>,
+    source: DataType,
     target: DataType,
 }
 
-impl Int32WrappingCastExpr {
-    pub(crate) fn new(operand: Arc<dyn PhysicalExpr>, target: DataType) -> Self {
-        Self { operand, target }
+impl SignedIntegerWrappingCastExpr {
+    pub(crate) fn new(operand: Arc<dyn PhysicalExpr>, source: DataType, target: DataType) -> Self {
+        Self {
+            operand,
+            source,
+            target,
+        }
     }
 }
 
-impl PartialEq for Int32WrappingCastExpr {
+impl PartialEq for SignedIntegerWrappingCastExpr {
     fn eq(&self, other: &Self) -> bool {
-        self.operand.eq(&other.operand) && self.target == other.target
+        self.operand.eq(&other.operand)
+            && self.source == other.source
+            && self.target == other.target
     }
 }
 
-impl Hash for Int32WrappingCastExpr {
+impl Hash for SignedIntegerWrappingCastExpr {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.operand.hash(state);
+        self.source.hash(state);
         self.target.hash(state);
     }
 }
 
-impl std::fmt::Display for Int32WrappingCastExpr {
+impl std::fmt::Display for SignedIntegerWrappingCastExpr {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             formatter,
@@ -52,7 +60,7 @@ impl std::fmt::Display for Int32WrappingCastExpr {
     }
 }
 
-impl PhysicalExpr for Int32WrappingCastExpr {
+impl PhysicalExpr for SignedIntegerWrappingCastExpr {
     fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
         Ok(self.target.clone())
     }
@@ -63,22 +71,49 @@ impl PhysicalExpr for Int32WrappingCastExpr {
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         match self.operand.evaluate(batch)? {
-            ColumnarValue::Array(array) => {
-                let integers = array.as_any().downcast_ref::<Int32Array>().ok_or_else(|| {
-                    DataFusionError::Execution("wrapping cast expected Int32 input".to_string())
-                })?;
-                match self.target {
-                    DataType::Int8 => Ok(ColumnarValue::Array(Arc::new(Int8Array::from_iter(
+            ColumnarValue::Array(array) => match (&self.source, &self.target) {
+                (DataType::Int16, DataType::Int8) => {
+                    let integers =
+                        array.as_any().downcast_ref::<Int16Array>().ok_or_else(|| {
+                            DataFusionError::Execution(
+                                "wrapping cast expected Int16 input".to_string(),
+                            )
+                        })?;
+                    Ok(ColumnarValue::Array(Arc::new(Int8Array::from_iter(
                         integers.iter().map(|value| value.map(|value| value as i8)),
-                    )))),
-                    DataType::Int16 => Ok(ColumnarValue::Array(Arc::new(Int16Array::from_iter(
-                        integers.iter().map(|value| value.map(|value| value as i16)),
-                    )))),
-                    _ => Err(DataFusionError::Execution(format!(
-                        "unsupported Int32 wrapping cast target {}",
-                        self.target
-                    ))),
+                    ))))
                 }
+                (DataType::Int32, DataType::Int8) => {
+                    let integers =
+                        array.as_any().downcast_ref::<Int32Array>().ok_or_else(|| {
+                            DataFusionError::Execution(
+                                "wrapping cast expected Int32 input".to_string(),
+                            )
+                        })?;
+                    Ok(ColumnarValue::Array(Arc::new(Int8Array::from_iter(
+                        integers.iter().map(|value| value.map(|value| value as i8)),
+                    ))))
+                }
+                (DataType::Int32, DataType::Int16) => {
+                    let integers =
+                        array.as_any().downcast_ref::<Int32Array>().ok_or_else(|| {
+                            DataFusionError::Execution(
+                                "wrapping cast expected Int32 input".to_string(),
+                            )
+                        })?;
+                    Ok(ColumnarValue::Array(Arc::new(Int16Array::from_iter(
+                        integers.iter().map(|value| value.map(|value| value as i16)),
+                    ))))
+                }
+                _ => Err(DataFusionError::Execution(format!(
+                    "unsupported wrapping cast from {} to {}",
+                    self.source, self.target
+                ))),
+            },
+            ColumnarValue::Scalar(ScalarValue::Int16(value)) if self.target == DataType::Int8 => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Int8(
+                    value.map(|value| value as i8),
+                )))
             }
             ColumnarValue::Scalar(ScalarValue::Int32(value)) => match self.target {
                 DataType::Int8 => Ok(ColumnarValue::Scalar(ScalarValue::Int8(
@@ -93,7 +128,8 @@ impl PhysicalExpr for Int32WrappingCastExpr {
                 ))),
             },
             ColumnarValue::Scalar(value) => Err(DataFusionError::Execution(format!(
-                "wrapping cast expected Int32 scalar, got {}",
+                "wrapping cast expected {} scalar, got {}",
+                self.source,
                 value.data_type()
             ))),
         }
@@ -118,6 +154,7 @@ impl PhysicalExpr for Int32WrappingCastExpr {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(Arc::new(Self::new(
             Arc::clone(&children[0]),
+            self.source.clone(),
             self.target.clone(),
         )))
     }

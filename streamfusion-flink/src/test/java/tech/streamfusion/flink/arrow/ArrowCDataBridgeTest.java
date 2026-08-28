@@ -236,6 +236,35 @@ class ArrowCDataBridgeTest {
     }
 
     @Test
+    void narrowsSmallintToTinyintWithFlinkOverflowParity() {
+        RowType inputType = RowType.of(new SmallIntType(true));
+        RowType outputType = RowType.of(new TinyIntType(true));
+        List<Short> values = List.of(
+                Short.MIN_VALUE,
+                (short) -129,
+                (short) -128,
+                (short) -1,
+                (short) 0,
+                (short) 127,
+                (short) 128,
+                Short.MAX_VALUE);
+        List<RowData> rows = new ArrayList<>(values.stream()
+                .map(value -> (RowData) GenericRowData.of(value))
+                .collect(java.util.stream.Collectors.toList()));
+        rows.add(GenericRowData.of((Object) null));
+
+        try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+                ArrowRowDataBatch input = ArrowRowDataBatch.transpose(rows, inputType, allocator);
+                ArrowRowDataBatch output =
+                        ArrowCDataBridge.execute(smallintToTinyintPlan(), input, outputType, allocator)) {
+            for (int index = 0; index < values.size(); index++) {
+                assertThat(output.rowView(index).getByte(0)).isEqualTo((byte) (short) values.get(index));
+            }
+            assertThat(output.rowView(values.size()).isNullAt(0)).isTrue();
+        }
+    }
+
+    @Test
     void importsAnEmptyNativeResultWithoutLeakingItsSchemaOrBuffers() {
         RowType rowType = RowType.of(new IntType(false));
 
@@ -628,6 +657,20 @@ class ArrowCDataBridgeTest {
                 0,
                 LogicalType.newBuilder().setSmallint(EmptyType.getDefaultInstance()),
                 CastKind.CAST_KIND_INTEGER_TO_SMALLINT);
+        return NativePlan.newBuilder()
+                .setProtocolVersion(1)
+                .setRoot(Operator.newBuilder().setCalc(calc))
+                .build()
+                .toByteArray();
+    }
+
+    private static byte[] smallintToTinyintPlan() {
+        Calc.Builder calc = Calc.newBuilder().setInput(Operator.newBuilder().setInput(Input.newBuilder()));
+        addCast(
+                calc,
+                0,
+                LogicalType.newBuilder().setTinyint(EmptyType.getDefaultInstance()),
+                CastKind.CAST_KIND_SMALLINT_TO_TINYINT);
         return NativePlan.newBuilder()
                 .setProtocolVersion(1)
                 .setRoot(Operator.newBuilder().setCalc(calc))
