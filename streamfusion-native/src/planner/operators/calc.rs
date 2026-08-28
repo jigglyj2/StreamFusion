@@ -147,6 +147,13 @@ pub(super) fn create_expression(
                 .ok_or_else(|| DataFusionError::Plan("SIGN operand is empty".to_string()))?;
             expressions::sign::create(create_expression(operand, schema)?, schema)
         }
+        Some(proto::expression::Expression::SquareRoot(square_root)) => {
+            let operand = square_root
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("SQRT operand is empty".to_string()))?;
+            expressions::square_root::create(create_expression(operand, schema)?, schema)
+        }
         Some(proto::expression::Expression::CharacterLength(character_length)) => {
             let operand = character_length
                 .operand

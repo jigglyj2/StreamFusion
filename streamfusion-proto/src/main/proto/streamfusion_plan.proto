@@ -100,6 +100,7 @@ message Expression {
     StringAscii string_ascii = 69;
     StringLeft string_left = 70;
     StringRight string_right = 71;
+    SquareRoot square_root = 72;
   }
 }
 
@@ -264,6 +265,10 @@ message StringLeft {
 message StringRight {
   Expression value = 1;
   Expression count = 2;
+}
+
+message SquareRoot {
+  Expression operand = 1;
 }
 
 message Coalesce {

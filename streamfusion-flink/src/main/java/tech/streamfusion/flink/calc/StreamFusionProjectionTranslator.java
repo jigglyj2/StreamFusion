@@ -43,6 +43,7 @@ import tech.streamfusion.proto.plan.v1.Lower;
 import tech.streamfusion.proto.plan.v1.NullLiteral;
 import tech.streamfusion.proto.plan.v1.ShortLiteral;
 import tech.streamfusion.proto.plan.v1.Sign;
+import tech.streamfusion.proto.plan.v1.SquareRoot;
 import tech.streamfusion.proto.plan.v1.StringLiteral;
 import tech.streamfusion.proto.plan.v1.Substring;
 import tech.streamfusion.proto.plan.v1.TimeLiteral;
@@ -268,6 +269,20 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
                     : Expression.newBuilder()
                             .setSign(Sign.newBuilder().setOperand(operand))
                             .build();
+        }
+        if ("POWER".equals(functionName(expression)) && expectedType.getTypeRoot() == LogicalTypeRoot.DOUBLE) {
+            List<?> operands = (List<?>) invoke(expression, "getOperands");
+            if (operands.size() == 2) {
+                Double exponent = literal(operands.get(1), Double.class);
+                if (exponent != null && Double.compare(exponent, 0.5d) == 0) {
+                    Expression operand = projectionExpression(operands.get(0), inputType, expectedType);
+                    if (operand != null) {
+                        return Expression.newBuilder()
+                                .setSquareRoot(SquareRoot.newBuilder().setOperand(operand))
+                                .build();
+                    }
+                }
+            }
         }
         if ("CHAR_LENGTH".equals(functionName(expression)) || "CHARACTER_LENGTH".equals(functionName(expression))) {
             List<?> operands = (List<?>) invoke(expression, "getOperands");

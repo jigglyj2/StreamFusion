@@ -249,6 +249,11 @@ branches and an `ELSE` expression.
 DataFusion's vectorized math function. Signed integers use a vectorized DataFusion `CASE`
 around StreamFusion's wrapping unary minus so Flink's minimum-value behavior is preserved.
 Parity coverage includes signed integer minima, nulls, infinities, NaN, and signed zero.
+`SQRT` is accelerated for numeric operands after Flink coerces them to `DOUBLE`. Flink lowers the
+call to `POWER(value, 0.5)`; StreamFusion preserves that shape in protobuf and uses DataFusion's
+vectorized power kernel. This retains Flink's NaN result for negative inputs, signed-zero behavior,
+infinities, and null propagation. General `POWER` remains on Flink because DataFusion rejects zero
+raised to a negative exponent while Flink returns a signed infinity.
 `CEIL` and `FLOOR` are accelerated for signed integers, `FLOAT`, and `DOUBLE`. Integer
 inputs are already integral and remain zero-copy references;
 floating-point inputs use DataFusion's vectorized math functions. Decimal and temporal forms

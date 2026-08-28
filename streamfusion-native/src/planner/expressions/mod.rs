@@ -44,6 +44,7 @@ pub(crate) mod null_literal;
 pub(crate) mod row_constructor;
 pub(crate) mod sign;
 pub(crate) mod split;
+pub(crate) mod square_root;
 pub(crate) mod starts_with;
 pub(crate) mod string_ascii;
 pub(crate) mod string_count_support;
