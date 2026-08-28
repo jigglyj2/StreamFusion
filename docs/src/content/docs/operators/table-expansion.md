@@ -70,6 +70,8 @@ expressions, rows containing maps, multisets, or arrays nested more than one lev
 nested more than one level, maps with collection keys or collection values outside the documented
 scalar-array shapes,
 nullable row-array elements with ordinality, multisets with nullable elements or collections nested more than one level,
+`UNNEST(MAP_ENTRIES(map))` (because Flink 2.3 reports nullable entry rows while preserving a
+non-null map-key output),
 user-defined table functions, and correlate
 conditions currently fall back. EXPLAIN identifies the rejected join form, function shape,
 operand, or element type and then reports whole-plan fallback.
@@ -78,6 +80,12 @@ Flink 2.3's row-array `WITH ORDINALITY` implementation violates its own output a
 it encounters a null row element. StreamFusion deliberately falls back for nullable row elements
 so it does not replace that failure with different observable behavior; EXPLAIN identifies this
 version-specific parity restriction.
+
+`MAP_KEYS(map)` and `MAP_VALUES(map)` can be computed and expanded in the same native plan.
+`MAP_ENTRIES(map)` remains accelerated as a projection, but directly expanding that computed
+array currently falls back because its Flink 2.3 row/nullability contract differs from an ordinary
+array of rows. StreamFusion reports the mismatched entry field in EXPLAIN rather than weakening
+type validation.
 
 ## Implementation
 

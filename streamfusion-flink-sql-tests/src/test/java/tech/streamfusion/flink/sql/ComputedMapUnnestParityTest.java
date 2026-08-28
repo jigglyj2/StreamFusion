@@ -77,4 +77,20 @@ class ComputedMapUnnestParityTest extends SqlParityTestSupport {
                 .isEqualTo(1);
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
+
+    @Test
+    void mapEntriesUnnestFallsBackForFlinkNullableEntryRowTyping() throws Exception {
+        assertDataStreamParity(
+                "SELECT map_key, map_value FROM map_entries_unnest_fallback_input "
+                        + "CROSS JOIN UNNEST(MAP_ENTRIES(metric)) AS expanded(map_key, map_value)",
+                Types.MAP(Types.STRING, Types.INT),
+                DataTypes.MAP(DataTypes.STRING().notNull(), DataTypes.INT()),
+                Arrays.asList(Row.of(java.util.Map.of("first", 1)), Row.of(java.util.Map.of()), Row.of((Object) null)),
+                "map_entries_unnest_fallback_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
+        assertThat(StreamFusionPlanningDiagnostics.explain())
+                .contains("array UNNEST output field 0 does not match its ROW element field")
+                .contains("Accelerated: no");
+    }
 }
