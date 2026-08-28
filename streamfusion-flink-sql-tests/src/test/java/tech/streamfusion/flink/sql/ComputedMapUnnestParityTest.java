@@ -36,4 +36,23 @@ class ComputedMapUnnestParityTest extends SqlParityTestSupport {
                 .isEqualTo(1);
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
+
+    @Test
+    void nativeUnnestEvaluatesMapKeysInsideTheSamePlan() throws Exception {
+        assertDataStreamParity(
+                "SELECT map_key, ord_idx FROM computed_map_keys_unnest_input "
+                        + "LEFT JOIN UNNEST(MAP_KEYS(metric)) WITH ORDINALITY "
+                        + "AS expanded(map_key, ord_idx) ON TRUE",
+                Types.MAP(Types.STRING, Types.INT),
+                DataTypes.MAP(DataTypes.STRING().notNull(), DataTypes.INT()),
+                Arrays.asList(
+                        Row.of(java.util.Map.of("first", 1, "second", 2)), Row.of(java.util.Map.of()), Row.of((Object)
+                                null)),
+                "computed_map_keys_unnest_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isEqualTo(1);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
 }
