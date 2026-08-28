@@ -22,7 +22,7 @@ The supported predicates are `=`, `<>`, `<`, `<=`, `>`, and `>=` between a `TINY
 `SMALLINT`, `INTEGER`, `BIGINT`, `FLOAT`, or `DOUBLE` column and a compatible literal. Either operand order is accepted,
 and the filtered column does not need to appear in the projection. A null input produces
 SQL unknown and is removed by `WHERE`, matching Flink. Unsupported column pairs,
-functions, and other operand types currently fall back to Flink.
+unlisted functions, and other operand types currently fall back to Flink.
 
 Floating-point literals must be finite. StreamFusion falls back for NaN or infinite
 literals until their ordering and equality semantics are proven identical across Flink,

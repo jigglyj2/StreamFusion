@@ -5,7 +5,8 @@ sidebar:
   order: 1
 ---
 
-**Current status:** Input-reference projections are accelerated.
+**Current status:** Input references, literals, supported arithmetic/casts, conditionals,
+and the explicitly listed stateless functions are accelerated.
 
 ## SQL example
 

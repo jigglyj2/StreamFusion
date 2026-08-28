@@ -1407,9 +1407,15 @@ class SqlParityTest {
         assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
     }
 
-    @Test
-    void nullContainingInSearchMatchesFlinkByteForByte() throws Exception {
-        assertIntegerDataStreamParity("SELECT metric FROM integer_input WHERE metric IN (1, 3, NULL)");
+    @ParameterizedTest(name = "null-containing IN {0}")
+    @ValueSource(
+            strings = {
+                "metric IN (1, 3, NULL)",
+                "metric IN (1, 3, NULL) AND metric > 0",
+                "metric IN (1, 3, NULL) OR metric = 2"
+            })
+    void nullContainingInSearchMatchesFlinkByteForByte(String predicate) throws Exception {
+        assertIntegerDataStreamParity("SELECT metric FROM integer_input WHERE " + predicate);
 
         assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
     }
