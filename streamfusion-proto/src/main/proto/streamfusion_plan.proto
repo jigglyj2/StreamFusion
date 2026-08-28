@@ -40,6 +40,8 @@ message Expression {
     LongLiteral long_literal = 9;
     ByteLiteral byte_literal = 10;
     ShortLiteral short_literal = 11;
+    FloatLiteral float_literal = 12;
+    DoubleLiteral double_literal = 13;
   }
 }
 
@@ -57,6 +59,14 @@ message ByteLiteral {
 
 message ShortLiteral {
   int32 value = 1;
+}
+
+message FloatLiteral {
+  float value = 1;
+}
+
+message DoubleLiteral {
+  double value = 1;
 }
 
 message GreaterThanOrEqual {

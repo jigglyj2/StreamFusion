@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-**Current status:** Simple integral comparisons are accelerated.
+**Current status:** Simple integral and finite floating-point comparisons are accelerated.
 
 ## SQL example
 
@@ -18,10 +18,15 @@ WHERE id >= 100;
 ## Acceleration and fallback
 
 The supported predicates are `=`, `<>`, `<`, `<=`, `>`, and `>=` between a `TINYINT`,
-`SMALLINT`, `INTEGER`, or `BIGINT` column and a compatible integer literal. Either operand order is accepted,
+`SMALLINT`, `INTEGER`, `BIGINT`, `FLOAT`, or `DOUBLE` column and a compatible literal. Either operand order is accepted,
 and the filtered column does not need to appear in the projection. A null input produces
 SQL unknown and is removed by `WHERE`, matching Flink. Column-to-column comparisons,
 functions, and other operand types currently fall back to Flink.
+
+Floating-point literals must be finite. StreamFusion falls back for NaN or infinite
+literals until their ordering and equality semantics are proven identical across Flink,
+Arrow, and DataFusion. Planner-inserted casts that obscure the direct column/literal
+shape also cause the whole Calc to fall back.
 
 `IS NULL` and `IS NOT NULL` are supported over direct input columns of every scalar type
 listed on the [projection coverage page](../projections/).

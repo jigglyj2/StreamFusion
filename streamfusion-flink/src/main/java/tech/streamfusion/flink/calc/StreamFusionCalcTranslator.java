@@ -268,6 +268,18 @@ public final class StreamFusionCalcTranslator {
             Long literal = longLiteral(literalExpression);
             return literal == null ? null : new StreamFusionLongComparison(inputIndex, literal, operator, inputOnLeft);
         }
+        if (type == LogicalTypeRoot.FLOAT) {
+            Float literal = literal(literalExpression, Float.class);
+            return literal == null || !Float.isFinite(literal)
+                    ? null
+                    : new StreamFusionFloatComparison(inputIndex, literal, operator, inputOnLeft);
+        }
+        if (type == LogicalTypeRoot.DOUBLE) {
+            Double literal = literal(literalExpression, Double.class);
+            return literal == null || !Double.isFinite(literal)
+                    ? null
+                    : new StreamFusionDoubleComparison(inputIndex, literal, operator, inputOnLeft);
+        }
         return null;
     }
 

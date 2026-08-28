@@ -80,6 +80,12 @@ fn create_expression(
                 ))
             })?)),
         ))),
+        Some(proto::expression::Expression::FloatLiteral(literal)) => Ok(Arc::new(Literal::new(
+            ScalarValue::Float32(Some(literal.value)),
+        ))),
+        Some(proto::expression::Expression::DoubleLiteral(literal)) => Ok(Arc::new(Literal::new(
+            ScalarValue::Float64(Some(literal.value)),
+        ))),
         Some(proto::expression::Expression::GreaterThanOrEqual(comparison)) => {
             Ok(Arc::new(BinaryExpr::new(
                 create_expression(

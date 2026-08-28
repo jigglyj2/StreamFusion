@@ -195,6 +195,34 @@ class SqlParityTest {
     }
 
     @ParameterizedTest(name = "{0}")
+    @MethodSource("nativeFloatingPointComparisonCases")
+    void nativeFloatingPointComparisonsMatchFlinkByteForByte(
+            String ignoredName, String valueType, String predicate, boolean nativeExecutionExpected) throws Exception {
+        String sql = "SELECT payload FROM (VALUES "
+                + "(CAST(-1.5 AS "
+                + valueType
+                + "), 10), (CAST(0.5 AS "
+                + valueType
+                + "), 20), (CAST(2.5 AS "
+                + valueType
+                + "), 30)) AS input(metric, payload) WHERE "
+                + predicate;
+        assertParity(sql, true);
+
+        if (nativeExecutionExpected) {
+            assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        }
+    }
+
+    private static Stream<Arguments> nativeFloatingPointComparisonCases() {
+        return Stream.of(
+                Arguments.of("FLOAT coerced input falls back", "FLOAT", "metric >= 0.5", false),
+                Arguments.of("FLOAT native comparison", "FLOAT", "CAST(0.5 AS FLOAT) < metric", true),
+                Arguments.of("DOUBLE coerced input falls back", "DOUBLE", "metric >= 0.5", false),
+                Arguments.of("DOUBLE native comparison", "DOUBLE", "CAST(0.5 AS DOUBLE) < metric", true));
+    }
+
+    @ParameterizedTest(name = "{0}")
     @MethodSource("nativeNullPredicateCases")
     void nativeNullPredicatesMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {
         String sql = "SELECT id FROM (VALUES (1), (CAST(NULL AS INT)), (3)) AS input(id) WHERE " + predicate;
