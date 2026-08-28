@@ -10,8 +10,10 @@ accelerator nodes. Flink first builds its normal exec graph. The StreamFusion gr
 processor proves whole-plan eligibility and replaces eligible `StreamExecCalc` nodes
 with `StreamFusionExecCalc` nodes. The original Flink nodes are neither modified nor
 given native execution branches; if eligibility fails, the original graph is returned
-unchanged. Each StreamFusion exec node then creates its corresponding StreamFusion
-runtime operator.
+unchanged. At translation time, the outermost `StreamFusionExecCalc` collects every
+adjacent StreamFusion Calc below it, preserves their input-to-output order, and creates
+one Flink runtime operator for the connected chain. A non-StreamFusion node ends the
+chain and therefore defines a native-plan boundary.
 
 ```text
 Flink source
@@ -26,7 +28,7 @@ Sources and sinks are the only boundary exceptions. A connector may eventually s
 
 Creating this Java view must not copy row payloads. A native boundary implementation may still need to materialize Arrow column buffers once when a source is genuinely row-based—row and column memory layouts cannot be relabeled into one another. If a connector already owns Arrow-compatible columnar buffers, its view should import or retain those buffers instead. The sink side follows the inverse ownership protocol through the same boundary abstraction.
 
-The Arrow boundary follows PyFlink's lightweight model: `ColumnarRowData` moves a reusable row index over Flink column vectors backed by Arrow vectors. Its implemented type matrix includes compatible scalar, temporal, decimal128, string, binary, array, map, nested-row, and null types. Arrow C Data release ownership is implemented at the single-calc boundary. Flink managed-memory allocation and checkpoint-aware native state remain TODO.
+The Arrow boundary follows PyFlink's lightweight model: `ColumnarRowData` moves a reusable row index over Flink column vectors backed by Arrow vectors. Its implemented type matrix includes compatible scalar, temporal, decimal128, string, binary, array, map, nested-row, and null types. Arrow C Data release ownership is implemented at the fused Calc-chain boundary. Flink managed-memory allocation and checkpoint-aware native state remain TODO.
 
 ## Native batch pipeline
 
@@ -46,6 +48,13 @@ vectorized model. Each physical operator consumes a batch and completes before i
 parent consumes the output: a chain of three calc nodes remains calc → calc → calc.
 The stages use ordinary DataFusion execution operators and remain separately visible
 for metrics, diagnostics, and parity tests.
+
+Adjacent Calc fusion is implemented. Java encodes `Calc(Calc(...Input))` as one native
+protobuf tree, and Rust recursively lowers it into distinct DataFusion filter and
+projection stages. Each input batch crosses JNI once for the complete chain. The hidden
+input ordinal used to preserve Flink `RowKind` is projected through every stage and is
+removed only at the outer output boundary. Identity-chain tests also compare Arrow
+buffer addresses and prove that adjacent projections retain the same underlying buffer.
 
 ## Protobuf plan handoff
 
