@@ -22,7 +22,9 @@ import org.apache.flink.streaming.api.transformations.OneInputTransformation;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.TimestampData;
 import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
+import org.apache.flink.table.types.logical.BinaryType;
 import org.apache.flink.table.types.logical.DecimalType;
+import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.TimeType;
@@ -587,11 +589,14 @@ public final class StreamFusionCalcTranslator {
                     ? null
                     : new StreamFusionStringComparison(inputIndex, literal, operator, inputOnLeft);
         }
-        if (type == LogicalTypeRoot.VARBINARY) {
+        if (type == LogicalTypeRoot.BINARY || type == LogicalTypeRoot.VARBINARY) {
             byte[] literal = literal(literalExpression, byte[].class);
-            return literal == null
+            LogicalType logicalType = inputType.getTypeAt(inputIndex);
+            boolean fixedWidth = type == LogicalTypeRoot.BINARY;
+            int length = fixedWidth ? ((BinaryType) logicalType).getLength() : literal == null ? 0 : literal.length;
+            return literal == null || (fixedWidth && literal.length != length)
                     ? null
-                    : new StreamFusionBinaryComparison(inputIndex, literal, operator, inputOnLeft);
+                    : new StreamFusionBinaryComparison(inputIndex, literal, fixedWidth, length, operator, inputOnLeft);
         }
         if (type == LogicalTypeRoot.DATE) {
             Integer epochDay = integerLiteral(literalExpression);

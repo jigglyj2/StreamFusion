@@ -11,6 +11,7 @@ package tech.streamfusion.flink.arrow;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.google.protobuf.ByteString;
 import java.util.ArrayList;
 import java.util.List;
 import org.apache.arrow.memory.RootAllocator;
@@ -23,6 +24,7 @@ import org.apache.flink.table.data.StringData;
 import org.apache.flink.table.data.TimestampData;
 import org.apache.flink.table.types.logical.ArrayType;
 import org.apache.flink.table.types.logical.BigIntType;
+import org.apache.flink.table.types.logical.BinaryType;
 import org.apache.flink.table.types.logical.BooleanType;
 import org.apache.flink.table.types.logical.DecimalType;
 import org.apache.flink.table.types.logical.DoubleType;
@@ -39,6 +41,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import tech.streamfusion.proto.plan.v1.Arithmetic;
 import tech.streamfusion.proto.plan.v1.ArithmeticOperator;
+import tech.streamfusion.proto.plan.v1.BinaryLiteral;
 import tech.streamfusion.proto.plan.v1.Calc;
 import tech.streamfusion.proto.plan.v1.Cast;
 import tech.streamfusion.proto.plan.v1.CastKind;
@@ -383,6 +386,24 @@ class ArrowCDataBridgeTest {
     }
 
     @Test
+    void comparesFixedWidthBinaryThroughTheCDataBoundary() {
+        RowType rowType = RowType.of(new BinaryType(false, 3));
+        List<RowData> rows = List.of(
+                GenericRowData.of(new byte[] {0, 0, 1}),
+                GenericRowData.of(new byte[] {0x7f, (byte) 0xff, (byte) 0xff}),
+                GenericRowData.of(new byte[] {(byte) 0x80, 0, 0}));
+
+        try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+                ArrowRowDataBatch input = ArrowRowDataBatch.transpose(rows, rowType, allocator);
+                ArrowRowDataBatch output =
+                        ArrowCDataBridge.execute(fixedBinaryComparisonPlan(), input, rowType, allocator)) {
+            assertThat(output.size()).isEqualTo(2);
+            assertThat(output.rowView(0).getBinary(0)).containsExactly(0, 0, 1);
+            assertThat(output.rowView(1).getBinary(0)).containsExactly(0x7f, 0xff, 0xff);
+        }
+    }
+
+    @Test
     void projectsAndReordersCompatibleColumnsThroughDataFusion() {
         RowType inputType = RowType.of(
                 new IntType(false), new VarCharType(), new DecimalType(10, 2), new ArrayType(new VarCharType()));
@@ -585,6 +606,36 @@ class ArrowCDataBridgeTest {
                                 .setLeft(reference)
                                 .setRight(literal)
                                 .setOperator(operator)))
+                .build();
+        return NativePlan.newBuilder()
+                .setProtocolVersion(1)
+                .setRoot(Operator.newBuilder().setCalc(calc))
+                .build()
+                .toByteArray();
+    }
+
+    private static byte[] fixedBinaryComparisonPlan() {
+        LogicalType binary = LogicalType.newBuilder()
+                .setNullable(false)
+                .setBinary(EmptyType.getDefaultInstance())
+                .build();
+        Expression reference = Expression.newBuilder()
+                .setInputReference(InputReference.newBuilder().setIndex(0).setType(binary))
+                .build();
+        Expression literal = Expression.newBuilder()
+                .setBinaryLiteral(BinaryLiteral.newBuilder()
+                        .setValue(ByteString.copyFrom(new byte[] {(byte) 0x80, 0, 0}))
+                        .setFixedWidth(true)
+                        .setLength(3))
+                .build();
+        Calc calc = Calc.newBuilder()
+                .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
+                .addProjections(reference)
+                .setCondition(Expression.newBuilder()
+                        .setComparison(Comparison.newBuilder()
+                                .setLeft(reference)
+                                .setRight(literal)
+                                .setOperator(ComparisonOperator.COMPARISON_OPERATOR_LESS_THAN)))
                 .build();
         return NativePlan.newBuilder()
                 .setProtocolVersion(1)

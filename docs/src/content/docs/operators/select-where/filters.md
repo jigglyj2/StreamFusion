@@ -30,11 +30,11 @@ Arrow, and DataFusion. Planner-inserted casts that obscure the direct column/lit
 shape also cause the whole Calc to fall back.
 
 The same six predicates support direct, exactly matching column pairs for `TINYINT`,
-`SMALLINT`, `INTEGER`, `BIGINT`, `VARCHAR`, `DECIMAL`, `DATE`, `TIME`, and
-`TIMESTAMP WITHOUT TIME ZONE`. Decimal precision
+`SMALLINT`, `INTEGER`, `BIGINT`, `VARCHAR`, `BINARY`, `VARBINARY`, `DECIMAL`, `DATE`,
+`TIME`, and `TIMESTAMP WITHOUT TIME ZONE`. Decimal precision
 and scale and temporal precision must match on both sides. Direct `BOOLEAN` pairs support
-`=` and `<>`. A null on either side produces SQL unknown. Floating-point, `CHAR`, fixed-width
-`BINARY`, mismatched, and planner-cast column pairs currently
+`=` and `<>`. A null on either side produces SQL unknown. Floating-point, `CHAR`,
+mismatched, and planner-cast column pairs currently
 fall back to Flink.
 
 The same six predicates support `DATE` columns compared with `DATE` literals, including
@@ -46,10 +46,11 @@ literal or an exactly matching `VARCHAR` column. Ordering is binary UTF-8, inclu
 empty and non-ASCII strings. `CHAR` remains on Flink because its padding semantics need
 separate parity coverage.
 
-Direct `VARBINARY` columns support all six ordered comparisons against a direct binary
-literal or an exactly matching `VARBINARY` column. Bytes compare lexicographically as
-unsigned values, and shorter equal-prefix values sort first. Fixed-width `BINARY` remains
-on Flink pending padding and width parity coverage.
+Direct `BINARY` and `VARBINARY` columns support all six ordered comparisons against a
+direct binary literal or an exactly matching column. Bytes compare lexicographically as
+unsigned values, and shorter equal-prefix values sort first. `BINARY(n)` is accelerated
+only when both column operands have the same width or the planner has already padded or
+truncated the literal to exactly `n` bytes; other shapes fall back.
 
 `TIME` comparisons preserve Flink's millisecond-of-day representation. The protobuf also
 carries the declared precision so Rust creates the matching Arrow `Time32` or `Time64`
@@ -85,7 +86,7 @@ The null-safe boolean predicates `IS TRUE`, `IS FALSE`, `IS NOT TRUE`, and `IS N
 are accelerated over any supported boolean expression.
 
 `IS DISTINCT FROM` and `IS NOT DISTINCT FROM` are accelerated for the same numeric,
-`VARCHAR`, `VARBINARY`, and temporal column/literal and matching column/column types as
+`VARCHAR`, `BINARY`, `VARBINARY`, and temporal column/literal and matching column/column types as
 ordinary comparisons, plus matching boolean column pairs. Unlike `=` and `<>`, they
 always return a non-null boolean and treat two nulls as not distinct.
 This includes matching `TINYINT` and `SMALLINT` column pairs; no widening cast is inserted.

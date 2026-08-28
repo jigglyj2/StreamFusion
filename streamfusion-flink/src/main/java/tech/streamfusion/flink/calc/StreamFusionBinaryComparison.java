@@ -16,12 +16,22 @@ import tech.streamfusion.proto.plan.v1.BinaryLiteral;
 import tech.streamfusion.proto.plan.v1.ComparisonOperator;
 import tech.streamfusion.proto.plan.v1.Expression;
 
-/** Ordered comparison between a VARBINARY input column and literal. */
+/** Ordered comparison between a BINARY or VARBINARY input column and literal. */
 final class StreamFusionBinaryComparison extends StreamFusionOrderedComparison {
     private static final long serialVersionUID = 1L;
     private final byte[] literal;
 
     StreamFusionBinaryComparison(int inputIndex, byte[] literal, ComparisonOperator operator, boolean inputOnLeft) {
+        this(inputIndex, literal, false, literal.length, operator, inputOnLeft);
+    }
+
+    StreamFusionBinaryComparison(
+            int inputIndex,
+            byte[] literal,
+            boolean fixedWidth,
+            int length,
+            ComparisonOperator operator,
+            boolean inputOnLeft) {
         super(
                 inputIndex,
                 operator,
@@ -29,9 +39,12 @@ final class StreamFusionBinaryComparison extends StreamFusionOrderedComparison {
                 Expression.newBuilder()
                         .setBinaryLiteral(BinaryLiteral.newBuilder()
                                 .setValue(ByteString.copyFrom(literal))
-                                .setFixedWidth(false)
-                                .setLength(literal.length))
+                                .setFixedWidth(fixedWidth)
+                                .setLength(length))
                         .build());
+        if (fixedWidth && literal.length != length) {
+            throw new IllegalArgumentException("BINARY(" + length + ") literal has " + literal.length + " bytes");
+        }
         this.literal = literal.clone();
     }
 
