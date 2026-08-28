@@ -18,7 +18,9 @@ package tech.streamfusion.flink.sql;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.table.api.DataTypes;
@@ -29,6 +31,24 @@ import tech.streamfusion.flink.StreamFusionPlannerFactory;
 import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 
 class ComplexTypeAccessParityTest extends SqlParityTestSupport {
+    @Test
+    void mapElementsMatchFlinkByteForByte() throws Exception {
+        Map<String, Integer> first = new LinkedHashMap<>();
+        first.put("present", 7);
+        first.put("null_value", null);
+        Map<String, Integer> second = new LinkedHashMap<>();
+        second.put("present", 9);
+
+        assertDataStreamParity(
+                "SELECT metric['present'], metric['null_value'], metric['missing'] FROM map_input",
+                Types.MAP(Types.STRING, Types.INT),
+                DataTypes.MAP(DataTypes.STRING().notNull(), DataTypes.INT()),
+                Arrays.asList(Row.of(first), Row.of(second), Row.of(new LinkedHashMap<>()), Row.of((Object) null)),
+                "map_input");
+
+        assertNativeCalcRan();
+    }
+
     @Test
     void arrayElementsMatchFlinkByteForByte() throws Exception {
         assertDataStreamParity(
