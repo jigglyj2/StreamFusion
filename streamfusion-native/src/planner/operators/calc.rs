@@ -81,6 +81,21 @@ fn create_expression(
                 schema,
             )
         }
+        Some(proto::expression::Expression::MapElement(element)) => {
+            let map = element
+                .map
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("map element is missing its map".into()))?;
+            let key = element
+                .key
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("map element is missing its key".into()))?;
+            expressions::map_element::create(
+                create_expression(map, schema)?,
+                create_expression(key, schema)?,
+                schema,
+            )
+        }
         Some(proto::expression::Expression::IntegerLiteral(literal)) => Ok(Arc::new(Literal::new(
             ScalarValue::Int32(Some(literal.value)),
         ))),

@@ -22,6 +22,7 @@ import org.apache.flink.table.types.logical.MapType;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.proto.plan.v1.ArrayElement;
 import tech.streamfusion.proto.plan.v1.Expression;
+import tech.streamfusion.proto.plan.v1.MapElement;
 import tech.streamfusion.proto.plan.v1.StructField;
 
 /** Complex-type expressions kept separate from the scalar Calc translator. */
@@ -59,6 +60,37 @@ final class StreamFusionComplexProjectionTranslator extends StreamFusionRexSuppo
                 : Expression.newBuilder()
                         .setArrayElement(
                                 ArrayElement.newBuilder().setArray(array).setIndex(index))
+                        .build();
+    }
+
+    static Expression mapElement(Object expression, RowType inputType, LogicalType expectedType) {
+        if (!"ITEM"
+                .equals(
+                        hasNoArgMethod(expression, "getKind")
+                                ? invoke(expression, "getKind").toString()
+                                : "")) {
+            return null;
+        }
+        java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
+        if (operands.size() != 2) {
+            return null;
+        }
+        LogicalType collectionType = logicalType(operands.get(0), inputType);
+        if (!(collectionType instanceof MapType)) {
+            return null;
+        }
+        MapType mapType = (MapType) collectionType;
+        if (!mapType.getValueType().copy(expectedType.isNullable()).equals(expectedType)) {
+            return null;
+        }
+        Expression map =
+                StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, collectionType);
+        Expression key =
+                StreamFusionProjectionTranslator.projectionExpression(operands.get(1), inputType, mapType.getKeyType());
+        return map == null || key == null
+                ? null
+                : Expression.newBuilder()
+                        .setMapElement(MapElement.newBuilder().setMap(map).setKey(key))
                         .build();
     }
 

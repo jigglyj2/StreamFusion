@@ -65,6 +65,10 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
         if (arrayElement != null) {
             return arrayElement;
         }
+        Expression mapElement = StreamFusionComplexProjectionTranslator.mapElement(expression, inputType, expectedType);
+        if (mapElement != null) {
+            return mapElement;
+        }
         if (isNullLiteral(expression) && supportsNullLiteral(expectedType.getTypeRoot())) {
             return Expression.newBuilder()
                     .setNullLiteral(NullLiteral.newBuilder()
