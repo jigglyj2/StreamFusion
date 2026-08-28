@@ -29,6 +29,48 @@ import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 
 class CollectionFunctionParityTest extends SqlParityTestSupport {
     @Test
+    void arrayContainsMatchesFlinkByteForByteInProjectionAndFilter() throws Exception {
+        java.util.List<Row> rows = Arrays.asList(
+                Row.of((Object) new Integer[] {1, 2, 3}),
+                Row.of((Object) new Integer[] {1, null, 3}),
+                Row.of((Object) new Integer[] {}),
+                Row.of((Object) null));
+
+        assertDataStreamParity(
+                "SELECT ARRAY_CONTAINS(metric, 2), ARRAY_CONTAINS(metric, 42) FROM array_input",
+                Types.OBJECT_ARRAY(Types.INT),
+                DataTypes.ARRAY(DataTypes.INT()),
+                rows,
+                "array_input");
+        assertNativeCalcRan();
+
+        assertDataStreamParity(
+                "SELECT metric FROM filtered_array_input WHERE ARRAY_CONTAINS(metric, 3)",
+                Types.OBJECT_ARRAY(Types.INT),
+                DataTypes.ARRAY(DataTypes.INT()),
+                rows,
+                "filtered_array_input");
+        assertNativeCalcRan();
+    }
+
+    @Test
+    void nullableArrayContainsNeedleFallsBackWithSemanticReason() throws Exception {
+        assertDataStreamParity(
+                "SELECT ARRAY_CONTAINS(metric, CAST(NULL AS INT)) FROM nullable_needle_input",
+                Types.OBJECT_ARRAY(Types.INT),
+                DataTypes.ARRAY(DataTypes.INT()),
+                Arrays.asList(
+                        Row.of((Object) new Integer[] {1, null, 3}),
+                        Row.of((Object) new Integer[] {1, 2, 3}),
+                        Row.of((Object) null)),
+                "nullable_needle_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
+        assertThat(StreamFusionPlanningDiagnostics.explain())
+                .contains("Flink searches for null while DataFusion returns null without searching");
+    }
+
+    @Test
     void arrayCardinalityMatchesFlinkByteForByte() throws Exception {
         assertDataStreamParity(
                 "SELECT CARDINALITY(metric) FROM array_input",
