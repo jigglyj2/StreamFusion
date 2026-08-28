@@ -234,6 +234,11 @@ abstract class StreamFusionExpressionTranslator extends StreamFusionProjectionTr
                 return search;
             }
         }
+        Expression arrayContains = StreamFusionComplexProjectionTranslator.arrayContains(
+                expression, inputType, new org.apache.flink.table.types.logical.BooleanType(true));
+        if (arrayContains != null) {
+            return arrayContains;
+        }
         StreamFusionCondition legacy = condition(expression, inputType);
         return legacy == null ? null : legacy.expression();
     }

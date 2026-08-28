@@ -20,6 +20,7 @@ import org.apache.flink.table.types.logical.ArrayType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.MapType;
 import org.apache.flink.table.types.logical.RowType;
+import tech.streamfusion.proto.plan.v1.ArrayContains;
 import tech.streamfusion.proto.plan.v1.ArrayElement;
 import tech.streamfusion.proto.plan.v1.Cardinality;
 import tech.streamfusion.proto.plan.v1.Expression;
@@ -53,6 +54,13 @@ final class StreamFusionComplexProjectionTranslator extends StreamFusionRexSuppo
                     return "ARRAY access requires a positive integer literal index; zero, negative, and "
                             + "computed indexes have not passed Flink parity coverage";
                 }
+            }
+        }
+        if ("ARRAY_CONTAINS".equals(function) && operands.size() == 2) {
+            LogicalType needle = logicalType(operands.get(1), inputType);
+            if (needle != null && needle.isNullable()) {
+                return "ARRAY_CONTAINS with a nullable needle stays on Flink because Flink searches for null "
+                        + "while DataFusion returns null without searching";
             }
         }
         return null;
@@ -145,6 +153,36 @@ final class StreamFusionComplexProjectionTranslator extends StreamFusionRexSuppo
                 ? null
                 : Expression.newBuilder()
                         .setCardinality(Cardinality.newBuilder().setCollection(collection))
+                        .build();
+    }
+
+    static Expression arrayContains(Object expression, RowType inputType, LogicalType expectedType) {
+        if (!"ARRAY_CONTAINS".equals(functionName(expression))
+                || expectedType.getTypeRoot() != org.apache.flink.table.types.logical.LogicalTypeRoot.BOOLEAN) {
+            return null;
+        }
+        java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
+        if (operands.size() != 2) {
+            return null;
+        }
+        LogicalType collectionType = logicalType(operands.get(0), inputType);
+        if (!(collectionType instanceof ArrayType)) {
+            return null;
+        }
+        LogicalType elementType = ((ArrayType) collectionType).getElementType();
+        LogicalType needleType = logicalType(operands.get(1), inputType);
+        if (needleType == null || needleType.isNullable()) {
+            return null;
+        }
+        Expression array =
+                StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, collectionType);
+        Expression needle = StreamFusionProjectionTranslator.projectionExpression(
+                operands.get(1), inputType, elementType.copy(false));
+        return array == null || needle == null
+                ? null
+                : Expression.newBuilder()
+                        .setArrayContains(
+                                ArrayContains.newBuilder().setArray(array).setNeedle(needle))
                         .build();
     }
 

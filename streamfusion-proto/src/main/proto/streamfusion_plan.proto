@@ -70,6 +70,7 @@ message Expression {
     ArrayElement array_element = 39;
     MapElement map_element = 40;
     Cardinality cardinality = 41;
+    ArrayContains array_contains = 42;
   }
 }
 
@@ -90,6 +91,11 @@ message MapElement {
 
 message Cardinality {
   Expression collection = 1;
+}
+
+message ArrayContains {
+  Expression array = 1;
+  Expression needle = 2;
 }
 
 message Coalesce {

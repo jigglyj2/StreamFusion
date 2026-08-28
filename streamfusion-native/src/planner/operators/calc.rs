@@ -102,6 +102,19 @@ fn create_expression(
             })?;
             expressions::cardinality::create(create_expression(collection, schema)?, schema)
         }
+        Some(proto::expression::Expression::ArrayContains(contains)) => {
+            let array = contains.array.as_ref().ok_or_else(|| {
+                DataFusionError::Plan("array contains is missing its array".into())
+            })?;
+            let needle = contains.needle.as_ref().ok_or_else(|| {
+                DataFusionError::Plan("array contains is missing its needle".into())
+            })?;
+            expressions::array_contains::create(
+                create_expression(array, schema)?,
+                create_expression(needle, schema)?,
+                schema,
+            )
+        }
         Some(proto::expression::Expression::IntegerLiteral(literal)) => Ok(Arc::new(Literal::new(
             ScalarValue::Int32(Some(literal.value)),
         ))),

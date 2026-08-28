@@ -74,6 +74,11 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
         if (cardinality != null) {
             return cardinality;
         }
+        Expression arrayContains =
+                StreamFusionComplexProjectionTranslator.arrayContains(expression, inputType, expectedType);
+        if (arrayContains != null) {
+            return arrayContains;
+        }
         if (isNullLiteral(expression) && supportsNullLiteral(expectedType.getTypeRoot())) {
             return Expression.newBuilder()
                     .setNullLiteral(NullLiteral.newBuilder()
