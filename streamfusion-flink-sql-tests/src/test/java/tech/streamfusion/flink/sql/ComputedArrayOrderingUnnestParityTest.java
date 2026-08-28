@@ -39,4 +39,24 @@ class ComputedArrayOrderingUnnestParityTest extends SqlParityTestSupport {
                 .isEqualTo(1);
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
+
+    @Test
+    void nativeUnnestObservesNegativeArraySliceBounds() throws Exception {
+        assertDataStreamParity(
+                "SELECT item, ord_idx FROM array_slice_unnest_input "
+                        + "LEFT JOIN UNNEST(ARRAY_SLICE(metric, -3, -1)) WITH ORDINALITY "
+                        + "AS expanded(item, ord_idx) ON TRUE",
+                Types.OBJECT_ARRAY(Types.INT),
+                DataTypes.ARRAY(DataTypes.INT()),
+                Arrays.asList(
+                        Row.of((Object) new Integer[] {1, null, 3, 4, 5}),
+                        Row.of((Object) new Integer[] {}),
+                        Row.of((Object) null)),
+                "array_slice_unnest_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isEqualTo(1);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
 }
