@@ -32,6 +32,9 @@ intermediate results. Signed integer overflow follows Flink's wrapping semantics
 Floating-point literals must be finite. Constant `TRUE` and `FALSE` projections are also
 accelerated, as are constant `DATE` values, including dates before the Unix epoch.
 Unary minus is accelerated for the same numeric types.
+Direct `DOUBLE` division is accelerated for arbitrary supported operands. It follows
+IEEE-754 semantics for positive and negative zero divisors, infinities, and NaN results.
+`FLOAT` division falls back because Flink plans that expression with widening casts.
 Boolean projections can recursively compose direct boolean columns and constants with
 `NOT`, `AND`, and `OR` using SQL's three-valued logic. Every comparison and null-check
 shape listed on the [filter coverage page](../filters/) can also be projected as a boolean
@@ -69,8 +72,8 @@ width, so
 DataFusion materializes a correctly typed all-null Arrow vector rather than an untyped
 Arrow `Null` vector.
 
-Division or remainder by zero or a non-literal divisor, decimal and floating-point
-division and remainder, unary plus, non-decimal mixed-width arithmetic, non-finite
+Integer division or remainder by zero or a non-literal divisor, decimal division and
+remainder, floating-point remainder, unary plus, non-decimal mixed-width arithmetic, non-finite
 floating-point literals, arithmetic on other types, casts, and functions currently fall
 back to Flink, except for the lossless casts listed above. The Calc also falls back if its
 filter is unsupported.

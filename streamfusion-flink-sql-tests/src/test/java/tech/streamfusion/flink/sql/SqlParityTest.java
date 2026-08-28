@@ -297,6 +297,22 @@ class SqlParityTest {
                 Arguments.of("decimal", "SELECT -metric FROM (VALUES (-12.34), (0.00), (99.99)) AS input(metric)"));
     }
 
+    @ParameterizedTest(name = "{0} division")
+    @MethodSource("nativeFloatingDivisionCases")
+    void nativeFloatingDivisionMatchesFlinkByteForByte(String ignoredName, String sql) throws Exception {
+        assertParity(sql, true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    private static Stream<Arguments> nativeFloatingDivisionCases() {
+        return Stream.of(Arguments.of(
+                "double",
+                "SELECT numerator / denominator FROM (VALUES "
+                        + "(7.0E0, 2.0E0), (1.0E0, 0.0E0), (-1.0E0, -0.0E0), (0.0E0, 0.0E0)) "
+                        + "AS input(numerator, denominator)"));
+    }
+
     @Test
     void nativeBigintArithmeticMatchesFlinkByteForByte() throws Exception {
         assertParity(BIGINT_ARITHMETIC_SQL, true);

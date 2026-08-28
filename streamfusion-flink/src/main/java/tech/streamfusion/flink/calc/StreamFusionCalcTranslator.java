@@ -351,13 +351,17 @@ public final class StreamFusionCalcTranslator {
             if (operands.size() != 2) {
                 return null;
             }
-            boolean nonzeroLiteralDivisor = expectedType == LogicalTypeRoot.INTEGER
-                    ? integerLiteral(operands.get(1)) != null && integerLiteral(operands.get(1)) != 0
-                    : expectedType == LogicalTypeRoot.BIGINT
-                            && longLiteral(operands.get(1)) != null
-                            && longLiteral(operands.get(1)) != 0;
-            if (!nonzeroLiteralDivisor) {
-                return null;
+            if ("DIVIDE".equals(kind) && expectedType == LogicalTypeRoot.DOUBLE) {
+                // IEEE-754 division is defined for zero divisors and remains vectorized.
+            } else {
+                boolean nonzeroLiteralDivisor = expectedType == LogicalTypeRoot.INTEGER
+                        ? integerLiteral(operands.get(1)) != null && integerLiteral(operands.get(1)) != 0
+                        : expectedType == LogicalTypeRoot.BIGINT
+                                && longLiteral(operands.get(1)) != null
+                                && longLiteral(operands.get(1)) != 0;
+                if (!nonzeroLiteralDivisor) {
+                    return null;
+                }
             }
         }
         ArithmeticOperator operator = arithmeticOperator(kind);
