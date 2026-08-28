@@ -193,7 +193,17 @@ class SqlParityTest {
                                 + "(TIMESTAMP '1969-12-31 23:59:59.999', TIMESTAMP '1970-01-01 00:00:00.000'), "
                                 + "(TIMESTAMP '2026-01-03 00:00:00.000', TIMESTAMP '2026-01-02 00:00:00.000'), "
                                 + "(TIMESTAMP '2026-01-04 00:00:00.000', TIMESTAMP '2026-01-04 00:00:00.000')) "
-                                + "AS input(left_value, right_value) WHERE left_value <= right_value"));
+                                + "AS input(left_value, right_value) WHERE left_value <= right_value"),
+                Arguments.of(
+                        "boolean equality",
+                        "SELECT left_value, right_value FROM "
+                                + "(VALUES (TRUE, FALSE), (TRUE, TRUE), (FALSE, FALSE)) "
+                                + "AS input(left_value, right_value) WHERE left_value = right_value"),
+                Arguments.of(
+                        "boolean inequality",
+                        "SELECT left_value, right_value FROM "
+                                + "(VALUES (TRUE, FALSE), (TRUE, TRUE), (FALSE, FALSE)) "
+                                + "AS input(left_value, right_value) WHERE left_value <> right_value"));
     }
 
     private static String columnComparisonSql(String operator) {

@@ -344,7 +344,10 @@ public final class StreamFusionCalcTranslator {
                     || rightInput >= inputType.getFieldCount()
                     || !inputType.getTypeAt(leftInput).equals(inputType.getTypeAt(rightInput))
                     || !StreamFusionColumnComparison.supports(
-                            inputType.getTypeAt(leftInput).getTypeRoot())) {
+                            inputType.getTypeAt(leftInput).getTypeRoot())
+                    || (inputType.getTypeAt(leftInput).getTypeRoot() == LogicalTypeRoot.BOOLEAN
+                            && operator != ComparisonOperator.COMPARISON_OPERATOR_EQUAL
+                            && operator != ComparisonOperator.COMPARISON_OPERATOR_NOT_EQUAL)) {
                 return null;
             }
             return new StreamFusionColumnComparison(leftInput, rightInput, inputType.getTypeAt(leftInput), operator);

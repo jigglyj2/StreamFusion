@@ -36,7 +36,8 @@ final class StreamFusionColumnComparison implements StreamFusionCondition {
     }
 
     static boolean supports(LogicalTypeRoot root) {
-        return root == LogicalTypeRoot.INTEGER
+        return root == LogicalTypeRoot.BOOLEAN
+                || root == LogicalTypeRoot.INTEGER
                 || root == LogicalTypeRoot.BIGINT
                 || root == LogicalTypeRoot.DATE
                 || root == LogicalTypeRoot.TIME_WITHOUT_TIME_ZONE
@@ -70,6 +71,8 @@ final class StreamFusionColumnComparison implements StreamFusionCondition {
 
     private int compare(RowData row) {
         switch (type.getTypeRoot()) {
+            case BOOLEAN:
+                return Boolean.compare(row.getBoolean(leftIndex), row.getBoolean(rightIndex));
             case INTEGER:
             case DATE:
             case TIME_WITHOUT_TIME_ZONE:

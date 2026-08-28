@@ -30,9 +30,10 @@ shape also cause the whole Calc to fall back.
 
 The same six predicates support direct, exactly matching column pairs for `INTEGER`,
 `BIGINT`, `DECIMAL`, `DATE`, `TIME`, and `TIMESTAMP WITHOUT TIME ZONE`. Decimal precision
-and scale and temporal precision must match on both sides. A null on either side produces
-SQL unknown. `TINYINT`, `SMALLINT`, floating-point, string, binary, mismatched, and
-planner-cast column pairs currently fall back to Flink.
+and scale and temporal precision must match on both sides. Direct `BOOLEAN` pairs support
+`=` and `<>`. A null on either side produces SQL unknown. `TINYINT`, `SMALLINT`,
+floating-point, character, binary, mismatched, and planner-cast column pairs currently
+fall back to Flink.
 
 The same six predicates support `DATE` columns compared with `DATE` literals, including
 dates before the Unix epoch. Flink epoch-day values lower directly to Arrow `Date32`
