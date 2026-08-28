@@ -58,6 +58,25 @@ public final class PlannerHookIntegrationJob {
         if (StreamFusionPlannerFactory.nativeCalcBatchCount() == 0) {
             throw new IllegalStateException("The submitted job did not execute a native calc batch");
         }
+
+        long batchesBeforeUnion = StreamFusionPlannerFactory.nativeCalcBatchCount();
+        List<Integer> unionValues = new ArrayList<>();
+        String unionSql = "SELECT id + 10 FROM (VALUES (1), (2)) AS left_input(id) WHERE id >= 1 "
+                + "UNION ALL "
+                + "SELECT id + 20 FROM (VALUES (2), (3)) AS right_input(id) WHERE id >= 2";
+        try (CloseableIterator<Row> rows = tables.executeSql(unionSql).collect()) {
+            while (rows.hasNext()) {
+                unionValues.add((Integer) rows.next().getField(0));
+            }
+        }
+        unionValues.sort(Integer::compareTo);
+        if (!unionValues.equals(List.of(11, 12, 22, 23))) {
+            throw new IllegalStateException("Unexpected UNION ALL result: " + unionValues);
+        }
+        if (StreamFusionPlannerFactory.nativeCalcBatchCount() < batchesBeforeUnion + 2) {
+            throw new IllegalStateException("UNION ALL did not execute both native Calc branches");
+        }
+
         long acceleratedBatches = StreamFusionPlannerFactory.nativeCalcBatchCount();
         List<Integer> fallbackValues = new ArrayList<>();
         try (CloseableIterator<Row> rows = tables.executeSql("SELECT -id FROM (VALUES (1), (2)) AS input(id)")
@@ -81,6 +100,6 @@ public final class PlannerHookIntegrationJob {
                 + StreamFusionPlannerFactory.translatedPlanCount()
                 + " nativeCalcBatches="
                 + StreamFusionPlannerFactory.nativeCalcBatchCount()
-                + " fallback=verified");
+                + " unionAll=verified fallback=verified");
     }
 }
