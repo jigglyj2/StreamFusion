@@ -156,6 +156,19 @@ fn create_expression(
                 .collect::<Result<Vec<_>>>()?;
             expressions::array_concat::create(arrays, schema)
         }
+        Some(proto::expression::Expression::ArrayPosition(position)) => {
+            let array = position.array.as_ref().ok_or_else(|| {
+                DataFusionError::Plan("array position is missing its array".into())
+            })?;
+            let needle = position.needle.as_ref().ok_or_else(|| {
+                DataFusionError::Plan("array position is missing its needle".into())
+            })?;
+            expressions::array_position::create(
+                create_expression(array, schema)?,
+                create_expression(needle, schema)?,
+                schema,
+            )
+        }
         Some(proto::expression::Expression::IntegerLiteral(literal)) => Ok(Arc::new(Literal::new(
             ScalarValue::Int32(Some(literal.value)),
         ))),

@@ -17,6 +17,7 @@ import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.proto.plan.v1.ArrayAppend;
 import tech.streamfusion.proto.plan.v1.ArrayConcat;
 import tech.streamfusion.proto.plan.v1.ArrayContains;
+import tech.streamfusion.proto.plan.v1.ArrayPosition;
 import tech.streamfusion.proto.plan.v1.ArrayPrepend;
 import tech.streamfusion.proto.plan.v1.ArrayReverse;
 import tech.streamfusion.proto.plan.v1.Cardinality;
@@ -174,6 +175,32 @@ final class StreamFusionCollectionTranslator extends StreamFusionComplexTypeSupp
             concat.addArrays(array);
         }
         return Expression.newBuilder().setArrayConcat(concat).build();
+    }
+
+    static Expression arrayPosition(Object expression, RowType inputType, LogicalType expectedType) {
+        if (!"ARRAY_POSITION".equals(functionName(expression))
+                || expectedType.getTypeRoot() != LogicalTypeRoot.INTEGER) {
+            return null;
+        }
+        java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
+        if (operands.size() != 2) {
+            return null;
+        }
+        LogicalType arrayType = logicalType(operands.get(0), inputType);
+        LogicalType needleType = logicalType(operands.get(1), inputType);
+        if (!(arrayType instanceof ArrayType) || needleType == null) {
+            return null;
+        }
+        LogicalType elementType = ((ArrayType) arrayType).getElementType();
+        Expression array = StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, arrayType);
+        Expression needle =
+                StreamFusionProjectionTranslator.projectionExpression(operands.get(1), inputType, elementType);
+        return array == null || needle == null
+                ? null
+                : Expression.newBuilder()
+                        .setArrayPosition(
+                                ArrayPosition.newBuilder().setArray(array).setNeedle(needle))
+                        .build();
     }
 
     private static java.util.List<?> collectionAndElementOperands(
