@@ -18,6 +18,7 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import org.apache.flink.api.dag.Transformation;
 import org.apache.flink.core.memory.ManagedMemoryUseCase;
 import org.apache.flink.streaming.api.transformations.OneInputTransformation;
@@ -53,6 +54,7 @@ import tech.streamfusion.proto.plan.v1.FloatLiteral;
 import tech.streamfusion.proto.plan.v1.Floor;
 import tech.streamfusion.proto.plan.v1.IntegerLiteral;
 import tech.streamfusion.proto.plan.v1.LongLiteral;
+import tech.streamfusion.proto.plan.v1.Lower;
 import tech.streamfusion.proto.plan.v1.NullLiteral;
 import tech.streamfusion.proto.plan.v1.ShortLiteral;
 import tech.streamfusion.proto.plan.v1.Sign;
@@ -60,6 +62,7 @@ import tech.streamfusion.proto.plan.v1.StringLiteral;
 import tech.streamfusion.proto.plan.v1.TimeLiteral;
 import tech.streamfusion.proto.plan.v1.TimestampLiteral;
 import tech.streamfusion.proto.plan.v1.UnaryMinus;
+import tech.streamfusion.proto.plan.v1.Upper;
 import tech.streamfusion.proto.plan.v1.WhenThen;
 
 /** Reflection entry point called by the small Flink planner patch for eligible calc nodes. */
@@ -330,7 +333,31 @@ public final class StreamFusionCalcTranslator {
                             .setCharacterLength(CharacterLength.newBuilder().setOperand(operand))
                             .build();
         }
+        if (("LOWER".equals(functionName(expression)) || "UPPER".equals(functionName(expression)))
+                && expectedType.getTypeRoot() == LogicalTypeRoot.VARCHAR
+                && supportsLocaleIndependentCaseMapping()) {
+            List<?> operands = (List<?>) invoke(expression, "getOperands");
+            if (operands.size() != 1) {
+                return null;
+            }
+            Expression operand = projectionExpression(operands.get(0), inputType, expectedType);
+            if (operand == null) {
+                return null;
+            }
+            return "LOWER".equals(functionName(expression))
+                    ? Expression.newBuilder()
+                            .setLower(Lower.newBuilder().setOperand(operand))
+                            .build()
+                    : Expression.newBuilder()
+                            .setUpper(Upper.newBuilder().setOperand(operand))
+                            .build();
+        }
         return projectionExpression(expression, inputType, expectedType.getTypeRoot());
+    }
+
+    private static boolean supportsLocaleIndependentCaseMapping() {
+        String language = Locale.getDefault().getLanguage();
+        return !"tr".equals(language) && !"az".equals(language) && !"lt".equals(language);
     }
 
     private static boolean isSignNumeric(LogicalTypeRoot type) {

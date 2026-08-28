@@ -154,6 +154,20 @@ fn create_expression(
                 .ok_or_else(|| DataFusionError::Plan("CHAR_LENGTH operand is empty".to_string()))?;
             expressions::character_length::create(create_expression(operand, schema)?, schema)
         }
+        Some(proto::expression::Expression::Lower(lower)) => {
+            let operand = lower
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("LOWER operand is empty".to_string()))?;
+            expressions::lower::create(create_expression(operand, schema)?, schema)
+        }
+        Some(proto::expression::Expression::Upper(upper)) => {
+            let operand = upper
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("UPPER operand is empty".to_string()))?;
+            expressions::upper::create(create_expression(operand, schema)?, schema)
+        }
         Some(proto::expression::Expression::DateLiteral(literal)) => Ok(Arc::new(Literal::new(
             ScalarValue::Date32(Some(literal.epoch_day)),
         ))),

@@ -13,6 +13,8 @@ pub(crate) mod character_length;
 pub(crate) mod coalesce;
 pub(crate) mod conditional;
 pub(crate) mod floor;
+pub(crate) mod lower;
 pub(crate) mod null_literal;
 pub(crate) mod sign;
+pub(crate) mod upper;
 mod wrapping_cast;

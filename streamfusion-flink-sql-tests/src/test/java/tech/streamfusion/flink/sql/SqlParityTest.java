@@ -1198,6 +1198,27 @@ class SqlParityTest {
         assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
     }
 
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"LOWER", "UPPER"})
+    void nativeCaseMappingMatchesFlinkByteForByte(String function) throws Exception {
+        assertDataStreamParity(
+                "SELECT " + function + "(metric) FROM case_mapping_input",
+                Types.STRING,
+                Arrays.asList(
+                        Row.of(""),
+                        Row.of("StreamFusion 123"),
+                        Row.of("Straße"),
+                        Row.of("İı"),
+                        Row.of("ΟΣ Σσς"),
+                        Row.of("ﬃ"),
+                        Row.of("你好😀"),
+                        Row.of("e\u0301"),
+                        Row.of((Object) null)),
+                "case_mapping_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
     @ParameterizedTest(name = "VARBINARY {0}")
     @MethodSource("nativeVarbinaryDataStreamRangeCases")
     void nativeVarbinaryDataStreamRangesMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {

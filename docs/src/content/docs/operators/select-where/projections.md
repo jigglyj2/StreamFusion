@@ -114,6 +114,11 @@ currently generates uncompilable Java for those calls, preventing a byte-parity 
 Unicode kernel counts UTF-8 code points, matching Flink for ASCII, multibyte text, emoji,
 combining marks, embedded NUL characters, empty strings, and nulls. `CHAR` operands remain
 fallback until fixed-width padding semantics have dedicated coverage.
+`LOWER` and `UPPER` are accelerated for `VARCHAR` under locale-independent JVM case-mapping
+locales. They use DataFusion's vectorized Unicode kernels and preserve empty strings and
+nulls. StreamFusion falls back for Turkish, Azerbaijani, and Lithuanian JVM locales, where
+Flink's default-locale Java mapping can differ from locale-independent Unicode mapping, and
+for fixed-width `CHAR` until padding behavior has dedicated coverage.
 
 Cast approval is table-driven. Java maps an explicitly approved Flink source/target pair
 to a stable protobuf cast kind; Rust independently verifies that kind against the actual

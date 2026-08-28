@@ -60,6 +60,8 @@ message Expression {
     Floor floor = 29;
     Sign sign = 30;
     CharacterLength character_length = 31;
+    Lower lower = 32;
+    Upper upper = 33;
   }
 }
 
@@ -94,6 +96,14 @@ message Sign {
 }
 
 message CharacterLength {
+  Expression operand = 1;
+}
+
+message Lower {
+  Expression operand = 1;
+}
+
+message Upper {
   Expression operand = 1;
 }
 
