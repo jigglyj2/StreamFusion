@@ -64,6 +64,9 @@ fn create_expression(
         Some(proto::expression::Expression::IntegerLiteral(literal)) => Ok(Arc::new(Literal::new(
             ScalarValue::Int32(Some(literal.value)),
         ))),
+        Some(proto::expression::Expression::LongLiteral(literal)) => Ok(Arc::new(Literal::new(
+            ScalarValue::Int64(Some(literal.value)),
+        ))),
         Some(proto::expression::Expression::GreaterThanOrEqual(comparison)) => {
             Ok(Arc::new(BinaryExpr::new(
                 create_expression(

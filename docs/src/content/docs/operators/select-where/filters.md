@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-**Current status:** Simple integer comparisons are accelerated.
+**Current status:** Simple `INTEGER` and `BIGINT` comparisons are accelerated.
 
 ## SQL example
 
@@ -17,11 +17,11 @@ WHERE id >= 100;
 
 ## Acceleration and fallback
 
-The supported predicates are `=`, `<>`, `<`, `<=`, `>`, and `>=` between an `INT`
-column and an integer literal. Either operand order is accepted, and the filtered column
-does not need to appear in the projection. A null input produces SQL unknown and is
-removed by `WHERE`, matching Flink. Column-to-column comparisons, compound boolean
-predicates, functions, and non-integer operands currently fall back to Flink.
+The supported predicates are `=`, `<>`, `<`, `<=`, `>`, and `>=` between an `INTEGER`
+or `BIGINT` column and a same-width integer literal. Either operand order is accepted,
+and the filtered column does not need to appear in the projection. A null input produces
+SQL unknown and is removed by `WHERE`, matching Flink. Column-to-column comparisons,
+functions, and other operand types currently fall back to Flink.
 
 `IS NULL` and `IS NOT NULL` are supported over direct input columns of every scalar type
 listed on the [projection coverage page](../projections/).

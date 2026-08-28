@@ -143,6 +143,29 @@ class SqlParityTest {
                 Arguments.of("literal-on-left", "2 < id", true));
     }
 
+    @ParameterizedTest(name = "BIGINT {0}")
+    @MethodSource("nativeBigintComparisonCases")
+    void nativeBigintComparisonsMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {
+        String sql = "SELECT payload FROM (VALUES "
+                + "(2147483648, 10), (2147483649, 20), (2147483649, 21), (2147483650, 30)) "
+                + "AS input(id, payload) WHERE "
+                + predicate;
+        assertParity(sql, true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    private static Stream<Arguments> nativeBigintComparisonCases() {
+        return Stream.of(
+                Arguments.of("equal", "id = 2147483649"),
+                Arguments.of("not-equal", "id <> 2147483649"),
+                Arguments.of("less-than", "id < 2147483649"),
+                Arguments.of("less-than-or-equal", "id <= 2147483649"),
+                Arguments.of("greater-than", "id > 2147483649"),
+                Arguments.of("greater-than-or-equal", "id >= 2147483649"),
+                Arguments.of("literal-on-left", "2147483649 < id"));
+    }
+
     @ParameterizedTest(name = "{0}")
     @MethodSource("nativeNullPredicateCases")
     void nativeNullPredicatesMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {
@@ -176,8 +199,8 @@ class SqlParityTest {
     @ParameterizedTest(name = "{0}")
     @MethodSource("nativeBooleanColumnCases")
     void nativeBooleanColumnsMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {
-        String sql = "SELECT id FROM (VALUES (1, TRUE), (2, FALSE), (3, TRUE)) AS input(id, enabled) WHERE "
-                + predicate;
+        String sql =
+                "SELECT id FROM (VALUES (1, TRUE), (2, FALSE), (3, TRUE)) AS input(id, enabled) WHERE " + predicate;
         assertParity(sql, true);
 
         assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);

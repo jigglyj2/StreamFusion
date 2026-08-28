@@ -103,12 +103,9 @@ public final class StreamFusionCalcTranslator {
                             directInputIndex,
                             StreamFusionIdentityCalcOperator.logicalType(inputType, directInputIndex)));
         }
-        StreamFusionIntComparison comparison = comparison(condition);
+        StreamFusionOrderedComparison comparison = comparison(condition, inputType);
         if (comparison != null) {
-            return comparison.inputIndex() < inputType.getFieldCount()
-                            && inputType.getTypeAt(comparison.inputIndex()).getTypeRoot() == LogicalTypeRoot.INTEGER
-                    ? comparison
-                    : null;
+            return comparison;
         }
         String kind = invoke(condition, "getKind").toString();
         if ("AND".equals(kind) || "OR".equals(kind)) {
@@ -221,7 +218,7 @@ public final class StreamFusionCalcTranslator {
                 || type == LogicalTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE;
     }
 
-    private static StreamFusionIntComparison comparison(Object condition) {
+    private static StreamFusionOrderedComparison comparison(Object condition, RowType inputType) {
         if (condition == null) {
             return null;
         }
@@ -236,13 +233,32 @@ public final class StreamFusionCalcTranslator {
         }
         int leftInput = inputIndex(operands.get(0));
         int rightInput = inputIndex(operands.get(1));
-        Integer leftLiteral = integerLiteral(operands.get(0));
-        Integer rightLiteral = integerLiteral(operands.get(1));
-        if (leftInput >= 0 && rightLiteral != null) {
-            return new StreamFusionIntComparison(leftInput, rightLiteral, operator, true);
+        if (leftInput >= 0 && rightInput < 0) {
+            return comparison(leftInput, operands.get(1), operator, true, inputType);
         }
-        if (rightInput >= 0 && leftLiteral != null) {
-            return new StreamFusionIntComparison(rightInput, leftLiteral, operator, false);
+        if (rightInput >= 0 && leftInput < 0) {
+            return comparison(rightInput, operands.get(0), operator, false, inputType);
+        }
+        return null;
+    }
+
+    private static StreamFusionOrderedComparison comparison(
+            int inputIndex,
+            Object literalExpression,
+            ComparisonOperator operator,
+            boolean inputOnLeft,
+            RowType inputType) {
+        if (inputIndex >= inputType.getFieldCount()) {
+            return null;
+        }
+        LogicalTypeRoot type = inputType.getTypeAt(inputIndex).getTypeRoot();
+        if (type == LogicalTypeRoot.INTEGER) {
+            Integer literal = integerLiteral(literalExpression);
+            return literal == null ? null : new StreamFusionIntComparison(inputIndex, literal, operator, inputOnLeft);
+        }
+        if (type == LogicalTypeRoot.BIGINT) {
+            Long literal = longLiteral(literalExpression);
+            return literal == null ? null : new StreamFusionLongComparison(inputIndex, literal, operator, inputOnLeft);
         }
         return null;
     }
@@ -253,6 +269,14 @@ public final class StreamFusionCalcTranslator {
         }
         Object value = invoke(expression, "getValueAs", Class.class, Integer.class);
         return value instanceof Integer ? (Integer) value : null;
+    }
+
+    private static Long longLiteral(Object expression) {
+        if (!expression.getClass().getSimpleName().equals("RexLiteral")) {
+            return null;
+        }
+        Object value = invoke(expression, "getValueAs", Class.class, Long.class);
+        return value instanceof Long ? (Long) value : null;
     }
 
     private static ComparisonOperator comparisonOperator(String kind) {

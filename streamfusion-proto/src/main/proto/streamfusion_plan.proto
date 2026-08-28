@@ -37,11 +37,16 @@ message Expression {
     NullCheck null_check = 6;
     BooleanBinary boolean_binary = 7;
     BooleanNot boolean_not = 8;
+    LongLiteral long_literal = 9;
   }
 }
 
 message IntegerLiteral {
   int32 value = 1;
+}
+
+message LongLiteral {
+  int64 value = 1;
 }
 
 message GreaterThanOrEqual {

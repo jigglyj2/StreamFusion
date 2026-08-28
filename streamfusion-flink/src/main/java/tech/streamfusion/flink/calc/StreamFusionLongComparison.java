@@ -12,26 +12,26 @@ package tech.streamfusion.flink.calc;
 import org.apache.flink.table.data.RowData;
 import tech.streamfusion.proto.plan.v1.ComparisonOperator;
 import tech.streamfusion.proto.plan.v1.Expression;
-import tech.streamfusion.proto.plan.v1.IntegerLiteral;
+import tech.streamfusion.proto.plan.v1.LongLiteral;
 
-/** Supported integer comparison, including the original SQL operand order. */
-final class StreamFusionIntComparison extends StreamFusionOrderedComparison {
+/** Ordered comparison between a BIGINT input column and literal. */
+final class StreamFusionLongComparison extends StreamFusionOrderedComparison {
     private static final long serialVersionUID = 1L;
-    private final int literal;
+    private final long literal;
 
-    StreamFusionIntComparison(int inputIndex, int literal, ComparisonOperator operator, boolean inputOnLeft) {
+    StreamFusionLongComparison(int inputIndex, long literal, ComparisonOperator operator, boolean inputOnLeft) {
         super(
                 inputIndex,
                 operator,
                 inputOnLeft,
                 Expression.newBuilder()
-                        .setIntegerLiteral(IntegerLiteral.newBuilder().setValue(literal))
+                        .setLongLiteral(LongLiteral.newBuilder().setValue(literal))
                         .build());
         this.literal = literal;
     }
 
     @Override
     protected int compareInputToLiteral(RowData row) {
-        return Integer.compare(row.getInt(inputIndex()), literal);
+        return Long.compare(row.getLong(inputIndex()), literal);
     }
 }
