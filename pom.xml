@@ -25,6 +25,8 @@
     <properties>
         <revision>0.1.0-SNAPSHOT</revision>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <maven.version>3.9.11</maven.version>
+        <maven.wrapper.plugin.version>3.3.4</maven.wrapper.plugin.version>
         <maven.compiler.release>11</maven.compiler.release>
         <flink.version>2.3.0</flink.version>
         <flink.kafka.connector.version>5.0.0-2.2</flink.kafka.connector.version>
@@ -136,6 +138,11 @@
     <build>
         <pluginManagement>
             <plugins>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-wrapper-plugin</artifactId>
+                    <version>${maven.wrapper.plugin.version}</version>
+                </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-jar-plugin</artifactId>
