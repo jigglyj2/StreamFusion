@@ -44,6 +44,7 @@ pub(crate) mod cotangent;
 pub(crate) mod degrees;
 pub(crate) mod exponential;
 pub(crate) mod floor;
+pub(crate) mod hexadecimal;
 pub(crate) mod hyperbolic_sine;
 pub(crate) mod hyperbolic_tangent;
 pub(crate) mod like;

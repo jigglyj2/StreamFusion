@@ -138,6 +138,10 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
         if (mapProjection != null) {
             return mapProjection;
         }
+        Expression hexadecimal = StreamFusionBinaryFunctionTranslator.hexadecimal(expression, inputType, expectedType);
+        if (hexadecimal != null) {
+            return hexadecimal;
+        }
         Expression stringReplace = StreamFusionStringFunctionTranslator.replace(expression, inputType, expectedType);
         if (stringReplace != null) {
             return stringReplace;

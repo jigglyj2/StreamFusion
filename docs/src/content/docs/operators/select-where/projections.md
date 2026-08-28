@@ -366,6 +366,12 @@ Flink returns its first UTF-8 byte sign-extended with Java byte semantics, rathe
 code point; StreamFusion therefore uses a focused vectorized compatibility expression instead
 of DataFusion's differing `ascii` kernel. Empty strings return zero and nulls remain null.
 Fixed-width `CHAR` remains on Flink.
+`HEX(value)` is accelerated for signed integer and `VARCHAR` expressions. Java records a distinct
+protobuf expression; Rust widens signed integers to `INT64` before DataFusion's hexadecimal kernel
+so negative values retain Flink's 64-bit two's-complement representation. Text is encoded from its
+UTF-8 bytes, and both paths compose DataFusion's uppercase kernel to match Flink's output casing.
+Generated parity coverage includes integer extrema, multilingual text, supplementary characters,
+embedded NUL bytes, empty strings, and nulls. Other input types remain on Flink.
 
 Cast approval is table-driven. Java maps an explicitly approved Flink source/target pair
 to a stable protobuf cast kind; Rust independently verifies that kind against the actual

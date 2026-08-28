@@ -118,6 +118,7 @@ message Expression {
     CommonLogarithm common_logarithm = 87;
     ArbitraryLogarithm arbitrary_logarithm = 88;
     Power power = 89;
+    Hexadecimal hexadecimal = 90;
   }
 }
 
@@ -357,6 +358,10 @@ message ArbitraryLogarithm {
 message Power {
   Expression base = 1;
   Expression exponent = 2;
+}
+
+message Hexadecimal {
+  Expression operand = 1;
 }
 
 message Coalesce {

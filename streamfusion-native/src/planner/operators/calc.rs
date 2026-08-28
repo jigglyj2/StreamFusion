@@ -232,6 +232,13 @@ pub(super) fn create_expression(
                 schema,
             )
         }
+        Some(proto::expression::Expression::Hexadecimal(hexadecimal)) => {
+            let operand = hexadecimal
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("HEX operand is empty".to_string()))?;
+            expressions::hexadecimal::create(create_expression(operand, schema)?, schema)
+        }
         Some(proto::expression::Expression::HyperbolicSine(sine)) => {
             let operand = sine
                 .operand
