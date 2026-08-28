@@ -23,11 +23,13 @@ StreamFusion can select, reorder, omit, or repeat direct input columns of these 
 - `CHAR`, `VARCHAR`, `BINARY`, and `VARBINARY`
 - `DECIMAL`, `DATE`, `TIME`, `TIMESTAMP`, and `TIMESTAMP_LTZ`
 
-Precision, scale, fixed width, and nullability are preserved. Computed `INT` projections
-also support integer literals and recursively nested addition, subtraction, and
-multiplication.
+Precision, scale, fixed width, and nullability are preserved. Computed `INT` and
+`BIGINT` projections also support same-width integer literals and recursively nested
+addition, subtraction, and multiplication. Signed overflow follows Flink's wrapping
+semantics.
 
-Division, remainder, unary arithmetic, arithmetic on other types, casts, and functions
+Division, remainder, unary arithmetic, mixed-width arithmetic, arithmetic on other
+types, casts, and functions
 currently fall back to Flink. The Calc also falls back if its filter is unsupported.
 
 ## Implementation

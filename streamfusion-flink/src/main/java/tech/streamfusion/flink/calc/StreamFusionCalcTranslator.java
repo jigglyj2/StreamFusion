@@ -32,6 +32,7 @@ import tech.streamfusion.proto.plan.v1.BooleanOperator;
 import tech.streamfusion.proto.plan.v1.ComparisonOperator;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.IntegerLiteral;
+import tech.streamfusion.proto.plan.v1.LongLiteral;
 
 /** Reflection entry point called by the small Flink planner patch for eligible calc nodes. */
 public final class StreamFusionCalcTranslator {
@@ -48,8 +49,11 @@ public final class StreamFusionCalcTranslator {
         }
 
         List<Expression> nativeProjections = new ArrayList<>(projections.size());
-        for (Object projection : projections) {
-            nativeProjections.add(projectionExpression(projection, inputType));
+        for (int outputIndex = 0; outputIndex < projections.size(); outputIndex++) {
+            nativeProjections.add(projectionExpression(
+                    projections.get(outputIndex),
+                    inputType,
+                    outputType.getTypeAt(outputIndex).getTypeRoot()));
         }
         StreamFusionCondition nativeCondition = condition(condition, inputType);
         StreamFusionIdentityCalcOperator operator =
@@ -84,9 +88,12 @@ public final class StreamFusionCalcTranslator {
                         || !inputType.getTypeAt(inputIndex).equals(outputType.getTypeAt(outputIndex))) {
                     return false;
                 }
-            } else if (outputType.getTypeAt(outputIndex).getTypeRoot() != LogicalTypeRoot.INTEGER
-                    || projectionExpression(projection, inputType) == null) {
-                return false;
+            } else {
+                LogicalTypeRoot outputRoot = outputType.getTypeAt(outputIndex).getTypeRoot();
+                if ((outputRoot != LogicalTypeRoot.INTEGER && outputRoot != LogicalTypeRoot.BIGINT)
+                        || projectionExpression(projection, inputType, outputRoot) == null) {
+                    return false;
+                }
             }
         }
         if (condition == null) {
@@ -157,20 +164,32 @@ public final class StreamFusionCalcTranslator {
                         inputIndex, StreamFusionIdentityCalcOperator.logicalType(inputType, inputIndex)));
     }
 
-    private static Expression projectionExpression(Object expression, RowType inputType) {
+    private static Expression projectionExpression(Object expression, RowType inputType, LogicalTypeRoot expectedType) {
         int inputIndex = inputIndex(expression);
         if (inputIndex >= 0) {
-            if (inputIndex >= inputType.getFieldCount()) {
+            if (inputIndex >= inputType.getFieldCount()
+                    || inputType.getTypeAt(inputIndex).getTypeRoot() != expectedType) {
                 return null;
             }
             return StreamFusionIdentityCalcOperator.inputReference(
                     inputIndex, StreamFusionIdentityCalcOperator.logicalType(inputType, inputIndex));
         }
-        Integer literal = integerLiteral(expression);
-        if (literal != null) {
-            return Expression.newBuilder()
-                    .setIntegerLiteral(IntegerLiteral.newBuilder().setValue(literal))
-                    .build();
+        if (expectedType == LogicalTypeRoot.INTEGER) {
+            Integer literal = integerLiteral(expression);
+            if (literal != null) {
+                return Expression.newBuilder()
+                        .setIntegerLiteral(IntegerLiteral.newBuilder().setValue(literal))
+                        .build();
+            }
+        } else if (expectedType == LogicalTypeRoot.BIGINT) {
+            Long literal = longLiteral(expression);
+            if (literal != null) {
+                return Expression.newBuilder()
+                        .setLongLiteral(LongLiteral.newBuilder().setValue(literal))
+                        .build();
+            }
+        } else {
+            return null;
         }
         ArithmeticOperator operator =
                 arithmeticOperator(invoke(expression, "getKind").toString());
@@ -181,8 +200,8 @@ public final class StreamFusionCalcTranslator {
         if (operands.size() != 2) {
             return null;
         }
-        Expression left = projectionExpression(operands.get(0), inputType);
-        Expression right = projectionExpression(operands.get(1), inputType);
+        Expression left = projectionExpression(operands.get(0), inputType, expectedType);
+        Expression right = projectionExpression(operands.get(1), inputType, expectedType);
         if (left == null || right == null) {
             return null;
         }

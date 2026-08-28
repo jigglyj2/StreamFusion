@@ -69,6 +69,10 @@ class SqlParityTest {
             + "time_value, timestamp_value) WHERE id >= 1";
     private static final String INTEGER_ARITHMETIC_SQL = "SELECT id + 10, id - 1, id * 3, "
             + "(id + 2) * (id - 1), 7 FROM (VALUES (1), (2), (3)) AS input(id) WHERE id >= 1";
+    private static final String BIGINT_ARITHMETIC_SQL = "SELECT id + 2147483648, id - 2147483648, "
+            + "id * 2147483648, (id + 2147483648) * (id - 2147483648), 2147483648 "
+            + "FROM (VALUES (2147483648), (2147483649), (2147483650)) AS input(id) "
+            + "WHERE id >= 2147483648";
 
     @AfterEach
     void clearPlannerOverride() {
@@ -109,6 +113,23 @@ class SqlParityTest {
     @Test
     void nativeIntegerArithmeticMatchesFlinkByteForByte() throws Exception {
         assertParity(INTEGER_ARITHMETIC_SQL, true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    @Test
+    void nativeBigintArithmeticMatchesFlinkByteForByte() throws Exception {
+        assertParity(BIGINT_ARITHMETIC_SQL, true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    @Test
+    void nativeBigintArithmeticWrapsOverflowLikeFlink() throws Exception {
+        String sql = "SELECT id + 2147483648 FROM "
+                + "(VALUES (9223372034707292159), (9223372034707292160)) AS input(id) "
+                + "WHERE id >= 9223372034707292159";
+        assertParity(sql, true);
 
         assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
     }
