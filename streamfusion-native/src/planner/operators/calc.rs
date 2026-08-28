@@ -140,6 +140,13 @@ fn create_expression(
                 .ok_or_else(|| DataFusionError::Plan("FLOOR operand is empty".to_string()))?;
             expressions::floor::create(create_expression(operand, schema)?, schema)
         }
+        Some(proto::expression::Expression::Sign(sign)) => {
+            let operand = sign
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("SIGN operand is empty".to_string()))?;
+            expressions::sign::create(create_expression(operand, schema)?, schema)
+        }
         Some(proto::expression::Expression::DateLiteral(literal)) => Ok(Arc::new(Literal::new(
             ScalarValue::Date32(Some(literal.epoch_day)),
         ))),

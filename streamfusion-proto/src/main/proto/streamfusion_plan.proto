@@ -58,6 +58,7 @@ message Expression {
     AbsoluteValue absolute_value = 27;
     Ceiling ceiling = 28;
     Floor floor = 29;
+    Sign sign = 30;
   }
 }
 
@@ -84,6 +85,10 @@ message Ceiling {
 }
 
 message Floor {
+  Expression operand = 1;
+}
+
+message Sign {
   Expression operand = 1;
 }
 

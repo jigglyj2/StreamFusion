@@ -13,4 +13,5 @@ pub(crate) mod coalesce;
 pub(crate) mod conditional;
 pub(crate) mod floor;
 pub(crate) mod null_literal;
+pub(crate) mod sign;
 mod wrapping_cast;

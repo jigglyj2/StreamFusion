@@ -1163,6 +1163,21 @@ class SqlParityTest {
                                 function.toLowerCase() + "_double_input")));
     }
 
+    @ParameterizedTest(name = "SIGN {0}")
+    @MethodSource("nativeSignDataStreamCases")
+    void nativeSignMatchesFlinkByteForByte(
+            String ignoredName, TypeInformation<?> type, List<Row> rows, String tableName) throws Exception {
+        assertDataStreamParity("SELECT SIGN(metric) FROM " + tableName, type, rows, tableName);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    private static Stream<Arguments> nativeSignDataStreamCases() {
+        return nativeAbsoluteValueDataStreamCases()
+                .filter(arguments -> !"tinyint".equals(arguments.get()[0])
+                        && !"smallint".equals(arguments.get()[0]));
+    }
+
     @ParameterizedTest(name = "VARBINARY {0}")
     @MethodSource("nativeVarbinaryDataStreamRangeCases")
     void nativeVarbinaryDataStreamRangesMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {

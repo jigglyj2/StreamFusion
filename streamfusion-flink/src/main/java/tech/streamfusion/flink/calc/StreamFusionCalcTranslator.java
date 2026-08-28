@@ -54,6 +54,7 @@ import tech.streamfusion.proto.plan.v1.IntegerLiteral;
 import tech.streamfusion.proto.plan.v1.LongLiteral;
 import tech.streamfusion.proto.plan.v1.NullLiteral;
 import tech.streamfusion.proto.plan.v1.ShortLiteral;
+import tech.streamfusion.proto.plan.v1.Sign;
 import tech.streamfusion.proto.plan.v1.StringLiteral;
 import tech.streamfusion.proto.plan.v1.TimeLiteral;
 import tech.streamfusion.proto.plan.v1.TimestampLiteral;
@@ -304,7 +305,27 @@ public final class StreamFusionCalcTranslator {
                             .setFloor(Floor.newBuilder().setOperand(operand))
                             .build();
         }
+        if ("SIGN".equals(functionName(expression)) && isSignNumeric(expectedType.getTypeRoot())) {
+            List<?> operands = (List<?>) invoke(expression, "getOperands");
+            if (operands.size() != 1) {
+                return null;
+            }
+            Expression operand = projectionExpression(operands.get(0), inputType, expectedType);
+            return operand == null
+                    ? null
+                    : Expression.newBuilder()
+                            .setSign(Sign.newBuilder().setOperand(operand))
+                            .build();
+        }
         return projectionExpression(expression, inputType, expectedType.getTypeRoot());
+    }
+
+    private static boolean isSignNumeric(LogicalTypeRoot type) {
+        return type == LogicalTypeRoot.INTEGER
+                || type == LogicalTypeRoot.BIGINT
+                || type == LogicalTypeRoot.FLOAT
+                || type == LogicalTypeRoot.DOUBLE
+                || type == LogicalTypeRoot.DECIMAL;
     }
 
     private static boolean isNonDecimalNumeric(LogicalTypeRoot type) {

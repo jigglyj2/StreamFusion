@@ -105,6 +105,11 @@ inputs are already integral and remain zero-copy references;
 floating-point inputs use DataFusion's vectorized math functions. Decimal and temporal forms
 currently cause whole-Calc fallback because their result-type and calendar semantics need
 separate parity work.
+`SIGN` is accelerated for `INTEGER`, `BIGINT`, floating-point values, and decimals. Integer
+and decimal inputs lower to ordered DataFusion comparisons and a `CASE`. Floating-point
+inputs first preserve either signed zero through a `CASE`, then use DataFusion `signum` for
+nonzero values so NaN is retained. `TINYINT` and `SMALLINT` remain fallback because Flink 2.3
+currently generates uncompilable Java for those calls, preventing a byte-parity contract.
 
 Cast approval is table-driven. Java maps an explicitly approved Flink source/target pair
 to a stable protobuf cast kind; Rust independently verifies that kind against the actual
