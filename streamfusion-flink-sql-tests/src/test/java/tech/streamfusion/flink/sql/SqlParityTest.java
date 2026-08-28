@@ -1528,16 +1528,35 @@ class SqlParityTest {
     }
 
     @Test
-    void explainStatesWhyCurrentPlanFallsBack() {
+    void explainStatesWhenEveryExpressionIsAccelerated() {
         System.setProperty(
                 StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY, StreamFusionPlannerFactory.class.getName());
-        TableEnvironment tableEnvironment = TableEnvironment.create(EnvironmentSettings.inStreamingMode());
+        StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();
+        StreamTableEnvironment tableEnvironment = StreamTableEnvironment.create(environment);
+        tableEnvironment.createTemporaryView(
+                "supported_explain_input", environment.fromData(Row.of("Alpha")).returns(Types.ROW(Types.STRING)));
 
-        assertThat(tableEnvironment.explainSql(STREAMING_CALC_SQL))
+        assertThat(tableEnvironment.explainSql(
+                        "SELECT UPPER(f0) FROM supported_explain_input WHERE LOWER(f0) = 'alpha'"))
+                .contains("== StreamFusion Acceleration ==")
+                .contains("Accelerated: yes")
+                .contains("every internal node and expression has a StreamFusion implementation");
+    }
+
+    @Test
+    void explainIncludesUnsupportedExpressionPath() {
+        System.setProperty(
+                StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY, StreamFusionPlannerFactory.class.getName());
+        StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();
+        StreamTableEnvironment tableEnvironment = StreamTableEnvironment.create(environment);
+        tableEnvironment.createTemporaryView(
+                "explain_input", environment.fromData(Row.of(" a ")).returns(Types.ROW(Types.STRING)));
+
+        assertThat(tableEnvironment.explainSql("SELECT TRIM(f0) FROM explain_input"))
                 .contains("== StreamFusion Acceleration ==")
                 .contains("Accelerated: no")
-                .contains("Flink plan conversion to StreamFusion physical operators is not implemented")
-                .contains("Flink RowData Arrow batch views and native materialization are TODO");
+                .contains("projection[0]/TRIM")
+                .contains("the entire plan will use Flink");
     }
 
     @ParameterizedTest(name = "{0}")

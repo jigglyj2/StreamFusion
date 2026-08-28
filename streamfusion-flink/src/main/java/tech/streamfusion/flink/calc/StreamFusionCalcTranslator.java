@@ -84,7 +84,7 @@ public final class StreamFusionCalcTranslator {
             RowType outputType,
             List<?> projections,
             Object condition) {
-        if (!isSupportedCalc(inputType, outputType, projections, condition)) {
+        if (unsupportedReason(inputType, outputType, projections, condition) != null) {
             return null;
         }
 
@@ -108,50 +108,104 @@ public final class StreamFusionCalcTranslator {
     }
 
     public static boolean canTranslate(RowType inputType, RowType outputType, List<?> projections, Object condition) {
-        return isSupportedCalc(inputType, outputType, projections, condition);
+        return unsupportedReason(inputType, outputType, projections, condition) == null;
     }
 
-    private static boolean isSupportedCalc(
+    /** Returns {@code null} when supported, otherwise the first precise expression-path rejection. */
+    public static String unsupportedReason(
             RowType inputType, RowType outputType, List<?> projections, Object condition) {
-        if (projections.isEmpty() || outputType.getFieldCount() != projections.size()) {
-            return false;
+        if (projections.isEmpty()) {
+            return "projection: a Calc must produce at least one column";
+        }
+        if (outputType.getFieldCount() != projections.size()) {
+            return "projection: Flink produced "
+                    + projections.size()
+                    + " expressions for "
+                    + outputType.getFieldCount()
+                    + " output fields";
         }
         for (int outputIndex = 0; outputIndex < projections.size(); outputIndex++) {
             Object projection = projections.get(outputIndex);
-            int inputIndex = inputIndex(projection);
-            if (inputIndex >= 0) {
-                if (inputIndex >= inputType.getFieldCount()
-                        || !isSupportedProjectionType(
-                                inputType.getTypeAt(inputIndex).getTypeRoot())
-                        || !inputType.getTypeAt(inputIndex).equals(outputType.getTypeAt(outputIndex))) {
-                    return false;
+            org.apache.flink.table.types.logical.LogicalType expectedType = outputType.getTypeAt(outputIndex);
+            int directInput = inputIndex(projection);
+            if (directInput >= 0
+                    && (directInput >= inputType.getFieldCount()
+                            || !isSupportedProjectionType(
+                                    inputType.getTypeAt(directInput).getTypeRoot())
+                            || !inputType.getTypeAt(directInput).equals(expectedType))) {
+                return "projection["
+                        + outputIndex
+                        + "]/input["
+                        + directInput
+                        + "]: input and output types must match exactly";
+            }
+            if (projectionExpression(projection, inputType, expectedType) == null) {
+                return expressionFailure(projection, inputType, expectedType, false, "projection[" + outputIndex + "]");
+            }
+        }
+        if (condition != null && conditionExpression(condition, inputType) == null) {
+            return expressionFailure(
+                    condition,
+                    inputType,
+                    new org.apache.flink.table.types.logical.BooleanType(true),
+                    true,
+                    "condition");
+        }
+        return null;
+    }
+
+    private static String expressionFailure(
+            Object expression,
+            RowType inputType,
+            org.apache.flink.table.types.logical.LogicalType expectedType,
+            boolean booleanPosition,
+            String path) {
+        Expression translated = booleanPosition
+                ? conditionExpression(expression, inputType)
+                : projectionExpression(expression, inputType, expectedType);
+        if (translated != null) {
+            return null;
+        }
+        if (hasNoArgMethod(expression, "getOperands")) {
+            List<?> operands = (List<?>) invoke(expression, "getOperands");
+            for (int index = 0; index < operands.size(); index++) {
+                Object operand = operands.get(index);
+                org.apache.flink.table.types.logical.LogicalType operandType = expressionLogicalType(operand);
+                if (operandType == null) {
+                    return path
+                            + "/"
+                            + expressionName(expression)
+                            + ".operand["
+                            + index
+                            + "]: Calcite type is not supported";
                 }
-            } else {
-                LogicalTypeRoot outputRoot = outputType.getTypeAt(outputIndex).getTypeRoot();
-                if ((outputRoot != LogicalTypeRoot.INTEGER
-                                && outputRoot != LogicalTypeRoot.TINYINT
-                                && outputRoot != LogicalTypeRoot.SMALLINT
-                                && outputRoot != LogicalTypeRoot.BIGINT
-                                && outputRoot != LogicalTypeRoot.FLOAT
-                                && outputRoot != LogicalTypeRoot.DOUBLE
-                                && outputRoot != LogicalTypeRoot.DECIMAL
-                                && outputRoot != LogicalTypeRoot.BOOLEAN
-                                && outputRoot != LogicalTypeRoot.DATE
-                                && outputRoot != LogicalTypeRoot.TIME_WITHOUT_TIME_ZONE
-                                && outputRoot != LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE
-                                && outputRoot != LogicalTypeRoot.CHAR
-                                && outputRoot != LogicalTypeRoot.VARCHAR
-                                && outputRoot != LogicalTypeRoot.BINARY
-                                && outputRoot != LogicalTypeRoot.VARBINARY)
-                        || projectionExpression(projection, inputType, outputType.getTypeAt(outputIndex)) == null) {
-                    return false;
+                String childFailure = expressionFailure(
+                        operand,
+                        inputType,
+                        operandType,
+                        operandType.getTypeRoot() == LogicalTypeRoot.BOOLEAN,
+                        path + "/" + expressionName(expression) + ".operand[" + index + "]");
+                if (childFailure != null) {
+                    return childFailure;
                 }
             }
         }
-        if (condition == null) {
-            return true;
+        return path
+                + "/"
+                + expressionName(expression)
+                + ": expression shape or type combination is not parity-approved ("
+                + expression
+                + ")";
+    }
+
+    private static String expressionName(Object expression) {
+        String function = functionName(expression);
+        if (function != null && !function.isEmpty()) {
+            return function;
         }
-        return conditionExpression(condition, inputType) != null;
+        return hasNoArgMethod(expression, "getKind")
+                ? invoke(expression, "getKind").toString()
+                : expression.getClass().getSimpleName();
     }
 
     /**

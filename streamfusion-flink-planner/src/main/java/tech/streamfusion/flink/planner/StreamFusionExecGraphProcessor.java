@@ -12,6 +12,7 @@ package tech.streamfusion.flink.planner;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
 import org.apache.calcite.rex.RexNode;
@@ -30,26 +31,44 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
 
     @Override
     public ExecNodeGraph process(ExecNodeGraph graph, ProcessorContext context) {
-        if (!graph.getRootNodes().stream().allMatch(node -> isEligible(node, context))) {
+        StreamFusionPlanningDiagnostics.begin();
+        List<String> rejections = new ArrayList<>();
+        for (int index = 0; index < graph.getRootNodes().size(); index++) {
+            collectRejections(graph.getRootNodes().get(index), context, "root[" + index + "]", rejections);
+        }
+        if (!rejections.isEmpty()) {
+            rejections.forEach(rejection -> {
+                int separator = rejection.indexOf('\n');
+                StreamFusionPlanningDiagnostics.reject(
+                        rejection.substring(0, separator), rejection.substring(separator + 1));
+            });
             return graph;
         }
+        StreamFusionPlanningDiagnostics.accelerate();
         List<ExecNode<?>> roots =
                 graph.getRootNodes().stream().map(this::convert).collect(Collectors.toList());
         return new ExecNodeGraph(graph.getFlinkVersion(), roots);
     }
 
-    private boolean isEligible(ExecNode<?> node, ProcessorContext context) {
+    private void collectRejections(ExecNode<?> node, ProcessorContext context, String path, List<String> rejections) {
+        String nodePath = path + "/" + node.getClass().getSimpleName();
         if (node.getInputEdges().isEmpty()) {
-            return true;
+            return;
+        } else if (node instanceof StreamExecCalc) {
+            String reason = unsupportedReason((StreamExecCalc) node, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
+        } else if (!node.getClass().getSimpleName().equals("StreamExecSink")) {
+            rejections.add(nodePath + "\noperator has no StreamFusion physical implementation");
         }
-        if (node instanceof StreamExecCalc) {
-            return canTranslate((StreamExecCalc) node, context)
-                    && node.getInputEdges().stream().allMatch(edge -> isEligible(edge.getSource(), context));
+        for (int index = 0; index < node.getInputEdges().size(); index++) {
+            collectRejections(
+                    node.getInputEdges().get(index).getSource(),
+                    context,
+                    nodePath + "/input[" + index + "]",
+                    rejections);
         }
-        if (node.getClass().getSimpleName().equals("StreamExecSink")) {
-            return node.getInputEdges().stream().allMatch(edge -> isEligible(edge.getSource(), context));
-        }
-        return false;
     }
 
     private ExecNode<?> convert(ExecNode<?> node) {
@@ -83,7 +102,7 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                 .build();
     }
 
-    private boolean canTranslate(StreamExecCalc calc, ProcessorContext context) {
+    private String unsupportedReason(StreamExecCalc calc, ProcessorContext context) {
         ExecEdge input = calc.getInputEdges().get(0);
         try {
             Class<?> translator = Class.forName(
@@ -91,8 +110,8 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     true,
                     context.getPlanner().getFlinkContext().getClassLoader());
             Method method =
-                    translator.getMethod("canTranslate", RowType.class, RowType.class, List.class, Object.class);
-            return (boolean) method.invoke(
+                    translator.getMethod("unsupportedReason", RowType.class, RowType.class, List.class, Object.class);
+            return (String) method.invoke(
                     null,
                     (RowType) input.getOutputType(),
                     (RowType) calc.getOutputType(),

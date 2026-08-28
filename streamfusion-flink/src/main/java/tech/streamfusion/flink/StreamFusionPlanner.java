@@ -16,6 +16,8 @@
 package tech.streamfusion.flink;
 
 import java.io.IOException;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.flink.api.dag.Transformation;
@@ -90,10 +92,23 @@ final class StreamFusionPlanner implements Planner {
                 + System.lineSeparator()
                 + "== StreamFusion Acceleration =="
                 + System.lineSeparator()
-                + "Accelerated: no"
-                + System.lineSeparator()
-                + "Plan reason: Flink plan conversion to StreamFusion physical operators is not implemented."
-                + System.lineSeparator()
-                + "Boundary reason: Flink RowData Arrow batch views and native materialization are TODO.";
+                + planningDiagnostics();
+    }
+
+    private static String planningDiagnostics() {
+        try {
+            Class<?> diagnostics = Class.forName(
+                    "tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics",
+                    true,
+                    Thread.currentThread().getContextClassLoader());
+            Method explain = diagnostics.getMethod("explain");
+            return (String) explain.invoke(null);
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
+            return "Accelerated: no"
+                    + System.lineSeparator()
+                    + "Plan reason: StreamFusion planner diagnostics are not installed.";
+        } catch (InvocationTargetException e) {
+            throw new IllegalStateException("Could not read StreamFusion planning diagnostics", e.getCause());
+        }
     }
 }
