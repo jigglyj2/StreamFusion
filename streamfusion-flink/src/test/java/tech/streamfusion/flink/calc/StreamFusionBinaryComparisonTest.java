@@ -47,6 +47,17 @@ class StreamFusionBinaryComparisonTest {
                 .isTrue();
     }
 
+    @ParameterizedTest
+    @MethodSource("nullSafeCases")
+    void preservesNullSafeVarbinarySemantics(byte[] left, byte[] right, ComparisonOperator operator, boolean expected) {
+        GenericRowData row = GenericRowData.of(left, right);
+
+        assertThat(new StreamFusionColumnComparison(0, 1, new VarBinaryType(), operator).evaluate(row))
+                .isEqualTo(expected);
+        assertThat(new StreamFusionBinaryComparison(0, right, operator, true).evaluate(GenericRowData.of(left)))
+                .isEqualTo(expected);
+    }
+
     private static Stream<Arguments> orderedCases() {
         return Stream.of(
                 Arguments.of(new byte[0], new byte[] {0}, ComparisonOperator.COMPARISON_OPERATOR_LESS_THAN, true),
@@ -62,5 +73,17 @@ class StreamFusionBinaryComparisonTest {
                         new byte[] {(byte) 0xff},
                         ComparisonOperator.COMPARISON_OPERATOR_GREATER_THAN_OR_EQUAL,
                         true));
+    }
+
+    private static Stream<Arguments> nullSafeCases() {
+        return Stream.of(
+                Arguments.of(
+                        new byte[] {0}, new byte[] {1}, ComparisonOperator.COMPARISON_OPERATOR_IS_DISTINCT_FROM, true),
+                Arguments.of(
+                        new byte[] {1},
+                        new byte[] {1},
+                        ComparisonOperator.COMPARISON_OPERATOR_IS_NOT_DISTINCT_FROM,
+                        true),
+                Arguments.of(null, new byte[] {1}, ComparisonOperator.COMPARISON_OPERATOR_IS_DISTINCT_FROM, true));
     }
 }
