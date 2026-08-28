@@ -116,6 +116,7 @@ message Expression {
     Cotangent cotangent = 85;
     NaturalLogarithm natural_logarithm = 86;
     CommonLogarithm common_logarithm = 87;
+    ArbitraryLogarithm arbitrary_logarithm = 88;
   }
 }
 
@@ -345,6 +346,11 @@ message NaturalLogarithm {
 
 message CommonLogarithm {
   Expression operand = 1;
+}
+
+message ArbitraryLogarithm {
+  Expression base = 1;
+  Expression value = 2;
 }
 
 message Coalesce {

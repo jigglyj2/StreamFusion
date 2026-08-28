@@ -7,6 +7,7 @@
 //     http://www.apache.org/licenses/LICENSE-2.0
 
 pub(crate) mod absolute_value;
+pub(crate) mod arbitrary_logarithm;
 pub(crate) mod arc_cosine;
 pub(crate) mod arc_sine;
 pub(crate) mod arc_tangent;

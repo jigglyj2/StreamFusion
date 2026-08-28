@@ -203,6 +203,21 @@ pub(super) fn create_expression(
                 .ok_or_else(|| DataFusionError::Plan("LOG10 operand is empty".to_string()))?;
             expressions::common_logarithm::create(create_expression(operand, schema)?, schema)
         }
+        Some(proto::expression::Expression::ArbitraryLogarithm(logarithm)) => {
+            let base = logarithm
+                .base
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("LOG base operand is empty".to_string()))?;
+            let value = logarithm
+                .value
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("LOG value operand is empty".to_string()))?;
+            expressions::arbitrary_logarithm::create(
+                create_expression(base, schema)?,
+                create_expression(value, schema)?,
+                schema,
+            )
+        }
         Some(proto::expression::Expression::HyperbolicSine(sine)) => {
             let operand = sine
                 .operand

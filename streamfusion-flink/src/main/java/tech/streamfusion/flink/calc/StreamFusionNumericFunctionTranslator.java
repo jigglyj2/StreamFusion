@@ -14,6 +14,7 @@ import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.proto.plan.v1.AbsoluteValue;
+import tech.streamfusion.proto.plan.v1.ArbitraryLogarithm;
 import tech.streamfusion.proto.plan.v1.ArcCosine;
 import tech.streamfusion.proto.plan.v1.ArcSine;
 import tech.streamfusion.proto.plan.v1.ArcTangent;
@@ -43,6 +44,9 @@ final class StreamFusionNumericFunctionTranslator extends StreamFusionRexSupport
     static String failureReason(Object expression) {
         if ("COSH".equals(functionName(expression))) {
             return "COSH stays on Flink because DataFusion differs from Flink by one ULP for finite DOUBLE inputs";
+        }
+        if ("LOG2".equals(functionName(expression))) {
+            return "LOG2 stays on Flink because DataFusion differs from Flink by one ULP for finite DOUBLE inputs";
         }
         return null;
     }
@@ -82,6 +86,18 @@ final class StreamFusionNumericFunctionTranslator extends StreamFusionRexSupport
                         .build();
             }
         }
+        if ("LOG".equals(function) && operands.size() == 2 && expectedType.getTypeRoot() == LogicalTypeRoot.DOUBLE) {
+            Expression base =
+                    StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, expectedType);
+            Expression value =
+                    StreamFusionProjectionTranslator.projectionExpression(operands.get(1), inputType, expectedType);
+            if (base != null && value != null) {
+                return Expression.newBuilder()
+                        .setArbitraryLogarithm(
+                                ArbitraryLogarithm.newBuilder().setBase(base).setValue(value))
+                        .build();
+            }
+        }
         if ("EXP".equals(function) && operands.size() == 1 && expectedType.getTypeRoot() == LogicalTypeRoot.DOUBLE) {
             return unary(expression, inputType, expectedType, UnaryKind.EXPONENTIAL);
         }
@@ -99,6 +115,9 @@ final class StreamFusionNumericFunctionTranslator extends StreamFusionRexSupport
                 return unary(expression, inputType, expectedType, UnaryKind.COTANGENT);
             }
             if ("LN".equals(function)) {
+                return unary(expression, inputType, expectedType, UnaryKind.NATURAL_LOGARITHM);
+            }
+            if ("LOG".equals(function)) {
                 return unary(expression, inputType, expectedType, UnaryKind.NATURAL_LOGARITHM);
             }
             if ("LOG10".equals(function)) {

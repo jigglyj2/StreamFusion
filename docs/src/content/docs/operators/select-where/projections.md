@@ -270,6 +270,11 @@ operand to `DOUBLE`. They preserve Flink's IEEE-754 domain behavior: negative in
 positive and negative zero produce negative infinity, positive infinity remains infinite, and null
 propagates. Generated parity tests include subnormal and maximum finite inputs and composition in
 comparison filters.
+Unary `LOG(value)` is accelerated with Flink's natural-logarithm semantics rather than DataFusion's
+single-argument base-10 convention. `LOG(base, value)` preserves Flink's argument order in protobuf
+and lowers to DataFusion's arbitrary-base vector expression. Invalid bases and values retain
+IEEE-754 infinity and NaN behavior. `LOG2` stays on Flink with an explicit EXPLAIN reason because
+DataFusion differs from Flink by one ULP for finite inputs such as `10.0`.
 `SINH` and `TANH` are accelerated under the same `DOUBLE` coercion contract and remain distinct
 native stages. Generated parity coverage includes finite values, overflow, signed zero, infinities,
 NaN, and nulls. `COSH` stays on Flink with an explicit EXPLAIN reason because DataFusion's kernel
