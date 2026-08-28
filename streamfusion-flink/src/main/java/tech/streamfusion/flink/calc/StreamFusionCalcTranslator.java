@@ -88,17 +88,50 @@ public final class StreamFusionCalcTranslator {
             return null;
         }
 
-        List<Expression> nativeProjections = new ArrayList<>(projections.size());
-        for (int outputIndex = 0; outputIndex < projections.size(); outputIndex++) {
-            nativeProjections.add(
-                    projectionExpression(projections.get(outputIndex), inputType, outputType.getTypeAt(outputIndex)));
+        return translateChain(
+                input,
+                java.util.Collections.singletonList(inputType),
+                java.util.Collections.singletonList(outputType),
+                java.util.Collections.singletonList(projections),
+                java.util.Collections.singletonList(condition));
+    }
+
+    /** Translates adjacent Flink Calc nodes into one native operator and one nested native plan. */
+    public static Transformation<RowData> translateChain(
+            Transformation<RowData> input,
+            List<RowType> inputTypes,
+            List<RowType> outputTypes,
+            List<List<?>> projectionStages,
+            List<?> conditions) {
+        if (inputTypes.isEmpty()
+                || inputTypes.size() != outputTypes.size()
+                || inputTypes.size() != projectionStages.size()
+                || inputTypes.size() != conditions.size()) {
+            throw new IllegalArgumentException("A native Calc chain must contain equally sized, non-empty stages");
         }
-        Expression nativeCondition = conditionExpression(condition, inputType);
-        StreamFusionIdentityCalcOperator operator =
-                new StreamFusionIdentityCalcOperator(inputType, outputType, nativeProjections, nativeCondition);
+        List<List<Expression>> nativeProjectionStages = new ArrayList<>(projectionStages.size());
+        List<Expression> nativeConditions = new ArrayList<>(conditions.size());
+        for (int stage = 0; stage < inputTypes.size(); stage++) {
+            RowType stageInputType = inputTypes.get(stage);
+            RowType stageOutputType = outputTypes.get(stage);
+            List<?> stageProjections = projectionStages.get(stage);
+            if (unsupportedReason(stageInputType, stageOutputType, stageProjections, conditions.get(stage)) != null) {
+                return null;
+            }
+            List<Expression> nativeProjections = new ArrayList<>(stageProjections.size());
+            for (int outputIndex = 0; outputIndex < stageProjections.size(); outputIndex++) {
+                nativeProjections.add(projectionExpression(
+                        stageProjections.get(outputIndex), stageInputType, stageOutputType.getTypeAt(outputIndex)));
+            }
+            nativeProjectionStages.add(nativeProjections);
+            nativeConditions.add(conditionExpression(conditions.get(stage), stageInputType));
+        }
+        RowType outputType = outputTypes.get(outputTypes.size() - 1);
+        StreamFusionIdentityCalcOperator operator = new StreamFusionIdentityCalcOperator(
+                inputTypes.get(0), outputType, nativeProjectionStages, nativeConditions);
         OneInputTransformation<RowData, RowData> transformation = new OneInputTransformation<>(
                 input,
-                "streamfusion-identity-calc",
+                "streamfusion-calc-chain[" + inputTypes.size() + "]",
                 operator,
                 InternalTypeInfo.of(outputType),
                 input.getParallelism(),

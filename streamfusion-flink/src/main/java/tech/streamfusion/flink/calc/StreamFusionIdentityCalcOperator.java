@@ -39,7 +39,6 @@ import tech.streamfusion.proto.plan.v1.PrecisionType;
 final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowData>
         implements OneInputStreamOperator<RowData, RowData>, BoundedOneInput {
     private static final int BATCH_SIZE = 1024;
-    private final Expression condition;
     private final RowType inputType;
     private final RowType outputType;
     private final RowDataSerializer serializer;
@@ -48,12 +47,14 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
     private final List<RowKind> rowKinds = new ArrayList<>(BATCH_SIZE);
 
     StreamFusionIdentityCalcOperator(
-            RowType inputType, RowType outputType, List<Expression> projections, Expression condition) {
+            RowType inputType,
+            RowType outputType,
+            List<List<Expression>> projectionStages,
+            List<Expression> conditions) {
         this.inputType = inputType;
         this.outputType = outputType;
-        this.condition = condition;
         this.serializer = new RowDataSerializer(inputType);
-        this.serializedPlan = createPlan(inputType, projections, condition);
+        this.serializedPlan = createPlan(inputType, projectionStages, conditions);
     }
 
     @Override
@@ -99,17 +100,25 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
         rowKinds.clear();
     }
 
-    private static byte[] createPlan(RowType inputType, List<Expression> projections, Expression condition) {
-        Calc.Builder calc = Calc.newBuilder().setInput(Operator.newBuilder().setInput(Input.newBuilder()));
-        calc.addAllProjections(projections);
-        calc.addProjections(inputReference(
-                inputType.getFieldCount(), logicalType(new org.apache.flink.table.types.logical.IntType(false))));
-        if (condition != null) {
-            calc.setCondition(condition);
+    private static byte[] createPlan(
+            RowType inputType, List<List<Expression>> projectionStages, List<Expression> conditions) {
+        Operator operator = Operator.newBuilder().setInput(Input.newBuilder()).build();
+        int stageInputFieldCount = inputType.getFieldCount();
+        for (int stage = 0; stage < projectionStages.size(); stage++) {
+            List<Expression> projections = projectionStages.get(stage);
+            Calc.Builder calc = Calc.newBuilder().setInput(operator).addAllProjections(projections);
+            calc.addProjections(inputReference(
+                    stageInputFieldCount, logicalType(new org.apache.flink.table.types.logical.IntType(false))));
+            Expression condition = conditions.get(stage);
+            if (condition != null) {
+                calc.setCondition(condition);
+            }
+            operator = Operator.newBuilder().setCalc(calc).build();
+            stageInputFieldCount = projections.size();
         }
         return NativePlan.newBuilder()
                 .setProtocolVersion(1)
-                .setRoot(Operator.newBuilder().setCalc(calc))
+                .setRoot(operator)
                 .build()
                 .toByteArray();
     }

@@ -69,6 +69,24 @@ import tech.streamfusion.proto.plan.v1.TruthTestOperator;
 
 class ArrowCDataBridgeTest {
     @Test
+    void executesAdjacentCalcsInOneNativePlanAndPreservesInputOrdinals() {
+        RowType inputType = RowType.of(new IntType(false));
+        RowType outputType = RowType.of(new IntType(false));
+        List<RowData> rows = List.of(GenericRowData.of(1), GenericRowData.of(2), GenericRowData.of(3));
+
+        try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+                ArrowRowDataBatch input = ArrowRowDataBatch.transpose(rows, inputType, allocator);
+                NativeCalcResult result =
+                        ArrowCDataBridge.executeWithSelection(chainedSelectionPlan(), input, outputType, allocator)) {
+            assertThat(result.batch().size()).isEqualTo(2);
+            assertThat(result.batch().rowView(0).getInt(0)).isEqualTo(12);
+            assertThat(result.batch().rowView(1).getInt(0)).isEqualTo(13);
+            assertThat(result.inputRow(0)).isEqualTo(1);
+            assertThat(result.inputRow(1)).isEqualTo(2);
+        }
+    }
+
+    @Test
     void returnsNativeFilterSelectionAsInputRowOrdinals() {
         RowType inputType = RowType.of(new IntType(false));
         RowType outputType = RowType.of(new IntType(false));
@@ -650,6 +668,54 @@ class ArrowCDataBridgeTest {
         return NativePlan.newBuilder()
                 .setProtocolVersion(1)
                 .setRoot(Operator.newBuilder().setCalc(calc))
+                .build()
+                .toByteArray();
+    }
+
+    private static byte[] chainedSelectionPlan() {
+        LogicalType integer = LogicalType.newBuilder()
+                .setNullable(false)
+                .setInteger(EmptyType.getDefaultInstance())
+                .build();
+        Expression inputValue = Expression.newBuilder()
+                .setInputReference(InputReference.newBuilder().setIndex(0).setType(integer))
+                .build();
+        Expression inputOrdinal = Expression.newBuilder()
+                .setInputReference(InputReference.newBuilder().setIndex(1).setType(integer))
+                .build();
+        Expression incrementedValue = Expression.newBuilder()
+                .setArithmetic(Arithmetic.newBuilder()
+                        .setLeft(inputValue)
+                        .setRight(Expression.newBuilder()
+                                .setIntegerLiteral(IntegerLiteral.newBuilder().setValue(10)))
+                        .setOperator(ArithmeticOperator.ARITHMETIC_OPERATOR_ADD))
+                .build();
+        Calc inner = Calc.newBuilder()
+                .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
+                .addProjections(incrementedValue)
+                .addProjections(inputOrdinal)
+                .build();
+        Expression innerValue = Expression.newBuilder()
+                .setInputReference(InputReference.newBuilder().setIndex(0).setType(integer))
+                .build();
+        Expression innerOrdinal = Expression.newBuilder()
+                .setInputReference(InputReference.newBuilder().setIndex(1).setType(integer))
+                .build();
+        Calc outer = Calc.newBuilder()
+                .setInput(Operator.newBuilder().setCalc(inner))
+                .addProjections(innerValue)
+                .addProjections(innerOrdinal)
+                .setCondition(Expression.newBuilder()
+                        .setComparison(Comparison.newBuilder()
+                                .setLeft(innerValue)
+                                .setRight(Expression.newBuilder()
+                                        .setIntegerLiteral(
+                                                IntegerLiteral.newBuilder().setValue(11)))
+                                .setOperator(ComparisonOperator.COMPARISON_OPERATOR_GREATER_THAN)))
+                .build();
+        return NativePlan.newBuilder()
+                .setProtocolVersion(1)
+                .setRoot(Operator.newBuilder().setCalc(outer))
                 .build()
                 .toByteArray();
     }

@@ -11,6 +11,7 @@ package tech.streamfusion.flink.planner;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import javax.annotation.Nullable;
@@ -31,6 +32,8 @@ import org.apache.flink.table.types.logical.RowType;
 /** StreamFusion's parallel physical calc node; the original Flink calc remains the fallback. */
 public final class StreamFusionExecCalc extends CommonExecCalc implements StreamExecNode<RowData> {
     private static final String TRANSLATOR_CLASS = "tech.streamfusion.flink.calc.StreamFusionCalcTranslator";
+    private final List<RexNode> streamFusionProjection;
+    private final @Nullable RexNode streamFusionCondition;
 
     public StreamFusionExecCalc(
             ReadableConfig persistedConfig,
@@ -50,20 +53,42 @@ public final class StreamFusionExecCalc extends CommonExecCalc implements Stream
                 Collections.singletonList(inputProperty),
                 outputType,
                 description);
+        this.streamFusionProjection = projection;
+        this.streamFusionCondition = condition;
     }
 
     @SuppressWarnings("unchecked")
     @Override
     protected Transformation<RowData> translateToPlanInternal(PlannerBase planner, ExecNodeConfig config) {
-        ExecEdge inputEdge = getInputEdges().get(0);
+        List<StreamFusionExecCalc> chain = new ArrayList<>();
+        StreamFusionExecCalc current = this;
+        ExecEdge inputEdge;
+        while (true) {
+            chain.add(0, current);
+            inputEdge = current.getInputEdges().get(0);
+            if (!(inputEdge.getSource() instanceof StreamFusionExecCalc)) {
+                break;
+            }
+            current = (StreamFusionExecCalc) inputEdge.getSource();
+        }
         Transformation<RowData> input = (Transformation<RowData>) inputEdge.translateToPlan(planner);
+        List<RowType> inputTypes = new ArrayList<>(chain.size());
+        List<RowType> outputTypes = new ArrayList<>(chain.size());
+        List<List<RexNode>> projections = new ArrayList<>(chain.size());
+        List<RexNode> conditions = new ArrayList<>(chain.size());
+        for (StreamFusionExecCalc calc : chain) {
+            inputTypes.add((RowType) calc.getInputEdges().get(0).getOutputType());
+            outputTypes.add((RowType) calc.getOutputType());
+            projections.add(calc.streamFusionProjection);
+            conditions.add(calc.streamFusionCondition);
+        }
         try {
             Class<?> translator = Class.forName(
                     TRANSLATOR_CLASS, true, planner.getFlinkContext().getClassLoader());
             Method translate = translator.getMethod(
-                    "translate", Transformation.class, RowType.class, RowType.class, List.class, Object.class);
-            Transformation<RowData> result = (Transformation<RowData>) translate.invoke(
-                    null, input, (RowType) inputEdge.getOutputType(), (RowType) getOutputType(), projection, condition);
+                    "translateChain", Transformation.class, List.class, List.class, List.class, List.class);
+            Transformation<RowData> result = (Transformation<RowData>)
+                    translate.invoke(null, input, inputTypes, outputTypes, projections, conditions);
             if (result == null) {
                 throw new IllegalStateException("A selected StreamFusion calc failed translation");
             }
