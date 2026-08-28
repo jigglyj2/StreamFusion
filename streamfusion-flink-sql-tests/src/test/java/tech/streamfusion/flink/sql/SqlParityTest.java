@@ -118,6 +118,15 @@ class SqlParityTest {
     }
 
     @Test
+    void nativeBooleanLiteralProjectionsMatchFlinkByteForByte() throws Exception {
+        String sql = "SELECT enabled, TRUE, FALSE FROM "
+                + "(VALUES (1, TRUE), (2, FALSE)) AS input(id, enabled) WHERE id >= 1";
+        assertParity(sql, true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    @Test
     void nativeBigintArithmeticMatchesFlinkByteForByte() throws Exception {
         assertParity(BIGINT_ARITHMETIC_SQL, true);
 

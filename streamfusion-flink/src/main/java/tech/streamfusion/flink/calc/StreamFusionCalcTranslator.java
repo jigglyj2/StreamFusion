@@ -28,6 +28,7 @@ import org.apache.flink.table.types.logical.TimeType;
 import org.apache.flink.table.types.logical.TimestampType;
 import tech.streamfusion.proto.plan.v1.Arithmetic;
 import tech.streamfusion.proto.plan.v1.ArithmeticOperator;
+import tech.streamfusion.proto.plan.v1.BooleanLiteral;
 import tech.streamfusion.proto.plan.v1.BooleanOperator;
 import tech.streamfusion.proto.plan.v1.ComparisonOperator;
 import tech.streamfusion.proto.plan.v1.DecimalLiteral;
@@ -97,7 +98,8 @@ public final class StreamFusionCalcTranslator {
                                 && outputRoot != LogicalTypeRoot.BIGINT
                                 && outputRoot != LogicalTypeRoot.FLOAT
                                 && outputRoot != LogicalTypeRoot.DOUBLE
-                                && outputRoot != LogicalTypeRoot.DECIMAL)
+                                && outputRoot != LogicalTypeRoot.DECIMAL
+                                && outputRoot != LogicalTypeRoot.BOOLEAN)
                         || projectionExpression(projection, inputType, outputRoot) == null) {
                     return false;
                 }
@@ -184,7 +186,14 @@ public final class StreamFusionCalcTranslator {
             return StreamFusionIdentityCalcOperator.inputReference(
                     inputIndex, StreamFusionIdentityCalcOperator.logicalType(inputType, inputIndex));
         }
-        if (expectedType == LogicalTypeRoot.INTEGER) {
+        if (expectedType == LogicalTypeRoot.BOOLEAN) {
+            Boolean literal = literal(expression, Boolean.class);
+            if (literal != null) {
+                return Expression.newBuilder()
+                        .setBooleanLiteral(BooleanLiteral.newBuilder().setValue(literal))
+                        .build();
+            }
+        } else if (expectedType == LogicalTypeRoot.INTEGER) {
             Integer literal = integerLiteral(expression);
             if (literal != null) {
                 return Expression.newBuilder()

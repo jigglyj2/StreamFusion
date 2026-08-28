@@ -149,6 +149,9 @@ fn create_expression(
                 scale,
             ))))
         }
+        Some(proto::expression::Expression::BooleanLiteral(literal)) => {
+            Ok(Arc::new(Literal::new(ScalarValue::Boolean(Some(literal.value)))))
+        }
         Some(proto::expression::Expression::GreaterThanOrEqual(comparison)) => {
             Ok(Arc::new(BinaryExpr::new(
                 create_expression(
