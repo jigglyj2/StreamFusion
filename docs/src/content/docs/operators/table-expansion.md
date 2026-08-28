@@ -39,8 +39,8 @@ StreamFusion accelerates the operation when all of the following are true:
 - Flink planned an inner/cross or left correlate around its built-in `$UNNEST_ROWS$` function.
 - The function has one direct input-field operand whose type is `ARRAY`, `MAP`, or `MULTISET`.
 - The element is a supported scalar Arrow boundary type, including numeric, boolean, character,
-  binary, decimal, date, time, and timestamp values; a non-empty `ROW` composed of those types; or
-  an `ARRAY` of one of those scalar types.
+  binary, decimal, date, time, and timestamp values; a non-empty `ROW` composed of those types and
+  scalar arrays; or an `ARRAY` of one of those scalar types.
 - The correlate has no additional condition and its output preserves every input field before
   appending the array element or map key/value fields with exactly Flink's types.
 - Every other internal node in the plan has a StreamFusion implementation.
@@ -55,8 +55,8 @@ the synthetic row also has a null position when ordinality is requested. Map exp
 the paired key and value arrays and assigns positions in Flink's stored `MapData` entry order; SQL
 map ordering is not otherwise guaranteed. In left expansion of arrays of rows, null and empty
 collections still produce exactly one synthetic all-null row. Computed
-collection operands, rows containing nested collection fields, arrays nested more than one level,
-maps with collection keys or values nested more than one level,
+collection operands, rows containing maps, multisets, or arrays nested more than one level, arrays
+nested more than one level, maps with collection keys or values nested more than one level,
 left row-array expansion with ordinality, multisets with nullable or complex elements,
 user-defined table functions, and correlate
 conditions currently fall back. EXPLAIN identifies the rejected join form, function shape,

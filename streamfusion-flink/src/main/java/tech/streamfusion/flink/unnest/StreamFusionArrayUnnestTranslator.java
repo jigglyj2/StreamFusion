@@ -267,6 +267,18 @@ public final class StreamFusionArrayUnnestTranslator {
         if (isSupportedElement(element)) {
             return true;
         }
+        if (element instanceof RowType) {
+            RowType row = (RowType) element;
+            return row.getFieldCount() > 0
+                    && row.getChildren().stream().allMatch(child -> {
+                        if (isScalarBoundaryType(child.getTypeRoot())) {
+                            return true;
+                        }
+                        return child instanceof ArrayType
+                                && isScalarBoundaryType(
+                                        ((ArrayType) child).getElementType().getTypeRoot());
+                    });
+        }
         return element instanceof ArrayType
                 && isScalarBoundaryType(((ArrayType) element).getElementType().getTypeRoot());
     }

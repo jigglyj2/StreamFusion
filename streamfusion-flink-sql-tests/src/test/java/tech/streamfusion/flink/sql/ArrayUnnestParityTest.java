@@ -237,6 +237,45 @@ class ArrayUnnestParityTest extends SqlParityTestSupport {
     }
 
     @Test
+    void nativeArrayOfRowsPreservesScalarArrayFieldsWithoutFlatteningThem() throws Exception {
+        java.util.List<Row> inputs = Arrays.asList(
+                Row.of((Object) new Row[] {
+                    Row.of("values", new Integer[] {1, null, 3}),
+                    Row.of("empty", new Integer[] {}),
+                    Row.of("null", null),
+                    null
+                }),
+                Row.of((Object) new Row[] {}),
+                Row.of((Object) null));
+        org.apache.flink.api.common.typeinfo.TypeInformation<Row[]> externalType = Types.OBJECT_ARRAY(
+                Types.ROW_NAMED(new String[] {"label", "values"}, Types.STRING, Types.OBJECT_ARRAY(Types.INT)));
+        org.apache.flink.table.types.DataType logicalType = DataTypes.ARRAY(DataTypes.ROW(
+                DataTypes.FIELD("label", DataTypes.STRING()),
+                DataTypes.FIELD("values", DataTypes.ARRAY(DataTypes.INT()))));
+
+        assertDataStreamParity(
+                "SELECT label, nested_values FROM nested_row_array_unnest_input "
+                        + "CROSS JOIN UNNEST(metric) AS expanded(label, nested_values)",
+                externalType,
+                logicalType,
+                inputs,
+                "nested_row_array_unnest_input");
+
+        assertDataStreamParity(
+                "SELECT label, nested_values FROM left_nested_row_array_unnest_input "
+                        + "LEFT JOIN UNNEST(metric) AS expanded(label, nested_values) ON TRUE",
+                externalType,
+                logicalType,
+                inputs,
+                "left_nested_row_array_unnest_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isEqualTo(1);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
+    @Test
     void nativeNestedArrayUnnestPreservesEachInnerArrayAndOrdinality() throws Exception {
         java.util.List<Row> inputs = Arrays.asList(
                 Row.of((Object) new Integer[][] {new Integer[] {1, null}, new Integer[] {}, null}),
