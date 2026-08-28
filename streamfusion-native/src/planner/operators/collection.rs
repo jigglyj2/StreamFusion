@@ -211,6 +211,17 @@ pub(super) fn create(
                 schema,
             )
         }
+        MapKeys(keys) => expressions::map_keys::create(
+            create_expression(required(&keys.map, "map keys is missing its map")?, schema)?,
+            schema,
+        ),
+        MapValues(values) => expressions::map_values::create(
+            create_expression(
+                required(&values.map, "map values is missing its map")?,
+                schema,
+            )?,
+            schema,
+        ),
         ArrayDistinct(distinct) => expressions::array_distinct::create(
             create_expression(
                 required(&distinct.array, "array distinct is missing its array")?,

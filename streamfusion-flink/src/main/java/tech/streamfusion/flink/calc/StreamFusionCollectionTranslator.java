@@ -28,6 +28,8 @@ import tech.streamfusion.proto.plan.v1.ArraySlice;
 import tech.streamfusion.proto.plan.v1.ArraySort;
 import tech.streamfusion.proto.plan.v1.Cardinality;
 import tech.streamfusion.proto.plan.v1.Expression;
+import tech.streamfusion.proto.plan.v1.MapKeys;
+import tech.streamfusion.proto.plan.v1.MapValues;
 import tech.streamfusion.proto.plan.v1.Split;
 
 /** Collection functions kept separate from complex access-path translation. */
@@ -430,6 +432,54 @@ final class StreamFusionCollectionTranslator extends StreamFusionComplexTypeSupp
             slice.setEnd(end.longValue());
         }
         return Expression.newBuilder().setArraySlice(slice).build();
+    }
+
+    static Expression mapProjection(Object expression, RowType inputType, LogicalType expectedType) {
+        String function = functionName(expression);
+        if ((!"MAP_KEYS".equals(function) && !"MAP_VALUES".equals(function)) || !(expectedType instanceof ArrayType)) {
+            return null;
+        }
+        java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
+        if (operands.size() != 1) {
+            return null;
+        }
+        LogicalType mapType = logicalType(operands.get(0), inputType);
+        if (!(mapType instanceof MapType)) {
+            mapType = nestedMapType(operands.get(0), inputType, (ArrayType) expectedType, function);
+        }
+        if (!(mapType instanceof MapType)) {
+            return null;
+        }
+        Expression map = StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, mapType);
+        if (map == null) {
+            return null;
+        }
+        return "MAP_KEYS".equals(function)
+                ? Expression.newBuilder()
+                        .setMapKeys(MapKeys.newBuilder().setMap(map))
+                        .build()
+                : Expression.newBuilder()
+                        .setMapValues(MapValues.newBuilder().setMap(map))
+                        .build();
+    }
+
+    private static LogicalType nestedMapType(Object operand, RowType inputType, ArrayType resultType, String function) {
+        if (!hasNoArgMethod(operand, "getKind")
+                || !"MAP_VALUE_CONSTRUCTOR".equals(invoke(operand, "getKind").toString())) {
+            return null;
+        }
+        java.util.List<?> entries = (java.util.List<?>) invoke(operand, "getOperands");
+        if (entries.size() < 2) {
+            return null;
+        }
+        LogicalType projectedType = resultType.getElementType();
+        LogicalType otherType = logicalType(entries.get("MAP_KEYS".equals(function) ? 1 : 0), inputType);
+        if (otherType == null) {
+            return null;
+        }
+        return "MAP_KEYS".equals(function)
+                ? new MapType(false, projectedType, otherType)
+                : new MapType(false, otherType, projectedType);
     }
 
     private static Expression stringLiteral(String value) {

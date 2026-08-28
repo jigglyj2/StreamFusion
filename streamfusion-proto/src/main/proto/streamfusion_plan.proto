@@ -90,6 +90,8 @@ message Expression {
     ArraySlice array_slice = 59;
     RowConstructor row_constructor = 60;
     MapConstructor map_constructor = 61;
+    MapKeys map_keys = 62;
+    MapValues map_values = 63;
   }
 }
 
@@ -207,6 +209,14 @@ message RowConstructor {
 message MapConstructor {
   repeated Expression keys = 1;
   repeated Expression values = 2;
+}
+
+message MapKeys {
+  Expression map = 1;
+}
+
+message MapValues {
+  Expression map = 1;
 }
 
 message Coalesce {

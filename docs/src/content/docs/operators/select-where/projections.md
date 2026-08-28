@@ -229,6 +229,10 @@ the protobuf; Rust builds Arrow key and value lists and passes them directly to 
 constructor. Dynamic, null, or duplicate keys remain on Flink with an EXPLAIN reason because Flink
 uses last-value-wins semantics for duplicate keys while DataFusion rejects them. Empty maps remain
 fallback until the protobuf carries an explicit Arrow key/value type for an empty constructor.
+`MAP_KEYS` and `MAP_VALUES` are accelerated for otherwise native map expressions. They lower
+directly to DataFusion's Arrow map projection kernels and preserve entry order, null maps, and
+nullable values. They can consume a native `MAP[...]` constructor without materializing the map in
+Java or crossing an intermediate JVM boundary.
 `ARRAY_EXCEPT` is accelerated for compatible array inputs, including arrays of nested rows and
 native `ARRAY[...]` constructors. It preserves the first occurrence of each left-side value not
 present on the right, treats null as a comparable set value, removes duplicates, and returns null
