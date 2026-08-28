@@ -35,6 +35,7 @@ import org.apache.flink.table.types.logical.FloatType;
 import org.apache.flink.table.types.logical.IntType;
 import org.apache.flink.table.types.logical.LocalZonedTimestampType;
 import org.apache.flink.table.types.logical.MapType;
+import org.apache.flink.table.types.logical.MultisetType;
 import org.apache.flink.table.types.logical.NullType;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.SmallIntType;
@@ -121,6 +122,21 @@ class ArrowRowDataBatchTest {
             for (int field = 0; field < ALL_TYPES.getFieldCount(); field++) {
                 assertThat(nullRow.isNullAt(field)).isTrue();
             }
+        }
+    }
+
+    @Test
+    void roundTripsNonNullMultisetElementsThroughArrowMapView() {
+        Map<StringData, Integer> values = new LinkedHashMap<>();
+        values.put(StringData.fromString("repeat"), 2);
+        values.put(StringData.fromString("once"), 1);
+        RowType type = RowType.of(new MultisetType(new VarCharType(false, VarCharType.MAX_LENGTH)));
+
+        try (ArrowRowDataBatch batch =
+                ArrowRowDataBatch.transpose(List.of(GenericRowData.of(new GenericMapData(values))), type)) {
+            assertThat(batch.rowView(0).getMap(0).size()).isEqualTo(2);
+            assertThat(batch.rowView(0).getMap(0).valueArray().getInt(0)).isEqualTo(2);
+            assertThat(batch.rowView(0).getMap(0).valueArray().getInt(1)).isEqualTo(1);
         }
     }
 

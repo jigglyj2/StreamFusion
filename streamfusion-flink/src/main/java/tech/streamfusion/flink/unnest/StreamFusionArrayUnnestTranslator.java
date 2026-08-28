@@ -21,6 +21,7 @@ import org.apache.flink.table.types.logical.ArrayType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.MapType;
+import org.apache.flink.table.types.logical.MultisetType;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.proto.plan.v1.UnnestCollection;
 
@@ -81,8 +82,12 @@ public final class StreamFusionArrayUnnestTranslator {
         if (collection.getTypeRoot() == LogicalTypeRoot.MAP) {
             return unsupportedMapReason(inputType, outputType, joinName, withOrdinality, (MapType) collection);
         }
+        if (collection.getTypeRoot() == LogicalTypeRoot.MULTISET) {
+            return unsupportedMultisetReason(
+                    inputType, outputType, joinName, withOrdinality, (MultisetType) collection);
+        }
         if (collection.getTypeRoot() != LogicalTypeRoot.ARRAY) {
-            return "UNNEST input " + inputType.getFieldNames().get(index) + " is neither ARRAY nor MAP";
+            return "UNNEST input " + inputType.getFieldNames().get(index) + " is not ARRAY, MAP, or MULTISET";
         }
         LogicalType element = ((ArrayType) collection).getElementType();
         if (!isSupportedElement(element)) {
@@ -164,6 +169,38 @@ public final class StreamFusionArrayUnnestTranslator {
         return null;
     }
 
+    private static String unsupportedMultisetReason(
+            RowType inputType, RowType outputType, String joinName, boolean withOrdinality, MultisetType multiset) {
+        LogicalType element = multiset.getElementType();
+        if (element.isNullable()) {
+            return "multiset UNNEST nullable elements are not yet supported by the Arrow map boundary";
+        }
+        if (!isScalarBoundaryType(element.getTypeRoot())) {
+            return "multiset UNNEST element type " + element + " is not yet supported";
+        }
+        int appendedFields = 1 + (withOrdinality ? 1 : 0);
+        if (outputType.getFieldCount() != inputType.getFieldCount() + appendedFields) {
+            return "multiset UNNEST output must append its element" + (withOrdinality ? " and ordinality" : "");
+        }
+        for (int field = 0; field < inputType.getFieldCount(); field++) {
+            if (!inputType.getTypeAt(field).equals(outputType.getTypeAt(field))) {
+                return "multiset UNNEST output does not preserve input field " + field + " exactly";
+            }
+        }
+        boolean left = "LEFT".equals(joinName);
+        LogicalType expectedElement = left ? element.copy(true) : element;
+        if (!expectedElement.equals(outputType.getTypeAt(inputType.getFieldCount()))) {
+            return "multiset UNNEST output element type does not match its MULTISET element type";
+        }
+        if (withOrdinality) {
+            LogicalType ordinality = outputType.getTypeAt(inputType.getFieldCount() + 1);
+            if (ordinality.getTypeRoot() != LogicalTypeRoot.INTEGER || ordinality.isNullable() != left) {
+                return "multiset UNNEST ordinality must be " + (left ? "a nullable" : "a non-null") + " INT";
+            }
+        }
+        return null;
+    }
+
     public static int arrayIndex(Object invocation) {
         List<?> operands = (List<?>) invoke(invocation, "getOperands");
         Object field = invoke(operands.get(0), "getField");
@@ -180,9 +217,14 @@ public final class StreamFusionArrayUnnestTranslator {
     }
 
     public static UnnestCollection collection(RowType inputType, Object invocation) {
-        return inputType.getTypeAt(arrayIndex(invocation)).getTypeRoot() == LogicalTypeRoot.MAP
-                ? UnnestCollection.UNNEST_COLLECTION_MAP
-                : UnnestCollection.UNNEST_COLLECTION_ARRAY;
+        LogicalTypeRoot root = inputType.getTypeAt(arrayIndex(invocation)).getTypeRoot();
+        if (root == LogicalTypeRoot.MAP) {
+            return UnnestCollection.UNNEST_COLLECTION_MAP;
+        }
+        if (root == LogicalTypeRoot.MULTISET) {
+            return UnnestCollection.UNNEST_COLLECTION_MULTISET;
+        }
+        return UnnestCollection.UNNEST_COLLECTION_ARRAY;
     }
 
     private static boolean isScalarBoundaryType(LogicalTypeRoot type) {

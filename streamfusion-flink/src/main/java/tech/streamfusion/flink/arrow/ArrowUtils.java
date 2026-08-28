@@ -75,6 +75,7 @@ import org.apache.flink.table.types.logical.LegacyTypeInformationType;
 import org.apache.flink.table.types.logical.LocalZonedTimestampType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.MapType;
+import org.apache.flink.table.types.logical.MultisetType;
 import org.apache.flink.table.types.logical.NullType;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.SmallIntType;
@@ -172,16 +173,24 @@ public final class ArrowUtils {
             for (RowType.RowField field : rowType.getFields()) {
                 children.add(toArrowField(field.getName(), field.getType()));
             }
-        } else if (logicalType instanceof MapType) {
-            MapType mapType = (MapType) logicalType;
-            Preconditions.checkArgument(!mapType.getKeyType().isNullable(), "Map key type should be non-nullable");
+        } else if (logicalType instanceof MapType || logicalType instanceof MultisetType) {
+            LogicalType keyType = mapKeyType(logicalType);
+            LogicalType valueType = mapValueType(logicalType);
+            Preconditions.checkArgument(!keyType.isNullable(), "Map and multiset key types should be non-nullable");
             children = Collections.singletonList(new Field(
                     "items",
                     new FieldType(false, ArrowType.Struct.INSTANCE, null),
-                    Arrays.asList(
-                            toArrowField("key", mapType.getKeyType()), toArrowField("value", mapType.getValueType()))));
+                    Arrays.asList(toArrowField("key", keyType), toArrowField("value", valueType))));
         }
         return new Field(fieldName, fieldType, children);
+    }
+
+    private static LogicalType mapKeyType(LogicalType type) {
+        return type instanceof MapType ? ((MapType) type).getKeyType() : ((MultisetType) type).getElementType();
+    }
+
+    private static LogicalType mapValueType(LogicalType type) {
+        return type instanceof MapType ? ((MapType) type).getValueType() : new IntType(false);
     }
 
     /** Creates an {@link ArrowWriter} for the specified {@link VectorSchemaRoot}. */
@@ -240,8 +249,8 @@ public final class ArrowUtils {
             return TimestampWriter.forRow(vector, precision);
         } else if (vector instanceof MapVector) {
             MapVector mapVector = (MapVector) vector;
-            LogicalType keyType = ((MapType) fieldType).getKeyType();
-            LogicalType valueType = ((MapType) fieldType).getValueType();
+            LogicalType keyType = mapKeyType(fieldType);
+            LogicalType valueType = mapValueType(fieldType);
             StructVector structVector = (StructVector) mapVector.getDataVector();
             return MapWriter.forRow(
                     mapVector,
@@ -310,8 +319,8 @@ public final class ArrowUtils {
             return TimestampWriter.forArray(vector, precision);
         } else if (vector instanceof MapVector) {
             MapVector mapVector = (MapVector) vector;
-            LogicalType keyType = ((MapType) fieldType).getKeyType();
-            LogicalType valueType = ((MapType) fieldType).getValueType();
+            LogicalType keyType = mapKeyType(fieldType);
+            LogicalType valueType = mapValueType(fieldType);
             StructVector structVector = (StructVector) mapVector.getDataVector();
             return MapWriter.forArray(
                     mapVector,
@@ -383,8 +392,8 @@ public final class ArrowUtils {
             return new ArrowTimestampColumnVector(vector);
         } else if (vector instanceof MapVector) {
             MapVector mapVector = (MapVector) vector;
-            LogicalType keyType = ((MapType) fieldType).getKeyType();
-            LogicalType valueType = ((MapType) fieldType).getValueType();
+            LogicalType keyType = mapKeyType(fieldType);
+            LogicalType valueType = mapValueType(fieldType);
             StructVector structVector = (StructVector) mapVector.getDataVector();
             return new ArrowMapColumnVector(
                     mapVector,
@@ -529,6 +538,11 @@ public final class ArrowUtils {
 
         @Override
         public ArrowType visit(MapType mapType) {
+            return new ArrowType.Map(false);
+        }
+
+        @Override
+        public ArrowType visit(MultisetType multisetType) {
             return new ArrowType.Map(false);
         }
 

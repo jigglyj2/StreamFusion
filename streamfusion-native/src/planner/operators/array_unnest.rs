@@ -24,6 +24,7 @@ use datafusion::physical_plan::unnest::{ListUnnest, UnnestExec};
 use crate::proto;
 
 mod map_entries;
+mod multiset_entries;
 mod ordinality;
 
 const VALUE_COLUMN: &str = "__streamfusion_unnest_value";
@@ -57,8 +58,9 @@ pub(crate) fn create(
         ))
     })?;
     let is_map = collection == proto::UnnestCollection::Map;
-    let (collection, element_field) = match (is_map, array_field.data_type()) {
-        (false, DataType::List(element)) => (
+    let is_multiset = collection == proto::UnnestCollection::Multiset;
+    let (collection, element_field) = match (collection, array_field.data_type()) {
+        (proto::UnnestCollection::Array, DataType::List(element)) => (
             source,
             Arc::new(Field::new(
                 VALUE_COLUMN,
@@ -66,7 +68,7 @@ pub(crate) fn create(
                 element.is_nullable() || unnest.preserve_empty,
             )),
         ),
-        (true, DataType::Map(entries, _)) => (
+        (proto::UnnestCollection::Map, DataType::Map(entries, _)) => (
             map_entries::create(source),
             Arc::new(Field::new(
                 VALUE_COLUMN,
@@ -74,14 +76,37 @@ pub(crate) fn create(
                 unnest.preserve_empty,
             )),
         ),
-        (false, other) => {
+        (proto::UnnestCollection::Multiset, DataType::Map(entries, _)) => {
+            let DataType::Struct(fields) = entries.data_type() else {
+                return Err(DataFusionError::Plan(
+                    "multiset Arrow map entries must be a struct".to_string(),
+                ));
+            };
+            let element = fields.first().ok_or_else(|| {
+                DataFusionError::Plan("multiset Arrow map has no element field".to_string())
+            })?;
+            (
+                multiset_entries::create(source),
+                Arc::new(Field::new(
+                    VALUE_COLUMN,
+                    element.data_type().clone(),
+                    unnest.preserve_empty,
+                )),
+            )
+        }
+        (proto::UnnestCollection::Array, other) => {
             return Err(DataFusionError::Plan(format!(
                 "array unnest requires List input, got {other}"
             )));
         }
-        (true, other) => {
+        (proto::UnnestCollection::Map, other) => {
             return Err(DataFusionError::Plan(format!(
                 "map unnest requires Map input, got {other}"
+            )));
+        }
+        (proto::UnnestCollection::Multiset, other) => {
+            return Err(DataFusionError::Plan(format!(
+                "multiset unnest requires Map input, got {other}"
             )));
         }
     };
@@ -154,7 +179,7 @@ pub(crate) fn create(
         visible_field_count,
         unnest.with_ordinality,
         unnest.preserve_empty,
-        !is_map,
+        !is_map && !is_multiset,
     )
 }
 
@@ -455,6 +480,61 @@ mod tests {
                 .unwrap()
                 .values(),
             &[1, 2, 1]
+        );
+    }
+
+    #[tokio::test]
+    async fn repeats_multiset_elements_by_count_with_global_ordinality() {
+        let multisets = Arc::new(MapArray::from_vec_of_maps::<StringArray, Int32Array, _, _>(
+            vec![
+                Some(vec![("b", Some(2)), ("a", Some(1)), ("none", Some(0))]),
+                Some(vec![("z", Some(2))]),
+            ],
+            true,
+        ));
+        let ids = Arc::new(Int32Array::from(vec![10, 20]));
+        let ordinals = Arc::new(Int32Array::from(vec![0, 1]));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("items", multisets.data_type().clone(), true),
+            Field::new(INPUT_ROW_COLUMN, DataType::Int32, false),
+        ]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![ids, multisets, ordinals]).unwrap();
+        let source = MemorySourceConfig::try_new_exec(&[vec![batch]], schema, None).unwrap();
+        let plan = create(
+            &proto::ArrayUnnest {
+                input: None,
+                array_index: 1,
+                with_ordinality: true,
+                preserve_empty: false,
+                collection: proto::UnnestCollection::Multiset as i32,
+            },
+            source,
+        )
+        .unwrap();
+
+        let output = collect(plan, SessionContext::new().task_ctx())
+            .await
+            .unwrap();
+        let batch = &output[0];
+        assert_eq!(
+            batch
+                .column(2)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some("b"), Some("b"), Some("a"), Some("z"), Some("z")]
+        );
+        assert_eq!(
+            batch
+                .column(3)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .values(),
+            &[1, 2, 3, 1, 2]
         );
     }
 }

@@ -39,6 +39,7 @@ message ArrayUnnest {
 enum UnnestCollection {
   UNNEST_COLLECTION_ARRAY = 0;
   UNNEST_COLLECTION_MAP = 1;
+  UNNEST_COLLECTION_MULTISET = 2;
 }
 
 message Expression {
