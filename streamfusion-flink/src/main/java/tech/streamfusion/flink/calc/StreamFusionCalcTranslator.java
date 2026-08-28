@@ -160,11 +160,25 @@ public final class StreamFusionCalcTranslator {
             org.apache.flink.table.types.logical.LogicalType expectedType,
             boolean booleanPosition,
             String path) {
-        Expression translated = booleanPosition
-                ? conditionExpression(expression, inputType)
-                : projectionExpression(expression, inputType, expectedType);
+        Expression translated;
+        try {
+            translated = booleanPosition
+                    ? conditionExpression(expression, inputType)
+                    : projectionExpression(expression, inputType, expectedType);
+        } catch (RuntimeException | AssertionError ignored) {
+            return path
+                    + "/"
+                    + expressionName(expression)
+                    + ": planner representation could not be serialized safely ("
+                    + expression
+                    + ")";
+        }
         if (translated != null) {
             return null;
+        }
+        if (hasNoArgMethod(expression, "getKind")
+                && "SEARCH".equals(invoke(expression, "getKind").toString())) {
+            return path + "/SEARCH: search argument shape or endpoint type is not parity-approved (" + expression + ")";
         }
         if (hasNoArgMethod(expression, "getOperands")) {
             List<?> operands = (List<?>) invoke(expression, "getOperands");
