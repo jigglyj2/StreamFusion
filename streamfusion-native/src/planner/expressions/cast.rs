@@ -40,6 +40,11 @@ fn approved_types(kind: proto::CastKind) -> Result<(DataType, DataType)> {
         proto::CastKind::SmallintToInteger => Ok((DataType::Int16, DataType::Int32)),
         proto::CastKind::SmallintToBigint => Ok((DataType::Int16, DataType::Int64)),
         proto::CastKind::IntegerToBigint => Ok((DataType::Int32, DataType::Int64)),
+        proto::CastKind::TinyintToFloat => Ok((DataType::Int8, DataType::Float32)),
+        proto::CastKind::TinyintToDouble => Ok((DataType::Int8, DataType::Float64)),
+        proto::CastKind::SmallintToFloat => Ok((DataType::Int16, DataType::Float32)),
+        proto::CastKind::SmallintToDouble => Ok((DataType::Int16, DataType::Float64)),
+        proto::CastKind::IntegerToDouble => Ok((DataType::Int32, DataType::Float64)),
         proto::CastKind::Unspecified => Err(DataFusionError::Plan(
             "cast kind is unspecified or unknown".to_string(),
         )),
@@ -55,8 +60,10 @@ fn declared_target(cast: &proto::Cast) -> Result<DataType> {
         Some(proto::logical_type::Type::Smallint(_)) => Ok(DataType::Int16),
         Some(proto::logical_type::Type::Integer(_)) => Ok(DataType::Int32),
         Some(proto::logical_type::Type::Bigint(_)) => Ok(DataType::Int64),
+        Some(proto::logical_type::Type::Float(_)) => Ok(DataType::Float32),
+        Some(proto::logical_type::Type::Double(_)) => Ok(DataType::Float64),
         _ => Err(DataFusionError::Plan(
-            "cast target is not an approved signed integer".to_string(),
+            "cast target is not an approved numeric type".to_string(),
         )),
     }
 }

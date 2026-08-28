@@ -127,6 +127,15 @@ class SqlParityTest {
     }
 
     @Test
+    void nativeIntegerToDoubleCastMatchesFlinkByteForByte() throws Exception {
+        String sql =
+                "SELECT CAST(id AS DOUBLE) FROM " + "(VALUES (-2147483648), (-1), (0), (1), (2147483647)) AS input(id)";
+        assertParity(sql, true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    @Test
     void nativeBooleanLiteralProjectionsMatchFlinkByteForByte() throws Exception {
         String sql = "SELECT enabled, TRUE, FALSE FROM "
                 + "(VALUES (1, TRUE), (2, FALSE)) AS input(id, enabled) WHERE id >= 1";

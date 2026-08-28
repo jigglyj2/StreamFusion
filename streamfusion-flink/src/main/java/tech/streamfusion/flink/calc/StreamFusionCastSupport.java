@@ -38,6 +38,10 @@ final class StreamFusionCastSupport {
                 return type.setInteger(EmptyType.getDefaultInstance()).build();
             case BIGINT:
                 return type.setBigint(EmptyType.getDefaultInstance()).build();
+            case FLOAT:
+                return type.setFloat(EmptyType.getDefaultInstance()).build();
+            case DOUBLE:
+                return type.setDouble(EmptyType.getDefaultInstance()).build();
             default:
                 throw new IllegalArgumentException("Unsupported cast target " + target);
         }
@@ -51,6 +55,11 @@ final class StreamFusionCastSupport {
         approve(casts, LogicalTypeRoot.SMALLINT, LogicalTypeRoot.INTEGER, CastKind.CAST_KIND_SMALLINT_TO_INTEGER);
         approve(casts, LogicalTypeRoot.SMALLINT, LogicalTypeRoot.BIGINT, CastKind.CAST_KIND_SMALLINT_TO_BIGINT);
         approve(casts, LogicalTypeRoot.INTEGER, LogicalTypeRoot.BIGINT, CastKind.CAST_KIND_INTEGER_TO_BIGINT);
+        approve(casts, LogicalTypeRoot.TINYINT, LogicalTypeRoot.FLOAT, CastKind.CAST_KIND_TINYINT_TO_FLOAT);
+        approve(casts, LogicalTypeRoot.TINYINT, LogicalTypeRoot.DOUBLE, CastKind.CAST_KIND_TINYINT_TO_DOUBLE);
+        approve(casts, LogicalTypeRoot.SMALLINT, LogicalTypeRoot.FLOAT, CastKind.CAST_KIND_SMALLINT_TO_FLOAT);
+        approve(casts, LogicalTypeRoot.SMALLINT, LogicalTypeRoot.DOUBLE, CastKind.CAST_KIND_SMALLINT_TO_DOUBLE);
+        approve(casts, LogicalTypeRoot.INTEGER, LogicalTypeRoot.DOUBLE, CastKind.CAST_KIND_INTEGER_TO_DOUBLE);
         casts.replaceAll((ignored, targets) -> Collections.unmodifiableMap(targets));
         return Collections.unmodifiableMap(casts);
     }

@@ -45,6 +45,9 @@ and divisor restriction. A planner representation that wraps a negative `BIGINT`
 in a cast or unary expression falls back because it is no longer a direct literal.
 Lossless signed-integer widening projections are accelerated: `TINYINT` to `SMALLINT`,
 `INT`, or `BIGINT`; `SMALLINT` to `INT` or `BIGINT`; and `INT` to `BIGINT`.
+Exactly representable integer-to-floating projections are accelerated: `TINYINT` and
+`SMALLINT` to `FLOAT` or `DOUBLE`, and `INT` to `DOUBLE`. `INT` to `FLOAT` and casts from
+`BIGINT` to floating-point types remain on Flink because they can round integer values.
 Constant `TIME` values preserve their declared precision and millisecond-of-day value.
 Constant `TIMESTAMP WITHOUT TIME ZONE` values preserve their local calendar value and
 sub-millisecond nanoseconds without applying a session or JVM timezone.
@@ -56,7 +59,7 @@ fixed width. Cast-derived and computed binary expressions remain on Flink.
 Division or remainder by zero or a non-literal divisor, decimal and floating-point
 division and remainder, unary plus, non-decimal mixed-width arithmetic, non-finite
 floating-point literals, arithmetic on other types, casts, and functions currently fall
-back to Flink, except for the widening cast listed above. The Calc also falls back if its
+back to Flink, except for the lossless casts listed above. The Calc also falls back if its
 filter is unsupported.
 
 ## Implementation
