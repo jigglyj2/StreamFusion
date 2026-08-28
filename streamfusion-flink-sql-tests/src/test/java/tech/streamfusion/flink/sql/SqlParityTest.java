@@ -1219,6 +1219,26 @@ class SqlParityTest {
         assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
     }
 
+    @ParameterizedTest(name = "CONCAT {0}")
+    @MethodSource("nativeConcatCases")
+    void nativeConcatMatchesFlinkByteForByte(String ignoredName, String expression) throws Exception {
+        assertDataStreamParity(
+                "SELECT " + expression + " FROM concat_input",
+                Types.STRING,
+                Arrays.asList(Row.of(""), Row.of("AbC"), Row.of("你好😀"), Row.of((Object) null)),
+                "concat_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    private static Stream<Arguments> nativeConcatCases() {
+        return Stream.of(
+                Arguments.of("binary", "CONCAT(metric, '/', metric)"),
+                Arguments.of("variadic", "CONCAT('[', metric, ']', '')"),
+                Arguments.of("null argument", "CONCAT(metric, CAST(NULL AS STRING))"),
+                Arguments.of("nested", "CONCAT(LOWER(metric), UPPER(metric))"));
+    }
+
     @ParameterizedTest(name = "VARBINARY {0}")
     @MethodSource("nativeVarbinaryDataStreamRangeCases")
     void nativeVarbinaryDataStreamRangesMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {

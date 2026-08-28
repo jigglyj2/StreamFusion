@@ -168,6 +168,14 @@ fn create_expression(
                 .ok_or_else(|| DataFusionError::Plan("UPPER operand is empty".to_string()))?;
             expressions::upper::create(create_expression(operand, schema)?, schema)
         }
+        Some(proto::expression::Expression::Concat(concat)) => {
+            let arguments = concat
+                .arguments
+                .iter()
+                .map(|argument| create_expression(argument, schema))
+                .collect::<Result<Vec<_>>>()?;
+            expressions::concat::create(arguments, schema)
+        }
         Some(proto::expression::Expression::DateLiteral(literal)) => Ok(Arc::new(Literal::new(
             ScalarValue::Date32(Some(literal.epoch_day)),
         ))),

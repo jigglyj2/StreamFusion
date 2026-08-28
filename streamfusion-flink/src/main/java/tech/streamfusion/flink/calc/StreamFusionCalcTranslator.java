@@ -45,6 +45,7 @@ import tech.streamfusion.proto.plan.v1.Ceiling;
 import tech.streamfusion.proto.plan.v1.CharacterLength;
 import tech.streamfusion.proto.plan.v1.Coalesce;
 import tech.streamfusion.proto.plan.v1.ComparisonOperator;
+import tech.streamfusion.proto.plan.v1.Concat;
 import tech.streamfusion.proto.plan.v1.Conditional;
 import tech.streamfusion.proto.plan.v1.DateLiteral;
 import tech.streamfusion.proto.plan.v1.DecimalLiteral;
@@ -351,6 +352,21 @@ public final class StreamFusionCalcTranslator {
                     : Expression.newBuilder()
                             .setUpper(Upper.newBuilder().setOperand(operand))
                             .build();
+        }
+        if ("CONCAT".equals(functionName(expression)) && expectedType.getTypeRoot() == LogicalTypeRoot.VARCHAR) {
+            List<?> operands = (List<?>) invoke(expression, "getOperands");
+            if (operands.size() < 2) {
+                return null;
+            }
+            Concat.Builder concat = Concat.newBuilder();
+            for (Object operand : operands) {
+                Expression argument = projectionExpression(operand, inputType, expectedType);
+                if (argument == null) {
+                    return null;
+                }
+                concat.addArguments(argument);
+            }
+            return Expression.newBuilder().setConcat(concat).build();
         }
         return projectionExpression(expression, inputType, expectedType.getTypeRoot());
     }

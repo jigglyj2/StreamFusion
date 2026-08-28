@@ -119,6 +119,11 @@ locales. They use DataFusion's vectorized Unicode kernels and preserve empty str
 nulls. StreamFusion falls back for Turkish, Azerbaijani, and Lithuanian JVM locales, where
 Flink's default-locale Java mapping can differ from locale-independent Unicode mapping, and
 for fixed-width `CHAR` until padding behavior has dedicated coverage.
+`CONCAT` is accelerated for two or more `VARCHAR` arguments. A DataFusion `CASE` first checks
+that every argument is non-null before invoking the vectorized concat kernel, preserving
+Flink's null-if-any-argument-is-null rule (DataFusion concat alone skips nulls). Character
+literals and nested supported projections may be arguments; binary and fixed-width character
+concatenation remain fallback pending their distinct type-width rules.
 
 Cast approval is table-driven. Java maps an explicitly approved Flink source/target pair
 to a stable protobuf cast kind; Rust independently verifies that kind against the actual

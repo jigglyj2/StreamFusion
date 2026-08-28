@@ -11,6 +11,7 @@ pub(crate) mod cast;
 pub(crate) mod ceiling;
 pub(crate) mod character_length;
 pub(crate) mod coalesce;
+pub(crate) mod concat;
 pub(crate) mod conditional;
 pub(crate) mod floor;
 pub(crate) mod lower;
