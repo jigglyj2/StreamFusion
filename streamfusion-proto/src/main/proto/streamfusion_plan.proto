@@ -126,6 +126,17 @@ message TruthTest {
 message Cast {
   Expression operand = 1;
   LogicalType target_type = 2;
+  CastKind kind = 3;
+}
+
+enum CastKind {
+  CAST_KIND_UNSPECIFIED = 0;
+  CAST_KIND_TINYINT_TO_SMALLINT = 1;
+  CAST_KIND_TINYINT_TO_INTEGER = 2;
+  CAST_KIND_TINYINT_TO_BIGINT = 3;
+  CAST_KIND_SMALLINT_TO_INTEGER = 4;
+  CAST_KIND_SMALLINT_TO_BIGINT = 5;
+  CAST_KIND_INTEGER_TO_BIGINT = 6;
 }
 
 enum TruthTestOperator {

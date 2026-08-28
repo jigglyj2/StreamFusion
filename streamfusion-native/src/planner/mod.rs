@@ -13,6 +13,7 @@ use datafusion::physical_plan::ExecutionPlan;
 
 use crate::{decode_plan, proto};
 
+mod expressions;
 mod operators;
 
 pub fn create_plan(bytes: &[u8], input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {

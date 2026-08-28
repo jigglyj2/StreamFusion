@@ -66,4 +66,10 @@ plan. Rust maps them to DataFusion `Column`, `Literal`, and `BinaryExpr` express
 `ProjectionExec`. DataFusion shares referenced Arrow buffers for direct projections and
 allocates a result vector when arithmetic produces new values.
 
+Cast approval is table-driven. Java maps an explicitly approved Flink source/target pair
+to a stable protobuf cast kind; Rust independently verifies that kind against the actual
+Arrow source type and declared target before creating a DataFusion `CastExpr`. Adding a
+cast family therefore extends one compatibility matrix and its generated parity cases,
+while semantic exceptions remain isolated.
+
 See the [Flink SELECT-clause documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/select/#select-clause).

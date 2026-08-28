@@ -40,6 +40,7 @@ import tech.streamfusion.proto.plan.v1.Arithmetic;
 import tech.streamfusion.proto.plan.v1.ArithmeticOperator;
 import tech.streamfusion.proto.plan.v1.Calc;
 import tech.streamfusion.proto.plan.v1.Cast;
+import tech.streamfusion.proto.plan.v1.CastKind;
 import tech.streamfusion.proto.plan.v1.Comparison;
 import tech.streamfusion.proto.plan.v1.ComparisonOperator;
 import tech.streamfusion.proto.plan.v1.DecimalLiteral;
@@ -447,12 +448,36 @@ class ArrowCDataBridgeTest {
 
     private static byte[] integerWideningPlan() {
         Calc.Builder calc = Calc.newBuilder().setInput(Operator.newBuilder().setInput(Input.newBuilder()));
-        addIntegerCast(calc, 0, LogicalType.newBuilder().setSmallint(EmptyType.getDefaultInstance()));
-        addIntegerCast(calc, 0, LogicalType.newBuilder().setInteger(EmptyType.getDefaultInstance()));
-        addIntegerCast(calc, 0, LogicalType.newBuilder().setBigint(EmptyType.getDefaultInstance()));
-        addIntegerCast(calc, 1, LogicalType.newBuilder().setInteger(EmptyType.getDefaultInstance()));
-        addIntegerCast(calc, 1, LogicalType.newBuilder().setBigint(EmptyType.getDefaultInstance()));
-        addIntegerCast(calc, 2, LogicalType.newBuilder().setBigint(EmptyType.getDefaultInstance()));
+        addIntegerCast(
+                calc,
+                0,
+                LogicalType.newBuilder().setSmallint(EmptyType.getDefaultInstance()),
+                CastKind.CAST_KIND_TINYINT_TO_SMALLINT);
+        addIntegerCast(
+                calc,
+                0,
+                LogicalType.newBuilder().setInteger(EmptyType.getDefaultInstance()),
+                CastKind.CAST_KIND_TINYINT_TO_INTEGER);
+        addIntegerCast(
+                calc,
+                0,
+                LogicalType.newBuilder().setBigint(EmptyType.getDefaultInstance()),
+                CastKind.CAST_KIND_TINYINT_TO_BIGINT);
+        addIntegerCast(
+                calc,
+                1,
+                LogicalType.newBuilder().setInteger(EmptyType.getDefaultInstance()),
+                CastKind.CAST_KIND_SMALLINT_TO_INTEGER);
+        addIntegerCast(
+                calc,
+                1,
+                LogicalType.newBuilder().setBigint(EmptyType.getDefaultInstance()),
+                CastKind.CAST_KIND_SMALLINT_TO_BIGINT);
+        addIntegerCast(
+                calc,
+                2,
+                LogicalType.newBuilder().setBigint(EmptyType.getDefaultInstance()),
+                CastKind.CAST_KIND_INTEGER_TO_BIGINT);
         return NativePlan.newBuilder()
                 .setProtocolVersion(1)
                 .setRoot(Operator.newBuilder().setCalc(calc))
@@ -460,12 +485,14 @@ class ArrowCDataBridgeTest {
                 .toByteArray();
     }
 
-    private static void addIntegerCast(Calc.Builder calc, int inputIndex, LogicalType.Builder targetType) {
+    private static void addIntegerCast(
+            Calc.Builder calc, int inputIndex, LogicalType.Builder targetType, CastKind kind) {
         calc.addProjections(Expression.newBuilder()
                 .setCast(Cast.newBuilder()
                         .setOperand(Expression.newBuilder()
                                 .setInputReference(InputReference.newBuilder().setIndex(inputIndex)))
-                        .setTargetType(targetType.setNullable(false))));
+                        .setTargetType(targetType.setNullable(false))
+                        .setKind(kind)));
     }
 
     private static byte[] nullCheckPlan(boolean negated) {
