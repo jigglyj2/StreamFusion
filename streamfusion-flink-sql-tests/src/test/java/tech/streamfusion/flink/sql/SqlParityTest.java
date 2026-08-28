@@ -1243,6 +1243,47 @@ class SqlParityTest {
                 Arguments.of("nested", "CONCAT(LOWER(metric), UPPER(metric))"));
     }
 
+    @ParameterizedTest(name = "recursive filter {0}")
+    @MethodSource("nativeRecursiveStringFilterCases")
+    void nativeRecursiveStringFiltersMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {
+        assertDataStreamParity(
+                "SELECT metric FROM recursive_string_filter_input WHERE " + predicate,
+                Types.STRING,
+                Arrays.asList(
+                        Row.of("Alpha"), Row.of("ALPINE"), Row.of("beta"), Row.of("你好世界"), Row.of(""), Row.of((Object)
+                                null)),
+                "recursive_string_filter_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    private static Stream<Arguments> nativeRecursiveStringFilterCases() {
+        return Stream.of(
+                Arguments.of("function comparison", "LOWER(metric) = 'alpha'"),
+                Arguments.of("numeric result comparison", "CHAR_LENGTH(metric) > 4"),
+                Arguments.of("nested LIKE", "CONCAT(LOWER(metric), '!') LIKE 'alp%'"),
+                Arguments.of("nested null check", "LOWER(metric) IS NOT NULL"));
+    }
+
+    @Test
+    void nativeRecursiveNumericFilterMatchesFlinkByteForByte() throws Exception {
+        assertDataStreamParity(
+                "SELECT metric FROM recursive_numeric_filter_input WHERE ABS(metric + 1) BETWEEN 2 AND 5",
+                Types.INT,
+                Arrays.asList(
+                        Row.of(Integer.MIN_VALUE),
+                        Row.of(-6),
+                        Row.of(-3),
+                        Row.of(-1),
+                        Row.of(1),
+                        Row.of(4),
+                        Row.of(5),
+                        Row.of((Object) null)),
+                "recursive_numeric_filter_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
     @ParameterizedTest(name = "LIKE {0}")
     @MethodSource("nativeLikeCases")
     void nativeLikeMatchesFlinkByteForByte(String ignoredName, String predicate) throws Exception {

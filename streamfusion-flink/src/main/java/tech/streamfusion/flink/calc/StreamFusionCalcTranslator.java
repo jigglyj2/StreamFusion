@@ -37,7 +37,9 @@ import tech.streamfusion.proto.plan.v1.AbsoluteValue;
 import tech.streamfusion.proto.plan.v1.Arithmetic;
 import tech.streamfusion.proto.plan.v1.ArithmeticOperator;
 import tech.streamfusion.proto.plan.v1.BinaryLiteral;
+import tech.streamfusion.proto.plan.v1.BooleanBinary;
 import tech.streamfusion.proto.plan.v1.BooleanLiteral;
+import tech.streamfusion.proto.plan.v1.BooleanNot;
 import tech.streamfusion.proto.plan.v1.BooleanOperator;
 import tech.streamfusion.proto.plan.v1.ByteLiteral;
 import tech.streamfusion.proto.plan.v1.Cast;
@@ -45,6 +47,7 @@ import tech.streamfusion.proto.plan.v1.CastKind;
 import tech.streamfusion.proto.plan.v1.Ceiling;
 import tech.streamfusion.proto.plan.v1.CharacterLength;
 import tech.streamfusion.proto.plan.v1.Coalesce;
+import tech.streamfusion.proto.plan.v1.Comparison;
 import tech.streamfusion.proto.plan.v1.ComparisonOperator;
 import tech.streamfusion.proto.plan.v1.Concat;
 import tech.streamfusion.proto.plan.v1.Conditional;
@@ -57,6 +60,7 @@ import tech.streamfusion.proto.plan.v1.Floor;
 import tech.streamfusion.proto.plan.v1.IntegerLiteral;
 import tech.streamfusion.proto.plan.v1.LongLiteral;
 import tech.streamfusion.proto.plan.v1.Lower;
+import tech.streamfusion.proto.plan.v1.NullCheck;
 import tech.streamfusion.proto.plan.v1.NullLiteral;
 import tech.streamfusion.proto.plan.v1.ShortLiteral;
 import tech.streamfusion.proto.plan.v1.Sign;
@@ -64,6 +68,8 @@ import tech.streamfusion.proto.plan.v1.StringLiteral;
 import tech.streamfusion.proto.plan.v1.Substring;
 import tech.streamfusion.proto.plan.v1.TimeLiteral;
 import tech.streamfusion.proto.plan.v1.TimestampLiteral;
+import tech.streamfusion.proto.plan.v1.TruthTest;
+import tech.streamfusion.proto.plan.v1.TruthTestOperator;
 import tech.streamfusion.proto.plan.v1.UnaryMinus;
 import tech.streamfusion.proto.plan.v1.Upper;
 import tech.streamfusion.proto.plan.v1.WhenThen;
@@ -87,7 +93,7 @@ public final class StreamFusionCalcTranslator {
             nativeProjections.add(
                     projectionExpression(projections.get(outputIndex), inputType, outputType.getTypeAt(outputIndex)));
         }
-        StreamFusionCondition nativeCondition = condition(condition, inputType);
+        Expression nativeCondition = conditionExpression(condition, inputType);
         StreamFusionIdentityCalcOperator operator =
                 new StreamFusionIdentityCalcOperator(inputType, outputType, nativeProjections, nativeCondition);
         OneInputTransformation<RowData, RowData> transformation = new OneInputTransformation<>(
@@ -145,7 +151,425 @@ public final class StreamFusionCalcTranslator {
         if (condition == null) {
             return true;
         }
-        return condition(condition, inputType) != null;
+        return conditionExpression(condition, inputType) != null;
+    }
+
+    /**
+     * Recursively lowers a boolean expression into the same protobuf tree used by projections.
+     * This mirrors Comet's single exprToProto path: filter position changes the expected result
+     * type, not the set of child expressions that can be serialized.
+     */
+    private static Expression conditionExpression(Object expression, RowType inputType) {
+        if (expression == null) {
+            return null;
+        }
+        Boolean literal = literal(expression, Boolean.class);
+        if (literal != null) {
+            return Expression.newBuilder()
+                    .setBooleanLiteral(BooleanLiteral.newBuilder().setValue(literal))
+                    .build();
+        }
+        int directInput = inputIndex(expression);
+        if (directInput >= 0
+                && directInput < inputType.getFieldCount()
+                && inputType.getTypeAt(directInput).getTypeRoot() == LogicalTypeRoot.BOOLEAN) {
+            return StreamFusionIdentityCalcOperator.inputReference(
+                    directInput, StreamFusionIdentityCalcOperator.logicalType(inputType, directInput));
+        }
+        if (!hasNoArgMethod(expression, "getOperands")) {
+            return null;
+        }
+        List<?> operands = (List<?>) invoke(expression, "getOperands");
+        String kind = invoke(expression, "getKind").toString();
+        ComparisonOperator comparisonOperator = comparisonOperator(kind);
+        if (comparisonOperator != null && operands.size() == 2) {
+            Expression comparison =
+                    recursiveComparison(operands.get(0), operands.get(1), comparisonOperator, inputType);
+            if (comparison != null) {
+                return comparison;
+            }
+        }
+        if ("LIKE".equals(functionName(expression)) && operands.size() == 2) {
+            org.apache.flink.table.types.logical.LogicalType valueType = expressionLogicalType(operands.get(0));
+            Expression value = valueType == null || valueType.getTypeRoot() != LogicalTypeRoot.VARCHAR
+                    ? null
+                    : projectionExpression(operands.get(0), inputType, valueType);
+            String pattern = literal(operands.get(1), String.class);
+            if (value != null && pattern != null && pattern.indexOf('\\') < 0) {
+                return Expression.newBuilder()
+                        .setLike(tech.streamfusion.proto.plan.v1.Like.newBuilder()
+                                .setOperand(value)
+                                .setPattern(pattern))
+                        .build();
+            }
+        }
+        if (("STARTSWITH".equals(functionName(expression)) || "STARTS_WITH".equals(functionName(expression)))
+                && operands.size() == 2) {
+            org.apache.flink.table.types.logical.LogicalType valueType = expressionLogicalType(operands.get(0));
+            Expression value = valueType == null || valueType.getTypeRoot() != LogicalTypeRoot.VARCHAR
+                    ? null
+                    : projectionExpression(operands.get(0), inputType, valueType);
+            String prefix = literal(operands.get(1), String.class);
+            if (value != null && prefix != null) {
+                return Expression.newBuilder()
+                        .setStartsWith(tech.streamfusion.proto.plan.v1.StartsWith.newBuilder()
+                                .setOperand(value)
+                                .setPrefix(prefix))
+                        .build();
+            }
+        }
+        if (("AND".equals(kind) || "OR".equals(kind)) && operands.size() == 2) {
+            Expression left = conditionExpression(operands.get(0), inputType);
+            Expression right = conditionExpression(operands.get(1), inputType);
+            if (left != null && right != null) {
+                return Expression.newBuilder()
+                        .setBooleanBinary(BooleanBinary.newBuilder()
+                                .setLeft(left)
+                                .setRight(right)
+                                .setOperator(
+                                        "AND".equals(kind)
+                                                ? BooleanOperator.BOOLEAN_OPERATOR_AND
+                                                : BooleanOperator.BOOLEAN_OPERATOR_OR))
+                        .build();
+            }
+        }
+        if ("NOT".equals(kind) && operands.size() == 1) {
+            Expression operand = conditionExpression(operands.get(0), inputType);
+            return operand == null
+                    ? null
+                    : Expression.newBuilder()
+                            .setBooleanNot(BooleanNot.newBuilder().setOperand(operand))
+                            .build();
+        }
+        TruthTestOperator truthTest = truthTestOperator(kind);
+        if (truthTest != null && operands.size() == 1) {
+            Expression operand = conditionExpression(operands.get(0), inputType);
+            return operand == null
+                    ? null
+                    : Expression.newBuilder()
+                            .setTruthTest(
+                                    TruthTest.newBuilder().setOperand(operand).setOperator(truthTest))
+                            .build();
+        }
+        if (("IS_NULL".equals(kind) || "IS_NOT_NULL".equals(kind)) && operands.size() == 1) {
+            org.apache.flink.table.types.logical.LogicalType operandType = expressionLogicalType(operands.get(0));
+            Expression operand =
+                    operandType == null ? null : projectionExpression(operands.get(0), inputType, operandType);
+            return operand == null
+                    ? null
+                    : Expression.newBuilder()
+                            .setNullCheck(
+                                    NullCheck.newBuilder().setOperand(operand).setNegated("IS_NOT_NULL".equals(kind)))
+                            .build();
+        }
+        if ("SEARCH".equals(kind)) {
+            Expression search = recursiveSearch(expression, inputType);
+            if (search != null) {
+                return search;
+            }
+        }
+        StreamFusionCondition legacy = condition(expression, inputType);
+        return legacy == null ? null : legacy.expression();
+    }
+
+    private static Expression recursiveSearch(Object search, RowType inputType) {
+        try {
+            List<?> operands = (List<?>) invoke(search, "getOperands");
+            if (operands.size() != 2) {
+                return null;
+            }
+            org.apache.flink.table.types.logical.LogicalType valueType = expressionLogicalType(operands.get(0));
+            if (valueType == null || !supportsSearch(valueType.getTypeRoot())) {
+                return null;
+            }
+            Expression value = projectionExpression(operands.get(0), inputType, valueType);
+            Object sarg = invoke(operands.get(1), "getValue");
+            if (value == null
+                    || sarg == null
+                    || !"UNKNOWN".equals(publicField(sarg, "nullAs").toString())) {
+                return null;
+            }
+            if ((valueType.getTypeRoot() == LogicalTypeRoot.VARBINARY
+                            || valueType.getTypeRoot() == LogicalTypeRoot.BINARY)
+                    && ((boolean) invoke(sarg, "isPoints") || (boolean) invoke(sarg, "isComplementedPoints"))) {
+                return null;
+            }
+            Object ranges = invoke(publicField(sarg, "rangeSet"), "asRanges");
+            Expression result = null;
+            for (Object range : (Iterable<?>) ranges) {
+                Expression rangeExpression = null;
+                if ((boolean) invoke(range, "hasLowerBound")) {
+                    boolean closed =
+                            "CLOSED".equals(invoke(range, "lowerBoundType").toString());
+                    rangeExpression = searchComparisonExpression(
+                            value,
+                            searchLiteral(invoke(range, "lowerEndpoint"), valueType),
+                            closed
+                                    ? ComparisonOperator.COMPARISON_OPERATOR_GREATER_THAN_OR_EQUAL
+                                    : ComparisonOperator.COMPARISON_OPERATOR_GREATER_THAN);
+                    if (rangeExpression == null) {
+                        return null;
+                    }
+                }
+                if ((boolean) invoke(range, "hasUpperBound")) {
+                    boolean closed =
+                            "CLOSED".equals(invoke(range, "upperBoundType").toString());
+                    Expression upper = searchComparisonExpression(
+                            value,
+                            searchLiteral(invoke(range, "upperEndpoint"), valueType),
+                            closed
+                                    ? ComparisonOperator.COMPARISON_OPERATOR_LESS_THAN_OR_EQUAL
+                                    : ComparisonOperator.COMPARISON_OPERATOR_LESS_THAN);
+                    if (upper == null) {
+                        return null;
+                    }
+                    rangeExpression = rangeExpression == null
+                            ? upper
+                            : Expression.newBuilder()
+                                    .setBooleanBinary(BooleanBinary.newBuilder()
+                                            .setLeft(rangeExpression)
+                                            .setRight(upper)
+                                            .setOperator(BooleanOperator.BOOLEAN_OPERATOR_AND))
+                                    .build();
+                }
+                if (rangeExpression == null) {
+                    return null;
+                }
+                result = result == null
+                        ? rangeExpression
+                        : Expression.newBuilder()
+                                .setBooleanBinary(BooleanBinary.newBuilder()
+                                        .setLeft(result)
+                                        .setRight(rangeExpression)
+                                        .setOperator(BooleanOperator.BOOLEAN_OPERATOR_OR))
+                                .build();
+            }
+            return result;
+        } catch (RuntimeException exception) {
+            return null;
+        }
+    }
+
+    private static Expression searchComparisonExpression(
+            Expression value, Expression literal, ComparisonOperator operator) {
+        return literal == null
+                ? null
+                : Expression.newBuilder()
+                        .setComparison(Comparison.newBuilder()
+                                .setLeft(value)
+                                .setRight(literal)
+                                .setOperator(operator))
+                        .build();
+    }
+
+    private static Expression searchLiteral(
+            Object endpoint, org.apache.flink.table.types.logical.LogicalType logicalType) {
+        switch (logicalType.getTypeRoot()) {
+            case TINYINT:
+                return Expression.newBuilder()
+                        .setByteLiteral(ByteLiteral.newBuilder().setValue(((BigDecimal) endpoint).byteValueExact()))
+                        .build();
+            case SMALLINT:
+                return Expression.newBuilder()
+                        .setShortLiteral(ShortLiteral.newBuilder().setValue(((BigDecimal) endpoint).shortValueExact()))
+                        .build();
+            case INTEGER:
+                return Expression.newBuilder()
+                        .setIntegerLiteral(
+                                IntegerLiteral.newBuilder().setValue(((BigDecimal) endpoint).intValueExact()))
+                        .build();
+            case BIGINT:
+                return Expression.newBuilder()
+                        .setLongLiteral(LongLiteral.newBuilder().setValue(((BigDecimal) endpoint).longValueExact()))
+                        .build();
+            case DECIMAL:
+                BigDecimal decimal = (BigDecimal) endpoint;
+                DecimalType decimalType = (DecimalType) logicalType;
+                if (decimal.scale() != decimalType.getScale() || decimal.precision() > decimalType.getPrecision()) {
+                    return null;
+                }
+                return Expression.newBuilder()
+                        .setDecimalLiteral(DecimalLiteral.newBuilder()
+                                .setUnscaledValue(decimal.unscaledValue().toString())
+                                .setPrecision(decimalType.getPrecision())
+                                .setScale(decimalType.getScale()))
+                        .build();
+            case DATE:
+                return Expression.newBuilder()
+                        .setDateLiteral(DateLiteral.newBuilder()
+                                .setEpochDay(Math.toIntExact(
+                                        LocalDate.parse(endpoint.toString()).toEpochDay())))
+                        .build();
+            case TIME_WITHOUT_TIME_ZONE:
+                return Expression.newBuilder()
+                        .setTimeLiteral(TimeLiteral.newBuilder()
+                                .setMillisecondOfDay(Math.toIntExact(
+                                        LocalTime.parse(endpoint.toString()).toNanoOfDay() / 1_000_000))
+                                .setPrecision(((TimeType) logicalType).getPrecision()))
+                        .build();
+            case TIMESTAMP_WITHOUT_TIME_ZONE:
+                TimestampData timestamp = TimestampData.fromLocalDateTime(
+                        LocalDateTime.parse(endpoint.toString().replace(' ', 'T')));
+                return Expression.newBuilder()
+                        .setTimestampLiteral(TimestampLiteral.newBuilder()
+                                .setEpochMillisecond(timestamp.getMillisecond())
+                                .setNanoOfMillisecond(timestamp.getNanoOfMillisecond())
+                                .setPrecision(((TimestampType) logicalType).getPrecision()))
+                        .build();
+            case VARCHAR:
+                return Expression.newBuilder()
+                        .setStringLiteral(StringLiteral.newBuilder()
+                                .setValue(invoke(endpoint, "getValue").toString()))
+                        .build();
+            default:
+                return null;
+        }
+    }
+
+    private static Expression recursiveComparison(
+            Object leftExpression, Object rightExpression, ComparisonOperator operator, RowType inputType) {
+        org.apache.flink.table.types.logical.LogicalType leftType = expressionLogicalType(leftExpression);
+        org.apache.flink.table.types.logical.LogicalType rightType = expressionLogicalType(rightExpression);
+        if (leftType == null
+                || rightType == null
+                || leftType.getTypeRoot() != rightType.getTypeRoot()
+                || !supportsRecursiveComparison(leftType.getTypeRoot(), operator)) {
+            return null;
+        }
+        Expression left = projectionExpression(leftExpression, inputType, leftType);
+        Expression right = projectionExpression(rightExpression, inputType, rightType);
+        if (left == null || right == null) {
+            return null;
+        }
+        return Expression.newBuilder()
+                .setComparison(
+                        Comparison.newBuilder().setLeft(left).setRight(right).setOperator(operator))
+                .build();
+    }
+
+    private static boolean supportsRecursiveComparison(LogicalTypeRoot type, ComparisonOperator operator) {
+        if (type == LogicalTypeRoot.BOOLEAN) {
+            return operator == ComparisonOperator.COMPARISON_OPERATOR_EQUAL
+                    || operator == ComparisonOperator.COMPARISON_OPERATOR_NOT_EQUAL
+                    || operator == ComparisonOperator.COMPARISON_OPERATOR_IS_DISTINCT_FROM
+                    || operator == ComparisonOperator.COMPARISON_OPERATOR_IS_NOT_DISTINCT_FROM;
+        }
+        return type == LogicalTypeRoot.TINYINT
+                || type == LogicalTypeRoot.SMALLINT
+                || type == LogicalTypeRoot.INTEGER
+                || type == LogicalTypeRoot.BIGINT
+                || type == LogicalTypeRoot.FLOAT
+                || type == LogicalTypeRoot.DOUBLE
+                || type == LogicalTypeRoot.DECIMAL
+                || type == LogicalTypeRoot.VARCHAR
+                || type == LogicalTypeRoot.DATE
+                || type == LogicalTypeRoot.TIME_WITHOUT_TIME_ZONE
+                || type == LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE;
+    }
+
+    private static LogicalTypeRoot expressionTypeRoot(Object expression) {
+        if (!hasNoArgMethod(expression, "getType")) {
+            return null;
+        }
+        String typeName =
+                invoke(invoke(expression, "getType"), "getSqlTypeName").toString();
+        switch (typeName) {
+            case "TINYINT":
+                return LogicalTypeRoot.TINYINT;
+            case "SMALLINT":
+                return LogicalTypeRoot.SMALLINT;
+            case "INTEGER":
+                return LogicalTypeRoot.INTEGER;
+            case "BIGINT":
+                return LogicalTypeRoot.BIGINT;
+            case "FLOAT":
+            case "REAL":
+                return LogicalTypeRoot.FLOAT;
+            case "DOUBLE":
+                return LogicalTypeRoot.DOUBLE;
+            case "DECIMAL":
+                return LogicalTypeRoot.DECIMAL;
+            case "BOOLEAN":
+                return LogicalTypeRoot.BOOLEAN;
+            case "CHAR":
+                return LogicalTypeRoot.CHAR;
+            case "VARCHAR":
+                return LogicalTypeRoot.VARCHAR;
+            case "BINARY":
+                return LogicalTypeRoot.BINARY;
+            case "VARBINARY":
+                return LogicalTypeRoot.VARBINARY;
+            case "DATE":
+                return LogicalTypeRoot.DATE;
+            case "TIME":
+                return LogicalTypeRoot.TIME_WITHOUT_TIME_ZONE;
+            case "TIMESTAMP":
+                return LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE;
+            default:
+                return null;
+        }
+    }
+
+    private static org.apache.flink.table.types.logical.LogicalType expressionLogicalType(Object expression) {
+        if (!hasNoArgMethod(expression, "getType")) {
+            return null;
+        }
+        Object type = invoke(expression, "getType");
+        boolean nullable = (boolean) invoke(type, "isNullable");
+        int precision = (int) invoke(type, "getPrecision");
+        LogicalTypeRoot root = expressionTypeRoot(expression);
+        if (root == null) {
+            return null;
+        }
+        switch (root) {
+            case TINYINT:
+                return new org.apache.flink.table.types.logical.TinyIntType(nullable);
+            case SMALLINT:
+                return new org.apache.flink.table.types.logical.SmallIntType(nullable);
+            case INTEGER:
+                return new org.apache.flink.table.types.logical.IntType(nullable);
+            case BIGINT:
+                return new org.apache.flink.table.types.logical.BigIntType(nullable);
+            case FLOAT:
+                return new org.apache.flink.table.types.logical.FloatType(nullable);
+            case DOUBLE:
+                return new org.apache.flink.table.types.logical.DoubleType(nullable);
+            case DECIMAL:
+                return new DecimalType(nullable, precision, (int) invoke(type, "getScale"));
+            case BOOLEAN:
+                return new org.apache.flink.table.types.logical.BooleanType(nullable);
+            case CHAR:
+                return new CharType(nullable, precision);
+            case VARCHAR:
+                return new org.apache.flink.table.types.logical.VarCharType(nullable, precision);
+            case BINARY:
+                return new BinaryType(nullable, precision);
+            case VARBINARY:
+                return new org.apache.flink.table.types.logical.VarBinaryType(nullable, precision);
+            case DATE:
+                return new org.apache.flink.table.types.logical.DateType(nullable);
+            case TIME_WITHOUT_TIME_ZONE:
+                return new TimeType(nullable, precision);
+            case TIMESTAMP_WITHOUT_TIME_ZONE:
+                return new TimestampType(nullable, precision);
+            default:
+                return null;
+        }
+    }
+
+    private static TruthTestOperator truthTestOperator(String kind) {
+        switch (kind) {
+            case "IS_TRUE":
+                return TruthTestOperator.TRUTH_TEST_OPERATOR_IS_TRUE;
+            case "IS_FALSE":
+                return TruthTestOperator.TRUTH_TEST_OPERATOR_IS_FALSE;
+            case "IS_NOT_TRUE":
+                return TruthTestOperator.TRUTH_TEST_OPERATOR_IS_NOT_TRUE;
+            case "IS_NOT_FALSE":
+                return TruthTestOperator.TRUTH_TEST_OPERATOR_IS_NOT_FALSE;
+            default:
+                return null;
+        }
     }
 
     private static StreamFusionCondition condition(Object condition, RowType inputType) {
@@ -300,13 +724,12 @@ public final class StreamFusionCalcTranslator {
             }
             Conditional.Builder conditional = Conditional.newBuilder();
             for (int index = 0; index < operands.size() - 1; index += 2) {
-                StreamFusionCondition when = condition(operands.get(index), inputType);
+                Expression when = conditionExpression(operands.get(index), inputType);
                 Expression then = projectionExpression(operands.get(index + 1), inputType, expectedType);
                 if (when == null || then == null) {
                     return null;
                 }
-                conditional.addBranches(
-                        WhenThen.newBuilder().setWhen(when.expression()).setThen(then));
+                conditional.addBranches(WhenThen.newBuilder().setWhen(when).setThen(then));
             }
             Expression elseValue = projectionExpression(operands.get(operands.size() - 1), inputType, expectedType);
             return elseValue == null
@@ -368,7 +791,10 @@ public final class StreamFusionCalcTranslator {
             if (expectedType.getTypeRoot() != LogicalTypeRoot.INTEGER || operands.size() != 1) {
                 return null;
             }
-            Expression operand = projectionExpression(operands.get(0), inputType, LogicalTypeRoot.VARCHAR);
+            org.apache.flink.table.types.logical.LogicalType operandType = expressionLogicalType(operands.get(0));
+            Expression operand = operandType == null || operandType.getTypeRoot() != LogicalTypeRoot.VARCHAR
+                    ? null
+                    : projectionExpression(operands.get(0), inputType, operandType);
             return operand == null
                     ? null
                     : Expression.newBuilder()
@@ -664,8 +1090,7 @@ public final class StreamFusionCalcTranslator {
                     .setBooleanLiteral(BooleanLiteral.newBuilder().setValue(literal))
                     .build();
         }
-        StreamFusionCondition predicate = condition(expression, inputType);
-        return predicate == null ? null : predicate.expression();
+        return conditionExpression(expression, inputType);
     }
 
     private static Expression decimalProjectionExpression(Object expression, RowType inputType) {

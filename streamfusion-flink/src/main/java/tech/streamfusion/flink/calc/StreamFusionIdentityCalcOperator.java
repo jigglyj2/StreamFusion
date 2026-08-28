@@ -39,7 +39,7 @@ import tech.streamfusion.proto.plan.v1.PrecisionType;
 final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowData>
         implements OneInputStreamOperator<RowData, RowData>, BoundedOneInput {
     private static final int BATCH_SIZE = 1024;
-    private final StreamFusionCondition condition;
+    private final Expression condition;
     private final RowType inputType;
     private final RowType outputType;
     private final RowDataSerializer serializer;
@@ -48,7 +48,7 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
     private final List<RowKind> rowKinds = new ArrayList<>(BATCH_SIZE);
 
     StreamFusionIdentityCalcOperator(
-            RowType inputType, RowType outputType, List<Expression> projections, StreamFusionCondition condition) {
+            RowType inputType, RowType outputType, List<Expression> projections, Expression condition) {
         this.inputType = inputType;
         this.outputType = outputType;
         this.condition = condition;
@@ -99,13 +99,13 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
         rowKinds.clear();
     }
 
-    private static byte[] createPlan(RowType inputType, List<Expression> projections, StreamFusionCondition condition) {
+    private static byte[] createPlan(RowType inputType, List<Expression> projections, Expression condition) {
         Calc.Builder calc = Calc.newBuilder().setInput(Operator.newBuilder().setInput(Input.newBuilder()));
         calc.addAllProjections(projections);
         calc.addProjections(inputReference(
                 inputType.getFieldCount(), logicalType(new org.apache.flink.table.types.logical.IntType(false))));
         if (condition != null) {
-            calc.setCondition(condition.expression());
+            calc.setCondition(condition);
         }
         return NativePlan.newBuilder()
                 .setProtocolVersion(1)
