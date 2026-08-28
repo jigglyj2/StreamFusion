@@ -123,7 +123,7 @@ public final class StreamFusionCalcTranslator {
                             directInputIndex,
                             StreamFusionIdentityCalcOperator.logicalType(inputType, directInputIndex)));
         }
-        StreamFusionOrderedComparison comparison = comparison(condition, inputType);
+        StreamFusionCondition comparison = comparison(condition, inputType);
         if (comparison != null) {
             return comparison;
         }
@@ -324,7 +324,7 @@ public final class StreamFusionCalcTranslator {
                 || type == LogicalTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE;
     }
 
-    private static StreamFusionOrderedComparison comparison(Object condition, RowType inputType) {
+    private static StreamFusionCondition comparison(Object condition, RowType inputType) {
         if (condition == null) {
             return null;
         }
@@ -339,6 +339,16 @@ public final class StreamFusionCalcTranslator {
         }
         int leftInput = inputIndex(operands.get(0));
         int rightInput = inputIndex(operands.get(1));
+        if (leftInput >= 0 && rightInput >= 0) {
+            if (leftInput >= inputType.getFieldCount()
+                    || rightInput >= inputType.getFieldCount()
+                    || !inputType.getTypeAt(leftInput).equals(inputType.getTypeAt(rightInput))
+                    || !StreamFusionColumnComparison.supports(
+                            inputType.getTypeAt(leftInput).getTypeRoot())) {
+                return null;
+            }
+            return new StreamFusionColumnComparison(leftInput, rightInput, inputType.getTypeAt(leftInput), operator);
+        }
         if (leftInput >= 0 && rightInput < 0) {
             return comparison(leftInput, operands.get(1), operator, true, inputType);
         }

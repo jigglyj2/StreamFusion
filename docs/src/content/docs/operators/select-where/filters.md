@@ -20,13 +20,19 @@ WHERE id >= 100;
 The supported predicates are `=`, `<>`, `<`, `<=`, `>`, and `>=` between a `TINYINT`,
 `SMALLINT`, `INTEGER`, `BIGINT`, `FLOAT`, or `DOUBLE` column and a compatible literal. Either operand order is accepted,
 and the filtered column does not need to appear in the projection. A null input produces
-SQL unknown and is removed by `WHERE`, matching Flink. Column-to-column comparisons,
+SQL unknown and is removed by `WHERE`, matching Flink. Unsupported column pairs,
 functions, and other operand types currently fall back to Flink.
 
 Floating-point literals must be finite. StreamFusion falls back for NaN or infinite
 literals until their ordering and equality semantics are proven identical across Flink,
 Arrow, and DataFusion. Planner-inserted casts that obscure the direct column/literal
 shape also cause the whole Calc to fall back.
+
+The same six predicates support direct, exactly matching column pairs for `INTEGER`,
+`BIGINT`, `DECIMAL`, `DATE`, `TIME`, and `TIMESTAMP WITHOUT TIME ZONE`. Decimal precision
+and scale and temporal precision must match on both sides. A null on either side produces
+SQL unknown. `TINYINT`, `SMALLINT`, floating-point, string, binary, mismatched, and
+planner-cast column pairs currently fall back to Flink.
 
 The same six predicates support `DATE` columns compared with `DATE` literals, including
 dates before the Unix epoch. Flink epoch-day values lower directly to Arrow `Date32`
@@ -61,7 +67,7 @@ null to false within the expression.
 
 ## Implementation
 
-Java encodes the comparison as a protobuf expression. Rust lowers it to DataFusion
+Java encodes literal or column operands as protobuf expressions. Rust lowers them to DataFusion
 `Column`, `Literal`, `BinaryExpr`, `NotExpr`, `IsNullExpr`, and `IsNotNullExpr` nodes
 inside a `FilterExec`. The following `ProjectionExec` consumes its Arrow batches directly. A
 paired serializable Java evaluator retains the original Flink `RowKind` for each row

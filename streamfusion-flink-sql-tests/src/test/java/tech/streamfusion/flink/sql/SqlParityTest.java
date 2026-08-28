@@ -142,6 +142,67 @@ class SqlParityTest {
         assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
     }
 
+    @ParameterizedTest(name = "{0} column comparison")
+    @MethodSource("nativeColumnComparisonCases")
+    void nativeColumnComparisonsMatchFlinkByteForByte(String ignoredName, String sql) throws Exception {
+        assertParity(sql, true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    private static Stream<Arguments> nativeColumnComparisonCases() {
+        return Stream.of(
+                Arguments.of(
+                        "integer",
+                        "SELECT left_value, right_value FROM "
+                                + "(VALUES (1, 2), (3, 2), (4, 4)) AS input(left_value, right_value) "
+                                + "WHERE left_value <= right_value"),
+                Arguments.of("less than", columnComparisonSql("<")),
+                Arguments.of("equal", columnComparisonSql("=")),
+                Arguments.of("not equal", columnComparisonSql("<>")),
+                Arguments.of("greater than", columnComparisonSql(">")),
+                Arguments.of("greater than or equal", columnComparisonSql(">=")),
+                Arguments.of(
+                        "bigint",
+                        "SELECT left_value, right_value FROM (VALUES "
+                                + "(2147483648, 2147483649), (2147483650, 2147483649), "
+                                + "(2147483651, 2147483651)) AS input(left_value, right_value) "
+                                + "WHERE left_value <= right_value"),
+                Arguments.of(
+                        "decimal",
+                        "SELECT left_value, right_value FROM "
+                                + "(VALUES (1.25, 2.50), (3.75, 2.50), (4.00, 4.00)) "
+                                + "AS input(left_value, right_value) WHERE left_value <= right_value"),
+                Arguments.of(
+                        "date",
+                        "SELECT left_value, right_value FROM (VALUES "
+                                + "(DATE '1969-12-31', DATE '1970-01-01'), "
+                                + "(DATE '2026-01-03', DATE '2026-01-02'), "
+                                + "(DATE '2026-01-04', DATE '2026-01-04')) "
+                                + "AS input(left_value, right_value) WHERE left_value <= right_value"),
+                Arguments.of(
+                        "time",
+                        "SELECT left_value, right_value FROM (VALUES "
+                                + "(TIME '01:02:03.123', TIME '01:02:03.124'), "
+                                + "(TIME '23:00:00.000', TIME '22:00:00.000'), "
+                                + "(TIME '12:00:00.000', TIME '12:00:00.000')) "
+                                + "AS input(left_value, right_value) WHERE left_value <= right_value"),
+                Arguments.of(
+                        "timestamp",
+                        "SELECT left_value, right_value FROM (VALUES "
+                                + "(TIMESTAMP '1969-12-31 23:59:59.999', TIMESTAMP '1970-01-01 00:00:00.000'), "
+                                + "(TIMESTAMP '2026-01-03 00:00:00.000', TIMESTAMP '2026-01-02 00:00:00.000'), "
+                                + "(TIMESTAMP '2026-01-04 00:00:00.000', TIMESTAMP '2026-01-04 00:00:00.000')) "
+                                + "AS input(left_value, right_value) WHERE left_value <= right_value"));
+    }
+
+    private static String columnComparisonSql(String operator) {
+        return "SELECT left_value, right_value FROM "
+                + "(VALUES (1, 2), (3, 2), (4, 4)) AS input(left_value, right_value) WHERE left_value "
+                + operator
+                + " right_value";
+    }
+
     private static Stream<Arguments> nativeDecimalArithmeticCases() {
         return Stream.of(
                 Arguments.of(
