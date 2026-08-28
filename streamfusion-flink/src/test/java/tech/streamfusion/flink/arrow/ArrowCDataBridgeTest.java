@@ -213,9 +213,9 @@ class ArrowCDataBridgeTest {
     }
 
     @Test
-    void narrowsIntegerToSmallintWithFlinkOverflowParity() {
+    void narrowsIntegerWithFlinkOverflowParity() {
         RowType inputType = RowType.of(new IntType(true));
-        RowType outputType = RowType.of(new SmallIntType(true));
+        RowType outputType = RowType.of(new TinyIntType(true), new SmallIntType(true));
         List<Integer> values = List.of(Integer.MIN_VALUE, -32769, -32768, -1, 0, 32767, 32768, Integer.MAX_VALUE);
         List<RowData> rows = new ArrayList<>(values.stream()
                 .map(value -> (RowData) GenericRowData.of(value))
@@ -225,11 +225,13 @@ class ArrowCDataBridgeTest {
         try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
                 ArrowRowDataBatch input = ArrowRowDataBatch.transpose(rows, inputType, allocator);
                 ArrowRowDataBatch output =
-                        ArrowCDataBridge.execute(integerToSmallintPlan(), input, outputType, allocator)) {
+                        ArrowCDataBridge.execute(integerNarrowingPlan(), input, outputType, allocator)) {
             for (int index = 0; index < values.size(); index++) {
-                assertThat(output.rowView(index).getShort(0)).isEqualTo((short) (int) values.get(index));
+                assertThat(output.rowView(index).getByte(0)).isEqualTo((byte) (int) values.get(index));
+                assertThat(output.rowView(index).getShort(1)).isEqualTo((short) (int) values.get(index));
             }
             assertThat(output.rowView(values.size()).isNullAt(0)).isTrue();
+            assertThat(output.rowView(values.size()).isNullAt(1)).isTrue();
         }
     }
 
@@ -614,8 +616,13 @@ class ArrowCDataBridgeTest {
                 .toByteArray();
     }
 
-    private static byte[] integerToSmallintPlan() {
+    private static byte[] integerNarrowingPlan() {
         Calc.Builder calc = Calc.newBuilder().setInput(Operator.newBuilder().setInput(Input.newBuilder()));
+        addCast(
+                calc,
+                0,
+                LogicalType.newBuilder().setTinyint(EmptyType.getDefaultInstance()),
+                CastKind.CAST_KIND_INTEGER_TO_TINYINT);
         addCast(
                 calc,
                 0,

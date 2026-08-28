@@ -32,6 +32,8 @@ final class StreamFusionCastSupport {
     static LogicalType targetType(LogicalTypeRoot target, boolean nullable) {
         LogicalType.Builder type = LogicalType.newBuilder().setNullable(nullable);
         switch (target) {
+            case TINYINT:
+                return type.setTinyint(EmptyType.getDefaultInstance()).build();
             case SMALLINT:
                 return type.setSmallint(EmptyType.getDefaultInstance()).build();
             case INTEGER:
@@ -62,6 +64,7 @@ final class StreamFusionCastSupport {
         approve(casts, LogicalTypeRoot.INTEGER, LogicalTypeRoot.DOUBLE, CastKind.CAST_KIND_INTEGER_TO_DOUBLE);
         approve(casts, LogicalTypeRoot.FLOAT, LogicalTypeRoot.DOUBLE, CastKind.CAST_KIND_FLOAT_TO_DOUBLE);
         approve(casts, LogicalTypeRoot.INTEGER, LogicalTypeRoot.SMALLINT, CastKind.CAST_KIND_INTEGER_TO_SMALLINT);
+        approve(casts, LogicalTypeRoot.INTEGER, LogicalTypeRoot.TINYINT, CastKind.CAST_KIND_INTEGER_TO_TINYINT);
         casts.replaceAll((ignored, targets) -> Collections.unmodifiableMap(targets));
         return Collections.unmodifiableMap(casts);
     }

@@ -13,7 +13,7 @@ use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_expr::expressions::CastExpr;
 use datafusion::physical_expr::PhysicalExpr;
 
-use crate::planner::expressions::wrapping_cast::Int32ToInt16WrappingExpr;
+use crate::planner::expressions::wrapping_cast::Int32WrappingCastExpr;
 use crate::proto;
 
 pub(crate) fn create(
@@ -30,8 +30,14 @@ pub(crate) fn create(
             cast.kind()
         )));
     }
-    if cast.kind() == proto::CastKind::IntegerToSmallint {
-        return Ok(Arc::new(Int32ToInt16WrappingExpr::new(operand)));
+    if matches!(
+        cast.kind(),
+        proto::CastKind::IntegerToTinyint | proto::CastKind::IntegerToSmallint
+    ) {
+        return Ok(Arc::new(Int32WrappingCastExpr::new(
+            operand,
+            approved_target,
+        )));
     }
     Ok(Arc::new(CastExpr::new(operand, approved_target, None)))
 }
@@ -51,6 +57,7 @@ fn approved_types(kind: proto::CastKind) -> Result<(DataType, DataType)> {
         proto::CastKind::IntegerToDouble => Ok((DataType::Int32, DataType::Float64)),
         proto::CastKind::FloatToDouble => Ok((DataType::Float32, DataType::Float64)),
         proto::CastKind::IntegerToSmallint => Ok((DataType::Int32, DataType::Int16)),
+        proto::CastKind::IntegerToTinyint => Ok((DataType::Int32, DataType::Int8)),
         proto::CastKind::Unspecified => Err(DataFusionError::Plan(
             "cast kind is unspecified or unknown".to_string(),
         )),
@@ -63,6 +70,7 @@ fn declared_target(cast: &proto::Cast) -> Result<DataType> {
         .as_ref()
         .ok_or_else(|| DataFusionError::Plan("cast target type is empty".to_string()))?;
     match target.r#type {
+        Some(proto::logical_type::Type::Tinyint(_)) => Ok(DataType::Int8),
         Some(proto::logical_type::Type::Smallint(_)) => Ok(DataType::Int16),
         Some(proto::logical_type::Type::Integer(_)) => Ok(DataType::Int32),
         Some(proto::logical_type::Type::Bigint(_)) => Ok(DataType::Int64),
