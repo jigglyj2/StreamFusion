@@ -182,6 +182,61 @@ class ArrayUnnestParityTest extends SqlParityTestSupport {
     }
 
     @Test
+    void nativeLeftArrayOfRowsDistinguishesNullElementsFromSyntheticRows() throws Exception {
+        java.util.List<Row> inputs = Arrays.asList(
+                Row.of((Object) new Row[] {Row.of("alpha", 1), null, Row.of(null, 2)}),
+                Row.of((Object) new Row[] {}),
+                Row.of((Object) null));
+        org.apache.flink.api.common.typeinfo.TypeInformation<Row[]> externalType =
+                Types.OBJECT_ARRAY(Types.ROW_NAMED(new String[] {"label", "amount"}, Types.STRING, Types.INT));
+        org.apache.flink.table.types.DataType logicalType = DataTypes.ARRAY(DataTypes.ROW(
+                DataTypes.FIELD("label", DataTypes.STRING()), DataTypes.FIELD("amount", DataTypes.INT())));
+
+        assertDataStreamParity(
+                "SELECT label, amount FROM left_row_array_unnest_input "
+                        + "LEFT JOIN UNNEST(metric) AS expanded(label, amount) ON TRUE",
+                externalType,
+                logicalType,
+                inputs,
+                "left_row_array_unnest_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isEqualTo(1);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
+    @Test
+    void leftArrayOfRowsWithOrdinalityExplainsFlink23ParityFallback() {
+        System.setProperty(
+                StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY, StreamFusionPlannerFactory.class.getName());
+        StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();
+        StreamTableEnvironment tables = StreamTableEnvironment.create(environment);
+        DataStream<Row> input = environment
+                .fromData(Row.of((Object) new Row[] {Row.of("alpha", 1)}))
+                .returns(Types.ROW_NAMED(
+                        new String[] {"metric"},
+                        Types.OBJECT_ARRAY(
+                                Types.ROW_NAMED(new String[] {"label", "amount"}, Types.STRING, Types.INT))));
+        Table table = tables.fromDataStream(
+                input,
+                Schema.newBuilder()
+                        .column(
+                                "metric",
+                                DataTypes.ARRAY(DataTypes.ROW(
+                                        DataTypes.FIELD("label", DataTypes.STRING()),
+                                        DataTypes.FIELD("amount", DataTypes.INT()))))
+                        .build());
+        tables.createTemporaryView("left_row_array_ordinality_input", table);
+
+        assertThat(tables.explainSql("SELECT label, amount, ord_idx FROM left_row_array_ordinality_input "
+                        + "LEFT JOIN UNNEST(metric) WITH ORDINALITY "
+                        + "AS expanded(label, amount, ord_idx) ON TRUE"))
+                .contains("Accelerated: no")
+                .contains("Flink 2.3 fails its output arity contract");
+    }
+
+    @Test
     void nativeNestedArrayUnnestPreservesEachInnerArrayAndOrdinality() throws Exception {
         java.util.List<Row> inputs = Arrays.asList(
                 Row.of((Object) new Integer[][] {new Integer[] {1, null}, new Integer[] {}, null}),

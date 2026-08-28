@@ -50,14 +50,21 @@ StreamFusion accelerates the operation when all of the following are true:
 
 `LEFT JOIN UNNEST(array) ON TRUE` retains one null-extended result for a null or empty array and
 otherwise emits the same ordered elements as the inner form. Arrays of `ROW` flatten each element
-into its named fields, and a null row element produces null for every flattened field. With
-ordinality, the synthetic row also has a null position. Map expansion preserves the paired key and
-value arrays and assigns positions in Flink's stored `MapData` entry order; SQL map ordering is not
-otherwise guaranteed. Left expansion of arrays of rows, computed collection operands, rows
-containing nested collection fields, arrays nested more than one level, maps with collection keys or values nested more than one level,
-multisets with nullable or complex elements, user-defined table functions, and correlate
+into its named fields and omit null row elements, matching Flink. For supported left expansion,
+the synthetic row also has a null position when ordinality is requested. Map expansion preserves
+the paired key and value arrays and assigns positions in Flink's stored `MapData` entry order; SQL
+map ordering is not otherwise guaranteed. In left expansion of arrays of rows, null and empty
+collections still produce exactly one synthetic all-null row. Computed
+collection operands, rows containing nested collection fields, arrays nested more than one level,
+maps with collection keys or values nested more than one level,
+left row-array expansion with ordinality, multisets with nullable or complex elements,
+user-defined table functions, and correlate
 conditions currently fall back. EXPLAIN identifies the rejected join form, function shape,
 operand, or element type and then reports whole-plan fallback.
+
+Flink 2.3's left row-array `WITH ORDINALITY` implementation violates its own output arity contract
+at runtime. StreamFusion deliberately falls back so it does not replace that failure with different
+observable behavior; EXPLAIN identifies this version-specific parity restriction.
 
 ## Implementation
 
@@ -70,7 +77,9 @@ null or empty array and retains the parent-row ordinal for changelog restoration
 For arrays of rows, a native `IS NOT NULL` filter reproduces Flink's behavior of skipping null row
 elements. A projection immediately above it applies DataFusion `get_field` expressions to the
 Arrow struct and exposes Flink's flattened columns. Both stages remain inside the same native
-plan.
+plan. For the left form, the native plan retains an internal ordinality list even when SQL does
+not request it. A null ordinal identifies the synthetic row created for a null or empty array;
+the marker is projected away before crossing the JVM boundary.
 For maps, a lightweight physical expression reinterprets Arrow's map offsets and entry struct as
 a list without copying its key, value, offset, or validity buffers. `UnnestExec` expands that list,
 and the same struct projection exposes the paired key and value columns. Ordinality is derived

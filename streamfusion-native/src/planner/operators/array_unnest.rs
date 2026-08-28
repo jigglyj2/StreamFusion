@@ -110,6 +110,9 @@ pub(crate) fn create(
             )));
         }
     };
+    let flatten_array_row =
+        !is_map && !is_multiset && matches!(element_field.data_type(), DataType::Struct(_));
+    let needs_ordinality = unnest.with_ordinality || (unnest.preserve_empty && flatten_array_row);
 
     let mut projection: Vec<(Arc<dyn PhysicalExpr>, String)> = child_schema
         .fields()
@@ -124,7 +127,7 @@ pub(crate) fn create(
         })
         .collect::<Vec<_>>();
     projection.push((Arc::clone(&collection), VALUE_COLUMN.to_string()));
-    if unnest.with_ordinality {
+    if needs_ordinality {
         projection.push((
             ordinality::create(collection),
             ORDINALITY_COLUMN.to_string(),
@@ -143,7 +146,7 @@ pub(crate) fn create(
         .cloned()
         .collect::<Vec<_>>();
     output_fields.push(element_field);
-    if unnest.with_ordinality {
+    if needs_ordinality {
         output_fields.push(Arc::new(Field::new(
             ORDINALITY_COLUMN,
             DataType::Int32,
@@ -156,7 +159,7 @@ pub(crate) fn create(
         index_in_input_schema: visible_field_count,
         depth: 1,
     }];
-    if unnest.with_ordinality {
+    if needs_ordinality {
         list_columns.push(ListUnnest {
             index_in_input_schema: visible_field_count + 1,
             depth: 1,
@@ -178,6 +181,7 @@ pub(crate) fn create(
         unnested,
         visible_field_count,
         unnest.with_ordinality,
+        needs_ordinality,
         unnest.preserve_empty,
         !is_map && !is_multiset,
     )
@@ -187,6 +191,7 @@ fn flatten_struct_element(
     unnested: Arc<dyn ExecutionPlan>,
     visible_field_count: usize,
     with_ordinality: bool,
+    has_ordinality: bool,
     preserve_empty: bool,
     skip_null_struct: bool,
 ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -195,16 +200,22 @@ fn flatten_struct_element(
         return Ok(unnested);
     };
     let fields = fields.clone();
-    if preserve_empty && skip_null_struct {
-        return Err(DataFusionError::Plan(
-            "left array UNNEST of ROW is not yet supported".to_string(),
-        ));
-    }
     let unnested: Arc<dyn ExecutionPlan> = if skip_null_struct {
-        Arc::new(FilterExec::try_new(
-            is_not_null(Arc::new(Column::new(VALUE_COLUMN, visible_field_count)))?,
-            unnested,
-        )?)
+        let predicate = if preserve_empty {
+            let df_schema = DFSchema::try_from(Arc::clone(&schema))?;
+            let logical = datafusion::logical_expr::col(VALUE_COLUMN)
+                .is_not_null()
+                .or(datafusion::logical_expr::col(ORDINALITY_COLUMN).is_null());
+            create_physical_expr(
+                &logical,
+                &df_schema,
+                &ExecutionProps::default(),
+                &PhysicalPlanningContext::default(),
+            )?
+        } else {
+            is_not_null(Arc::new(Column::new(VALUE_COLUMN, visible_field_count)))?
+        };
+        Arc::new(FilterExec::try_new(predicate, unnested)?)
     } else {
         unnested
     };
@@ -244,7 +255,7 @@ fn flatten_struct_element(
             ORDINALITY_COLUMN.to_string(),
         ));
     }
-    let input_row_index = ordinal_index + usize::from(with_ordinality);
+    let input_row_index = ordinal_index + usize::from(has_ordinality);
     projection.push((
         Arc::new(Column::new(INPUT_ROW_COLUMN, input_row_index)),
         INPUT_ROW_COLUMN.to_string(),

@@ -93,8 +93,8 @@ public final class StreamFusionArrayUnnestTranslator {
         if (!isSupportedArrayElement(element)) {
             return "array UNNEST element type " + element + " is not yet supported";
         }
-        if ("LEFT".equals(joinName) && element instanceof RowType) {
-            return "left array UNNEST of ROW is not yet supported";
+        if ("LEFT".equals(joinName) && withOrdinality && element instanceof RowType) {
+            return "left array UNNEST of ROW WITH ORDINALITY is not accelerated because Flink 2.3 fails its output arity contract";
         }
         int elementFields = element instanceof RowType ? ((RowType) element).getFieldCount() : 1;
         int appendedFields = elementFields + (withOrdinality ? 1 : 0);
