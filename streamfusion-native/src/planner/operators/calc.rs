@@ -61,6 +61,16 @@ fn create_expression(
             })?;
             Ok(Arc::new(Column::new(field.name(), index)))
         }
+        Some(proto::expression::Expression::StructField(field)) => {
+            let operand = field.operand.as_ref().ok_or_else(|| {
+                DataFusionError::Plan("struct field operand is empty".to_string())
+            })?;
+            expressions::struct_field::create(
+                create_expression(operand, schema)?,
+                &field.field_name,
+                schema,
+            )
+        }
         Some(proto::expression::Expression::IntegerLiteral(literal)) => Ok(Arc::new(Literal::new(
             ScalarValue::Int32(Some(literal.value)),
         ))),
