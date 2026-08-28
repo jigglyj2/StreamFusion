@@ -39,4 +39,24 @@ class ComputedArraySetUnnestParityTest extends SqlParityTestSupport {
                 .isEqualTo(1);
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
+
+    @Test
+    void nativeUnnestPreservesArrayUnionEncounterOrder() throws Exception {
+        assertDataStreamParity(
+                "SELECT item, ord_idx FROM array_union_unnest_input "
+                        + "CROSS JOIN UNNEST(ARRAY_UNION(metric, ARRAY[3, 2, CAST(NULL AS INT)])) "
+                        + "WITH ORDINALITY AS expanded(item, ord_idx)",
+                Types.OBJECT_ARRAY(Types.INT),
+                DataTypes.ARRAY(DataTypes.INT()),
+                Arrays.asList(
+                        Row.of((Object) new Integer[] {2, null, 1, 2}),
+                        Row.of((Object) new Integer[] {}),
+                        Row.of((Object) null)),
+                "array_union_unnest_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isEqualTo(1);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
 }
