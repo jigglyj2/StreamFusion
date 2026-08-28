@@ -82,6 +82,8 @@ message Expression {
     ArrayConstructor array_constructor = 51;
     ArrayExcept array_except = 52;
     ArrayRemove array_remove = 53;
+    ArrayMinimum array_minimum = 54;
+    ArrayMaximum array_maximum = 55;
   }
 }
 
@@ -158,6 +160,14 @@ message ArrayExcept {
 message ArrayRemove {
   Expression array = 1;
   Expression needle = 2;
+}
+
+message ArrayMinimum {
+  Expression array = 1;
+}
+
+message ArrayMaximum {
+  Expression array = 1;
 }
 
 message Coalesce {

@@ -113,6 +113,20 @@ pub(super) fn create(
             schema,
             expressions::array_remove::create,
         ),
+        ArrayMinimum(minimum) => expressions::array_minimum::create(
+            create_expression(
+                required(&minimum.array, "array minimum is missing its array")?,
+                schema,
+            )?,
+            schema,
+        ),
+        ArrayMaximum(maximum) => expressions::array_maximum::create(
+            create_expression(
+                required(&maximum.array, "array maximum is missing its array")?,
+                schema,
+            )?,
+            schema,
+        ),
         ArrayDistinct(distinct) => expressions::array_distinct::create(
             create_expression(
                 required(&distinct.array, "array distinct is missing its array")?,

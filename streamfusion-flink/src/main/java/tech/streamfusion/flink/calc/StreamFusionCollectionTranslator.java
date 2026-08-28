@@ -17,6 +17,8 @@ import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.proto.plan.v1.ArrayAppend;
 import tech.streamfusion.proto.plan.v1.ArrayConcat;
 import tech.streamfusion.proto.plan.v1.ArrayContains;
+import tech.streamfusion.proto.plan.v1.ArrayMaximum;
+import tech.streamfusion.proto.plan.v1.ArrayMinimum;
 import tech.streamfusion.proto.plan.v1.ArrayPosition;
 import tech.streamfusion.proto.plan.v1.ArrayPrepend;
 import tech.streamfusion.proto.plan.v1.ArrayRemove;
@@ -51,6 +53,16 @@ final class StreamFusionCollectionTranslator extends StreamFusionComplexTypeSupp
             LogicalType needle = logicalType(operands.get(1), inputType);
             if (needle != null && needle.isNullable()) {
                 return "ARRAY_REMOVE with a nullable needle stays on Flink because Flink removes null elements while DataFusion returns null";
+            }
+        }
+        if (("ARRAY_MIN".equals(function) || "ARRAY_MAX".equals(function)) && operands.size() == 1) {
+            LogicalType collection = logicalType(operands.get(0), inputType);
+            if (collection instanceof ArrayType) {
+                LogicalTypeRoot element =
+                        ((ArrayType) collection).getElementType().getTypeRoot();
+                if (element == LogicalTypeRoot.FLOAT || element == LogicalTypeRoot.DOUBLE) {
+                    return "floating-point ARRAY_MIN and ARRAY_MAX stay on Flink because Flink and DataFusion order NaN differently";
+                }
             }
         }
         return null;
@@ -232,6 +244,43 @@ final class StreamFusionCollectionTranslator extends StreamFusionComplexTypeSupp
                 : Expression.newBuilder()
                         .setArrayRemove(ArrayRemove.newBuilder().setArray(array).setNeedle(needle))
                         .build();
+    }
+
+    static Expression arrayExtremum(Object expression, RowType inputType, LogicalType expectedType) {
+        String function = functionName(expression);
+        if (!"ARRAY_MIN".equals(function) && !"ARRAY_MAX".equals(function)) {
+            return null;
+        }
+        java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
+        if (operands.size() != 1 || !supportsArrayExtremum(expectedType.getTypeRoot())) {
+            return null;
+        }
+        LogicalType arrayType = logicalType(operands.get(0), inputType);
+        if (!(arrayType instanceof ArrayType)
+                || ((ArrayType) arrayType).getElementType().getTypeRoot() != expectedType.getTypeRoot()) {
+            return null;
+        }
+        Expression array = StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, arrayType);
+        if (array == null) {
+            return null;
+        }
+        return "ARRAY_MIN".equals(function)
+                ? Expression.newBuilder()
+                        .setArrayMinimum(ArrayMinimum.newBuilder().setArray(array))
+                        .build()
+                : Expression.newBuilder()
+                        .setArrayMaximum(ArrayMaximum.newBuilder().setArray(array))
+                        .build();
+    }
+
+    private static boolean supportsArrayExtremum(LogicalTypeRoot type) {
+        return type == LogicalTypeRoot.TINYINT
+                || type == LogicalTypeRoot.SMALLINT
+                || type == LogicalTypeRoot.INTEGER
+                || type == LogicalTypeRoot.BIGINT
+                || type == LogicalTypeRoot.DECIMAL
+                || type == LogicalTypeRoot.VARCHAR
+                || type == LogicalTypeRoot.DATE;
     }
 
     private static java.util.List<?> collectionAndElementOperands(
