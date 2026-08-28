@@ -23,6 +23,7 @@ import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecCalc;
 import org.apache.flink.table.planner.plan.nodes.exec.processor.ExecNodeGraphProcessor;
 import org.apache.flink.table.planner.plan.nodes.exec.processor.ProcessorContext;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecCalc;
+import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecUnion;
 import org.apache.flink.table.types.logical.RowType;
 
 /** All-or-nothing physical rule modelled after Comet's distinct accelerator exec nodes. */
@@ -59,7 +60,8 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             if (reason != null) {
                 rejections.add(nodePath + "\n" + reason);
             }
-        } else if (!node.getClass().getSimpleName().equals("StreamExecSink")) {
+        } else if (!(node instanceof StreamExecUnion)
+                && !node.getClass().getSimpleName().equals("StreamExecSink")) {
             rejections.add(nodePath + "\noperator has no StreamFusion physical implementation");
         }
         for (int index = 0; index < node.getInputEdges().size(); index++) {
@@ -82,6 +84,18 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     (RowType) calc.getOutputType(),
                     "StreamFusionCalc");
             replacement.setInputEdges(calc.getInputEdges().stream()
+                    .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                    .collect(Collectors.toList()));
+            return replacement;
+        }
+        if (node instanceof StreamExecUnion) {
+            StreamExecUnion union = (StreamExecUnion) node;
+            StreamFusionExecUnion replacement = new StreamFusionExecUnion(
+                    union.getPersistedConfig(),
+                    union.getInputProperties(),
+                    (RowType) union.getOutputType(),
+                    "StreamFusionUnionAll");
+            replacement.setInputEdges(union.getInputEdges().stream()
                     .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
                     .collect(Collectors.toList()));
             return replacement;
