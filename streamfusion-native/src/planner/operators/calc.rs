@@ -46,7 +46,7 @@ pub(crate) fn create(
     Ok(Arc::new(ProjectionExec::try_new(expressions, child)?))
 }
 
-fn create_expression(
+pub(super) fn create_expression(
     expression: &proto::Expression,
     schema: &arrow::datatypes::Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
@@ -60,167 +60,6 @@ fn create_expression(
                 ))
             })?;
             Ok(Arc::new(Column::new(field.name(), index)))
-        }
-        Some(proto::expression::Expression::StructField(field)) => {
-            let operand = field.operand.as_ref().ok_or_else(|| {
-                DataFusionError::Plan("struct field operand is empty".to_string())
-            })?;
-            expressions::struct_field::create(
-                create_expression(operand, schema)?,
-                &field.field_name,
-                schema,
-            )
-        }
-        Some(proto::expression::Expression::ArrayElement(element)) => {
-            let array = element.array.as_ref().ok_or_else(|| {
-                DataFusionError::Plan("array element is missing its array".into())
-            })?;
-            expressions::array_element::create(
-                create_expression(array, schema)?,
-                element.index,
-                schema,
-            )
-        }
-        Some(proto::expression::Expression::MapElement(element)) => {
-            let map = element
-                .map
-                .as_ref()
-                .ok_or_else(|| DataFusionError::Plan("map element is missing its map".into()))?;
-            let key = element
-                .key
-                .as_ref()
-                .ok_or_else(|| DataFusionError::Plan("map element is missing its key".into()))?;
-            expressions::map_element::create(
-                create_expression(map, schema)?,
-                create_expression(key, schema)?,
-                schema,
-            )
-        }
-        Some(proto::expression::Expression::Cardinality(cardinality)) => {
-            let collection = cardinality.collection.as_ref().ok_or_else(|| {
-                DataFusionError::Plan("cardinality is missing its collection".into())
-            })?;
-            expressions::cardinality::create(create_expression(collection, schema)?, schema)
-        }
-        Some(proto::expression::Expression::ArrayContains(contains)) => {
-            let array = contains.array.as_ref().ok_or_else(|| {
-                DataFusionError::Plan("array contains is missing its array".into())
-            })?;
-            let needle = contains.needle.as_ref().ok_or_else(|| {
-                DataFusionError::Plan("array contains is missing its needle".into())
-            })?;
-            expressions::array_contains::create(
-                create_expression(array, schema)?,
-                create_expression(needle, schema)?,
-                schema,
-            )
-        }
-        Some(proto::expression::Expression::ArrayReverse(reverse)) => {
-            let array = reverse.array.as_ref().ok_or_else(|| {
-                DataFusionError::Plan("array reverse is missing its array".into())
-            })?;
-            expressions::array_reverse::create(create_expression(array, schema)?, schema)
-        }
-        Some(proto::expression::Expression::ArrayAppend(append)) => {
-            let array = append
-                .array
-                .as_ref()
-                .ok_or_else(|| DataFusionError::Plan("array append is missing its array".into()))?;
-            let element = append.element.as_ref().ok_or_else(|| {
-                DataFusionError::Plan("array append is missing its element".into())
-            })?;
-            expressions::array_append::create(
-                create_expression(array, schema)?,
-                create_expression(element, schema)?,
-                schema,
-            )
-        }
-        Some(proto::expression::Expression::ArrayPrepend(prepend)) => {
-            let array = prepend.array.as_ref().ok_or_else(|| {
-                DataFusionError::Plan("array prepend is missing its array".into())
-            })?;
-            let element = prepend.element.as_ref().ok_or_else(|| {
-                DataFusionError::Plan("array prepend is missing its element".into())
-            })?;
-            expressions::array_prepend::create(
-                create_expression(array, schema)?,
-                create_expression(element, schema)?,
-                schema,
-            )
-        }
-        Some(proto::expression::Expression::ArrayConcat(concat)) => {
-            let arrays = concat
-                .arrays
-                .iter()
-                .map(|array| create_expression(array, schema))
-                .collect::<Result<Vec<_>>>()?;
-            expressions::array_concat::create(arrays, schema)
-        }
-        Some(proto::expression::Expression::ArrayPosition(position)) => {
-            let array = position.array.as_ref().ok_or_else(|| {
-                DataFusionError::Plan("array position is missing its array".into())
-            })?;
-            let needle = position.needle.as_ref().ok_or_else(|| {
-                DataFusionError::Plan("array position is missing its needle".into())
-            })?;
-            expressions::array_position::create(
-                create_expression(array, schema)?,
-                create_expression(needle, schema)?,
-                schema,
-            )
-        }
-        Some(proto::expression::Expression::ArrayDistinct(distinct)) => {
-            let array = distinct.array.as_ref().ok_or_else(|| {
-                DataFusionError::Plan("array distinct is missing its array".into())
-            })?;
-            expressions::array_distinct::create(create_expression(array, schema)?, schema)
-        }
-        Some(proto::expression::Expression::ArrayUnion(union)) => {
-            let left = union.left.as_ref().ok_or_else(|| {
-                DataFusionError::Plan("array union is missing its left array".into())
-            })?;
-            let right = union.right.as_ref().ok_or_else(|| {
-                DataFusionError::Plan("array union is missing its right array".into())
-            })?;
-            expressions::array_union::create(
-                create_expression(left, schema)?,
-                create_expression(right, schema)?,
-                schema,
-            )
-        }
-        Some(proto::expression::Expression::ArrayIntersect(intersect)) => {
-            let left = intersect.left.as_ref().ok_or_else(|| {
-                DataFusionError::Plan("array intersect is missing its left array".into())
-            })?;
-            let right = intersect.right.as_ref().ok_or_else(|| {
-                DataFusionError::Plan("array intersect is missing its right array".into())
-            })?;
-            expressions::array_intersect::create(
-                create_expression(left, schema)?,
-                create_expression(right, schema)?,
-                schema,
-            )
-        }
-        Some(proto::expression::Expression::ArrayConstructor(constructor)) => {
-            let elements = constructor
-                .elements
-                .iter()
-                .map(|element| create_expression(element, schema))
-                .collect::<Result<Vec<_>>>()?;
-            expressions::array_constructor::create(elements, schema)
-        }
-        Some(proto::expression::Expression::ArrayExcept(except)) => {
-            let left = except.left.as_ref().ok_or_else(|| {
-                DataFusionError::Plan("array except is missing its left array".into())
-            })?;
-            let right = except.right.as_ref().ok_or_else(|| {
-                DataFusionError::Plan("array except is missing its right array".into())
-            })?;
-            expressions::array_except::create(
-                create_expression(left, schema)?,
-                create_expression(right, schema)?,
-                schema,
-            )
         }
         Some(proto::expression::Expression::IntegerLiteral(literal)) => Ok(Arc::new(Literal::new(
             ScalarValue::Int32(Some(literal.value)),
@@ -628,6 +467,7 @@ fn create_expression(
                 schema,
             )?)))
         }
+        Some(collection_expression) => super::collection::create(collection_expression, schema),
         None => Err(DataFusionError::Plan("expression is empty".to_string())),
     }
 }
