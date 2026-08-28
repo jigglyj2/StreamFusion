@@ -125,11 +125,24 @@ final class StreamFusionComplexProjectionTranslator extends StreamFusionComplexT
             fields.addFirst(invoke(base, "getField"));
             base = invoke(base, "getReferenceExpr");
         }
-        LogicalType currentType = logicalType(base, inputType);
-        if (currentType == null) {
-            return null;
+        LogicalType currentType;
+        Expression current;
+        if ("RexCorrelVariable".equals(base.getClass().getSimpleName()) && !fields.isEmpty()) {
+            Object inputField = fields.removeFirst();
+            int inputIndex = (int) invoke(inputField, "getIndex");
+            if (inputIndex < 0 || inputIndex >= inputType.getFieldCount()) {
+                return null;
+            }
+            currentType = inputType.getTypeAt(inputIndex);
+            current = StreamFusionIdentityCalcOperator.inputReference(
+                    inputIndex, StreamFusionIdentityCalcOperator.logicalType(inputType, inputIndex));
+        } else {
+            currentType = logicalType(base, inputType);
+            if (currentType == null) {
+                return null;
+            }
+            current = StreamFusionProjectionTranslator.projectionExpression(base, inputType, currentType);
         }
-        Expression current = StreamFusionProjectionTranslator.projectionExpression(base, inputType, currentType);
         if (current == null) {
             return null;
         }

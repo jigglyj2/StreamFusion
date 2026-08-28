@@ -13,8 +13,8 @@ is accelerated, with or without ordinality. The same forms accelerate multisets 
 non-null scalar, scalar-array, or row elements composed of scalars and scalar arrays. Arrays whose
 elements are scalar arrays are also accelerated, with each inner array remaining one output value.
 Computed array operands, including `ARRAY[...]` and supported array functions, are accelerated when
-the complete expression is supported by StreamFusion Calc. Other table functions and expansion
-forms fall back to Flink.
+the complete expression is supported by StreamFusion Calc. Nested row fields containing supported
+arrays use the same expression path. Other table functions and expansion forms fall back to Flink.
 
 ## SQL example
 

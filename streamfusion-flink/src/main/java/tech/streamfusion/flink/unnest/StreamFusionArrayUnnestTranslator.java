@@ -80,7 +80,7 @@ public final class StreamFusionArrayUnnestTranslator {
             return "collection UNNEST requires exactly one operand";
         }
         Object operand = operands.get(0);
-        boolean directField = operand.getClass().getSimpleName().equals("RexFieldAccess");
+        boolean directField = isDirectInputField(operand);
         int index = directField ? arrayIndex(invocation) : -1;
         if (directField && (index < 0 || index >= inputType.getFieldCount())) {
             return "collection UNNEST field index " + index + " is outside the input row";
@@ -231,7 +231,7 @@ public final class StreamFusionArrayUnnestTranslator {
 
     public static int arrayIndex(Object invocation) {
         List<?> operands = (List<?>) invoke(invocation, "getOperands");
-        if (!operands.get(0).getClass().getSimpleName().equals("RexFieldAccess")) {
+        if (!isDirectInputField(operands.get(0))) {
             return 0;
         }
         Object field = invoke(operands.get(0), "getField");
@@ -260,7 +260,7 @@ public final class StreamFusionArrayUnnestTranslator {
 
     public static Expression collectionExpression(RowType inputType, Object invocation) {
         Object operand = ((List<?>) invoke(invocation, "getOperands")).get(0);
-        if (operand.getClass().getSimpleName().equals("RexFieldAccess")) {
+        if (isDirectInputField(operand)) {
             return null;
         }
         return StreamFusionCalcTranslator.operatorExpression(operand, inputType, collectionType(inputType, invocation));
@@ -268,10 +268,18 @@ public final class StreamFusionArrayUnnestTranslator {
 
     private static LogicalType collectionType(RowType inputType, Object invocation) {
         Object operand = ((List<?>) invoke(invocation, "getOperands")).get(0);
-        if (operand.getClass().getSimpleName().equals("RexFieldAccess")) {
+        if (isDirectInputField(operand)) {
             return inputType.getTypeAt(arrayIndex(invocation));
         }
         return FlinkTypeFactory.toLogicalType((RelDataType) invoke(operand, "getType"));
+    }
+
+    private static boolean isDirectInputField(Object operand) {
+        return operand.getClass().getSimpleName().equals("RexFieldAccess")
+                && invoke(operand, "getReferenceExpr")
+                        .getClass()
+                        .getSimpleName()
+                        .equals("RexCorrelVariable");
     }
 
     private static boolean isScalarBoundaryType(LogicalTypeRoot type) {

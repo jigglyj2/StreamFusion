@@ -72,4 +72,25 @@ class ComputedArrayUnnestParityTest extends SqlParityTestSupport {
                 .isEqualTo(1);
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
+
+    @Test
+    void nativeLeftUnnestReadsNestedArrayFieldWithoutJavaMaterialization() throws Exception {
+        assertDataStreamParity(
+                "SELECT item, ord_idx FROM nested_field_unnest_input "
+                        + "LEFT JOIN UNNEST(nested_field_unnest_input.metric.items) WITH ORDINALITY "
+                        + "AS expanded(item, ord_idx) ON TRUE",
+                Types.ROW_NAMED(new String[] {"items"}, Types.OBJECT_ARRAY(Types.INT)),
+                DataTypes.ROW(DataTypes.FIELD("items", DataTypes.ARRAY(DataTypes.INT()))),
+                Arrays.asList(
+                        Row.of(Row.of((Object) new Integer[] {1, null, 3})),
+                        Row.of(Row.of((Object) new Integer[] {})),
+                        Row.of(Row.of((Object) null)),
+                        Row.of((Object) null)),
+                "nested_field_unnest_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isEqualTo(1);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
 }
