@@ -101,6 +101,7 @@ message Expression {
     StringLeft string_left = 70;
     StringRight string_right = 71;
     SquareRoot square_root = 72;
+    Exponential exponential = 73;
   }
 }
 
@@ -268,6 +269,10 @@ message StringRight {
 }
 
 message SquareRoot {
+  Expression operand = 1;
+}
+
+message Exponential {
   Expression operand = 1;
 }
 

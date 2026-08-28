@@ -154,6 +154,13 @@ pub(super) fn create_expression(
                 .ok_or_else(|| DataFusionError::Plan("SQRT operand is empty".to_string()))?;
             expressions::square_root::create(create_expression(operand, schema)?, schema)
         }
+        Some(proto::expression::Expression::Exponential(exponential)) => {
+            let operand = exponential
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("EXP operand is empty".to_string()))?;
+            expressions::exponential::create(create_expression(operand, schema)?, schema)
+        }
         Some(proto::expression::Expression::CharacterLength(character_length)) => {
             let operand = character_length
                 .operand

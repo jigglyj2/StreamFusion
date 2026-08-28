@@ -254,6 +254,9 @@ call to `POWER(value, 0.5)`; StreamFusion preserves that shape in protobuf and u
 vectorized power kernel. This retains Flink's NaN result for negative inputs, signed-zero behavior,
 infinities, and null propagation. General `POWER` remains on Flink because DataFusion rejects zero
 raised to a negative exponent while Flink returns a signed infinity.
+`EXP` is accelerated for numeric operands after Flink coerces them to `DOUBLE`. It lowers to
+DataFusion's vectorized exponential kernel, including byte-parity coverage around underflow and
+overflow as well as signed zero, infinities, NaN, and nulls.
 `CEIL` and `FLOOR` are accelerated for signed integers, `FLOAT`, and `DOUBLE`. Integer
 inputs are already integral and remain zero-copy references;
 floating-point inputs use DataFusion's vectorized math functions. Decimal and temporal forms

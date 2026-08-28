@@ -32,6 +32,7 @@ pub(crate) mod character_length;
 pub(crate) mod coalesce;
 pub(crate) mod concat;
 pub(crate) mod conditional;
+pub(crate) mod exponential;
 pub(crate) mod floor;
 pub(crate) mod like;
 pub(crate) mod lower;

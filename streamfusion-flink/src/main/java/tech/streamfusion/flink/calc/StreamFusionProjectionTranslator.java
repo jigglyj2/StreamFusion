@@ -34,6 +34,7 @@ import tech.streamfusion.proto.plan.v1.Conditional;
 import tech.streamfusion.proto.plan.v1.DateLiteral;
 import tech.streamfusion.proto.plan.v1.DecimalLiteral;
 import tech.streamfusion.proto.plan.v1.DoubleLiteral;
+import tech.streamfusion.proto.plan.v1.Exponential;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.FloatLiteral;
 import tech.streamfusion.proto.plan.v1.Floor;
@@ -283,6 +284,18 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
                     }
                 }
             }
+        }
+        if ("EXP".equals(functionName(expression)) && expectedType.getTypeRoot() == LogicalTypeRoot.DOUBLE) {
+            List<?> operands = (List<?>) invoke(expression, "getOperands");
+            if (operands.size() != 1) {
+                return null;
+            }
+            Expression operand = projectionExpression(operands.get(0), inputType, expectedType);
+            return operand == null
+                    ? null
+                    : Expression.newBuilder()
+                            .setExponential(Exponential.newBuilder().setOperand(operand))
+                            .build();
         }
         if ("CHAR_LENGTH".equals(functionName(expression)) || "CHARACTER_LENGTH".equals(functionName(expression))) {
             List<?> operands = (List<?>) invoke(expression, "getOperands");
