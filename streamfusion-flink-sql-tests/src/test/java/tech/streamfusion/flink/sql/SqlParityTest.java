@@ -311,6 +311,35 @@ class SqlParityTest {
                 Arguments.of("literal-on-left", "TIMESTAMP '2026-08-27 12:34:56.123' < event_timestamp"));
     }
 
+    @ParameterizedTest(name = "DECIMAL {0}")
+    @MethodSource("nativeDecimalComparisonCases")
+    void nativeDecimalComparisonsMatchFlinkByteForByte(String ignoredName, String sql) throws Exception {
+        assertParity(sql, true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    private static Stream<Arguments> nativeDecimalComparisonCases() {
+        String compactValues =
+                "(VALUES (-12.34, 10), (12.34, 20), (12.34, 21), (99.99, 30)) " + "AS input(amount, payload)";
+        String wideValues = "(VALUES "
+                + "(-1234567890.123456789, 10), "
+                + "(1234567890.123456789, 20), "
+                + "(1234567890.123456789, 21), "
+                + "(2234567890.123456789, 30)) AS input(amount, payload)";
+        return Stream.of(
+                Arguments.of(
+                        "compact input on left", "SELECT payload FROM " + compactValues + " WHERE amount >= 12.34"),
+                Arguments.of(
+                        "compact literal on left", "SELECT payload FROM " + compactValues + " WHERE 12.34 <= amount"),
+                Arguments.of(
+                        "wide input on left",
+                        "SELECT payload FROM " + wideValues + " WHERE amount >= 1234567890.123456789"),
+                Arguments.of(
+                        "wide literal on left",
+                        "SELECT payload FROM " + wideValues + " WHERE 1234567890.123456789 <= amount"));
+    }
+
     @ParameterizedTest(name = "{0}")
     @MethodSource("nativeNullPredicateCases")
     void nativeNullPredicatesMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {

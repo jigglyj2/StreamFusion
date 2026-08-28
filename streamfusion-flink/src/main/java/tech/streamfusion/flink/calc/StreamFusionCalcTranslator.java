@@ -11,6 +11,7 @@ package tech.streamfusion.flink.calc;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -20,6 +21,7 @@ import org.apache.flink.streaming.api.transformations.OneInputTransformation;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.TimestampData;
 import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
+import org.apache.flink.table.types.logical.DecimalType;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.TimeType;
@@ -303,6 +305,15 @@ public final class StreamFusionCalcTranslator {
             return timestamp == null
                     ? null
                     : new StreamFusionTimestampComparison(inputIndex, timestamp, precision, operator, inputOnLeft);
+        }
+        if (type == LogicalTypeRoot.DECIMAL) {
+            BigDecimal decimal = literal(literalExpression, BigDecimal.class);
+            DecimalType decimalType = (DecimalType) inputType.getTypeAt(inputIndex);
+            if (decimal == null || decimal.scale() != decimalType.getScale()) {
+                return null;
+            }
+            return new StreamFusionDecimalComparison(
+                    inputIndex, decimal, decimalType.getPrecision(), decimalType.getScale(), operator, inputOnLeft);
         }
         return null;
     }

@@ -33,6 +33,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import tech.streamfusion.proto.plan.v1.Calc;
 import tech.streamfusion.proto.plan.v1.Comparison;
 import tech.streamfusion.proto.plan.v1.ComparisonOperator;
+import tech.streamfusion.proto.plan.v1.DecimalLiteral;
 import tech.streamfusion.proto.plan.v1.EmptyType;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.GreaterThanOrEqual;
@@ -158,6 +159,30 @@ class ArrowCDataBridgeTest {
             assertThat(output.size()).isEqualTo(2);
             assertThat(output.rowView(0).getTimestamp(0, precision)).isEqualTo(noon);
             assertThat(output.rowView(1).getTimestamp(0, precision)).isEqualTo(evening);
+        }
+    }
+
+    @ParameterizedTest(name = "DECIMAL({0}, {1})")
+    @org.junit.jupiter.params.provider.CsvSource({"10, 2, 12.34", "38, 9, 12345678901234567890.123456789"})
+    void filtersCompactAndWideDecimalsThroughDataFusion(int precision, int scale, String literalText) {
+        DecimalType decimalType = new DecimalType(false, precision, scale);
+        RowType rowType = RowType.of(decimalType);
+        java.math.BigDecimal literal = new java.math.BigDecimal(literalText);
+        List<RowData> rows = List.of(
+                GenericRowData.of(
+                        DecimalData.fromBigDecimal(literal.subtract(java.math.BigDecimal.ONE), precision, scale)),
+                GenericRowData.of(DecimalData.fromBigDecimal(literal, precision, scale)),
+                GenericRowData.of(DecimalData.fromBigDecimal(literal.add(java.math.BigDecimal.ONE), precision, scale)));
+
+        try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+                ArrowRowDataBatch input = ArrowRowDataBatch.transpose(rows, rowType, allocator);
+                ArrowRowDataBatch output =
+                        ArrowCDataBridge.execute(decimalPlan(precision, scale, literal), input, rowType, allocator)) {
+            assertThat(output.size()).isEqualTo(2);
+            assertThat(output.rowView(0).getDecimal(0, precision, scale).toBigDecimal())
+                    .isEqualByComparingTo(literal);
+            assertThat(output.rowView(1).getDecimal(0, precision, scale).toBigDecimal())
+                    .isEqualByComparingTo(literal.add(java.math.BigDecimal.ONE));
         }
     }
 
@@ -294,6 +319,32 @@ class ArrowCDataBridgeTest {
                         .setComparison(Comparison.newBuilder()
                                 .setLeft(reference)
                                 .setRight(timestamp)
+                                .setOperator(ComparisonOperator.COMPARISON_OPERATOR_GREATER_THAN_OR_EQUAL)))
+                .build();
+        return NativePlan.newBuilder()
+                .setProtocolVersion(1)
+                .setRoot(Operator.newBuilder().setCalc(calc))
+                .build()
+                .toByteArray();
+    }
+
+    private static byte[] decimalPlan(int precision, int scale, java.math.BigDecimal literal) {
+        Expression reference = Expression.newBuilder()
+                .setInputReference(InputReference.newBuilder().setIndex(0))
+                .build();
+        Expression decimal = Expression.newBuilder()
+                .setDecimalLiteral(DecimalLiteral.newBuilder()
+                        .setUnscaledValue(literal.unscaledValue().toString())
+                        .setPrecision(precision)
+                        .setScale(scale))
+                .build();
+        Calc calc = Calc.newBuilder()
+                .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
+                .addProjections(reference)
+                .setCondition(Expression.newBuilder()
+                        .setComparison(Comparison.newBuilder()
+                                .setLeft(reference)
+                                .setRight(decimal)
                                 .setOperator(ComparisonOperator.COMPARISON_OPERATOR_GREATER_THAN_OR_EQUAL)))
                 .build();
         return NativePlan.newBuilder()

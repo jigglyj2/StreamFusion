@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-**Current status:** Simple numeric, date, time, and local timestamp comparisons are accelerated.
+**Current status:** Simple numeric, decimal, date, time, and local timestamp comparisons are accelerated.
 
 ## SQL example
 
@@ -42,6 +42,11 @@ applying a session or JVM timezone. Milliseconds and the remaining nanoseconds t
 separately in the plan protobuf, then Rust constructs a matching Arrow timestamp scalar
 at the declared precision. `TIMESTAMP_LTZ` remains on Flink pending separate timezone and
 daylight-saving parity coverage.
+
+Exact `DECIMAL` comparisons support Flink precision up to 38 with a same-scale literal.
+The plan carries the signed unscaled integer, precision, and scale; Rust validates these
+before constructing a DataFusion `Decimal128` scalar. Comparisons that require planner
+rescaling or exceed Flink's decimal range fall back rather than rounding.
 
 `IS NULL` and `IS NOT NULL` are supported over direct input columns of every scalar type
 listed on the [projection coverage page](../projections/).

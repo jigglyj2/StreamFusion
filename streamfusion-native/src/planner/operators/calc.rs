@@ -122,6 +122,33 @@ fn create_expression(
             };
             Ok(Arc::new(Literal::new(value)))
         }
+        Some(proto::expression::Expression::DecimalLiteral(literal)) => {
+            let value = literal.unscaled_value.parse::<i128>().map_err(|error| {
+                DataFusionError::Plan(format!(
+                    "DECIMAL unscaled value '{}' is invalid: {error}",
+                    literal.unscaled_value
+                ))
+            })?;
+            let precision = u8::try_from(literal.precision).map_err(|_| {
+                DataFusionError::Plan(format!(
+                    "DECIMAL precision {} exceeds Decimal128",
+                    literal.precision
+                ))
+            })?;
+            let scale = i8::try_from(literal.scale).map_err(|_| {
+                DataFusionError::Plan(format!("DECIMAL scale {} is invalid", literal.scale))
+            })?;
+            if precision == 0 || precision > 38 || scale < 0 || scale > precision as i8 {
+                return Err(DataFusionError::Plan(format!(
+                    "DECIMAL({precision}, {scale}) is outside Flink's supported range"
+                )));
+            }
+            Ok(Arc::new(Literal::new(ScalarValue::Decimal128(
+                Some(value),
+                precision,
+                scale,
+            ))))
+        }
         Some(proto::expression::Expression::GreaterThanOrEqual(comparison)) => {
             Ok(Arc::new(BinaryExpr::new(
                 create_expression(

@@ -45,6 +45,7 @@ message Expression {
     DateLiteral date_literal = 14;
     TimeLiteral time_literal = 15;
     TimestampLiteral timestamp_literal = 16;
+    DecimalLiteral decimal_literal = 17;
   }
 }
 
@@ -85,6 +86,12 @@ message TimestampLiteral {
   int64 epoch_millisecond = 1;
   int32 nano_of_millisecond = 2;
   uint32 precision = 3;
+}
+
+message DecimalLiteral {
+  string unscaled_value = 1;
+  uint32 precision = 2;
+  int32 scale = 3;
 }
 
 message GreaterThanOrEqual {
