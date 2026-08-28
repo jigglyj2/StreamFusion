@@ -25,7 +25,8 @@ StreamFusion accelerates the operation when all of the following are true:
 
 - Flink planned an inner/cross correlate around its built-in `$UNNEST_ROWS$` function.
 - The function has one direct input-field operand whose type is `ARRAY`.
-- The element is a supported scalar Arrow boundary type.
+- The element is a supported scalar Arrow boundary type, including numeric, boolean, character,
+  binary, decimal, date, time, and timestamp values.
 - The correlate has no additional condition and its output preserves every input field before
   appending the element field with exactly the array's element type.
 - Every other internal node in the plan has a StreamFusion implementation.

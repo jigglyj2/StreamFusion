@@ -17,6 +17,7 @@ package tech.streamfusion.flink.sql;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.math.BigDecimal;
 import java.util.Arrays;
 import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.streaming.api.datastream.DataStream;
@@ -83,6 +84,49 @@ class ArrayUnnestParityTest extends SqlParityTestSupport {
 
         assertThat(streamFusion).isEqualTo(flink);
         assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isEqualTo(1);
+    }
+
+    @Test
+    void nativeArrayUnnestSupportsVariableAndFixedWidthScalarBoundaries() throws Exception {
+        assertDataStreamParity(
+                "SELECT item FROM varchar_array_unnest_input " + "CROSS JOIN UNNEST(metric) AS expanded(item)",
+                Types.OBJECT_ARRAY(Types.STRING),
+                DataTypes.ARRAY(DataTypes.STRING()),
+                Arrays.asList(
+                        Row.of((Object) new String[] {"alpha", "你好", null}),
+                        Row.of((Object) new String[] {}),
+                        Row.of((Object) null)),
+                "varchar_array_unnest_input");
+
+        assertDataStreamParity(
+                "SELECT item FROM decimal_array_unnest_input " + "CROSS JOIN UNNEST(metric) AS expanded(item)",
+                Types.OBJECT_ARRAY(Types.BIG_DEC),
+                DataTypes.ARRAY(DataTypes.DECIMAL(10, 2)),
+                Arrays.asList(
+                        Row.of((Object) new BigDecimal[] {new BigDecimal("12.34"), new BigDecimal("-0.01"), null}),
+                        Row.of((Object) new BigDecimal[] {}),
+                        Row.of((Object) null)),
+                "decimal_array_unnest_input");
+
+        assertDataStreamParity(
+                "SELECT item FROM char_array_unnest_input " + "CROSS JOIN UNNEST(metric) AS expanded(item)",
+                Types.OBJECT_ARRAY(Types.STRING),
+                DataTypes.ARRAY(DataTypes.CHAR(4)),
+                Arrays.asList(
+                        Row.of((Object) new String[] {"abcd", "xy  ", null}),
+                        Row.of((Object) new String[] {}),
+                        Row.of((Object) null)),
+                "char_array_unnest_input");
+
+        assertDataStreamParity(
+                "SELECT item FROM binary_array_unnest_input " + "CROSS JOIN UNNEST(metric) AS expanded(item)",
+                Types.OBJECT_ARRAY(Types.PRIMITIVE_ARRAY(Types.BYTE)),
+                DataTypes.ARRAY(DataTypes.BINARY(3)),
+                Arrays.asList(
+                        Row.of((Object) new byte[][] {new byte[] {0, 1, 2}, new byte[] {-1, 0, 1}, null}),
+                        Row.of((Object) new byte[][] {}),
+                        Row.of((Object) null)),
+                "binary_array_unnest_input");
     }
 
     private static byte[] executeChangelog(java.util.List<Row> rows, boolean streamFusionEnabled) throws Exception {

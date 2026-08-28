@@ -105,7 +105,9 @@ public final class StreamFusionArrayUnnestTranslator {
             case FLOAT:
             case DOUBLE:
             case BOOLEAN:
+            case CHAR:
             case VARCHAR:
+            case BINARY:
             case VARBINARY:
             case DATE:
             case TIME_WITHOUT_TIME_ZONE:
