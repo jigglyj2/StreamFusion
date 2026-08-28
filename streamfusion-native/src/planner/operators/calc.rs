@@ -104,6 +104,24 @@ fn create_expression(
             };
             Ok(Arc::new(Literal::new(value)))
         }
+        Some(proto::expression::Expression::TimestampLiteral(literal)) => {
+            let millis = literal.epoch_millisecond;
+            let nanos = i64::from(literal.nano_of_millisecond);
+            let value = match literal.precision {
+                0 => ScalarValue::TimestampSecond(Some(millis / 1_000), None),
+                1..=3 => ScalarValue::TimestampMillisecond(Some(millis), None),
+                4..=6 => {
+                    ScalarValue::TimestampMicrosecond(Some(millis * 1_000 + nanos / 1_000), None)
+                }
+                7..=9 => ScalarValue::TimestampNanosecond(Some(millis * 1_000_000 + nanos), None),
+                precision => {
+                    return Err(DataFusionError::Plan(format!(
+                        "TIMESTAMP precision {precision} is outside Flink's supported range 0..=9"
+                    )))
+                }
+            };
+            Ok(Arc::new(Literal::new(value)))
+        }
         Some(proto::expression::Expression::GreaterThanOrEqual(comparison)) => {
             Ok(Arc::new(BinaryExpr::new(
                 create_expression(

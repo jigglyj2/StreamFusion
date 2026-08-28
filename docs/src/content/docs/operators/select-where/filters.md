@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-**Current status:** Simple numeric, `DATE`, and `TIME` comparisons are accelerated.
+**Current status:** Simple numeric, date, time, and local timestamp comparisons are accelerated.
 
 ## SQL example
 
@@ -36,6 +36,12 @@ without changing units or timezone.
 carries the declared precision so Rust creates the matching Arrow `Time32` or `Time64`
 literal and scales milliseconds to seconds, microseconds, or nanoseconds exactly as the
 boundary writer does. `TIME WITH TIME ZONE` is not a Flink SQL type and is not supported.
+
+`TIMESTAMP WITHOUT TIME ZONE` comparisons preserve Flink's local calendar value without
+applying a session or JVM timezone. Milliseconds and the remaining nanoseconds travel
+separately in the plan protobuf, then Rust constructs a matching Arrow timestamp scalar
+at the declared precision. `TIMESTAMP_LTZ` remains on Flink pending separate timezone and
+daylight-saving parity coverage.
 
 `IS NULL` and `IS NOT NULL` are supported over direct input columns of every scalar type
 listed on the [projection coverage page](../projections/).

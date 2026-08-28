@@ -288,6 +288,29 @@ class SqlParityTest {
         return Stream.of(0, 6, 9);
     }
 
+    @ParameterizedTest(name = "TIMESTAMP {0}")
+    @MethodSource("nativeTimestampComparisonCases")
+    void nativeTimestampComparisonsMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {
+        String sql = "SELECT payload FROM (VALUES "
+                + "(TIMESTAMP '1969-12-31 23:59:59.123', 10), "
+                + "(TIMESTAMP '2026-08-27 12:34:56.123', 20), "
+                + "(TIMESTAMP '2026-08-27 12:34:56.123', 21), "
+                + "(TIMESTAMP '2030-01-01 00:00:00.000', 30)) "
+                + "AS input(event_timestamp, payload) WHERE "
+                + predicate;
+        assertParity(sql, true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    private static Stream<Arguments> nativeTimestampComparisonCases() {
+        return Stream.of(
+                Arguments.of("equal", "event_timestamp = TIMESTAMP '2026-08-27 12:34:56.123'"),
+                Arguments.of("pre-epoch", "event_timestamp < TIMESTAMP '1970-01-01 00:00:00.000'"),
+                Arguments.of("range", "event_timestamp >= TIMESTAMP '2026-08-27 12:34:56.123'"),
+                Arguments.of("literal-on-left", "TIMESTAMP '2026-08-27 12:34:56.123' < event_timestamp"));
+    }
+
     @ParameterizedTest(name = "{0}")
     @MethodSource("nativeNullPredicateCases")
     void nativeNullPredicatesMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {

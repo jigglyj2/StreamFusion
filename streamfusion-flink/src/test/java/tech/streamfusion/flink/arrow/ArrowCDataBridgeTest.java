@@ -19,11 +19,13 @@ import org.apache.flink.table.data.GenericArrayData;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.StringData;
+import org.apache.flink.table.data.TimestampData;
 import org.apache.flink.table.types.logical.ArrayType;
 import org.apache.flink.table.types.logical.DecimalType;
 import org.apache.flink.table.types.logical.IntType;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.TimeType;
+import org.apache.flink.table.types.logical.TimestampType;
 import org.apache.flink.table.types.logical.VarCharType;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -42,6 +44,7 @@ import tech.streamfusion.proto.plan.v1.NativePlan;
 import tech.streamfusion.proto.plan.v1.NullCheck;
 import tech.streamfusion.proto.plan.v1.Operator;
 import tech.streamfusion.proto.plan.v1.TimeLiteral;
+import tech.streamfusion.proto.plan.v1.TimestampLiteral;
 
 class ArrowCDataBridgeTest {
     @Test
@@ -135,6 +138,26 @@ class ArrowCDataBridgeTest {
             assertThat(output.size()).isEqualTo(2);
             assertThat(output.rowView(0).getInt(0)).isEqualTo(43_200_000);
             assertThat(output.rowView(1).getInt(0)).isEqualTo(86_399_000);
+        }
+    }
+
+    @ParameterizedTest(name = "TIMESTAMP({0})")
+    @ValueSource(ints = {0, 3, 6, 9})
+    void filtersEveryTimestampPrecisionThroughDataFusion(int precision) {
+        RowType rowType = RowType.of(new TimestampType(false, precision));
+        TimestampData beforeEpoch = TimestampData.fromEpochMillis(-1_000);
+        TimestampData noon = TimestampData.fromEpochMillis(43_200_000, precision > 3 ? 456_000 : 0);
+        TimestampData evening = TimestampData.fromEpochMillis(64_800_000, precision > 3 ? 789_000 : 0);
+        List<RowData> rows =
+                List.of(GenericRowData.of(beforeEpoch), GenericRowData.of(noon), GenericRowData.of(evening));
+
+        try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+                ArrowRowDataBatch input = ArrowRowDataBatch.transpose(rows, rowType, allocator);
+                ArrowRowDataBatch output =
+                        ArrowCDataBridge.execute(timestampPlan(precision, noon), input, rowType, allocator)) {
+            assertThat(output.size()).isEqualTo(2);
+            assertThat(output.rowView(0).getTimestamp(0, precision)).isEqualTo(noon);
+            assertThat(output.rowView(1).getTimestamp(0, precision)).isEqualTo(evening);
         }
     }
 
@@ -245,6 +268,32 @@ class ArrowCDataBridgeTest {
                         .setComparison(Comparison.newBuilder()
                                 .setLeft(reference)
                                 .setRight(noon)
+                                .setOperator(ComparisonOperator.COMPARISON_OPERATOR_GREATER_THAN_OR_EQUAL)))
+                .build();
+        return NativePlan.newBuilder()
+                .setProtocolVersion(1)
+                .setRoot(Operator.newBuilder().setCalc(calc))
+                .build()
+                .toByteArray();
+    }
+
+    private static byte[] timestampPlan(int precision, TimestampData literal) {
+        Expression reference = Expression.newBuilder()
+                .setInputReference(InputReference.newBuilder().setIndex(0))
+                .build();
+        Expression timestamp = Expression.newBuilder()
+                .setTimestampLiteral(TimestampLiteral.newBuilder()
+                        .setEpochMillisecond(literal.getMillisecond())
+                        .setNanoOfMillisecond(literal.getNanoOfMillisecond())
+                        .setPrecision(precision))
+                .build();
+        Calc calc = Calc.newBuilder()
+                .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
+                .addProjections(reference)
+                .setCondition(Expression.newBuilder()
+                        .setComparison(Comparison.newBuilder()
+                                .setLeft(reference)
+                                .setRight(timestamp)
                                 .setOperator(ComparisonOperator.COMPARISON_OPERATOR_GREATER_THAN_OR_EQUAL)))
                 .build();
         return NativePlan.newBuilder()

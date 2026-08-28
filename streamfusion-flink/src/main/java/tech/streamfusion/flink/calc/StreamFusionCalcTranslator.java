@@ -11,16 +11,19 @@ package tech.streamfusion.flink.calc;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import org.apache.flink.api.dag.Transformation;
 import org.apache.flink.core.memory.ManagedMemoryUseCase;
 import org.apache.flink.streaming.api.transformations.OneInputTransformation;
 import org.apache.flink.table.data.RowData;
+import org.apache.flink.table.data.TimestampData;
 import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.TimeType;
+import org.apache.flink.table.types.logical.TimestampType;
 import tech.streamfusion.proto.plan.v1.Arithmetic;
 import tech.streamfusion.proto.plan.v1.ArithmeticOperator;
 import tech.streamfusion.proto.plan.v1.BooleanOperator;
@@ -294,6 +297,13 @@ public final class StreamFusionCalcTranslator {
                     ? null
                     : new StreamFusionTimeComparison(inputIndex, millis, precision, operator, inputOnLeft);
         }
+        if (type == LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE) {
+            TimestampData timestamp = timestampLiteral(literalExpression);
+            int precision = ((TimestampType) inputType.getTypeAt(inputIndex)).getPrecision();
+            return timestamp == null
+                    ? null
+                    : new StreamFusionTimestampComparison(inputIndex, timestamp, precision, operator, inputOnLeft);
+        }
         return null;
     }
 
@@ -315,6 +325,26 @@ public final class StreamFusionCalcTranslator {
         }
         Object value = invoke(expression, "getValueAs", Class.class, literalType);
         return literalType.isInstance(value) ? literalType.cast(value) : null;
+    }
+
+    private static TimestampData timestampLiteral(Object expression) {
+        if (!expression.getClass().getSimpleName().equals("RexLiteral")) {
+            return null;
+        }
+        try {
+            Class<?> timestampString = Class.forName(
+                    "org.apache.calcite.util.TimestampString",
+                    false,
+                    expression.getClass().getClassLoader());
+            Object value = invoke(expression, "getValueAs", Class.class, timestampString);
+            if (value == null) {
+                return null;
+            }
+            return TimestampData.fromLocalDateTime(
+                    LocalDateTime.parse(value.toString().replace(' ', 'T')));
+        } catch (ClassNotFoundException | RuntimeException exception) {
+            return null;
+        }
     }
 
     private static ComparisonOperator comparisonOperator(String kind) {
