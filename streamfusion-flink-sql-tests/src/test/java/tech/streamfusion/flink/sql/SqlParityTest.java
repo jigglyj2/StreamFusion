@@ -1407,6 +1407,26 @@ class SqlParityTest {
         assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
     }
 
+    @Test
+    void nullContainingInSearchMatchesFlinkByteForByte() throws Exception {
+        assertIntegerDataStreamParity("SELECT metric FROM integer_input WHERE metric IN (1, 3, NULL)");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    @ParameterizedTest(name = "null-aware fallback {0}")
+    @ValueSource(
+            strings = {
+                "metric NOT IN (1, 3, NULL)",
+                "NOT (metric IN (1, 3, NULL))",
+                "(metric IN (1, 3, NULL)) IS NOT FALSE"
+            })
+    void nullAwareNegatedOrTruthTestSearchUsesFlink(String predicate) throws Exception {
+        assertIntegerDataStreamParity("SELECT metric FROM integer_input WHERE " + predicate);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
+    }
+
     @ParameterizedTest(name = "VARBINARY {0}")
     @MethodSource("nativeVarbinaryDataStreamRangeCases")
     void nativeVarbinaryDataStreamRangesMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {

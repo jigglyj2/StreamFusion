@@ -85,7 +85,12 @@ remain distinct throughout the expression, and `WHERE` retains only true rows.
 Decimal endpoints must retain the
 column's precision and scale. Flink represents these predicates as search-argument ranges;
 StreamFusion expands each bounded or unbounded range into the existing comparison tree.
-Lists containing `NULL` and search arguments over other types currently fall back.
+At the top-level `WHERE` filter (including positive `AND`/`OR` composition), `IN` lists may
+contain `NULL`: Flink supplies an `UNKNOWN` search argument and both unknown and false rows
+are discarded, so the native point expansion selects the identical true rows. Negated and
+truth-tested null-containing searches remain on Flink (and `NOT IN (..., NULL)` may be folded
+away entirely) because those contexts must preserve unknown distinctly from false. Search
+arguments over other types currently fall back.
 Bounded `VARBINARY BETWEEN` ranges are also accelerated. `VARBINARY IN` and `NOT IN`
 point searches fall back because Flink's binary-literal coercion is not raw byte equality.
 Fixed-width `CHAR(n)` search arguments and bounded `BINARY(n)` ranges are accelerated only
