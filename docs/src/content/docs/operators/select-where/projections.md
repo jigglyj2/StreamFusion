@@ -372,6 +372,11 @@ so negative values retain Flink's 64-bit two's-complement representation. Text i
 UTF-8 bytes, and both paths compose DataFusion's uppercase kernel to match Flink's output casing.
 Generated parity coverage includes integer extrema, multilingual text, supplementary characters,
 embedded NUL bytes, empty strings, and nulls. Other input types remain on Flink.
+`TO_BASE64(value)` is accelerated for `VARCHAR`, `BINARY`, and `VARBINARY` expressions using
+DataFusion's padded Base64 kernel. Generated parity coverage includes arbitrary binary bytes,
+UTF-8 text, nulls, and long values immediately below and above 76 encoded characters to ensure
+Flink 2.3's unwrapped output is preserved. Fixed-width `CHAR` remains on Flink pending
+padding-specific parity coverage.
 
 Cast approval is table-driven. Java maps an explicitly approved Flink source/target pair
 to a stable protobuf cast kind; Rust independently verifies that kind against the actual

@@ -142,6 +142,11 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
         if (hexadecimal != null) {
             return hexadecimal;
         }
+        Expression base64Encode =
+                StreamFusionBinaryFunctionTranslator.base64Encode(expression, inputType, expectedType);
+        if (base64Encode != null) {
+            return base64Encode;
+        }
         Expression stringReplace = StreamFusionStringFunctionTranslator.replace(expression, inputType, expectedType);
         if (stringReplace != null) {
             return stringReplace;

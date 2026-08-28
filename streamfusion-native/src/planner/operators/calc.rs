@@ -239,6 +239,13 @@ pub(super) fn create_expression(
                 .ok_or_else(|| DataFusionError::Plan("HEX operand is empty".to_string()))?;
             expressions::hexadecimal::create(create_expression(operand, schema)?, schema)
         }
+        Some(proto::expression::Expression::Base64Encode(base64)) => {
+            let operand = base64
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("TO_BASE64 operand is empty".to_string()))?;
+            expressions::base64_encode::create(create_expression(operand, schema)?, schema)
+        }
         Some(proto::expression::Expression::HyperbolicSine(sine)) => {
             let operand = sine
                 .operand

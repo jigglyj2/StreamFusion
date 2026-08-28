@@ -119,6 +119,7 @@ message Expression {
     ArbitraryLogarithm arbitrary_logarithm = 88;
     Power power = 89;
     Hexadecimal hexadecimal = 90;
+    Base64Encode base64_encode = 91;
   }
 }
 
@@ -361,6 +362,10 @@ message Power {
 }
 
 message Hexadecimal {
+  Expression operand = 1;
+}
+
+message Base64Encode {
   Expression operand = 1;
 }
 

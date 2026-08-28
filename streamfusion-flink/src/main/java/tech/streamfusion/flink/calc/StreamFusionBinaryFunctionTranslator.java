@@ -13,6 +13,7 @@ import java.util.List;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
+import tech.streamfusion.proto.plan.v1.Base64Encode;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.Hexadecimal;
 
@@ -45,11 +46,36 @@ final class StreamFusionBinaryFunctionTranslator extends StreamFusionComplexType
                         .build();
     }
 
+    static Expression base64Encode(Object expression, RowType inputType, LogicalType expectedType) {
+        if (!"TO_BASE64".equals(functionName(expression)) || expectedType.getTypeRoot() != LogicalTypeRoot.VARCHAR) {
+            return null;
+        }
+        List<?> operands = (List<?>) invoke(expression, "getOperands");
+        if (operands.size() != 1) {
+            return null;
+        }
+        LogicalType operandType = logicalType(operands.get(0), inputType);
+        if (operandType == null || !supportsBase64(operandType.getTypeRoot())) {
+            return null;
+        }
+        Expression operand =
+                StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, operandType);
+        return operand == null
+                ? null
+                : Expression.newBuilder()
+                        .setBase64Encode(Base64Encode.newBuilder().setOperand(operand))
+                        .build();
+    }
+
     private static boolean supportsHex(LogicalTypeRoot type) {
         return type == LogicalTypeRoot.TINYINT
                 || type == LogicalTypeRoot.SMALLINT
                 || type == LogicalTypeRoot.INTEGER
                 || type == LogicalTypeRoot.BIGINT
                 || type == LogicalTypeRoot.VARCHAR;
+    }
+
+    private static boolean supportsBase64(LogicalTypeRoot type) {
+        return type == LogicalTypeRoot.VARCHAR || type == LogicalTypeRoot.BINARY || type == LogicalTypeRoot.VARBINARY;
     }
 }
