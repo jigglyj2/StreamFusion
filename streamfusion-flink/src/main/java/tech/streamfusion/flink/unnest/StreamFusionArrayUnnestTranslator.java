@@ -93,8 +93,8 @@ public final class StreamFusionArrayUnnestTranslator {
         if (!isSupportedArrayElement(element)) {
             return "array UNNEST element type " + element + " is not yet supported";
         }
-        if ("LEFT".equals(joinName) && withOrdinality && element instanceof RowType) {
-            return "left array UNNEST of ROW WITH ORDINALITY is not accelerated because Flink 2.3 fails its output arity contract";
+        if (withOrdinality && element instanceof RowType && element.isNullable()) {
+            return "array UNNEST of nullable ROW WITH ORDINALITY is not accelerated because Flink 2.3 fails its output arity contract for null elements";
         }
         int elementFields = element instanceof RowType ? ((RowType) element).getFieldCount() : 1;
         int appendedFields = elementFields + (withOrdinality ? 1 : 0);
@@ -175,10 +175,11 @@ public final class StreamFusionArrayUnnestTranslator {
         if (element.isNullable()) {
             return "multiset UNNEST nullable elements are not yet supported by the Arrow map boundary";
         }
-        if (!isScalarBoundaryType(element.getTypeRoot())) {
+        if (!isSupportedElement(element)) {
             return "multiset UNNEST element type " + element + " is not yet supported";
         }
-        int appendedFields = 1 + (withOrdinality ? 1 : 0);
+        int elementFields = element instanceof RowType ? ((RowType) element).getFieldCount() : 1;
+        int appendedFields = elementFields + (withOrdinality ? 1 : 0);
         if (outputType.getFieldCount() != inputType.getFieldCount() + appendedFields) {
             return "multiset UNNEST output must append its element" + (withOrdinality ? " and ordinality" : "");
         }
@@ -188,12 +189,23 @@ public final class StreamFusionArrayUnnestTranslator {
             }
         }
         boolean left = "LEFT".equals(joinName);
-        LogicalType expectedElement = left ? element.copy(true) : element;
-        if (!expectedElement.equals(outputType.getTypeAt(inputType.getFieldCount()))) {
-            return "multiset UNNEST output element type does not match its MULTISET element type";
+        if (element instanceof RowType) {
+            RowType row = (RowType) element;
+            for (int field = 0; field < row.getFieldCount(); field++) {
+                LogicalType expected =
+                        row.getTypeAt(field).copy(left || row.getTypeAt(field).isNullable());
+                if (!expected.equals(outputType.getTypeAt(inputType.getFieldCount() + field))) {
+                    return "multiset UNNEST output field " + field + " does not match its ROW element field";
+                }
+            }
+        } else {
+            LogicalType expectedElement = left ? element.copy(true) : element;
+            if (!expectedElement.equals(outputType.getTypeAt(inputType.getFieldCount()))) {
+                return "multiset UNNEST output element type does not match its MULTISET element type";
+            }
         }
         if (withOrdinality) {
-            LogicalType ordinality = outputType.getTypeAt(inputType.getFieldCount() + 1);
+            LogicalType ordinality = outputType.getTypeAt(inputType.getFieldCount() + elementFields);
             if (ordinality.getTypeRoot() != LogicalTypeRoot.INTEGER || ordinality.isNullable() != left) {
                 return "multiset UNNEST ordinality must be " + (left ? "a nullable" : "a non-null") + " INT";
             }

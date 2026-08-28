@@ -233,7 +233,7 @@ class ArrayUnnestParityTest extends SqlParityTestSupport {
                         + "LEFT JOIN UNNEST(metric) WITH ORDINALITY "
                         + "AS expanded(label, amount, ord_idx) ON TRUE"))
                 .contains("Accelerated: no")
-                .contains("Flink 2.3 fails its output arity contract");
+                .contains("Flink 2.3 fails its output arity contract for null elements");
     }
 
     @Test

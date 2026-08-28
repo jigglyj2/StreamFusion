@@ -53,6 +53,41 @@ class MultisetUnnestParityTest extends SqlParityTestSupport {
         assertNativeExecution();
     }
 
+    @Test
+    void nativeMultisetUnnestRepeatsAndFlattensNonNullRowElements() throws Exception {
+        LinkedHashMap<Row, Integer> populated = new LinkedHashMap<>();
+        populated.put(Row.of("repeat", 2), 2);
+        populated.put(Row.of("nullable", null), 1);
+        populated.put(Row.of("zero", 0), 0);
+        java.util.List<Row> inputs =
+                Arrays.asList(Row.of(populated), Row.of(new LinkedHashMap<>()), Row.of((Object) null));
+        org.apache.flink.api.common.typeinfo.TypeInformation<java.util.Map<Row, Integer>> externalType =
+                Types.MAP(Types.ROW_NAMED(new String[] {"label", "amount"}, Types.STRING, Types.INT), Types.INT);
+        org.apache.flink.table.types.DataType logicalType = DataTypes.MULTISET(
+                DataTypes.ROW(DataTypes.FIELD("label", DataTypes.STRING()), DataTypes.FIELD("amount", DataTypes.INT()))
+                        .notNull());
+
+        assertDataStreamParity(
+                "SELECT label, amount, ord_idx FROM row_multiset_unnest_input "
+                        + "CROSS JOIN UNNEST(metric) WITH ORDINALITY "
+                        + "AS expanded(label, amount, ord_idx)",
+                externalType,
+                logicalType,
+                inputs,
+                "row_multiset_unnest_input");
+
+        assertDataStreamParity(
+                "SELECT label, amount, ord_idx FROM left_row_multiset_unnest_input "
+                        + "LEFT JOIN UNNEST(metric) WITH ORDINALITY "
+                        + "AS expanded(label, amount, ord_idx) ON TRUE",
+                externalType,
+                logicalType,
+                inputs,
+                "left_row_multiset_unnest_input");
+
+        assertNativeExecution();
+    }
+
     private static LinkedHashMap<String, Integer> multisetOf(Object... entries) {
         LinkedHashMap<String, Integer> multiset = new LinkedHashMap<>();
         for (int index = 0; index < entries.length; index += 2) {

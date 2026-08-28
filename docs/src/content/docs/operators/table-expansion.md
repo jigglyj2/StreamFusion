@@ -9,8 +9,8 @@ sidebar:
 referenced arrays of supported scalar values are accelerated. Inner/cross expansion also supports
 arrays of scalar-field rows. Inner/cross and left expansion of maps with supported scalar or
 scalar-field row keys and scalar, scalar-array, or row values composed of scalars and scalar arrays
-is accelerated, with or without ordinality. The same forms accelerate multisets of
-supported non-null scalar elements. Arrays whose elements are scalar arrays are also accelerated,
+is accelerated, with or without ordinality. The same forms accelerate multisets of supported
+non-null scalar or scalar-field row elements. Arrays whose elements are scalar arrays are also accelerated,
 with each inner array remaining one output value. Other table functions and expansion forms fall back to Flink.
 
 ## SQL example
@@ -59,14 +59,15 @@ collections still produce exactly one synthetic all-null row. Computed
 collection operands, rows containing maps, multisets, or arrays nested more than one level, arrays
 nested more than one level, maps with collection keys or collection values outside the documented
 scalar-array shapes,
-left row-array expansion with ordinality, multisets with nullable or complex elements,
+nullable row-array elements with ordinality, multisets with nullable or nested-collection elements,
 user-defined table functions, and correlate
 conditions currently fall back. EXPLAIN identifies the rejected join form, function shape,
 operand, or element type and then reports whole-plan fallback.
 
-Flink 2.3's left row-array `WITH ORDINALITY` implementation violates its own output arity contract
-at runtime. StreamFusion deliberately falls back so it does not replace that failure with different
-observable behavior; EXPLAIN identifies this version-specific parity restriction.
+Flink 2.3's row-array `WITH ORDINALITY` implementation violates its own output arity contract when
+it encounters a null row element. StreamFusion deliberately falls back for nullable row elements
+so it does not replace that failure with different observable behavior; EXPLAIN identifies this
+version-specific parity restriction.
 
 ## Implementation
 
@@ -88,9 +89,10 @@ and the same struct projection exposes the paired key and value columns. Ordinal
 from those shared offsets, so it follows the exact entry order received from Flink.
 For multisets, the Arrow boundary uses a map-shaped element/count representation for non-null
 elements. Rust builds vectorized take indices from each non-negative count, gathers the element
-buffer once, and assigns ordinality across the expanded sequence exactly as Flink does. Creating
-the repeated output is inherent to multiset expansion; adjacent native operators still consume
-the resulting Arrow batch directly.
+buffer once, and assigns ordinality across the expanded sequence exactly as Flink does. Row
+elements are gathered as Arrow structs and flattened by the same native field projection used for
+arrays of rows. Creating the repeated output is inherent to multiset expansion; adjacent native
+operators still consume the resulting Arrow batch directly.
 DataFusion allocates take indices because repeating parent values is inherent to expansion; it
 does not serialize rows or copy the array merely to hand it to the next native stage.
 For `WITH ORDINALITY`, StreamFusion derives a second Arrow list from the source offsets, fills its
