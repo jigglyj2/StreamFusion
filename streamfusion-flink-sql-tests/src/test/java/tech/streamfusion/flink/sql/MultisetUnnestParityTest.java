@@ -119,6 +119,29 @@ class MultisetUnnestParityTest extends SqlParityTestSupport {
         assertNativeExecution();
     }
 
+    @Test
+    void nativeMultisetUnnestFlattensRowsContainingScalarArrays() throws Exception {
+        LinkedHashMap<Row, Integer> populated = new LinkedHashMap<>();
+        populated.put(Row.of("values", new Integer[] {1, null, 3}), 2);
+        populated.put(Row.of("empty", new Integer[] {}), 1);
+        populated.put(Row.of("null", null), 1);
+
+        assertDataStreamParity(
+                "SELECT label, nested_values FROM nested_row_multiset_unnest_input "
+                        + "CROSS JOIN UNNEST(metric) AS expanded(label, nested_values)",
+                Types.MAP(
+                        Types.ROW_NAMED(new String[] {"label", "values"}, Types.STRING, Types.OBJECT_ARRAY(Types.INT)),
+                        Types.INT),
+                DataTypes.MULTISET(DataTypes.ROW(
+                                DataTypes.FIELD("label", DataTypes.STRING()),
+                                DataTypes.FIELD("values", DataTypes.ARRAY(DataTypes.INT())))
+                        .notNull()),
+                java.util.List.of(Row.of(populated)),
+                "nested_row_multiset_unnest_input");
+
+        assertNativeExecution();
+    }
+
     private static LinkedHashMap<String, Integer> multisetOf(Object... entries) {
         LinkedHashMap<String, Integer> multiset = new LinkedHashMap<>();
         for (int index = 0; index < entries.length; index += 2) {
