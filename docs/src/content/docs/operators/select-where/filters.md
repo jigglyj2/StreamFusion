@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-**Current status:** Simple integral and finite floating-point comparisons are accelerated.
+**Current status:** Simple numeric and `DATE` comparisons are accelerated.
 
 ## SQL example
 
@@ -27,6 +27,10 @@ Floating-point literals must be finite. StreamFusion falls back for NaN or infin
 literals until their ordering and equality semantics are proven identical across Flink,
 Arrow, and DataFusion. Planner-inserted casts that obscure the direct column/literal
 shape also cause the whole Calc to fall back.
+
+The same six predicates support `DATE` columns compared with `DATE` literals, including
+dates before the Unix epoch. Flink epoch-day values lower directly to Arrow `Date32`
+without changing units or timezone.
 
 `IS NULL` and `IS NOT NULL` are supported over direct input columns of every scalar type
 listed on the [projection coverage page](../projections/).

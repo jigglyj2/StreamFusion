@@ -280,6 +280,12 @@ public final class StreamFusionCalcTranslator {
                     ? null
                     : new StreamFusionDoubleComparison(inputIndex, literal, operator, inputOnLeft);
         }
+        if (type == LogicalTypeRoot.DATE) {
+            Integer epochDay = integerLiteral(literalExpression);
+            return epochDay == null
+                    ? null
+                    : new StreamFusionDateComparison(inputIndex, epochDay, operator, inputOnLeft);
+        }
         return null;
     }
 

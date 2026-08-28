@@ -222,6 +222,27 @@ class SqlParityTest {
                 Arguments.of("DOUBLE native comparison", "DOUBLE", "CAST(0.5 AS DOUBLE) < metric", true));
     }
 
+    @ParameterizedTest(name = "DATE {0}")
+    @MethodSource("nativeDateComparisonCases")
+    void nativeDateComparisonsMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {
+        String sql = "SELECT payload FROM (VALUES "
+                + "(DATE '1969-12-31', 10), (DATE '2026-08-27', 20), "
+                + "(DATE '2026-08-27', 21), (DATE '2030-01-01', 30)) "
+                + "AS input(event_date, payload) WHERE "
+                + predicate;
+        assertParity(sql, true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    private static Stream<Arguments> nativeDateComparisonCases() {
+        return Stream.of(
+                Arguments.of("equal", "event_date = DATE '2026-08-27'"),
+                Arguments.of("pre-epoch", "event_date < DATE '1970-01-01'"),
+                Arguments.of("greater-than-or-equal", "event_date >= DATE '2026-08-27'"),
+                Arguments.of("literal-on-left", "DATE '2026-08-27' < event_date"));
+    }
+
     @ParameterizedTest(name = "{0}")
     @MethodSource("nativeNullPredicateCases")
     void nativeNullPredicatesMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {
