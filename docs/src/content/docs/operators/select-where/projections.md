@@ -33,6 +33,8 @@ accelerated, as are constant `DATE` values, including dates before the Unix epoc
 Constant `TIME` values preserve their declared precision and millisecond-of-day value.
 Constant `TIMESTAMP WITHOUT TIME ZONE` values preserve their local calendar value and
 sub-millisecond nanoseconds without applying a session or JVM timezone.
+Direct constant character literals are encoded as UTF-8 and accelerated. Character
+expressions that require a planner-inserted cast still fall back with the whole Calc.
 
 Division, remainder, unary arithmetic, non-decimal mixed-width arithmetic, non-finite
 floating-point literals, arithmetic on other types, casts, and functions currently fall

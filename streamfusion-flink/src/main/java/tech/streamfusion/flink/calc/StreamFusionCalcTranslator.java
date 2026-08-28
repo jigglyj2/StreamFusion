@@ -38,6 +38,7 @@ import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.FloatLiteral;
 import tech.streamfusion.proto.plan.v1.IntegerLiteral;
 import tech.streamfusion.proto.plan.v1.LongLiteral;
+import tech.streamfusion.proto.plan.v1.StringLiteral;
 import tech.streamfusion.proto.plan.v1.TimeLiteral;
 import tech.streamfusion.proto.plan.v1.TimestampLiteral;
 
@@ -105,7 +106,9 @@ public final class StreamFusionCalcTranslator {
                                 && outputRoot != LogicalTypeRoot.BOOLEAN
                                 && outputRoot != LogicalTypeRoot.DATE
                                 && outputRoot != LogicalTypeRoot.TIME_WITHOUT_TIME_ZONE
-                                && outputRoot != LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE)
+                                && outputRoot != LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE
+                                && outputRoot != LogicalTypeRoot.CHAR
+                                && outputRoot != LogicalTypeRoot.VARCHAR)
                         || projectionExpression(projection, inputType, outputRoot) == null) {
                     return false;
                 }
@@ -192,7 +195,14 @@ public final class StreamFusionCalcTranslator {
             return StreamFusionIdentityCalcOperator.inputReference(
                     inputIndex, StreamFusionIdentityCalcOperator.logicalType(inputType, inputIndex));
         }
-        if (expectedType == LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE) {
+        if (expectedType == LogicalTypeRoot.CHAR || expectedType == LogicalTypeRoot.VARCHAR) {
+            String literal = literal(expression, String.class);
+            if (literal != null) {
+                return Expression.newBuilder()
+                        .setStringLiteral(StringLiteral.newBuilder().setValue(literal))
+                        .build();
+            }
+        } else if (expectedType == LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE) {
             TimestampData timestamp = timestampLiteral(expression);
             int precision = (int) invoke(invoke(expression, "getType"), "getPrecision");
             if (timestamp != null && precision >= 0 && precision <= 9) {

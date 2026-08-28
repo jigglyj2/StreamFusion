@@ -47,6 +47,7 @@ message Expression {
     TimestampLiteral timestamp_literal = 16;
     DecimalLiteral decimal_literal = 17;
     BooleanLiteral boolean_literal = 18;
+    StringLiteral string_literal = 19;
   }
 }
 
@@ -97,6 +98,10 @@ message DecimalLiteral {
 
 message BooleanLiteral {
   bool value = 1;
+}
+
+message StringLiteral {
+  string value = 1;
 }
 
 message GreaterThanOrEqual {
