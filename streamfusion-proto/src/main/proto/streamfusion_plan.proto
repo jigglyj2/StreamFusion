@@ -96,6 +96,7 @@ message Expression {
     StringReplace string_replace = 65;
     StringRepeat string_repeat = 66;
     StringEndsWith string_ends_with = 67;
+    StringPosition string_position = 68;
   }
 }
 
@@ -241,6 +242,11 @@ message StringRepeat {
 message StringEndsWith {
   Expression value = 1;
   Expression suffix = 2;
+}
+
+message StringPosition {
+  Expression needle = 1;
+  Expression haystack = 2;
 }
 
 message Coalesce {

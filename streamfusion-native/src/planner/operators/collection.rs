@@ -269,6 +269,20 @@ pub(super) fn create(
             )?,
             schema,
         ),
+        StringPosition(position) => expressions::string_position::create(
+            create_expression(
+                required(&position.needle, "string position is missing its needle")?,
+                schema,
+            )?,
+            create_expression(
+                required(
+                    &position.haystack,
+                    "string position is missing its haystack",
+                )?,
+                schema,
+            )?,
+            schema,
+        ),
         ArrayDistinct(distinct) => expressions::array_distinct::create(
             create_expression(
                 required(&distinct.array, "array distinct is missing its array")?,

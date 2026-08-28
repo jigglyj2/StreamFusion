@@ -291,6 +291,11 @@ values or counts produce null. Fixed-width `CHAR` remains on Flink.
 supported `VARCHAR` expressions. Both literal and computed suffixes lower to DataFusion's
 vectorized UTF-8 predicate, including empty suffixes, Unicode text, and null propagation.
 The binary-string overload and fixed-width `CHAR` remain on Flink.
+`POSITION(needle IN haystack)` is accelerated when both operands are supported `VARCHAR`
+expressions. StreamFusion reverses Flink's syntax operands when constructing DataFusion's
+vectorized `strpos(haystack, needle)` expression. Results remain one-based, missing needles
+return zero, empty needles return one, Unicode positions count code points, and nulls propagate.
+Fixed-width `CHAR` remains on Flink.
 
 Cast approval is table-driven. Java maps an explicitly approved Flink source/target pair
 to a stable protobuf cast kind; Rust independently verifies that kind against the actual

@@ -14,6 +14,7 @@ import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.proto.plan.v1.Expression;
+import tech.streamfusion.proto.plan.v1.StringPosition;
 import tech.streamfusion.proto.plan.v1.StringRepeat;
 import tech.streamfusion.proto.plan.v1.StringReplace;
 
@@ -64,6 +65,29 @@ final class StreamFusionStringFunctionTranslator extends StreamFusionComplexType
         }
         return Expression.newBuilder()
                 .setStringRepeat(StringRepeat.newBuilder().setValue(value).setCount(count))
+                .build();
+    }
+
+    static Expression position(Object expression, RowType inputType, LogicalType expectedType) {
+        if (!"POSITION".equals(functionName(expression)) || expectedType.getTypeRoot() != LogicalTypeRoot.INTEGER) {
+            return null;
+        }
+        java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
+        if (operands.size() != 2) {
+            return null;
+        }
+        org.apache.flink.table.types.logical.VarCharType stringType =
+                new org.apache.flink.table.types.logical.VarCharType(
+                        org.apache.flink.table.types.logical.VarCharType.MAX_LENGTH);
+        Expression needle =
+                StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, stringType);
+        Expression haystack =
+                StreamFusionProjectionTranslator.projectionExpression(operands.get(1), inputType, stringType);
+        if (needle == null || haystack == null) {
+            return null;
+        }
+        return Expression.newBuilder()
+                .setStringPosition(StringPosition.newBuilder().setNeedle(needle).setHaystack(haystack))
                 .build();
     }
 }
