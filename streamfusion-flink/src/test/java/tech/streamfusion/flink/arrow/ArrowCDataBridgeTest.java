@@ -168,6 +168,19 @@ class ArrowCDataBridgeTest {
         }
     }
 
+    @Test
+    void importsPreEpochNanosecondTimestampWithNonNegativeRemainder() {
+        RowType rowType = RowType.of(new TimestampType(false, 9));
+        TimestampData oneNanosecondBeforeEpoch = TimestampData.fromEpochMillis(-1, 999_999);
+
+        try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+                ArrowRowDataBatch input = ArrowRowDataBatch.transpose(
+                        List.of(GenericRowData.of(oneNanosecondBeforeEpoch)), rowType, allocator);
+                ArrowRowDataBatch output = ArrowCDataBridge.execute(projectionPlan(0), input, rowType, allocator)) {
+            assertThat(output.rowView(0).getTimestamp(0, 9)).isEqualTo(oneNanosecondBeforeEpoch);
+        }
+    }
+
     @ParameterizedTest(name = "DECIMAL({0}, {1})")
     @org.junit.jupiter.params.provider.CsvSource({"10, 2, 12.34", "38, 9, 12345678901234567890.123456789"})
     void filtersCompactAndWideDecimalsThroughDataFusion(int precision, int scale, String literalText) {
