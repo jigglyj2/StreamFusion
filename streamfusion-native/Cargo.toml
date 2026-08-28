@@ -12,7 +12,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 arrow = { version = "59.2.0", features = ["ffi"] }
 datafusion = { version = "55.0.0", default-features = false }
-datafusion-functions = { version = "55.0.0", default-features = false, features = ["math_expressions", "string_expressions", "unicode_expressions"] }
+datafusion-functions = { version = "55.0.0", default-features = false, features = ["crypto_expressions", "math_expressions", "string_expressions", "unicode_expressions"] }
 datafusion-functions-nested = { version = "55.0.0", default-features = false }
 jni = "0.22.4"
 prost = "0.14.4"

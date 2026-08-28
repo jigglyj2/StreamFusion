@@ -147,6 +147,10 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
         if (base64Encode != null) {
             return base64Encode;
         }
+        Expression md5 = StreamFusionBinaryFunctionTranslator.md5(expression, inputType, expectedType);
+        if (md5 != null) {
+            return md5;
+        }
         Expression stringReplace = StreamFusionStringFunctionTranslator.replace(expression, inputType, expectedType);
         if (stringReplace != null) {
             return stringReplace;

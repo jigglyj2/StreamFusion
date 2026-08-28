@@ -55,6 +55,7 @@ pub(crate) mod map_element;
 pub(crate) mod map_entries;
 pub(crate) mod map_keys;
 pub(crate) mod map_values;
+pub(crate) mod md5;
 pub(crate) mod natural_logarithm;
 pub(crate) mod null_literal;
 pub(crate) mod power;

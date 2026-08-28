@@ -377,6 +377,11 @@ DataFusion's padded Base64 kernel. Generated parity coverage includes arbitrary 
 UTF-8 text, nulls, and long values immediately below and above 76 encoded characters to ensure
 Flink 2.3's unwrapped output is preserved. Fixed-width `CHAR` remains on Flink pending
 padding-specific parity coverage.
+`MD5(value)` is accelerated for `VARCHAR`, `BINARY`, and `VARBINARY` expressions. DataFusion's
+vectorized digest kernel hashes the original UTF-8 or binary bytes and returns Flink-compatible
+lowercase hexadecimal text. Generated parity coverage includes empty values, arbitrary binary
+bytes, multilingual text, embedded NUL bytes, and null propagation. Fixed-width `CHAR` remains
+on Flink pending padding-specific parity coverage.
 
 Cast approval is table-driven. Java maps an explicitly approved Flink source/target pair
 to a stable protobuf cast kind; Rust independently verifies that kind against the actual

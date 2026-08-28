@@ -120,6 +120,7 @@ message Expression {
     Power power = 89;
     Hexadecimal hexadecimal = 90;
     Base64Encode base64_encode = 91;
+    Md5 md5 = 92;
   }
 }
 
@@ -366,6 +367,10 @@ message Hexadecimal {
 }
 
 message Base64Encode {
+  Expression operand = 1;
+}
+
+message Md5 {
   Expression operand = 1;
 }
 

@@ -16,6 +16,7 @@ import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.proto.plan.v1.Base64Encode;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.Hexadecimal;
+import tech.streamfusion.proto.plan.v1.Md5;
 
 /** Translates byte-oriented scalar functions into native expressions. */
 final class StreamFusionBinaryFunctionTranslator extends StreamFusionComplexTypeSupport {
@@ -67,6 +68,29 @@ final class StreamFusionBinaryFunctionTranslator extends StreamFusionComplexType
                         .build();
     }
 
+    static Expression md5(Object expression, RowType inputType, LogicalType expectedType) {
+        if (!"MD5".equals(functionName(expression))
+                || (expectedType.getTypeRoot() != LogicalTypeRoot.CHAR
+                        && expectedType.getTypeRoot() != LogicalTypeRoot.VARCHAR)) {
+            return null;
+        }
+        List<?> operands = (List<?>) invoke(expression, "getOperands");
+        if (operands.size() != 1) {
+            return null;
+        }
+        LogicalType operandType = logicalType(operands.get(0), inputType);
+        if (operandType == null || !supportsMd5(operandType.getTypeRoot())) {
+            return null;
+        }
+        Expression operand =
+                StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, operandType);
+        return operand == null
+                ? null
+                : Expression.newBuilder()
+                        .setMd5(Md5.newBuilder().setOperand(operand))
+                        .build();
+    }
+
     private static boolean supportsHex(LogicalTypeRoot type) {
         return type == LogicalTypeRoot.TINYINT
                 || type == LogicalTypeRoot.SMALLINT
@@ -76,6 +100,10 @@ final class StreamFusionBinaryFunctionTranslator extends StreamFusionComplexType
     }
 
     private static boolean supportsBase64(LogicalTypeRoot type) {
+        return type == LogicalTypeRoot.VARCHAR || type == LogicalTypeRoot.BINARY || type == LogicalTypeRoot.VARBINARY;
+    }
+
+    private static boolean supportsMd5(LogicalTypeRoot type) {
         return type == LogicalTypeRoot.VARCHAR || type == LogicalTypeRoot.BINARY || type == LogicalTypeRoot.VARBINARY;
     }
 }
