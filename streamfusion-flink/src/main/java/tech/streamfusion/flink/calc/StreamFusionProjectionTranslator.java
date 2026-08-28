@@ -55,6 +55,11 @@ import tech.streamfusion.proto.plan.v1.WhenThen;
 abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
     protected static Expression projectionExpression(
             Object expression, RowType inputType, org.apache.flink.table.types.logical.LogicalType expectedType) {
+        Expression arrayConstructor =
+                StreamFusionArrayConstructorTranslator.translate(expression, inputType, expectedType);
+        if (arrayConstructor != null) {
+            return arrayConstructor;
+        }
         Expression structField =
                 StreamFusionComplexProjectionTranslator.structField(expression, inputType, expectedType);
         if (structField != null) {

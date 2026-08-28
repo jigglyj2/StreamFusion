@@ -79,6 +79,7 @@ message Expression {
     ArrayDistinct array_distinct = 48;
     ArrayUnion array_union = 49;
     ArrayIntersect array_intersect = 50;
+    ArrayConstructor array_constructor = 51;
   }
 }
 
@@ -141,6 +142,10 @@ message ArrayUnion {
 message ArrayIntersect {
   Expression left = 1;
   Expression right = 2;
+}
+
+message ArrayConstructor {
+  repeated Expression elements = 1;
 }
 
 message Coalesce {

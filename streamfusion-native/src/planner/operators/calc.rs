@@ -201,6 +201,14 @@ fn create_expression(
                 schema,
             )
         }
+        Some(proto::expression::Expression::ArrayConstructor(constructor)) => {
+            let elements = constructor
+                .elements
+                .iter()
+                .map(|element| create_expression(element, schema))
+                .collect::<Result<Vec<_>>>()?;
+            expressions::array_constructor::create(elements, schema)
+        }
         Some(proto::expression::Expression::IntegerLiteral(literal)) => Ok(Arc::new(Literal::new(
             ScalarValue::Int32(Some(literal.value)),
         ))),
