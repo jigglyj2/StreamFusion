@@ -217,6 +217,12 @@ dynamic scalar values, arrays, or rows. Java serializes each element independent
 lowers the constructor to DataFusion's vectorized `make_array`; no materialized collection is
 sent through protobuf. Empty constructors remain on Flink with an EXPLAIN reason because
 DataFusion's untyped `List<Null>` result cannot preserve Flink's declared element type.
+Non-empty typed `ROW(...)` constructors are accelerated when every field expression lowers
+natively. Java serializes Flink's resolved field names and expressions in the plan protobuf; Rust
+interleaves those names with the native field expressions and lowers the constructor to
+DataFusion's `named_struct`. Primitive, nullable, and nested native fields therefore remain Arrow
+children of one struct array without JVM materialization. Empty rows stay on Flink because
+DataFusion named structs require at least one field.
 `ARRAY_EXCEPT` is accelerated for compatible array inputs, including arrays of nested rows and
 native `ARRAY[...]` constructors. It preserves the first occurrence of each left-side value not
 present on the right, treats null as a comparable set value, removes duplicates, and returns null

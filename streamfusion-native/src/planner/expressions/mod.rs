@@ -37,6 +37,7 @@ pub(crate) mod like;
 pub(crate) mod lower;
 pub(crate) mod map_element;
 pub(crate) mod null_literal;
+pub(crate) mod row_constructor;
 pub(crate) mod sign;
 pub(crate) mod split;
 pub(crate) mod starts_with;

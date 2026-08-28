@@ -88,6 +88,7 @@ message Expression {
     Split split = 57;
     ArraySort array_sort = 58;
     ArraySlice array_slice = 59;
+    RowConstructor row_constructor = 60;
   }
 }
 
@@ -195,6 +196,11 @@ message ArraySlice {
   Expression array = 1;
   int64 start = 2;
   optional int64 end = 3;
+}
+
+message RowConstructor {
+  repeated string field_names = 1;
+  repeated Expression fields = 2;
 }
 
 message Coalesce {

@@ -169,6 +169,28 @@ pub(super) fn create(
             slice.end,
             schema,
         ),
+        RowConstructor(constructor) => {
+            if constructor.field_names.len() != constructor.fields.len() {
+                return Err(DataFusionError::Plan(
+                    "row constructor field names and values have different lengths".into(),
+                ));
+            }
+            expressions::row_constructor::create(
+                constructor
+                    .field_names
+                    .iter()
+                    .cloned()
+                    .zip(
+                        constructor
+                            .fields
+                            .iter()
+                            .map(|field| create_expression(field, schema)),
+                    )
+                    .map(|(name, field)| field.map(|field| (name, field)))
+                    .collect::<Result<Vec<_>>>()?,
+                schema,
+            )
+        }
         ArrayDistinct(distinct) => expressions::array_distinct::create(
             create_expression(
                 required(&distinct.array, "array distinct is missing its array")?,
