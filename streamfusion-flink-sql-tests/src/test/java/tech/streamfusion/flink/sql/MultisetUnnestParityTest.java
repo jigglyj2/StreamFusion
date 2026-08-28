@@ -88,6 +88,37 @@ class MultisetUnnestParityTest extends SqlParityTestSupport {
         assertNativeExecution();
     }
 
+    @Test
+    void nativeMultisetUnnestRepeatsScalarArrayElementsAsWholeValues() throws Exception {
+        LinkedHashMap<Integer[], Integer> populated = new LinkedHashMap<>();
+        populated.put(new Integer[] {1, null, 3}, 2);
+        populated.put(new Integer[] {}, 1);
+        java.util.List<Row> inputs =
+                Arrays.asList(Row.of(populated), Row.of(new LinkedHashMap<>()), Row.of((Object) null));
+        org.apache.flink.api.common.typeinfo.TypeInformation<java.util.Map<Integer[], Integer>> externalType =
+                Types.MAP(Types.OBJECT_ARRAY(Types.INT), Types.INT);
+        org.apache.flink.table.types.DataType logicalType =
+                DataTypes.MULTISET(DataTypes.ARRAY(DataTypes.INT()).notNull());
+
+        assertDataStreamParity(
+                "SELECT item, ord_idx FROM array_multiset_unnest_input "
+                        + "CROSS JOIN UNNEST(metric) WITH ORDINALITY AS expanded(item, ord_idx)",
+                externalType,
+                logicalType,
+                inputs,
+                "array_multiset_unnest_input");
+
+        assertDataStreamParity(
+                "SELECT item, ord_idx FROM left_array_multiset_unnest_input "
+                        + "LEFT JOIN UNNEST(metric) WITH ORDINALITY AS expanded(item, ord_idx) ON TRUE",
+                externalType,
+                logicalType,
+                inputs,
+                "left_array_multiset_unnest_input");
+
+        assertNativeExecution();
+    }
+
     private static LinkedHashMap<String, Integer> multisetOf(Object... entries) {
         LinkedHashMap<String, Integer> multiset = new LinkedHashMap<>();
         for (int index = 0; index < entries.length; index += 2) {

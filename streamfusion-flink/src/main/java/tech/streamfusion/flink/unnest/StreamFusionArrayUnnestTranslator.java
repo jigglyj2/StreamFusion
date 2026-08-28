@@ -175,7 +175,7 @@ public final class StreamFusionArrayUnnestTranslator {
         if (element.isNullable()) {
             return "multiset UNNEST nullable elements are not yet supported by the Arrow map boundary";
         }
-        if (!isSupportedElement(element)) {
+        if (!isSupportedArrayElement(element)) {
             return "multiset UNNEST element type " + element + " is not yet supported";
         }
         int elementFields = element instanceof RowType ? ((RowType) element).getFieldCount() : 1;

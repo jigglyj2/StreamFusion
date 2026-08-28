@@ -10,7 +10,7 @@ referenced arrays of supported scalar values are accelerated. Inner/cross expans
 arrays of scalar-field rows. Inner/cross and left expansion of maps with supported scalar or
 scalar-field row keys and scalar, scalar-array, or row values composed of scalars and scalar arrays
 is accelerated, with or without ordinality. The same forms accelerate multisets of supported
-non-null scalar or scalar-field row elements. Arrays whose elements are scalar arrays are also accelerated,
+non-null scalar, scalar-array, or row elements composed of scalars and scalar arrays. Arrays whose elements are scalar arrays are also accelerated,
 with each inner array remaining one output value. Other table functions and expansion forms fall back to Flink.
 
 ## SQL example
@@ -59,7 +59,7 @@ collections still produce exactly one synthetic all-null row. Computed
 collection operands, rows containing maps, multisets, or arrays nested more than one level, arrays
 nested more than one level, maps with collection keys or collection values outside the documented
 scalar-array shapes,
-nullable row-array elements with ordinality, multisets with nullable or nested-collection elements,
+nullable row-array elements with ordinality, multisets with nullable elements or collections nested more than one level,
 user-defined table functions, and correlate
 conditions currently fall back. EXPLAIN identifies the rejected join form, function shape,
 operand, or element type and then reports whole-plan fallback.
