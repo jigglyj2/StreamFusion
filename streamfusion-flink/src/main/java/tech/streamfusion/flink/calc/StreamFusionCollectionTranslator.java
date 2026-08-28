@@ -28,6 +28,7 @@ import tech.streamfusion.proto.plan.v1.ArraySlice;
 import tech.streamfusion.proto.plan.v1.ArraySort;
 import tech.streamfusion.proto.plan.v1.Cardinality;
 import tech.streamfusion.proto.plan.v1.Expression;
+import tech.streamfusion.proto.plan.v1.MapEntries;
 import tech.streamfusion.proto.plan.v1.MapKeys;
 import tech.streamfusion.proto.plan.v1.MapValues;
 import tech.streamfusion.proto.plan.v1.Split;
@@ -436,7 +437,8 @@ final class StreamFusionCollectionTranslator extends StreamFusionComplexTypeSupp
 
     static Expression mapProjection(Object expression, RowType inputType, LogicalType expectedType) {
         String function = functionName(expression);
-        if ((!"MAP_KEYS".equals(function) && !"MAP_VALUES".equals(function)) || !(expectedType instanceof ArrayType)) {
+        if ((!"MAP_KEYS".equals(function) && !"MAP_VALUES".equals(function) && !"MAP_ENTRIES".equals(function))
+                || !(expectedType instanceof ArrayType)) {
             return null;
         }
         java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
@@ -454,12 +456,17 @@ final class StreamFusionCollectionTranslator extends StreamFusionComplexTypeSupp
         if (map == null) {
             return null;
         }
-        return "MAP_KEYS".equals(function)
+        if ("MAP_KEYS".equals(function)) {
+            return Expression.newBuilder()
+                    .setMapKeys(MapKeys.newBuilder().setMap(map))
+                    .build();
+        }
+        return "MAP_VALUES".equals(function)
                 ? Expression.newBuilder()
-                        .setMapKeys(MapKeys.newBuilder().setMap(map))
+                        .setMapValues(MapValues.newBuilder().setMap(map))
                         .build()
                 : Expression.newBuilder()
-                        .setMapValues(MapValues.newBuilder().setMap(map))
+                        .setMapEntries(MapEntries.newBuilder().setMap(map))
                         .build();
     }
 
@@ -473,6 +480,12 @@ final class StreamFusionCollectionTranslator extends StreamFusionComplexTypeSupp
             return null;
         }
         LogicalType projectedType = resultType.getElementType();
+        if ("MAP_ENTRIES".equals(function) && projectedType instanceof RowType) {
+            RowType entryType = (RowType) projectedType;
+            return entryType.getFieldCount() == 2
+                    ? new MapType(false, entryType.getTypeAt(0), entryType.getTypeAt(1))
+                    : null;
+        }
         LogicalType otherType = logicalType(entries.get("MAP_KEYS".equals(function) ? 1 : 0), inputType);
         if (otherType == null) {
             return null;

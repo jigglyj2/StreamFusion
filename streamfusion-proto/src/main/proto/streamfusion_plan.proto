@@ -92,6 +92,7 @@ message Expression {
     MapConstructor map_constructor = 61;
     MapKeys map_keys = 62;
     MapValues map_values = 63;
+    MapEntries map_entries = 64;
   }
 }
 
@@ -216,6 +217,10 @@ message MapKeys {
 }
 
 message MapValues {
+  Expression map = 1;
+}
+
+message MapEntries {
   Expression map = 1;
 }
 

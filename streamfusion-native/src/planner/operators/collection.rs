@@ -222,6 +222,13 @@ pub(super) fn create(
             )?,
             schema,
         ),
+        MapEntries(entries) => expressions::map_entries::create(
+            create_expression(
+                required(&entries.map, "map entries is missing its map")?,
+                schema,
+            )?,
+            schema,
+        ),
         ArrayDistinct(distinct) => expressions::array_distinct::create(
             create_expression(
                 required(&distinct.array, "array distinct is missing its array")?,

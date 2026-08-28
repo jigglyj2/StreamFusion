@@ -33,4 +33,18 @@ class MapProjectionParityTest extends SqlParityTestSupport {
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())
                 .isGreaterThan(0);
     }
+
+    @Test
+    void mapEntriesPreservesKeyValueStructShape() throws Exception {
+        assertDataStreamParity(
+                "SELECT MAP_ENTRIES(MAP['a', metric, 'b', metric + 1]) FROM int_input",
+                Types.INT,
+                DataTypes.INT(),
+                Arrays.asList(Row.of(12), Row.of(-1), Row.of((Object) null)),
+                "int_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isGreaterThan(0);
+    }
 }

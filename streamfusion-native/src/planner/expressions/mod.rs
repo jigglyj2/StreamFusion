@@ -37,6 +37,7 @@ pub(crate) mod like;
 pub(crate) mod lower;
 pub(crate) mod map_constructor;
 pub(crate) mod map_element;
+pub(crate) mod map_entries;
 pub(crate) mod map_keys;
 pub(crate) mod map_values;
 pub(crate) mod null_literal;

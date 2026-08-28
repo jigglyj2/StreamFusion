@@ -233,6 +233,9 @@ fallback until the protobuf carries an explicit Arrow key/value type for an empt
 directly to DataFusion's Arrow map projection kernels and preserve entry order, null maps, and
 nullable values. They can consume a native `MAP[...]` constructor without materializing the map in
 Java or crossing an intermediate JVM boundary.
+`MAP_ENTRIES` is accelerated under the same conditions and returns an Arrow list of structs named
+`key` and `value`, matching Flink's `ARRAY<ROW<key, value>>` shape and preserving entry order and
+value nullability. It also composes directly with a native map constructor.
 `ARRAY_EXCEPT` is accelerated for compatible array inputs, including arrays of nested rows and
 native `ARRAY[...]` constructors. It preserves the first occurrence of each left-side value not
 present on the right, treats null as a comparable set value, removes duplicates, and returns null
