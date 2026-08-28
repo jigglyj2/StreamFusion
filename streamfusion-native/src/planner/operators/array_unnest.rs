@@ -44,13 +44,26 @@ pub(crate) fn create(
             "array unnest input-row ordinal must be the final column".to_string(),
         ));
     }
-    let array_index = unnest.array_index as usize;
-    let array_field = child_schema.fields().get(array_index).filter(|_| array_index < visible_field_count).ok_or_else(|| {
-        DataFusionError::Plan(format!(
-            "array unnest index {array_index} is outside the {visible_field_count}-column visible input schema"
-        ))
-    })?;
-    let source: Arc<dyn PhysicalExpr> = Arc::new(Column::new(array_field.name(), array_index));
+    let (source, array_field) = if let Some(expression) = unnest.collection_expression.as_ref() {
+        let source = super::calc::create_expression(expression, child_schema.as_ref())?;
+        let field = source.return_field(child_schema.as_ref())?;
+        (source, field)
+    } else {
+        let array_index = unnest.array_index as usize;
+        let field = child_schema
+            .fields()
+            .get(array_index)
+            .filter(|_| array_index < visible_field_count)
+            .ok_or_else(|| {
+                DataFusionError::Plan(format!(
+                    "array unnest index {array_index} is outside the {visible_field_count}-column visible input schema"
+                ))
+            })?;
+        (
+            Arc::new(Column::new(field.name(), array_index)) as Arc<dyn PhysicalExpr>,
+            Arc::clone(field),
+        )
+    };
     let collection = proto::UnnestCollection::try_from(unnest.collection).map_err(|_| {
         DataFusionError::Plan(format!(
             "unknown UNNEST collection kind {}",
@@ -296,6 +309,7 @@ mod tests {
                 with_ordinality: false,
                 preserve_empty: false,
                 collection: proto::UnnestCollection::Array as i32,
+                collection_expression: None,
             },
             source,
         )
@@ -349,6 +363,7 @@ mod tests {
                 with_ordinality: true,
                 preserve_empty: false,
                 collection: proto::UnnestCollection::Array as i32,
+                collection_expression: None,
             },
             source,
         )
@@ -401,6 +416,7 @@ mod tests {
                 with_ordinality: false,
                 preserve_empty: true,
                 collection: proto::UnnestCollection::Array as i32,
+                collection_expression: None,
             },
             source,
         )
@@ -454,6 +470,7 @@ mod tests {
                 with_ordinality: true,
                 preserve_empty: false,
                 collection: proto::UnnestCollection::Map as i32,
+                collection_expression: None,
             },
             source,
         )
@@ -519,6 +536,7 @@ mod tests {
                 with_ordinality: true,
                 preserve_empty: false,
                 collection: proto::UnnestCollection::Multiset as i32,
+                collection_expression: None,
             },
             source,
         )

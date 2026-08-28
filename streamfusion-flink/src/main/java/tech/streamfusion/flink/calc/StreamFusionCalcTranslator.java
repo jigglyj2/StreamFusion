@@ -24,6 +24,12 @@ import tech.streamfusion.proto.plan.v1.Expression;
 public final class StreamFusionCalcTranslator extends StreamFusionExpressionTranslator {
     private StreamFusionCalcTranslator() {}
 
+    /** Reuses Calc's parity-checked expression contract for another native physical operator. */
+    public static Expression operatorExpression(
+            Object expression, RowType inputType, org.apache.flink.table.types.logical.LogicalType expectedType) {
+        return projectionExpression(expression, inputType, expectedType);
+    }
+
     public static Transformation<RowData> translate(
             Transformation<RowData> input,
             RowType inputType,
@@ -130,6 +136,7 @@ public final class StreamFusionCalcTranslator extends StreamFusionExpressionTran
                 StreamFusionArrayUnnestTranslator.withOrdinality(invocation),
                 StreamFusionArrayUnnestTranslator.isLeft(joinType),
                 StreamFusionArrayUnnestTranslator.collection(boundaryInputType, invocation),
+                StreamFusionArrayUnnestTranslator.collectionExpression(boundaryInputType, invocation),
                 unnestOutputType.getFieldCount(),
                 nativeProjectionStages,
                 nativeConditions);

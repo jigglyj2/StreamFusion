@@ -69,6 +69,7 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
             boolean withOrdinality,
             boolean preserveEmpty,
             UnnestCollection collection,
+            Expression collectionExpression,
             int unnestOutputFieldCount,
             List<List<Expression>> projectionStages,
             List<Expression> conditions) {
@@ -80,6 +81,7 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
                 withOrdinality,
                 preserveEmpty,
                 collection,
+                collectionExpression,
                 unnestOutputFieldCount,
                 projectionStages,
                 conditions);
@@ -139,18 +141,21 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
             boolean withOrdinality,
             boolean preserveEmpty,
             UnnestCollection collection,
+            Expression collectionExpression,
             int unnestOutputFieldCount,
             List<List<Expression>> projectionStages,
             List<Expression> conditions) {
         Operator input = Operator.newBuilder().setInput(Input.newBuilder()).build();
-        Operator operator = Operator.newBuilder()
-                .setArrayUnnest(ArrayUnnest.newBuilder()
-                        .setInput(input)
-                        .setArrayIndex(arrayUnnestIndex)
-                        .setWithOrdinality(withOrdinality)
-                        .setPreserveEmpty(preserveEmpty)
-                        .setCollection(collection))
-                .build();
+        ArrayUnnest.Builder unnest = ArrayUnnest.newBuilder()
+                .setInput(input)
+                .setArrayIndex(arrayUnnestIndex)
+                .setWithOrdinality(withOrdinality)
+                .setPreserveEmpty(preserveEmpty)
+                .setCollection(collection);
+        if (collectionExpression != null) {
+            unnest.setCollectionExpression(collectionExpression);
+        }
+        Operator operator = Operator.newBuilder().setArrayUnnest(unnest).build();
         return createPlan(operator, unnestOutputFieldCount, projectionStages, conditions);
     }
 

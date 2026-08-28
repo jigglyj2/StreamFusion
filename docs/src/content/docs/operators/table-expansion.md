@@ -10,8 +10,10 @@ referenced arrays of supported scalar values are accelerated. Inner/cross expans
 arrays of scalar-field rows. Inner/cross and left expansion of maps with supported scalar or
 scalar-field row keys and scalar, scalar-array, or row values composed of scalars and scalar arrays
 is accelerated, with or without ordinality. The same forms accelerate multisets of supported
-non-null scalar, scalar-array, or row elements composed of scalars and scalar arrays. Arrays whose elements are scalar arrays are also accelerated,
-with each inner array remaining one output value. Other table functions and expansion forms fall back to Flink.
+non-null scalar, scalar-array, or row elements composed of scalars and scalar arrays. Arrays whose
+elements are scalar arrays are also accelerated, with each inner array remaining one output value.
+Computed `ARRAY[...]` operands are accelerated when every element expression is supported by
+StreamFusion Calc. Other table functions and expansion forms fall back to Flink.
 
 ## SQL example
 
@@ -28,6 +30,11 @@ CROSS JOIN UNNEST(attributes) WITH ORDINALITY
 SELECT tag, position
 FROM tag_bags
 CROSS JOIN UNNEST(tags) WITH ORDINALITY AS entries(tag, position);
+
+SELECT item, position
+FROM measurements
+CROSS JOIN UNNEST(ARRAY[value, value + 1, CAST(NULL AS INT)]) WITH ORDINALITY
+  AS expanded(item, position);
 ```
 
 Each input row produces one output row per array element. Array order, duplicates, null elements,
@@ -38,7 +45,8 @@ and the input row's changelog `RowKind` are preserved. Null and empty arrays pro
 StreamFusion accelerates the operation when all of the following are true:
 
 - Flink planned an inner/cross or left correlate around its built-in `$UNNEST_ROWS$` function.
-- The function has one direct input-field operand whose type is `ARRAY`, `MAP`, or `MULTISET`.
+- The function has one operand: either a direct `ARRAY`, `MAP`, or `MULTISET` field, or an
+  `ARRAY` expression that the Calc expression translator supports exactly.
 - The element is a supported scalar Arrow boundary type, including numeric, boolean, character,
   binary, decimal, date, time, and timestamp values; a non-empty `ROW` composed of those types and
   scalar arrays; or an `ARRAY` of one of those scalar types.
@@ -55,8 +63,8 @@ into its named fields and omit null row elements, matching Flink. For supported 
 the synthetic row also has a null position when ordinality is requested. Map expansion preserves
 the paired key and value arrays and assigns positions in Flink's stored `MapData` entry order; SQL
 map ordering is not otherwise guaranteed. In left expansion of arrays of rows, null and empty
-collections still produce exactly one synthetic all-null row. Computed
-collection operands, rows containing maps, multisets, or arrays nested more than one level, arrays
+collections still produce exactly one synthetic all-null row. Computed map and multiset operands,
+unsupported computed array expressions, rows containing maps, multisets, or arrays nested more than one level, arrays
 nested more than one level, maps with collection keys or collection values outside the documented
 scalar-array shapes,
 nullable row-array elements with ordinality, multisets with nullable elements or collections nested more than one level,
@@ -73,6 +81,10 @@ version-specific parity restriction.
 
 The Java planner replaces the eligible `StreamExecCorrelate` with the distinct
 `StreamFusionExecArrayUnnest` node and sends a versioned `ArrayUnnest` protobuf operator to Rust.
+The protobuf retains its field index for existing direct-column plans and optionally carries the
+same typed `Expression` contract used by Calc. Rust lowers a computed operand through the shared
+DataFusion expression planner before `UnnestExec`, keeping expression evaluation and expansion in
+one native execution-plan tree and crossing the Arrow boundary only once.
 Rust projects the input columns plus a lightweight duplicate reference to the array and executes
 DataFusion's vectorized `UnnestExec` with `NullHandling::Drop`, matching Flink inner-join behavior.
 The left form selects `PreserveAndExpandEmpty`, which creates exactly one nullable element for a

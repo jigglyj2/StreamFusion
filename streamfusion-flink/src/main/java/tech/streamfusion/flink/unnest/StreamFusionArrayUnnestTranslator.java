@@ -12,10 +12,12 @@ package tech.streamfusion.flink.unnest;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.List;
+import org.apache.calcite.rel.type.RelDataType;
 import org.apache.flink.api.dag.Transformation;
 import org.apache.flink.core.memory.ManagedMemoryUseCase;
 import org.apache.flink.streaming.api.transformations.OneInputTransformation;
 import org.apache.flink.table.data.RowData;
+import org.apache.flink.table.planner.calcite.FlinkTypeFactory;
 import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
 import org.apache.flink.table.types.logical.ArrayType;
 import org.apache.flink.table.types.logical.LogicalType;
@@ -23,6 +25,8 @@ import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.MapType;
 import org.apache.flink.table.types.logical.MultisetType;
 import org.apache.flink.table.types.logical.RowType;
+import tech.streamfusion.flink.calc.StreamFusionCalcTranslator;
+import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.UnnestCollection;
 
 /** Reflection entry point for parity-safe UNNEST over a directly referenced array column. */
@@ -42,7 +46,8 @@ public final class StreamFusionArrayUnnestTranslator {
                 arrayIndex,
                 withOrdinality(invocation),
                 isLeft(joinType),
-                collection(inputType, invocation));
+                collection(inputType, invocation),
+                collectionExpression(inputType, invocation));
         OneInputTransformation<RowData, RowData> transformation = new OneInputTransformation<>(
                 input,
                 "streamfusion-array-unnest",
@@ -71,14 +76,25 @@ public final class StreamFusionArrayUnnestTranslator {
             return "table function " + functionName + " is not StreamFusion collection UNNEST";
         }
         List<?> operands = (List<?>) invoke(invocation, "getOperands");
-        if (operands.size() != 1 || !operands.get(0).getClass().getSimpleName().equals("RexFieldAccess")) {
-            return "collection UNNEST requires one directly referenced input field";
+        if (operands.size() != 1) {
+            return "collection UNNEST requires exactly one operand";
         }
-        int index = arrayIndex(invocation);
-        if (index < 0 || index >= inputType.getFieldCount()) {
+        Object operand = operands.get(0);
+        boolean directField = operand.getClass().getSimpleName().equals("RexFieldAccess");
+        int index = directField ? arrayIndex(invocation) : -1;
+        if (directField && (index < 0 || index >= inputType.getFieldCount())) {
             return "collection UNNEST field index " + index + " is outside the input row";
         }
-        LogicalType collection = inputType.getTypeAt(index);
+        LogicalType collection = collectionType(inputType, invocation);
+        if (!directField) {
+            if (collection.getTypeRoot() != LogicalTypeRoot.ARRAY) {
+                return "computed collection UNNEST currently supports only ARRAY expressions";
+            }
+            if (StreamFusionCalcTranslator.operatorExpression(operand, inputType, collection) == null) {
+                return "computed ARRAY operand " + operand
+                        + " has an expression that StreamFusion Calc cannot translate exactly";
+            }
+        }
         if (collection.getTypeRoot() == LogicalTypeRoot.MAP) {
             return unsupportedMapReason(inputType, outputType, joinName, withOrdinality, (MapType) collection);
         }
@@ -87,7 +103,7 @@ public final class StreamFusionArrayUnnestTranslator {
                     inputType, outputType, joinName, withOrdinality, (MultisetType) collection);
         }
         if (collection.getTypeRoot() != LogicalTypeRoot.ARRAY) {
-            return "UNNEST input " + inputType.getFieldNames().get(index) + " is not ARRAY, MAP, or MULTISET";
+            return "UNNEST operand is not ARRAY, MAP, or MULTISET";
         }
         LogicalType element = ((ArrayType) collection).getElementType();
         if (!isSupportedArrayElement(element)) {
@@ -215,6 +231,9 @@ public final class StreamFusionArrayUnnestTranslator {
 
     public static int arrayIndex(Object invocation) {
         List<?> operands = (List<?>) invoke(invocation, "getOperands");
+        if (!operands.get(0).getClass().getSimpleName().equals("RexFieldAccess")) {
+            return 0;
+        }
         Object field = invoke(operands.get(0), "getField");
         return ((Number) invoke(field, "getIndex")).intValue();
     }
@@ -229,7 +248,7 @@ public final class StreamFusionArrayUnnestTranslator {
     }
 
     public static UnnestCollection collection(RowType inputType, Object invocation) {
-        LogicalTypeRoot root = inputType.getTypeAt(arrayIndex(invocation)).getTypeRoot();
+        LogicalTypeRoot root = collectionType(inputType, invocation).getTypeRoot();
         if (root == LogicalTypeRoot.MAP) {
             return UnnestCollection.UNNEST_COLLECTION_MAP;
         }
@@ -237,6 +256,22 @@ public final class StreamFusionArrayUnnestTranslator {
             return UnnestCollection.UNNEST_COLLECTION_MULTISET;
         }
         return UnnestCollection.UNNEST_COLLECTION_ARRAY;
+    }
+
+    public static Expression collectionExpression(RowType inputType, Object invocation) {
+        Object operand = ((List<?>) invoke(invocation, "getOperands")).get(0);
+        if (operand.getClass().getSimpleName().equals("RexFieldAccess")) {
+            return null;
+        }
+        return StreamFusionCalcTranslator.operatorExpression(operand, inputType, collectionType(inputType, invocation));
+    }
+
+    private static LogicalType collectionType(RowType inputType, Object invocation) {
+        Object operand = ((List<?>) invoke(invocation, "getOperands")).get(0);
+        if (operand.getClass().getSimpleName().equals("RexFieldAccess")) {
+            return inputType.getTypeAt(arrayIndex(invocation));
+        }
+        return FlinkTypeFactory.toLogicalType((RelDataType) invoke(operand, "getType"));
     }
 
     private static boolean isScalarBoundaryType(LogicalTypeRoot type) {

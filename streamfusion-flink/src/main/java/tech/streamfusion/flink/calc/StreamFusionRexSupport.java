@@ -390,6 +390,13 @@ abstract class StreamFusionRexSupport {
     }
 
     protected static int inputIndex(Object expression) {
+        if (expression.getClass().getSimpleName().equals("RexFieldAccess")) {
+            Object reference = invoke(expression, "getReferenceExpr");
+            if (reference.getClass().getSimpleName().equals("RexCorrelVariable")) {
+                Object index = invoke(invoke(expression, "getField"), "getIndex");
+                return index instanceof Integer ? (Integer) index : -1;
+            }
+        }
         if (!expression.getClass().getSimpleName().equals("RexInputRef")) {
             return -1;
         }

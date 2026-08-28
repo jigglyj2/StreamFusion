@@ -24,6 +24,7 @@ import tech.streamfusion.flink.arrow.ArrowCDataBridge;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.NativeCalcResult;
 import tech.streamfusion.proto.plan.v1.ArrayUnnest;
+import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.Input;
 import tech.streamfusion.proto.plan.v1.NativePlan;
 import tech.streamfusion.proto.plan.v1.Operator;
@@ -47,19 +48,22 @@ final class StreamFusionArrayUnnestOperator extends AbstractStreamOperator<RowDa
             int arrayIndex,
             boolean withOrdinality,
             boolean preserveEmpty,
-            UnnestCollection collection) {
+            UnnestCollection collection,
+            Expression collectionExpression) {
         this.inputType = inputType;
         this.outputType = outputType;
         this.serializer = new RowDataSerializer(inputType);
         Operator input = Operator.newBuilder().setInput(Input.newBuilder()).build();
-        Operator root = Operator.newBuilder()
-                .setArrayUnnest(ArrayUnnest.newBuilder()
-                        .setInput(input)
-                        .setArrayIndex(arrayIndex)
-                        .setWithOrdinality(withOrdinality)
-                        .setPreserveEmpty(preserveEmpty)
-                        .setCollection(collection))
-                .build();
+        ArrayUnnest.Builder unnest = ArrayUnnest.newBuilder()
+                .setInput(input)
+                .setArrayIndex(arrayIndex)
+                .setWithOrdinality(withOrdinality)
+                .setPreserveEmpty(preserveEmpty)
+                .setCollection(collection);
+        if (collectionExpression != null) {
+            unnest.setCollectionExpression(collectionExpression);
+        }
+        Operator root = Operator.newBuilder().setArrayUnnest(unnest).build();
         this.serializedPlan = NativePlan.newBuilder()
                 .setProtocolVersion(1)
                 .setRoot(root)

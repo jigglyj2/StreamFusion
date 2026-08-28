@@ -34,6 +34,7 @@ message ArrayUnnest {
   bool with_ordinality = 3;
   bool preserve_empty = 4;
   UnnestCollection collection = 5;
+  optional Expression collection_expression = 6;
 }
 
 enum UnnestCollection {
