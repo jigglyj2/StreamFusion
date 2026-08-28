@@ -192,6 +192,21 @@ abstract class StreamFusionExpressionTranslator extends StreamFusionProjectionTr
                         .build();
             }
         }
+        if (("ENDSWITH".equals(functionName(expression)) || "ENDS_WITH".equals(functionName(expression)))
+                && operands.size() == 2) {
+            org.apache.flink.table.types.logical.VarCharType stringType =
+                    new org.apache.flink.table.types.logical.VarCharType(
+                            org.apache.flink.table.types.logical.VarCharType.MAX_LENGTH);
+            Expression value = projectionExpression(operands.get(0), inputType, stringType);
+            Expression suffix = projectionExpression(operands.get(1), inputType, stringType);
+            if (value != null && suffix != null) {
+                return Expression.newBuilder()
+                        .setStringEndsWith(tech.streamfusion.proto.plan.v1.StringEndsWith.newBuilder()
+                                .setValue(value)
+                                .setSuffix(suffix))
+                        .build();
+            }
+        }
         if (("AND".equals(kind) || "OR".equals(kind)) && operands.size() == 2) {
             Expression left = conditionExpression(operands.get(0), inputType);
             Expression right = conditionExpression(operands.get(1), inputType);

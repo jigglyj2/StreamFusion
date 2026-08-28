@@ -45,6 +45,7 @@ pub(crate) mod row_constructor;
 pub(crate) mod sign;
 pub(crate) mod split;
 pub(crate) mod starts_with;
+pub(crate) mod string_ends_with;
 pub(crate) mod string_repeat;
 pub(crate) mod string_replace;
 pub(crate) mod struct_field;

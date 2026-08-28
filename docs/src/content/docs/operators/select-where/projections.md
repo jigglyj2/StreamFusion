@@ -287,6 +287,10 @@ type semantics.
 including computed counts. StreamFusion widens the count inside the native plan for DataFusion's
 vectorized kernel; zero and negative counts produce the empty string as in Flink, while null
 values or counts produce null. Fixed-width `CHAR` remains on Flink.
+`ENDSWITH(value, suffix)` is accelerated in projections and filters when both arguments are
+supported `VARCHAR` expressions. Both literal and computed suffixes lower to DataFusion's
+vectorized UTF-8 predicate, including empty suffixes, Unicode text, and null propagation.
+The binary-string overload and fixed-width `CHAR` remain on Flink.
 
 Cast approval is table-driven. Java maps an explicitly approved Flink source/target pair
 to a stable protobuf cast kind; Rust independently verifies that kind against the actual

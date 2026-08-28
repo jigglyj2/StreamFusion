@@ -258,6 +258,17 @@ pub(super) fn create(
             )?,
             schema,
         ),
+        StringEndsWith(ends_with) => expressions::string_ends_with::create(
+            create_expression(
+                required(&ends_with.value, "string ends-with is missing its value")?,
+                schema,
+            )?,
+            create_expression(
+                required(&ends_with.suffix, "string ends-with is missing its suffix")?,
+                schema,
+            )?,
+            schema,
+        ),
         ArrayDistinct(distinct) => expressions::array_distinct::create(
             create_expression(
                 required(&distinct.array, "array distinct is missing its array")?,
