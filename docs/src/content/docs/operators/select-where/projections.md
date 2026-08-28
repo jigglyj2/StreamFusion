@@ -156,6 +156,11 @@ the array or search value is null. StreamFusion wraps DataFusion's vectorized se
 input-null guard and converts DataFusion's missing-match null to Flink's `INT` zero. This follows
 the same semantic-adapter model as Comet's array-position implementation while retaining the
 upstream DataFusion kernel.
+`ARRAY_DISTINCT` is accelerated for Arrow-compatible element types, including nested `ROW`
+elements. It preserves the first occurrence order, retains at most one null element, and
+preserves null and empty arrays. Rust lowers it directly to DataFusion's vectorized set kernel;
+generated parity cases cover duplicate primitive values and duplicate nested rows so complex
+element identity is verified rather than inferred.
 
 Rust lowers `COALESCE` to DataFusion's vectorized `CaseExpr`: each argument except the last
 becomes an `IS NOT NULL` branch and the last argument is the fallback value.
