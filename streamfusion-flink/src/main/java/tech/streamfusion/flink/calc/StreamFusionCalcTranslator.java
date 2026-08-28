@@ -301,6 +301,9 @@ public final class StreamFusionCalcTranslator {
         } else {
             return null;
         }
+        if (!hasNoArgMethod(expression, "getOperands")) {
+            return null;
+        }
         String kind = invoke(expression, "getKind").toString();
         List<?> operands = (List<?>) invoke(expression, "getOperands");
         if ("MINUS_PREFIX".equals(kind)) {
@@ -493,7 +496,7 @@ public final class StreamFusionCalcTranslator {
     }
 
     private static StreamFusionCondition comparison(Object condition, RowType inputType) {
-        if (condition == null) {
+        if (condition == null || !hasNoArgMethod(condition, "getOperands")) {
             return null;
         }
         ComparisonOperator operator =
@@ -529,6 +532,15 @@ public final class StreamFusionCalcTranslator {
             return comparison(rightInput, operands.get(0), operator, false, inputType);
         }
         return null;
+    }
+
+    private static boolean hasNoArgMethod(Object target, String methodName) {
+        try {
+            target.getClass().getMethod(methodName);
+            return true;
+        } catch (NoSuchMethodException ignored) {
+            return false;
+        }
     }
 
     private static StreamFusionOrderedComparison comparison(
