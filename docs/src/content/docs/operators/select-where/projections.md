@@ -271,6 +271,8 @@ StreamFusion's byte-parity contract.
 `ASIN`, `ACOS`, and `ATAN` are accelerated as distinct DataFusion vector expressions after Flink's
 `DOUBLE` coercion. Tests include values outside the `ASIN`/`ACOS` domain to verify Flink-compatible
 NaN results, along with endpoints, signed zero, infinities, and nulls.
+`DEGREES` and `RADIANS` are accelerated through DataFusion's vectorized angle-conversion kernels.
+They accept Flink-coerced `DOUBLE` inputs and preserve signed zero, infinities, NaN, and nulls.
 `CEIL` and `FLOOR` are accelerated for signed integers, `FLOAT`, and `DOUBLE`. Integer
 inputs are already integral and remain zero-copy references;
 floating-point inputs use DataFusion's vectorized math functions. Decimal and temporal forms

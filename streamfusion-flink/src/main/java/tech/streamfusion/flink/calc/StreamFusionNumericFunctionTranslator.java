@@ -19,12 +19,14 @@ import tech.streamfusion.proto.plan.v1.ArcSine;
 import tech.streamfusion.proto.plan.v1.ArcTangent;
 import tech.streamfusion.proto.plan.v1.Ceiling;
 import tech.streamfusion.proto.plan.v1.Cosine;
+import tech.streamfusion.proto.plan.v1.Degrees;
 import tech.streamfusion.proto.plan.v1.DoubleLiteral;
 import tech.streamfusion.proto.plan.v1.Exponential;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.Floor;
 import tech.streamfusion.proto.plan.v1.HyperbolicSine;
 import tech.streamfusion.proto.plan.v1.HyperbolicTangent;
+import tech.streamfusion.proto.plan.v1.Radians;
 import tech.streamfusion.proto.plan.v1.Sign;
 import tech.streamfusion.proto.plan.v1.Sine;
 import tech.streamfusion.proto.plan.v1.SquareRoot;
@@ -93,6 +95,12 @@ final class StreamFusionNumericFunctionTranslator extends StreamFusionRexSupport
             if ("ATAN".equals(function)) {
                 return unary(expression, inputType, expectedType, UnaryKind.ARC_TANGENT);
             }
+            if ("DEGREES".equals(function)) {
+                return unary(expression, inputType, expectedType, UnaryKind.DEGREES);
+            }
+            if ("RADIANS".equals(function)) {
+                return unary(expression, inputType, expectedType, UnaryKind.RADIANS);
+            }
         }
         if (("PI".equals(function) || "E".equals(function))
                 && operands.isEmpty()
@@ -153,6 +161,12 @@ final class StreamFusionNumericFunctionTranslator extends StreamFusionRexSupport
             case ARC_TANGENT:
                 return result.setArcTangent(ArcTangent.newBuilder().setOperand(operand))
                         .build();
+            case DEGREES:
+                return result.setDegrees(Degrees.newBuilder().setOperand(operand))
+                        .build();
+            case RADIANS:
+                return result.setRadians(Radians.newBuilder().setOperand(operand))
+                        .build();
             default:
                 throw new IllegalStateException("Unknown numeric unary function " + kind);
         }
@@ -193,6 +207,8 @@ final class StreamFusionNumericFunctionTranslator extends StreamFusionRexSupport
         HYPERBOLIC_TANGENT,
         ARC_SINE,
         ARC_COSINE,
-        ARC_TANGENT
+        ARC_TANGENT,
+        DEGREES,
+        RADIANS
     }
 }

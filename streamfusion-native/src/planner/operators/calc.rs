@@ -217,6 +217,20 @@ pub(super) fn create_expression(
                 .ok_or_else(|| DataFusionError::Plan("ATAN operand is empty".to_string()))?;
             expressions::arc_tangent::create(create_expression(operand, schema)?, schema)
         }
+        Some(proto::expression::Expression::Degrees(degrees)) => {
+            let operand = degrees
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("DEGREES operand is empty".to_string()))?;
+            expressions::degrees::create(create_expression(operand, schema)?, schema)
+        }
+        Some(proto::expression::Expression::Radians(radians)) => {
+            let operand = radians
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("RADIANS operand is empty".to_string()))?;
+            expressions::radians::create(create_expression(operand, schema)?, schema)
+        }
         Some(proto::expression::Expression::CharacterLength(character_length)) => {
             let operand = character_length
                 .operand

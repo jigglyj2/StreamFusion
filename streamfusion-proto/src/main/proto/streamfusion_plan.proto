@@ -110,6 +110,8 @@ message Expression {
     ArcSine arc_sine = 79;
     ArcCosine arc_cosine = 80;
     ArcTangent arc_tangent = 81;
+    Degrees degrees = 82;
+    Radians radians = 83;
   }
 }
 
@@ -313,6 +315,14 @@ message ArcCosine {
 }
 
 message ArcTangent {
+  Expression operand = 1;
+}
+
+message Degrees {
+  Expression operand = 1;
+}
+
+message Radians {
   Expression operand = 1;
 }
 
