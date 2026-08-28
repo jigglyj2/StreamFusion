@@ -33,6 +33,12 @@ message ArrayUnnest {
   uint32 array_index = 2;
   bool with_ordinality = 3;
   bool preserve_empty = 4;
+  UnnestCollection collection = 5;
+}
+
+enum UnnestCollection {
+  UNNEST_COLLECTION_ARRAY = 0;
+  UNNEST_COLLECTION_MAP = 1;
 }
 
 message Expression {

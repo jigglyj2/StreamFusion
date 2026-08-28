@@ -7,7 +7,9 @@ sidebar:
 
 **Current status:** inner/cross and left `UNNEST`, with or without `WITH ORDINALITY`, over directly
 referenced arrays of supported scalar values are accelerated. Inner/cross expansion also supports
-arrays of scalar-field rows. Other table functions and expansion forms fall back to Flink.
+arrays of scalar-field rows. Inner/cross and left expansion of maps with supported scalar keys and
+values is accelerated, with or without ordinality. Other table functions and expansion forms fall
+back to Flink.
 
 ## SQL example
 
@@ -15,6 +17,11 @@ arrays of scalar-field rows. Other table functions and expansion forms fall back
 SELECT order_id, product_id
 FROM orders
 CROSS JOIN UNNEST(product_ids) AS products(product_id);
+
+SELECT order_id, attribute_key, attribute_value, position
+FROM orders
+CROSS JOIN UNNEST(attributes) WITH ORDINALITY
+  AS entries(attribute_key, attribute_value, position);
 ```
 
 Each input row produces one output row per array element. Array order, duplicates, null elements,
@@ -25,11 +32,11 @@ and the input row's changelog `RowKind` are preserved. Null and empty arrays pro
 StreamFusion accelerates the operation when all of the following are true:
 
 - Flink planned an inner/cross or left correlate around its built-in `$UNNEST_ROWS$` function.
-- The function has one direct input-field operand whose type is `ARRAY`.
+- The function has one direct input-field operand whose type is `ARRAY` or `MAP`.
 - The element is a supported scalar Arrow boundary type, including numeric, boolean, character,
   binary, decimal, date, time, and timestamp values, or a non-empty `ROW` composed of those types.
 - The correlate has no additional condition and its output preserves every input field before
-  appending the element field with exactly the array's element type.
+  appending the array element or map key/value fields with exactly Flink's types.
 - Every other internal node in the plan has a StreamFusion implementation.
 
 `WITH ORDINALITY` is accelerated for the same scalar-array cases and appends Flink's non-null,
@@ -38,11 +45,13 @@ StreamFusion accelerates the operation when all of the following are true:
 `LEFT JOIN UNNEST(array) ON TRUE` retains one null-extended result for a null or empty array and
 otherwise emits the same ordered elements as the inner form. Arrays of `ROW` flatten each element
 into its named fields, and a null row element produces null for every flattened field. With
-ordinality, the synthetic row also has a null position. Left expansion of arrays of rows, computed
-array operands, rows containing nested collection fields, nested collections, maps, multisets,
-user-defined table functions, and correlate conditions currently fall back. EXPLAIN identifies
-the rejected join form, function shape, operand, or element type and then reports whole-plan
-fallback.
+ordinality, the synthetic row also has a null position. Map expansion preserves the paired key and
+value arrays and assigns positions in Flink's stored `MapData` entry order; SQL map ordering is not
+otherwise guaranteed. Left expansion of arrays of rows, computed collection operands, rows
+containing nested collection fields, nested collections, maps with complex keys or values,
+multisets, user-defined table functions, and correlate conditions currently fall back. EXPLAIN
+identifies the rejected join form, function shape, operand, or element type and then reports
+whole-plan fallback.
 
 ## Implementation
 
@@ -56,6 +65,10 @@ For arrays of rows, a native `IS NOT NULL` filter reproduces Flink's behavior of
 elements. A projection immediately above it applies DataFusion `get_field` expressions to the
 Arrow struct and exposes Flink's flattened columns. Both stages remain inside the same native
 plan.
+For maps, a lightweight physical expression reinterprets Arrow's map offsets and entry struct as
+a list without copying its key, value, offset, or validity buffers. `UnnestExec` expands that list,
+and the same struct projection exposes the paired key and value columns. Ordinality is derived
+from those shared offsets, so it follows the exact entry order received from Flink.
 DataFusion allocates take indices because repeating parent values is inherent to expansion; it
 does not serialize rows or copy the array merely to hand it to the next native stage.
 For `WITH ORDINALITY`, StreamFusion derives a second Arrow list from the source offsets, fills its

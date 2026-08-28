@@ -20,7 +20,9 @@ import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
 import org.apache.flink.table.types.logical.ArrayType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
+import org.apache.flink.table.types.logical.MapType;
 import org.apache.flink.table.types.logical.RowType;
+import tech.streamfusion.proto.plan.v1.UnnestCollection;
 
 /** Reflection entry point for parity-safe UNNEST over a directly referenced array column. */
 public final class StreamFusionArrayUnnestTranslator {
@@ -34,7 +36,12 @@ public final class StreamFusionArrayUnnestTranslator {
         }
         int arrayIndex = arrayIndex(invocation);
         StreamFusionArrayUnnestOperator operator = new StreamFusionArrayUnnestOperator(
-                inputType, outputType, arrayIndex, withOrdinality(invocation), isLeft(joinType));
+                inputType,
+                outputType,
+                arrayIndex,
+                withOrdinality(invocation),
+                isLeft(joinType),
+                collection(inputType, invocation));
         OneInputTransformation<RowData, RowData> transformation = new OneInputTransformation<>(
                 input,
                 "streamfusion-array-unnest",
@@ -52,7 +59,7 @@ public final class StreamFusionArrayUnnestTranslator {
         String joinName = joinType instanceof Enum<?> ? ((Enum<?>) joinType).name() : String.valueOf(joinType);
         if (!"INNER".equals(joinName) && !"LEFT".equals(joinName)) {
             return "UNNEST join type " + joinType
-                    + " is not accelerated; only inner/cross and left array UNNEST are supported";
+                    + " is not accelerated; only inner/cross and left ARRAY/MAP UNNEST are supported";
         }
         if (condition != null) {
             return "UNNEST correlate conditions are not accelerated";
@@ -60,19 +67,22 @@ public final class StreamFusionArrayUnnestTranslator {
         String functionName = String.valueOf(invoke(invoke(invocation, "getOperator"), "getName"));
         boolean withOrdinality = "$UNNEST_ROWS_WITH_ORDINALITY$1".equals(functionName);
         if (!"$UNNEST_ROWS$1".equals(functionName) && !withOrdinality) {
-            return "table function " + functionName + " is not StreamFusion array UNNEST";
+            return "table function " + functionName + " is not StreamFusion collection UNNEST";
         }
         List<?> operands = (List<?>) invoke(invocation, "getOperands");
         if (operands.size() != 1 || !operands.get(0).getClass().getSimpleName().equals("RexFieldAccess")) {
-            return "array UNNEST requires one directly referenced input field";
+            return "collection UNNEST requires one directly referenced input field";
         }
         int index = arrayIndex(invocation);
         if (index < 0 || index >= inputType.getFieldCount()) {
-            return "array UNNEST field index " + index + " is outside the input row";
+            return "collection UNNEST field index " + index + " is outside the input row";
         }
         LogicalType collection = inputType.getTypeAt(index);
+        if (collection.getTypeRoot() == LogicalTypeRoot.MAP) {
+            return unsupportedMapReason(inputType, outputType, joinName, withOrdinality, (MapType) collection);
+        }
         if (collection.getTypeRoot() != LogicalTypeRoot.ARRAY) {
-            return "UNNEST input " + inputType.getFieldNames().get(index) + " is not an ARRAY";
+            return "UNNEST input " + inputType.getFieldNames().get(index) + " is neither ARRAY nor MAP";
         }
         LogicalType element = ((ArrayType) collection).getElementType();
         if (!isSupportedElement(element)) {
@@ -120,6 +130,40 @@ public final class StreamFusionArrayUnnestTranslator {
         return null;
     }
 
+    private static String unsupportedMapReason(
+            RowType inputType, RowType outputType, String joinName, boolean withOrdinality, MapType map) {
+        LogicalType key = map.getKeyType();
+        LogicalType value = map.getValueType();
+        if (!isScalarBoundaryType(key.getTypeRoot()) || !isScalarBoundaryType(value.getTypeRoot())) {
+            return "map UNNEST key/value types " + key + "/" + value + " are not yet supported";
+        }
+        int appendedFields = 2 + (withOrdinality ? 1 : 0);
+        if (outputType.getFieldCount() != inputType.getFieldCount() + appendedFields) {
+            return "map UNNEST output must append key, value" + (withOrdinality ? ", and ordinality" : "");
+        }
+        for (int field = 0; field < inputType.getFieldCount(); field++) {
+            if (!inputType.getTypeAt(field).equals(outputType.getTypeAt(field))) {
+                return "map UNNEST output does not preserve input field " + field + " exactly";
+            }
+        }
+        boolean left = "LEFT".equals(joinName);
+        LogicalType expectedKey = left ? key.copy(true) : key;
+        if (!expectedKey.equals(outputType.getTypeAt(inputType.getFieldCount()))) {
+            return "map UNNEST output key type does not match its MAP key type";
+        }
+        LogicalType expectedValue = left ? value.copy(true) : value;
+        if (!expectedValue.equals(outputType.getTypeAt(inputType.getFieldCount() + 1))) {
+            return "map UNNEST output value type does not match its MAP value type";
+        }
+        if (withOrdinality) {
+            LogicalType ordinality = outputType.getTypeAt(inputType.getFieldCount() + 2);
+            if (ordinality.getTypeRoot() != LogicalTypeRoot.INTEGER || ordinality.isNullable() != left) {
+                return "map UNNEST ordinality must be " + (left ? "a nullable" : "a non-null") + " INT";
+            }
+        }
+        return null;
+    }
+
     public static int arrayIndex(Object invocation) {
         List<?> operands = (List<?>) invoke(invocation, "getOperands");
         Object field = invoke(operands.get(0), "getField");
@@ -133,6 +177,12 @@ public final class StreamFusionArrayUnnestTranslator {
 
     public static boolean isLeft(Object joinType) {
         return "LEFT".equals(joinType instanceof Enum<?> ? ((Enum<?>) joinType).name() : String.valueOf(joinType));
+    }
+
+    public static UnnestCollection collection(RowType inputType, Object invocation) {
+        return inputType.getTypeAt(arrayIndex(invocation)).getTypeRoot() == LogicalTypeRoot.MAP
+                ? UnnestCollection.UNNEST_COLLECTION_MAP
+                : UnnestCollection.UNNEST_COLLECTION_ARRAY;
     }
 
     private static boolean isScalarBoundaryType(LogicalTypeRoot type) {

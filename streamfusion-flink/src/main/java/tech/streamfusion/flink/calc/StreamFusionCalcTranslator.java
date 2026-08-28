@@ -129,6 +129,7 @@ public final class StreamFusionCalcTranslator extends StreamFusionExpressionTran
                 StreamFusionArrayUnnestTranslator.arrayIndex(invocation),
                 StreamFusionArrayUnnestTranslator.withOrdinality(invocation),
                 StreamFusionArrayUnnestTranslator.isLeft(joinType),
+                StreamFusionArrayUnnestTranslator.collection(boundaryInputType, invocation),
                 unnestOutputType.getFieldCount(),
                 nativeProjectionStages,
                 nativeConditions);

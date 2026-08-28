@@ -23,6 +23,7 @@ use datafusion::physical_plan::unnest::{ListUnnest, UnnestExec};
 
 use crate::proto;
 
+mod map_entries;
 mod ordinality;
 
 const VALUE_COLUMN: &str = "__streamfusion_unnest_value";
@@ -48,15 +49,39 @@ pub(crate) fn create(
             "array unnest index {array_index} is outside the {visible_field_count}-column visible input schema"
         ))
     })?;
-    let element_field = match array_field.data_type() {
-        DataType::List(element) => Arc::new(Field::new(
-            VALUE_COLUMN,
-            element.data_type().clone(),
-            element.is_nullable() || unnest.preserve_empty,
-        )),
-        other => {
+    let source: Arc<dyn PhysicalExpr> = Arc::new(Column::new(array_field.name(), array_index));
+    let collection = proto::UnnestCollection::try_from(unnest.collection).map_err(|_| {
+        DataFusionError::Plan(format!(
+            "unknown UNNEST collection kind {}",
+            unnest.collection
+        ))
+    })?;
+    let is_map = collection == proto::UnnestCollection::Map;
+    let (collection, element_field) = match (is_map, array_field.data_type()) {
+        (false, DataType::List(element)) => (
+            source,
+            Arc::new(Field::new(
+                VALUE_COLUMN,
+                element.data_type().clone(),
+                element.is_nullable() || unnest.preserve_empty,
+            )),
+        ),
+        (true, DataType::Map(entries, _)) => (
+            map_entries::create(source),
+            Arc::new(Field::new(
+                VALUE_COLUMN,
+                entries.data_type().clone(),
+                unnest.preserve_empty,
+            )),
+        ),
+        (false, other) => {
             return Err(DataFusionError::Plan(format!(
                 "array unnest requires List input, got {other}"
+            )));
+        }
+        (true, other) => {
+            return Err(DataFusionError::Plan(format!(
+                "map unnest requires Map input, got {other}"
             )));
         }
     };
@@ -73,13 +98,10 @@ pub(crate) fn create(
             )
         })
         .collect::<Vec<_>>();
-    projection.push((
-        Arc::new(Column::new(array_field.name(), array_index)),
-        VALUE_COLUMN.to_string(),
-    ));
+    projection.push((Arc::clone(&collection), VALUE_COLUMN.to_string()));
     if unnest.with_ordinality {
         projection.push((
-            ordinality::create(Arc::new(Column::new(array_field.name(), array_index))),
+            ordinality::create(collection),
             ORDINALITY_COLUMN.to_string(),
         ));
     }
@@ -132,6 +154,7 @@ pub(crate) fn create(
         visible_field_count,
         unnest.with_ordinality,
         unnest.preserve_empty,
+        !is_map,
     )
 }
 
@@ -140,21 +163,26 @@ fn flatten_struct_element(
     visible_field_count: usize,
     with_ordinality: bool,
     preserve_empty: bool,
+    skip_null_struct: bool,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let schema = unnested.schema();
     let DataType::Struct(fields) = schema.field(visible_field_count).data_type() else {
         return Ok(unnested);
     };
     let fields = fields.clone();
-    if preserve_empty {
+    if preserve_empty && skip_null_struct {
         return Err(DataFusionError::Plan(
             "left array UNNEST of ROW is not yet supported".to_string(),
         ));
     }
-    let unnested: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(
-        is_not_null(Arc::new(Column::new(VALUE_COLUMN, visible_field_count)))?,
-        unnested,
-    )?);
+    let unnested: Arc<dyn ExecutionPlan> = if skip_null_struct {
+        Arc::new(FilterExec::try_new(
+            is_not_null(Arc::new(Column::new(VALUE_COLUMN, visible_field_count)))?,
+            unnested,
+        )?)
+    } else {
+        unnested
+    };
     let schema = unnested.schema();
     let mut projection = schema
         .fields()
@@ -202,7 +230,7 @@ fn flatten_struct_element(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Array, Int32Array, ListArray, RecordBatch};
+    use arrow::array::{Array, Int32Array, ListArray, MapArray, RecordBatch, StringArray};
     use arrow::datatypes::Int32Type;
     use datafusion::datasource::memory::MemorySourceConfig;
     use datafusion::physical_plan::collect;
@@ -231,6 +259,7 @@ mod tests {
                 array_index: 1,
                 with_ordinality: false,
                 preserve_empty: false,
+                collection: proto::UnnestCollection::Array as i32,
             },
             source,
         )
@@ -283,6 +312,7 @@ mod tests {
                 array_index: 1,
                 with_ordinality: true,
                 preserve_empty: false,
+                collection: proto::UnnestCollection::Array as i32,
             },
             source,
         )
@@ -334,6 +364,7 @@ mod tests {
                 array_index: 1,
                 with_ordinality: false,
                 preserve_empty: true,
+                collection: proto::UnnestCollection::Array as i32,
             },
             source,
         )
@@ -357,6 +388,73 @@ mod tests {
                 .unwrap()
                 .values(),
             &[0, 1, 2]
+        );
+    }
+
+    #[tokio::test]
+    async fn emits_map_entries_in_stored_order_with_ordinality() {
+        let maps = Arc::new(MapArray::from_vec_of_maps::<StringArray, Int32Array, _, _>(
+            vec![
+                Some(vec![("b", Some(2)), ("a", None)]),
+                Some(vec![]),
+                None,
+                Some(vec![("z", Some(9))]),
+            ],
+            true,
+        ));
+        let ids = Arc::new(Int32Array::from(vec![10, 20, 30, 40]));
+        let ordinals = Arc::new(Int32Array::from(vec![0, 1, 2, 3]));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("items", maps.data_type().clone(), true),
+            Field::new(INPUT_ROW_COLUMN, DataType::Int32, false),
+        ]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![ids, maps, ordinals]).unwrap();
+        let source = MemorySourceConfig::try_new_exec(&[vec![batch]], schema, None).unwrap();
+        let plan = create(
+            &proto::ArrayUnnest {
+                input: None,
+                array_index: 1,
+                with_ordinality: true,
+                preserve_empty: false,
+                collection: proto::UnnestCollection::Map as i32,
+            },
+            source,
+        )
+        .unwrap();
+
+        let output = collect(plan, SessionContext::new().task_ctx())
+            .await
+            .unwrap();
+        let batch = &output[0];
+        assert_eq!(
+            batch
+                .column(2)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some("b"), Some("a"), Some("z")]
+        );
+        assert_eq!(
+            batch
+                .column(3)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(2), None, Some(9)]
+        );
+        assert_eq!(
+            batch
+                .column(4)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .values(),
+            &[1, 2, 1]
         );
     }
 }

@@ -38,6 +38,7 @@ import tech.streamfusion.proto.plan.v1.NativePlan;
 import tech.streamfusion.proto.plan.v1.Operator;
 import tech.streamfusion.proto.plan.v1.PrecisionType;
 import tech.streamfusion.proto.plan.v1.RowField;
+import tech.streamfusion.proto.plan.v1.UnnestCollection;
 
 /** Initial bounded, vectorized identity calc for one non-null INT column. */
 final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowData>
@@ -67,6 +68,7 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
             int arrayUnnestIndex,
             boolean withOrdinality,
             boolean preserveEmpty,
+            UnnestCollection collection,
             int unnestOutputFieldCount,
             List<List<Expression>> projectionStages,
             List<Expression> conditions) {
@@ -74,7 +76,13 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
         this.outputType = outputType;
         this.serializer = new RowDataSerializer(boundaryInputType);
         this.serializedPlan = createPlan(
-                arrayUnnestIndex, withOrdinality, preserveEmpty, unnestOutputFieldCount, projectionStages, conditions);
+                arrayUnnestIndex,
+                withOrdinality,
+                preserveEmpty,
+                collection,
+                unnestOutputFieldCount,
+                projectionStages,
+                conditions);
     }
 
     @Override
@@ -130,6 +138,7 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
             int arrayUnnestIndex,
             boolean withOrdinality,
             boolean preserveEmpty,
+            UnnestCollection collection,
             int unnestOutputFieldCount,
             List<List<Expression>> projectionStages,
             List<Expression> conditions) {
@@ -139,7 +148,8 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
                         .setInput(input)
                         .setArrayIndex(arrayUnnestIndex)
                         .setWithOrdinality(withOrdinality)
-                        .setPreserveEmpty(preserveEmpty))
+                        .setPreserveEmpty(preserveEmpty)
+                        .setCollection(collection))
                 .build();
         return createPlan(operator, unnestOutputFieldCount, projectionStages, conditions);
     }

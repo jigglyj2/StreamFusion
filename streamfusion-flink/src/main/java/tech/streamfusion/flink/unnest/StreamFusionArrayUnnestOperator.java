@@ -27,6 +27,7 @@ import tech.streamfusion.proto.plan.v1.ArrayUnnest;
 import tech.streamfusion.proto.plan.v1.Input;
 import tech.streamfusion.proto.plan.v1.NativePlan;
 import tech.streamfusion.proto.plan.v1.Operator;
+import tech.streamfusion.proto.plan.v1.UnnestCollection;
 
 /** Bounded vectorized execution of an array UNNEST. */
 final class StreamFusionArrayUnnestOperator extends AbstractStreamOperator<RowData>
@@ -41,7 +42,12 @@ final class StreamFusionArrayUnnestOperator extends AbstractStreamOperator<RowDa
     private final List<RowKind> rowKinds = new ArrayList<>(BATCH_SIZE);
 
     StreamFusionArrayUnnestOperator(
-            RowType inputType, RowType outputType, int arrayIndex, boolean withOrdinality, boolean preserveEmpty) {
+            RowType inputType,
+            RowType outputType,
+            int arrayIndex,
+            boolean withOrdinality,
+            boolean preserveEmpty,
+            UnnestCollection collection) {
         this.inputType = inputType;
         this.outputType = outputType;
         this.serializer = new RowDataSerializer(inputType);
@@ -51,7 +57,8 @@ final class StreamFusionArrayUnnestOperator extends AbstractStreamOperator<RowDa
                         .setInput(input)
                         .setArrayIndex(arrayIndex)
                         .setWithOrdinality(withOrdinality)
-                        .setPreserveEmpty(preserveEmpty))
+                        .setPreserveEmpty(preserveEmpty)
+                        .setCollection(collection))
                 .build();
         this.serializedPlan = NativePlan.newBuilder()
                 .setProtocolVersion(1)
