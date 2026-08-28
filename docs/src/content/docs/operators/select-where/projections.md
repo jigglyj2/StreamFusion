@@ -29,8 +29,11 @@ Complex types may be selected, reordered, omitted, or repeated as direct input r
 Named `ROW` fields may also be projected or used inside supported expressions, including
 chains through nested rows. A null parent row produces a null child value, matching Flink.
 Typed `NULL` literals are accelerated for `ARRAY`, `MAP`, and `ROW`, including recursively
-nested arrays and rows. Collection element access, non-null complex literals, `MULTISET`, and
-collection functions still fall back with the whole Calc. Nested child types, field names,
+nested arrays and rows. One-based `ARRAY` access is accelerated for positive integer literal
+indexes; a null array, null element, or index beyond the array length produces null. The
+selected element may itself be complex, so expressions such as `rows[1].name` are supported.
+Zero, negative, and computed indexes, map access, non-null complex literals, `MULTISET`, and
+other collection functions still fall back with the whole Calc. Nested child types, field names,
 ordering, nullability, and Arrow offsets are preserved across the native plan.
 
 Precision, scale, fixed width, and nullability are preserved. Constant `TINYINT` and
@@ -110,6 +113,10 @@ For `ROW` access, Java resolves every field against Flink's authoritative row ty
 encodes its name as a nested protobuf expression. Rust lowers each step to DataFusion's
 vectorized `get_field`. The child value buffers remain shared where Arrow validity permits;
 DataFusion may create a validity bitmap to combine nullable parent and child rows.
+Positive literal array indexes are encoded as `INT64` in the protobuf and lowered to
+DataFusion's vectorized `array_element`, which has the same one-based and out-of-range-null
+behavior. StreamFusion deliberately rejects the remaining index shapes until their Flink
+semantics have dedicated parity coverage.
 
 Rust lowers `COALESCE` to DataFusion's vectorized `CaseExpr`: each argument except the last
 becomes an `IS NOT NULL` branch and the last argument is the fallback value.
