@@ -159,6 +159,10 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
         if (sha1 != null) {
             return sha1;
         }
+        Expression sha2Literal = StreamFusionBinaryFunctionTranslator.sha2Literal(expression, inputType, expectedType);
+        if (sha2Literal != null) {
+            return sha2Literal;
+        }
         Expression stringReplace = StreamFusionStringFunctionTranslator.replace(expression, inputType, expectedType);
         if (stringReplace != null) {
             return stringReplace;

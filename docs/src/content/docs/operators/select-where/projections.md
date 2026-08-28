@@ -389,8 +389,10 @@ Flink-compatible lowercase hexadecimal text. `SHA1(value)` is also accelerated f
 because DataFusion does not provide SHA-1, its isolated Rust compatibility expression hashes each
 UTF-8 value with RustCrypto and emits the same lowercase hexadecimal representation. Generated
 projection and filter parity coverage includes empty strings, multilingual text, embedded NUL
-bytes, and null propagation. Length-selected `SHA2` remains on Flink until its literal and dynamic
-length semantics have dedicated parity coverage.
+bytes, and null propagation. `SHA2(value, bit_length)` is accelerated when `bit_length` is a
+non-null literal equal to `224`, `256`, `384`, or `512`, reusing the same protobuf and DataFusion
+digest paths as the named functions. Null, invalid, and dynamic lengths remain on Flink with an
+explicit EXPLAIN fallback reason pending their distinct initialization and per-row error semantics.
 
 Cast approval is table-driven. Java maps an explicitly approved Flink source/target pair
 to a stable protobuf cast kind; Rust independently verifies that kind against the actual

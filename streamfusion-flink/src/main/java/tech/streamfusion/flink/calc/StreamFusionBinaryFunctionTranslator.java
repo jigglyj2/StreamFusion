@@ -28,7 +28,7 @@ final class StreamFusionBinaryFunctionTranslator extends StreamFusionComplexType
     static String failureReason(Object expression) {
         String function = functionName(expression);
         if ("SHA2".equals(function)) {
-            return "SHA2 stays on Flink until literal and dynamic digest-length semantics have dedicated parity coverage";
+            return "SHA2 stays on Flink when its digest length is null, dynamic, or not one of 224, 256, 384, and 512";
         }
         if (shaAlgorithm(function) != null) {
             return function + " input or result type is not parity-approved";
@@ -148,6 +148,29 @@ final class StreamFusionBinaryFunctionTranslator extends StreamFusionComplexType
                         .build();
     }
 
+    static Expression sha2Literal(Object expression, RowType inputType, LogicalType expectedType) {
+        if (!"SHA2".equals(functionName(expression)) || expectedType.getTypeRoot() != LogicalTypeRoot.VARCHAR) {
+            return null;
+        }
+        List<?> operands = (List<?>) invoke(expression, "getOperands");
+        if (operands.size() != 2) {
+            return null;
+        }
+        Integer bitLength = integerLiteral(operands.get(1));
+        ShaAlgorithm algorithm = sha2Algorithm(bitLength);
+        LogicalType operandType = logicalType(operands.get(0), inputType);
+        if (algorithm == null || operandType == null || operandType.getTypeRoot() != LogicalTypeRoot.VARCHAR) {
+            return null;
+        }
+        Expression operand =
+                StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, operandType);
+        return operand == null
+                ? null
+                : Expression.newBuilder()
+                        .setShaDigest(ShaDigest.newBuilder().setOperand(operand).setAlgorithm(algorithm))
+                        .build();
+    }
+
     private static boolean supportsHex(LogicalTypeRoot type) {
         return type == LogicalTypeRoot.TINYINT
                 || type == LogicalTypeRoot.SMALLINT
@@ -178,5 +201,23 @@ final class StreamFusionBinaryFunctionTranslator extends StreamFusionComplexType
             return ShaAlgorithm.SHA_ALGORITHM_512;
         }
         return null;
+    }
+
+    private static ShaAlgorithm sha2Algorithm(Integer bitLength) {
+        if (bitLength == null) {
+            return null;
+        }
+        switch (bitLength) {
+            case 224:
+                return ShaAlgorithm.SHA_ALGORITHM_224;
+            case 256:
+                return ShaAlgorithm.SHA_ALGORITHM_256;
+            case 384:
+                return ShaAlgorithm.SHA_ALGORITHM_384;
+            case 512:
+                return ShaAlgorithm.SHA_ALGORITHM_512;
+            default:
+                return null;
+        }
     }
 }
