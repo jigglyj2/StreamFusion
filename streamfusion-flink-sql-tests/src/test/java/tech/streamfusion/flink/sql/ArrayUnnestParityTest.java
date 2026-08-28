@@ -181,6 +181,35 @@ class ArrayUnnestParityTest extends SqlParityTestSupport {
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 
+    @Test
+    void nativeNestedArrayUnnestPreservesEachInnerArrayAndOrdinality() throws Exception {
+        java.util.List<Row> inputs = Arrays.asList(
+                Row.of((Object) new Integer[][] {new Integer[] {1, null}, new Integer[] {}, null}),
+                Row.of((Object) new Integer[][] {}),
+                Row.of((Object) null));
+
+        assertDataStreamParity(
+                "SELECT item, ord_idx FROM nested_array_unnest_input "
+                        + "CROSS JOIN UNNEST(metric) WITH ORDINALITY AS expanded(item, ord_idx)",
+                Types.OBJECT_ARRAY(Types.OBJECT_ARRAY(Types.INT)),
+                DataTypes.ARRAY(DataTypes.ARRAY(DataTypes.INT())),
+                inputs,
+                "nested_array_unnest_input");
+
+        assertDataStreamParity(
+                "SELECT item, ord_idx FROM left_nested_array_unnest_input "
+                        + "LEFT JOIN UNNEST(metric) WITH ORDINALITY AS expanded(item, ord_idx) ON TRUE",
+                Types.OBJECT_ARRAY(Types.OBJECT_ARRAY(Types.INT)),
+                DataTypes.ARRAY(DataTypes.ARRAY(DataTypes.INT())),
+                inputs,
+                "left_nested_array_unnest_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isEqualTo(1);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
     private static byte[] executeChangelog(java.util.List<Row> rows, boolean streamFusionEnabled) throws Exception {
         if (streamFusionEnabled) {
             System.setProperty(

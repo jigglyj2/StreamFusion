@@ -9,7 +9,8 @@ sidebar:
 referenced arrays of supported scalar values are accelerated. Inner/cross expansion also supports
 arrays of scalar-field rows. Inner/cross and left expansion of maps with supported scalar or
 scalar-field row keys and values is accelerated, with or without ordinality. The same forms accelerate multisets of
-supported non-null scalar elements. Other table functions and expansion forms fall back to Flink.
+supported non-null scalar elements. Arrays whose elements are scalar arrays are also accelerated,
+with each inner array remaining one output value. Other table functions and expansion forms fall back to Flink.
 
 ## SQL example
 
@@ -38,7 +39,8 @@ StreamFusion accelerates the operation when all of the following are true:
 - Flink planned an inner/cross or left correlate around its built-in `$UNNEST_ROWS$` function.
 - The function has one direct input-field operand whose type is `ARRAY`, `MAP`, or `MULTISET`.
 - The element is a supported scalar Arrow boundary type, including numeric, boolean, character,
-  binary, decimal, date, time, and timestamp values, or a non-empty `ROW` composed of those types.
+  binary, decimal, date, time, and timestamp values; a non-empty `ROW` composed of those types; or
+  an `ARRAY` of one of those scalar types.
 - The correlate has no additional condition and its output preserves every input field before
   appending the array element or map key/value fields with exactly Flink's types.
 - Every other internal node in the plan has a StreamFusion implementation.
@@ -52,7 +54,7 @@ into its named fields, and a null row element produces null for every flattened 
 ordinality, the synthetic row also has a null position. Map expansion preserves the paired key and
 value arrays and assigns positions in Flink's stored `MapData` entry order; SQL map ordering is not
 otherwise guaranteed. Left expansion of arrays of rows, computed collection operands, rows
-containing nested collection fields, nested collections, maps with nested-collection keys or values,
+containing nested collection fields, arrays nested more than one level, maps with nested-collection keys or values,
 multisets with nullable or complex elements, user-defined table functions, and correlate
 conditions currently fall back. EXPLAIN identifies the rejected join form, function shape,
 operand, or element type and then reports whole-plan fallback.

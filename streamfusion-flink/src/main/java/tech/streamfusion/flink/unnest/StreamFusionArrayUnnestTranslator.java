@@ -90,7 +90,7 @@ public final class StreamFusionArrayUnnestTranslator {
             return "UNNEST input " + inputType.getFieldNames().get(index) + " is not ARRAY, MAP, or MULTISET";
         }
         LogicalType element = ((ArrayType) collection).getElementType();
-        if (!isSupportedElement(element)) {
+        if (!isSupportedArrayElement(element)) {
             return "array UNNEST element type " + element + " is not yet supported";
         }
         if ("LEFT".equals(joinName) && element instanceof RowType) {
@@ -261,6 +261,14 @@ public final class StreamFusionArrayUnnestTranslator {
         RowType row = (RowType) element;
         return row.getFieldCount() > 0
                 && row.getChildren().stream().allMatch(child -> isScalarBoundaryType(child.getTypeRoot()));
+    }
+
+    private static boolean isSupportedArrayElement(LogicalType element) {
+        if (isSupportedElement(element)) {
+            return true;
+        }
+        return element instanceof ArrayType
+                && isScalarBoundaryType(((ArrayType) element).getElementType().getTypeRoot());
     }
 
     private static Object invoke(Object target, String methodName) {
