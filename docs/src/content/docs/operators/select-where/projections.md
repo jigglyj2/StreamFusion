@@ -190,6 +190,11 @@ end positions are non-null integer literals. Positive, zero, negative, and out-o
 use DataFusion's vectorized one-based slice kernel, whose clamping and negative-from-end behavior
 matches Flink; the omitted end is represented natively as an unbounded upper position. Dynamic or
 null positions remain on Flink with an explicit EXPLAIN reason.
+`ELEMENT(array)` currently stays on Flink. A singleton array returns its value and an empty or null
+array returns null, but Flink raises a runtime error when the array contains more than one element.
+DataFusion's indexed access does not enforce that cardinality contract, so StreamFusion reports the
+semantic mismatch in EXPLAIN instead of approximating it. A future native implementation requires a
+dedicated checked expression that preserves the same runtime failure.
 `ARRAY_DISTINCT` is accelerated for Arrow-compatible element types, including nested `ROW`
 elements. It preserves the first occurrence order, retains at most one null element, and
 preserves null and empty arrays. Rust lowers it directly to DataFusion's vectorized set kernel;

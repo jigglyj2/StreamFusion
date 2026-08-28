@@ -106,6 +106,9 @@ final class StreamFusionCollectionTranslator extends StreamFusionComplexTypeSupp
                 }
             }
         }
+        if ("ELEMENT".equals(function) && operands.size() == 1) {
+            return "ELEMENT stays on Flink because Flink raises a runtime error for arrays with more than one element while DataFusion indexed access does not";
+        }
         return null;
     }
 
