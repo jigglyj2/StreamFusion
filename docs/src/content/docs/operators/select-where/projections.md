@@ -257,6 +257,9 @@ raised to a negative exponent while Flink returns a signed infinity.
 `EXP` is accelerated for numeric operands after Flink coerces them to `DOUBLE`. It lowers to
 DataFusion's vectorized exponential kernel, including byte-parity coverage around underflow and
 overflow as well as signed zero, infinities, NaN, and nulls.
+`PI()` and `E()` are accelerated as exact `DOUBLE` constants. The Java planner records the same
+IEEE-754 values used by Flink directly in protobuf, and native Calc treats them as DataFusion
+literals that can compose with other projections and predicates without a per-row function call.
 `CEIL` and `FLOOR` are accelerated for signed integers, `FLOAT`, and `DOUBLE`. Integer
 inputs are already integral and remain zero-copy references;
 floating-point inputs use DataFusion's vectorized math functions. Decimal and temporal forms

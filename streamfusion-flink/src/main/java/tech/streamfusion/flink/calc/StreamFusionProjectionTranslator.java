@@ -297,6 +297,16 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
                             .setExponential(Exponential.newBuilder().setOperand(operand))
                             .build();
         }
+        if (("PI".equals(functionName(expression)) || "E".equals(functionName(expression)))
+                && expectedType.getTypeRoot() == LogicalTypeRoot.DOUBLE) {
+            List<?> operands = (List<?>) invoke(expression, "getOperands");
+            if (operands.isEmpty()) {
+                double value = "PI".equals(functionName(expression)) ? Math.PI : Math.E;
+                return Expression.newBuilder()
+                        .setDoubleLiteral(DoubleLiteral.newBuilder().setValue(value))
+                        .build();
+            }
+        }
         if ("CHAR_LENGTH".equals(functionName(expression)) || "CHARACTER_LENGTH".equals(functionName(expression))) {
             List<?> operands = (List<?>) invoke(expression, "getOperands");
             if (expectedType.getTypeRoot() != LogicalTypeRoot.INTEGER || operands.size() != 1) {
