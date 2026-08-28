@@ -23,7 +23,8 @@ StreamFusion can select, reorder, omit, or repeat direct input columns of these 
 - `CHAR`, `VARCHAR`, `BINARY`, and `VARBINARY`
 - `DECIMAL`, `DATE`, `TIME`, `TIMESTAMP`, and `TIMESTAMP_LTZ`
 
-Precision, scale, fixed width, and nullability are preserved. Computed `INT`, `BIGINT`,
+Precision, scale, fixed width, and nullability are preserved. Constant `TINYINT` and
+`SMALLINT` projections are accelerated across their complete value ranges. Computed `INT`, `BIGINT`,
 `FLOAT`, `DOUBLE`, and `DECIMAL` projections support literals and recursively nested
 addition, subtraction, and multiplication. Decimal operands retain the precision and
 scale assigned to each expression by Flink's planner, including the precision growth of

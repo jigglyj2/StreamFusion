@@ -144,6 +144,26 @@ class SqlParityTest {
         assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
     }
 
+    @ParameterizedTest(name = "{0} literal projections")
+    @MethodSource("narrowIntegerLiteralProjectionCases")
+    void nativeNarrowIntegerLiteralProjectionsMatchFlinkByteForByte(String ignoredName, String sql) throws Exception {
+        assertParity(sql, true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    private static Stream<Arguments> narrowIntegerLiteralProjectionCases() {
+        return Stream.of(
+                Arguments.of(
+                        "tinyint",
+                        "SELECT CAST(-128 AS TINYINT), CAST(0 AS TINYINT), CAST(127 AS TINYINT) "
+                                + "FROM (VALUES (1), (2)) AS input(id) WHERE id >= 1"),
+                Arguments.of(
+                        "smallint",
+                        "SELECT CAST(-32768 AS SMALLINT), CAST(0 AS SMALLINT), CAST(32767 AS SMALLINT) "
+                                + "FROM (VALUES (1), (2)) AS input(id) WHERE id >= 1"));
+    }
+
     @Test
     void nativeBooleanExpressionProjectionsMatchFlinkByteForByte() throws Exception {
         String sql = "SELECT NOT left_flag, left_flag AND right_flag, left_flag OR right_flag, "

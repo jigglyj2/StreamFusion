@@ -34,6 +34,7 @@ import tech.streamfusion.proto.plan.v1.ArithmeticOperator;
 import tech.streamfusion.proto.plan.v1.BinaryLiteral;
 import tech.streamfusion.proto.plan.v1.BooleanLiteral;
 import tech.streamfusion.proto.plan.v1.BooleanOperator;
+import tech.streamfusion.proto.plan.v1.ByteLiteral;
 import tech.streamfusion.proto.plan.v1.Cast;
 import tech.streamfusion.proto.plan.v1.CastKind;
 import tech.streamfusion.proto.plan.v1.ComparisonOperator;
@@ -44,6 +45,7 @@ import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.FloatLiteral;
 import tech.streamfusion.proto.plan.v1.IntegerLiteral;
 import tech.streamfusion.proto.plan.v1.LongLiteral;
+import tech.streamfusion.proto.plan.v1.ShortLiteral;
 import tech.streamfusion.proto.plan.v1.StringLiteral;
 import tech.streamfusion.proto.plan.v1.TimeLiteral;
 import tech.streamfusion.proto.plan.v1.TimestampLiteral;
@@ -106,6 +108,8 @@ public final class StreamFusionCalcTranslator {
             } else {
                 LogicalTypeRoot outputRoot = outputType.getTypeAt(outputIndex).getTypeRoot();
                 if ((outputRoot != LogicalTypeRoot.INTEGER
+                                && outputRoot != LogicalTypeRoot.TINYINT
+                                && outputRoot != LogicalTypeRoot.SMALLINT
                                 && outputRoot != LogicalTypeRoot.BIGINT
                                 && outputRoot != LogicalTypeRoot.FLOAT
                                 && outputRoot != LogicalTypeRoot.DOUBLE
@@ -270,6 +274,20 @@ public final class StreamFusionCalcTranslator {
             if (epochDay != null) {
                 return Expression.newBuilder()
                         .setDateLiteral(DateLiteral.newBuilder().setEpochDay(epochDay))
+                        .build();
+            }
+        } else if (expectedType == LogicalTypeRoot.TINYINT) {
+            Byte literal = literal(expression, Byte.class);
+            if (literal != null) {
+                return Expression.newBuilder()
+                        .setByteLiteral(ByteLiteral.newBuilder().setValue(literal))
+                        .build();
+            }
+        } else if (expectedType == LogicalTypeRoot.SMALLINT) {
+            Short literal = literal(expression, Short.class);
+            if (literal != null) {
+                return Expression.newBuilder()
+                        .setShortLiteral(ShortLiteral.newBuilder().setValue(literal))
                         .build();
             }
         } else if (expectedType == LogicalTypeRoot.INTEGER) {
