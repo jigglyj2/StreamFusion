@@ -589,7 +589,7 @@ public final class StreamFusionCalcTranslator {
             int inputIndex = inputIndex(operands.get(0));
             if (inputIndex < 0
                     || inputIndex >= inputType.getFieldCount()
-                    || !isIntegral(inputType.getTypeAt(inputIndex).getTypeRoot())) {
+                    || !supportsSearch(inputType.getTypeAt(inputIndex).getTypeRoot())) {
                 return null;
             }
             Object sarg = invoke(operands.get(1), "getValue");
@@ -646,11 +646,12 @@ public final class StreamFusionCalcTranslator {
         }
     }
 
-    private static boolean isIntegral(LogicalTypeRoot type) {
+    private static boolean supportsSearch(LogicalTypeRoot type) {
         return type == LogicalTypeRoot.TINYINT
                 || type == LogicalTypeRoot.SMALLINT
                 || type == LogicalTypeRoot.INTEGER
-                || type == LogicalTypeRoot.BIGINT;
+                || type == LogicalTypeRoot.BIGINT
+                || type == LogicalTypeRoot.DECIMAL;
     }
 
     private static StreamFusionCondition searchComparison(
@@ -668,6 +669,13 @@ public final class StreamFusionCalcTranslator {
                 return new StreamFusionIntComparison(inputIndex, value.intValueExact(), operator, true);
             case BIGINT:
                 return new StreamFusionLongComparison(inputIndex, value.longValueExact(), operator, true);
+            case DECIMAL:
+                DecimalType decimalType = (DecimalType) inputType.getTypeAt(inputIndex);
+                if (value.scale() != decimalType.getScale() || value.precision() > decimalType.getPrecision()) {
+                    return null;
+                }
+                return new StreamFusionDecimalComparison(
+                        inputIndex, value, decimalType.getPrecision(), decimalType.getScale(), operator, true);
             default:
                 return null;
         }

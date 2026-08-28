@@ -81,7 +81,8 @@ Supported comparisons and null checks can be recursively composed with `AND`, `O
 remain distinct throughout the expression, and `WHERE` retains only true rows.
 
 `BETWEEN`, `NOT BETWEEN`, `IN`, and `NOT IN` are accelerated for direct signed-integer
-columns and non-null same-type literals. Flink represents these predicates as search-argument ranges;
+or `DECIMAL` columns and non-null same-type literals. Decimal endpoints must retain the
+column's precision and scale. Flink represents these predicates as search-argument ranges;
 StreamFusion expands each bounded or unbounded range into the existing comparison tree.
 Lists containing `NULL` and search arguments over other types currently fall back.
 

@@ -840,6 +840,34 @@ class SqlParityTest {
                         "metric BETWEEN -2147483648 AND 2147483648"));
     }
 
+    @ParameterizedTest(name = "DECIMAL {0}")
+    @MethodSource("nativeDecimalDataStreamRangeCases")
+    void nativeDecimalDataStreamRangesMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {
+        assertDataStreamParity(
+                "SELECT metric FROM decimal_input WHERE " + predicate,
+                Types.BIG_DEC,
+                Arrays.asList(
+                        Row.of(new java.math.BigDecimal("-2.500000000000000000")),
+                        Row.of(new java.math.BigDecimal("-2.000000000000000000")),
+                        Row.of(new java.math.BigDecimal("2.000000000000000000")),
+                        Row.of(new java.math.BigDecimal("2.500000000000000000"))),
+                "decimal_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    private static Stream<Arguments> nativeDecimalDataStreamRangeCases() {
+        return Stream.of(
+                Arguments.of(
+                        "between",
+                        "metric BETWEEN CAST(-2.000000000000000000 AS DECIMAL(38, 18)) AND "
+                                + "CAST(2.000000000000000000 AS DECIMAL(38, 18))"),
+                Arguments.of(
+                        "in",
+                        "metric IN (CAST(-2.000000000000000000 AS DECIMAL(38, 18)), "
+                                + "CAST(2.000000000000000000 AS DECIMAL(38, 18)))"));
+    }
+
     @ParameterizedTest(name = "{0}")
     @MethodSource("nativeBooleanColumnCases")
     void nativeBooleanColumnsMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {
