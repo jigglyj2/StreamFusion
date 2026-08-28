@@ -20,6 +20,7 @@ import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
+import org.apache.flink.table.types.logical.TimeType;
 import tech.streamfusion.proto.plan.v1.Arithmetic;
 import tech.streamfusion.proto.plan.v1.ArithmeticOperator;
 import tech.streamfusion.proto.plan.v1.BooleanOperator;
@@ -285,6 +286,13 @@ public final class StreamFusionCalcTranslator {
             return epochDay == null
                     ? null
                     : new StreamFusionDateComparison(inputIndex, epochDay, operator, inputOnLeft);
+        }
+        if (type == LogicalTypeRoot.TIME_WITHOUT_TIME_ZONE) {
+            Integer millis = integerLiteral(literalExpression);
+            int precision = ((TimeType) inputType.getTypeAt(inputIndex)).getPrecision();
+            return millis == null
+                    ? null
+                    : new StreamFusionTimeComparison(inputIndex, millis, precision, operator, inputOnLeft);
         }
         return null;
     }

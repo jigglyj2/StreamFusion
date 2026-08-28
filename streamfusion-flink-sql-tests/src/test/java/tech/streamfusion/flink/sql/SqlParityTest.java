@@ -243,6 +243,51 @@ class SqlParityTest {
                 Arguments.of("literal-on-left", "DATE '2026-08-27' < event_date"));
     }
 
+    @ParameterizedTest(name = "TIME {0}")
+    @MethodSource("nativeTimeComparisonCases")
+    void nativeTimeComparisonsMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {
+        String sql = "SELECT payload FROM (VALUES "
+                + "(TIME '00:00:00.000', 10), (TIME '12:34:56.123', 20), "
+                + "(TIME '12:34:56.123', 21), (TIME '23:59:59.999', 30)) "
+                + "AS input(event_time, payload) WHERE "
+                + predicate;
+        assertParity(sql, true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    private static Stream<Arguments> nativeTimeComparisonCases() {
+        return Stream.of(
+                Arguments.of("equal at millisecond precision", "event_time = TIME '12:34:56.123'"),
+                Arguments.of("midnight lower bound", "event_time >= TIME '00:00:00.000'"),
+                Arguments.of("end-of-day range", "event_time < TIME '23:59:59.999'"),
+                Arguments.of("literal-on-left", "TIME '12:34:56.123' < event_time"));
+    }
+
+    @ParameterizedTest(name = "TIME({0})")
+    @MethodSource("nativeTimePrecisionCases")
+    void castTimePrecisionFallsBackAndMatchesFlinkByteForByte(int precision) throws Exception {
+        String type = "TIME(" + precision + ")";
+        String sql = "SELECT payload FROM (VALUES "
+                + "(CAST(TIME '00:00:00.000' AS "
+                + type
+                + "), 10), (CAST(TIME '12:34:56.123' AS "
+                + type
+                + "), 20), (CAST(TIME '23:59:59.999' AS "
+                + type
+                + "), 30)) AS input(event_time, payload) WHERE "
+                + "CAST(TIME '12:34:56.123' AS "
+                + type
+                + ") <= event_time";
+        assertParity(sql, true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
+    }
+
+    private static Stream<Integer> nativeTimePrecisionCases() {
+        return Stream.of(0, 6, 9);
+    }
+
     @ParameterizedTest(name = "{0}")
     @MethodSource("nativeNullPredicateCases")
     void nativeNullPredicatesMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {

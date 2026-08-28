@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-**Current status:** Simple numeric and `DATE` comparisons are accelerated.
+**Current status:** Simple numeric, `DATE`, and `TIME` comparisons are accelerated.
 
 ## SQL example
 
@@ -31,6 +31,11 @@ shape also cause the whole Calc to fall back.
 The same six predicates support `DATE` columns compared with `DATE` literals, including
 dates before the Unix epoch. Flink epoch-day values lower directly to Arrow `Date32`
 without changing units or timezone.
+
+`TIME` comparisons preserve Flink's millisecond-of-day representation. The protobuf also
+carries the declared precision so Rust creates the matching Arrow `Time32` or `Time64`
+literal and scales milliseconds to seconds, microseconds, or nanoseconds exactly as the
+boundary writer does. `TIME WITH TIME ZONE` is not a Flink SQL type and is not supported.
 
 `IS NULL` and `IS NOT NULL` are supported over direct input columns of every scalar type
 listed on the [projection coverage page](../projections/).

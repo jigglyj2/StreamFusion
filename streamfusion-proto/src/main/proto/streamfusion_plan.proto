@@ -43,6 +43,7 @@ message Expression {
     FloatLiteral float_literal = 12;
     DoubleLiteral double_literal = 13;
     DateLiteral date_literal = 14;
+    TimeLiteral time_literal = 15;
   }
 }
 
@@ -72,6 +73,11 @@ message DoubleLiteral {
 
 message DateLiteral {
   int32 epoch_day = 1;
+}
+
+message TimeLiteral {
+  int32 millisecond_of_day = 1;
+  uint32 precision = 2;
 }
 
 message GreaterThanOrEqual {

@@ -89,6 +89,21 @@ fn create_expression(
         Some(proto::expression::Expression::DateLiteral(literal)) => Ok(Arc::new(Literal::new(
             ScalarValue::Date32(Some(literal.epoch_day)),
         ))),
+        Some(proto::expression::Expression::TimeLiteral(literal)) => {
+            let millis = literal.millisecond_of_day;
+            let value = match literal.precision {
+                0 => ScalarValue::Time32Second(Some(millis / 1_000)),
+                1..=3 => ScalarValue::Time32Millisecond(Some(millis)),
+                4..=6 => ScalarValue::Time64Microsecond(Some(i64::from(millis) * 1_000)),
+                7..=9 => ScalarValue::Time64Nanosecond(Some(i64::from(millis) * 1_000_000)),
+                precision => {
+                    return Err(DataFusionError::Plan(format!(
+                        "TIME precision {precision} is outside Flink's supported range 0..=9"
+                    )))
+                }
+            };
+            Ok(Arc::new(Literal::new(value)))
+        }
         Some(proto::expression::Expression::GreaterThanOrEqual(comparison)) => {
             Ok(Arc::new(BinaryExpr::new(
                 create_expression(

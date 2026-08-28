@@ -23,8 +23,11 @@ import org.apache.flink.table.types.logical.ArrayType;
 import org.apache.flink.table.types.logical.DecimalType;
 import org.apache.flink.table.types.logical.IntType;
 import org.apache.flink.table.types.logical.RowType;
+import org.apache.flink.table.types.logical.TimeType;
 import org.apache.flink.table.types.logical.VarCharType;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import tech.streamfusion.proto.plan.v1.Calc;
 import tech.streamfusion.proto.plan.v1.Comparison;
 import tech.streamfusion.proto.plan.v1.ComparisonOperator;
@@ -38,6 +41,7 @@ import tech.streamfusion.proto.plan.v1.LogicalType;
 import tech.streamfusion.proto.plan.v1.NativePlan;
 import tech.streamfusion.proto.plan.v1.NullCheck;
 import tech.streamfusion.proto.plan.v1.Operator;
+import tech.streamfusion.proto.plan.v1.TimeLiteral;
 
 class ArrowCDataBridgeTest {
     @Test
@@ -115,6 +119,22 @@ class ArrowCDataBridgeTest {
                 ArrowRowDataBatch output = ArrowCDataBridge.execute(nullCheckPlan(false), input, rowType, allocator)) {
             assertThat(output.size()).isOne();
             assertThat(output.rowView(0).isNullAt(0)).isTrue();
+        }
+    }
+
+    @ParameterizedTest(name = "TIME({0})")
+    @ValueSource(ints = {0, 3, 6, 9})
+    void filtersEveryTimePrecisionThroughDataFusion(int precision) {
+        RowType rowType = RowType.of(new TimeType(false, precision));
+        List<RowData> rows =
+                List.of(GenericRowData.of(0), GenericRowData.of(43_200_000), GenericRowData.of(86_399_000));
+
+        try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+                ArrowRowDataBatch input = ArrowRowDataBatch.transpose(rows, rowType, allocator);
+                ArrowRowDataBatch output = ArrowCDataBridge.execute(timePlan(precision), input, rowType, allocator)) {
+            assertThat(output.size()).isEqualTo(2);
+            assertThat(output.rowView(0).getInt(0)).isEqualTo(43_200_000);
+            assertThat(output.rowView(1).getInt(0)).isEqualTo(86_399_000);
         }
     }
 
@@ -202,6 +222,30 @@ class ArrowCDataBridgeTest {
                 .setCondition(Expression.newBuilder()
                         .setNullCheck(
                                 NullCheck.newBuilder().setOperand(reference).setNegated(negated)))
+                .build();
+        return NativePlan.newBuilder()
+                .setProtocolVersion(1)
+                .setRoot(Operator.newBuilder().setCalc(calc))
+                .build()
+                .toByteArray();
+    }
+
+    private static byte[] timePlan(int precision) {
+        Expression reference = Expression.newBuilder()
+                .setInputReference(InputReference.newBuilder().setIndex(0))
+                .build();
+        Expression noon = Expression.newBuilder()
+                .setTimeLiteral(
+                        TimeLiteral.newBuilder().setMillisecondOfDay(43_200_000).setPrecision(precision))
+                .build();
+        Calc calc = Calc.newBuilder()
+                .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
+                .addProjections(reference)
+                .setCondition(Expression.newBuilder()
+                        .setComparison(Comparison.newBuilder()
+                                .setLeft(reference)
+                                .setRight(noon)
+                                .setOperator(ComparisonOperator.COMPARISON_OPERATOR_GREATER_THAN_OR_EQUAL)))
                 .build();
         return NativePlan.newBuilder()
                 .setProtocolVersion(1)
