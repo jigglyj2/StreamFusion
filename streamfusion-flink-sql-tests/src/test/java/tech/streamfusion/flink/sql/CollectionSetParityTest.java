@@ -21,6 +21,38 @@ import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 
 class CollectionSetParityTest extends SqlParityTestSupport {
     @Test
+    void arrayIntersectMatchesFlinkForPrimitiveElementsAndNullInputs() throws Exception {
+        assertDataStreamParity(
+                "SELECT ARRAY_INTERSECT(metric, ARRAY_REVERSE(metric)), "
+                        + "ARRAY_INTERSECT(metric, CAST(NULL AS ARRAY<INT>)) FROM array_input",
+                Types.OBJECT_ARRAY(Types.INT),
+                DataTypes.ARRAY(DataTypes.INT()),
+                Arrays.asList(
+                        Row.of((Object) new Integer[] {1, 2, null, 1}),
+                        Row.of((Object) new Integer[] {}),
+                        Row.of((Object) null)),
+                "array_input");
+
+        assertNativeCalcRan();
+    }
+
+    @Test
+    void arrayIntersectMatchesFlinkForNestedRows() throws Exception {
+        assertDataStreamParity(
+                "SELECT ARRAY_INTERSECT(metric, ARRAY_REVERSE(metric)) FROM row_array_input",
+                Types.OBJECT_ARRAY(Types.ROW_NAMED(new String[] {"label", "amount"}, Types.STRING, Types.INT)),
+                DataTypes.ARRAY(DataTypes.ROW(
+                        DataTypes.FIELD("label", DataTypes.STRING()), DataTypes.FIELD("amount", DataTypes.INT()))),
+                Arrays.asList(
+                        Row.of((Object) new Row[] {Row.of("a", 1), Row.of("b", null), Row.of("a", 1), null}),
+                        Row.of((Object) new Row[] {}),
+                        Row.of((Object) null)),
+                "row_array_input");
+
+        assertNativeCalcRan();
+    }
+
+    @Test
     void arrayUnionMatchesFlinkForPrimitiveElementsAndNullInputs() throws Exception {
         assertDataStreamParity(
                 "SELECT ARRAY_UNION(metric, ARRAY_REVERSE(metric)), "
