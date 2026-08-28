@@ -38,7 +38,7 @@ Flink's scalar result. `CARDINALITY` is accelerated for maps and non-nested arra
 an `INT` count or null for a null collection. Nested-array cardinality remains on Flink because
 Flink counts the outer array while DataFusion recursively counts leaf elements. Zero, negative,
 and computed array indexes, non-null complex literals,
-`MULTISET`, and other collection functions still fall back with the whole Calc. Nested child types, field names,
+`MULTISET`, and collection functions not explicitly listed below still fall back with the whole Calc. Nested child types, field names,
 ordering, nullability, and Arrow offsets are preserved across the native plan.
 
 Precision, scale, fixed width, and nullability are preserved. Constant `TINYINT` and
@@ -144,6 +144,12 @@ another native expression. StreamFusion wraps DataFusion's vectorized kernels wi
 null-array guard because DataFusion otherwise treats a null array like an empty array, while
 Flink requires the result to remain null. Element nullability in the result follows Flink's
 planned array type.
+`ARRAY_CONCAT` is accelerated for two or more otherwise supported array expressions with the
+common array type resolved by Flink, including arrays of nested rows and composition with other
+native array functions. Empty inputs contribute no elements. StreamFusion adds a null guard
+around DataFusion's vectorized concatenation because Flink returns null when any input array is
+null, while DataFusion otherwise skips null arrays. The concatenated batch remains inside the
+fused native plan until its output boundary.
 
 Rust lowers `COALESCE` to DataFusion's vectorized `CaseExpr`: each argument except the last
 becomes an `IS NOT NULL` branch and the last argument is the fallback value.
