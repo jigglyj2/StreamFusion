@@ -74,6 +74,10 @@ Arrow `Null` vector.
 `COALESCE` is accelerated when it has at least two arguments and every argument can be
 lowered as the same supported Flink result type. Nullability and left-to-right first-non-null
 selection are preserved; an unsupported argument causes the whole Calc to fall back.
+Searched and simple `CASE` projections and three-argument `IF` are accelerated when every
+condition and result branch is otherwise supported and Flink assigns one common result type.
+Conditions are evaluated in order, null conditions do not match, and the final `ELSE` value
+is required. Any unsupported condition or branch causes whole-Calc fallback.
 
 Integer division or remainder by zero or a non-literal divisor, decimal division and
 remainder, floating-point remainder, unary plus, non-decimal mixed-width arithmetic, non-finite
@@ -90,6 +94,8 @@ allocates a result vector when arithmetic produces new values.
 
 Rust lowers `COALESCE` to DataFusion's vectorized `CaseExpr`: each argument except the last
 becomes an `IS NOT NULL` branch and the last argument is the fallback value.
+`CASE` and `IF` use the same DataFusion expression with explicit ordered condition/result
+branches and an `ELSE` expression.
 
 Cast approval is table-driven. Java maps an explicitly approved Flink source/target pair
 to a stable protobuf cast kind; Rust independently verifies that kind against the actual

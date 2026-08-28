@@ -97,6 +97,28 @@ fn create_expression(
                 .collect::<Result<Vec<_>>>()?;
             expressions::coalesce::create(arguments)
         }
+        Some(proto::expression::Expression::Conditional(conditional)) => {
+            let branches = conditional
+                .branches
+                .iter()
+                .map(|branch| {
+                    let when = branch.when.as_ref().ok_or_else(|| {
+                        DataFusionError::Plan("conditional WHEN expression is empty".to_string())
+                    })?;
+                    let then = branch.then.as_ref().ok_or_else(|| {
+                        DataFusionError::Plan("conditional THEN expression is empty".to_string())
+                    })?;
+                    Ok((
+                        create_expression(when, schema)?,
+                        create_expression(then, schema)?,
+                    ))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let else_value = conditional.else_value.as_ref().ok_or_else(|| {
+                DataFusionError::Plan("conditional ELSE expression is empty".to_string())
+            })?;
+            expressions::conditional::create(branches, create_expression(else_value, schema)?)
+        }
         Some(proto::expression::Expression::DateLiteral(literal)) => Ok(Arc::new(Literal::new(
             ScalarValue::Date32(Some(literal.epoch_day)),
         ))),

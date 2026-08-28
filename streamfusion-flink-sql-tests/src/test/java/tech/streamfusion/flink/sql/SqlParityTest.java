@@ -989,6 +989,27 @@ class SqlParityTest {
                         "coalesce_string_input"));
     }
 
+    @ParameterizedTest(name = "conditional {0}")
+    @MethodSource("nativeConditionalDataStreamCases")
+    void nativeConditionalProjectionsMatchFlinkByteForByte(String ignoredName, String expression) throws Exception {
+        assertDataStreamParity(
+                "SELECT " + expression + " FROM conditional_input",
+                Types.INT,
+                Arrays.asList(Row.of(-3), Row.of(0), Row.of(1), Row.of(2), Row.of((Object) null)),
+                "conditional_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    private static Stream<Arguments> nativeConditionalDataStreamCases() {
+        return Stream.of(
+                Arguments.of(
+                        "searched-case",
+                        "CASE WHEN metric IS NULL THEN 99 WHEN metric < 0 THEN -metric ELSE metric + 10 END"),
+                Arguments.of("simple-case", "CASE metric WHEN 1 THEN 10 WHEN 2 THEN 20 ELSE 30 END"),
+                Arguments.of("if", "IF(metric IS NULL, 99, metric + 1)"));
+    }
+
     @ParameterizedTest(name = "VARBINARY {0}")
     @MethodSource("nativeVarbinaryDataStreamRangeCases")
     void nativeVarbinaryDataStreamRangesMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {

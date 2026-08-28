@@ -8,5 +8,6 @@
 
 pub(crate) mod cast;
 pub(crate) mod coalesce;
+pub(crate) mod conditional;
 pub(crate) mod null_literal;
 mod wrapping_cast;

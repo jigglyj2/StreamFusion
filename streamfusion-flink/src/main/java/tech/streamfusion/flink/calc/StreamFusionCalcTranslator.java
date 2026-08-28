@@ -41,6 +41,7 @@ import tech.streamfusion.proto.plan.v1.Cast;
 import tech.streamfusion.proto.plan.v1.CastKind;
 import tech.streamfusion.proto.plan.v1.Coalesce;
 import tech.streamfusion.proto.plan.v1.ComparisonOperator;
+import tech.streamfusion.proto.plan.v1.Conditional;
 import tech.streamfusion.proto.plan.v1.DateLiteral;
 import tech.streamfusion.proto.plan.v1.DecimalLiteral;
 import tech.streamfusion.proto.plan.v1.DoubleLiteral;
@@ -54,6 +55,7 @@ import tech.streamfusion.proto.plan.v1.StringLiteral;
 import tech.streamfusion.proto.plan.v1.TimeLiteral;
 import tech.streamfusion.proto.plan.v1.TimestampLiteral;
 import tech.streamfusion.proto.plan.v1.UnaryMinus;
+import tech.streamfusion.proto.plan.v1.WhenThen;
 
 /** Reflection entry point called by the small Flink planner patch for eligible calc nodes. */
 public final class StreamFusionCalcTranslator {
@@ -237,6 +239,31 @@ public final class StreamFusionCalcTranslator {
                 coalesce.addArguments(argument);
             }
             return Expression.newBuilder().setCoalesce(coalesce).build();
+        }
+        String kind = hasNoArgMethod(expression, "getKind")
+                ? invoke(expression, "getKind").toString()
+                : "";
+        if ("CASE".equals(kind) || "IF".equals(functionName(expression))) {
+            List<?> operands = (List<?>) invoke(expression, "getOperands");
+            if (operands.size() < 3 || operands.size() % 2 == 0) {
+                return null;
+            }
+            Conditional.Builder conditional = Conditional.newBuilder();
+            for (int index = 0; index < operands.size() - 1; index += 2) {
+                StreamFusionCondition when = condition(operands.get(index), inputType);
+                Expression then = projectionExpression(operands.get(index + 1), inputType, expectedType);
+                if (when == null || then == null) {
+                    return null;
+                }
+                conditional.addBranches(
+                        WhenThen.newBuilder().setWhen(when.expression()).setThen(then));
+            }
+            Expression elseValue = projectionExpression(operands.get(operands.size() - 1), inputType, expectedType);
+            return elseValue == null
+                    ? null
+                    : Expression.newBuilder()
+                            .setConditional(conditional.setElseValue(elseValue))
+                            .build();
         }
         return projectionExpression(expression, inputType, expectedType.getTypeRoot());
     }

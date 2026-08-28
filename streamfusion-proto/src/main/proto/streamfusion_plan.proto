@@ -54,11 +54,22 @@ message Expression {
     Cast cast = 23;
     NullLiteral null_literal = 24;
     Coalesce coalesce = 25;
+    Conditional conditional = 26;
   }
 }
 
 message Coalesce {
   repeated Expression arguments = 1;
+}
+
+message Conditional {
+  repeated WhenThen branches = 1;
+  Expression else_value = 2;
+}
+
+message WhenThen {
+  Expression when = 1;
+  Expression then = 2;
 }
 
 message NullLiteral {
