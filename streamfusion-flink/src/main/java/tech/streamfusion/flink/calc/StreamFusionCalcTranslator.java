@@ -30,7 +30,9 @@ import org.apache.flink.table.types.logical.TimestampType;
 import tech.streamfusion.proto.plan.v1.Arithmetic;
 import tech.streamfusion.proto.plan.v1.ArithmeticOperator;
 import tech.streamfusion.proto.plan.v1.BinaryLiteral;
+import tech.streamfusion.proto.plan.v1.BooleanBinary;
 import tech.streamfusion.proto.plan.v1.BooleanLiteral;
+import tech.streamfusion.proto.plan.v1.BooleanNot;
 import tech.streamfusion.proto.plan.v1.BooleanOperator;
 import tech.streamfusion.proto.plan.v1.ComparisonOperator;
 import tech.streamfusion.proto.plan.v1.DateLiteral;
@@ -191,6 +193,9 @@ public final class StreamFusionCalcTranslator {
         if (expectedType == LogicalTypeRoot.DECIMAL) {
             return decimalProjectionExpression(expression, inputType);
         }
+        if (expectedType == LogicalTypeRoot.BOOLEAN) {
+            return booleanProjectionExpression(expression, inputType);
+        }
         int inputIndex = inputIndex(expression);
         if (inputIndex >= 0) {
             if (inputIndex >= inputType.getFieldCount()
@@ -244,13 +249,6 @@ public final class StreamFusionCalcTranslator {
             if (epochDay != null) {
                 return Expression.newBuilder()
                         .setDateLiteral(DateLiteral.newBuilder().setEpochDay(epochDay))
-                        .build();
-            }
-        } else if (expectedType == LogicalTypeRoot.BOOLEAN) {
-            Boolean literal = literal(expression, Boolean.class);
-            if (literal != null) {
-                return Expression.newBuilder()
-                        .setBooleanLiteral(BooleanLiteral.newBuilder().setValue(literal))
                         .build();
             }
         } else if (expectedType == LogicalTypeRoot.INTEGER) {
@@ -325,6 +323,59 @@ public final class StreamFusionCalcTranslator {
         return Expression.newBuilder()
                 .setArithmetic(
                         Arithmetic.newBuilder().setLeft(left).setRight(right).setOperator(operator))
+                .build();
+    }
+
+    private static Expression booleanProjectionExpression(Object expression, RowType inputType) {
+        int inputIndex = inputIndex(expression);
+        if (inputIndex >= 0) {
+            if (inputIndex >= inputType.getFieldCount()
+                    || inputType.getTypeAt(inputIndex).getTypeRoot() != LogicalTypeRoot.BOOLEAN) {
+                return null;
+            }
+            return StreamFusionIdentityCalcOperator.inputReference(
+                    inputIndex, StreamFusionIdentityCalcOperator.logicalType(inputType, inputIndex));
+        }
+
+        Boolean literal = literal(expression, Boolean.class);
+        if (literal != null) {
+            return Expression.newBuilder()
+                    .setBooleanLiteral(BooleanLiteral.newBuilder().setValue(literal))
+                    .build();
+        }
+
+        String kind = invoke(expression, "getKind").toString();
+        List<?> operands = (List<?>) invoke(expression, "getOperands");
+        if ("NOT".equals(kind)) {
+            if (operands.size() != 1) {
+                return null;
+            }
+            Expression operand = booleanProjectionExpression(operands.get(0), inputType);
+            return operand == null
+                    ? null
+                    : Expression.newBuilder()
+                            .setBooleanNot(BooleanNot.newBuilder().setOperand(operand))
+                            .build();
+        }
+        if (!"AND".equals(kind) && !"OR".equals(kind)) {
+            return null;
+        }
+        if (operands.size() != 2) {
+            return null;
+        }
+        Expression left = booleanProjectionExpression(operands.get(0), inputType);
+        Expression right = booleanProjectionExpression(operands.get(1), inputType);
+        if (left == null || right == null) {
+            return null;
+        }
+        return Expression.newBuilder()
+                .setBooleanBinary(BooleanBinary.newBuilder()
+                        .setLeft(left)
+                        .setRight(right)
+                        .setOperator(
+                                "AND".equals(kind)
+                                        ? BooleanOperator.BOOLEAN_OPERATOR_AND
+                                        : BooleanOperator.BOOLEAN_OPERATOR_OR))
                 .build();
     }
 

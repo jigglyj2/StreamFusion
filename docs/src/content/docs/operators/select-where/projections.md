@@ -31,6 +31,8 @@ intermediate results. Signed integer overflow follows Flink's wrapping semantics
 Floating-point literals must be finite. Constant `TRUE` and `FALSE` projections are also
 accelerated, as are constant `DATE` values, including dates before the Unix epoch.
 Unary minus is accelerated for the same numeric types.
+Boolean projections can recursively compose direct boolean columns and constants with
+`NOT`, `AND`, and `OR` using SQL's three-valued logic.
 `INT` and `BIGINT` division is accelerated when the divisor is a direct nonzero literal;
 signed results truncate exactly as Flink does. `MOD` remainder supports the same types
 and divisor restriction. A planner representation that wraps a negative `BIGINT` divisor

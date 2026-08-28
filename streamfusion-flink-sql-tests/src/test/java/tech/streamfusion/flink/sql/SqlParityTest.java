@@ -127,6 +127,17 @@ class SqlParityTest {
     }
 
     @Test
+    void nativeBooleanExpressionProjectionsMatchFlinkByteForByte() throws Exception {
+        String sql = "SELECT NOT left_flag, left_flag AND right_flag, left_flag OR right_flag, "
+                + "NOT (left_flag AND right_flag), (left_flag OR FALSE) AND TRUE "
+                + "FROM (VALUES (TRUE, TRUE), (TRUE, FALSE), (FALSE, TRUE), (FALSE, FALSE)) "
+                + "AS input(left_flag, right_flag)";
+        assertParity(sql, true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    @Test
     void nativeDateLiteralProjectionsMatchFlinkByteForByte() throws Exception {
         String sql = "SELECT DATE '1969-12-31', DATE '1970-01-01', DATE '2026-08-27' "
                 + "FROM (VALUES (1), (2)) AS input(id) WHERE id >= 1";
