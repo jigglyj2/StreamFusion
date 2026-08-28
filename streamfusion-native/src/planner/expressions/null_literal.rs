@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, TimeUnit};
+use arrow::datatypes::{DataType, Field, Fields, TimeUnit};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_expr::expressions::Literal;
 use datafusion::physical_expr::PhysicalExpr;
@@ -68,10 +68,52 @@ fn data_type(logical_type: &proto::LogicalType) -> Result<DataType> {
             }
             Ok(DataType::Decimal128(precision, scale))
         }
+        Some(proto::logical_type::Type::Array(array)) => {
+            let element_type = required_type("ARRAY element", array.element_type.as_deref())?;
+            Ok(DataType::List(Arc::new(Field::new(
+                "element",
+                data_type(element_type)?,
+                element_type.nullable,
+            ))))
+        }
+        Some(proto::logical_type::Type::Map(map)) => {
+            let key_type = required_type("MAP key", map.key_type.as_deref())?;
+            let value_type = required_type("MAP value", map.value_type.as_deref())?;
+            let entries = DataType::Struct(Fields::from(vec![
+                Field::new("key", data_type(key_type)?, false),
+                Field::new("value", data_type(value_type)?, value_type.nullable),
+            ]));
+            Ok(DataType::Map(
+                Arc::new(Field::new("items", entries, false)),
+                false,
+            ))
+        }
+        Some(proto::logical_type::Type::Row(row)) => {
+            let fields = row
+                .fields
+                .iter()
+                .map(|field| {
+                    let field_type = required_type("ROW field", field.r#type.as_ref())?;
+                    Ok(Field::new(
+                        &field.name,
+                        data_type(field_type)?,
+                        field_type.nullable,
+                    ))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(DataType::Struct(Fields::from(fields)))
+        }
         _ => Err(DataFusionError::Plan(
             "NULL literal type is not supported".to_string(),
         )),
     }
+}
+
+fn required_type<'a>(
+    name: &str,
+    logical_type: Option<&'a proto::LogicalType>,
+) -> Result<&'a proto::LogicalType> {
+    logical_type.ok_or_else(|| DataFusionError::Plan(format!("{name} type is missing")))
 }
 
 fn validate_length(name: &str, length: u32) -> Result<i32> {

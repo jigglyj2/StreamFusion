@@ -340,7 +340,10 @@ abstract class StreamFusionRexSupport {
                 || type == LogicalTypeRoot.DECIMAL
                 || type == LogicalTypeRoot.DATE
                 || type == LogicalTypeRoot.TIME_WITHOUT_TIME_ZONE
-                || type == LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE;
+                || type == LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE
+                || type == LogicalTypeRoot.ARRAY
+                || type == LogicalTypeRoot.MAP
+                || type == LogicalTypeRoot.ROW;
     }
 
     protected static TimestampData timestampLiteral(Object expression) {
