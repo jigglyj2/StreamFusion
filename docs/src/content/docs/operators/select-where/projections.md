@@ -138,6 +138,12 @@ DataFusion returns null without searching the array.
 elements and nullable elements. It lowers directly to DataFusion's vectorized array reversal;
 null and empty arrays retain Flink's behavior, and the resulting Arrow array stays inside the
 fused native plan until the output boundary.
+`ARRAY_APPEND` and `ARRAY_PREPEND` are accelerated when the input array and element are
+otherwise supported expressions, including null elements and complex elements obtained from
+another native expression. StreamFusion wraps DataFusion's vectorized kernels with an explicit
+null-array guard because DataFusion otherwise treats a null array like an empty array, while
+Flink requires the result to remain null. Element nullability in the result follows Flink's
+planned array type.
 
 Rust lowers `COALESCE` to DataFusion's vectorized `CaseExpr`: each argument except the last
 becomes an `IS NOT NULL` branch and the last argument is the fallback value.
