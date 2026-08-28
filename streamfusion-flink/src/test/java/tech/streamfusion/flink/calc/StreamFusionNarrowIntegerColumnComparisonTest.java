@@ -45,7 +45,11 @@ class StreamFusionNarrowIntegerColumnComparisonTest {
                     Arguments.of(type, higher, equal, ComparisonOperator.COMPARISON_OPERATOR_GREATER_THAN, true),
                     Arguments.of(
                             type, higher, equal, ComparisonOperator.COMPARISON_OPERATOR_GREATER_THAN_OR_EQUAL, true),
-                    Arguments.of(type, null, equal, ComparisonOperator.COMPARISON_OPERATOR_EQUAL, null));
+                    Arguments.of(type, null, equal, ComparisonOperator.COMPARISON_OPERATOR_EQUAL, null),
+                    Arguments.of(type, lower, equal, ComparisonOperator.COMPARISON_OPERATOR_IS_DISTINCT_FROM, true),
+                    Arguments.of(type, equal, equal, ComparisonOperator.COMPARISON_OPERATOR_IS_NOT_DISTINCT_FROM, true),
+                    Arguments.of(type, null, equal, ComparisonOperator.COMPARISON_OPERATOR_IS_DISTINCT_FROM, true),
+                    Arguments.of(type, null, null, ComparisonOperator.COMPARISON_OPERATOR_IS_NOT_DISTINCT_FROM, true));
         });
     }
 

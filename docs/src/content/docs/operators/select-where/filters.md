@@ -76,6 +76,7 @@ are accelerated over any supported boolean expression.
 temporal column/literal and matching column/column types as ordinary comparisons, plus
 matching boolean column pairs. Unlike `=` and `<>`, they always return a non-null boolean
 and treat two nulls as not distinct.
+This includes matching `TINYINT` and `SMALLINT` column pairs; no widening cast is inserted.
 
 ## Implementation
 
