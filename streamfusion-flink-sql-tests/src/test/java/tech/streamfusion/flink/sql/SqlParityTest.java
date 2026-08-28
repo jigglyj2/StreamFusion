@@ -868,6 +868,28 @@ class SqlParityTest {
                                 + "CAST(2.000000000000000000 AS DECIMAL(38, 18)))"));
     }
 
+    @ParameterizedTest(name = "DATE {0}")
+    @MethodSource("nativeDateDataStreamRangeCases")
+    void nativeDateDataStreamRangesMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {
+        assertDataStreamParity(
+                "SELECT metric FROM date_input WHERE " + predicate,
+                Types.SQL_DATE,
+                Arrays.asList(
+                        Row.of(java.sql.Date.valueOf("1969-12-31")),
+                        Row.of(java.sql.Date.valueOf("1970-01-01")),
+                        Row.of(java.sql.Date.valueOf("2026-08-28")),
+                        Row.of(java.sql.Date.valueOf("2030-01-01"))),
+                "date_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    private static Stream<Arguments> nativeDateDataStreamRangeCases() {
+        return Stream.of(
+                Arguments.of("between", "metric BETWEEN DATE '1970-01-01' AND DATE '2026-08-28'"),
+                Arguments.of("in", "metric IN (DATE '1969-12-31', DATE '2026-08-28')"));
+    }
+
     @ParameterizedTest(name = "{0}")
     @MethodSource("nativeBooleanColumnCases")
     void nativeBooleanColumnsMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {

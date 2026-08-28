@@ -13,6 +13,7 @@ import com.google.protobuf.ByteString;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -651,31 +652,39 @@ public final class StreamFusionCalcTranslator {
                 || type == LogicalTypeRoot.SMALLINT
                 || type == LogicalTypeRoot.INTEGER
                 || type == LogicalTypeRoot.BIGINT
-                || type == LogicalTypeRoot.DECIMAL;
+                || type == LogicalTypeRoot.DECIMAL
+                || type == LogicalTypeRoot.DATE;
     }
 
     private static StreamFusionCondition searchComparison(
             int inputIndex, Object endpoint, ComparisonOperator operator, RowType inputType) {
-        if (!(endpoint instanceof BigDecimal)) {
-            return null;
-        }
-        BigDecimal value = (BigDecimal) endpoint;
         switch (inputType.getTypeAt(inputIndex).getTypeRoot()) {
             case TINYINT:
-                return new StreamFusionByteComparison(inputIndex, value.byteValueExact(), operator, true);
+                return new StreamFusionByteComparison(
+                        inputIndex, ((BigDecimal) endpoint).byteValueExact(), operator, true);
             case SMALLINT:
-                return new StreamFusionShortComparison(inputIndex, value.shortValueExact(), operator, true);
+                return new StreamFusionShortComparison(
+                        inputIndex, ((BigDecimal) endpoint).shortValueExact(), operator, true);
             case INTEGER:
-                return new StreamFusionIntComparison(inputIndex, value.intValueExact(), operator, true);
+                return new StreamFusionIntComparison(
+                        inputIndex, ((BigDecimal) endpoint).intValueExact(), operator, true);
             case BIGINT:
-                return new StreamFusionLongComparison(inputIndex, value.longValueExact(), operator, true);
+                return new StreamFusionLongComparison(
+                        inputIndex, ((BigDecimal) endpoint).longValueExact(), operator, true);
             case DECIMAL:
+                BigDecimal value = (BigDecimal) endpoint;
                 DecimalType decimalType = (DecimalType) inputType.getTypeAt(inputIndex);
                 if (value.scale() != decimalType.getScale() || value.precision() > decimalType.getPrecision()) {
                     return null;
                 }
                 return new StreamFusionDecimalComparison(
                         inputIndex, value, decimalType.getPrecision(), decimalType.getScale(), operator, true);
+            case DATE:
+                return new StreamFusionDateComparison(
+                        inputIndex,
+                        Math.toIntExact(LocalDate.parse(endpoint.toString()).toEpochDay()),
+                        operator,
+                        true);
             default:
                 return null;
         }
