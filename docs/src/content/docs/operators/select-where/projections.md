@@ -296,6 +296,11 @@ expressions. StreamFusion reverses Flink's syntax operands when constructing Dat
 vectorized `strpos(haystack, needle)` expression. Results remain one-based, missing needles
 return zero, empty needles return one, Unicode positions count code points, and nulls propagate.
 Fixed-width `CHAR` remains on Flink.
+`ASCII(value)` is accelerated for supported `VARCHAR` expressions in projections and filters.
+Flink returns its first UTF-8 byte sign-extended with Java byte semantics, rather than a Unicode
+code point; StreamFusion therefore uses a focused vectorized compatibility expression instead
+of DataFusion's differing `ascii` kernel. Empty strings return zero and nulls remain null.
+Fixed-width `CHAR` remains on Flink.
 
 Cast approval is table-driven. Java maps an explicitly approved Flink source/target pair
 to a stable protobuf cast kind; Rust independently verifies that kind against the actual

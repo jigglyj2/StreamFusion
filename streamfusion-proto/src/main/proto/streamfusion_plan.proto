@@ -97,6 +97,7 @@ message Expression {
     StringRepeat string_repeat = 66;
     StringEndsWith string_ends_with = 67;
     StringPosition string_position = 68;
+    StringAscii string_ascii = 69;
   }
 }
 
@@ -247,6 +248,10 @@ message StringEndsWith {
 message StringPosition {
   Expression needle = 1;
   Expression haystack = 2;
+}
+
+message StringAscii {
+  Expression value = 1;
 }
 
 message Coalesce {

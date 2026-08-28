@@ -283,6 +283,13 @@ pub(super) fn create(
             )?,
             schema,
         ),
+        StringAscii(ascii) => expressions::string_ascii::create(
+            create_expression(
+                required(&ascii.value, "string ASCII is missing its value")?,
+                schema,
+            )?,
+            schema,
+        ),
         ArrayDistinct(distinct) => expressions::array_distinct::create(
             create_expression(
                 required(&distinct.array, "array distinct is missing its array")?,

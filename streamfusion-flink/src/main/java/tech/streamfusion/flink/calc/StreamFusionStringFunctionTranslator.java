@@ -14,6 +14,7 @@ import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.proto.plan.v1.Expression;
+import tech.streamfusion.proto.plan.v1.StringAscii;
 import tech.streamfusion.proto.plan.v1.StringPosition;
 import tech.streamfusion.proto.plan.v1.StringRepeat;
 import tech.streamfusion.proto.plan.v1.StringReplace;
@@ -89,5 +90,25 @@ final class StreamFusionStringFunctionTranslator extends StreamFusionComplexType
         return Expression.newBuilder()
                 .setStringPosition(StringPosition.newBuilder().setNeedle(needle).setHaystack(haystack))
                 .build();
+    }
+
+    static Expression ascii(Object expression, RowType inputType, LogicalType expectedType) {
+        if (!"ASCII".equals(functionName(expression)) || expectedType.getTypeRoot() != LogicalTypeRoot.INTEGER) {
+            return null;
+        }
+        java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
+        if (operands.size() != 1) {
+            return null;
+        }
+        org.apache.flink.table.types.logical.VarCharType stringType =
+                new org.apache.flink.table.types.logical.VarCharType(
+                        org.apache.flink.table.types.logical.VarCharType.MAX_LENGTH);
+        Expression value =
+                StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, stringType);
+        return value == null
+                ? null
+                : Expression.newBuilder()
+                        .setStringAscii(StringAscii.newBuilder().setValue(value))
+                        .build();
     }
 }
