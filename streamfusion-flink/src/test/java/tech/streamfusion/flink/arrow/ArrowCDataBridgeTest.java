@@ -21,14 +21,17 @@ import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.StringData;
 import org.apache.flink.table.data.TimestampData;
 import org.apache.flink.table.types.logical.ArrayType;
+import org.apache.flink.table.types.logical.BigIntType;
 import org.apache.flink.table.types.logical.BooleanType;
 import org.apache.flink.table.types.logical.DecimalType;
 import org.apache.flink.table.types.logical.DoubleType;
 import org.apache.flink.table.types.logical.FloatType;
 import org.apache.flink.table.types.logical.IntType;
 import org.apache.flink.table.types.logical.RowType;
+import org.apache.flink.table.types.logical.SmallIntType;
 import org.apache.flink.table.types.logical.TimeType;
 import org.apache.flink.table.types.logical.TimestampType;
+import org.apache.flink.table.types.logical.TinyIntType;
 import org.apache.flink.table.types.logical.VarCharType;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -36,6 +39,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import tech.streamfusion.proto.plan.v1.Arithmetic;
 import tech.streamfusion.proto.plan.v1.ArithmeticOperator;
 import tech.streamfusion.proto.plan.v1.Calc;
+import tech.streamfusion.proto.plan.v1.Cast;
 import tech.streamfusion.proto.plan.v1.Comparison;
 import tech.streamfusion.proto.plan.v1.ComparisonOperator;
 import tech.streamfusion.proto.plan.v1.DecimalLiteral;
@@ -113,6 +117,37 @@ class ArrowCDataBridgeTest {
             assertThat(output.rowView(1).getBoolean(1)).isTrue();
             assertThat(output.rowView(2).getBoolean(0)).isTrue();
             assertThat(output.rowView(2).getBoolean(1)).isFalse();
+        }
+    }
+
+    @Test
+    void widensEverySignedIntegerTypeWithoutChangingValues() {
+        RowType inputType = RowType.of(new TinyIntType(false), new SmallIntType(false), new IntType(false));
+        RowType outputType = RowType.of(
+                new SmallIntType(false),
+                new IntType(false),
+                new BigIntType(false),
+                new IntType(false),
+                new BigIntType(false),
+                new BigIntType(false));
+        List<RowData> rows = List.of(
+                GenericRowData.of((byte) -128, (short) -32768, Integer.MIN_VALUE),
+                GenericRowData.of((byte) 0, (short) 0, 0),
+                GenericRowData.of((byte) 127, (short) 32767, Integer.MAX_VALUE));
+
+        try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+                ArrowRowDataBatch input = ArrowRowDataBatch.transpose(rows, inputType, allocator);
+                ArrowRowDataBatch output =
+                        ArrowCDataBridge.execute(integerWideningPlan(), input, outputType, allocator)) {
+            assertThat(output.rowView(0).getShort(0)).isEqualTo((short) -128);
+            assertThat(output.rowView(0).getInt(1)).isEqualTo(-128);
+            assertThat(output.rowView(0).getLong(2)).isEqualTo(-128L);
+            assertThat(output.rowView(0).getInt(3)).isEqualTo(-32768);
+            assertThat(output.rowView(0).getLong(4)).isEqualTo(-32768L);
+            assertThat(output.rowView(0).getLong(5)).isEqualTo(Integer.MIN_VALUE);
+            assertThat(output.rowView(2).getLong(2)).isEqualTo(127L);
+            assertThat(output.rowView(2).getLong(4)).isEqualTo(32767L);
+            assertThat(output.rowView(2).getLong(5)).isEqualTo(Integer.MAX_VALUE);
         }
     }
 
@@ -408,6 +443,29 @@ class ArrowCDataBridgeTest {
                 .setRoot(Operator.newBuilder().setCalc(calc))
                 .build()
                 .toByteArray();
+    }
+
+    private static byte[] integerWideningPlan() {
+        Calc.Builder calc = Calc.newBuilder().setInput(Operator.newBuilder().setInput(Input.newBuilder()));
+        addIntegerCast(calc, 0, LogicalType.newBuilder().setSmallint(EmptyType.getDefaultInstance()));
+        addIntegerCast(calc, 0, LogicalType.newBuilder().setInteger(EmptyType.getDefaultInstance()));
+        addIntegerCast(calc, 0, LogicalType.newBuilder().setBigint(EmptyType.getDefaultInstance()));
+        addIntegerCast(calc, 1, LogicalType.newBuilder().setInteger(EmptyType.getDefaultInstance()));
+        addIntegerCast(calc, 1, LogicalType.newBuilder().setBigint(EmptyType.getDefaultInstance()));
+        addIntegerCast(calc, 2, LogicalType.newBuilder().setBigint(EmptyType.getDefaultInstance()));
+        return NativePlan.newBuilder()
+                .setProtocolVersion(1)
+                .setRoot(Operator.newBuilder().setCalc(calc))
+                .build()
+                .toByteArray();
+    }
+
+    private static void addIntegerCast(Calc.Builder calc, int inputIndex, LogicalType.Builder targetType) {
+        calc.addProjections(Expression.newBuilder()
+                .setCast(Cast.newBuilder()
+                        .setOperand(Expression.newBuilder()
+                                .setInputReference(InputReference.newBuilder().setIndex(inputIndex)))
+                        .setTargetType(targetType.setNullable(false))));
     }
 
     private static byte[] nullCheckPlan(boolean negated) {

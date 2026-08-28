@@ -221,20 +221,45 @@ fn create_expression(
                 .target_type
                 .as_ref()
                 .ok_or_else(|| DataFusionError::Plan("cast target type is empty".to_string()))?;
-            match target.r#type {
-                Some(proto::logical_type::Type::Bigint(_))
-                    if operand.data_type(schema)? == arrow::datatypes::DataType::Int32 =>
-                {
-                    Ok(Arc::new(CastExpr::new(
-                        operand,
-                        arrow::datatypes::DataType::Int64,
-                        None,
-                    )))
+            let source_type = operand.data_type(schema)?;
+            let target_type = match target.r#type {
+                Some(proto::logical_type::Type::Smallint(_)) => arrow::datatypes::DataType::Int16,
+                Some(proto::logical_type::Type::Integer(_)) => arrow::datatypes::DataType::Int32,
+                Some(proto::logical_type::Type::Bigint(_)) => arrow::datatypes::DataType::Int64,
+                _ => {
+                    return Err(DataFusionError::Plan(
+                        "cast target is not a signed integer".to_string(),
+                    ))
                 }
-                _ => Err(DataFusionError::Plan(
-                    "only INT to BIGINT casts are supported".to_string(),
-                )),
+            };
+            let widening = matches!(
+                (&source_type, &target_type),
+                (
+                    arrow::datatypes::DataType::Int8,
+                    arrow::datatypes::DataType::Int16
+                ) | (
+                    arrow::datatypes::DataType::Int8,
+                    arrow::datatypes::DataType::Int32
+                ) | (
+                    arrow::datatypes::DataType::Int8,
+                    arrow::datatypes::DataType::Int64
+                ) | (
+                    arrow::datatypes::DataType::Int16,
+                    arrow::datatypes::DataType::Int32
+                ) | (
+                    arrow::datatypes::DataType::Int16,
+                    arrow::datatypes::DataType::Int64
+                ) | (
+                    arrow::datatypes::DataType::Int32,
+                    arrow::datatypes::DataType::Int64
+                )
+            );
+            if !widening {
+                return Err(DataFusionError::Plan(format!(
+                    "cast from {source_type} to {target_type} is not lossless integer widening"
+                )));
             }
+            Ok(Arc::new(CastExpr::new(operand, target_type, None)))
         }
         Some(proto::expression::Expression::GreaterThanOrEqual(comparison)) => {
             Ok(Arc::new(BinaryExpr::new(

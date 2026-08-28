@@ -43,7 +43,8 @@ accelerated for the types supported by filters.
 signed results truncate exactly as Flink does. `MOD` remainder supports the same types
 and divisor restriction. A planner representation that wraps a negative `BIGINT` divisor
 in a cast or unary expression falls back because it is no longer a direct literal.
-Lossless `CAST(INT AS BIGINT)` projections are accelerated.
+Lossless signed-integer widening projections are accelerated: `TINYINT` to `SMALLINT`,
+`INT`, or `BIGINT`; `SMALLINT` to `INT` or `BIGINT`; and `INT` to `BIGINT`.
 Constant `TIME` values preserve their declared precision and millisecond-of-day value.
 Constant `TIMESTAMP WITHOUT TIME ZONE` values preserve their local calendar value and
 sub-millisecond nanoseconds without applying a session or JVM timezone.

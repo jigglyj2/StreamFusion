@@ -349,8 +349,7 @@ public final class StreamFusionCalcTranslator {
     private static Expression wideningCastExpression(
             Object expression, RowType inputType, LogicalTypeRoot expectedType) {
         if (!expression.getClass().getSimpleName().equals("RexCall")
-                || !"CAST".equals(invoke(expression, "getKind").toString())
-                || expectedType != LogicalTypeRoot.BIGINT) {
+                || !"CAST".equals(invoke(expression, "getKind").toString())) {
             return null;
         }
         List<?> operands = (List<?>) invoke(expression, "getOperands");
@@ -358,22 +357,51 @@ public final class StreamFusionCalcTranslator {
             return null;
         }
         int inputIndex = inputIndex(operands.get(0));
-        if (inputIndex < 0
-                || inputIndex >= inputType.getFieldCount()
-                || inputType.getTypeAt(inputIndex).getTypeRoot() != LogicalTypeRoot.INTEGER) {
+        if (inputIndex < 0 || inputIndex >= inputType.getFieldCount()) {
+            return null;
+        }
+        LogicalTypeRoot sourceType = inputType.getTypeAt(inputIndex).getTypeRoot();
+        int sourceWidth = signedIntegerWidth(sourceType);
+        int targetWidth = signedIntegerWidth(expectedType);
+        if (sourceWidth < 0 || targetWidth <= sourceWidth) {
             return null;
         }
         boolean nullable = (boolean) invoke(invoke(expression, "getType"), "isNullable");
-        LogicalType targetType = LogicalType.newBuilder()
-                .setNullable(nullable)
-                .setBigint(EmptyType.getDefaultInstance())
-                .build();
+        LogicalType.Builder targetType = LogicalType.newBuilder().setNullable(nullable);
+        switch (expectedType) {
+            case SMALLINT:
+                targetType.setSmallint(EmptyType.getDefaultInstance());
+                break;
+            case INTEGER:
+                targetType.setInteger(EmptyType.getDefaultInstance());
+                break;
+            case BIGINT:
+                targetType.setBigint(EmptyType.getDefaultInstance());
+                break;
+            default:
+                return null;
+        }
         return Expression.newBuilder()
                 .setCast(Cast.newBuilder()
                         .setOperand(StreamFusionIdentityCalcOperator.inputReference(
                                 inputIndex, StreamFusionIdentityCalcOperator.logicalType(inputType, inputIndex)))
                         .setTargetType(targetType))
                 .build();
+    }
+
+    private static int signedIntegerWidth(LogicalTypeRoot type) {
+        switch (type) {
+            case TINYINT:
+                return 8;
+            case SMALLINT:
+                return 16;
+            case INTEGER:
+                return 32;
+            case BIGINT:
+                return 64;
+            default:
+                return -1;
+        }
     }
 
     private static Expression booleanProjectionExpression(Object expression, RowType inputType) {
