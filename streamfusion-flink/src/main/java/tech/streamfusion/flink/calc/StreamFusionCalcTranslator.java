@@ -38,6 +38,7 @@ import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.FloatLiteral;
 import tech.streamfusion.proto.plan.v1.IntegerLiteral;
 import tech.streamfusion.proto.plan.v1.LongLiteral;
+import tech.streamfusion.proto.plan.v1.TimeLiteral;
 
 /** Reflection entry point called by the small Flink planner patch for eligible calc nodes. */
 public final class StreamFusionCalcTranslator {
@@ -101,7 +102,8 @@ public final class StreamFusionCalcTranslator {
                                 && outputRoot != LogicalTypeRoot.DOUBLE
                                 && outputRoot != LogicalTypeRoot.DECIMAL
                                 && outputRoot != LogicalTypeRoot.BOOLEAN
-                                && outputRoot != LogicalTypeRoot.DATE)
+                                && outputRoot != LogicalTypeRoot.DATE
+                                && outputRoot != LogicalTypeRoot.TIME_WITHOUT_TIME_ZONE)
                         || projectionExpression(projection, inputType, outputRoot) == null) {
                     return false;
                 }
@@ -188,7 +190,17 @@ public final class StreamFusionCalcTranslator {
             return StreamFusionIdentityCalcOperator.inputReference(
                     inputIndex, StreamFusionIdentityCalcOperator.logicalType(inputType, inputIndex));
         }
-        if (expectedType == LogicalTypeRoot.DATE) {
+        if (expectedType == LogicalTypeRoot.TIME_WITHOUT_TIME_ZONE) {
+            Integer millis = integerLiteral(expression);
+            int precision = (int) invoke(invoke(expression, "getType"), "getPrecision");
+            if (millis != null && precision >= 0 && precision <= 9) {
+                return Expression.newBuilder()
+                        .setTimeLiteral(TimeLiteral.newBuilder()
+                                .setMillisecondOfDay(millis)
+                                .setPrecision(precision))
+                        .build();
+            }
+        } else if (expectedType == LogicalTypeRoot.DATE) {
             Integer epochDay = integerLiteral(expression);
             if (epochDay != null) {
                 return Expression.newBuilder()

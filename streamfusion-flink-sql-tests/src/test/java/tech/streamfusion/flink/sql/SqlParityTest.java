@@ -136,6 +136,15 @@ class SqlParityTest {
     }
 
     @Test
+    void nativeTimeLiteralProjectionsMatchFlinkByteForByte() throws Exception {
+        String sql = "SELECT TIME '00:00:00', TIME '12:34:56.123', TIME '23:59:59.999' "
+                + "FROM (VALUES (1), (2)) AS input(id) WHERE id >= 1";
+        assertParity(sql, true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    @Test
     void nativeBigintArithmeticMatchesFlinkByteForByte() throws Exception {
         assertParity(BIGINT_ARITHMETIC_SQL, true);
 

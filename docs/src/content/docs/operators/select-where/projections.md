@@ -30,6 +30,7 @@ scale assigned to each expression by Flink's planner, including the precision gr
 intermediate results. Signed integer overflow follows Flink's wrapping semantics.
 Floating-point literals must be finite. Constant `TRUE` and `FALSE` projections are also
 accelerated, as are constant `DATE` values, including dates before the Unix epoch.
+Constant `TIME` values preserve their declared precision and millisecond-of-day value.
 
 Division, remainder, unary arithmetic, non-decimal mixed-width arithmetic, non-finite
 floating-point literals, arithmetic on other types, casts, and functions currently fall
