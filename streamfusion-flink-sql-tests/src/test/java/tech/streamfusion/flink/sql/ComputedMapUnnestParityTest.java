@@ -12,6 +12,7 @@ package tech.streamfusion.flink.sql;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.types.Row;
@@ -49,6 +50,27 @@ class ComputedMapUnnestParityTest extends SqlParityTestSupport {
                         Row.of(java.util.Map.of("first", 1, "second", 2)), Row.of(java.util.Map.of()), Row.of((Object)
                                 null)),
                 "computed_map_keys_unnest_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isEqualTo(1);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
+    @Test
+    void nativeUnnestEvaluatesNullableMapValuesInsideTheSamePlan() throws Exception {
+        LinkedHashMap<String, Integer> nullableValues = new LinkedHashMap<>();
+        nullableValues.put("first", 1);
+        nullableValues.put("missing", null);
+
+        assertDataStreamParity(
+                "SELECT map_value, ord_idx FROM computed_map_values_unnest_input "
+                        + "LEFT JOIN UNNEST(MAP_VALUES(metric)) WITH ORDINALITY "
+                        + "AS expanded(map_value, ord_idx) ON TRUE",
+                Types.MAP(Types.STRING, Types.INT),
+                DataTypes.MAP(DataTypes.STRING().notNull(), DataTypes.INT()),
+                Arrays.asList(Row.of(nullableValues), Row.of(java.util.Map.of()), Row.of((Object) null)),
+                "computed_map_values_unnest_input");
 
         assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())
