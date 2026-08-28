@@ -34,7 +34,10 @@ indexes; a null array, null element, or index beyond the array length produces n
 selected element may itself be complex, so expressions such as `rows[1].name` are supported.
 Map lookup is accelerated when both the map and key are otherwise supported expressions of
 the declared map types; present values, present null values, absent keys, and null maps match
-Flink's scalar result. Zero, negative, and computed array indexes, non-null complex literals,
+Flink's scalar result. `CARDINALITY` is accelerated for maps and non-nested arrays, returning
+an `INT` count or null for a null collection. Nested-array cardinality remains on Flink because
+Flink counts the outer array while DataFusion recursively counts leaf elements. Zero, negative,
+and computed array indexes, non-null complex literals,
 `MULTISET`, and other collection functions still fall back with the whole Calc. Nested child types, field names,
 ordering, nullability, and Arrow offsets are preserved across the native plan.
 
@@ -123,6 +126,9 @@ DataFusion's `map_extract` returns a one-element nullable list rather than Flink
 value. StreamFusion follows Comet's composition model and immediately applies
 `array_element(..., 1)` within the same native expression tree, producing the Flink scalar
 shape without crossing the JVM boundary.
+Flat-array and map `CARDINALITY` lower to DataFusion's vectorized nested-type function. Its
+unsigned result is safely narrowed to Flink's `INT`: Arrow list and map offsets cap a single
+row's collection length within the signed 32-bit range.
 
 Rust lowers `COALESCE` to DataFusion's vectorized `CaseExpr`: each argument except the last
 becomes an `IS NOT NULL` branch and the last argument is the fallback value.
