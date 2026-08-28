@@ -8,7 +8,8 @@ sidebar:
 **Current status:** inner/cross and left `UNNEST`, with or without `WITH ORDINALITY`, over directly
 referenced arrays of supported scalar values are accelerated. Inner/cross expansion also supports
 arrays of scalar-field rows. Inner/cross and left expansion of maps with supported scalar or
-scalar-field row keys and scalar, scalar-field row, or scalar-array values is accelerated, with or without ordinality. The same forms accelerate multisets of
+scalar-field row keys and scalar, scalar-array, or row values composed of scalars and scalar arrays
+is accelerated, with or without ordinality. The same forms accelerate multisets of
 supported non-null scalar elements. Arrays whose elements are scalar arrays are also accelerated,
 with each inner array remaining one output value. Other table functions and expansion forms fall back to Flink.
 
@@ -56,7 +57,8 @@ the paired key and value arrays and assigns positions in Flink's stored `MapData
 map ordering is not otherwise guaranteed. In left expansion of arrays of rows, null and empty
 collections still produce exactly one synthetic all-null row. Computed
 collection operands, rows containing maps, multisets, or arrays nested more than one level, arrays
-nested more than one level, maps with collection keys or values nested more than one level,
+nested more than one level, maps with collection keys or collection values outside the documented
+scalar-array shapes,
 left row-array expansion with ordinality, multisets with nullable or complex elements,
 user-defined table functions, and correlate
 conditions currently fall back. EXPLAIN identifies the rejected join form, function shape,

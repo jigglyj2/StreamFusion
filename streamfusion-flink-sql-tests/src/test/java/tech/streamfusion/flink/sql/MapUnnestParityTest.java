@@ -120,6 +120,31 @@ class MapUnnestParityTest extends SqlParityTestSupport {
         assertNativeExecution();
     }
 
+    @Test
+    void nativeMapUnnestPreservesRowValuesContainingScalarArrays() throws Exception {
+        LinkedHashMap<String, Row> metric = new LinkedHashMap<>();
+        metric.put("values", Row.of("alpha", new Integer[] {1, null, 3}));
+        metric.put("empty", Row.of(null, new Integer[] {}));
+        metric.put("null-array", Row.of("omega", null));
+        metric.put("null-row", null);
+
+        assertDataStreamParity(
+                "SELECT map_key, map_value FROM nested_row_value_map_unnest_input "
+                        + "CROSS JOIN UNNEST(metric) AS expanded(map_key, map_value)",
+                Types.MAP(
+                        Types.STRING,
+                        Types.ROW_NAMED(new String[] {"label", "values"}, Types.STRING, Types.OBJECT_ARRAY(Types.INT))),
+                DataTypes.MAP(
+                        DataTypes.STRING().notNull(),
+                        DataTypes.ROW(
+                                DataTypes.FIELD("label", DataTypes.STRING()),
+                                DataTypes.FIELD("values", DataTypes.ARRAY(DataTypes.INT())))),
+                java.util.List.of(Row.of(metric)),
+                "nested_row_value_map_unnest_input");
+
+        assertNativeExecution();
+    }
+
     private static LinkedHashMap<String, Integer> mapOf(Object... entries) {
         LinkedHashMap<String, Integer> map = new LinkedHashMap<>();
         for (int index = 0; index < entries.length; index += 2) {
