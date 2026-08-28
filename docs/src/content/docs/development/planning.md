@@ -55,6 +55,13 @@ options, serializes that tree with Protocol Buffers, and passes the bytes to the
 runtime. Rust decodes the message and lowers each node to a DataFusion `ExecutionPlan`
 or a custom StreamFusion operator.
 
+As in Comet's `exprToProto` model, Calc expressions use one recursive, typed serializer.
+Projection and filter positions do not maintain separate allow-lists: a filter merely
+requires the root expression to return `BOOLEAN`. Supported expressions can therefore be
+nested beneath comparisons, null checks, boolean operators, search ranges, `LIKE`, and
+other supported parents. The serializer validates the Flink/Calcite type at every node;
+being supported in isolation does not waive a parent's semantic restrictions.
+
 Only the root of a connected native block needs to carry the serialized tree. The
 protobuf schema is a versioned compatibility contract, not a serialization of Flink or
 DataFusion implementation classes. Every field that affects Flink semantics—types,
@@ -95,13 +102,16 @@ StreamFusion appends an acceleration section to Flink's normal explanation:
 ```text
 == StreamFusion Acceleration ==
 Accelerated: no
-Plan reason: all-or-nothing coverage failed; the entire plan will use Flink.
-Operator rejections:
-- StreamExecCalc [INTERNAL]: scalar function JSON_VALUE is not implemented
-- StreamExecGroupAggregate [INTERNAL]: retractable SUM is not implemented
+Plan reason: the entire plan will use Flink.
+Fallback: root[0]/StreamExecCalc: projection[0]/TRIM.operand[0]: Calcite type is not supported
 ```
 
-The plan-level reason explains why acceleration was rejected. Each operator-level entry identifies the Flink operator that could not be replaced and gives its specific reason. The current live explanation is still conservative and reports fallback while operator-level eligibility diagnostics are being connected to physical translation. Tests therefore prove acceleration with an execution counter in addition to byte parity; plan text is not used as proof.
+The plan-level reason explains the all-or-nothing decision. Every uncovered physical node
+is reported with its path through the exec graph. A rejected Calc additionally reports
+`projection[n]` or `condition` and descends through function operands to the expression
+that failed typed protobuf serialization. Eligible plans report `Accelerated: yes`.
+Execution-counter and byte-parity tests remain the proof that a selected native node ran;
+EXPLAIN describes the planner decision rather than replacing runtime verification.
 
 ## Flink runner integration test
 

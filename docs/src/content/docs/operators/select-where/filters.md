@@ -5,8 +5,8 @@ sidebar:
   order: 2
 ---
 
-**Current status:** Simple numeric, decimal, variable-width string and binary, date, time,
-and local timestamp comparisons are accelerated.
+**Current status:** Supported scalar expressions can be recursively composed into numeric,
+decimal, string, binary, date, time, and local timestamp predicates.
 
 ## SQL example
 
@@ -18,8 +18,8 @@ WHERE id >= 100;
 
 ## Acceleration and fallback
 
-The supported predicates are `=`, `<>`, `<`, `<=`, `>`, and `>=` between a `TINYINT`,
-`SMALLINT`, `INTEGER`, `BIGINT`, `FLOAT`, or `DOUBLE` column and a compatible literal. Either operand order is accepted,
+The supported predicates are `=`, `<>`, `<`, `<=`, `>`, and `>=` between compatible
+`TINYINT`, `SMALLINT`, `INTEGER`, `BIGINT`, `FLOAT`, or `DOUBLE` expressions. Either operand order is accepted,
 and the filtered column does not need to appear in the projection. A null input produces
 SQL unknown and is removed by `WHERE`, matching Flink. Unsupported column pairs,
 unlisted functions, and other operand types currently fall back to Flink.
@@ -114,14 +114,14 @@ ordinary comparisons, plus matching boolean column pairs. Unlike `=` and `<>`, t
 always return a non-null boolean and treat two nulls as not distinct.
 This includes matching `TINYINT` and `SMALLINT` column pairs; no widening cast is inserted.
 
-`LIKE` and `NOT LIKE` are accelerated for direct `VARCHAR` columns and literal patterns
+`LIKE` and `NOT LIKE` are accelerated for supported `VARCHAR` expressions and literal patterns
 without an explicit escape sequence. `%` matches any sequence of characters and `_` matches
 one character, including Unicode code points; null input remains unknown and is filtered out.
 Dynamic patterns, fixed-width `CHAR`, backslash-containing patterns, and explicit `ESCAPE`
 clauses cause whole-Calc fallback until their coercion and escape rules have dedicated parity
 coverage.
 
-`STARTSWITH` is accelerated for a direct `VARCHAR` column and a literal prefix. Prefix
+`STARTSWITH` is accelerated for a supported `VARCHAR` expression and a literal prefix. Prefix
 characters are matched literally (including `%` and `_`), an empty prefix matches every
 non-null string, and a null input remains unknown. Dynamic prefixes, `CHAR`, and binary
 arguments currently fall back pending separate type-specific coverage.
@@ -133,10 +133,19 @@ comparison expression. Dynamic, zero, or negative positions retain whole-Calc fa
 
 ## Implementation
 
-Java encodes literal or column operands as protobuf expressions. Rust lowers them to DataFusion
+Java recursively encodes the same typed protobuf expression tree for projections and
+filters, following Comet's JVM-side expression serialization model. Rust lowers it to DataFusion
 `Column`, `Literal`, `BinaryExpr`, `LikeExpr`, `NotExpr`, `IsNullExpr`, and `IsNotNullExpr` nodes
 inside a `FilterExec`. The following `ProjectionExec` consumes its Arrow batches directly. A
-paired serializable Java evaluator retains the original Flink `RowKind` for each row
-that survives native filtering.
+hidden input-row ordinal travels through native `FilterExec` and `ProjectionExec`. Native
+selection returns the surviving ordinals alongside the Arrow output, and Java uses only
+that mapping to restore the corresponding Flink `RowKind`; it does not evaluate a duplicate
+Java predicate.
+
+Examples of recursively accelerated shapes include `LOWER(name) = 'alice'`,
+`CHAR_LENGTH(name) > 10`, `CONCAT(region, id) LIKE 'us-%'` when its arguments are already
+type-compatible `VARCHAR`, and `ABS(amount + 1) BETWEEN 10 AND 20`. If a nested expression
+is unsupported, the whole Calc and therefore the whole plan falls back, and EXPLAIN names
+the failing condition operand path.
 
 See the [Flink WHERE-clause documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/select/#where-clause).

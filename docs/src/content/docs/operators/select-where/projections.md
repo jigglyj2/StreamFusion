@@ -89,7 +89,8 @@ filter is unsupported.
 ## Implementation
 
 Java recursively encodes input references, literals, and arithmetic in the protobuf
-plan. Rust maps them to DataFusion `Column`, `Literal`, and `BinaryExpr` expressions in a
+plan through the same typed serializer used by filters, following Comet's single
+expression-to-protobuf model. Rust maps them to DataFusion `Column`, `Literal`, and `BinaryExpr` expressions in a
 `ProjectionExec`. DataFusion shares referenced Arrow buffers for direct projections and
 allocates a result vector when arithmetic produces new values.
 

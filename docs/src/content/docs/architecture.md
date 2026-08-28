@@ -38,6 +38,12 @@ precision, strings and binary values, arrays, maps, nested rows, and nulls. Slic
 vectors are rebased to offset zero before crossing into Java because Java consumers do
 not consistently preserve Arrow slice offsets.
 
+For filtered Calc batches, Rust is the sole authority on row selection. StreamFusion adds
+a hidden zero-based input ordinal before DataFusion execution, carries it through the
+native filter and projection, and returns the selected ordinals with the output batch.
+The JVM uses that lightweight mapping to attach each original Flink `RowKind`; it never
+runs a parallel Java predicate or copies row payloads to discover which rows survived.
+
 Arrow C Data owns the cross-language contract. StreamFusion keeps one coherent,
 unrelocated Arrow Java implementation: although Java package shading cannot change C
 struct layouts or pointers, it does change the class names expected by Arrow Java's JNI
