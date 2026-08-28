@@ -296,6 +296,9 @@ expressions. StreamFusion reverses Flink's syntax operands when constructing Dat
 vectorized `strpos(haystack, needle)` expression. Results remain one-based, missing needles
 return zero, empty needles return one, Unicode positions count code points, and nulls propagate.
 Fixed-width `CHAR` remains on Flink.
+`OCTET_LENGTH` and `BIT_LENGTH` are not StreamFusion operators because Flink 2.3 rejects their
+character and binary SQL overloads during validation. StreamFusion does not expose unreachable
+Calcite runtime behavior as an extension.
 `ASCII(value)` is accelerated for supported `VARCHAR` expressions in projections and filters.
 Flink returns its first UTF-8 byte sign-extended with Java byte semantics, rather than a Unicode
 code point; StreamFusion therefore uses a focused vectorized compatibility expression instead
