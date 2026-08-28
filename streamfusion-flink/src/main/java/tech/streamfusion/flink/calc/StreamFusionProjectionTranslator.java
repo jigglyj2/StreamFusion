@@ -142,6 +142,10 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
         if (stringReplace != null) {
             return stringReplace;
         }
+        Expression stringRepeat = StreamFusionStringFunctionTranslator.repeat(expression, inputType, expectedType);
+        if (stringRepeat != null) {
+            return stringRepeat;
+        }
         Expression arrayDistinct =
                 StreamFusionCollectionSetTranslator.arrayDistinct(expression, inputType, expectedType);
         if (arrayDistinct != null) {

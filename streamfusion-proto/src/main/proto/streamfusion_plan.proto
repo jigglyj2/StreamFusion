@@ -94,6 +94,7 @@ message Expression {
     MapValues map_values = 63;
     MapEntries map_entries = 64;
     StringReplace string_replace = 65;
+    StringRepeat string_repeat = 66;
   }
 }
 
@@ -229,6 +230,11 @@ message StringReplace {
   Expression value = 1;
   Expression search = 2;
   Expression replacement = 3;
+}
+
+message StringRepeat {
+  Expression value = 1;
+  Expression count = 2;
 }
 
 message Coalesce {

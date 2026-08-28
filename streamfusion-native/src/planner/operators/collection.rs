@@ -247,6 +247,17 @@ pub(super) fn create(
             )?,
             schema,
         ),
+        StringRepeat(repeat) => expressions::string_repeat::create(
+            create_expression(
+                required(&repeat.value, "string repeat is missing its value")?,
+                schema,
+            )?,
+            create_expression(
+                required(&repeat.count, "string repeat is missing its count")?,
+                schema,
+            )?,
+            schema,
+        ),
         ArrayDistinct(distinct) => expressions::array_distinct::create(
             create_expression(
                 required(&distinct.array, "array distinct is missing its array")?,

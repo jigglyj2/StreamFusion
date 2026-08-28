@@ -283,6 +283,10 @@ back because Flink's negative-position rule differs from DataFusion's PostgreSQL
 or computed search and replacement strings, repeated matches, Unicode text, empty strings, and
 null propagation. Binary strings and fixed-width `CHAR` remain on Flink pending their distinct
 type semantics.
+`REPEAT(value, count)` is accelerated for supported `VARCHAR` values and `INTEGER` counts,
+including computed counts. StreamFusion widens the count inside the native plan for DataFusion's
+vectorized kernel; zero and negative counts produce the empty string as in Flink, while null
+values or counts produce null. Fixed-width `CHAR` remains on Flink.
 
 Cast approval is table-driven. Java maps an explicitly approved Flink source/target pair
 to a stable protobuf cast kind; Rust independently verifies that kind against the actual
