@@ -25,6 +25,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Stream;
 import org.apache.flink.api.common.RuntimeExecutionMode;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.configuration.ExecutionOptions;
 import org.apache.flink.streaming.api.datastream.DataStream;
@@ -809,6 +810,36 @@ class SqlParityTest {
                 Arguments.of("not-in", "metric NOT IN (1, 3, 4)"));
     }
 
+    @ParameterizedTest(name = "{0} BETWEEN")
+    @MethodSource("nativeIntegralDataStreamRangeCases")
+    void nativeIntegralDataStreamRangesMatchFlinkByteForByte(
+            String ignoredName, TypeInformation<?> type, List<Row> rows, String predicate) throws Exception {
+        assertDataStreamParity("SELECT metric FROM integral_input WHERE " + predicate, type, rows, "integral_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    private static Stream<Arguments> nativeIntegralDataStreamRangeCases() {
+        return Stream.of(
+                Arguments.of(
+                        "tinyint",
+                        Types.BYTE,
+                        Arrays.asList(Row.of((byte) -3), Row.of((byte) -2), Row.of((byte) 2), Row.of((byte) 3)),
+                        "metric BETWEEN CAST(-2 AS TINYINT) AND CAST(2 AS TINYINT)"),
+                Arguments.of(
+                        "smallint",
+                        Types.SHORT,
+                        Arrays.asList(
+                                Row.of((short) -300), Row.of((short) -200), Row.of((short) 200), Row.of((short) 300)),
+                        "metric BETWEEN CAST(-200 AS SMALLINT) AND CAST(200 AS SMALLINT)"),
+                Arguments.of(
+                        "bigint",
+                        Types.LONG,
+                        Arrays.asList(
+                                Row.of(-2147483649L), Row.of(-2147483648L), Row.of(2147483648L), Row.of(2147483649L)),
+                        "metric BETWEEN -2147483648 AND 2147483648"));
+    }
+
     @ParameterizedTest(name = "{0}")
     @MethodSource("nativeBooleanColumnCases")
     void nativeBooleanColumnsMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {
@@ -865,15 +896,26 @@ class SqlParityTest {
     }
 
     private static void assertIntegerDataStreamParity(String sql) throws Exception {
-        byte[] flinkResult = executeIntegerDataStream(sql, false);
-        byte[] streamFusionResult = executeIntegerDataStream(sql, true);
+        assertDataStreamParity(
+                sql,
+                Types.INT,
+                Arrays.asList(Row.of(1), Row.of(2), Row.of(3), Row.of(4), Row.of((Object) null)),
+                "integer_input");
+    }
+
+    private static void assertDataStreamParity(String sql, TypeInformation<?> type, List<Row> rows, String tableName)
+            throws Exception {
+        byte[] flinkResult = executeDataStream(sql, type, rows, tableName, false);
+        byte[] streamFusionResult = executeDataStream(sql, type, rows, tableName, true);
 
         assertThat(StreamFusionPlannerFactory.createdPlannerCount()).isEqualTo(1);
         assertThat(StreamFusionPlannerFactory.translatedPlanCount()).isGreaterThan(0);
         assertThat(streamFusionResult).isEqualTo(flinkResult);
     }
 
-    private static byte[] executeIntegerDataStream(String sql, boolean streamFusionEnabled) throws Exception {
+    private static byte[] executeDataStream(
+            String sql, TypeInformation<?> type, List<Row> rows, String tableName, boolean streamFusionEnabled)
+            throws Exception {
         if (streamFusionEnabled) {
             System.setProperty(
                     StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY, StreamFusionPlannerFactory.class.getName());
@@ -888,10 +930,9 @@ class SqlParityTest {
                 executionEnvironment,
                 EnvironmentSettings.newInstance().inStreamingMode().build());
         tableEnvironment.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
-        DataStream<Row> input = executionEnvironment.fromCollection(
-                Arrays.asList(Row.of(1), Row.of(2), Row.of(3), Row.of(4), Row.of((Object) null)),
-                Types.ROW_NAMED(new String[] {"metric"}, Types.INT));
-        tableEnvironment.createTemporaryView("integer_input", tableEnvironment.fromDataStream(input));
+        DataStream<Row> input =
+                executionEnvironment.fromCollection(rows, Types.ROW_NAMED(new String[] {"metric"}, type));
+        tableEnvironment.createTemporaryView(tableName, tableEnvironment.fromDataStream(input));
         return collect(tableEnvironment.executeSql(sql));
     }
 

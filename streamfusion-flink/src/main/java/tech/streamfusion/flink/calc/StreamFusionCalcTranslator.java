@@ -589,7 +589,7 @@ public final class StreamFusionCalcTranslator {
             int inputIndex = inputIndex(operands.get(0));
             if (inputIndex < 0
                     || inputIndex >= inputType.getFieldCount()
-                    || inputType.getTypeAt(inputIndex).getTypeRoot() != LogicalTypeRoot.INTEGER) {
+                    || !isIntegral(inputType.getTypeAt(inputIndex).getTypeRoot())) {
                 return null;
             }
             Object sarg = invoke(operands.get(1), "getValue");
@@ -601,28 +601,32 @@ public final class StreamFusionCalcTranslator {
             for (Object range : (Iterable<?>) ranges) {
                 StreamFusionCondition rangeCondition = null;
                 if ((boolean) invoke(range, "hasLowerBound")) {
-                    int endpoint = ((BigDecimal) invoke(range, "lowerEndpoint")).intValueExact();
                     boolean closed =
                             "CLOSED".equals(invoke(range, "lowerBoundType").toString());
-                    rangeCondition = new StreamFusionIntComparison(
+                    rangeCondition = searchComparison(
                             inputIndex,
-                            endpoint,
+                            invoke(range, "lowerEndpoint"),
                             closed
                                     ? ComparisonOperator.COMPARISON_OPERATOR_GREATER_THAN_OR_EQUAL
                                     : ComparisonOperator.COMPARISON_OPERATOR_GREATER_THAN,
-                            true);
+                            inputType);
+                    if (rangeCondition == null) {
+                        return null;
+                    }
                 }
                 if ((boolean) invoke(range, "hasUpperBound")) {
-                    int endpoint = ((BigDecimal) invoke(range, "upperEndpoint")).intValueExact();
                     boolean closed =
                             "CLOSED".equals(invoke(range, "upperBoundType").toString());
-                    StreamFusionCondition upper = new StreamFusionIntComparison(
+                    StreamFusionCondition upper = searchComparison(
                             inputIndex,
-                            endpoint,
+                            invoke(range, "upperEndpoint"),
                             closed
                                     ? ComparisonOperator.COMPARISON_OPERATOR_LESS_THAN_OR_EQUAL
                                     : ComparisonOperator.COMPARISON_OPERATOR_LESS_THAN,
-                            true);
+                            inputType);
+                    if (upper == null) {
+                        return null;
+                    }
                     rangeCondition = rangeCondition == null
                             ? upper
                             : StreamFusionBooleanCondition.binary(
@@ -639,6 +643,33 @@ public final class StreamFusionCalcTranslator {
             return result;
         } catch (RuntimeException exception) {
             return null;
+        }
+    }
+
+    private static boolean isIntegral(LogicalTypeRoot type) {
+        return type == LogicalTypeRoot.TINYINT
+                || type == LogicalTypeRoot.SMALLINT
+                || type == LogicalTypeRoot.INTEGER
+                || type == LogicalTypeRoot.BIGINT;
+    }
+
+    private static StreamFusionCondition searchComparison(
+            int inputIndex, Object endpoint, ComparisonOperator operator, RowType inputType) {
+        if (!(endpoint instanceof BigDecimal)) {
+            return null;
+        }
+        BigDecimal value = (BigDecimal) endpoint;
+        switch (inputType.getTypeAt(inputIndex).getTypeRoot()) {
+            case TINYINT:
+                return new StreamFusionByteComparison(inputIndex, value.byteValueExact(), operator, true);
+            case SMALLINT:
+                return new StreamFusionShortComparison(inputIndex, value.shortValueExact(), operator, true);
+            case INTEGER:
+                return new StreamFusionIntComparison(inputIndex, value.intValueExact(), operator, true);
+            case BIGINT:
+                return new StreamFusionLongComparison(inputIndex, value.longValueExact(), operator, true);
+            default:
+                return null;
         }
     }
 
