@@ -67,6 +67,19 @@ fn create_expression(
         Some(proto::expression::Expression::LongLiteral(literal)) => Ok(Arc::new(Literal::new(
             ScalarValue::Int64(Some(literal.value)),
         ))),
+        Some(proto::expression::Expression::ByteLiteral(literal)) => Ok(Arc::new(Literal::new(
+            ScalarValue::Int8(Some(literal.value.try_into().map_err(|_| {
+                DataFusionError::Plan(format!("TINYINT literal {} is out of range", literal.value))
+            })?)),
+        ))),
+        Some(proto::expression::Expression::ShortLiteral(literal)) => Ok(Arc::new(Literal::new(
+            ScalarValue::Int16(Some(literal.value.try_into().map_err(|_| {
+                DataFusionError::Plan(format!(
+                    "SMALLINT literal {} is out of range",
+                    literal.value
+                ))
+            })?)),
+        ))),
         Some(proto::expression::Expression::GreaterThanOrEqual(comparison)) => {
             Ok(Arc::new(BinaryExpr::new(
                 create_expression(

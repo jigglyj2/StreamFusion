@@ -252,6 +252,14 @@ public final class StreamFusionCalcTranslator {
             return null;
         }
         LogicalTypeRoot type = inputType.getTypeAt(inputIndex).getTypeRoot();
+        if (type == LogicalTypeRoot.TINYINT) {
+            Byte literal = literal(literalExpression, Byte.class);
+            return literal == null ? null : new StreamFusionByteComparison(inputIndex, literal, operator, inputOnLeft);
+        }
+        if (type == LogicalTypeRoot.SMALLINT) {
+            Short literal = literal(literalExpression, Short.class);
+            return literal == null ? null : new StreamFusionShortComparison(inputIndex, literal, operator, inputOnLeft);
+        }
         if (type == LogicalTypeRoot.INTEGER) {
             Integer literal = integerLiteral(literalExpression);
             return literal == null ? null : new StreamFusionIntComparison(inputIndex, literal, operator, inputOnLeft);
@@ -272,11 +280,15 @@ public final class StreamFusionCalcTranslator {
     }
 
     private static Long longLiteral(Object expression) {
+        return literal(expression, Long.class);
+    }
+
+    private static <T> T literal(Object expression, Class<T> literalType) {
         if (!expression.getClass().getSimpleName().equals("RexLiteral")) {
             return null;
         }
-        Object value = invoke(expression, "getValueAs", Class.class, Long.class);
-        return value instanceof Long ? (Long) value : null;
+        Object value = invoke(expression, "getValueAs", Class.class, literalType);
+        return literalType.isInstance(value) ? literalType.cast(value) : null;
     }
 
     private static ComparisonOperator comparisonOperator(String kind) {

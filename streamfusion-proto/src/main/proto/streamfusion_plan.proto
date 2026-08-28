@@ -38,6 +38,8 @@ message Expression {
     BooleanBinary boolean_binary = 7;
     BooleanNot boolean_not = 8;
     LongLiteral long_literal = 9;
+    ByteLiteral byte_literal = 10;
+    ShortLiteral short_literal = 11;
   }
 }
 
@@ -47,6 +49,14 @@ message IntegerLiteral {
 
 message LongLiteral {
   int64 value = 1;
+}
+
+message ByteLiteral {
+  int32 value = 1;
+}
+
+message ShortLiteral {
+  int32 value = 1;
 }
 
 message GreaterThanOrEqual {

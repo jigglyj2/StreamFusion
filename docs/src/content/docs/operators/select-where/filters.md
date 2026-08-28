@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-**Current status:** Simple `INTEGER` and `BIGINT` comparisons are accelerated.
+**Current status:** Simple integral comparisons are accelerated.
 
 ## SQL example
 
@@ -17,8 +17,8 @@ WHERE id >= 100;
 
 ## Acceleration and fallback
 
-The supported predicates are `=`, `<>`, `<`, `<=`, `>`, and `>=` between an `INTEGER`
-or `BIGINT` column and a same-width integer literal. Either operand order is accepted,
+The supported predicates are `=`, `<>`, `<`, `<=`, `>`, and `>=` between a `TINYINT`,
+`SMALLINT`, `INTEGER`, or `BIGINT` column and a compatible integer literal. Either operand order is accepted,
 and the filtered column does not need to appear in the projection. A null input produces
 SQL unknown and is removed by `WHERE`, matching Flink. Column-to-column comparisons,
 functions, and other operand types currently fall back to Flink.
