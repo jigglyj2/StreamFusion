@@ -114,6 +114,8 @@ message Expression {
     Radians radians = 83;
     ArcTangent2 arc_tangent2 = 84;
     Cotangent cotangent = 85;
+    NaturalLogarithm natural_logarithm = 86;
+    CommonLogarithm common_logarithm = 87;
   }
 }
 
@@ -334,6 +336,14 @@ message ArcTangent2 {
 }
 
 message Cotangent {
+  Expression operand = 1;
+}
+
+message NaturalLogarithm {
+  Expression operand = 1;
+}
+
+message CommonLogarithm {
   Expression operand = 1;
 }
 

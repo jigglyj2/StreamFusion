@@ -189,6 +189,20 @@ pub(super) fn create_expression(
                 .ok_or_else(|| DataFusionError::Plan("COT operand is empty".to_string()))?;
             expressions::cotangent::create(create_expression(operand, schema)?, schema)
         }
+        Some(proto::expression::Expression::NaturalLogarithm(logarithm)) => {
+            let operand = logarithm
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("LN operand is empty".to_string()))?;
+            expressions::natural_logarithm::create(create_expression(operand, schema)?, schema)
+        }
+        Some(proto::expression::Expression::CommonLogarithm(logarithm)) => {
+            let operand = logarithm
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("LOG10 operand is empty".to_string()))?;
+            expressions::common_logarithm::create(create_expression(operand, schema)?, schema)
+        }
         Some(proto::expression::Expression::HyperbolicSine(sine)) => {
             let operand = sine
                 .operand

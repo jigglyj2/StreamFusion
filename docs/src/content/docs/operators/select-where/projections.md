@@ -265,6 +265,11 @@ Each remains a distinct protobuf expression and DataFusion vectorized operator; 
 includes signed zero, infinities, NaN, and nulls.
 `COT` is accelerated as a distinct DataFusion vector expression after the same `DOUBLE` coercion.
 Parity coverage includes signed zero, multiples of pi, infinities, NaN, and nulls.
+`LN` and `LOG10` are accelerated as separate DataFusion vector expressions after Flink coerces the
+operand to `DOUBLE`. They preserve Flink's IEEE-754 domain behavior: negative inputs produce NaN,
+positive and negative zero produce negative infinity, positive infinity remains infinite, and null
+propagates. Generated parity tests include subnormal and maximum finite inputs and composition in
+comparison filters.
 `SINH` and `TANH` are accelerated under the same `DOUBLE` coercion contract and remain distinct
 native stages. Generated parity coverage includes finite values, overflow, signed zero, infinities,
 NaN, and nulls. `COSH` stays on Flink with an explicit EXPLAIN reason because DataFusion's kernel

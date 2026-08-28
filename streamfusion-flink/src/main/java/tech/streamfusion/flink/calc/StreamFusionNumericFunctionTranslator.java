@@ -19,6 +19,7 @@ import tech.streamfusion.proto.plan.v1.ArcSine;
 import tech.streamfusion.proto.plan.v1.ArcTangent;
 import tech.streamfusion.proto.plan.v1.ArcTangent2;
 import tech.streamfusion.proto.plan.v1.Ceiling;
+import tech.streamfusion.proto.plan.v1.CommonLogarithm;
 import tech.streamfusion.proto.plan.v1.Cosine;
 import tech.streamfusion.proto.plan.v1.Cotangent;
 import tech.streamfusion.proto.plan.v1.Degrees;
@@ -28,6 +29,7 @@ import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.Floor;
 import tech.streamfusion.proto.plan.v1.HyperbolicSine;
 import tech.streamfusion.proto.plan.v1.HyperbolicTangent;
+import tech.streamfusion.proto.plan.v1.NaturalLogarithm;
 import tech.streamfusion.proto.plan.v1.Radians;
 import tech.streamfusion.proto.plan.v1.Sign;
 import tech.streamfusion.proto.plan.v1.Sine;
@@ -95,6 +97,12 @@ final class StreamFusionNumericFunctionTranslator extends StreamFusionRexSupport
             }
             if ("COT".equals(function)) {
                 return unary(expression, inputType, expectedType, UnaryKind.COTANGENT);
+            }
+            if ("LN".equals(function)) {
+                return unary(expression, inputType, expectedType, UnaryKind.NATURAL_LOGARITHM);
+            }
+            if ("LOG10".equals(function)) {
+                return unary(expression, inputType, expectedType, UnaryKind.COMMON_LOGARITHM);
             }
             if ("SINH".equals(function)) {
                 return unary(expression, inputType, expectedType, UnaryKind.HYPERBOLIC_SINE);
@@ -164,6 +172,12 @@ final class StreamFusionNumericFunctionTranslator extends StreamFusionRexSupport
             case COTANGENT:
                 return result.setCotangent(Cotangent.newBuilder().setOperand(operand))
                         .build();
+            case NATURAL_LOGARITHM:
+                return result.setNaturalLogarithm(NaturalLogarithm.newBuilder().setOperand(operand))
+                        .build();
+            case COMMON_LOGARITHM:
+                return result.setCommonLogarithm(CommonLogarithm.newBuilder().setOperand(operand))
+                        .build();
             case HYPERBOLIC_SINE:
                 return result.setHyperbolicSine(HyperbolicSine.newBuilder().setOperand(operand))
                         .build();
@@ -223,6 +237,8 @@ final class StreamFusionNumericFunctionTranslator extends StreamFusionRexSupport
         COSINE,
         TANGENT,
         COTANGENT,
+        NATURAL_LOGARITHM,
+        COMMON_LOGARITHM,
         HYPERBOLIC_SINE,
         HYPERBOLIC_TANGENT,
         ARC_SINE,
