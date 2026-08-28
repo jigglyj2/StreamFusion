@@ -78,6 +78,29 @@ class MapUnnestParityTest extends SqlParityTestSupport {
         assertNativeExecution();
     }
 
+    @Test
+    void nativeMapUnnestPreservesNonNullRowKeysAsOneComplexColumn() throws Exception {
+        LinkedHashMap<Row, String> metric = new LinkedHashMap<>();
+        metric.put(Row.of(2, "second"), "two");
+        metric.put(Row.of(1, null), "one");
+
+        assertDataStreamParity(
+                "SELECT map_key, map_value, ord_idx FROM row_key_map_unnest_input "
+                        + "CROSS JOIN UNNEST(metric) WITH ORDINALITY "
+                        + "AS expanded(map_key, map_value, ord_idx)",
+                Types.MAP(Types.ROW_NAMED(new String[] {"number", "label"}, Types.INT, Types.STRING), Types.STRING),
+                DataTypes.MAP(
+                        DataTypes.ROW(
+                                        DataTypes.FIELD("number", DataTypes.INT()),
+                                        DataTypes.FIELD("label", DataTypes.STRING()))
+                                .notNull(),
+                        DataTypes.STRING()),
+                java.util.List.of(Row.of(metric)),
+                "row_key_map_unnest_input");
+
+        assertNativeExecution();
+    }
+
     private static LinkedHashMap<String, Integer> mapOf(Object... entries) {
         LinkedHashMap<String, Integer> map = new LinkedHashMap<>();
         for (int index = 0; index < entries.length; index += 2) {
