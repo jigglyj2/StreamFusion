@@ -231,6 +231,21 @@ pub(super) fn create_expression(
                 .ok_or_else(|| DataFusionError::Plan("RADIANS operand is empty".to_string()))?;
             expressions::radians::create(create_expression(operand, schema)?, schema)
         }
+        Some(proto::expression::Expression::ArcTangent2(arc_tangent2)) => {
+            let y = arc_tangent2
+                .y
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("ATAN2 y operand is empty".to_string()))?;
+            let x = arc_tangent2
+                .x
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("ATAN2 x operand is empty".to_string()))?;
+            expressions::arc_tangent2::create(
+                create_expression(y, schema)?,
+                create_expression(x, schema)?,
+                schema,
+            )
+        }
         Some(proto::expression::Expression::CharacterLength(character_length)) => {
             let operand = character_length
                 .operand

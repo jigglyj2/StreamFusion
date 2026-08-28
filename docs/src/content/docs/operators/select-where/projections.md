@@ -271,6 +271,9 @@ StreamFusion's byte-parity contract.
 `ASIN`, `ACOS`, and `ATAN` are accelerated as distinct DataFusion vector expressions after Flink's
 `DOUBLE` coercion. Tests include values outside the `ASIN`/`ACOS` domain to verify Flink-compatible
 NaN results, along with endpoints, signed zero, infinities, and nulls.
+`ATAN2(y, x)` is accelerated as a two-input DataFusion vector expression with Flink's argument order
+preserved. Generated parity coverage exercises every quadrant, signed zero, infinities, NaN, and
+null propagation.
 `DEGREES` and `RADIANS` are accelerated through DataFusion's vectorized angle-conversion kernels.
 They accept Flink-coerced `DOUBLE` inputs and preserve signed zero, infinities, NaN, and nulls.
 Parity-approved scalar expressions can participate in numeric comparison filters when Calcite keeps

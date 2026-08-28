@@ -10,6 +10,7 @@ pub(crate) mod absolute_value;
 pub(crate) mod arc_cosine;
 pub(crate) mod arc_sine;
 pub(crate) mod arc_tangent;
+pub(crate) mod arc_tangent2;
 pub(crate) mod array_append;
 pub(crate) mod array_concat;
 pub(crate) mod array_constructor;

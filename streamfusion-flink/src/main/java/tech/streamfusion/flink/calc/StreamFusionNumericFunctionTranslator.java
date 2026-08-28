@@ -17,6 +17,7 @@ import tech.streamfusion.proto.plan.v1.AbsoluteValue;
 import tech.streamfusion.proto.plan.v1.ArcCosine;
 import tech.streamfusion.proto.plan.v1.ArcSine;
 import tech.streamfusion.proto.plan.v1.ArcTangent;
+import tech.streamfusion.proto.plan.v1.ArcTangent2;
 import tech.streamfusion.proto.plan.v1.Ceiling;
 import tech.streamfusion.proto.plan.v1.Cosine;
 import tech.streamfusion.proto.plan.v1.Degrees;
@@ -65,6 +66,17 @@ final class StreamFusionNumericFunctionTranslator extends StreamFusionRexSupport
             Double exponent = literal(operands.get(1), Double.class);
             if (exponent != null && Double.compare(exponent, 0.5d) == 0) {
                 return unary(expression, inputType, expectedType, UnaryKind.SQUARE_ROOT);
+            }
+        }
+        if ("ATAN2".equals(function) && operands.size() == 2 && expectedType.getTypeRoot() == LogicalTypeRoot.DOUBLE) {
+            Expression y =
+                    StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, expectedType);
+            Expression x =
+                    StreamFusionProjectionTranslator.projectionExpression(operands.get(1), inputType, expectedType);
+            if (y != null && x != null) {
+                return Expression.newBuilder()
+                        .setArcTangent2(ArcTangent2.newBuilder().setY(y).setX(x))
+                        .build();
             }
         }
         if ("EXP".equals(function) && operands.size() == 1 && expectedType.getTypeRoot() == LogicalTypeRoot.DOUBLE) {
