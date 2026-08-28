@@ -161,6 +161,13 @@ elements. It preserves the first occurrence order, retains at most one null elem
 preserves null and empty arrays. Rust lowers it directly to DataFusion's vectorized set kernel;
 generated parity cases cover duplicate primitive values and duplicate nested rows so complex
 element identity is verified rather than inferred.
+`ARRAY_UNION` is accelerated for compatible native array inputs, including direct arrays,
+typed null arrays, `ARRAY_REVERSE`, and arrays of nested rows. It preserves first-occurrence
+order across the left array followed by the right, emits at most one null element, and returns
+null if either input array is null. Rust lowers it to DataFusion's vectorized set kernel.
+Planner-coerced compositions whose operand type Calcite cannot currently expose—such as an
+`ARRAY_APPEND` directly nested inside a union—still cause whole-Calc fallback instead of
+guessing the coerced element type.
 
 Rust lowers `COALESCE` to DataFusion's vectorized `CaseExpr`: each argument except the last
 becomes an `IS NOT NULL` branch and the last argument is the fallback value.
