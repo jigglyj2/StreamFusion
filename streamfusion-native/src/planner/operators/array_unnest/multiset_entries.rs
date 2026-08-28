@@ -65,11 +65,10 @@ impl PhysicalExpr for MultisetEntriesExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let ColumnarValue::Array(array) = self.multiset.evaluate(batch)? else {
-            return Err(DataFusionError::Execution(
-                "multiset UNNEST requires a column".to_string(),
-            ));
-        };
+        let array = self
+            .multiset
+            .evaluate(batch)?
+            .into_array(batch.num_rows())?;
         let maps = array.as_any().downcast_ref::<MapArray>().ok_or_else(|| {
             DataFusionError::Execution("multiset UNNEST expected Arrow Map input".to_string())
         })?;

@@ -45,6 +45,10 @@ CROSS JOIN UNNEST(values) WITH ORDINALITY AS inner_values(item, inner_position);
 
 SELECT item, position
 FROM UNNEST(ARRAY[1, CAST(NULL AS INT), 3]) WITH ORDINALITY AS values(item, position);
+
+SELECT map_key, map_value, position
+FROM UNNEST(MAP['first', 1, 'nullable', CAST(NULL AS INT)]) WITH ORDINALITY
+  AS entries(map_key, map_value, position);
 ```
 
 Each input row produces one output row per array element. Array order, duplicates, null elements,
@@ -109,8 +113,8 @@ same typed `Expression` contract used by Calc. Rust lowers a computed operand th
 DataFusion expression planner before `UnnestExec`, keeping expression evaluation and expansion in
 one native execution-plan tree and crossing the Arrow boundary only once.
 Source-free constructor expansion uses Flink's zero-column, one-row values input. The Arrow
-boundary carries its explicit row count even though it has no vectors, and native scalar array
-expressions are broadcast to that row before ordinality is derived.
+boundary carries its explicit row count even though it has no vectors, and native scalar array or
+map expressions are broadcast to that row before expansion and ordinality are derived.
 When Flink produces adjacent correlate nodes, the planner nests their `ArrayUnnest` protobufs in
 input-to-output order and installs one JVM operator around the entire chain. Each DataFusion
 `UnnestExec` consumes the preceding stage's Arrow output directly; intermediate arrays, repeated

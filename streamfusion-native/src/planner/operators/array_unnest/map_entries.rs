@@ -54,12 +54,7 @@ impl PhysicalExpr for MapEntriesExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let value = self.map.evaluate(batch)?;
-        let ColumnarValue::Array(array) = value else {
-            return Err(DataFusionError::Execution(
-                "map UNNEST requires a map column".to_string(),
-            ));
-        };
+        let array = self.map.evaluate(batch)?.into_array(batch.num_rows())?;
         let maps = array.as_any().downcast_ref::<MapArray>().ok_or_else(|| {
             DataFusionError::Execution("map UNNEST expected Map input".to_string())
         })?;

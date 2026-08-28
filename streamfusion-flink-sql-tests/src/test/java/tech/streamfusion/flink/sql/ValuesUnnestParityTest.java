@@ -28,4 +28,18 @@ class ValuesUnnestParityTest extends SqlParityTestSupport {
                 .isEqualTo(1);
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
+
+    @Test
+    void sourceFreeMapConstructorUnnestUsesNativeExpansion() throws Exception {
+        assertParity(
+                "SELECT map_key, map_value, ord_idx "
+                        + "FROM UNNEST(MAP['first', 1, 'nullable', CAST(NULL AS INT)]) "
+                        + "WITH ORDINALITY AS expanded(map_key, map_value, ord_idx)",
+                true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isEqualTo(1);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
 }
