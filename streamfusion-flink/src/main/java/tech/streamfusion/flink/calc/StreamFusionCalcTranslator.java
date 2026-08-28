@@ -32,13 +32,16 @@ import tech.streamfusion.proto.plan.v1.ArithmeticOperator;
 import tech.streamfusion.proto.plan.v1.BinaryLiteral;
 import tech.streamfusion.proto.plan.v1.BooleanLiteral;
 import tech.streamfusion.proto.plan.v1.BooleanOperator;
+import tech.streamfusion.proto.plan.v1.Cast;
 import tech.streamfusion.proto.plan.v1.ComparisonOperator;
 import tech.streamfusion.proto.plan.v1.DateLiteral;
 import tech.streamfusion.proto.plan.v1.DecimalLiteral;
 import tech.streamfusion.proto.plan.v1.DoubleLiteral;
+import tech.streamfusion.proto.plan.v1.EmptyType;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.FloatLiteral;
 import tech.streamfusion.proto.plan.v1.IntegerLiteral;
+import tech.streamfusion.proto.plan.v1.LogicalType;
 import tech.streamfusion.proto.plan.v1.LongLiteral;
 import tech.streamfusion.proto.plan.v1.StringLiteral;
 import tech.streamfusion.proto.plan.v1.TimeLiteral;
@@ -209,6 +212,10 @@ public final class StreamFusionCalcTranslator {
         if (expectedType == LogicalTypeRoot.BOOLEAN) {
             return booleanProjectionExpression(expression, inputType);
         }
+        Expression cast = wideningCastExpression(expression, inputType, expectedType);
+        if (cast != null) {
+            return cast;
+        }
         int inputIndex = inputIndex(expression);
         if (inputIndex >= 0) {
             if (inputIndex >= inputType.getFieldCount()
@@ -336,6 +343,36 @@ public final class StreamFusionCalcTranslator {
         return Expression.newBuilder()
                 .setArithmetic(
                         Arithmetic.newBuilder().setLeft(left).setRight(right).setOperator(operator))
+                .build();
+    }
+
+    private static Expression wideningCastExpression(
+            Object expression, RowType inputType, LogicalTypeRoot expectedType) {
+        if (!expression.getClass().getSimpleName().equals("RexCall")
+                || !"CAST".equals(invoke(expression, "getKind").toString())
+                || expectedType != LogicalTypeRoot.BIGINT) {
+            return null;
+        }
+        List<?> operands = (List<?>) invoke(expression, "getOperands");
+        if (operands.size() != 1) {
+            return null;
+        }
+        int inputIndex = inputIndex(operands.get(0));
+        if (inputIndex < 0
+                || inputIndex >= inputType.getFieldCount()
+                || inputType.getTypeAt(inputIndex).getTypeRoot() != LogicalTypeRoot.INTEGER) {
+            return null;
+        }
+        boolean nullable = (boolean) invoke(invoke(expression, "getType"), "isNullable");
+        LogicalType targetType = LogicalType.newBuilder()
+                .setNullable(nullable)
+                .setBigint(EmptyType.getDefaultInstance())
+                .build();
+        return Expression.newBuilder()
+                .setCast(Cast.newBuilder()
+                        .setOperand(StreamFusionIdentityCalcOperator.inputReference(
+                                inputIndex, StreamFusionIdentityCalcOperator.logicalType(inputType, inputIndex)))
+                        .setTargetType(targetType))
                 .build();
     }
 

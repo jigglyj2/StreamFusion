@@ -51,6 +51,7 @@ message Expression {
     BinaryLiteral binary_literal = 20;
     UnaryMinus unary_minus = 21;
     TruthTest truth_test = 22;
+    Cast cast = 23;
   }
 }
 
@@ -120,6 +121,11 @@ message UnaryMinus {
 message TruthTest {
   Expression operand = 1;
   TruthTestOperator operator = 2;
+}
+
+message Cast {
+  Expression operand = 1;
+  LogicalType target_type = 2;
 }
 
 enum TruthTestOperator {

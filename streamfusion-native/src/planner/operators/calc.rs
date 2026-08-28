@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::Operator;
+use datafusion::physical_expr::expressions::CastExpr;
 use datafusion::physical_expr::expressions::{BinaryExpr, Column, Literal, NegativeExpr};
 use datafusion::physical_expr::expressions::{IsNotNullExpr, IsNullExpr, NotExpr};
 use datafusion::physical_expr::PhysicalExpr;
@@ -149,9 +150,9 @@ fn create_expression(
                 scale,
             ))))
         }
-        Some(proto::expression::Expression::BooleanLiteral(literal)) => {
-            Ok(Arc::new(Literal::new(ScalarValue::Boolean(Some(literal.value)))))
-        }
+        Some(proto::expression::Expression::BooleanLiteral(literal)) => Ok(Arc::new(Literal::new(
+            ScalarValue::Boolean(Some(literal.value)),
+        ))),
         Some(proto::expression::Expression::StringLiteral(literal)) => Ok(Arc::new(Literal::new(
             ScalarValue::Utf8(Some(literal.value.clone())),
         ))),
@@ -177,9 +178,10 @@ fn create_expression(
             Ok(Arc::new(Literal::new(scalar)))
         }
         Some(proto::expression::Expression::UnaryMinus(unary)) => {
-            let operand = unary.operand.as_ref().ok_or_else(|| {
-                DataFusionError::Plan("unary minus operand is empty".to_string())
-            })?;
+            let operand = unary
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("unary minus operand is empty".to_string()))?;
             Ok(Arc::new(NegativeExpr::new(create_expression(
                 operand, schema,
             )?)))
@@ -207,6 +209,32 @@ fn create_expression(
                 operator,
                 Arc::new(Literal::new(ScalarValue::Boolean(Some(expected)))),
             )))
+        }
+        Some(proto::expression::Expression::Cast(cast)) => {
+            let operand = create_expression(
+                cast.operand
+                    .as_ref()
+                    .ok_or_else(|| DataFusionError::Plan("cast operand is empty".to_string()))?,
+                schema,
+            )?;
+            let target = cast
+                .target_type
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("cast target type is empty".to_string()))?;
+            match target.r#type {
+                Some(proto::logical_type::Type::Bigint(_))
+                    if operand.data_type(schema)? == arrow::datatypes::DataType::Int32 =>
+                {
+                    Ok(Arc::new(CastExpr::new(
+                        operand,
+                        arrow::datatypes::DataType::Int64,
+                        None,
+                    )))
+                }
+                _ => Err(DataFusionError::Plan(
+                    "only INT to BIGINT casts are supported".to_string(),
+                )),
+            }
         }
         Some(proto::expression::Expression::GreaterThanOrEqual(comparison)) => {
             Ok(Arc::new(BinaryExpr::new(
