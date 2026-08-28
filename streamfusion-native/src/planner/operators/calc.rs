@@ -241,6 +241,7 @@ fn create_expression(
                 proto::ArithmeticOperator::Subtract => Operator::Minus,
                 proto::ArithmeticOperator::Multiply => Operator::Multiply,
                 proto::ArithmeticOperator::Divide => Operator::Divide,
+                proto::ArithmeticOperator::Modulo => Operator::Modulo,
                 proto::ArithmeticOperator::Unspecified => {
                     return Err(DataFusionError::Plan(
                         "arithmetic operator is unspecified".to_string(),

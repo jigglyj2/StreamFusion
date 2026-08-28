@@ -381,6 +381,24 @@ class SqlParityTest {
         assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
     }
 
+    @Test
+    void nativeIntegerRemainderByNonzeroLiteralMatchesFlinkByteForByte() throws Exception {
+        assertParity("SELECT MOD(id, 3), MOD(id, -3) " + "FROM (VALUES (-7), (-1), (0), (1), (7)) AS input(id)", true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    @Test
+    void nativeBigintRemainderByNonzeroLiteralMatchesFlinkByteForByte() throws Exception {
+        assertParity(
+                "SELECT MOD(id, 2147483648) "
+                        + "FROM (VALUES (-9223372036854775807), (-2147483649), (0), "
+                        + "(2147483649), (9223372036854775807)) AS input(id)",
+                true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
     @ParameterizedTest(name = "{0}")
     @MethodSource("nativeComparisonCases")
     void nativeIntegerComparisonsMatchFlinkByteForByte(

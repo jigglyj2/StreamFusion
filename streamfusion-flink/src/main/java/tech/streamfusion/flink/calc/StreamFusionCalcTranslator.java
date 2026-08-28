@@ -297,7 +297,7 @@ public final class StreamFusionCalcTranslator {
                             .setUnaryMinus(UnaryMinus.newBuilder().setOperand(operand))
                             .build();
         }
-        if ("DIVIDE".equals(kind)) {
+        if ("DIVIDE".equals(kind) || "MOD".equals(kind)) {
             if (operands.size() != 2) {
                 return null;
             }
@@ -378,7 +378,7 @@ public final class StreamFusionCalcTranslator {
                             .setUnaryMinus(UnaryMinus.newBuilder().setOperand(operand))
                             .build();
         }
-        if ("DIVIDE".equals(kind)) {
+        if ("DIVIDE".equals(kind) || "MOD".equals(kind)) {
             return null;
         }
         ArithmeticOperator operator = arithmeticOperator(kind);
@@ -409,6 +409,8 @@ public final class StreamFusionCalcTranslator {
                 return ArithmeticOperator.ARITHMETIC_OPERATOR_MULTIPLY;
             case "DIVIDE":
                 return ArithmeticOperator.ARITHMETIC_OPERATOR_DIVIDE;
+            case "MOD":
+                return ArithmeticOperator.ARITHMETIC_OPERATOR_MODULO;
             default:
                 return null;
         }

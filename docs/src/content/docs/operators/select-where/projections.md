@@ -32,7 +32,9 @@ Floating-point literals must be finite. Constant `TRUE` and `FALSE` projections 
 accelerated, as are constant `DATE` values, including dates before the Unix epoch.
 Unary minus is accelerated for the same numeric types.
 `INT` and `BIGINT` division is accelerated when the divisor is a direct nonzero literal;
-signed results truncate exactly as Flink does.
+signed results truncate exactly as Flink does. `MOD` remainder supports the same types
+and divisor restriction. A planner representation that wraps a negative `BIGINT` divisor
+in a cast or unary expression falls back because it is no longer a direct literal.
 Constant `TIME` values preserve their declared precision and millisecond-of-day value.
 Constant `TIMESTAMP WITHOUT TIME ZONE` values preserve their local calendar value and
 sub-millisecond nanoseconds without applying a session or JVM timezone.
@@ -41,8 +43,8 @@ expressions that require a planner-inserted cast still fall back with the whole 
 Direct hexadecimal binary literals are accelerated with their exact byte sequence and
 fixed width. Cast-derived and computed binary expressions remain on Flink.
 
-Division by zero or a non-literal divisor, decimal and floating-point division,
-remainder, unary plus, non-decimal mixed-width arithmetic, non-finite
+Division or remainder by zero or a non-literal divisor, decimal and floating-point
+division and remainder, unary plus, non-decimal mixed-width arithmetic, non-finite
 floating-point literals, arithmetic on other types, casts, and functions currently fall
 back to Flink. The Calc also falls back if its filter is unsupported.
 
