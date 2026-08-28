@@ -30,11 +30,15 @@ import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.configuration.ExecutionOptions;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.EnvironmentSettings;
+import org.apache.flink.table.api.Schema;
+import org.apache.flink.table.api.Table;
 import org.apache.flink.table.api.TableEnvironment;
 import org.apache.flink.table.api.TableResult;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
+import org.apache.flink.table.types.DataType;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.CloseableIterator;
 import org.junit.jupiter.api.AfterEach;
@@ -1342,6 +1346,67 @@ class SqlParityTest {
                 Arguments.of("null safe", "SUBSTRING(metric FROM 1 FOR 2) IS DISTINCT FROM 'ab'"));
     }
 
+    @ParameterizedTest(name = "fixed-width search {0}")
+    @MethodSource("nativeFixedWidthSearchCases")
+    void nativeFixedWidthSearchMatchesFlinkByteForByte(
+            String ignoredName,
+            TypeInformation<?> type,
+            DataType logicalType,
+            List<Row> rows,
+            String tableName,
+            String predicate)
+            throws Exception {
+        assertDataStreamParity(
+                "SELECT metric FROM " + tableName + " WHERE " + predicate, type, logicalType, rows, tableName);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    private static Stream<Arguments> nativeFixedWidthSearchCases() {
+        return Stream.of(
+                Arguments.of(
+                        "CHAR BETWEEN",
+                        Types.STRING,
+                        DataTypes.CHAR(3),
+                        Arrays.asList(Row.of("a  "), Row.of("b  "), Row.of("é  "), Row.of((Object) null)),
+                        "fixed_char_input",
+                        "metric BETWEEN 'a  ' AND 'é  '"),
+                Arguments.of(
+                        "CHAR IN",
+                        Types.STRING,
+                        DataTypes.CHAR(3),
+                        Arrays.asList(Row.of("a  "), Row.of("b  "), Row.of("é  "), Row.of((Object) null)),
+                        "fixed_char_input",
+                        "metric IN ('a  ', 'é  ')"),
+                Arguments.of(
+                        "BINARY BETWEEN",
+                        Types.PRIMITIVE_ARRAY(Types.BYTE),
+                        DataTypes.BINARY(2),
+                        fixedBinaryRows(),
+                        "fixed_binary_input",
+                        "metric BETWEEN X'0000' AND X'80FF'"));
+    }
+
+    private static List<Row> fixedBinaryRows() {
+        return Arrays.asList(
+                Row.of(new byte[] {0x00, 0x00}),
+                Row.of(new byte[] {0x01, 0x02}),
+                Row.of(new byte[] {(byte) 0x80, (byte) 0xff}),
+                Row.of((Object) null));
+    }
+
+    @Test
+    void fixedBinaryPointSearchFallsBackToFlink() throws Exception {
+        assertDataStreamParity(
+                "SELECT metric FROM fixed_binary_fallback_input WHERE metric IN (X'0000', X'80FF')",
+                Types.PRIMITIVE_ARRAY(Types.BYTE),
+                DataTypes.BINARY(2),
+                fixedBinaryRows(),
+                "fixed_binary_fallback_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
+    }
+
     @ParameterizedTest(name = "VARBINARY {0}")
     @MethodSource("nativeVarbinaryDataStreamRangeCases")
     void nativeVarbinaryDataStreamRangesMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {
@@ -1439,8 +1504,14 @@ class SqlParityTest {
 
     private static void assertDataStreamParity(String sql, TypeInformation<?> type, List<Row> rows, String tableName)
             throws Exception {
-        byte[] flinkResult = executeDataStream(sql, type, rows, tableName, false);
-        byte[] streamFusionResult = executeDataStream(sql, type, rows, tableName, true);
+        assertDataStreamParity(sql, type, null, rows, tableName);
+    }
+
+    private static void assertDataStreamParity(
+            String sql, TypeInformation<?> type, DataType logicalType, List<Row> rows, String tableName)
+            throws Exception {
+        byte[] flinkResult = executeDataStream(sql, type, logicalType, rows, tableName, false);
+        byte[] streamFusionResult = executeDataStream(sql, type, logicalType, rows, tableName, true);
 
         assertThat(StreamFusionPlannerFactory.createdPlannerCount()).isEqualTo(1);
         assertThat(StreamFusionPlannerFactory.translatedPlanCount()).isGreaterThan(0);
@@ -1449,6 +1520,17 @@ class SqlParityTest {
 
     private static byte[] executeDataStream(
             String sql, TypeInformation<?> type, List<Row> rows, String tableName, boolean streamFusionEnabled)
+            throws Exception {
+        return executeDataStream(sql, type, null, rows, tableName, streamFusionEnabled);
+    }
+
+    private static byte[] executeDataStream(
+            String sql,
+            TypeInformation<?> type,
+            DataType logicalType,
+            List<Row> rows,
+            String tableName,
+            boolean streamFusionEnabled)
             throws Exception {
         if (streamFusionEnabled) {
             System.setProperty(
@@ -1466,7 +1548,11 @@ class SqlParityTest {
         tableEnvironment.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
         DataStream<Row> input =
                 executionEnvironment.fromCollection(rows, Types.ROW_NAMED(new String[] {"metric"}, type));
-        tableEnvironment.createTemporaryView(tableName, tableEnvironment.fromDataStream(input));
+        Table inputTable = logicalType == null
+                ? tableEnvironment.fromDataStream(input)
+                : tableEnvironment.fromDataStream(
+                        input, Schema.newBuilder().column("metric", logicalType).build());
+        tableEnvironment.createTemporaryView(tableName, inputTable);
         return collect(tableEnvironment.executeSql(sql));
     }
 

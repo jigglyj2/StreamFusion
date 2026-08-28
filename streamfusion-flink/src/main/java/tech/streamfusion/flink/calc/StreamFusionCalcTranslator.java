@@ -26,6 +26,7 @@ import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.TimestampData;
 import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
 import org.apache.flink.table.types.logical.BinaryType;
+import org.apache.flink.table.types.logical.CharType;
 import org.apache.flink.table.types.logical.DecimalType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
@@ -896,7 +897,8 @@ public final class StreamFusionCalcTranslator {
             if (sarg == null || !"UNKNOWN".equals(publicField(sarg, "nullAs").toString())) {
                 return null;
             }
-            if (inputType.getTypeAt(inputIndex).getTypeRoot() == LogicalTypeRoot.VARBINARY
+            if ((inputType.getTypeAt(inputIndex).getTypeRoot() == LogicalTypeRoot.VARBINARY
+                            || inputType.getTypeAt(inputIndex).getTypeRoot() == LogicalTypeRoot.BINARY)
                     && ((boolean) invoke(sarg, "isPoints") || (boolean) invoke(sarg, "isComplementedPoints"))) {
                 return null;
             }
@@ -959,7 +961,9 @@ public final class StreamFusionCalcTranslator {
                 || type == LogicalTypeRoot.DATE
                 || type == LogicalTypeRoot.TIME_WITHOUT_TIME_ZONE
                 || type == LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE
+                || type == LogicalTypeRoot.CHAR
                 || type == LogicalTypeRoot.VARCHAR
+                || type == LogicalTypeRoot.BINARY
                 || type == LogicalTypeRoot.VARBINARY;
     }
 
@@ -1005,9 +1009,24 @@ public final class StreamFusionCalcTranslator {
             case VARCHAR:
                 return new StreamFusionStringComparison(
                         inputIndex, invoke(endpoint, "getValue").toString(), operator, true);
+            case CHAR:
+                return new StreamFusionStringComparison(
+                        inputIndex,
+                        invoke(endpoint, "getValue").toString(),
+                        ((CharType) inputType.getTypeAt(inputIndex)).getLength(),
+                        operator,
+                        true);
             case VARBINARY:
                 return new StreamFusionBinaryComparison(
                         inputIndex, (byte[]) invoke(endpoint, "getBytes"), operator, true);
+            case BINARY:
+                return new StreamFusionBinaryComparison(
+                        inputIndex,
+                        (byte[]) invoke(endpoint, "getBytes"),
+                        true,
+                        ((BinaryType) inputType.getTypeAt(inputIndex)).getLength(),
+                        operator,
+                        true);
             default:
                 return null;
         }

@@ -88,6 +88,11 @@ StreamFusion expands each bounded or unbounded range into the existing compariso
 Lists containing `NULL` and search arguments over other types currently fall back.
 Bounded `VARBINARY BETWEEN` ranges are also accelerated. `VARBINARY IN` and `NOT IN`
 point searches fall back because Flink's binary-literal coercion is not raw byte equality.
+Fixed-width `CHAR(n)` search arguments and bounded `BINARY(n)` ranges are accelerated only
+when every planner-normalized endpoint is exactly `n` Unicode characters or bytes. This
+covers character ranges and point lists after Flink has applied its padding/truncation rules.
+`BINARY IN` and `NOT IN` remain fallback because Flink's binary-literal coercion is not raw
+byte equality; any endpoint whose declared width cannot be proven also causes fallback.
 
 A direct `BOOLEAN` column is also a supported condition, including inside a compound
 tree or beneath `NOT`. Nullable boolean columns preserve unknown rather than coercing
