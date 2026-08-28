@@ -957,6 +957,38 @@ class SqlParityTest {
                 Arguments.of("in", "metric IN ('alpha', 'delta', 'zeta')"));
     }
 
+    @ParameterizedTest(name = "VARBINARY {0}")
+    @MethodSource("nativeVarbinaryDataStreamRangeCases")
+    void nativeVarbinaryDataStreamRangesMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {
+        assertDataStreamParity(
+                "SELECT metric FROM varbinary_input WHERE " + predicate,
+                Types.PRIMITIVE_ARRAY(Types.BYTE),
+                Arrays.asList(
+                        Row.of(new byte[] {0x00}),
+                        Row.of(new byte[] {0x01, 0x02}),
+                        Row.of(new byte[] {0x03}),
+                        Row.of(new byte[] {(byte) 0x80}),
+                        Row.of((Object) null)),
+                "varbinary_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    private static Stream<Arguments> nativeVarbinaryDataStreamRangeCases() {
+        return Stream.of(Arguments.of("between", "metric BETWEEN X'0102' AND X'03'"));
+    }
+
+    @Test
+    void varbinaryPointSearchFallsBackAndMatchesFlinkByteForByte() throws Exception {
+        assertDataStreamParity(
+                "SELECT metric FROM varbinary_input WHERE metric IN (X'00', X'03', X'80')",
+                Types.PRIMITIVE_ARRAY(Types.BYTE),
+                Arrays.asList(Row.of(new byte[] {0x00}), Row.of(new byte[] {0x03}), Row.of(new byte[] {(byte) 0x80})),
+                "varbinary_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
+    }
+
     @ParameterizedTest(name = "{0}")
     @MethodSource("nativeBooleanColumnCases")
     void nativeBooleanColumnsMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {

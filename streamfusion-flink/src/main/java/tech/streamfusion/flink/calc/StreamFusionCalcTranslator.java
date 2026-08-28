@@ -598,6 +598,10 @@ public final class StreamFusionCalcTranslator {
             if (sarg == null || !"UNKNOWN".equals(publicField(sarg, "nullAs").toString())) {
                 return null;
             }
+            if (inputType.getTypeAt(inputIndex).getTypeRoot() == LogicalTypeRoot.VARBINARY
+                    && ((boolean) invoke(sarg, "isPoints") || (boolean) invoke(sarg, "isComplementedPoints"))) {
+                return null;
+            }
             Object ranges = invoke(publicField(sarg, "rangeSet"), "asRanges");
             StreamFusionCondition result = null;
             for (Object range : (Iterable<?>) ranges) {
@@ -657,7 +661,8 @@ public final class StreamFusionCalcTranslator {
                 || type == LogicalTypeRoot.DATE
                 || type == LogicalTypeRoot.TIME_WITHOUT_TIME_ZONE
                 || type == LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE
-                || type == LogicalTypeRoot.VARCHAR;
+                || type == LogicalTypeRoot.VARCHAR
+                || type == LogicalTypeRoot.VARBINARY;
     }
 
     private static StreamFusionCondition searchComparison(
@@ -702,6 +707,9 @@ public final class StreamFusionCalcTranslator {
             case VARCHAR:
                 return new StreamFusionStringComparison(
                         inputIndex, invoke(endpoint, "getValue").toString(), operator, true);
+            case VARBINARY:
+                return new StreamFusionBinaryComparison(
+                        inputIndex, (byte[]) invoke(endpoint, "getBytes"), operator, true);
             default:
                 return null;
         }

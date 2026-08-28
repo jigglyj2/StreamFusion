@@ -86,6 +86,8 @@ Decimal endpoints must retain the
 column's precision and scale. Flink represents these predicates as search-argument ranges;
 StreamFusion expands each bounded or unbounded range into the existing comparison tree.
 Lists containing `NULL` and search arguments over other types currently fall back.
+Bounded `VARBINARY BETWEEN` ranges are also accelerated. `VARBINARY IN` and `NOT IN`
+point searches fall back because Flink's binary-literal coercion is not raw byte equality.
 
 A direct `BOOLEAN` column is also a supported condition, including inside a compound
 tree or beneath `NOT`. Nullable boolean columns preserve unknown rather than coercing
