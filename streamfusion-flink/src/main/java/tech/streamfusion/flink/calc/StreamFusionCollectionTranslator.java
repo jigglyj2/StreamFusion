@@ -24,6 +24,7 @@ import tech.streamfusion.proto.plan.v1.ArrayPosition;
 import tech.streamfusion.proto.plan.v1.ArrayPrepend;
 import tech.streamfusion.proto.plan.v1.ArrayRemove;
 import tech.streamfusion.proto.plan.v1.ArrayReverse;
+import tech.streamfusion.proto.plan.v1.ArraySlice;
 import tech.streamfusion.proto.plan.v1.ArraySort;
 import tech.streamfusion.proto.plan.v1.Cardinality;
 import tech.streamfusion.proto.plan.v1.Expression;
@@ -95,6 +96,13 @@ final class StreamFusionCollectionTranslator extends StreamFusionComplexTypeSupp
             for (int index = 1; index < operands.size(); index++) {
                 if (literal(operands.get(index), Boolean.class) == null) {
                     return "ARRAY_SORT stays on Flink unless its ascending and null-order controls are non-null boolean literals";
+                }
+            }
+        }
+        if ("ARRAY_SLICE".equals(function) && (operands.size() == 2 || operands.size() == 3)) {
+            for (int index = 1; index < operands.size(); index++) {
+                if (literal(operands.get(index), Integer.class) == null) {
+                    return "ARRAY_SLICE stays on Flink unless its start and optional end positions are non-null integer literals";
                 }
             }
         }
@@ -394,6 +402,31 @@ final class StreamFusionCollectionTranslator extends StreamFusionComplexTypeSupp
                                 .setAscending(ascending)
                                 .setNullFirst(nullFirst))
                         .build();
+    }
+
+    static Expression arraySlice(Object expression, RowType inputType, LogicalType expectedType) {
+        if (!"ARRAY_SLICE".equals(functionName(expression)) || !(expectedType instanceof ArrayType)) {
+            return null;
+        }
+        java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
+        if (operands.size() < 2 || operands.size() > 3) {
+            return null;
+        }
+        LogicalType arrayType = logicalType(operands.get(0), inputType);
+        Integer start = literal(operands.get(1), Integer.class);
+        Integer end = operands.size() == 3 ? literal(operands.get(2), Integer.class) : null;
+        if (!(arrayType instanceof ArrayType) || start == null || (operands.size() == 3 && end == null)) {
+            return null;
+        }
+        Expression array = StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, arrayType);
+        if (array == null) {
+            return null;
+        }
+        ArraySlice.Builder slice = ArraySlice.newBuilder().setArray(array).setStart(start.longValue());
+        if (end != null) {
+            slice.setEnd(end.longValue());
+        }
+        return Expression.newBuilder().setArraySlice(slice).build();
     }
 
     private static Expression stringLiteral(String value) {

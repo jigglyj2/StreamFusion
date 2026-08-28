@@ -87,6 +87,7 @@ message Expression {
     ArrayJoin array_join = 56;
     Split split = 57;
     ArraySort array_sort = 58;
+    ArraySlice array_slice = 59;
   }
 }
 
@@ -188,6 +189,12 @@ message ArraySort {
   Expression array = 1;
   bool ascending = 2;
   bool null_first = 3;
+}
+
+message ArraySlice {
+  Expression array = 1;
+  int64 start = 2;
+  optional int64 end = 3;
 }
 
 message Coalesce {

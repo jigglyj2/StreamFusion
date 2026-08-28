@@ -185,6 +185,11 @@ form defaults to ascending with nulls first; the two-argument form puts nulls fi
 and last when descending, matching Flink. Floating-point arrays stay on Flink because NaN and
 signed-zero ordering is not yet parity-approved; dynamic or null controls also produce an explicit
 EXPLAIN fallback.
+`ARRAY_SLICE` is accelerated for Arrow-compatible arrays when its start and optional inclusive
+end positions are non-null integer literals. Positive, zero, negative, and out-of-range positions
+use DataFusion's vectorized one-based slice kernel, whose clamping and negative-from-end behavior
+matches Flink; the omitted end is represented natively as an unbounded upper position. Dynamic or
+null positions remain on Flink with an explicit EXPLAIN reason.
 `ARRAY_DISTINCT` is accelerated for Arrow-compatible element types, including nested `ROW`
 elements. It preserves the first occurrence order, retains at most one null element, and
 preserves null and empty arrays. Rust lowers it directly to DataFusion's vectorized set kernel;

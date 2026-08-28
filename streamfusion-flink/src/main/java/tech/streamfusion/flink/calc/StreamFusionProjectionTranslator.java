@@ -122,6 +122,10 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
         if (arraySort != null) {
             return arraySort;
         }
+        Expression arraySlice = StreamFusionCollectionTranslator.arraySlice(expression, inputType, expectedType);
+        if (arraySlice != null) {
+            return arraySlice;
+        }
         Expression arrayDistinct =
                 StreamFusionCollectionSetTranslator.arrayDistinct(expression, inputType, expectedType);
         if (arrayDistinct != null) {

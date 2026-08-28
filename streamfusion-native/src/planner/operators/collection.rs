@@ -160,6 +160,15 @@ pub(super) fn create(
             sort.null_first,
             schema,
         ),
+        ArraySlice(slice) => expressions::array_slice::create(
+            create_expression(
+                required(&slice.array, "array slice is missing its array")?,
+                schema,
+            )?,
+            slice.start,
+            slice.end,
+            schema,
+        ),
         ArrayDistinct(distinct) => expressions::array_distinct::create(
             create_expression(
                 required(&distinct.array, "array distinct is missing its array")?,
