@@ -116,6 +116,11 @@ characters are matched literally (including `%` and `_`), an empty prefix matche
 non-null string, and a null input remains unknown. Dynamic prefixes, `CHAR`, and binary
 arguments currently fall back pending separate type-specific coverage.
 
+The same safe positive-literal `SUBSTRING` and `SUBSTR` forms documented for projections
+may participate in any ordered or null-safe comparison with a `VARCHAR` literal, in either
+operand order. Rust composes the substring expression directly beneath DataFusion's existing
+comparison expression. Dynamic, zero, or negative positions retain whole-Calc fallback.
+
 ## Implementation
 
 Java encodes literal or column operands as protobuf expressions. Rust lowers them to DataFusion

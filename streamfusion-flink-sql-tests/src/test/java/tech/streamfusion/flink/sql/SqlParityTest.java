@@ -1321,6 +1321,27 @@ class SqlParityTest {
         assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
     }
 
+    @ParameterizedTest(name = "SUBSTRING filter {0}")
+    @MethodSource("nativeSubstringFilterCases")
+    void nativeSubstringFiltersMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {
+        assertDataStreamParity(
+                "SELECT metric FROM substring_filter_input WHERE " + predicate,
+                Types.STRING,
+                Arrays.asList(Row.of(""), Row.of("abcd"), Row.of("ab😀d"), Row.of("你好世界"), Row.of((Object) null)),
+                "substring_filter_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    private static Stream<Arguments> nativeSubstringFilterCases() {
+        return Stream.of(
+                Arguments.of("equal", "SUBSTRING(metric FROM 1 FOR 2) = 'ab'"),
+                Arguments.of("not equal", "SUBSTR(metric, 2, 2) <> 'bc'"),
+                Arguments.of("reverse ordered", "'bc' < SUBSTRING(metric FROM 2 FOR 2)"),
+                Arguments.of("remainder", "SUBSTRING(metric FROM 2) >= 'b'"),
+                Arguments.of("null safe", "SUBSTRING(metric FROM 1 FOR 2) IS DISTINCT FROM 'ab'"));
+    }
+
     @ParameterizedTest(name = "VARBINARY {0}")
     @MethodSource("nativeVarbinaryDataStreamRangeCases")
     void nativeVarbinaryDataStreamRangesMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {

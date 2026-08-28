@@ -22,13 +22,31 @@ abstract class StreamFusionOrderedComparison implements StreamFusionCondition {
     private final ComparisonOperator operator;
     private final boolean inputOnLeft;
     private final Expression literal;
+    private final Expression inputExpression;
 
     StreamFusionOrderedComparison(
             int inputIndex, ComparisonOperator operator, boolean inputOnLeft, Expression literal) {
+        this(
+                inputIndex,
+                operator,
+                inputOnLeft,
+                literal,
+                Expression.newBuilder()
+                        .setInputReference(InputReference.newBuilder().setIndex(inputIndex))
+                        .build());
+    }
+
+    StreamFusionOrderedComparison(
+            int inputIndex,
+            ComparisonOperator operator,
+            boolean inputOnLeft,
+            Expression literal,
+            Expression inputExpression) {
         this.inputIndex = inputIndex;
         this.operator = operator;
         this.inputOnLeft = inputOnLeft;
         this.literal = literal;
+        this.inputExpression = inputExpression;
     }
 
     final int inputIndex() {
@@ -76,13 +94,10 @@ abstract class StreamFusionOrderedComparison implements StreamFusionCondition {
 
     @Override
     public final Expression expression() {
-        Expression input = Expression.newBuilder()
-                .setInputReference(InputReference.newBuilder().setIndex(inputIndex))
-                .build();
         return Expression.newBuilder()
                 .setComparison(Comparison.newBuilder()
-                        .setLeft(inputOnLeft ? input : literal)
-                        .setRight(inputOnLeft ? literal : input)
+                        .setLeft(inputOnLeft ? inputExpression : literal)
+                        .setRight(inputOnLeft ? literal : inputExpression)
                         .setOperator(operator))
                 .build();
     }

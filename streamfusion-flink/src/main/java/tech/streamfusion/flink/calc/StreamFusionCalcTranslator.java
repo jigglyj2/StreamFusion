@@ -787,6 +787,15 @@ public final class StreamFusionCalcTranslator {
         if (operands.size() != 2) {
             return null;
         }
+        StreamFusionCondition substring =
+                substringComparison(operands.get(0), operands.get(1), operator, true, inputType);
+        if (substring != null) {
+            return substring;
+        }
+        substring = substringComparison(operands.get(1), operands.get(0), operator, false, inputType);
+        if (substring != null) {
+            return substring;
+        }
         int leftInput = inputIndex(operands.get(0));
         int rightInput = inputIndex(operands.get(1));
         if (leftInput >= 0 && rightInput >= 0) {
@@ -811,6 +820,47 @@ public final class StreamFusionCalcTranslator {
             return comparison(rightInput, operands.get(0), operator, false, inputType);
         }
         return null;
+    }
+
+    private static StreamFusionCondition substringComparison(
+            Object substring, Object literal, ComparisonOperator operator, boolean substringOnLeft, RowType inputType) {
+        String name = functionName(substring);
+        if (!"SUBSTRING".equals(name) && !"SUBSTR".equals(name)) {
+            return null;
+        }
+        List<?> operands = (List<?>) invoke(substring, "getOperands");
+        if (operands.size() < 2 || operands.size() > 3) {
+            return null;
+        }
+        int inputIndex = inputIndex(operands.get(0));
+        Integer start = integerLiteral(operands.get(1));
+        Integer length = operands.size() == 3 ? integerLiteral(operands.get(2)) : Integer.MAX_VALUE;
+        String literalValue = literal(literal, String.class);
+        if (inputIndex < 0
+                || inputIndex >= inputType.getFieldCount()
+                || inputType.getTypeAt(inputIndex).getTypeRoot() != LogicalTypeRoot.VARCHAR
+                || start == null
+                || start <= 0
+                || length == null
+                || length < 0
+                || literalValue == null) {
+            return null;
+        }
+        Substring.Builder nativeSubstring = Substring.newBuilder()
+                .setOperand(StreamFusionIdentityCalcOperator.inputReference(
+                        inputIndex, StreamFusionIdentityCalcOperator.logicalType(inputType, inputIndex)))
+                .setStart(start);
+        if (operands.size() == 3) {
+            nativeSubstring.setLength(length);
+        }
+        return new StreamFusionSubstringComparison(
+                inputIndex,
+                start,
+                length,
+                literalValue,
+                operator,
+                substringOnLeft,
+                Expression.newBuilder().setSubstring(nativeSubstring).build());
     }
 
     private static boolean hasNoArgMethod(Object target, String methodName) {
