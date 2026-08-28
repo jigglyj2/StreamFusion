@@ -57,4 +57,23 @@ class ComputedArrayTransformationUnnestParityTest extends SqlParityTestSupport {
                 .isEqualTo(1);
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
+
+    @Test
+    void nativeUnnestEvaluatesVariadicArrayConcatInsideTheSamePlan() throws Exception {
+        assertDataStreamParity(
+                "SELECT item, ord_idx FROM array_concat_unnest_input "
+                        + "LEFT JOIN UNNEST(ARRAY_CONCAT(metric, ARRAY[9, CAST(NULL AS INT)], metric)) "
+                        + "WITH ORDINALITY AS expanded(item, ord_idx) ON TRUE",
+                Types.OBJECT_ARRAY(Types.INT),
+                DataTypes.ARRAY(DataTypes.INT()),
+                Arrays.asList(
+                        Row.of((Object) new Integer[] {1, null, 3}), Row.of((Object) new Integer[] {}), Row.of((Object)
+                                null)),
+                "array_concat_unnest_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isEqualTo(1);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
 }
