@@ -124,6 +124,11 @@ that every argument is non-null before invoking the vectorized concat kernel, pr
 Flink's null-if-any-argument-is-null rule (DataFusion concat alone skips nulls). Character
 literals and nested supported projections may be arguments; binary and fixed-width character
 concatenation remain fallback pending their distinct type-width rules.
+`SUBSTRING` and `SUBSTR` are accelerated for `VARCHAR` with a positive literal start and an
+optional nonnegative literal length. Positions are one-based and count Unicode code points;
+zero length, starts beyond the value, empty strings, and nulls preserve Flink behavior.
+Dynamic indices, zero or negative starts, negative lengths, binary strings, and `CHAR` fall
+back because Flink's negative-position rule differs from DataFusion's PostgreSQL semantics.
 
 Cast approval is table-driven. Java maps an explicitly approved Flink source/target pair
 to a stable protobuf cast kind; Rust independently verifies that kind against the actual

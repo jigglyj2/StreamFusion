@@ -60,6 +60,7 @@ import tech.streamfusion.proto.plan.v1.NullLiteral;
 import tech.streamfusion.proto.plan.v1.ShortLiteral;
 import tech.streamfusion.proto.plan.v1.Sign;
 import tech.streamfusion.proto.plan.v1.StringLiteral;
+import tech.streamfusion.proto.plan.v1.Substring;
 import tech.streamfusion.proto.plan.v1.TimeLiteral;
 import tech.streamfusion.proto.plan.v1.TimestampLiteral;
 import tech.streamfusion.proto.plan.v1.UnaryMinus;
@@ -406,6 +407,28 @@ public final class StreamFusionCalcTranslator {
                 concat.addArguments(argument);
             }
             return Expression.newBuilder().setConcat(concat).build();
+        }
+        if (("SUBSTRING".equals(functionName(expression)) || "SUBSTR".equals(functionName(expression)))
+                && expectedType.getTypeRoot() == LogicalTypeRoot.VARCHAR) {
+            List<?> operands = (List<?>) invoke(expression, "getOperands");
+            if (operands.size() < 2 || operands.size() > 3) {
+                return null;
+            }
+            Expression operand = projectionExpression(operands.get(0), inputType, expectedType);
+            Integer start = integerLiteral(operands.get(1));
+            Integer length = operands.size() == 3 ? integerLiteral(operands.get(2)) : null;
+            if (operand == null
+                    || start == null
+                    || start <= 0
+                    || (operands.size() == 3 && (length == null || length < 0))) {
+                return null;
+            }
+            Substring.Builder substring =
+                    Substring.newBuilder().setOperand(operand).setStart(start);
+            if (length != null) {
+                substring.setLength(length);
+            }
+            return Expression.newBuilder().setSubstring(substring).build();
         }
         return projectionExpression(expression, inputType, expectedType.getTypeRoot());
     }

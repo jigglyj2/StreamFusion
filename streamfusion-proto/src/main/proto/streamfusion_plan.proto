@@ -65,6 +65,7 @@ message Expression {
     Concat concat = 34;
     Like like = 35;
     StartsWith starts_with = 36;
+    Substring substring = 37;
   }
 }
 
@@ -122,6 +123,12 @@ message Like {
 message StartsWith {
   Expression operand = 1;
   string prefix = 2;
+}
+
+message Substring {
+  Expression operand = 1;
+  int32 start = 2;
+  optional int32 length = 3;
 }
 
 message NullLiteral {

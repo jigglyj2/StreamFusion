@@ -194,6 +194,18 @@ fn create_expression(
                 schema,
             )
         }
+        Some(proto::expression::Expression::Substring(substring)) => {
+            let operand = substring
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("SUBSTRING operand is empty".to_string()))?;
+            expressions::substring::create(
+                create_expression(operand, schema)?,
+                substring.start,
+                substring.length,
+                schema,
+            )
+        }
         Some(proto::expression::Expression::DateLiteral(literal)) => Ok(Arc::new(Literal::new(
             ScalarValue::Date32(Some(literal.epoch_day)),
         ))),

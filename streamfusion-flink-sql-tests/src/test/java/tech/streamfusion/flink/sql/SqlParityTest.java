@@ -1289,6 +1289,38 @@ class SqlParityTest {
         assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
     }
 
+    @ParameterizedTest(name = "SUBSTRING {0}")
+    @MethodSource("nativeSubstringCases")
+    void nativeSubstringMatchesFlinkByteForByte(String ignoredName, String expression) throws Exception {
+        assertDataStreamParity(
+                "SELECT " + expression + " FROM substring_input",
+                Types.STRING,
+                Arrays.asList(Row.of(""), Row.of("abcdef"), Row.of("你好世界"), Row.of("a😀bc"), Row.of((Object) null)),
+                "substring_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    private static Stream<Arguments> nativeSubstringCases() {
+        return Stream.of(
+                Arguments.of("standard", "SUBSTRING(metric FROM 1 FOR 2)"),
+                Arguments.of("remainder", "SUBSTRING(metric FROM 2)"),
+                Arguments.of("alias", "SUBSTR(metric, 2, 3)"),
+                Arguments.of("zero length", "SUBSTRING(metric FROM 2 FOR 0)"),
+                Arguments.of("past end", "SUBSTRING(metric FROM 99 FOR 4)"));
+    }
+
+    @Test
+    void negativeSubstringStartFallsBackToFlink() throws Exception {
+        assertDataStreamParity(
+                "SELECT SUBSTRING(metric FROM -2 FOR 2) FROM substring_fallback_input",
+                Types.STRING,
+                Arrays.asList(Row.of("abcdef"), Row.of("你好世界"), Row.of((Object) null)),
+                "substring_fallback_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
+    }
+
     @ParameterizedTest(name = "VARBINARY {0}")
     @MethodSource("nativeVarbinaryDataStreamRangeCases")
     void nativeVarbinaryDataStreamRangesMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {
