@@ -97,7 +97,8 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
         if (arrayPosition != null) {
             return arrayPosition;
         }
-        Expression arrayDistinct = StreamFusionCollectionTranslator.arrayDistinct(expression, inputType, expectedType);
+        Expression arrayDistinct =
+                StreamFusionCollectionSetTranslator.arrayDistinct(expression, inputType, expectedType);
         if (arrayDistinct != null) {
             return arrayDistinct;
         }
