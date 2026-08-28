@@ -57,7 +57,7 @@ class ArrayUnnestParityTest extends SqlParityTestSupport {
     }
 
     @Test
-    void leftArrayUnnestFallsBackWithItsJoinSemanticReason() throws Exception {
+    void nativeLeftArrayUnnestNullExtendsNullAndEmptyArrays() throws Exception {
         assertDataStreamParity(
                 "SELECT item FROM array_left_unnest_input " + "LEFT JOIN UNNEST(metric) AS expanded(item) ON TRUE",
                 Types.OBJECT_ARRAY(Types.INT),
@@ -65,10 +65,10 @@ class ArrayUnnestParityTest extends SqlParityTestSupport {
                 INPUTS,
                 "array_left_unnest_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
-        assertThat(StreamFusionPlanningDiagnostics.explain())
-                .contains("Accelerated: no")
-                .contains("only inner/cross array UNNEST is supported");
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isEqualTo(1);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 
     @Test

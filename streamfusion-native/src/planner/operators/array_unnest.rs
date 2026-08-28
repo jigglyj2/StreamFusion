@@ -48,7 +48,7 @@ pub(crate) fn create(
         DataType::List(element) => Arc::new(Field::new(
             VALUE_COLUMN,
             element.data_type().clone(),
-            element.is_nullable(),
+            element.is_nullable() || unnest.preserve_empty,
         )),
         other => {
             return Err(DataFusionError::Plan(format!(
@@ -111,12 +111,17 @@ pub(crate) fn create(
             depth: 1,
         });
     }
+    let null_handling = if unnest.preserve_empty {
+        NullHandling::PreserveAndExpandEmpty
+    } else {
+        NullHandling::Drop
+    };
     Ok(Arc::new(UnnestExec::new(
         projected,
         list_columns,
         vec![],
         output_schema,
-        UnnestOptions::new().with_null_handling(NullHandling::Drop),
+        UnnestOptions::new().with_null_handling(null_handling),
     )?))
 }
 
@@ -151,6 +156,7 @@ mod tests {
                 input: None,
                 array_index: 1,
                 with_ordinality: false,
+                preserve_empty: false,
             },
             source,
         )
@@ -202,6 +208,7 @@ mod tests {
                 input: None,
                 array_index: 1,
                 with_ordinality: true,
+                preserve_empty: false,
             },
             source,
         )
@@ -228,6 +235,54 @@ mod tests {
                 .unwrap()
                 .values(),
             &[0, 0, 1]
+        );
+    }
+
+    #[tokio::test]
+    async fn preserves_null_and_empty_arrays_as_null_extended_rows() {
+        let arrays = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>([
+            Some(vec![Some(7)]),
+            Some(vec![]),
+            None,
+        ]));
+        let ids = Arc::new(Int32Array::from(vec![10, 20, 30]));
+        let ordinals = Arc::new(Int32Array::from(vec![0, 1, 2]));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("items", arrays.data_type().clone(), true),
+            Field::new(INPUT_ROW_COLUMN, DataType::Int32, false),
+        ]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![ids, arrays, ordinals]).unwrap();
+        let source = MemorySourceConfig::try_new_exec(&[vec![batch]], schema, None).unwrap();
+        let plan = create(
+            &proto::ArrayUnnest {
+                input: None,
+                array_index: 1,
+                with_ordinality: false,
+                preserve_empty: true,
+            },
+            source,
+        )
+        .unwrap();
+
+        let output = collect(plan, SessionContext::new().task_ctx())
+            .await
+            .unwrap();
+        let batch = &output[0];
+        let values = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(7), None, None]);
+        assert_eq!(
+            batch
+                .column(3)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .values(),
+            &[0, 1, 2]
         );
     }
 }

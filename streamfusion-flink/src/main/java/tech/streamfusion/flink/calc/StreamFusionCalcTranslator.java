@@ -91,13 +91,14 @@ public final class StreamFusionCalcTranslator extends StreamFusionExpressionTran
             Transformation<RowData> input,
             RowType boundaryInputType,
             RowType unnestOutputType,
+            Object joinType,
             Object invocation,
             List<RowType> inputTypes,
             List<RowType> outputTypes,
             List<List<?>> projectionStages,
             List<?> conditions) {
         if (StreamFusionArrayUnnestTranslator.unsupportedReason(
-                        boundaryInputType, unnestOutputType, "INNER", invocation, null)
+                        boundaryInputType, unnestOutputType, joinType, invocation, null)
                 != null) {
             return null;
         }
@@ -127,6 +128,7 @@ public final class StreamFusionCalcTranslator extends StreamFusionExpressionTran
                 outputType,
                 StreamFusionArrayUnnestTranslator.arrayIndex(invocation),
                 StreamFusionArrayUnnestTranslator.withOrdinality(invocation),
+                StreamFusionArrayUnnestTranslator.isLeft(joinType),
                 unnestOutputType.getFieldCount(),
                 nativeProjectionStages,
                 nativeConditions);

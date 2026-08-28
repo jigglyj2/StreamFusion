@@ -22,19 +22,19 @@ import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
 
-/** Reflection entry point for parity-safe inner UNNEST over a directly referenced array column. */
+/** Reflection entry point for parity-safe UNNEST over a directly referenced array column. */
 public final class StreamFusionArrayUnnestTranslator {
     private StreamFusionArrayUnnestTranslator() {}
 
     public static Transformation<RowData> translate(
-            Transformation<RowData> input, RowType inputType, RowType outputType, Object invocation) {
-        String rejection = unsupportedReason(inputType, outputType, "INNER", invocation, null);
+            Transformation<RowData> input, RowType inputType, RowType outputType, Object joinType, Object invocation) {
+        String rejection = unsupportedReason(inputType, outputType, joinType, invocation, null);
         if (rejection != null) {
             return null;
         }
         int arrayIndex = arrayIndex(invocation);
-        StreamFusionArrayUnnestOperator operator =
-                new StreamFusionArrayUnnestOperator(inputType, outputType, arrayIndex, withOrdinality(invocation));
+        StreamFusionArrayUnnestOperator operator = new StreamFusionArrayUnnestOperator(
+                inputType, outputType, arrayIndex, withOrdinality(invocation), isLeft(joinType));
         OneInputTransformation<RowData, RowData> transformation = new OneInputTransformation<>(
                 input,
                 "streamfusion-array-unnest",
@@ -50,14 +50,18 @@ public final class StreamFusionArrayUnnestTranslator {
     public static String unsupportedReason(
             RowType inputType, RowType outputType, Object joinType, Object invocation, Object condition) {
         String joinName = joinType instanceof Enum<?> ? ((Enum<?>) joinType).name() : String.valueOf(joinType);
-        if (!"INNER".equals(joinName)) {
-            return "UNNEST join type " + joinType + " is not accelerated; only inner/cross array UNNEST is supported";
+        if (!"INNER".equals(joinName) && !"LEFT".equals(joinName)) {
+            return "UNNEST join type " + joinType
+                    + " is not accelerated; only inner/cross and left array UNNEST are supported";
         }
         if (condition != null) {
             return "UNNEST correlate conditions are not accelerated";
         }
         String functionName = String.valueOf(invoke(invoke(invocation, "getOperator"), "getName"));
         boolean withOrdinality = "$UNNEST_ROWS_WITH_ORDINALITY$1".equals(functionName);
+        if ("LEFT".equals(joinName) && withOrdinality) {
+            return "left array UNNEST WITH ORDINALITY is not yet supported";
+        }
         if (!"$UNNEST_ROWS$1".equals(functionName) && !withOrdinality) {
             return "table function " + functionName + " is not StreamFusion array UNNEST";
         }
@@ -88,7 +92,8 @@ public final class StreamFusionArrayUnnestTranslator {
                 return "array UNNEST output does not preserve input field " + field + " exactly";
             }
         }
-        if (!element.equals(outputType.getTypeAt(inputType.getFieldCount()))) {
+        LogicalType expectedElement = "LEFT".equals(joinName) ? element.copy(true) : element;
+        if (!expectedElement.equals(outputType.getTypeAt(inputType.getFieldCount()))) {
             return "array UNNEST output element type does not match its ARRAY element type";
         }
         if (withOrdinality) {
@@ -109,6 +114,10 @@ public final class StreamFusionArrayUnnestTranslator {
     public static boolean withOrdinality(Object invocation) {
         String functionName = String.valueOf(invoke(invoke(invocation, "getOperator"), "getName"));
         return "$UNNEST_ROWS_WITH_ORDINALITY$1".equals(functionName);
+    }
+
+    public static boolean isLeft(Object joinType) {
+        return "LEFT".equals(joinType instanceof Enum<?> ? ((Enum<?>) joinType).name() : String.valueOf(joinType));
     }
 
     private static boolean isScalarBoundaryType(LogicalTypeRoot type) {

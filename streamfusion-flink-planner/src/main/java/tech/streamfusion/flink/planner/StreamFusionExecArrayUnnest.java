@@ -32,6 +32,7 @@ public final class StreamFusionExecArrayUnnest extends CommonExecCorrelate imple
     private static final String TRANSLATOR_CLASS = "tech.streamfusion.flink.unnest.StreamFusionArrayUnnestTranslator";
 
     private final RexCall streamFusionInvocation;
+    private final FlinkJoinType streamFusionJoinType;
 
     public StreamFusionExecArrayUnnest(
             ReadableConfig persistedConfig,
@@ -53,10 +54,15 @@ public final class StreamFusionExecArrayUnnest extends CommonExecCorrelate imple
                 outputType,
                 description);
         this.streamFusionInvocation = invocation;
+        this.streamFusionJoinType = joinType;
     }
 
     RexCall streamFusionInvocation() {
         return streamFusionInvocation;
+    }
+
+    FlinkJoinType streamFusionJoinType() {
+        return streamFusionJoinType;
     }
 
     @SuppressWarnings("unchecked")
@@ -67,13 +73,14 @@ public final class StreamFusionExecArrayUnnest extends CommonExecCorrelate imple
         try {
             Class<?> translator = Class.forName(
                     TRANSLATOR_CLASS, true, planner.getFlinkContext().getClassLoader());
-            Method translate =
-                    translator.getMethod("translate", Transformation.class, RowType.class, RowType.class, Object.class);
+            Method translate = translator.getMethod(
+                    "translate", Transformation.class, RowType.class, RowType.class, Object.class, Object.class);
             Transformation<RowData> result = (Transformation<RowData>) translate.invoke(
                     null,
                     input,
                     (RowType) inputEdge.getOutputType(),
                     (RowType) getOutputType(),
+                    streamFusionJoinType,
                     streamFusionInvocation);
             if (result == null) {
                 throw new IllegalStateException("A selected StreamFusion array UNNEST failed translation");

@@ -5,9 +5,9 @@ sidebar:
   order: 12
 ---
 
-**Current status:** inner/cross `UNNEST`, with or without `WITH ORDINALITY`, over directly
-referenced arrays of supported scalar values is accelerated. Other table functions and expansion
-forms fall back to Flink.
+**Current status:** inner/cross `UNNEST`, with or without `WITH ORDINALITY`, and left
+`UNNEST` without ordinality over directly referenced arrays of supported scalar values are
+accelerated. Other table functions and expansion forms fall back to Flink.
 
 ## SQL example
 
@@ -35,11 +35,11 @@ StreamFusion accelerates the operation when all of the following are true:
 `WITH ORDINALITY` is accelerated for the same scalar-array cases and appends Flink's non-null,
 1-based `INT` position, restarting at one for every input array.
 
-`LEFT JOIN UNNEST`, computed array operands, arrays of rows or nested collections, maps, multisets,
-user-defined table functions, and correlate conditions currently fall back. EXPLAIN identifies
-the rejected join form, function shape, operand, or element type and then reports whole-plan
-fallback. These variants remain on Flink until their null-extension, field-expansion, and
-changelog behavior has dedicated parity coverage.
+`LEFT JOIN UNNEST(array) ON TRUE` retains one null-extended result for a null or empty array and
+otherwise emits the same ordered elements as the inner form. Left UNNEST with ordinality,
+computed array operands, arrays of rows or nested collections, maps, multisets, user-defined
+table functions, and correlate conditions currently fall back. EXPLAIN identifies the rejected
+join form, function shape, operand, or element type and then reports whole-plan fallback.
 
 ## Implementation
 
@@ -47,6 +47,8 @@ The Java planner replaces the eligible `StreamExecCorrelate` with the distinct
 `StreamFusionExecArrayUnnest` node and sends a versioned `ArrayUnnest` protobuf operator to Rust.
 Rust projects the input columns plus a lightweight duplicate reference to the array and executes
 DataFusion's vectorized `UnnestExec` with `NullHandling::Drop`, matching Flink inner-join behavior.
+The left form selects `PreserveAndExpandEmpty`, which creates exactly one nullable element for a
+null or empty array and retains the parent-row ordinal for changelog restoration.
 DataFusion allocates take indices because repeating parent values is inherent to expansion; it
 does not serialize rows or copy the array merely to hand it to the next native stage.
 For `WITH ORDINALITY`, StreamFusion derives a second Arrow list from the source offsets, fills its

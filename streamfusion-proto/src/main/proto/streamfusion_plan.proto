@@ -32,6 +32,7 @@ message ArrayUnnest {
   Operator input = 1;
   uint32 array_index = 2;
   bool with_ordinality = 3;
+  bool preserve_empty = 4;
 }
 
 message Expression {
