@@ -58,6 +58,9 @@ final class StreamFusionNumericFunctionTranslator extends StreamFusionRexSupport
                 }
             }
         }
+        if ("ROUND".equals(functionName(expression))) {
+            return "ROUND stays on Flink because floating ROUND has data-dependent error semantics for non-finite values that DataFusion does not preserve";
+        }
         return null;
     }
 

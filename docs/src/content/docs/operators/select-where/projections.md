@@ -280,6 +280,10 @@ provably nonnegative `DOUBLE` literal. The special exponent `0.5` continues to l
 parity-approved square-root expression; other approved exponents use DataFusion's vectorized power
 kernel. Negative and dynamic exponents stay on Flink with an EXPLAIN reason because DataFusion
 raises an error for zero to a negative power while Flink returns IEEE infinity.
+`ROUND` remains on Flink with an explicit EXPLAIN reason. Flink's floating implementation throws
+for non-finite values while DataFusion returns a value, so native acceleration would otherwise make
+job success depend on which engine planned the same data. Integer and decimal rounding remain
+deferred until they have separate typed parity contracts.
 `SINH` and `TANH` are accelerated under the same `DOUBLE` coercion contract and remain distinct
 native stages. Generated parity coverage includes finite values, overflow, signed zero, infinities,
 NaN, and nulls. `COSH` stays on Flink with an explicit EXPLAIN reason because DataFusion's kernel
