@@ -17,7 +17,6 @@ import org.apache.flink.table.data.TimestampData;
 import org.apache.flink.table.types.logical.DecimalType;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
-import tech.streamfusion.proto.plan.v1.AbsoluteValue;
 import tech.streamfusion.proto.plan.v1.Arithmetic;
 import tech.streamfusion.proto.plan.v1.ArithmeticOperator;
 import tech.streamfusion.proto.plan.v1.BinaryLiteral;
@@ -25,7 +24,6 @@ import tech.streamfusion.proto.plan.v1.BooleanLiteral;
 import tech.streamfusion.proto.plan.v1.ByteLiteral;
 import tech.streamfusion.proto.plan.v1.Cast;
 import tech.streamfusion.proto.plan.v1.CastKind;
-import tech.streamfusion.proto.plan.v1.Ceiling;
 import tech.streamfusion.proto.plan.v1.CharacterLength;
 import tech.streamfusion.proto.plan.v1.Coalesce;
 import tech.streamfusion.proto.plan.v1.ComparisonOperator;
@@ -34,17 +32,13 @@ import tech.streamfusion.proto.plan.v1.Conditional;
 import tech.streamfusion.proto.plan.v1.DateLiteral;
 import tech.streamfusion.proto.plan.v1.DecimalLiteral;
 import tech.streamfusion.proto.plan.v1.DoubleLiteral;
-import tech.streamfusion.proto.plan.v1.Exponential;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.FloatLiteral;
-import tech.streamfusion.proto.plan.v1.Floor;
 import tech.streamfusion.proto.plan.v1.IntegerLiteral;
 import tech.streamfusion.proto.plan.v1.LongLiteral;
 import tech.streamfusion.proto.plan.v1.Lower;
 import tech.streamfusion.proto.plan.v1.NullLiteral;
 import tech.streamfusion.proto.plan.v1.ShortLiteral;
-import tech.streamfusion.proto.plan.v1.Sign;
-import tech.streamfusion.proto.plan.v1.SquareRoot;
 import tech.streamfusion.proto.plan.v1.StringLiteral;
 import tech.streamfusion.proto.plan.v1.Substring;
 import tech.streamfusion.proto.plan.v1.TimeLiteral;
@@ -127,6 +121,10 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
         Expression split = StreamFusionCollectionTranslator.split(expression, inputType, expectedType);
         if (split != null) {
             return split;
+        }
+        Expression numeric = StreamFusionNumericFunctionTranslator.translate(expression, inputType, expectedType);
+        if (numeric != null) {
+            return numeric;
         }
         Expression arraySort = StreamFusionCollectionTranslator.arraySort(expression, inputType, expectedType);
         if (arraySort != null) {
@@ -223,90 +221,6 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
                             .setConditional(conditional.setElseValue(elseValue))
                             .build();
         }
-        if ("ABS".equals(functionName(expression))) {
-            List<?> operands = (List<?>) invoke(expression, "getOperands");
-            if (operands.size() != 1 || !isNumeric(expectedType.getTypeRoot())) {
-                return null;
-            }
-            Expression operand = projectionExpression(operands.get(0), inputType, expectedType);
-            return operand == null
-                    ? null
-                    : Expression.newBuilder()
-                            .setAbsoluteValue(AbsoluteValue.newBuilder().setOperand(operand))
-                            .build();
-        }
-        if ("CEIL".equals(functionName(expression)) && isNonDecimalNumeric(expectedType.getTypeRoot())) {
-            List<?> operands = (List<?>) invoke(expression, "getOperands");
-            if (operands.size() != 1) {
-                return null;
-            }
-            Expression operand = projectionExpression(operands.get(0), inputType, expectedType);
-            return operand == null
-                    ? null
-                    : Expression.newBuilder()
-                            .setCeiling(Ceiling.newBuilder().setOperand(operand))
-                            .build();
-        }
-        if ("FLOOR".equals(functionName(expression)) && isNonDecimalNumeric(expectedType.getTypeRoot())) {
-            List<?> operands = (List<?>) invoke(expression, "getOperands");
-            if (operands.size() != 1) {
-                return null;
-            }
-            Expression operand = projectionExpression(operands.get(0), inputType, expectedType);
-            return operand == null
-                    ? null
-                    : Expression.newBuilder()
-                            .setFloor(Floor.newBuilder().setOperand(operand))
-                            .build();
-        }
-        if ("SIGN".equals(functionName(expression)) && isSignNumeric(expectedType.getTypeRoot())) {
-            List<?> operands = (List<?>) invoke(expression, "getOperands");
-            if (operands.size() != 1) {
-                return null;
-            }
-            Expression operand = projectionExpression(operands.get(0), inputType, expectedType);
-            return operand == null
-                    ? null
-                    : Expression.newBuilder()
-                            .setSign(Sign.newBuilder().setOperand(operand))
-                            .build();
-        }
-        if ("POWER".equals(functionName(expression)) && expectedType.getTypeRoot() == LogicalTypeRoot.DOUBLE) {
-            List<?> operands = (List<?>) invoke(expression, "getOperands");
-            if (operands.size() == 2) {
-                Double exponent = literal(operands.get(1), Double.class);
-                if (exponent != null && Double.compare(exponent, 0.5d) == 0) {
-                    Expression operand = projectionExpression(operands.get(0), inputType, expectedType);
-                    if (operand != null) {
-                        return Expression.newBuilder()
-                                .setSquareRoot(SquareRoot.newBuilder().setOperand(operand))
-                                .build();
-                    }
-                }
-            }
-        }
-        if ("EXP".equals(functionName(expression)) && expectedType.getTypeRoot() == LogicalTypeRoot.DOUBLE) {
-            List<?> operands = (List<?>) invoke(expression, "getOperands");
-            if (operands.size() != 1) {
-                return null;
-            }
-            Expression operand = projectionExpression(operands.get(0), inputType, expectedType);
-            return operand == null
-                    ? null
-                    : Expression.newBuilder()
-                            .setExponential(Exponential.newBuilder().setOperand(operand))
-                            .build();
-        }
-        if (("PI".equals(functionName(expression)) || "E".equals(functionName(expression)))
-                && expectedType.getTypeRoot() == LogicalTypeRoot.DOUBLE) {
-            List<?> operands = (List<?>) invoke(expression, "getOperands");
-            if (operands.isEmpty()) {
-                double value = "PI".equals(functionName(expression)) ? Math.PI : Math.E;
-                return Expression.newBuilder()
-                        .setDoubleLiteral(DoubleLiteral.newBuilder().setValue(value))
-                        .build();
-            }
-        }
         if ("CHAR_LENGTH".equals(functionName(expression)) || "CHARACTER_LENGTH".equals(functionName(expression))) {
             List<?> operands = (List<?>) invoke(expression, "getOperands");
             if (expectedType.getTypeRoot() != LogicalTypeRoot.INTEGER || operands.size() != 1) {
@@ -385,33 +299,6 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
     protected static boolean supportsLocaleIndependentCaseMapping() {
         String language = Locale.getDefault().getLanguage();
         return !"tr".equals(language) && !"az".equals(language) && !"lt".equals(language);
-    }
-
-    protected static boolean isSignNumeric(LogicalTypeRoot type) {
-        return type == LogicalTypeRoot.INTEGER
-                || type == LogicalTypeRoot.BIGINT
-                || type == LogicalTypeRoot.FLOAT
-                || type == LogicalTypeRoot.DOUBLE
-                || type == LogicalTypeRoot.DECIMAL;
-    }
-
-    protected static boolean isNonDecimalNumeric(LogicalTypeRoot type) {
-        return type == LogicalTypeRoot.TINYINT
-                || type == LogicalTypeRoot.SMALLINT
-                || type == LogicalTypeRoot.INTEGER
-                || type == LogicalTypeRoot.BIGINT
-                || type == LogicalTypeRoot.FLOAT
-                || type == LogicalTypeRoot.DOUBLE;
-    }
-
-    protected static boolean isNumeric(LogicalTypeRoot type) {
-        return type == LogicalTypeRoot.TINYINT
-                || type == LogicalTypeRoot.SMALLINT
-                || type == LogicalTypeRoot.INTEGER
-                || type == LogicalTypeRoot.BIGINT
-                || type == LogicalTypeRoot.FLOAT
-                || type == LogicalTypeRoot.DOUBLE
-                || type == LogicalTypeRoot.DECIMAL;
     }
 
     protected static Expression projectionExpression(
