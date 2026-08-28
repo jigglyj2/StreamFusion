@@ -24,6 +24,7 @@ import tech.streamfusion.flink.arrow.ArrowCDataBridge;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.NativeCalcResult;
 import tech.streamfusion.proto.plan.v1.Calc;
+import tech.streamfusion.proto.plan.v1.CollectionType;
 import tech.streamfusion.proto.plan.v1.DecimalType;
 import tech.streamfusion.proto.plan.v1.EmptyType;
 import tech.streamfusion.proto.plan.v1.Expression;
@@ -31,9 +32,11 @@ import tech.streamfusion.proto.plan.v1.Input;
 import tech.streamfusion.proto.plan.v1.InputReference;
 import tech.streamfusion.proto.plan.v1.LengthType;
 import tech.streamfusion.proto.plan.v1.LogicalType;
+import tech.streamfusion.proto.plan.v1.MapType;
 import tech.streamfusion.proto.plan.v1.NativePlan;
 import tech.streamfusion.proto.plan.v1.Operator;
 import tech.streamfusion.proto.plan.v1.PrecisionType;
+import tech.streamfusion.proto.plan.v1.RowField;
 
 /** Initial bounded, vectorized identity calc for one non-null INT column. */
 final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowData>
@@ -179,6 +182,28 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
                                 .setPrecision(decimal.getPrecision())
                                 .setScale(decimal.getScale()))
                         .build();
+            case ARRAY:
+                org.apache.flink.table.types.logical.ArrayType array =
+                        (org.apache.flink.table.types.logical.ArrayType) flinkType;
+                return type.setArray(CollectionType.newBuilder().setElementType(logicalType(array.getElementType())))
+                        .build();
+            case MAP:
+                org.apache.flink.table.types.logical.MapType map =
+                        (org.apache.flink.table.types.logical.MapType) flinkType;
+                return type.setMap(MapType.newBuilder()
+                                .setKeyType(logicalType(map.getKeyType()))
+                                .setValueType(logicalType(map.getValueType())))
+                        .build();
+            case ROW:
+                org.apache.flink.table.types.logical.RowType row =
+                        (org.apache.flink.table.types.logical.RowType) flinkType;
+                tech.streamfusion.proto.plan.v1.RowType.Builder rowType =
+                        tech.streamfusion.proto.plan.v1.RowType.newBuilder();
+                for (org.apache.flink.table.types.logical.RowType.RowField field : row.getFields()) {
+                    rowType.addFields(
+                            RowField.newBuilder().setName(field.getName()).setType(logicalType(field.getType())));
+                }
+                return type.setRow(rowType).build();
             default:
                 throw new IllegalArgumentException("Unsupported projection type " + flinkType);
         }

@@ -210,7 +210,11 @@ abstract class StreamFusionExpressionTranslator extends StreamFusionProjectionTr
                             .build();
         }
         if (("IS_NULL".equals(kind) || "IS_NOT_NULL".equals(kind)) && operands.size() == 1) {
-            org.apache.flink.table.types.logical.LogicalType operandType = expressionLogicalType(operands.get(0));
+            int operandInput = inputIndex(operands.get(0));
+            org.apache.flink.table.types.logical.LogicalType operandType = operandInput >= 0
+                            && operandInput < inputType.getFieldCount()
+                    ? inputType.getTypeAt(operandInput)
+                    : expressionLogicalType(operands.get(0));
             Expression operand =
                     operandType == null ? null : projectionExpression(operands.get(0), inputType, operandType);
             return operand == null

@@ -561,7 +561,10 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
                 || type == LogicalTypeRoot.DATE
                 || type == LogicalTypeRoot.TIME_WITHOUT_TIME_ZONE
                 || type == LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE
-                || type == LogicalTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE;
+                || type == LogicalTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE
+                || type == LogicalTypeRoot.ARRAY
+                || type == LogicalTypeRoot.MAP
+                || type == LogicalTypeRoot.ROW;
     }
 
     protected static StreamFusionCondition comparison(Object condition, RowType inputType) {

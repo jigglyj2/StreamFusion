@@ -335,6 +335,9 @@ message LogicalType {
     DecimalType decimal = 15;
     LengthType fixed_binary = 16;
     LengthType fixed_char = 17;
+    CollectionType array = 18;
+    MapType map = 19;
+    RowType row = 20;
   }
 }
 
@@ -351,4 +354,22 @@ message LengthType {
 message DecimalType {
   uint32 precision = 1;
   uint32 scale = 2;
+}
+
+message CollectionType {
+  LogicalType element_type = 1;
+}
+
+message MapType {
+  LogicalType key_type = 1;
+  LogicalType value_type = 2;
+}
+
+message RowType {
+  repeated RowField fields = 1;
+}
+
+message RowField {
+  string name = 1;
+  LogicalType type = 2;
 }
