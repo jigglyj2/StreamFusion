@@ -129,6 +129,22 @@ class ArrayUnnestParityTest extends SqlParityTestSupport {
                 "binary_array_unnest_input");
     }
 
+    @Test
+    void nativeArrayUnnestWithOrdinalityMatchesFlinkOneBasedPositions() throws Exception {
+        assertDataStreamParity(
+                "SELECT item, ord_idx FROM array_ordinality_input "
+                        + "CROSS JOIN UNNEST(metric) WITH ORDINALITY AS expanded(item, ord_idx)",
+                Types.OBJECT_ARRAY(Types.INT),
+                DataTypes.ARRAY(DataTypes.INT()),
+                INPUTS,
+                "array_ordinality_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isEqualTo(1);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
     private static byte[] executeChangelog(java.util.List<Row> rows, boolean streamFusionEnabled) throws Exception {
         if (streamFusionEnabled) {
             System.setProperty(

@@ -40,13 +40,16 @@ final class StreamFusionArrayUnnestOperator extends AbstractStreamOperator<RowDa
     private final List<RowData> rows = new ArrayList<>(BATCH_SIZE);
     private final List<RowKind> rowKinds = new ArrayList<>(BATCH_SIZE);
 
-    StreamFusionArrayUnnestOperator(RowType inputType, RowType outputType, int arrayIndex) {
+    StreamFusionArrayUnnestOperator(RowType inputType, RowType outputType, int arrayIndex, boolean withOrdinality) {
         this.inputType = inputType;
         this.outputType = outputType;
         this.serializer = new RowDataSerializer(inputType);
         Operator input = Operator.newBuilder().setInput(Input.newBuilder()).build();
         Operator root = Operator.newBuilder()
-                .setArrayUnnest(ArrayUnnest.newBuilder().setInput(input).setArrayIndex(arrayIndex))
+                .setArrayUnnest(ArrayUnnest.newBuilder()
+                        .setInput(input)
+                        .setArrayIndex(arrayIndex)
+                        .setWithOrdinality(withOrdinality))
                 .build();
         this.serializedPlan = NativePlan.newBuilder()
                 .setProtocolVersion(1)

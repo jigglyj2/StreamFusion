@@ -19,7 +19,10 @@ use datafusion::physical_plan::unnest::{ListUnnest, UnnestExec};
 
 use crate::proto;
 
+mod ordinality;
+
 const VALUE_COLUMN: &str = "__streamfusion_unnest_value";
+const ORDINALITY_COLUMN: &str = "__streamfusion_unnest_ordinality";
 const INPUT_ROW_COLUMN: &str = "__streamfusion_input_row";
 
 pub(crate) fn create(
@@ -70,6 +73,12 @@ pub(crate) fn create(
         Arc::new(Column::new(array_field.name(), array_index)),
         VALUE_COLUMN.to_string(),
     ));
+    if unnest.with_ordinality {
+        projection.push((
+            ordinality::create(Arc::new(Column::new(array_field.name(), array_index))),
+            ORDINALITY_COLUMN.to_string(),
+        ));
+    }
     projection.push((
         Arc::new(Column::new(INPUT_ROW_COLUMN, visible_field_count)),
         INPUT_ROW_COLUMN.to_string(),
@@ -83,14 +92,28 @@ pub(crate) fn create(
         .cloned()
         .collect::<Vec<_>>();
     output_fields.push(element_field);
+    if unnest.with_ordinality {
+        output_fields.push(Arc::new(Field::new(
+            ORDINALITY_COLUMN,
+            DataType::Int32,
+            false,
+        )));
+    }
     output_fields.push(Arc::clone(&child_schema.fields()[visible_field_count]));
     let output_schema = Arc::new(Schema::new(output_fields));
+    let mut list_columns = vec![ListUnnest {
+        index_in_input_schema: visible_field_count,
+        depth: 1,
+    }];
+    if unnest.with_ordinality {
+        list_columns.push(ListUnnest {
+            index_in_input_schema: visible_field_count + 1,
+            depth: 1,
+        });
+    }
     Ok(Arc::new(UnnestExec::new(
         projected,
-        vec![ListUnnest {
-            index_in_input_schema: visible_field_count,
-            depth: 1,
-        }],
+        list_columns,
         vec![],
         output_schema,
         UnnestOptions::new().with_null_handling(NullHandling::Drop),
@@ -127,6 +150,7 @@ mod tests {
             &proto::ArrayUnnest {
                 input: None,
                 array_index: 1,
+                with_ordinality: false,
             },
             source,
         )
@@ -155,6 +179,55 @@ mod tests {
                 .unwrap()
                 .values(),
             &[0, 0, 3, 3]
+        );
+    }
+
+    #[tokio::test]
+    async fn emits_one_based_ordinality_for_each_array() {
+        let arrays = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>([
+            Some(vec![Some(7), Some(8)]),
+            Some(vec![Some(9)]),
+        ]));
+        let ids = Arc::new(Int32Array::from(vec![10, 20]));
+        let ordinals = Arc::new(Int32Array::from(vec![0, 1]));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("items", arrays.data_type().clone(), true),
+            Field::new(INPUT_ROW_COLUMN, DataType::Int32, false),
+        ]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![ids, arrays, ordinals]).unwrap();
+        let source = MemorySourceConfig::try_new_exec(&[vec![batch]], schema, None).unwrap();
+        let plan = create(
+            &proto::ArrayUnnest {
+                input: None,
+                array_index: 1,
+                with_ordinality: true,
+            },
+            source,
+        )
+        .unwrap();
+
+        let output = collect(plan, SessionContext::new().task_ctx())
+            .await
+            .unwrap();
+        let batch = &output[0];
+        assert_eq!(
+            batch
+                .column(3)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .values(),
+            &[1, 2, 1]
+        );
+        assert_eq!(
+            batch
+                .column(4)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .values(),
+            &[0, 0, 1]
         );
     }
 }

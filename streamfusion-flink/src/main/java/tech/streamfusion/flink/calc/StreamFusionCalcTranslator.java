@@ -126,6 +126,7 @@ public final class StreamFusionCalcTranslator extends StreamFusionExpressionTran
                 boundaryInputType,
                 outputType,
                 StreamFusionArrayUnnestTranslator.arrayIndex(invocation),
+                StreamFusionArrayUnnestTranslator.withOrdinality(invocation),
                 unnestOutputType.getFieldCount(),
                 nativeProjectionStages,
                 nativeConditions);

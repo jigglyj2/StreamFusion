@@ -34,7 +34,7 @@ public final class StreamFusionArrayUnnestTranslator {
         }
         int arrayIndex = arrayIndex(invocation);
         StreamFusionArrayUnnestOperator operator =
-                new StreamFusionArrayUnnestOperator(inputType, outputType, arrayIndex);
+                new StreamFusionArrayUnnestOperator(inputType, outputType, arrayIndex, withOrdinality(invocation));
         OneInputTransformation<RowData, RowData> transformation = new OneInputTransformation<>(
                 input,
                 "streamfusion-array-unnest",
@@ -57,7 +57,8 @@ public final class StreamFusionArrayUnnestTranslator {
             return "UNNEST correlate conditions are not accelerated";
         }
         String functionName = String.valueOf(invoke(invoke(invocation, "getOperator"), "getName"));
-        if (!functionName.startsWith("$UNNEST_ROWS$")) {
+        boolean withOrdinality = "$UNNEST_ROWS_WITH_ORDINALITY$1".equals(functionName);
+        if (!"$UNNEST_ROWS$1".equals(functionName) && !withOrdinality) {
             return "table function " + functionName + " is not StreamFusion array UNNEST";
         }
         List<?> operands = (List<?>) invoke(invocation, "getOperands");
@@ -76,8 +77,11 @@ public final class StreamFusionArrayUnnestTranslator {
         if (!isScalarBoundaryType(element.getTypeRoot())) {
             return "array UNNEST element type " + element + " is not yet supported";
         }
-        if (outputType.getFieldCount() != inputType.getFieldCount() + 1) {
-            return "array UNNEST output must append exactly one element field";
+        int appendedFields = withOrdinality ? 2 : 1;
+        if (outputType.getFieldCount() != inputType.getFieldCount() + appendedFields) {
+            return "array UNNEST output must append its element"
+                    + (withOrdinality ? " and ordinality" : "")
+                    + " fields";
         }
         for (int field = 0; field < inputType.getFieldCount(); field++) {
             if (!inputType.getTypeAt(field).equals(outputType.getTypeAt(field))) {
@@ -87,6 +91,12 @@ public final class StreamFusionArrayUnnestTranslator {
         if (!element.equals(outputType.getTypeAt(inputType.getFieldCount()))) {
             return "array UNNEST output element type does not match its ARRAY element type";
         }
+        if (withOrdinality) {
+            LogicalType ordinality = outputType.getTypeAt(inputType.getFieldCount() + 1);
+            if (ordinality.getTypeRoot() != LogicalTypeRoot.INTEGER || ordinality.isNullable()) {
+                return "array UNNEST ordinality must be a non-null INT";
+            }
+        }
         return null;
     }
 
@@ -94,6 +104,11 @@ public final class StreamFusionArrayUnnestTranslator {
         List<?> operands = (List<?>) invoke(invocation, "getOperands");
         Object field = invoke(operands.get(0), "getField");
         return ((Number) invoke(field, "getIndex")).intValue();
+    }
+
+    public static boolean withOrdinality(Object invocation) {
+        String functionName = String.valueOf(invoke(invoke(invocation, "getOperator"), "getName"));
+        return "$UNNEST_ROWS_WITH_ORDINALITY$1".equals(functionName);
     }
 
     private static boolean isScalarBoundaryType(LogicalTypeRoot type) {

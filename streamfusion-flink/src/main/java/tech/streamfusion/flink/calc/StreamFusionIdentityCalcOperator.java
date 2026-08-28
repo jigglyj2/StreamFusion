@@ -65,13 +65,15 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
             RowType boundaryInputType,
             RowType outputType,
             int arrayUnnestIndex,
+            boolean withOrdinality,
             int unnestOutputFieldCount,
             List<List<Expression>> projectionStages,
             List<Expression> conditions) {
         this.inputType = boundaryInputType;
         this.outputType = outputType;
         this.serializer = new RowDataSerializer(boundaryInputType);
-        this.serializedPlan = createPlan(arrayUnnestIndex, unnestOutputFieldCount, projectionStages, conditions);
+        this.serializedPlan =
+                createPlan(arrayUnnestIndex, withOrdinality, unnestOutputFieldCount, projectionStages, conditions);
     }
 
     @Override
@@ -125,12 +127,16 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
 
     private static byte[] createPlan(
             int arrayUnnestIndex,
+            boolean withOrdinality,
             int unnestOutputFieldCount,
             List<List<Expression>> projectionStages,
             List<Expression> conditions) {
         Operator input = Operator.newBuilder().setInput(Input.newBuilder()).build();
         Operator operator = Operator.newBuilder()
-                .setArrayUnnest(ArrayUnnest.newBuilder().setInput(input).setArrayIndex(arrayUnnestIndex))
+                .setArrayUnnest(ArrayUnnest.newBuilder()
+                        .setInput(input)
+                        .setArrayIndex(arrayUnnestIndex)
+                        .setWithOrdinality(withOrdinality))
                 .build();
         return createPlan(operator, unnestOutputFieldCount, projectionStages, conditions);
     }
