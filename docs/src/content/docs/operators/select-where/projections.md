@@ -25,13 +25,13 @@ StreamFusion can select, reorder, omit, or repeat direct input columns of these 
 - `DECIMAL`, `DATE`, `TIME`, `TIMESTAMP`, and `TIMESTAMP_LTZ`
 - `ARRAY`, `MAP`, and `ROW`, recursively containing Arrow-compatible types
 
-Complex types are currently accelerated as direct input references: they may be selected,
-reordered, omitted, or repeated, but their contents cannot yet be constructed, accessed, or
-transformed natively. Typed `NULL` literals are also accelerated for `ARRAY`, `MAP`, and
-`ROW`, including recursively nested arrays and rows. Nested field access, collection element
-access, non-null complex literals, `MULTISET`, and collection functions fall back with the
-whole Calc. Nested child types, field names, ordering, nullability, and Arrow offsets are
-preserved across the native plan.
+Complex types may be selected, reordered, omitted, or repeated as direct input references.
+Named `ROW` fields may also be projected or used inside supported expressions, including
+chains through nested rows. A null parent row produces a null child value, matching Flink.
+Typed `NULL` literals are accelerated for `ARRAY`, `MAP`, and `ROW`, including recursively
+nested arrays and rows. Collection element access, non-null complex literals, `MULTISET`, and
+collection functions still fall back with the whole Calc. Nested child types, field names,
+ordering, nullability, and Arrow offsets are preserved across the native plan.
 
 Precision, scale, fixed width, and nullability are preserved. Constant `TINYINT` and
 `SMALLINT` projections are accelerated across their complete value ranges. Computed `INT`, `BIGINT`,
@@ -105,6 +105,11 @@ expression-to-protobuf model. Rust maps them to DataFusion `Column`, `Literal`, 
 `ProjectionExec`. DataFusion shares referenced Arrow buffers for direct projections,
 including the parent and child buffers of arrays, maps, and rows, and allocates a result
 vector when arithmetic produces new values.
+
+For `ROW` access, Java resolves every field against Flink's authoritative row type and
+encodes its name as a nested protobuf expression. Rust lowers each step to DataFusion's
+vectorized `get_field`. The child value buffers remain shared where Arrow validity permits;
+DataFusion may create a validity bitmap to combine nullable parent and child rows.
 
 Rust lowers `COALESCE` to DataFusion's vectorized `CaseExpr`: each argument except the last
 becomes an `IS NOT NULL` branch and the last argument is the fallback value.
