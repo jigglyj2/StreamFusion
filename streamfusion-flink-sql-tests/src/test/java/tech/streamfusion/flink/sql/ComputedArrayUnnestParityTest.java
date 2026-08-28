@@ -53,4 +53,23 @@ class ComputedArrayUnnestParityTest extends SqlParityTestSupport {
                 .contains("has an expression that StreamFusion Calc cannot translate exactly")
                 .contains("Accelerated: no");
     }
+
+    @Test
+    void nativeLeftUnnestEvaluatesNullableArrayFunctionOperand() throws Exception {
+        assertDataStreamParity(
+                "SELECT item, ord_idx FROM computed_array_function_unnest_input "
+                        + "LEFT JOIN UNNEST(ARRAY_REVERSE(metric)) WITH ORDINALITY "
+                        + "AS expanded(item, ord_idx) ON TRUE",
+                Types.OBJECT_ARRAY(Types.INT),
+                DataTypes.ARRAY(DataTypes.INT()),
+                Arrays.asList(
+                        Row.of((Object) new Integer[] {1, null, 3}), Row.of((Object) new Integer[] {}), Row.of((Object)
+                                null)),
+                "computed_array_function_unnest_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isEqualTo(1);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
 }

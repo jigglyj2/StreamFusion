@@ -12,8 +12,9 @@ scalar-field row keys and scalar, scalar-array, or row values composed of scalar
 is accelerated, with or without ordinality. The same forms accelerate multisets of supported
 non-null scalar, scalar-array, or row elements composed of scalars and scalar arrays. Arrays whose
 elements are scalar arrays are also accelerated, with each inner array remaining one output value.
-Computed `ARRAY[...]` operands are accelerated when every element expression is supported by
-StreamFusion Calc. Other table functions and expansion forms fall back to Flink.
+Computed array operands, including `ARRAY[...]` and supported array functions, are accelerated when
+the complete expression is supported by StreamFusion Calc. Other table functions and expansion
+forms fall back to Flink.
 
 ## SQL example
 
