@@ -253,6 +253,16 @@ pub(super) fn create_expression(
                 .ok_or_else(|| DataFusionError::Plan("MD5 operand is empty".to_string()))?;
             expressions::md5::create(create_expression(operand, schema)?, schema)
         }
+        Some(proto::expression::Expression::ShaDigest(sha)) => {
+            let operand = sha
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("SHA digest operand is empty".to_string()))?;
+            let algorithm = proto::ShaAlgorithm::try_from(sha.algorithm).map_err(|_| {
+                DataFusionError::Plan(format!("unknown SHA digest algorithm {}", sha.algorithm))
+            })?;
+            expressions::sha_digest::create(create_expression(operand, schema)?, algorithm, schema)
+        }
         Some(proto::expression::Expression::HyperbolicSine(sine)) => {
             let operand = sine
                 .operand

@@ -17,12 +17,24 @@ import tech.streamfusion.proto.plan.v1.Base64Encode;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.Hexadecimal;
 import tech.streamfusion.proto.plan.v1.Md5;
+import tech.streamfusion.proto.plan.v1.ShaAlgorithm;
+import tech.streamfusion.proto.plan.v1.ShaDigest;
 
 /** Translates byte-oriented scalar functions into native expressions. */
 final class StreamFusionBinaryFunctionTranslator extends StreamFusionComplexTypeSupport {
     private StreamFusionBinaryFunctionTranslator() {}
 
     static String failureReason(Object expression) {
+        String function = functionName(expression);
+        if ("SHA1".equals(function)) {
+            return "SHA1 stays on Flink until its non-DataFusion digest path has dedicated parity coverage";
+        }
+        if ("SHA2".equals(function)) {
+            return "SHA2 stays on Flink until literal and dynamic digest-length semantics have dedicated parity coverage";
+        }
+        if (shaAlgorithm(function) != null) {
+            return function + " input or result type is not parity-approved";
+        }
         return null;
     }
 
@@ -91,6 +103,30 @@ final class StreamFusionBinaryFunctionTranslator extends StreamFusionComplexType
                         .build();
     }
 
+    static Expression fixedSha(Object expression, RowType inputType, LogicalType expectedType) {
+        ShaAlgorithm algorithm = shaAlgorithm(functionName(expression));
+        if (algorithm == null
+                || (expectedType.getTypeRoot() != LogicalTypeRoot.CHAR
+                        && expectedType.getTypeRoot() != LogicalTypeRoot.VARCHAR)) {
+            return null;
+        }
+        List<?> operands = (List<?>) invoke(expression, "getOperands");
+        if (operands.size() != 1) {
+            return null;
+        }
+        LogicalType operandType = logicalType(operands.get(0), inputType);
+        if (operandType == null || !supportsMd5(operandType.getTypeRoot())) {
+            return null;
+        }
+        Expression operand =
+                StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, operandType);
+        return operand == null
+                ? null
+                : Expression.newBuilder()
+                        .setShaDigest(ShaDigest.newBuilder().setOperand(operand).setAlgorithm(algorithm))
+                        .build();
+    }
+
     private static boolean supportsHex(LogicalTypeRoot type) {
         return type == LogicalTypeRoot.TINYINT
                 || type == LogicalTypeRoot.SMALLINT
@@ -105,5 +141,21 @@ final class StreamFusionBinaryFunctionTranslator extends StreamFusionComplexType
 
     private static boolean supportsMd5(LogicalTypeRoot type) {
         return type == LogicalTypeRoot.VARCHAR || type == LogicalTypeRoot.BINARY || type == LogicalTypeRoot.VARBINARY;
+    }
+
+    private static ShaAlgorithm shaAlgorithm(String function) {
+        if ("SHA224".equals(function)) {
+            return ShaAlgorithm.SHA_ALGORITHM_224;
+        }
+        if ("SHA256".equals(function)) {
+            return ShaAlgorithm.SHA_ALGORITHM_256;
+        }
+        if ("SHA384".equals(function)) {
+            return ShaAlgorithm.SHA_ALGORITHM_384;
+        }
+        if ("SHA512".equals(function)) {
+            return ShaAlgorithm.SHA_ALGORITHM_512;
+        }
+        return null;
     }
 }

@@ -439,7 +439,9 @@ abstract class StreamFusionExpressionTranslator extends StreamFusionProjectionTr
         org.apache.flink.table.types.logical.LogicalType leftType = expressionLogicalType(leftExpression);
         org.apache.flink.table.types.logical.LogicalType rightType = expressionLogicalType(rightExpression);
         org.apache.flink.table.types.logical.LogicalType comparisonType = comparisonType(leftType, rightType);
-        if (comparisonType == null || !supportsRecursiveComparison(comparisonType.getTypeRoot(), operator)) {
+        if (comparisonType == null
+                || (!supportsRecursiveComparison(comparisonType.getTypeRoot(), operator)
+                        && !isDigestComparison(leftExpression, rightExpression, comparisonType.getTypeRoot()))) {
             return null;
         }
         Expression left = projectionExpression(leftExpression, inputType, comparisonType);
@@ -495,6 +497,20 @@ abstract class StreamFusionExpressionTranslator extends StreamFusionProjectionTr
                 || type == LogicalTypeRoot.DATE
                 || type == LogicalTypeRoot.TIME_WITHOUT_TIME_ZONE
                 || type == LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE;
+    }
+
+    private static boolean isDigestComparison(Object left, Object right, LogicalTypeRoot type) {
+        return type == LogicalTypeRoot.CHAR && (isFixedDigest(left) || isFixedDigest(right));
+    }
+
+    private static boolean isFixedDigest(Object expression) {
+        String function = functionName(expression);
+        return "MD5".equals(function)
+                || "SHA1".equals(function)
+                || "SHA224".equals(function)
+                || "SHA256".equals(function)
+                || "SHA384".equals(function)
+                || "SHA512".equals(function);
     }
 
     protected static LogicalTypeRoot expressionTypeRoot(Object expression) {

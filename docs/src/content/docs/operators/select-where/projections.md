@@ -382,6 +382,13 @@ vectorized digest kernel hashes the original UTF-8 or binary bytes and returns F
 lowercase hexadecimal text. Generated parity coverage includes empty values, arbitrary binary
 bytes, multilingual text, embedded NUL bytes, and null propagation. Fixed-width `CHAR` remains
 on Flink pending padding-specific parity coverage.
+`SHA224(value)`, `SHA256(value)`, `SHA384(value)`, and `SHA512(value)` are accelerated for supported
+character expressions. A shared protobuf digest expression selects a fixed algorithm;
+Rust runs the corresponding DataFusion vectorized digest kernel and converts its binary digest to
+Flink-compatible lowercase hexadecimal text. Generated projection and filter parity coverage
+includes empty strings, multilingual text, embedded NUL bytes, and null propagation. `SHA1` and
+length-selected `SHA2` remain on Flink until their distinct execution paths have dedicated parity
+coverage.
 
 Cast approval is table-driven. Java maps an explicitly approved Flink source/target pair
 to a stable protobuf cast kind; Rust independently verifies that kind against the actual
