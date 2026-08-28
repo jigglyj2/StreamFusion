@@ -64,6 +64,10 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
         if (rowConstructor != null) {
             return rowConstructor;
         }
+        Expression mapConstructor = StreamFusionMapConstructorTranslator.translate(expression, inputType, expectedType);
+        if (mapConstructor != null) {
+            return mapConstructor;
+        }
         Expression structField =
                 StreamFusionComplexProjectionTranslator.structField(expression, inputType, expectedType);
         if (structField != null) {

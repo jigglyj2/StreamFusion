@@ -223,6 +223,12 @@ interleaves those names with the native field expressions and lowers the constru
 DataFusion's `named_struct`. Primitive, nullable, and nested native fields therefore remain Arrow
 children of one struct array without JVM materialization. Empty rows stay on Flink because
 DataFusion named structs require at least one field.
+Non-empty typed `MAP[...]` constructors are accelerated when every key is a unique, non-null
+literal and every value expression lowers natively. Java separates the resolved key/value pairs in
+the protobuf; Rust builds Arrow key and value lists and passes them directly to DataFusion's map
+constructor. Dynamic, null, or duplicate keys remain on Flink with an EXPLAIN reason because Flink
+uses last-value-wins semantics for duplicate keys while DataFusion rejects them. Empty maps remain
+fallback until the protobuf carries an explicit Arrow key/value type for an empty constructor.
 `ARRAY_EXCEPT` is accelerated for compatible array inputs, including arrays of nested rows and
 native `ARRAY[...]` constructors. It preserves the first occurrence of each left-side value not
 present on the right, treats null as a comparable set value, removes duplicates, and returns null

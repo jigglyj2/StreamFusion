@@ -191,6 +191,26 @@ pub(super) fn create(
                 schema,
             )
         }
+        MapConstructor(constructor) => {
+            if constructor.keys.len() != constructor.values.len() {
+                return Err(DataFusionError::Plan(
+                    "map constructor keys and values have different lengths".into(),
+                ));
+            }
+            expressions::map_constructor::create(
+                constructor
+                    .keys
+                    .iter()
+                    .map(|key| create_expression(key, schema))
+                    .collect::<Result<Vec<_>>>()?,
+                constructor
+                    .values
+                    .iter()
+                    .map(|value| create_expression(value, schema))
+                    .collect::<Result<Vec<_>>>()?,
+                schema,
+            )
+        }
         ArrayDistinct(distinct) => expressions::array_distinct::create(
             create_expression(
                 required(&distinct.array, "array distinct is missing its array")?,

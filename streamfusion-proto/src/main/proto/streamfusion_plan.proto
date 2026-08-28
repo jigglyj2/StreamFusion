@@ -89,6 +89,7 @@ message Expression {
     ArraySort array_sort = 58;
     ArraySlice array_slice = 59;
     RowConstructor row_constructor = 60;
+    MapConstructor map_constructor = 61;
   }
 }
 
@@ -201,6 +202,11 @@ message ArraySlice {
 message RowConstructor {
   repeated string field_names = 1;
   repeated Expression fields = 2;
+}
+
+message MapConstructor {
+  repeated Expression keys = 1;
+  repeated Expression values = 2;
 }
 
 message Coalesce {
