@@ -27,6 +27,36 @@ import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 
 class CollectionTransformationParityTest extends SqlParityTestSupport {
     @Test
+    void arrayConcatMatchesFlinkAndComposesWithNativeArrays() throws Exception {
+        assertDataStreamParity(
+                "SELECT ARRAY_CONCAT(metric, ARRAY_REVERSE(metric), metric) FROM array_input",
+                Types.OBJECT_ARRAY(Types.INT),
+                DataTypes.ARRAY(DataTypes.INT()),
+                Arrays.asList(
+                        Row.of((Object) new Integer[] {1, null, 3}), Row.of((Object) new Integer[] {}), Row.of((Object)
+                                null)),
+                "array_input");
+
+        assertNativeCalcRan();
+    }
+
+    @Test
+    void arrayConcatMatchesFlinkForNestedRows() throws Exception {
+        assertDataStreamParity(
+                "SELECT ARRAY_CONCAT(metric, ARRAY_REVERSE(metric)) FROM row_array_input",
+                Types.OBJECT_ARRAY(Types.ROW_NAMED(new String[] {"label", "amount"}, Types.STRING, Types.INT)),
+                DataTypes.ARRAY(DataTypes.ROW(
+                        DataTypes.FIELD("label", DataTypes.STRING()), DataTypes.FIELD("amount", DataTypes.INT()))),
+                Arrays.asList(
+                        Row.of((Object) new Row[] {Row.of("a", 1), null, Row.of("b", null)}),
+                        Row.of((Object) new Row[] {}),
+                        Row.of((Object) null)),
+                "row_array_input");
+
+        assertNativeCalcRan();
+    }
+
+    @Test
     void arrayAppendAndPrependMatchFlinkForPrimitiveElements() throws Exception {
         assertDataStreamParity(
                 "SELECT ARRAY_APPEND(metric, 9), ARRAY_APPEND(metric, CAST(NULL AS INT)), "
