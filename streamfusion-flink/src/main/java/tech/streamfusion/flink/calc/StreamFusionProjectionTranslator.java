@@ -116,6 +116,10 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
         if (arrayIntersect != null) {
             return arrayIntersect;
         }
+        Expression arrayExcept = StreamFusionCollectionSetTranslator.arrayExcept(expression, inputType, expectedType);
+        if (arrayExcept != null) {
+            return arrayExcept;
+        }
         if (isNullLiteral(expression) && supportsNullLiteral(expectedType.getTypeRoot())) {
             return Expression.newBuilder()
                     .setNullLiteral(NullLiteral.newBuilder()

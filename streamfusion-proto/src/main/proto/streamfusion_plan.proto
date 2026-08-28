@@ -80,6 +80,7 @@ message Expression {
     ArrayUnion array_union = 49;
     ArrayIntersect array_intersect = 50;
     ArrayConstructor array_constructor = 51;
+    ArrayExcept array_except = 52;
   }
 }
 
@@ -146,6 +147,11 @@ message ArrayIntersect {
 
 message ArrayConstructor {
   repeated Expression elements = 1;
+}
+
+message ArrayExcept {
+  Expression left = 1;
+  Expression right = 2;
 }
 
 message Coalesce {

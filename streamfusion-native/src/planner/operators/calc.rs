@@ -209,6 +209,19 @@ fn create_expression(
                 .collect::<Result<Vec<_>>>()?;
             expressions::array_constructor::create(elements, schema)
         }
+        Some(proto::expression::Expression::ArrayExcept(except)) => {
+            let left = except.left.as_ref().ok_or_else(|| {
+                DataFusionError::Plan("array except is missing its left array".into())
+            })?;
+            let right = except.right.as_ref().ok_or_else(|| {
+                DataFusionError::Plan("array except is missing its right array".into())
+            })?;
+            expressions::array_except::create(
+                create_expression(left, schema)?,
+                create_expression(right, schema)?,
+                schema,
+            )
+        }
         Some(proto::expression::Expression::IntegerLiteral(literal)) => Ok(Arc::new(Literal::new(
             ScalarValue::Int32(Some(literal.value)),
         ))),

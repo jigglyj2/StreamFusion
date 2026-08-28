@@ -13,6 +13,7 @@ pub(crate) mod array_constructor;
 pub(crate) mod array_contains;
 pub(crate) mod array_distinct;
 pub(crate) mod array_element;
+pub(crate) mod array_except;
 pub(crate) mod array_intersect;
 pub(crate) mod array_position;
 pub(crate) mod array_prepend;
