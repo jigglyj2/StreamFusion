@@ -569,6 +569,12 @@ public final class StreamFusionCalcTranslator {
                     ? null
                     : new StreamFusionDoubleComparison(inputIndex, literal, operator, inputOnLeft);
         }
+        if (type == LogicalTypeRoot.VARCHAR) {
+            String literal = literal(literalExpression, String.class);
+            return literal == null
+                    ? null
+                    : new StreamFusionStringComparison(inputIndex, literal, operator, inputOnLeft);
+        }
         if (type == LogicalTypeRoot.DATE) {
             Integer epochDay = integerLiteral(literalExpression);
             return epochDay == null

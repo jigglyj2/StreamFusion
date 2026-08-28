@@ -40,9 +40,13 @@ abstract class StreamFusionOrderedComparison implements StreamFusionCondition {
     @Override
     public final Boolean evaluate(RowData row) {
         if (row.isNullAt(inputIndex)) {
-            return operator == ComparisonOperator.COMPARISON_OPERATOR_IS_DISTINCT_FROM
-                    ? true
-                    : operator == ComparisonOperator.COMPARISON_OPERATOR_IS_NOT_DISTINCT_FROM ? false : null;
+            if (operator == ComparisonOperator.COMPARISON_OPERATOR_IS_DISTINCT_FROM) {
+                return true;
+            }
+            if (operator == ComparisonOperator.COMPARISON_OPERATOR_IS_NOT_DISTINCT_FROM) {
+                return false;
+            }
+            return null;
         }
         int comparison = compareInputToLiteral(row);
         if (!inputOnLeft) {

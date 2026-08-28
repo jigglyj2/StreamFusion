@@ -29,15 +29,21 @@ Arrow, and DataFusion. Planner-inserted casts that obscure the direct column/lit
 shape also cause the whole Calc to fall back.
 
 The same six predicates support direct, exactly matching column pairs for `TINYINT`,
-`SMALLINT`, `INTEGER`, `BIGINT`, `DECIMAL`, `DATE`, `TIME`, and `TIMESTAMP WITHOUT TIME ZONE`. Decimal precision
+`SMALLINT`, `INTEGER`, `BIGINT`, `VARCHAR`, `DECIMAL`, `DATE`, `TIME`, and
+`TIMESTAMP WITHOUT TIME ZONE`. Decimal precision
 and scale and temporal precision must match on both sides. Direct `BOOLEAN` pairs support
-`=` and `<>`. A null on either side produces SQL unknown. Floating-point, character,
-binary, mismatched, and planner-cast column pairs currently
+`=` and `<>`. A null on either side produces SQL unknown. Floating-point, `CHAR`, binary,
+mismatched, and planner-cast column pairs currently
 fall back to Flink.
 
 The same six predicates support `DATE` columns compared with `DATE` literals, including
 dates before the Unix epoch. Flink epoch-day values lower directly to Arrow `Date32`
 without changing units or timezone.
+
+Direct `VARCHAR` columns support all six ordered comparisons against a direct string
+literal or an exactly matching `VARCHAR` column. Ordering is binary UTF-8, including for
+empty and non-ASCII strings. `CHAR` remains on Flink because its padding semantics need
+separate parity coverage.
 
 `TIME` comparisons preserve Flink's millisecond-of-day representation. The protobuf also
 carries the declared precision so Rust creates the matching Arrow `Time32` or `Time64`

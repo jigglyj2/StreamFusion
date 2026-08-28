@@ -41,6 +41,7 @@ final class StreamFusionColumnComparison implements StreamFusionCondition {
                 || root == LogicalTypeRoot.SMALLINT
                 || root == LogicalTypeRoot.INTEGER
                 || root == LogicalTypeRoot.BIGINT
+                || root == LogicalTypeRoot.VARCHAR
                 || root == LogicalTypeRoot.DATE
                 || root == LogicalTypeRoot.TIME_WITHOUT_TIME_ZONE
                 || root == LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE
@@ -93,6 +94,8 @@ final class StreamFusionColumnComparison implements StreamFusionCondition {
                 return Integer.compare(row.getInt(leftIndex), row.getInt(rightIndex));
             case BIGINT:
                 return Long.compare(row.getLong(leftIndex), row.getLong(rightIndex));
+            case VARCHAR:
+                return row.getString(leftIndex).compareTo(row.getString(rightIndex));
             case TIMESTAMP_WITHOUT_TIME_ZONE:
                 int timestampPrecision = ((TimestampType) type).getPrecision();
                 return row.getTimestamp(leftIndex, timestampPrecision)
