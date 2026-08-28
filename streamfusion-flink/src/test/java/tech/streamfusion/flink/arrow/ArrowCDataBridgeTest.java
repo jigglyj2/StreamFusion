@@ -22,6 +22,8 @@ import org.apache.flink.table.data.StringData;
 import org.apache.flink.table.data.TimestampData;
 import org.apache.flink.table.types.logical.ArrayType;
 import org.apache.flink.table.types.logical.DecimalType;
+import org.apache.flink.table.types.logical.DoubleType;
+import org.apache.flink.table.types.logical.FloatType;
 import org.apache.flink.table.types.logical.IntType;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.TimeType;
@@ -30,12 +32,16 @@ import org.apache.flink.table.types.logical.VarCharType;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import tech.streamfusion.proto.plan.v1.Arithmetic;
+import tech.streamfusion.proto.plan.v1.ArithmeticOperator;
 import tech.streamfusion.proto.plan.v1.Calc;
 import tech.streamfusion.proto.plan.v1.Comparison;
 import tech.streamfusion.proto.plan.v1.ComparisonOperator;
 import tech.streamfusion.proto.plan.v1.DecimalLiteral;
+import tech.streamfusion.proto.plan.v1.DoubleLiteral;
 import tech.streamfusion.proto.plan.v1.EmptyType;
 import tech.streamfusion.proto.plan.v1.Expression;
+import tech.streamfusion.proto.plan.v1.FloatLiteral;
 import tech.streamfusion.proto.plan.v1.GreaterThanOrEqual;
 import tech.streamfusion.proto.plan.v1.Input;
 import tech.streamfusion.proto.plan.v1.InputReference;
@@ -183,6 +189,49 @@ class ArrowCDataBridgeTest {
                     .isEqualByComparingTo(literal);
             assertThat(output.rowView(1).getDecimal(0, precision, scale).toBigDecimal())
                     .isEqualByComparingTo(literal.add(java.math.BigDecimal.ONE));
+        }
+    }
+
+    @Test
+    void computesFloatArithmeticThroughDataFusion() {
+        RowType rowType = RowType.of(new FloatType(false));
+        try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+                ArrowRowDataBatch input = ArrowRowDataBatch.transpose(
+                        List.of(GenericRowData.of(-2.5F), GenericRowData.of(0.0F), GenericRowData.of(3.25F)),
+                        rowType,
+                        allocator);
+                ArrowRowDataBatch output =
+                        ArrowCDataBridge.execute(floatingPointArithmeticPlan(true), input, rowType, allocator)) {
+            assertThat(output.rowView(0).getFloat(0)).isEqualTo(-1.0F);
+            assertThat(output.rowView(1).getFloat(0)).isEqualTo(1.5F);
+            assertThat(output.rowView(2).getFloat(0)).isEqualTo(4.75F);
+        }
+    }
+
+    @Test
+    void computesDoubleArithmeticThroughDataFusion() {
+        RowType rowType = RowType.of(new DoubleType(false));
+        try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+                ArrowRowDataBatch input = ArrowRowDataBatch.transpose(
+                        List.of(
+                                GenericRowData.of(-2.5D),
+                                GenericRowData.of(0.0D),
+                                GenericRowData.of(3.25D),
+                                GenericRowData.of(Double.NaN),
+                                GenericRowData.of(Double.POSITIVE_INFINITY),
+                                GenericRowData.of(Double.NEGATIVE_INFINITY),
+                                GenericRowData.of(-0.0D)),
+                        rowType,
+                        allocator);
+                ArrowRowDataBatch output =
+                        ArrowCDataBridge.execute(floatingPointArithmeticPlan(false), input, rowType, allocator)) {
+            assertThat(output.rowView(0).getDouble(0)).isEqualTo(-1.0D);
+            assertThat(output.rowView(1).getDouble(0)).isEqualTo(1.5D);
+            assertThat(output.rowView(2).getDouble(0)).isEqualTo(4.75D);
+            assertThat(output.rowView(3).getDouble(0)).isNaN();
+            assertThat(output.rowView(4).getDouble(0)).isEqualTo(Double.POSITIVE_INFINITY);
+            assertThat(output.rowView(5).getDouble(0)).isEqualTo(Double.NEGATIVE_INFINITY);
+            assertThat(output.rowView(6).getDouble(0)).isEqualTo(1.5D);
         }
     }
 
@@ -346,6 +395,34 @@ class ArrowCDataBridgeTest {
                                 .setLeft(reference)
                                 .setRight(decimal)
                                 .setOperator(ComparisonOperator.COMPARISON_OPERATOR_GREATER_THAN_OR_EQUAL)))
+                .build();
+        return NativePlan.newBuilder()
+                .setProtocolVersion(1)
+                .setRoot(Operator.newBuilder().setCalc(calc))
+                .build()
+                .toByteArray();
+    }
+
+    private static byte[] floatingPointArithmeticPlan(boolean singlePrecision) {
+        Expression reference = Expression.newBuilder()
+                .setInputReference(InputReference.newBuilder().setIndex(0))
+                .build();
+        Expression literal = singlePrecision
+                ? Expression.newBuilder()
+                        .setFloatLiteral(FloatLiteral.newBuilder().setValue(1.5F))
+                        .build()
+                : Expression.newBuilder()
+                        .setDoubleLiteral(DoubleLiteral.newBuilder().setValue(1.5D))
+                        .build();
+        Expression addition = Expression.newBuilder()
+                .setArithmetic(Arithmetic.newBuilder()
+                        .setLeft(reference)
+                        .setRight(literal)
+                        .setOperator(ArithmeticOperator.ARITHMETIC_OPERATOR_ADD))
+                .build();
+        Calc calc = Calc.newBuilder()
+                .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
+                .addProjections(addition)
                 .build();
         return NativePlan.newBuilder()
                 .setProtocolVersion(1)

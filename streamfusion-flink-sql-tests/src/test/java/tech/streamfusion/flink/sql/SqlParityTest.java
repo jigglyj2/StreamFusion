@@ -134,6 +134,62 @@ class SqlParityTest {
         assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
     }
 
+    @ParameterizedTest(name = "{0} arithmetic")
+    @MethodSource("nativeFloatingPointArithmeticCases")
+    void floatingPointArithmeticMatchesFlinkByteForByte(String ignoredName, String sql, boolean nativeExecutionExpected)
+            throws Exception {
+        assertParity(sql, true);
+
+        if (nativeExecutionExpected) {
+            assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        }
+    }
+
+    private static Stream<Arguments> nativeFloatingPointArithmeticCases() {
+        return Stream.of(
+                Arguments.of("FLOAT cast shape falls back", floatingPointArithmeticSql("FLOAT"), false),
+                Arguments.of("DOUBLE", nativeDoubleArithmeticSql(), true));
+    }
+
+    private static String floatingPointArithmeticSql(String type) {
+        String literal = "CAST(1.5 AS " + type + ")";
+        return "SELECT metric + "
+                + literal
+                + ", metric - "
+                + literal
+                + ", metric * "
+                + literal
+                + ", (metric + "
+                + literal
+                + ") * (metric - "
+                + literal
+                + "), "
+                + literal
+                + " FROM (VALUES (CAST(-2.5 AS "
+                + type
+                + ")), (CAST(0.0 AS "
+                + type
+                + ")), (CAST(3.25 AS "
+                + type
+                + "))) AS input(metric)";
+    }
+
+    private static String nativeDoubleArithmeticSql() {
+        return "SELECT metric + 1.5E0, metric - 1.5E0, metric * 1.5E0, "
+                + "(metric + 1.5E0) * (metric - 1.5E0), 1.5E0 "
+                + "FROM (VALUES (-2.5E0), (0.0E0), (3.25E0)) AS input(metric)";
+    }
+
+    @Test
+    void castDoubleSpecialValuesFallBackAndMatchFlinkByteForByte() throws Exception {
+        String sql = "SELECT metric + 1.5E0, metric * -1.0E0 FROM (VALUES "
+                + "(CAST('NaN' AS DOUBLE)), (CAST('Infinity' AS DOUBLE)), "
+                + "(CAST('-Infinity' AS DOUBLE)), (-0.0E0)) AS input(metric)";
+        assertParity(sql, true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
+    }
+
     @Test
     void unsupportedIntegerDivisionFallsBackAndMatchesFlinkByteForByte() throws Exception {
         assertParity("SELECT id / 2 FROM (VALUES (1), (2), (3)) AS input(id) WHERE id >= 1", true);

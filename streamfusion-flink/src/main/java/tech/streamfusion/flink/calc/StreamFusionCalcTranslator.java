@@ -30,7 +30,9 @@ import tech.streamfusion.proto.plan.v1.Arithmetic;
 import tech.streamfusion.proto.plan.v1.ArithmeticOperator;
 import tech.streamfusion.proto.plan.v1.BooleanOperator;
 import tech.streamfusion.proto.plan.v1.ComparisonOperator;
+import tech.streamfusion.proto.plan.v1.DoubleLiteral;
 import tech.streamfusion.proto.plan.v1.Expression;
+import tech.streamfusion.proto.plan.v1.FloatLiteral;
 import tech.streamfusion.proto.plan.v1.IntegerLiteral;
 import tech.streamfusion.proto.plan.v1.LongLiteral;
 
@@ -90,7 +92,10 @@ public final class StreamFusionCalcTranslator {
                 }
             } else {
                 LogicalTypeRoot outputRoot = outputType.getTypeAt(outputIndex).getTypeRoot();
-                if ((outputRoot != LogicalTypeRoot.INTEGER && outputRoot != LogicalTypeRoot.BIGINT)
+                if ((outputRoot != LogicalTypeRoot.INTEGER
+                                && outputRoot != LogicalTypeRoot.BIGINT
+                                && outputRoot != LogicalTypeRoot.FLOAT
+                                && outputRoot != LogicalTypeRoot.DOUBLE)
                         || projectionExpression(projection, inputType, outputRoot) == null) {
                     return false;
                 }
@@ -186,6 +191,20 @@ public final class StreamFusionCalcTranslator {
             if (literal != null) {
                 return Expression.newBuilder()
                         .setLongLiteral(LongLiteral.newBuilder().setValue(literal))
+                        .build();
+            }
+        } else if (expectedType == LogicalTypeRoot.FLOAT) {
+            Float literal = literal(expression, Float.class);
+            if (literal != null && Float.isFinite(literal)) {
+                return Expression.newBuilder()
+                        .setFloatLiteral(FloatLiteral.newBuilder().setValue(literal))
+                        .build();
+            }
+        } else if (expectedType == LogicalTypeRoot.DOUBLE) {
+            Double literal = literal(expression, Double.class);
+            if (literal != null && Double.isFinite(literal)) {
+                return Expression.newBuilder()
+                        .setDoubleLiteral(DoubleLiteral.newBuilder().setValue(literal))
                         .build();
             }
         } else {
