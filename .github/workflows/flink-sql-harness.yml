@@ -47,8 +47,36 @@ jobs:
           -pl flink-table/flink-table-api-java-uber,flink-table/flink-table-planner
           -am
 
+      - name: Build native library for JVM tests
+        shell: bash
+        run: >-
+          CARGO_TARGET_DIR="$PWD/streamfusion-native/target/rust"
+          cargo build --manifest-path streamfusion-native/Cargo.toml --release --locked
+
+      - name: Prepare Maven reactor artifacts
+        run: >-
+          mvn --batch-mode --update-snapshots --threads 1C
+          -DskipTests -Dexec.skip=true install
+
+      - name: Check Java formatting
+        run: mvn --batch-mode --threads 1C -Dexec.skip=true spotless:check
+
+      - name: Run Rust unit tests
+        shell: bash
+        run: >-
+          CARGO_TARGET_DIR="$PWD/streamfusion-native/target/rust"
+          cargo test --manifest-path streamfusion-native/Cargo.toml --locked
+
+      - name: Run Java unit tests
+        run: >-
+          mvn --batch-mode --threads 1C -Dexec.skip=true
+          -pl streamfusion-proto,streamfusion-native,streamfusion-flink,streamfusion-nexmark-benchmarks
+          test
+
       - name: Run StreamFusion SQL parity harness
-        run: mvn --batch-mode --update-snapshots --threads 1C verify
+        run: >-
+          mvn --batch-mode --threads 1C -Dexec.skip=true
+          -pl streamfusion-flink-sql-tests test
 
       - name: Download the Flink runner distribution
         shell: bash
