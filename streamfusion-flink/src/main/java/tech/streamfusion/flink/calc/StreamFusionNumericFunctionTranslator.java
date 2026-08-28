@@ -14,6 +14,9 @@ import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.proto.plan.v1.AbsoluteValue;
+import tech.streamfusion.proto.plan.v1.ArcCosine;
+import tech.streamfusion.proto.plan.v1.ArcSine;
+import tech.streamfusion.proto.plan.v1.ArcTangent;
 import tech.streamfusion.proto.plan.v1.Ceiling;
 import tech.streamfusion.proto.plan.v1.Cosine;
 import tech.streamfusion.proto.plan.v1.DoubleLiteral;
@@ -81,6 +84,15 @@ final class StreamFusionNumericFunctionTranslator extends StreamFusionRexSupport
             if ("TANH".equals(function)) {
                 return unary(expression, inputType, expectedType, UnaryKind.HYPERBOLIC_TANGENT);
             }
+            if ("ASIN".equals(function)) {
+                return unary(expression, inputType, expectedType, UnaryKind.ARC_SINE);
+            }
+            if ("ACOS".equals(function)) {
+                return unary(expression, inputType, expectedType, UnaryKind.ARC_COSINE);
+            }
+            if ("ATAN".equals(function)) {
+                return unary(expression, inputType, expectedType, UnaryKind.ARC_TANGENT);
+            }
         }
         if (("PI".equals(function) || "E".equals(function))
                 && operands.isEmpty()
@@ -132,6 +144,15 @@ final class StreamFusionNumericFunctionTranslator extends StreamFusionRexSupport
                 return result.setHyperbolicTangent(
                                 HyperbolicTangent.newBuilder().setOperand(operand))
                         .build();
+            case ARC_SINE:
+                return result.setArcSine(ArcSine.newBuilder().setOperand(operand))
+                        .build();
+            case ARC_COSINE:
+                return result.setArcCosine(ArcCosine.newBuilder().setOperand(operand))
+                        .build();
+            case ARC_TANGENT:
+                return result.setArcTangent(ArcTangent.newBuilder().setOperand(operand))
+                        .build();
             default:
                 throw new IllegalStateException("Unknown numeric unary function " + kind);
         }
@@ -169,6 +190,9 @@ final class StreamFusionNumericFunctionTranslator extends StreamFusionRexSupport
         COSINE,
         TANGENT,
         HYPERBOLIC_SINE,
-        HYPERBOLIC_TANGENT
+        HYPERBOLIC_TANGENT,
+        ARC_SINE,
+        ARC_COSINE,
+        ARC_TANGENT
     }
 }

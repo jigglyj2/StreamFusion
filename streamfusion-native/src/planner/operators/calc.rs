@@ -196,6 +196,27 @@ pub(super) fn create_expression(
                 .ok_or_else(|| DataFusionError::Plan("TANH operand is empty".to_string()))?;
             expressions::hyperbolic_tangent::create(create_expression(operand, schema)?, schema)
         }
+        Some(proto::expression::Expression::ArcSine(arc_sine)) => {
+            let operand = arc_sine
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("ASIN operand is empty".to_string()))?;
+            expressions::arc_sine::create(create_expression(operand, schema)?, schema)
+        }
+        Some(proto::expression::Expression::ArcCosine(arc_cosine)) => {
+            let operand = arc_cosine
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("ACOS operand is empty".to_string()))?;
+            expressions::arc_cosine::create(create_expression(operand, schema)?, schema)
+        }
+        Some(proto::expression::Expression::ArcTangent(arc_tangent)) => {
+            let operand = arc_tangent
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("ATAN operand is empty".to_string()))?;
+            expressions::arc_tangent::create(create_expression(operand, schema)?, schema)
+        }
         Some(proto::expression::Expression::CharacterLength(character_length)) => {
             let operand = character_length
                 .operand

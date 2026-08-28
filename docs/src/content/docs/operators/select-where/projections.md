@@ -268,6 +268,9 @@ native stages. Generated parity coverage includes finite values, overflow, signe
 NaN, and nulls. `COSH` stays on Flink with an explicit EXPLAIN reason because DataFusion's kernel
 differs from Flink by one ULP for finite inputs; approximate equality is not sufficient for
 StreamFusion's byte-parity contract.
+`ASIN`, `ACOS`, and `ATAN` are accelerated as distinct DataFusion vector expressions after Flink's
+`DOUBLE` coercion. Tests include values outside the `ASIN`/`ACOS` domain to verify Flink-compatible
+NaN results, along with endpoints, signed zero, infinities, and nulls.
 `CEIL` and `FLOOR` are accelerated for signed integers, `FLOAT`, and `DOUBLE`. Integer
 inputs are already integral and remain zero-copy references;
 floating-point inputs use DataFusion's vectorized math functions. Decimal and temporal forms

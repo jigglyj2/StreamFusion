@@ -107,6 +107,9 @@ message Expression {
     Tangent tangent = 76;
     HyperbolicSine hyperbolic_sine = 77;
     HyperbolicTangent hyperbolic_tangent = 78;
+    ArcSine arc_sine = 79;
+    ArcCosine arc_cosine = 80;
+    ArcTangent arc_tangent = 81;
   }
 }
 
@@ -298,6 +301,18 @@ message HyperbolicSine {
 }
 
 message HyperbolicTangent {
+  Expression operand = 1;
+}
+
+message ArcSine {
+  Expression operand = 1;
+}
+
+message ArcCosine {
+  Expression operand = 1;
+}
+
+message ArcTangent {
   Expression operand = 1;
 }
 
