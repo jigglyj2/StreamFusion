@@ -156,6 +156,11 @@ the array or search value is null. StreamFusion wraps DataFusion's vectorized se
 input-null guard and converts DataFusion's missing-match null to Flink's `INT` zero. This follows
 the same semantic-adapter model as Comet's array-position implementation while retaining the
 upstream DataFusion kernel.
+`ARRAY_REMOVE` is accelerated when its array and search value otherwise lower natively and the
+search value is provably non-null. It removes every matching value, preserves null elements and
+input order, and returns null for a null array. Nullable search values cause whole-Calc fallback
+with an EXPLAIN reason because Flink removes null elements when the search value is null, while
+DataFusion's remove-all kernel returns null instead.
 `ARRAY_DISTINCT` is accelerated for Arrow-compatible element types, including nested `ROW`
 elements. It preserves the first occurrence order, retains at most one null element, and
 preserves null and empty arrays. Rust lowers it directly to DataFusion's vectorized set kernel;
