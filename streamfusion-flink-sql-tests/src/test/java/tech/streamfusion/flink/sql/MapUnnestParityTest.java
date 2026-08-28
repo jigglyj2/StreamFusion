@@ -55,10 +55,41 @@ class MapUnnestParityTest extends SqlParityTestSupport {
         assertNativeExecution();
     }
 
+    @Test
+    void nativeMapUnnestPreservesRowValuesAsOneComplexColumn() throws Exception {
+        java.util.List<Row> inputs = Arrays.asList(
+                Row.of(rowMap("first", Row.of(7, "seven"), "nullable", Row.of(null, "值"))),
+                Row.of(new LinkedHashMap<>()),
+                Row.of((Object) null));
+
+        assertDataStreamParity(
+                "SELECT map_key, map_value, ord_idx FROM row_value_map_unnest_input "
+                        + "LEFT JOIN UNNEST(metric) WITH ORDINALITY "
+                        + "AS expanded(map_key, map_value, ord_idx) ON TRUE",
+                Types.MAP(Types.STRING, Types.ROW_NAMED(new String[] {"number", "label"}, Types.INT, Types.STRING)),
+                DataTypes.MAP(
+                        DataTypes.STRING().notNull(),
+                        DataTypes.ROW(
+                                DataTypes.FIELD("number", DataTypes.INT()),
+                                DataTypes.FIELD("label", DataTypes.STRING()))),
+                inputs,
+                "row_value_map_unnest_input");
+
+        assertNativeExecution();
+    }
+
     private static LinkedHashMap<String, Integer> mapOf(Object... entries) {
         LinkedHashMap<String, Integer> map = new LinkedHashMap<>();
         for (int index = 0; index < entries.length; index += 2) {
             map.put((String) entries[index], (Integer) entries[index + 1]);
+        }
+        return map;
+    }
+
+    private static LinkedHashMap<String, Row> rowMap(Object... entries) {
+        LinkedHashMap<String, Row> map = new LinkedHashMap<>();
+        for (int index = 0; index < entries.length; index += 2) {
+            map.put((String) entries[index], (Row) entries[index + 1]);
         }
         return map;
     }

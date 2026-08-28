@@ -139,7 +139,7 @@ public final class StreamFusionArrayUnnestTranslator {
             RowType inputType, RowType outputType, String joinName, boolean withOrdinality, MapType map) {
         LogicalType key = map.getKeyType();
         LogicalType value = map.getValueType();
-        if (!isScalarBoundaryType(key.getTypeRoot()) || !isScalarBoundaryType(value.getTypeRoot())) {
+        if (!isScalarBoundaryType(key.getTypeRoot()) || !isSupportedElement(value)) {
             return "map UNNEST key/value types " + key + "/" + value + " are not yet supported";
         }
         int appendedFields = 2 + (withOrdinality ? 1 : 0);
