@@ -138,6 +138,16 @@ class SqlParityTest {
     }
 
     @Test
+    void nativeComparisonProjectionsMatchFlinkByteForByte() throws Exception {
+        String sql = "SELECT id = 2, id <> 2, id < 2, id <= 2, id > 2, id >= 2, "
+                + "(id >= 2 AND enabled), NOT (id = 2 OR enabled) "
+                + "FROM (VALUES (1, TRUE), (2, FALSE), (3, TRUE)) AS input(id, enabled)";
+        assertParity(sql, true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    @Test
     void nativeDateLiteralProjectionsMatchFlinkByteForByte() throws Exception {
         String sql = "SELECT DATE '1969-12-31', DATE '1970-01-01', DATE '2026-08-27' "
                 + "FROM (VALUES (1), (2)) AS input(id) WHERE id >= 1";
