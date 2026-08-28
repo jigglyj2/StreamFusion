@@ -17,6 +17,7 @@ import tech.streamfusion.proto.plan.v1.Base64Encode;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.Hexadecimal;
 import tech.streamfusion.proto.plan.v1.Md5;
+import tech.streamfusion.proto.plan.v1.Sha1;
 import tech.streamfusion.proto.plan.v1.ShaAlgorithm;
 import tech.streamfusion.proto.plan.v1.ShaDigest;
 
@@ -26,9 +27,6 @@ final class StreamFusionBinaryFunctionTranslator extends StreamFusionComplexType
 
     static String failureReason(Object expression) {
         String function = functionName(expression);
-        if ("SHA1".equals(function)) {
-            return "SHA1 stays on Flink until its non-DataFusion digest path has dedicated parity coverage";
-        }
         if ("SHA2".equals(function)) {
             return "SHA2 stays on Flink until literal and dynamic digest-length semantics have dedicated parity coverage";
         }
@@ -124,6 +122,29 @@ final class StreamFusionBinaryFunctionTranslator extends StreamFusionComplexType
                 ? null
                 : Expression.newBuilder()
                         .setShaDigest(ShaDigest.newBuilder().setOperand(operand).setAlgorithm(algorithm))
+                        .build();
+    }
+
+    static Expression sha1(Object expression, RowType inputType, LogicalType expectedType) {
+        if (!"SHA1".equals(functionName(expression))
+                || (expectedType.getTypeRoot() != LogicalTypeRoot.CHAR
+                        && expectedType.getTypeRoot() != LogicalTypeRoot.VARCHAR)) {
+            return null;
+        }
+        List<?> operands = (List<?>) invoke(expression, "getOperands");
+        if (operands.size() != 1) {
+            return null;
+        }
+        LogicalType operandType = logicalType(operands.get(0), inputType);
+        if (operandType == null || operandType.getTypeRoot() != LogicalTypeRoot.VARCHAR) {
+            return null;
+        }
+        Expression operand =
+                StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, operandType);
+        return operand == null
+                ? null
+                : Expression.newBuilder()
+                        .setSha1(Sha1.newBuilder().setOperand(operand))
                         .build();
     }
 

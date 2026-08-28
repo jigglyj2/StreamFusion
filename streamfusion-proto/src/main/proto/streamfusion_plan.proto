@@ -122,6 +122,7 @@ message Expression {
     Base64Encode base64_encode = 91;
     Md5 md5 = 92;
     ShaDigest sha_digest = 93;
+    Sha1 sha1 = 94;
   }
 }
 
@@ -386,6 +387,10 @@ enum ShaAlgorithm {
   SHA_ALGORITHM_256 = 2;
   SHA_ALGORITHM_384 = 3;
   SHA_ALGORITHM_512 = 4;
+}
+
+message Sha1 {
+  Expression operand = 1;
 }
 
 message Coalesce {

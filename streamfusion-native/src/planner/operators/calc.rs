@@ -263,6 +263,13 @@ pub(super) fn create_expression(
             })?;
             expressions::sha_digest::create(create_expression(operand, schema)?, algorithm, schema)
         }
+        Some(proto::expression::Expression::Sha1(sha1)) => {
+            let operand = sha1
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("SHA1 operand is empty".to_string()))?;
+            expressions::sha1::create(create_expression(operand, schema)?, schema)
+        }
         Some(proto::expression::Expression::HyperbolicSine(sine)) => {
             let operand = sine
                 .operand

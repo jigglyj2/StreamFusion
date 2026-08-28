@@ -385,10 +385,12 @@ on Flink pending padding-specific parity coverage.
 `SHA224(value)`, `SHA256(value)`, `SHA384(value)`, and `SHA512(value)` are accelerated for supported
 character expressions. A shared protobuf digest expression selects a fixed algorithm;
 Rust runs the corresponding DataFusion vectorized digest kernel and converts its binary digest to
-Flink-compatible lowercase hexadecimal text. Generated projection and filter parity coverage
-includes empty strings, multilingual text, embedded NUL bytes, and null propagation. `SHA1` and
-length-selected `SHA2` remain on Flink until their distinct execution paths have dedicated parity
-coverage.
+Flink-compatible lowercase hexadecimal text. `SHA1(value)` is also accelerated for `VARCHAR`;
+because DataFusion does not provide SHA-1, its isolated Rust compatibility expression hashes each
+UTF-8 value with RustCrypto and emits the same lowercase hexadecimal representation. Generated
+projection and filter parity coverage includes empty strings, multilingual text, embedded NUL
+bytes, and null propagation. Length-selected `SHA2` remains on Flink until its literal and dynamic
+length semantics have dedicated parity coverage.
 
 Cast approval is table-driven. Java maps an explicitly approved Flink source/target pair
 to a stable protobuf cast kind; Rust independently verifies that kind against the actual
