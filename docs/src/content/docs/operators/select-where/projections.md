@@ -24,13 +24,15 @@ StreamFusion can select, reorder, omit, or repeat direct input columns of these 
 - `DECIMAL`, `DATE`, `TIME`, `TIMESTAMP`, and `TIMESTAMP_LTZ`
 
 Precision, scale, fixed width, and nullability are preserved. Computed `INT`, `BIGINT`,
-`FLOAT`, and `DOUBLE` projections also support same-width literals and recursively nested
-addition, subtraction, and multiplication. Signed integer overflow follows Flink's
-wrapping semantics. Floating-point literals must be finite.
+`FLOAT`, `DOUBLE`, and `DECIMAL` projections support literals and recursively nested
+addition, subtraction, and multiplication. Decimal operands retain the precision and
+scale assigned to each expression by Flink's planner, including the precision growth of
+intermediate results. Signed integer overflow follows Flink's wrapping semantics.
+Floating-point literals must be finite.
 
-Division, remainder, unary arithmetic, mixed-width arithmetic, non-finite floating-point
-literals, arithmetic on other types, casts, and functions
-currently fall back to Flink. The Calc also falls back if its filter is unsupported.
+Division, remainder, unary arithmetic, non-decimal mixed-width arithmetic, non-finite
+floating-point literals, arithmetic on other types, casts, and functions currently fall
+back to Flink. The Calc also falls back if its filter is unsupported.
 
 ## Implementation
 

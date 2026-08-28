@@ -134,6 +134,28 @@ class SqlParityTest {
         assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
     }
 
+    @ParameterizedTest(name = "{0} decimal arithmetic")
+    @MethodSource("nativeDecimalArithmeticCases")
+    void nativeDecimalArithmeticMatchesFlinkByteForByte(String ignoredName, String sql) throws Exception {
+        assertParity(sql, true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    private static Stream<Arguments> nativeDecimalArithmeticCases() {
+        return Stream.of(
+                Arguments.of(
+                        "compact",
+                        "SELECT amount + 1.25, amount - 1.25, amount * 1.25, "
+                                + "(amount + 1.25) * (amount - 1.25) "
+                                + "FROM (VALUES (-12.34), (0.00), (99.99)) AS input(amount)"),
+                Arguments.of(
+                        "wide",
+                        "SELECT amount + 1.25, amount - 1.25, amount * 1.25 "
+                                + "FROM (VALUES (-1234567890123456.78), (0.00), (1234567890123456.78)) "
+                                + "AS input(amount)"));
+    }
+
     @ParameterizedTest(name = "{0} arithmetic")
     @MethodSource("nativeFloatingPointArithmeticCases")
     void floatingPointArithmeticMatchesFlinkByteForByte(String ignoredName, String sql, boolean nativeExecutionExpected)

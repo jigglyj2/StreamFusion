@@ -30,6 +30,7 @@ import tech.streamfusion.proto.plan.v1.Arithmetic;
 import tech.streamfusion.proto.plan.v1.ArithmeticOperator;
 import tech.streamfusion.proto.plan.v1.BooleanOperator;
 import tech.streamfusion.proto.plan.v1.ComparisonOperator;
+import tech.streamfusion.proto.plan.v1.DecimalLiteral;
 import tech.streamfusion.proto.plan.v1.DoubleLiteral;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.FloatLiteral;
@@ -95,7 +96,8 @@ public final class StreamFusionCalcTranslator {
                 if ((outputRoot != LogicalTypeRoot.INTEGER
                                 && outputRoot != LogicalTypeRoot.BIGINT
                                 && outputRoot != LogicalTypeRoot.FLOAT
-                                && outputRoot != LogicalTypeRoot.DOUBLE)
+                                && outputRoot != LogicalTypeRoot.DOUBLE
+                                && outputRoot != LogicalTypeRoot.DECIMAL)
                         || projectionExpression(projection, inputType, outputRoot) == null) {
                     return false;
                 }
@@ -170,6 +172,9 @@ public final class StreamFusionCalcTranslator {
     }
 
     private static Expression projectionExpression(Object expression, RowType inputType, LogicalTypeRoot expectedType) {
+        if (expectedType == LogicalTypeRoot.DECIMAL) {
+            return decimalProjectionExpression(expression, inputType);
+        }
         int inputIndex = inputIndex(expression);
         if (inputIndex >= 0) {
             if (inputIndex >= inputType.getFieldCount()
@@ -221,6 +226,63 @@ public final class StreamFusionCalcTranslator {
         }
         Expression left = projectionExpression(operands.get(0), inputType, expectedType);
         Expression right = projectionExpression(operands.get(1), inputType, expectedType);
+        if (left == null || right == null) {
+            return null;
+        }
+        return Expression.newBuilder()
+                .setArithmetic(
+                        Arithmetic.newBuilder().setLeft(left).setRight(right).setOperator(operator))
+                .build();
+    }
+
+    private static Expression decimalProjectionExpression(Object expression, RowType inputType) {
+        Object expressionType = invoke(expression, "getType");
+        if (!"DECIMAL".equals(invoke(expressionType, "getSqlTypeName").toString())) {
+            return null;
+        }
+        int precision = (int) invoke(expressionType, "getPrecision");
+        int scale = (int) invoke(expressionType, "getScale");
+        if (precision < 1 || precision > DecimalType.MAX_PRECISION || scale < 0 || scale > precision) {
+            return null;
+        }
+
+        int inputIndex = inputIndex(expression);
+        if (inputIndex >= 0) {
+            if (inputIndex >= inputType.getFieldCount() || !(inputType.getTypeAt(inputIndex) instanceof DecimalType)) {
+                return null;
+            }
+            DecimalType inputDecimal = (DecimalType) inputType.getTypeAt(inputIndex);
+            if (inputDecimal.getPrecision() != precision || inputDecimal.getScale() != scale) {
+                return null;
+            }
+            return StreamFusionIdentityCalcOperator.inputReference(
+                    inputIndex, StreamFusionIdentityCalcOperator.logicalType(inputType, inputIndex));
+        }
+
+        BigDecimal literal = literal(expression, BigDecimal.class);
+        if (literal != null) {
+            if (literal.scale() != scale || literal.precision() > precision) {
+                return null;
+            }
+            return Expression.newBuilder()
+                    .setDecimalLiteral(DecimalLiteral.newBuilder()
+                            .setUnscaledValue(literal.unscaledValue().toString())
+                            .setScale(scale)
+                            .setPrecision(precision))
+                    .build();
+        }
+
+        ArithmeticOperator operator =
+                arithmeticOperator(invoke(expression, "getKind").toString());
+        if (operator == null) {
+            return null;
+        }
+        List<?> operands = (List<?>) invoke(expression, "getOperands");
+        if (operands.size() != 2) {
+            return null;
+        }
+        Expression left = decimalProjectionExpression(operands.get(0), inputType);
+        Expression right = decimalProjectionExpression(operands.get(1), inputType);
         if (left == null || right == null) {
             return null;
         }
