@@ -37,7 +37,15 @@ fn data_type(logical_type: &proto::LogicalType) -> Result<DataType> {
         Some(proto::logical_type::Type::Double(_)) => Ok(DataType::Float64),
         Some(proto::logical_type::Type::Boolean(_)) => Ok(DataType::Boolean),
         Some(proto::logical_type::Type::Varchar(_)) => Ok(DataType::Utf8),
+        Some(proto::logical_type::Type::FixedChar(length)) => {
+            validate_length("CHAR", length.length)?;
+            Ok(DataType::Utf8)
+        }
         Some(proto::logical_type::Type::Binary(_)) => Ok(DataType::Binary),
+        Some(proto::logical_type::Type::FixedBinary(length)) => {
+            let length = validate_length("BINARY", length.length)?;
+            Ok(DataType::FixedSizeBinary(length))
+        }
         Some(proto::logical_type::Type::Date(_)) => Ok(DataType::Date32),
         Some(proto::logical_type::Type::Time(precision)) => time_type(precision.precision),
         Some(proto::logical_type::Type::Timestamp(precision)) => {
@@ -64,6 +72,17 @@ fn data_type(logical_type: &proto::LogicalType) -> Result<DataType> {
             "NULL literal type is not supported".to_string(),
         )),
     }
+}
+
+fn validate_length(name: &str, length: u32) -> Result<i32> {
+    let length = i32::try_from(length)
+        .map_err(|_| DataFusionError::Plan(format!("{name} length {length} is invalid")))?;
+    if length <= 0 {
+        return Err(DataFusionError::Plan(format!(
+            "{name} length {length} is invalid"
+        )));
+    }
+    Ok(length)
 }
 
 fn time_type(precision: u32) -> Result<DataType> {

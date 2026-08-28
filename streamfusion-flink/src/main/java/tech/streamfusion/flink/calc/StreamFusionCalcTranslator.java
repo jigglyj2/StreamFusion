@@ -702,6 +702,7 @@ public final class StreamFusionCalcTranslator {
                 || type == LogicalTypeRoot.BOOLEAN
                 || type == LogicalTypeRoot.CHAR
                 || type == LogicalTypeRoot.VARCHAR
+                || type == LogicalTypeRoot.BINARY
                 || type == LogicalTypeRoot.VARBINARY
                 || type == LogicalTypeRoot.DECIMAL
                 || type == LogicalTypeRoot.DATE

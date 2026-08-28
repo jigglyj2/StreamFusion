@@ -65,4 +65,19 @@ class NativePlanTest {
 
         assertThat(Expression.parseFrom(expression.toByteArray())).isEqualTo(expression);
     }
+
+    @Test
+    void fixedWidthTypesRoundTripThroughProtobuf() throws Exception {
+        LogicalType binary = LogicalType.newBuilder()
+                .setNullable(true)
+                .setFixedBinary(LengthType.newBuilder().setLength(8))
+                .build();
+        LogicalType character = LogicalType.newBuilder()
+                .setNullable(true)
+                .setFixedChar(LengthType.newBuilder().setLength(5))
+                .build();
+
+        assertThat(LogicalType.parseFrom(binary.toByteArray())).isEqualTo(binary);
+        assertThat(LogicalType.parseFrom(character.toByteArray())).isEqualTo(character);
+    }
 }

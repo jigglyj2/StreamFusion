@@ -64,7 +64,8 @@ expressions that require a planner-inserted cast still fall back with the whole 
 Direct hexadecimal binary literals are accelerated with their exact byte sequence and
 fixed width. Cast-derived and computed binary expressions remain on Flink.
 Typed `NULL` literals are accelerated for the supported scalar projection types except
-fixed-width `BINARY(n)` and `TIMESTAMP_LTZ`. The protobuf carries the declared type so
+`TIMESTAMP_LTZ`. The protobuf carries the declared type, including `CHAR(n)` and `BINARY(n)`
+width, so
 DataFusion materializes a correctly typed all-null Arrow vector rather than an untyped
 Arrow `Null` vector.
 

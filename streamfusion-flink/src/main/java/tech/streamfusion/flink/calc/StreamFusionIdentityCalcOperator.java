@@ -28,6 +28,7 @@ import tech.streamfusion.proto.plan.v1.EmptyType;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.Input;
 import tech.streamfusion.proto.plan.v1.InputReference;
+import tech.streamfusion.proto.plan.v1.LengthType;
 import tech.streamfusion.proto.plan.v1.LogicalType;
 import tech.streamfusion.proto.plan.v1.NativePlan;
 import tech.streamfusion.proto.plan.v1.Operator;
@@ -137,9 +138,15 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
             case BOOLEAN:
                 return type.setBoolean(EmptyType.getDefaultInstance()).build();
             case CHAR:
+                return type.setFixedChar(LengthType.newBuilder()
+                                .setLength(((org.apache.flink.table.types.logical.CharType) flinkType).getLength()))
+                        .build();
             case VARCHAR:
                 return type.setVarchar(EmptyType.getDefaultInstance()).build();
             case BINARY:
+                return type.setFixedBinary(LengthType.newBuilder()
+                                .setLength(((org.apache.flink.table.types.logical.BinaryType) flinkType).getLength()))
+                        .build();
             case VARBINARY:
                 return type.setBinary(EmptyType.getDefaultInstance()).build();
             case DATE:

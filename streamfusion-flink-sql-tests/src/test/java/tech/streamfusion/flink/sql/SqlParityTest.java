@@ -184,6 +184,7 @@ class SqlParityTest {
                 "BOOLEAN",
                 "CHAR(5)",
                 "VARCHAR(12)",
+                "BINARY(8)",
                 "VARBINARY(8)",
                 "DECIMAL(20, 4)",
                 "DATE",

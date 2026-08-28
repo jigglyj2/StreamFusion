@@ -258,6 +258,8 @@ message LogicalType {
     PrecisionType timestamp = 13;
     PrecisionType timestamp_ltz = 14;
     DecimalType decimal = 15;
+    LengthType fixed_binary = 16;
+    LengthType fixed_char = 17;
   }
 }
 
@@ -265,6 +267,10 @@ message EmptyType {}
 
 message PrecisionType {
   uint32 precision = 1;
+}
+
+message LengthType {
+  uint32 length = 1;
 }
 
 message DecimalType {
