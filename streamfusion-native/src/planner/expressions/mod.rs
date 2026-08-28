@@ -8,7 +8,9 @@
 
 pub(crate) mod absolute_value;
 pub(crate) mod cast;
+pub(crate) mod ceiling;
 pub(crate) mod coalesce;
 pub(crate) mod conditional;
+pub(crate) mod floor;
 pub(crate) mod null_literal;
 mod wrapping_cast;

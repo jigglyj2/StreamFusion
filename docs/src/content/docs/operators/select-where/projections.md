@@ -100,6 +100,11 @@ branches and an `ELSE` expression.
 DataFusion's vectorized math function. Signed integers use a vectorized DataFusion `CASE`
 around StreamFusion's wrapping unary minus so Flink's minimum-value behavior is preserved.
 Parity coverage includes signed integer minima, nulls, infinities, NaN, and signed zero.
+`CEIL` and `FLOOR` are accelerated for signed integers, `FLOAT`, and `DOUBLE`. Integer
+inputs are already integral and remain zero-copy references;
+floating-point inputs use DataFusion's vectorized math functions. Decimal and temporal forms
+currently cause whole-Calc fallback because their result-type and calendar semantics need
+separate parity work.
 
 Cast approval is table-driven. Java maps an explicitly approved Flink source/target pair
 to a stable protobuf cast kind; Rust independently verifies that kind against the actual

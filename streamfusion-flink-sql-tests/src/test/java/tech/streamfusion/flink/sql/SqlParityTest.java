@@ -1086,6 +1086,83 @@ class SqlParityTest {
                         "abs_decimal_input"));
     }
 
+    @ParameterizedTest(name = "{0} {1}")
+    @MethodSource("nativeRoundingDataStreamCases")
+    void nativeRoundingMatchesFlinkByteForByte(
+            String function, String ignoredType, TypeInformation<?> type, List<Row> rows, String tableName)
+            throws Exception {
+        assertDataStreamParity("SELECT " + function + "(metric) FROM " + tableName, type, rows, tableName);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    private static Stream<Arguments> nativeRoundingDataStreamCases() {
+        return Stream.of("CEIL", "FLOOR")
+                .flatMap(function -> Stream.of(
+                        Arguments.of(
+                                function,
+                                "tinyint",
+                                Types.BYTE,
+                                Arrays.asList(
+                                        Row.of(Byte.MIN_VALUE),
+                                        Row.of((byte) 0),
+                                        Row.of(Byte.MAX_VALUE),
+                                        Row.of((Object) null)),
+                                function.toLowerCase() + "_tinyint_input"),
+                        Arguments.of(
+                                function,
+                                "smallint",
+                                Types.SHORT,
+                                Arrays.asList(
+                                        Row.of(Short.MIN_VALUE),
+                                        Row.of((short) 0),
+                                        Row.of(Short.MAX_VALUE),
+                                        Row.of((Object) null)),
+                                function.toLowerCase() + "_smallint_input"),
+                        Arguments.of(
+                                function,
+                                "integer",
+                                Types.INT,
+                                Arrays.asList(
+                                        Row.of(Integer.MIN_VALUE), Row.of(0), Row.of(Integer.MAX_VALUE), Row.of((Object)
+                                                null)),
+                                function.toLowerCase() + "_integer_input"),
+                        Arguments.of(
+                                function,
+                                "bigint",
+                                Types.LONG,
+                                Arrays.asList(
+                                        Row.of(Long.MIN_VALUE), Row.of(0L), Row.of(Long.MAX_VALUE), Row.of((Object)
+                                                null)),
+                                function.toLowerCase() + "_bigint_input"),
+                        Arguments.of(
+                                function,
+                                "float",
+                                Types.FLOAT,
+                                Arrays.asList(
+                                        Row.of(Float.NEGATIVE_INFINITY),
+                                        Row.of(-7.5f),
+                                        Row.of(-0.0f),
+                                        Row.of(7.5f),
+                                        Row.of(Float.POSITIVE_INFINITY),
+                                        Row.of(Float.NaN),
+                                        Row.of((Object) null)),
+                                function.toLowerCase() + "_float_input"),
+                        Arguments.of(
+                                function,
+                                "double",
+                                Types.DOUBLE,
+                                Arrays.asList(
+                                        Row.of(Double.NEGATIVE_INFINITY),
+                                        Row.of(-7.5d),
+                                        Row.of(-0.0d),
+                                        Row.of(7.5d),
+                                        Row.of(Double.POSITIVE_INFINITY),
+                                        Row.of(Double.NaN),
+                                        Row.of((Object) null)),
+                                function.toLowerCase() + "_double_input")));
+    }
+
     @ParameterizedTest(name = "VARBINARY {0}")
     @MethodSource("nativeVarbinaryDataStreamRangeCases")
     void nativeVarbinaryDataStreamRangesMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {

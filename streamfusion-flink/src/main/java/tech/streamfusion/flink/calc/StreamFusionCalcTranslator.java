@@ -40,6 +40,7 @@ import tech.streamfusion.proto.plan.v1.BooleanOperator;
 import tech.streamfusion.proto.plan.v1.ByteLiteral;
 import tech.streamfusion.proto.plan.v1.Cast;
 import tech.streamfusion.proto.plan.v1.CastKind;
+import tech.streamfusion.proto.plan.v1.Ceiling;
 import tech.streamfusion.proto.plan.v1.Coalesce;
 import tech.streamfusion.proto.plan.v1.ComparisonOperator;
 import tech.streamfusion.proto.plan.v1.Conditional;
@@ -48,6 +49,7 @@ import tech.streamfusion.proto.plan.v1.DecimalLiteral;
 import tech.streamfusion.proto.plan.v1.DoubleLiteral;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.FloatLiteral;
+import tech.streamfusion.proto.plan.v1.Floor;
 import tech.streamfusion.proto.plan.v1.IntegerLiteral;
 import tech.streamfusion.proto.plan.v1.LongLiteral;
 import tech.streamfusion.proto.plan.v1.NullLiteral;
@@ -278,7 +280,40 @@ public final class StreamFusionCalcTranslator {
                             .setAbsoluteValue(AbsoluteValue.newBuilder().setOperand(operand))
                             .build();
         }
+        if ("CEIL".equals(functionName(expression)) && isNonDecimalNumeric(expectedType.getTypeRoot())) {
+            List<?> operands = (List<?>) invoke(expression, "getOperands");
+            if (operands.size() != 1) {
+                return null;
+            }
+            Expression operand = projectionExpression(operands.get(0), inputType, expectedType);
+            return operand == null
+                    ? null
+                    : Expression.newBuilder()
+                            .setCeiling(Ceiling.newBuilder().setOperand(operand))
+                            .build();
+        }
+        if ("FLOOR".equals(functionName(expression)) && isNonDecimalNumeric(expectedType.getTypeRoot())) {
+            List<?> operands = (List<?>) invoke(expression, "getOperands");
+            if (operands.size() != 1) {
+                return null;
+            }
+            Expression operand = projectionExpression(operands.get(0), inputType, expectedType);
+            return operand == null
+                    ? null
+                    : Expression.newBuilder()
+                            .setFloor(Floor.newBuilder().setOperand(operand))
+                            .build();
+        }
         return projectionExpression(expression, inputType, expectedType.getTypeRoot());
+    }
+
+    private static boolean isNonDecimalNumeric(LogicalTypeRoot type) {
+        return type == LogicalTypeRoot.TINYINT
+                || type == LogicalTypeRoot.SMALLINT
+                || type == LogicalTypeRoot.INTEGER
+                || type == LogicalTypeRoot.BIGINT
+                || type == LogicalTypeRoot.FLOAT
+                || type == LogicalTypeRoot.DOUBLE;
     }
 
     private static boolean isNumeric(LogicalTypeRoot type) {

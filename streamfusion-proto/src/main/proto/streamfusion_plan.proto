@@ -56,6 +56,8 @@ message Expression {
     Coalesce coalesce = 25;
     Conditional conditional = 26;
     AbsoluteValue absolute_value = 27;
+    Ceiling ceiling = 28;
+    Floor floor = 29;
   }
 }
 
@@ -74,6 +76,14 @@ message WhenThen {
 }
 
 message AbsoluteValue {
+  Expression operand = 1;
+}
+
+message Ceiling {
+  Expression operand = 1;
+}
+
+message Floor {
   Expression operand = 1;
 }
 
