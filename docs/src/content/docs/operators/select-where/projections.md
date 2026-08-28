@@ -161,6 +161,11 @@ search value is provably non-null. It removes every matching value, preserves nu
 input order, and returns null for a null array. Nullable search values cause whole-Calc fallback
 with an EXPLAIN reason because Flink removes null elements when the search value is null, while
 DataFusion's remove-all kernel returns null instead.
+`ARRAY_MIN` and `ARRAY_MAX` are accelerated for arrays of `TINYINT`, `SMALLINT`, `INT`,
+`BIGINT`, `DECIMAL`, `VARCHAR`, and `DATE`. Null elements are ignored; empty, all-null, and null
+arrays produce null. Rust uses DataFusion's vectorized extrema kernels. `FLOAT` and `DOUBLE`
+arrays stay on Flink with an EXPLAIN reason because Flink and DataFusion order `NaN` differently;
+generated edge coverage includes `NaN`, infinities, and signed zero to enforce that fallback.
 `ARRAY_DISTINCT` is accelerated for Arrow-compatible element types, including nested `ROW`
 elements. It preserves the first occurrence order, retains at most one null element, and
 preserves null and empty arrays. Rust lowers it directly to DataFusion's vectorized set kernel;
