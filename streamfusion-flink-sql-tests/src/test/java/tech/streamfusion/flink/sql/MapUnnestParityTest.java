@@ -101,6 +101,25 @@ class MapUnnestParityTest extends SqlParityTestSupport {
         assertNativeExecution();
     }
 
+    @Test
+    void nativeMapUnnestPreservesScalarArrayValuesAsOneComplexColumn() throws Exception {
+        LinkedHashMap<String, Integer[]> metric = new LinkedHashMap<>();
+        metric.put("values", new Integer[] {1, null, 3});
+        metric.put("empty", new Integer[] {});
+        metric.put("null", null);
+
+        assertDataStreamParity(
+                "SELECT map_key, map_value, ord_idx FROM array_value_map_unnest_input "
+                        + "LEFT JOIN UNNEST(metric) WITH ORDINALITY "
+                        + "AS expanded(map_key, map_value, ord_idx) ON TRUE",
+                Types.MAP(Types.STRING, Types.OBJECT_ARRAY(Types.INT)),
+                DataTypes.MAP(DataTypes.STRING().notNull(), DataTypes.ARRAY(DataTypes.INT())),
+                Arrays.asList(Row.of(metric), Row.of(new LinkedHashMap<>()), Row.of((Object) null)),
+                "array_value_map_unnest_input");
+
+        assertNativeExecution();
+    }
+
     private static LinkedHashMap<String, Integer> mapOf(Object... entries) {
         LinkedHashMap<String, Integer> map = new LinkedHashMap<>();
         for (int index = 0; index < entries.length; index += 2) {
