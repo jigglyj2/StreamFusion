@@ -134,6 +134,10 @@ non-null and both arguments otherwise lower natively. Null arrays yield null, an
 do not prevent a non-null needle from matching another element. Nullable needles remain on
 Flink with an EXPLAIN reason: Flink treats a null needle as a search for a null element, whereas
 DataFusion returns null without searching the array.
+`ARRAY_REVERSE` is accelerated for Arrow-compatible element types, including nested `ROW`
+elements and nullable elements. It lowers directly to DataFusion's vectorized array reversal;
+null and empty arrays retain Flink's behavior, and the resulting Arrow array stays inside the
+fused native plan until the output boundary.
 
 Rust lowers `COALESCE` to DataFusion's vectorized `CaseExpr`: each argument except the last
 becomes an `IS NOT NULL` branch and the last argument is the fallback value.
