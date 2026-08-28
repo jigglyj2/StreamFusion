@@ -171,6 +171,23 @@ class SqlParityTest {
         assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
     }
 
+    @ParameterizedTest(name = "{0} unary minus")
+    @MethodSource("nativeUnaryMinusCases")
+    void nativeUnaryMinusMatchesFlinkByteForByte(String ignoredName, String sql) throws Exception {
+        assertParity(sql, true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    private static Stream<Arguments> nativeUnaryMinusCases() {
+        return Stream.of(
+                Arguments.of("integer", "SELECT -metric FROM (VALUES (-2147483648), (-1), (0), (7)) AS input(metric)"),
+                Arguments.of(
+                        "bigint", "SELECT -metric FROM (VALUES (-2147483649), (0), (2147483649)) AS input(metric)"),
+                Arguments.of("double", "SELECT -metric FROM (VALUES (-2.5E0), (-0.0E0), (3.25E0)) AS input(metric)"),
+                Arguments.of("decimal", "SELECT -metric FROM (VALUES (-12.34), (0.00), (99.99)) AS input(metric)"));
+    }
+
     @Test
     void nativeBigintArithmeticMatchesFlinkByteForByte() throws Exception {
         assertParity(BIGINT_ARITHMETIC_SQL, true);

@@ -49,6 +49,7 @@ message Expression {
     BooleanLiteral boolean_literal = 18;
     StringLiteral string_literal = 19;
     BinaryLiteral binary_literal = 20;
+    UnaryMinus unary_minus = 21;
   }
 }
 
@@ -109,6 +110,10 @@ message BinaryLiteral {
   bytes value = 1;
   bool fixed_width = 2;
   uint32 length = 3;
+}
+
+message UnaryMinus {
+  Expression operand = 1;
 }
 
 message GreaterThanOrEqual {

@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::Operator;
-use datafusion::physical_expr::expressions::{BinaryExpr, Column, Literal};
+use datafusion::physical_expr::expressions::{BinaryExpr, Column, Literal, NegativeExpr};
 use datafusion::physical_expr::expressions::{IsNotNullExpr, IsNullExpr, NotExpr};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::filter::FilterExec;
@@ -175,6 +175,14 @@ fn create_expression(
                 ScalarValue::Binary(Some(value))
             };
             Ok(Arc::new(Literal::new(scalar)))
+        }
+        Some(proto::expression::Expression::UnaryMinus(unary)) => {
+            let operand = unary.operand.as_ref().ok_or_else(|| {
+                DataFusionError::Plan("unary minus operand is empty".to_string())
+            })?;
+            Ok(Arc::new(NegativeExpr::new(create_expression(
+                operand, schema,
+            )?)))
         }
         Some(proto::expression::Expression::GreaterThanOrEqual(comparison)) => {
             Ok(Arc::new(BinaryExpr::new(

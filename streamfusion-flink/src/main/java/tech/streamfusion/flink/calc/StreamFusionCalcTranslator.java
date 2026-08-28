@@ -43,6 +43,7 @@ import tech.streamfusion.proto.plan.v1.LongLiteral;
 import tech.streamfusion.proto.plan.v1.StringLiteral;
 import tech.streamfusion.proto.plan.v1.TimeLiteral;
 import tech.streamfusion.proto.plan.v1.TimestampLiteral;
+import tech.streamfusion.proto.plan.v1.UnaryMinus;
 
 /** Reflection entry point called by the small Flink planner patch for eligible calc nodes. */
 public final class StreamFusionCalcTranslator {
@@ -283,12 +284,23 @@ public final class StreamFusionCalcTranslator {
         } else {
             return null;
         }
-        ArithmeticOperator operator =
-                arithmeticOperator(invoke(expression, "getKind").toString());
+        String kind = invoke(expression, "getKind").toString();
+        List<?> operands = (List<?>) invoke(expression, "getOperands");
+        if ("MINUS_PREFIX".equals(kind)) {
+            if (operands.size() != 1) {
+                return null;
+            }
+            Expression operand = projectionExpression(operands.get(0), inputType, expectedType);
+            return operand == null
+                    ? null
+                    : Expression.newBuilder()
+                            .setUnaryMinus(UnaryMinus.newBuilder().setOperand(operand))
+                            .build();
+        }
+        ArithmeticOperator operator = arithmeticOperator(kind);
         if (operator == null) {
             return null;
         }
-        List<?> operands = (List<?>) invoke(expression, "getOperands");
         if (operands.size() != 2) {
             return null;
         }
@@ -340,12 +352,23 @@ public final class StreamFusionCalcTranslator {
                     .build();
         }
 
-        ArithmeticOperator operator =
-                arithmeticOperator(invoke(expression, "getKind").toString());
+        String kind = invoke(expression, "getKind").toString();
+        List<?> operands = (List<?>) invoke(expression, "getOperands");
+        if ("MINUS_PREFIX".equals(kind)) {
+            if (operands.size() != 1) {
+                return null;
+            }
+            Expression operand = decimalProjectionExpression(operands.get(0), inputType);
+            return operand == null
+                    ? null
+                    : Expression.newBuilder()
+                            .setUnaryMinus(UnaryMinus.newBuilder().setOperand(operand))
+                            .build();
+        }
+        ArithmeticOperator operator = arithmeticOperator(kind);
         if (operator == null) {
             return null;
         }
-        List<?> operands = (List<?>) invoke(expression, "getOperands");
         if (operands.size() != 2) {
             return null;
         }
