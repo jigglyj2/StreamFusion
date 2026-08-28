@@ -25,10 +25,14 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Stream;
 import org.apache.flink.api.common.RuntimeExecutionMode;
+import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.configuration.ExecutionOptions;
+import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.table.api.EnvironmentSettings;
 import org.apache.flink.table.api.TableEnvironment;
 import org.apache.flink.table.api.TableResult;
+import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.CloseableIterator;
@@ -790,6 +794,22 @@ class SqlParityTest {
     }
 
     @ParameterizedTest(name = "{0}")
+    @MethodSource("nativeDataStreamRangePredicateCases")
+    void nativeDataStreamRangePredicatesMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {
+        assertIntegerDataStreamParity("SELECT metric FROM integer_input WHERE " + predicate);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    private static Stream<Arguments> nativeDataStreamRangePredicateCases() {
+        return Stream.of(
+                Arguments.of("between", "metric BETWEEN 2 AND 3"),
+                Arguments.of("not-between", "metric NOT BETWEEN 2 AND 3"),
+                Arguments.of("in", "metric IN (1, 3, 4)"),
+                Arguments.of("not-in", "metric NOT IN (1, 3, 4)"));
+    }
+
+    @ParameterizedTest(name = "{0}")
     @MethodSource("nativeBooleanColumnCases")
     void nativeBooleanColumnsMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {
         String sql =
@@ -844,6 +864,37 @@ class SqlParityTest {
         assertThat(streamFusionResult).isEqualTo(flinkResult);
     }
 
+    private static void assertIntegerDataStreamParity(String sql) throws Exception {
+        byte[] flinkResult = executeIntegerDataStream(sql, false);
+        byte[] streamFusionResult = executeIntegerDataStream(sql, true);
+
+        assertThat(StreamFusionPlannerFactory.createdPlannerCount()).isEqualTo(1);
+        assertThat(StreamFusionPlannerFactory.translatedPlanCount()).isGreaterThan(0);
+        assertThat(streamFusionResult).isEqualTo(flinkResult);
+    }
+
+    private static byte[] executeIntegerDataStream(String sql, boolean streamFusionEnabled) throws Exception {
+        if (streamFusionEnabled) {
+            System.setProperty(
+                    StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY, StreamFusionPlannerFactory.class.getName());
+        } else {
+            System.clearProperty(StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY);
+            StreamFusionPlannerFactory.resetMetrics();
+        }
+
+        StreamExecutionEnvironment executionEnvironment = StreamExecutionEnvironment.getExecutionEnvironment();
+        executionEnvironment.setParallelism(1);
+        StreamTableEnvironment tableEnvironment = StreamTableEnvironment.create(
+                executionEnvironment,
+                EnvironmentSettings.newInstance().inStreamingMode().build());
+        tableEnvironment.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+        DataStream<Row> input = executionEnvironment.fromCollection(
+                Arrays.asList(Row.of(1), Row.of(2), Row.of(3), Row.of(4), Row.of((Object) null)),
+                Types.ROW_NAMED(new String[] {"metric"}, Types.INT));
+        tableEnvironment.createTemporaryView("integer_input", tableEnvironment.fromDataStream(input));
+        return collect(tableEnvironment.executeSql(sql));
+    }
+
     private static byte[] execute(String sql, boolean streaming, boolean streamFusionEnabled) throws Exception {
         if (streamFusionEnabled) {
             System.setProperty(
@@ -861,7 +912,10 @@ class SqlParityTest {
         tableEnvironment.getConfig().getConfiguration().set(ExecutionOptions.RUNTIME_MODE, runtimeMode);
         tableEnvironment.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
 
-        TableResult result = tableEnvironment.executeSql(sql);
+        return collect(tableEnvironment.executeSql(sql));
+    }
+
+    private static byte[] collect(TableResult result) throws Exception {
         try (CloseableIterator<Row> rows = result.collect();
                 ByteArrayOutputStream bytes = new ByteArrayOutputStream();
                 DataOutputStream output = new DataOutputStream(bytes)) {

@@ -155,6 +155,9 @@ public final class StreamFusionCalcTranslator {
             return comparison;
         }
         String kind = invoke(condition, "getKind").toString();
+        if ("SEARCH".equals(kind)) {
+            return search(condition, inputType);
+        }
         if ("AND".equals(kind) || "OR".equals(kind)) {
             List<?> operands = (List<?>) invoke(condition, "getOperands");
             if (operands.size() != 2) {
@@ -574,6 +577,76 @@ public final class StreamFusionCalcTranslator {
             return true;
         } catch (NoSuchMethodException ignored) {
             return false;
+        }
+    }
+
+    private static StreamFusionCondition search(Object condition, RowType inputType) {
+        try {
+            List<?> operands = (List<?>) invoke(condition, "getOperands");
+            if (operands.size() != 2) {
+                return null;
+            }
+            int inputIndex = inputIndex(operands.get(0));
+            if (inputIndex < 0
+                    || inputIndex >= inputType.getFieldCount()
+                    || inputType.getTypeAt(inputIndex).getTypeRoot() != LogicalTypeRoot.INTEGER) {
+                return null;
+            }
+            Object sarg = invoke(operands.get(1), "getValue");
+            if (sarg == null || !"UNKNOWN".equals(publicField(sarg, "nullAs").toString())) {
+                return null;
+            }
+            Object ranges = invoke(publicField(sarg, "rangeSet"), "asRanges");
+            StreamFusionCondition result = null;
+            for (Object range : (Iterable<?>) ranges) {
+                StreamFusionCondition rangeCondition = null;
+                if ((boolean) invoke(range, "hasLowerBound")) {
+                    int endpoint = ((BigDecimal) invoke(range, "lowerEndpoint")).intValueExact();
+                    boolean closed =
+                            "CLOSED".equals(invoke(range, "lowerBoundType").toString());
+                    rangeCondition = new StreamFusionIntComparison(
+                            inputIndex,
+                            endpoint,
+                            closed
+                                    ? ComparisonOperator.COMPARISON_OPERATOR_GREATER_THAN_OR_EQUAL
+                                    : ComparisonOperator.COMPARISON_OPERATOR_GREATER_THAN,
+                            true);
+                }
+                if ((boolean) invoke(range, "hasUpperBound")) {
+                    int endpoint = ((BigDecimal) invoke(range, "upperEndpoint")).intValueExact();
+                    boolean closed =
+                            "CLOSED".equals(invoke(range, "upperBoundType").toString());
+                    StreamFusionCondition upper = new StreamFusionIntComparison(
+                            inputIndex,
+                            endpoint,
+                            closed
+                                    ? ComparisonOperator.COMPARISON_OPERATOR_LESS_THAN_OR_EQUAL
+                                    : ComparisonOperator.COMPARISON_OPERATOR_LESS_THAN,
+                            true);
+                    rangeCondition = rangeCondition == null
+                            ? upper
+                            : StreamFusionBooleanCondition.binary(
+                                    rangeCondition, upper, BooleanOperator.BOOLEAN_OPERATOR_AND);
+                }
+                if (rangeCondition == null) {
+                    return null;
+                }
+                result = result == null
+                        ? rangeCondition
+                        : StreamFusionBooleanCondition.binary(
+                                result, rangeCondition, BooleanOperator.BOOLEAN_OPERATOR_OR);
+            }
+            return result;
+        } catch (RuntimeException exception) {
+            return null;
+        }
+    }
+
+    private static Object publicField(Object target, String fieldName) {
+        try {
+            return target.getClass().getField(fieldName).get(target);
+        } catch (NoSuchFieldException | IllegalAccessException exception) {
+            throw new IllegalStateException(exception);
         }
     }
 

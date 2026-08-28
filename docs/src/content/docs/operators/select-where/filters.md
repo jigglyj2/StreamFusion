@@ -80,6 +80,11 @@ Supported comparisons and null checks can be recursively composed with `AND`, `O
 `NOT`. StreamFusion preserves SQL's three-valued boolean logic: true, false, and unknown
 remain distinct throughout the expression, and `WHERE` retains only true rows.
 
+`BETWEEN`, `NOT BETWEEN`, `IN`, and `NOT IN` are accelerated for direct `INT` columns and
+non-null integer literals. Flink represents these predicates as search-argument ranges;
+StreamFusion expands each bounded or unbounded range into the existing comparison tree.
+Lists containing `NULL` and search arguments over other types currently fall back.
+
 A direct `BOOLEAN` column is also a supported condition, including inside a compound
 tree or beneath `NOT`. Nullable boolean columns preserve unknown rather than coercing
 null to false within the expression. Comparisons such as `flag = TRUE`, `TRUE = flag`,
