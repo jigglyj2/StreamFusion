@@ -178,6 +178,10 @@ dynamic scalar values, arrays, or rows. Java serializes each element independent
 lowers the constructor to DataFusion's vectorized `make_array`; no materialized collection is
 sent through protobuf. Empty constructors remain on Flink with an EXPLAIN reason because
 DataFusion's untyped `List<Null>` result cannot preserve Flink's declared element type.
+`ARRAY_EXCEPT` is accelerated for compatible array inputs, including arrays of nested rows and
+native `ARRAY[...]` constructors. It preserves the first occurrence of each left-side value not
+present on the right, treats null as a comparable set value, removes duplicates, and returns null
+if either array is null. Rust lowers it directly to DataFusion's vectorized difference kernel.
 
 Rust lowers `COALESCE` to DataFusion's vectorized `CaseExpr`: each argument except the last
 becomes an `IS NOT NULL` branch and the last argument is the fallback value.
