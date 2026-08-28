@@ -105,6 +105,8 @@ message Expression {
     Sine sine = 74;
     Cosine cosine = 75;
     Tangent tangent = 76;
+    HyperbolicSine hyperbolic_sine = 77;
+    HyperbolicTangent hyperbolic_tangent = 78;
   }
 }
 
@@ -288,6 +290,14 @@ message Cosine {
 }
 
 message Tangent {
+  Expression operand = 1;
+}
+
+message HyperbolicSine {
+  Expression operand = 1;
+}
+
+message HyperbolicTangent {
   Expression operand = 1;
 }
 

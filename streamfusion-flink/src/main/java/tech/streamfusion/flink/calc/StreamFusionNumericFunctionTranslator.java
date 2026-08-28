@@ -20,6 +20,8 @@ import tech.streamfusion.proto.plan.v1.DoubleLiteral;
 import tech.streamfusion.proto.plan.v1.Exponential;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.Floor;
+import tech.streamfusion.proto.plan.v1.HyperbolicSine;
+import tech.streamfusion.proto.plan.v1.HyperbolicTangent;
 import tech.streamfusion.proto.plan.v1.Sign;
 import tech.streamfusion.proto.plan.v1.Sine;
 import tech.streamfusion.proto.plan.v1.SquareRoot;
@@ -28,6 +30,13 @@ import tech.streamfusion.proto.plan.v1.Tangent;
 /** Translates numeric scalar functions into the native expression protocol. */
 final class StreamFusionNumericFunctionTranslator extends StreamFusionRexSupport {
     private StreamFusionNumericFunctionTranslator() {}
+
+    static String failureReason(Object expression) {
+        if ("COSH".equals(functionName(expression))) {
+            return "COSH stays on Flink because DataFusion differs from Flink by one ULP for finite DOUBLE inputs";
+        }
+        return null;
+    }
 
     static Expression translate(Object expression, RowType inputType, LogicalType expectedType) {
         if (!hasNoArgMethod(expression, "getOperands")) {
@@ -65,6 +74,12 @@ final class StreamFusionNumericFunctionTranslator extends StreamFusionRexSupport
             }
             if ("TAN".equals(function)) {
                 return unary(expression, inputType, expectedType, UnaryKind.TANGENT);
+            }
+            if ("SINH".equals(function)) {
+                return unary(expression, inputType, expectedType, UnaryKind.HYPERBOLIC_SINE);
+            }
+            if ("TANH".equals(function)) {
+                return unary(expression, inputType, expectedType, UnaryKind.HYPERBOLIC_TANGENT);
             }
         }
         if (("PI".equals(function) || "E".equals(function))
@@ -110,6 +125,13 @@ final class StreamFusionNumericFunctionTranslator extends StreamFusionRexSupport
             case TANGENT:
                 return result.setTangent(Tangent.newBuilder().setOperand(operand))
                         .build();
+            case HYPERBOLIC_SINE:
+                return result.setHyperbolicSine(HyperbolicSine.newBuilder().setOperand(operand))
+                        .build();
+            case HYPERBOLIC_TANGENT:
+                return result.setHyperbolicTangent(
+                                HyperbolicTangent.newBuilder().setOperand(operand))
+                        .build();
             default:
                 throw new IllegalStateException("Unknown numeric unary function " + kind);
         }
@@ -145,6 +167,8 @@ final class StreamFusionNumericFunctionTranslator extends StreamFusionRexSupport
         EXPONENTIAL,
         SINE,
         COSINE,
-        TANGENT
+        TANGENT,
+        HYPERBOLIC_SINE,
+        HYPERBOLIC_TANGENT
     }
 }

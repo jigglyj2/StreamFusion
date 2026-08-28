@@ -182,6 +182,20 @@ pub(super) fn create_expression(
                 .ok_or_else(|| DataFusionError::Plan("TAN operand is empty".to_string()))?;
             expressions::tangent::create(create_expression(operand, schema)?, schema)
         }
+        Some(proto::expression::Expression::HyperbolicSine(sine)) => {
+            let operand = sine
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("SINH operand is empty".to_string()))?;
+            expressions::hyperbolic_sine::create(create_expression(operand, schema)?, schema)
+        }
+        Some(proto::expression::Expression::HyperbolicTangent(tangent)) => {
+            let operand = tangent
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("TANH operand is empty".to_string()))?;
+            expressions::hyperbolic_tangent::create(create_expression(operand, schema)?, schema)
+        }
         Some(proto::expression::Expression::CharacterLength(character_length)) => {
             let operand = character_length
                 .operand

@@ -35,6 +35,8 @@ pub(crate) mod conditional;
 pub(crate) mod cosine;
 pub(crate) mod exponential;
 pub(crate) mod floor;
+pub(crate) mod hyperbolic_sine;
+pub(crate) mod hyperbolic_tangent;
 pub(crate) mod like;
 pub(crate) mod lower;
 pub(crate) mod map_constructor;
