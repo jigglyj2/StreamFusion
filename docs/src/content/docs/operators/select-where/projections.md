@@ -48,6 +48,8 @@ Lossless signed-integer widening projections are accelerated: `TINYINT` to `SMAL
 Exactly representable integer-to-floating projections are accelerated: `TINYINT` and
 `SMALLINT` to `FLOAT` or `DOUBLE`, and `INT` to `DOUBLE`. `INT` to `FLOAT` and casts from
 `BIGINT` to floating-point types remain on Flink because they can round integer values.
+`FLOAT` to `DOUBLE` is also accelerated and preserves every finite value, signed zero,
+infinity, and NaN. The narrowing `DOUBLE` to `FLOAT` cast remains on Flink.
 Constant `TIME` values preserve their declared precision and millisecond-of-day value.
 Constant `TIMESTAMP WITHOUT TIME ZONE` values preserve their local calendar value and
 sub-millisecond nanoseconds without applying a session or JVM timezone.

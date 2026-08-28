@@ -184,6 +184,34 @@ class ArrowCDataBridgeTest {
     }
 
     @Test
+    void widensFloatToDoubleWithJavaCastParity() {
+        RowType inputType = RowType.of(new FloatType(false));
+        RowType outputType = RowType.of(new DoubleType(false));
+        List<Float> values = List.of(
+                Float.NEGATIVE_INFINITY,
+                -Float.MAX_VALUE,
+                -0.0f,
+                0.0f,
+                Float.MIN_VALUE,
+                Float.MAX_VALUE,
+                Float.POSITIVE_INFINITY,
+                Float.NaN);
+        List<RowData> rows = values.stream()
+                .map(value -> (RowData) GenericRowData.of(value))
+                .collect(java.util.stream.Collectors.toList());
+
+        try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+                ArrowRowDataBatch input = ArrowRowDataBatch.transpose(rows, inputType, allocator);
+                ArrowRowDataBatch output =
+                        ArrowCDataBridge.execute(floatToDoublePlan(), input, outputType, allocator)) {
+            for (int index = 0; index < values.size(); index++) {
+                assertThat(Double.doubleToLongBits(output.rowView(index).getDouble(0)))
+                        .isEqualTo(Double.doubleToLongBits((double) values.get(index)));
+            }
+        }
+    }
+
+    @Test
     void importsAnEmptyNativeResultWithoutLeakingItsSchemaOrBuffers() {
         RowType rowType = RowType.of(new IntType(false));
 
@@ -543,6 +571,20 @@ class ArrowCDataBridgeTest {
                 2,
                 LogicalType.newBuilder().setDouble(EmptyType.getDefaultInstance()),
                 CastKind.CAST_KIND_INTEGER_TO_DOUBLE);
+        return NativePlan.newBuilder()
+                .setProtocolVersion(1)
+                .setRoot(Operator.newBuilder().setCalc(calc))
+                .build()
+                .toByteArray();
+    }
+
+    private static byte[] floatToDoublePlan() {
+        Calc.Builder calc = Calc.newBuilder().setInput(Operator.newBuilder().setInput(Input.newBuilder()));
+        addCast(
+                calc,
+                0,
+                LogicalType.newBuilder().setDouble(EmptyType.getDefaultInstance()),
+                CastKind.CAST_KIND_FLOAT_TO_DOUBLE);
         return NativePlan.newBuilder()
                 .setProtocolVersion(1)
                 .setRoot(Operator.newBuilder().setCalc(calc))

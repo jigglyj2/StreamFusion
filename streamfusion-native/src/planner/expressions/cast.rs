@@ -45,6 +45,7 @@ fn approved_types(kind: proto::CastKind) -> Result<(DataType, DataType)> {
         proto::CastKind::SmallintToFloat => Ok((DataType::Int16, DataType::Float32)),
         proto::CastKind::SmallintToDouble => Ok((DataType::Int16, DataType::Float64)),
         proto::CastKind::IntegerToDouble => Ok((DataType::Int32, DataType::Float64)),
+        proto::CastKind::FloatToDouble => Ok((DataType::Float32, DataType::Float64)),
         proto::CastKind::Unspecified => Err(DataFusionError::Plan(
             "cast kind is unspecified or unknown".to_string(),
         )),
