@@ -76,4 +76,24 @@ class ComputedArrayTransformationUnnestParityTest extends SqlParityTestSupport {
                 .isEqualTo(1);
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
+
+    @Test
+    void nativeUnnestEvaluatesArrayRemoveInsideTheSamePlan() throws Exception {
+        assertDataStreamParity(
+                "SELECT item, ord_idx FROM array_remove_unnest_input "
+                        + "LEFT JOIN UNNEST(ARRAY_REMOVE(metric, 2)) WITH ORDINALITY "
+                        + "AS expanded(item, ord_idx) ON TRUE",
+                Types.OBJECT_ARRAY(Types.INT),
+                DataTypes.ARRAY(DataTypes.INT()),
+                Arrays.asList(
+                        Row.of((Object) new Integer[] {2, null, 1, 2}),
+                        Row.of((Object) new Integer[] {}),
+                        Row.of((Object) null)),
+                "array_remove_unnest_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isEqualTo(1);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
 }
