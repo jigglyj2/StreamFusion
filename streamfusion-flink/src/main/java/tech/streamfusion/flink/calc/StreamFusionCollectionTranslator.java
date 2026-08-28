@@ -15,6 +15,7 @@ import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.MapType;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.proto.plan.v1.ArrayAppend;
+import tech.streamfusion.proto.plan.v1.ArrayConcat;
 import tech.streamfusion.proto.plan.v1.ArrayContains;
 import tech.streamfusion.proto.plan.v1.ArrayPrepend;
 import tech.streamfusion.proto.plan.v1.ArrayReverse;
@@ -150,6 +151,29 @@ final class StreamFusionCollectionTranslator extends StreamFusionComplexTypeSupp
                         .setArrayPrepend(
                                 ArrayPrepend.newBuilder().setArray(array).setElement(element))
                         .build();
+    }
+
+    static Expression arrayConcat(Object expression, RowType inputType, LogicalType expectedType) {
+        if (!"ARRAY_CONCAT".equals(functionName(expression)) || !(expectedType instanceof ArrayType)) {
+            return null;
+        }
+        java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
+        if (operands.size() < 2) {
+            return null;
+        }
+        ArrayConcat.Builder concat = ArrayConcat.newBuilder();
+        for (Object operand : operands) {
+            // Flink's ARRAY_CONCAT type inference has already coerced every operand to
+            // the resolved common result type. Calcite does not expose a convertible
+            // logical type for every collection-valued call (notably nested calls), so
+            // use that authoritative common type while recursively translating them.
+            Expression array = StreamFusionProjectionTranslator.projectionExpression(operand, inputType, expectedType);
+            if (array == null) {
+                return null;
+            }
+            concat.addArrays(array);
+        }
+        return Expression.newBuilder().setArrayConcat(concat).build();
     }
 
     private static java.util.List<?> collectionAndElementOperands(

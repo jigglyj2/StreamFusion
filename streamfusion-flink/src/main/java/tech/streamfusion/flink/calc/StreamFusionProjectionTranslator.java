@@ -89,6 +89,10 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
         if (arrayPrepend != null) {
             return arrayPrepend;
         }
+        Expression arrayConcat = StreamFusionCollectionTranslator.arrayConcat(expression, inputType, expectedType);
+        if (arrayConcat != null) {
+            return arrayConcat;
+        }
         if (isNullLiteral(expression) && supportsNullLiteral(expectedType.getTypeRoot())) {
             return Expression.newBuilder()
                     .setNullLiteral(NullLiteral.newBuilder()

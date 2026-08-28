@@ -148,6 +148,14 @@ fn create_expression(
                 schema,
             )
         }
+        Some(proto::expression::Expression::ArrayConcat(concat)) => {
+            let arrays = concat
+                .arrays
+                .iter()
+                .map(|array| create_expression(array, schema))
+                .collect::<Result<Vec<_>>>()?;
+            expressions::array_concat::create(arrays, schema)
+        }
         Some(proto::expression::Expression::IntegerLiteral(literal)) => Ok(Arc::new(Literal::new(
             ScalarValue::Int32(Some(literal.value)),
         ))),

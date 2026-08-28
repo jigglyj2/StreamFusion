@@ -8,6 +8,7 @@
 
 pub(crate) mod absolute_value;
 pub(crate) mod array_append;
+pub(crate) mod array_concat;
 pub(crate) mod array_contains;
 pub(crate) mod array_element;
 pub(crate) mod array_prepend;

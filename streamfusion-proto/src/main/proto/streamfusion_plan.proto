@@ -74,6 +74,7 @@ message Expression {
     ArrayReverse array_reverse = 43;
     ArrayAppend array_append = 44;
     ArrayPrepend array_prepend = 45;
+    ArrayConcat array_concat = 46;
   }
 }
 
@@ -113,6 +114,10 @@ message ArrayAppend {
 message ArrayPrepend {
   Expression array = 1;
   Expression element = 2;
+}
+
+message ArrayConcat {
+  repeated Expression arrays = 1;
 }
 
 message Coalesce {
