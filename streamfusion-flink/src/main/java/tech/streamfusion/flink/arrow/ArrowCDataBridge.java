@@ -14,6 +14,8 @@ import org.apache.arrow.c.ArrowSchema;
 import org.apache.arrow.c.CDataDictionaryProvider;
 import org.apache.arrow.c.Data;
 import org.apache.arrow.memory.BufferAllocator;
+import org.apache.arrow.vector.FieldVector;
+import org.apache.arrow.vector.IntVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.nativebridge.NativeCalcBridge;
@@ -24,6 +26,31 @@ public final class ArrowCDataBridge {
 
     public static ArrowRowDataBatch execute(
             byte[] serializedPlan, ArrowRowDataBatch input, RowType outputType, BufferAllocator allocator) {
+        VectorSchemaRoot output = executeNative(serializedPlan, input, allocator);
+        return ArrowRowDataBatch.wrap(output, outputType);
+    }
+
+    public static NativeCalcResult executeWithSelection(
+            byte[] serializedPlan, ArrowRowDataBatch input, RowType outputType, BufferAllocator allocator) {
+        VectorSchemaRoot output = executeNative(serializedPlan, input, allocator);
+        int ordinalIndex = output.getFieldVectors().size() - 1;
+        FieldVector ordinalVector = output.getVector(ordinalIndex);
+        if (!(ordinalVector instanceof IntVector)) {
+            output.close();
+            throw new IllegalStateException("Native calc did not return its INT input-row ordinal");
+        }
+        int[] inputRows = new int[output.getRowCount()];
+        IntVector ordinals = (IntVector) ordinalVector;
+        for (int index = 0; index < inputRows.length; index++) {
+            inputRows[index] = ordinals.get(index);
+        }
+        VectorSchemaRoot visibleOutput = output.removeVector(ordinalIndex);
+        ordinalVector.close();
+        return new NativeCalcResult(ArrowRowDataBatch.wrap(visibleOutput, outputType), inputRows);
+    }
+
+    private static VectorSchemaRoot executeNative(
+            byte[] serializedPlan, ArrowRowDataBatch input, BufferAllocator allocator) {
         try (ArrowArray inputArray = ArrowArray.allocateNew(allocator);
                 ArrowSchema inputSchema = ArrowSchema.allocateNew(allocator);
                 ArrowArray outputArray = ArrowArray.allocateNew(allocator);
@@ -41,7 +68,7 @@ public final class ArrowCDataBridge {
             }
             VectorSchemaRoot output = Data.importVectorSchemaRoot(allocator, outputArray, outputSchema, dictionaries);
             output.setRowCount((int) rowCount);
-            return ArrowRowDataBatch.wrap(output, outputType);
+            return output;
         }
     }
 }

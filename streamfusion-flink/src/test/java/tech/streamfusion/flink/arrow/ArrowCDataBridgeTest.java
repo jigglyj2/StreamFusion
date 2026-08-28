@@ -69,6 +69,24 @@ import tech.streamfusion.proto.plan.v1.TruthTestOperator;
 
 class ArrowCDataBridgeTest {
     @Test
+    void returnsNativeFilterSelectionAsInputRowOrdinals() {
+        RowType inputType = RowType.of(new IntType(false));
+        RowType outputType = RowType.of(new IntType(false));
+        List<RowData> rows = List.of(GenericRowData.of(3), GenericRowData.of(1), GenericRowData.of(4));
+
+        try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+                ArrowRowDataBatch input = ArrowRowDataBatch.transpose(rows, inputType, allocator);
+                NativeCalcResult result =
+                        ArrowCDataBridge.executeWithSelection(selectionPlan(), input, outputType, allocator)) {
+            assertThat(result.batch().size()).isEqualTo(2);
+            assertThat(result.batch().rowView(0).getInt(0)).isEqualTo(3);
+            assertThat(result.batch().rowView(1).getInt(0)).isEqualTo(4);
+            assertThat(result.inputRow(0)).isEqualTo(0);
+            assertThat(result.inputRow(1)).isEqualTo(2);
+        }
+    }
+
+    @Test
     void transfersRebasedNestedBatchThroughDataFusionAndBackToRowData() {
         RowType inputType = RowType.of(
                 new IntType(false), new VarCharType(), new DecimalType(10, 2), new ArrayType(new VarCharType()));
@@ -598,6 +616,36 @@ class ArrowCDataBridgeTest {
                                 .setRight(Expression.newBuilder()
                                         .setIntegerLiteral(
                                                 IntegerLiteral.newBuilder().setValue(minimum)))))
+                .build();
+        return NativePlan.newBuilder()
+                .setProtocolVersion(1)
+                .setRoot(Operator.newBuilder().setCalc(calc))
+                .build()
+                .toByteArray();
+    }
+
+    private static byte[] selectionPlan() {
+        LogicalType integer = LogicalType.newBuilder()
+                .setNullable(false)
+                .setInteger(EmptyType.getDefaultInstance())
+                .build();
+        Expression value = Expression.newBuilder()
+                .setInputReference(InputReference.newBuilder().setIndex(0).setType(integer))
+                .build();
+        Expression ordinal = Expression.newBuilder()
+                .setInputReference(InputReference.newBuilder().setIndex(1).setType(integer))
+                .build();
+        Calc calc = Calc.newBuilder()
+                .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
+                .addProjections(value)
+                .addProjections(ordinal)
+                .setCondition(Expression.newBuilder()
+                        .setComparison(Comparison.newBuilder()
+                                .setLeft(value)
+                                .setRight(Expression.newBuilder()
+                                        .setIntegerLiteral(
+                                                IntegerLiteral.newBuilder().setValue(2)))
+                                .setOperator(ComparisonOperator.COMPARISON_OPERATOR_GREATER_THAN)))
                 .build();
         return NativePlan.newBuilder()
                 .setProtocolVersion(1)

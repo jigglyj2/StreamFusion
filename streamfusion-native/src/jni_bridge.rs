@@ -6,7 +6,10 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-use arrow::array::{Array, RecordBatch, StructArray};
+use std::sync::Arc;
+
+use arrow::array::{Array, Int32Array, RecordBatch, StructArray};
+use arrow::datatypes::{DataType, Field, Schema};
 use arrow::ffi::{from_ffi, FFI_ArrowArray, FFI_ArrowSchema};
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::physical_plan::collect;
@@ -77,6 +80,23 @@ unsafe fn execute_arrow(
     let ffi_schema = unsafe { FFI_ArrowSchema::from_raw(input_schema_address) };
     let input_data = unsafe { from_ffi(ffi_array, &ffi_schema) }?;
     let input_batch = RecordBatch::from(StructArray::from(input_data));
+    let row_count = input_batch.num_rows();
+    let mut fields = input_batch
+        .schema()
+        .fields()
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    fields.push(Arc::new(Field::new(
+        "__streamfusion_input_row",
+        DataType::Int32,
+        false,
+    )));
+    let mut columns = input_batch.columns().to_vec();
+    columns.push(Arc::new(Int32Array::from_iter_values(
+        (0..row_count).map(|index| index as i32),
+    )));
+    let input_batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)?;
     let schema = input_batch.schema();
     let source = MemorySourceConfig::try_new_exec(&[vec![input_batch]], schema, None)?;
     let plan = create_plan(plan, source)?;

@@ -22,6 +22,7 @@ import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.types.RowKind;
 import tech.streamfusion.flink.arrow.ArrowCDataBridge;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
+import tech.streamfusion.flink.arrow.NativeCalcResult;
 import tech.streamfusion.proto.plan.v1.Calc;
 import tech.streamfusion.proto.plan.v1.DecimalType;
 import tech.streamfusion.proto.plan.v1.EmptyType;
@@ -79,23 +80,18 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
         if (rows.isEmpty()) {
             return;
         }
-        List<RowKind> outputRowKinds = new ArrayList<>(rows.size());
-        for (int index = 0; index < rows.size(); index++) {
-            if (condition == null || condition.test(rows.get(index))) {
-                outputRowKinds.add(rowKinds.get(index));
-            }
-        }
         try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
                 ArrowRowDataBatch inputBatch = ArrowRowDataBatch.transpose(rows, inputType, allocator);
-                ArrowRowDataBatch outputBatch =
-                        ArrowCDataBridge.execute(serializedPlan, inputBatch, outputType, allocator)) {
-            if (outputBatch.size() != outputRowKinds.size()) {
-                throw new IllegalStateException(
-                        "Native calc returned " + outputBatch.size() + " rows, expected " + outputRowKinds.size());
-            }
+                NativeCalcResult nativeResult =
+                        ArrowCDataBridge.executeWithSelection(serializedPlan, inputBatch, outputType, allocator)) {
+            ArrowRowDataBatch outputBatch = nativeResult.batch();
             for (int index = 0; index < outputBatch.size(); index++) {
                 RowData row = outputBatch.rowView(index);
-                row.setRowKind(outputRowKinds.get(index));
+                int inputRow = nativeResult.inputRow(index);
+                if (inputRow < 0 || inputRow >= rowKinds.size()) {
+                    throw new IllegalStateException("Native calc returned invalid input-row ordinal " + inputRow);
+                }
+                row.setRowKind(rowKinds.get(inputRow));
                 output.collect(new StreamRecord<>(row));
             }
         }
@@ -106,6 +102,8 @@ final class StreamFusionIdentityCalcOperator extends AbstractStreamOperator<RowD
     private static byte[] createPlan(RowType inputType, List<Expression> projections, StreamFusionCondition condition) {
         Calc.Builder calc = Calc.newBuilder().setInput(Operator.newBuilder().setInput(Input.newBuilder()));
         calc.addAllProjections(projections);
+        calc.addProjections(inputReference(
+                inputType.getFieldCount(), logicalType(new org.apache.flink.table.types.logical.IntType(false))));
         if (condition != null) {
             calc.setCondition(condition.expression());
         }
