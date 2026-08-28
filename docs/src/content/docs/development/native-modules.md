@@ -54,7 +54,7 @@ modeled on the ADBC driver interface:
 - Creation, cancellation, close, and release functions have explicit ownership and
   idempotency rules.
 - The host supplies memory reservation/release callbacks so every component remains
-  inside the [Flink-governed memory budget](./memory-and-configuration/).
+  inside the [Flink-governed memory budget](../memory-and-configuration/).
 
 The ABI definition should live in a small dependency-free interface artifact shared
 by the native runtime and optional modules. It must be compatibility-tested against

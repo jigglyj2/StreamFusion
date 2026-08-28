@@ -33,7 +33,7 @@ accelerated, as are constant `DATE` values, including dates before the Unix epoc
 Unary minus is accelerated for the same numeric types.
 Boolean projections can recursively compose direct boolean columns and constants with
 `NOT`, `AND`, and `OR` using SQL's three-valued logic. Every comparison and null-check
-shape listed on the [filter coverage page](./filters/) can also be projected as a boolean
+shape listed on the [filter coverage page](../filters/) can also be projected as a boolean
 value instead of being used by `WHERE`.
 Null-safe `IS TRUE`, `IS FALSE`, `IS NOT TRUE`, and `IS NOT FALSE` expressions are
 accelerated and always produce a non-null boolean result.

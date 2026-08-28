@@ -6,7 +6,7 @@ hero:
   tagline: Accelerating Flink SQL execution with Apache DataFusion while preserving Flink's planner, runtime, and fault-tolerance model.
   actions:
     - text: Understand the architecture
-      link: /architecture/
+      link: /StreamFusion/architecture/
       icon: right-arrow
       variant: primary
     - text: View on GitHub
