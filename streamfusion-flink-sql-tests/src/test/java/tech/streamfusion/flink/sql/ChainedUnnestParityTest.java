@@ -84,4 +84,24 @@ class ChainedUnnestParityTest extends SqlParityTestSupport {
                 .isEqualTo(1);
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
+
+    @Test
+    void adjacentLeftArrayUnnestsPreserveEachEmptyLevelInOneNativePlan() throws Exception {
+        assertDataStreamParity(
+                "SELECT outer_pos, item, inner_pos FROM chained_left_unnest_input "
+                        + "LEFT JOIN UNNEST(metric) WITH ORDINALITY AS outer_values(inner_array, outer_pos) ON TRUE "
+                        + "LEFT JOIN UNNEST(inner_array) WITH ORDINALITY AS inner_values(item, inner_pos) ON TRUE",
+                Types.OBJECT_ARRAY(Types.OBJECT_ARRAY(Types.INT)),
+                DataTypes.ARRAY(DataTypes.ARRAY(DataTypes.INT())),
+                Arrays.asList(
+                        Row.of((Object) new Integer[][] {{1, null}, {}, {3}}),
+                        Row.of((Object) new Integer[][] {}),
+                        Row.of((Object) null)),
+                "chained_left_unnest_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isEqualTo(1);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
 }
