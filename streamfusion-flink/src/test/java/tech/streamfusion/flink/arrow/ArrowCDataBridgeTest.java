@@ -298,6 +298,35 @@ class ArrowCDataBridgeTest {
     }
 
     @Test
+    void roundsWideIntegersToFloatingPointWithFlinkParity() {
+        RowType inputType = RowType.of(new IntType(false), new BigIntType(false));
+        RowType outputType = RowType.of(new FloatType(false), new FloatType(false), new DoubleType(false));
+        List<RowData> rows = List.of(
+                GenericRowData.of(Integer.MIN_VALUE, Long.MIN_VALUE),
+                GenericRowData.of(-16_777_217, -9_007_199_254_740_993L),
+                GenericRowData.of(-16_777_216, -9_007_199_254_740_992L),
+                GenericRowData.of(0, 0L),
+                GenericRowData.of(16_777_216, 9_007_199_254_740_992L),
+                GenericRowData.of(16_777_217, 9_007_199_254_740_993L),
+                GenericRowData.of(Integer.MAX_VALUE, Long.MAX_VALUE));
+
+        try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+                ArrowRowDataBatch input = ArrowRowDataBatch.transpose(rows, inputType, allocator);
+                ArrowRowDataBatch output =
+                        ArrowCDataBridge.execute(wideIntegerToFloatingPlan(), input, outputType, allocator)) {
+            for (int index = 0; index < rows.size(); index++) {
+                RowData inputRow = rows.get(index);
+                assertThat(Float.floatToIntBits(output.rowView(index).getFloat(0)))
+                        .isEqualTo(Float.floatToIntBits((float) inputRow.getInt(0)));
+                assertThat(Float.floatToIntBits(output.rowView(index).getFloat(1)))
+                        .isEqualTo(Float.floatToIntBits((float) inputRow.getLong(1)));
+                assertThat(Double.doubleToLongBits(output.rowView(index).getDouble(2)))
+                        .isEqualTo(Double.doubleToLongBits((double) inputRow.getLong(1)));
+            }
+        }
+    }
+
+    @Test
     void importsAnEmptyNativeResultWithoutLeakingItsSchemaOrBuffers() {
         RowType rowType = RowType.of(new IntType(false));
 
@@ -728,6 +757,30 @@ class ArrowCDataBridgeTest {
                 0,
                 LogicalType.newBuilder().setInteger(EmptyType.getDefaultInstance()),
                 CastKind.CAST_KIND_BIGINT_TO_INTEGER);
+        return NativePlan.newBuilder()
+                .setProtocolVersion(1)
+                .setRoot(Operator.newBuilder().setCalc(calc))
+                .build()
+                .toByteArray();
+    }
+
+    private static byte[] wideIntegerToFloatingPlan() {
+        Calc.Builder calc = Calc.newBuilder().setInput(Operator.newBuilder().setInput(Input.newBuilder()));
+        addCast(
+                calc,
+                0,
+                LogicalType.newBuilder().setFloat(EmptyType.getDefaultInstance()),
+                CastKind.CAST_KIND_INTEGER_TO_FLOAT);
+        addCast(
+                calc,
+                1,
+                LogicalType.newBuilder().setFloat(EmptyType.getDefaultInstance()),
+                CastKind.CAST_KIND_BIGINT_TO_FLOAT);
+        addCast(
+                calc,
+                1,
+                LogicalType.newBuilder().setDouble(EmptyType.getDefaultInstance()),
+                CastKind.CAST_KIND_BIGINT_TO_DOUBLE);
         return NativePlan.newBuilder()
                 .setProtocolVersion(1)
                 .setRoot(Operator.newBuilder().setCalc(calc))

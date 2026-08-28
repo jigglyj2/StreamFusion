@@ -45,9 +45,9 @@ and divisor restriction. A planner representation that wraps a negative `BIGINT`
 in a cast or unary expression falls back because it is no longer a direct literal.
 Lossless signed-integer widening projections are accelerated: `TINYINT` to `SMALLINT`,
 `INT`, or `BIGINT`; `SMALLINT` to `INT` or `BIGINT`; and `INT` to `BIGINT`.
-Exactly representable integer-to-floating projections are accelerated: `TINYINT` and
-`SMALLINT` to `FLOAT` or `DOUBLE`, and `INT` to `DOUBLE`. `INT` to `FLOAT` and casts from
-`BIGINT` to floating-point types remain on Flink because they can round integer values.
+Integer-to-floating projections are accelerated for every signed integer source and
+`FLOAT` or `DOUBLE` target. Wider integer inputs use the same IEEE-754 rounding as Flink;
+parity coverage includes the `FLOAT` and `DOUBLE` precision cliffs and integer extrema.
 `FLOAT` to `DOUBLE` is also accelerated and preserves every finite value, signed zero,
 infinity, and NaN. The narrowing `DOUBLE` to `FLOAT` cast remains on Flink.
 `SMALLINT` to `TINYINT`, `INT` to `TINYINT` or `SMALLINT`, and `BIGINT` to
