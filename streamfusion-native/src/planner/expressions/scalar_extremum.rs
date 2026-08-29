@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::{DataType, Schema, TimeUnit};
 use datafusion::common::config::ConfigOptions;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::Operator;
@@ -27,7 +27,14 @@ pub(crate) fn create(
     let data_type = first.data_type(schema)?;
     if !matches!(
         data_type,
-        DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 | DataType::Date32
+        DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::Date32
+            | DataType::Time32(TimeUnit::Second | TimeUnit::Millisecond)
+            | DataType::Time64(TimeUnit::Microsecond | TimeUnit::Nanosecond)
+            | DataType::Timestamp(_, None)
     ) {
         return Err(DataFusionError::Plan(
             "GREATEST/LEAST requires one parity-approved type for every argument".to_string(),
