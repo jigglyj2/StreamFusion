@@ -176,6 +176,7 @@ message Expression {
     StringSplitIndex string_split_index = 103;
     BinaryString binary_string = 104;
     Unhex unhex = 105;
+    UrlEncode url_encode = 106;
   }
 }
 
@@ -496,6 +497,10 @@ message BinaryString {
 }
 
 message Unhex {
+  Expression operand = 1;
+}
+
+message UrlEncode {
   Expression operand = 1;
 }
 

@@ -91,4 +91,5 @@ pub(crate) mod substring;
 pub(crate) mod tangent;
 pub(crate) mod unhex;
 pub(crate) mod upper;
+pub(crate) mod url_encode;
 mod wrapping_cast;

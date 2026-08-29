@@ -382,6 +382,11 @@ dedicated native vector expression accepts upper- or lowercase ASCII hexadecimal
 null for invalid input, and preserves Flink's unusual odd-length rule: the leading digit is
 validated but represented by a zero byte. Empty input produces an empty byte array and null input
 remains null. Fixed-width `CHAR` values remain on Flink pending padding parity coverage.
+`URL_ENCODE(value)` is accelerated for `VARCHAR` expressions using a dedicated vectorized form
+encoder. It matches Java's `application/x-www-form-urlencoded` rules used by Flink: spaces become
+`+`, ASCII letters, digits, `.`, `-`, `*`, and `_` remain literal, and every other UTF-8 byte uses
+uppercase percent encoding. Empty strings and nulls preserve Flink behavior. Fixed-width `CHAR`
+values remain on Flink pending padding parity coverage.
 `STR_TO_MAP` remains on Flink. Flink treats both separators as Java regular expressions, whereas
 DataFusion's similarly named Spark function performs literal delimiter matching; using it would
 produce different keys for valid Flink expressions. StreamFusion reports this distinction in
