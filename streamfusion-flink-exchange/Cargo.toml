@@ -8,3 +8,6 @@ publish = false
 
 [lib]
 crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+arrow = "59.2.0"
