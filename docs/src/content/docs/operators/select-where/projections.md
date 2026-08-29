@@ -405,6 +405,11 @@ UTF-8 with Java-compatible replacement for malformed byte sequences, and returns
 incomplete or non-hex escape. Literal Unicode remains outside adjacent escape-run decoding, as in
 Java's `URLDecoder`. Empty strings and nulls preserve Flink behavior; fixed-width `CHAR` remains on
 Flink pending padding parity coverage.
+`ENCODE(value, charset)` and `DECODE(value, charset)` remain on Flink. Their charset aliases,
+installed providers, malformed-input replacement, and unsupported-charset failures are defined by
+the running JVM. StreamFusion reports that environment-dependent contract in `EXPLAIN` until a
+native implementation is proven against the complete Java `Charset` behavior, rather than
+supporting only a convenient list of encodings.
 `JSON_QUOTE(value)` is accelerated for `VARCHAR` expressions by a dedicated native vector
 expression. It wraps the value in quotes, escapes Flink's ASCII quote, backslash, slash, and control
 characters, and emits lowercase `\\u` escapes for every non-ASCII UTF-16 code unit. StreamFusion
