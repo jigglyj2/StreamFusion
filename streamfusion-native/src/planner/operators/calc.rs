@@ -505,6 +505,13 @@ pub(super) fn create_expression(
                 .ok_or_else(|| DataFusionError::Plan("URL_DECODE operand is empty".to_string()))?;
             expressions::url_decode::create(create_expression(operand, schema)?, schema)
         }
+        Some(proto::expression::Expression::JsonQuote(json_quote)) => {
+            let operand = json_quote
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("JSON_QUOTE operand is empty".to_string()))?;
+            expressions::json_quote::create(create_expression(operand, schema)?, schema)
+        }
         Some(proto::expression::Expression::Substring(substring)) => {
             let operand = substring
                 .operand

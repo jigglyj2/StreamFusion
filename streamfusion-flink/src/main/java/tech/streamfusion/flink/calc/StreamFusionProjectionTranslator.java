@@ -238,6 +238,10 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
         if (urlFunction != null) {
             return urlFunction;
         }
+        Expression jsonFunction = StreamFusionJsonFunctionTranslator.translate(expression, inputType, expectedType);
+        if (jsonFunction != null) {
+            return jsonFunction;
+        }
         Expression arrayDistinct =
                 StreamFusionCollectionSetTranslator.arrayDistinct(expression, inputType, expectedType);
         if (arrayDistinct != null) {

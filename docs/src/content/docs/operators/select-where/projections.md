@@ -393,6 +393,12 @@ UTF-8 with Java-compatible replacement for malformed byte sequences, and returns
 incomplete or non-hex escape. Literal Unicode remains outside adjacent escape-run decoding, as in
 Java's `URLDecoder`. Empty strings and nulls preserve Flink behavior; fixed-width `CHAR` remains on
 Flink pending padding parity coverage.
+`JSON_QUOTE(value)` is accelerated for `VARCHAR` expressions by a dedicated native vector
+expression. It wraps the value in quotes, escapes Flink's ASCII quote, backslash, slash, and control
+characters, and emits lowercase `\\u` escapes for every non-ASCII UTF-16 code unit. StreamFusion
+intentionally preserves Flink 2.3's supplementary-character quirk: the high-surrogate position
+emits the full code point and the low surrogate is then escaped again. Nulls remain null;
+fixed-width `CHAR` stays on Flink pending padding parity coverage.
 `STR_TO_MAP` remains on Flink. Flink treats both separators as Java regular expressions, whereas
 DataFusion's similarly named Spark function performs literal delimiter matching; using it would
 produce different keys for valid Flink expressions. StreamFusion reports this distinction in

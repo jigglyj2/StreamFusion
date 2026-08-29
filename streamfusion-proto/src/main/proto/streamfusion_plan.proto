@@ -178,6 +178,7 @@ message Expression {
     Unhex unhex = 105;
     UrlEncode url_encode = 106;
     UrlDecode url_decode = 107;
+    JsonQuote json_quote = 108;
   }
 }
 
@@ -506,6 +507,10 @@ message UrlEncode {
 }
 
 message UrlDecode {
+  Expression operand = 1;
+}
+
+message JsonQuote {
   Expression operand = 1;
 }
 
