@@ -20,6 +20,12 @@ import tech.streamfusion.proto.plan.v1.JsonQuote;
 final class StreamFusionJsonFunctionTranslator extends StreamFusionComplexTypeSupport {
     private StreamFusionJsonFunctionTranslator() {}
 
+    static String failureReason(Object expression) {
+        return "JSON_UNQUOTE".equals(functionName(expression))
+                ? "JSON_UNQUOTE stays on Flink because its pass-through behavior depends on Flink's shaded Jackson JSON validator and has not been proven identical to a native validator"
+                : null;
+    }
+
     static Expression translate(Object expression, RowType inputType, LogicalType expectedType) {
         if (!"JSON_QUOTE".equals(functionName(expression)) || expectedType.getTypeRoot() != LogicalTypeRoot.VARCHAR) {
             return null;

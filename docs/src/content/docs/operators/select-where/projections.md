@@ -399,6 +399,10 @@ characters, and emits lowercase `\\u` escapes for every non-ASCII UTF-16 code un
 intentionally preserves Flink 2.3's supplementary-character quirk: the high-surrogate position
 emits the full code point and the low surrogate is then escaped again. Nulls remain null;
 fixed-width `CHAR` stays on Flink pending padding parity coverage.
+`JSON_UNQUOTE` remains on Flink. It validates the complete input with Flink's shaded Jackson
+configuration, unescapes only valid quoted JSON strings, and returns invalid JSON unchanged. No
+native validator has yet been proven to accept and reject exactly the same edge cases, so
+StreamFusion reports that dependency in `EXPLAIN` rather than approximating pass-through behavior.
 `STR_TO_MAP` remains on Flink. Flink treats both separators as Java regular expressions, whereas
 DataFusion's similarly named Spark function performs literal delimiter matching; using it would
 produce different keys for valid Flink expressions. StreamFusion reports this distinction in
