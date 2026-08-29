@@ -24,6 +24,7 @@ import tech.streamfusion.proto.plan.v1.StringRepeat;
 import tech.streamfusion.proto.plan.v1.StringReplace;
 import tech.streamfusion.proto.plan.v1.StringReverse;
 import tech.streamfusion.proto.plan.v1.StringRight;
+import tech.streamfusion.proto.plan.v1.StringTranslate;
 import tech.streamfusion.proto.plan.v1.StringTrim;
 import tech.streamfusion.proto.plan.v1.StringTrimDirection;
 
@@ -329,6 +330,45 @@ final class StreamFusionStringFunctionTranslator extends StreamFusionComplexType
             }
         }
         return Expression.newBuilder().setStringConcatWs(concatWs).build();
+    }
+
+    static Expression translate(Object expression, RowType inputType, LogicalType expectedType) {
+        String function = functionName(expression);
+        if (!("TRANSLATE".equals(function) || "TRANSLATE3".equals(function))
+                || expectedType.getTypeRoot() != LogicalTypeRoot.VARCHAR) {
+            return null;
+        }
+        java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
+        if (operands.size() != 3) {
+            return null;
+        }
+        org.apache.flink.table.types.logical.VarCharType stringType =
+                new org.apache.flink.table.types.logical.VarCharType(
+                        org.apache.flink.table.types.logical.VarCharType.MAX_LENGTH);
+        StringTranslate.Builder translate = StringTranslate.newBuilder();
+        for (int index = 0; index < operands.size(); index++) {
+            Object operand = operands.get(index);
+            LogicalType operandType = logicalType(operand, inputType);
+            boolean characterLiteral = operandType != null
+                    && operandType.getTypeRoot() == LogicalTypeRoot.CHAR
+                    && literal(operand, String.class) != null;
+            if (operandType == null || (operandType.getTypeRoot() != LogicalTypeRoot.VARCHAR && !characterLiteral)) {
+                return null;
+            }
+            Expression argument = StreamFusionProjectionTranslator.projectionExpression(
+                    operand, inputType, characterLiteral ? stringType : operandType);
+            if (argument == null) {
+                return null;
+            }
+            if (index == 0) {
+                translate.setValue(argument);
+            } else if (index == 1) {
+                translate.setSourceCharacters(argument);
+            } else {
+                translate.setTargetCharacters(argument);
+            }
+        }
+        return Expression.newBuilder().setStringTranslate(translate).build();
     }
 
     private static StringTrimDirection trimDirection(String flag) {

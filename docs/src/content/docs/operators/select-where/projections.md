@@ -354,6 +354,12 @@ back because Flink's negative-position rule differs from DataFusion's PostgreSQL
 or computed search and replacement strings, repeated matches, Unicode text, empty strings, and
 null propagation. Binary strings and fixed-width `CHAR` remain on Flink pending their distinct
 type semantics.
+`TRANSLATE(value, source_characters, target_characters)` is accelerated for supported `VARCHAR`
+expressions. It uses DataFusion's vectorized Unicode code-point mapping, including Flink's
+first-mapping-wins rule for duplicate source characters and deletion when the target alphabet is
+shorter. StreamFusion converts a null target alphabet to empty before execution because Flink
+deletes matched characters in that case; null values or source alphabets retain Flink's result.
+Fixed-width `CHAR` columns remain on Flink pending padding coverage.
 `REPEAT(value, count)` is accelerated for supported `VARCHAR` values and `INTEGER` counts,
 including computed counts. StreamFusion widens the count inside the native plan for DataFusion's
 vectorized kernel; zero and negative counts produce the empty string as in Flink, while null

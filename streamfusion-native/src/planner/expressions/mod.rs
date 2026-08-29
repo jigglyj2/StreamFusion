@@ -81,6 +81,7 @@ pub(crate) mod string_repeat;
 pub(crate) mod string_replace;
 pub(crate) mod string_reverse;
 pub(crate) mod string_right;
+pub(crate) mod string_translate;
 pub(crate) mod string_trim;
 pub(crate) mod struct_field;
 pub(crate) mod substring;

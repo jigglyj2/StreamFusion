@@ -431,6 +431,24 @@ pub(super) fn create_expression(
                 schema,
             )
         }
+        Some(proto::expression::Expression::StringTranslate(translate)) => {
+            let value = translate
+                .value
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("TRANSLATE value is empty".to_string()))?;
+            let source_characters = translate.source_characters.as_ref().ok_or_else(|| {
+                DataFusionError::Plan("TRANSLATE source characters are empty".to_string())
+            })?;
+            let target_characters = translate.target_characters.as_ref().ok_or_else(|| {
+                DataFusionError::Plan("TRANSLATE target characters are empty".to_string())
+            })?;
+            expressions::string_translate::create(
+                create_expression(value, schema)?,
+                create_expression(source_characters, schema)?,
+                create_expression(target_characters, schema)?,
+                schema,
+            )
+        }
         Some(proto::expression::Expression::Substring(substring)) => {
             let operand = substring
                 .operand
