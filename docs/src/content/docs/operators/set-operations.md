@@ -19,8 +19,10 @@ SELECT bidder FROM web_bids;
 
 `UNION ALL` is eligible when every input has the same Flink logical row type and every
 internal operator in every branch is accelerated. It preserves duplicates, nulls,
-changelog records, and each record's `RowKind`. A rejected node in any branch causes the
-entire query to fall back under the normal all-or-nothing rule.
+changelog records, each record's `RowKind`, timestamps, and the order of records within
+each individual input. Flink does not define a stable ordering between different union
+inputs. A rejected node in any branch causes the entire query to fall back under the
+normal all-or-nothing rule.
 
 `UNION`/`UNION DISTINCT` is not accelerated because it adds deduplication. `INTERSECT`,
 `EXCEPT`, `IN`, and `EXISTS` also remain on Flink. Their equality, null, keyed-state,
@@ -29,16 +31,23 @@ unimplemented physical node that caused whole-plan fallback.
 
 ## Implementation
 
-Flink streaming `UNION ALL` is deliberately a zero-work topology operation rather than
-a runtime operator. StreamFusion replaces `StreamExecUnion` with the distinct
-`StreamFusionExecUnion` physical node, then preserves Flink's `UnionTransformation`.
-This lets Flink retain scheduling, watermark, checkpoint-barrier, and record-interleaving
-semantics without converting or copying rows. Native Calc chains in each input branch
-still execute normally at their own Arrow boundaries.
+The planner replaces `StreamExecUnion` with the distinct `StreamFusionExecUnion` node.
+Its Flink runtime is a non-keyed multiple-input operator: Flink still schedules and
+multiplexes the inputs, aligns checkpoint barriers, combines watermarks, and tracks input
+idleness. The operator transposes buffered rows from each input into Arrow batches and
+sends a versioned protobuf `Union` tree plus those batches through Arrow C Data. Rust
+binds each indexed protobuf `Input` to its corresponding Arrow batch and executes
+DataFusion `UnionExec`.
 
-StreamFusion does **not** lower streaming `UNION ALL` to DataFusion `UnionExec`, whose
-partition-at-a-time batch behavior is not Flink's streaming merge contract. Future
-bounded-only set operations may use DataFusion. Stateful streaming distinct,
-intersection, and difference require Flink-checkpointed native keyed state.
+The native union forwards the input batches' shared Arrow buffers; it does not serialize
+or copy complete batches between native children. A global input-row ordinal travels as
+a private Arrow column so the JVM boundary can restore each record's `RowKind` and
+timestamp after native execution. Buffered records are flushed before watermarks,
+watermark-status changes, record attributes, latency markers, checkpoint barriers, and
+end-of-input notifications. This keeps data ahead of the Flink control event that
+follows it and leaves recovery and coordination in Flink.
+
+Stateful streaming distinct, intersection, and difference require Flink-checkpointed
+native keyed state and remain unsupported.
 
 See the [Flink 2.3 Set operations documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/set-ops/).

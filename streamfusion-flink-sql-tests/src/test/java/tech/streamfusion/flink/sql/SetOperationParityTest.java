@@ -11,8 +11,11 @@ package tech.streamfusion.flink.sql;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.List;
+import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
+import org.apache.flink.types.Row;
 import org.junit.jupiter.api.Test;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
 
@@ -27,6 +30,19 @@ class SetOperationParityTest extends SqlParityTestSupport {
         assertParity(LEFT + " UNION ALL " + RIGHT, true);
 
         assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThanOrEqualTo(2);
+        assertThat(StreamFusionPlannerFactory.nativeUnionBatchCount()).isGreaterThan(0);
+    }
+
+    @Test
+    void threeWayUnionAllPreservesDuplicatesAndNullsByteForByte() throws Exception {
+        String branch = "SELECT metric FROM union_input";
+        assertDataStreamParity(
+                branch + " UNION ALL " + branch + " UNION ALL " + branch,
+                Types.INT,
+                List.of(Row.of(1), Row.of(1), Row.of(2), Row.of((Object) null)),
+                "union_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeUnionBatchCount()).isGreaterThan(0);
     }
 
     @Test

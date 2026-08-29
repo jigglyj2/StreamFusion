@@ -9,11 +9,12 @@
  */
 package tech.streamfusion.flink.planner;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
 import org.apache.flink.api.dag.Transformation;
 import org.apache.flink.configuration.ReadableConfig;
-import org.apache.flink.streaming.api.transformations.UnionTransformation;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.planner.delegation.PlannerBase;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecEdge;
@@ -26,6 +27,8 @@ import org.apache.flink.table.types.logical.RowType;
 
 /** StreamFusion physical coverage for Flink's zero-work streaming UNION ALL wiring. */
 public final class StreamFusionExecUnion extends CommonExecUnion implements StreamExecNode<RowData> {
+    private static final String TRANSLATOR_CLASS = "tech.streamfusion.flink.union.StreamFusionUnionTranslator";
+
     public StreamFusionExecUnion(
             ReadableConfig persistedConfig,
             List<InputProperty> inputProperties,
@@ -47,6 +50,20 @@ public final class StreamFusionExecUnion extends CommonExecUnion implements Stre
         for (ExecEdge edge : getInputEdges()) {
             inputs.add((Transformation<RowData>) edge.translateToPlan(planner));
         }
-        return new UnionTransformation<>(inputs);
+        try {
+            Class<?> translator = Class.forName(
+                    TRANSLATOR_CLASS, true, planner.getFlinkContext().getClassLoader());
+            Method translate = translator.getMethod("translate", List.class, RowType.class);
+            Transformation<RowData> result =
+                    (Transformation<RowData>) translate.invoke(null, inputs, (RowType) getOutputType());
+            if (result == null) {
+                throw new IllegalStateException("A selected StreamFusion UNION ALL failed translation");
+            }
+            return result;
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
+            throw new IllegalStateException("Could not invoke the StreamFusion UNION ALL runtime", e);
+        } catch (InvocationTargetException e) {
+            throw new IllegalStateException("StreamFusion UNION ALL translation failed", e.getCause());
+        }
     }
 }
