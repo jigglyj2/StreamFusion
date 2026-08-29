@@ -183,10 +183,15 @@ message Expression {
     NumericTruncate numeric_truncate = 110;
     TemporalExtract temporal_extract = 111;
     InetNtoa inet_ntoa = 112;
+    InetAton inet_aton = 113;
   }
 }
 
 message InetNtoa {
+  Expression operand = 1;
+}
+
+message InetAton {
   Expression operand = 1;
 }
 

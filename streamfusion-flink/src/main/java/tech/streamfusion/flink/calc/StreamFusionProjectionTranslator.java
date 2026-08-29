@@ -59,6 +59,10 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
         if (inetNtoa != null) {
             return inetNtoa;
         }
+        Expression inetAton = StreamFusionInetFunctionTranslator.aton(expression, inputType, expectedType);
+        if (inetAton != null) {
+            return inetAton;
+        }
         Expression identityCast = identityCastExpression(expression, inputType, expectedType);
         if (identityCast != null) {
             return identityCast;

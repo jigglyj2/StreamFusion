@@ -43,6 +43,30 @@ final class StreamFusionInetFunctionTranslator extends StreamFusionComplexTypeSu
                         .build();
     }
 
+    static Expression aton(Object expression, RowType inputType, LogicalType expectedType) {
+        if (!"INET_ATON".equals(functionName(expression))
+                || expectedType.getTypeRoot() != LogicalTypeRoot.BIGINT
+                || !hasNoArgMethod(expression, "getOperands")) {
+            return null;
+        }
+        List<?> operands = (List<?>) invoke(expression, "getOperands");
+        if (operands.size() != 1) {
+            return null;
+        }
+        LogicalType operandType = logicalType(operands.get(0), inputType);
+        if (operandType == null || operandType.getTypeRoot() != LogicalTypeRoot.VARCHAR) {
+            return null;
+        }
+        Expression operand =
+                StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, operandType);
+        return operand == null
+                ? null
+                : Expression.newBuilder()
+                        .setInetAton(tech.streamfusion.proto.plan.v1.InetAton.newBuilder()
+                                .setOperand(operand))
+                        .build();
+    }
+
     private static boolean isInteger(LogicalTypeRoot root) {
         return root == LogicalTypeRoot.TINYINT
                 || root == LogicalTypeRoot.SMALLINT

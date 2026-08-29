@@ -498,6 +498,13 @@ pub(super) fn create_expression(
                 .ok_or_else(|| DataFusionError::Plan("INET_NTOA operand is empty".to_string()))?;
             expressions::inet_ntoa::create(create_expression(operand, schema)?, schema)
         }
+        Some(proto::expression::Expression::InetAton(inet_aton)) => {
+            let operand = inet_aton
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("INET_ATON operand is empty".to_string()))?;
+            expressions::inet_aton::create(create_expression(operand, schema)?, schema)
+        }
         Some(proto::expression::Expression::UrlEncode(url_encode)) => {
             let operand = url_encode
                 .operand

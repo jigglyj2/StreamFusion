@@ -31,6 +31,10 @@ byte-parity coverage.
 Arrow integer without loss and formats values in Flink's unsigned IPv4 range `[0, 4294967295]` as
 dotted decimal; null, negative, and out-of-range values return null. All integer widths, both range
 boundaries, invalid values, projections, and filters have byte-parity coverage.
+`INET_ATON(varchar)` is accelerated with Flink's MySQL-compatible decimal parser, including the
+`a`, `a.b`, `a.b.c`, and `a.b.c.d` forms and decimal leading zeros. Empty components, non-digits,
+whitespace, extra components, and values above 255 return null. Standard, abbreviated, boundary,
+invalid, nested `INET_NTOA(INET_ATON(...))`, projection, and filter cases have parity coverage.
 
 StreamFusion can select, reorder, omit, or repeat direct input columns of these types:
 
