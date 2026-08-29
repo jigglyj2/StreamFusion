@@ -66,3 +66,9 @@ mvn -pl streamfusion-nexmark-benchmarks -am \
   -Dnexmark.generator.jar=/root/data/nexmark/nexmark-flink/target/nexmark-flink-0.3-SNAPSHOT.jar \
   -Dit.test=LocalRowDataNexmarkBenchmarkIT verify
 ```
+
+`LocalRowDataNexmarkBenchmark` also accepts an event count, comma-separated query list, and an
+engine selector (`flink`, `streamfusion`, or `both`) for standalone measurements. It reports
+end-to-end elapsed time, input-event throughput, and native calc batch count. Performance reports
+must come from separate, unprofiled JVM forks built with release-mode native code; profiler runs
+are diagnostic artifacts rather than benchmark measurements.

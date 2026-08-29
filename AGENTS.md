@@ -146,10 +146,40 @@ our north-star benchmark. Optimize its four state-backend/mini-batch cases while
 keeping the code simple and avoiding substantial divergence from Flink's result
 parity and architecture.
 
+Benchmark-driven optimizations must preserve the intended StreamFusion architecture;
+never trade away the production design merely to improve a benchmark result. Before
+adopting an optimization, evaluate whether the equivalent change would make architectural
+sense in DataFusion Comet's vectorized execution model. Reject benchmark-specific shortcuts,
+RowData processing inside native operators, extra JVM/native crossings, whole-batch copies,
+disabled Flink semantics, or special cases that Comet would reasonably consider an
+architectural regression. Treat a faster result as actionable only when the optimized path
+remains representative of the production Arrow and DataFusion execution path.
+
 Nexmark is an opt-in benchmark, not part of routine push or pull-request CI. Run it
 deliberately with `mvn -pl streamfusion-nexmark-benchmarks -am
 -Pbenchmark-integration verify` when validating benchmark or integration changes.
 Do not add it to the normal CI workflow unless this policy is explicitly changed.
+
+For performance investigations, build Rust with `--release`, the benchmark machine's
+native CPU features, frame pointers, and profiling symbols; profiling symbols must not
+reduce the release optimization level. Measure Flink and StreamFusion in separate JVMs
+with identical heap, parallelism, checkpoint, source, sink, and event-count settings.
+Use at least three unprofiled measured forks, alternate engine order, and report the
+median plus dispersion. State whether the timing is end-to-end or steady-state, record
+the commit and machine/runtime details, and verify that StreamFusion EXPLAIN reports
+acceleration and that native batch counters are non-zero. Never use profiler-instrumented
+throughput as the benchmark result.
+
+Capture mixed JVM/native CPU profiles on a longer representative fork of every compared
+query. On Linux, use async-profiler (or an equivalent sampling profiler) with Java
+non-safepoint sampling, native DWARF/frame-pointer unwinding, and JFR output, then retain
+the per-engine flame graphs, collapsed stacks, and a differential flame graph. Inspect
+the complete source -> RowData/Arrow boundary -> JNI -> Rust/DataFusion -> Arrow/RowData
+boundary -> sink path, not an isolated native microbenchmark. Report native invocation
+counts and inclusive CPU shares for row copying, RowData-to-Arrow transposition, Arrow C
+Data/JNI transport, native plan lowering, DataFusion execution, and Arrow-backed output
+access. Keep generated profiles under the benchmark module's `target/` directory unless
+the user explicitly requests checked-in artifacts.
 
 Immediately before each commit, run Palantir Java formatting and only the unit tests
 relevant to that commit. Treat this like a focused commit hook; do not spend time
