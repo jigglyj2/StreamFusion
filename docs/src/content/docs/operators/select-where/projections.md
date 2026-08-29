@@ -266,6 +266,11 @@ overflow as well as signed zero, infinities, NaN, and nulls.
 `PI()` and `E()` are accelerated as exact `DOUBLE` constants. The Java planner records the same
 IEEE-754 values used by Flink directly in protobuf, and native Calc treats them as DataFusion
 literals that can compose with other projections and predicates without a per-row function call.
+`UUID()`, `RAND([seed])`, and `RAND_INTEGER([seed,] bound)` remain on Flink. UUID values come from
+the JVM's secure random generator, while Flink's random-number state advances per row and function
+instance. Native vector evaluation cannot reproduce the same execution-history-dependent sequence
+byte-for-byte, including for seeded calls, so `EXPLAIN` reports the lifecycle dependency instead of
+claiming approximate distribution parity.
 `SIN`, `COS`, and `TAN` are accelerated for numeric operands after Flink coerces them to `DOUBLE`.
 Each remains a distinct protobuf expression and DataFusion vectorized operator; parity coverage
 includes signed zero, infinities, NaN, and nulls.
