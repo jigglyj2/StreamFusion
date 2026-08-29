@@ -23,6 +23,12 @@ DECIMAL, DATE, TIME, and TIMESTAMP literals. The declared Flink nullability and
 precision are retained in the Arrow schema. An empty VALUES physical node is also
 valid and produces an empty batch with its declared schema.
 
+Flink can lower heterogeneous typed rows into a native `UNION ALL` whose branches project
+literals over one-row VALUES inputs. StreamFusion removes only semantic no-op casts whose
+complete source and target logical types match, then executes those VALUES, Calc, and union
+nodes natively. Casts that change a type, width, precision, or scale still require their own
+parity-approved Calc implementation or cause all-or-nothing fallback.
+
 Complex literals and types without an exact Flink-to-Arrow literal mapping fall back
 with the tuple and field path in EXPLAIN. Because plan replacement is all-or-nothing,
 that fallback keeps the complete query on Flink.

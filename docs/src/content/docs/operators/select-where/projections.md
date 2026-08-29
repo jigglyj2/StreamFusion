@@ -81,7 +81,11 @@ Constant `TIME` values preserve their declared precision and millisecond-of-day 
 Constant `TIMESTAMP WITHOUT TIME ZONE` values preserve their local calendar value and
 sub-millisecond nanoseconds without applying a session or JVM timezone.
 Direct constant character literals are encoded as UTF-8 and accelerated. Character
-expressions that require a planner-inserted cast still fall back with the whole Calc.
+expressions that require a converting planner-inserted cast still fall back with the whole Calc.
+Planner-inserted casts that leave the complete logical type unchanged, including width,
+precision, and scale, are removed on the Java side and the enclosed expression is serialized
+normally. This covers the redundant typed-literal casts Flink introduces around some `VALUES`
+branches without delegating any conversion semantics to DataFusion.
 Direct hexadecimal binary literals are accelerated with their exact byte sequence and
 fixed width. Cast-derived and computed binary expressions remain on Flink.
 Typed `NULL` literals are accelerated for the supported scalar projection types except
@@ -101,7 +105,7 @@ is required. Any unsupported condition or branch causes whole-Calc fallback.
 
 Integer division or remainder by zero or a non-literal divisor, decimal division and
 remainder, floating-point remainder, unary plus, non-decimal mixed-width arithmetic, non-finite
-floating-point literals, arithmetic on other types, casts, and unlisted functions currently
+floating-point literals, arithmetic on other types, converting casts, and unlisted functions currently
 fall back to Flink, except for the lossless casts and functions listed above. The Calc also falls back if its
 filter is unsupported.
 

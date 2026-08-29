@@ -37,5 +37,9 @@ class ValuesParityTest extends SqlParityTestSupport {
     @Test
     void scalarValuesWithPlannerInsertedCalcsStillMatchFlinkByteForByte() throws Exception {
         assertParity(ALL_SCALAR_TYPES, true);
+
+        assertThat(StreamFusionPlannerFactory.nativeValuesBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativeUnionBatchCount()).isGreaterThan(0);
     }
 }
