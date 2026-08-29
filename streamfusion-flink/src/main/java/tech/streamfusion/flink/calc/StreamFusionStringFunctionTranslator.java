@@ -91,7 +91,9 @@ final class StreamFusionStringFunctionTranslator extends StreamFusionComplexType
     }
 
     static Expression position(Object expression, RowType inputType, LogicalType expectedType) {
-        if (!"POSITION".equals(functionName(expression)) || expectedType.getTypeRoot() != LogicalTypeRoot.INTEGER) {
+        String function = functionName(expression);
+        if (!("POSITION".equals(function) || "INSTR".equals(function) || "LOCATE".equals(function))
+                || expectedType.getTypeRoot() != LogicalTypeRoot.INTEGER) {
             return null;
         }
         java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
@@ -101,10 +103,12 @@ final class StreamFusionStringFunctionTranslator extends StreamFusionComplexType
         org.apache.flink.table.types.logical.VarCharType stringType =
                 new org.apache.flink.table.types.logical.VarCharType(
                         org.apache.flink.table.types.logical.VarCharType.MAX_LENGTH);
+        int needleIndex = "INSTR".equals(function) ? 1 : 0;
+        int haystackIndex = "INSTR".equals(function) ? 0 : 1;
         Expression needle =
-                StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, stringType);
-        Expression haystack =
-                StreamFusionProjectionTranslator.projectionExpression(operands.get(1), inputType, stringType);
+                StreamFusionProjectionTranslator.projectionExpression(operands.get(needleIndex), inputType, stringType);
+        Expression haystack = StreamFusionProjectionTranslator.projectionExpression(
+                operands.get(haystackIndex), inputType, stringType);
         if (needle == null || haystack == null) {
             return null;
         }

@@ -383,6 +383,10 @@ expressions. StreamFusion reverses Flink's syntax operands when constructing Dat
 vectorized `strpos(haystack, needle)` expression. Results remain one-based, missing needles
 return zero, empty needles return one, Unicode positions count code points, and nulls propagate.
 Fixed-width `CHAR` remains on Flink.
+The two-argument forms `INSTR(haystack, needle)` and `LOCATE(needle, haystack)` use that same
+native expression with planner-side argument normalization. Computed `VARCHAR` operands are
+supported. Extended forms with a start position or occurrence count stay on Flink until their
+forward/backward search rules have dedicated parity coverage.
 `LEFT(value, count)` and `RIGHT(value, count)` are accelerated for `VARCHAR` and `INTEGER`
 expressions, including computed counts and use inside filters. They count Unicode code points.
 StreamFusion inserts a native count-normalization expression because DataFusion interprets a
