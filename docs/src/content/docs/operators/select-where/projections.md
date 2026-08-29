@@ -341,6 +341,13 @@ and decimal inputs lower to ordered DataFusion comparisons and a `CASE`. Floatin
 inputs first preserve either signed zero through a `CASE`, then use DataFusion `signum` for
 nonzero values so NaN is retained. `TINYINT` and `SMALLINT` remain fallback because Flink 2.3
 currently generates uncompilable Java for those calls, preventing a byte-parity contract.
+Timezone-free `YEAR(date)`, `QUARTER(date)`, `MONTH(date)`, `WEEK(date)`, and their equivalent
+`EXTRACT` forms are accelerated for `DATE`. Flink canonicalizes the convenience functions to one
+`EXTRACT` expression; the Java planner records the calendar field and Calcite result width in
+protobuf, and Rust lowers it to DataFusion's Arrow temporal kernel. ISO week boundaries, dates
+before the Unix epoch, leap days, nulls, and the supported Flink date range have parity coverage.
+Timestamp, local-time-zone, time-of-day, epoch, and additional calendar fields remain on Flink
+until their session-zone and precision contracts are separately proven.
 `CHAR_LENGTH` and `CHARACTER_LENGTH` are accelerated for `VARCHAR` operands. DataFusion's
 Unicode kernel counts UTF-8 code points, matching Flink for ASCII, multibyte text, emoji,
 combining marks, embedded NUL characters, empty strings, and nulls. `CHAR` operands remain

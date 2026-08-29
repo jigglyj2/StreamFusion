@@ -534,6 +534,29 @@ pub(super) fn create_expression(
                 schema,
             )
         }
+        Some(proto::expression::Expression::TemporalExtract(extract)) => {
+            let operand = extract
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("EXTRACT operand is empty".to_string()))?;
+            let field = match extract.field() {
+                proto::TemporalExtractField::Year => "year",
+                proto::TemporalExtractField::Quarter => "quarter",
+                proto::TemporalExtractField::Month => "month",
+                proto::TemporalExtractField::Week => "week",
+                proto::TemporalExtractField::Unspecified => {
+                    return Err(DataFusionError::Plan(
+                        "EXTRACT field is unspecified".to_string(),
+                    ));
+                }
+            };
+            expressions::temporal_extract::create(
+                create_expression(operand, schema)?,
+                field,
+                extract.result_is_bigint,
+                schema,
+            )
+        }
         Some(proto::expression::Expression::Substring(substring)) => {
             let operand = substring
                 .operand

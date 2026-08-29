@@ -246,6 +246,11 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
         if (jsonFunction != null) {
             return jsonFunction;
         }
+        Expression temporalExtract =
+                StreamFusionTemporalFunctionTranslator.extract(expression, inputType, expectedType);
+        if (temporalExtract != null) {
+            return temporalExtract;
+        }
         Expression arrayDistinct =
                 StreamFusionCollectionSetTranslator.arrayDistinct(expression, inputType, expectedType);
         if (arrayDistinct != null) {
