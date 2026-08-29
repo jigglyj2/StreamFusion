@@ -14,6 +14,7 @@ This matrix follows the query operations documented by Flink 2.3, including the 
 | [WITH](with/) | **No** | Not directly | Inlined by Flink; accelerate resulting operators |
 | [VALUES](values/) | **Partial** (scalar literals) | Yes | Source-free native Arrow batch |
 | [Windowing TVFs](window-tvf/) | **Partial** (`TUMBLE`, `HOP`, `CUMULATE`) | Yes | Native aligned-window assignment compatible with Flink |
+| [Watermark assignment](watermark-assignment/) | **Plan-compatible** | Flink-owned | Distinct StreamFusion node delegating Flink's exact timer and idleness runtime |
 | [Group aggregation](group-aggregation/) | **No** | Yes | DataFusion aggregates with Flink-managed state |
 | [Window aggregation](window-aggregation/) | **No** | Yes | Native window state and DataFusion aggregate kernels |
 | [OVER aggregation](over-aggregation/) | **No** | Yes | Native ordered state and aggregate kernels |

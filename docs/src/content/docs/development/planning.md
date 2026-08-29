@@ -129,6 +129,21 @@ that failed typed protobuf serialization. Eligible plans report `Accelerated: ye
 Execution-counter and byte-parity tests remain the proof that a selected native node ran;
 EXPLAIN describes the planner decision rather than replacing runtime verification.
 
+## Watermark ownership
+
+`StreamExecWatermarkAssigner` is represented by a distinct `StreamFusionExecWatermarkAssigner` so
+it satisfies all-or-nothing physical coverage. This is deliberately a compatibility node rather
+than a native compute operator. It asks Flink's `WatermarkGeneratorCodeGenerator` to compile the
+original SQL expression and instantiates Flink's `WatermarkAssignerOperatorFactory` unchanged.
+
+That boundary keeps record forwarding, monotonic watermark advancement, periodic processing-time
+callbacks, backpressure-aware idleness detection, watermark-status transitions, upstream watermark
+suppression, and the final maximum watermark in Flink. Source watermark alignment also remains in
+Flink's source/coordinator machinery and its existing configuration is not translated or duplicated.
+StreamFusion therefore adds no watermark state, recovery format, timer implementation, or deployment
+setting. Generated SQL parity runs a declared watermark into a native `TUMBLE` TVF and compares the
+complete output with unmodified Flink.
+
 ## Native exchange contract
 
 A native exchange does not replace Flink distribution. Flink still declares the shuffle,

@@ -25,9 +25,9 @@ steps, offsets, negative timestamps, null timestamps, changelog kinds, and contr
 follow Flink. A null event timestamp drops the row, as it does in Flink.
 
 The plan falls back with an EXPLAIN reason for processing time, `TIMESTAMP_LTZ`, `SESSION`, an
-invalid descriptor, or an unsupported surrounding node. In particular, StreamFusion's
-all-or-nothing rule means a separate watermark-assignment node must itself become eligible before
-a plan containing one can accelerate end to end.
+invalid descriptor, or an unsupported surrounding node. A declared SQL watermark is eligible
+through StreamFusion's distinct, Flink-managed watermark node, so supported event-time TVFs can
+accelerate end to end.
 
 ## Implementation
 
