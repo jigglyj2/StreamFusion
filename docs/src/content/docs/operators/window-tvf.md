@@ -5,22 +5,36 @@ sidebar:
   order: 5
 ---
 
-**Current status:** Not accelerated; executed by Flink.
+**Current status:** Partially accelerated.
 
-**Future acceleration target:** Yes.
+StreamFusion has a distinct native physical operator for the row-semantics `TUMBLE`, `HOP`, and
+`CUMULATE` TVFs. `SESSION` remains on Flink.
 
 ## SQL example
 
 ```sql
-SELECT *\nFROM TABLE(TUMBLE(TABLE bid, DESCRIPTOR(dateTime), INTERVAL '10' SECOND));
+SELECT *
+FROM TABLE(TUMBLE(TABLE bid, DESCRIPTOR(dateTime), INTERVAL '10' SECOND));
 ```
 
 ## Acceleration and fallback
 
-TUMBLE, HOP, CUMULATE, and SESSION can accelerate after timestamp, watermark, offset, and late-event behavior have parity coverage. Unsupported descriptors or window parameters fall back.
+An aligned Window TVF is eligible when its descriptor is an event-time `TIMESTAMP` column and its
+output is the input row followed by `window_start`, `window_end`, and `window_time`. Sizes, slides,
+steps, offsets, negative timestamps, null timestamps, changelog kinds, and control-event ordering
+follow Flink. A null event timestamp drops the row, as it does in Flink.
+
+The plan falls back with an EXPLAIN reason for processing time, `TIMESTAMP_LTZ`, `SESSION`, an
+invalid descriptor, or an unsupported surrounding node. In particular, StreamFusion's
+all-or-nothing rule means a separate watermark-assignment node must itself become eligible before
+a plan containing one can accelerate end to end.
 
 ## Implementation
 
-Use custom Rust window assignment because streaming watermarks and Flink window metadata are outside DataFusion's batch execution model. Emit Flink-compatible window_start, window_end, and window_time columns.
+Java encodes the time-column ordinal, window kind, and millisecond size/slide/step/offset in the
+versioned plan protobuf. A dedicated Rust physical operator expands Arrow batches and appends
+Flink-compatible `window_start`, `window_end`, and `window_time` values. It uses Flink's exact epoch
+arithmetic and emission order: newest start first for HOP and increasing end for CUMULATE. Input
+columns and the bridge selection ordinal are gathered as Arrow arrays; rows are not serialized.
 
 See the [Flink 2.3 Windowing TVFs documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/window-tvf/).

@@ -16,12 +16,14 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
 import org.apache.calcite.rex.RexNode;
+import org.apache.flink.table.planner.plan.logical.TimeAttributeWindowingStrategy;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecEdge;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNode;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeGraph;
 import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecCalc;
 import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecCorrelate;
 import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecExpand;
+import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecWindowTableFunction;
 import org.apache.flink.table.planner.plan.nodes.exec.processor.ExecNodeGraphProcessor;
 import org.apache.flink.table.planner.plan.nodes.exec.processor.ProcessorContext;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecCalc;
@@ -30,6 +32,7 @@ import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecDropUpdat
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecExpand;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecUnion;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecValues;
+import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWindowTableFunction;
 import org.apache.flink.table.types.logical.RowType;
 
 /** All-or-nothing physical rule modelled after Comet's distinct accelerator exec nodes. */
@@ -40,6 +43,8 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
     private static final String EXPAND_TRANSLATOR_CLASS = "tech.streamfusion.flink.expand.StreamFusionExpandTranslator";
     private static final String VALUES_TRANSLATOR_CLASS = "tech.streamfusion.flink.values.StreamFusionValuesTranslator";
     private static final String UNION_TRANSLATOR_CLASS = "tech.streamfusion.flink.union.StreamFusionUnionTranslator";
+    private static final String WINDOW_TRANSLATOR_CLASS =
+            "tech.streamfusion.flink.window.StreamFusionWindowTableFunctionTranslator";
 
     @Override
     public ExecNodeGraph process(ExecNodeGraph graph, ProcessorContext context) {
@@ -90,6 +95,11 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             }
         } else if (node instanceof StreamExecUnion) {
             String reason = unsupportedReason((StreamExecUnion) node, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
+        } else if (node instanceof StreamExecWindowTableFunction) {
+            String reason = unsupportedReason((StreamExecWindowTableFunction) node, context);
             if (reason != null) {
                 rejections.add(nodePath + "\n" + reason);
             }
@@ -162,6 +172,19 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     (RowType) expand.getOutputType(),
                     "StreamFusionExpand");
             replacement.setInputEdges(expand.getInputEdges().stream()
+                    .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                    .collect(Collectors.toList()));
+            return replacement;
+        }
+        if (node instanceof StreamExecWindowTableFunction) {
+            StreamExecWindowTableFunction window = (StreamExecWindowTableFunction) node;
+            StreamFusionExecWindowTableFunction replacement = new StreamFusionExecWindowTableFunction(
+                    window.getPersistedConfig(),
+                    windowStrategy(window),
+                    window.getInputProperties().get(0),
+                    (RowType) window.getOutputType(),
+                    "StreamFusionWindowTableFunction");
+            replacement.setInputEdges(window.getInputEdges().stream()
                     .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
                     .collect(Collectors.toList()));
             return replacement;
@@ -295,6 +318,24 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         }
     }
 
+    private String unsupportedReason(StreamExecWindowTableFunction window, ProcessorContext context) {
+        ExecEdge input = window.getInputEdges().get(0);
+        try {
+            Class<?> translator = Class.forName(
+                    WINDOW_TRANSLATOR_CLASS,
+                    true,
+                    context.getPlanner().getFlinkContext().getClassLoader());
+            Method method = translator.getMethod(
+                    "unsupportedReason", RowType.class, RowType.class, TimeAttributeWindowingStrategy.class);
+            return (String) method.invoke(
+                    null, (RowType) input.getOutputType(), (RowType) window.getOutputType(), windowStrategy(window));
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
+            throw new IllegalStateException("Could not inspect StreamFusion Window TVF support", e);
+        } catch (InvocationTargetException e) {
+            throw new IllegalStateException("StreamFusion Window TVF support inspection failed", e.getCause());
+        }
+    }
+
     @SuppressWarnings("unchecked")
     private static List<RexNode> projection(StreamExecCalc calc) {
         return (List<RexNode>) field(calc, CommonExecCalc.class, "projection");
@@ -307,6 +348,10 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
     @SuppressWarnings("unchecked")
     private static List<List<RexNode>> projects(StreamExecExpand expand) {
         return (List<List<RexNode>>) field(expand, CommonExecExpand.class, "projects");
+    }
+
+    private static TimeAttributeWindowingStrategy windowStrategy(StreamExecWindowTableFunction window) {
+        return (TimeAttributeWindowingStrategy) field(window, CommonExecWindowTableFunction.class, "windowingStrategy");
     }
 
     private static Object field(Object node, Class<?> declaringClass, String name) {
