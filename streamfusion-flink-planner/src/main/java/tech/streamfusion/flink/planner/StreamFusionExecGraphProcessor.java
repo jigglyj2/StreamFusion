@@ -26,6 +26,7 @@ import org.apache.flink.table.planner.plan.nodes.exec.processor.ExecNodeGraphPro
 import org.apache.flink.table.planner.plan.nodes.exec.processor.ProcessorContext;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecCalc;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecCorrelate;
+import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecDropUpdateBefore;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecExpand;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecUnion;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecValues;
@@ -80,6 +81,8 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             if (reason != null) {
                 rejections.add(nodePath + "\n" + reason);
             }
+        } else if (node instanceof StreamExecDropUpdateBefore) {
+            // RowKind is Flink changelog metadata, so this node is always eligible.
         } else if (node instanceof StreamExecExpand) {
             String reason = unsupportedReason((StreamExecExpand) node, context);
             if (reason != null) {
@@ -122,6 +125,18 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     (RowType) calc.getOutputType(),
                     "StreamFusionCalc");
             replacement.setInputEdges(calc.getInputEdges().stream()
+                    .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                    .collect(Collectors.toList()));
+            return replacement;
+        }
+        if (node instanceof StreamExecDropUpdateBefore) {
+            StreamExecDropUpdateBefore drop = (StreamExecDropUpdateBefore) node;
+            StreamFusionExecDropUpdateBefore replacement = new StreamFusionExecDropUpdateBefore(
+                    drop.getPersistedConfig(),
+                    drop.getInputProperties().get(0),
+                    (RowType) drop.getOutputType(),
+                    "StreamFusionDropUpdateBefore");
+            replacement.setInputEdges(drop.getInputEdges().stream()
                     .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
                     .collect(Collectors.toList()));
             return replacement;
