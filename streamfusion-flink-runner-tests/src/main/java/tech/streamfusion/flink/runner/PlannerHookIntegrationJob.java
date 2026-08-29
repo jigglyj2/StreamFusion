@@ -78,9 +78,10 @@ public final class PlannerHookIntegrationJob {
         }
 
         long acceleratedBatches = StreamFusionPlannerFactory.nativeCalcBatchCount();
+        PlannerFallbackFixture.register(tables);
         List<Integer> fallbackValues = new ArrayList<>();
-        try (CloseableIterator<Row> rows = tables.executeSql("SELECT -id FROM (VALUES (1), (2)) AS input(id)")
-                .collect()) {
+        try (CloseableIterator<Row> rows =
+                tables.executeSql(PlannerFallbackFixture.SQL).collect()) {
             while (rows.hasNext()) {
                 fallbackValues.add((Integer) rows.next().getField(0));
             }
@@ -90,7 +91,7 @@ public final class PlannerHookIntegrationJob {
             throw new IllegalStateException("Unexpected Flink fallback result: " + fallbackValues);
         }
         if (StreamFusionPlannerFactory.nativeCalcBatchCount() != acceleratedBatches) {
-            throw new IllegalStateException("An unsupported calc unexpectedly ran in StreamFusion");
+            throw new IllegalStateException("The runner-only fallback fixture unexpectedly ran in StreamFusion");
         }
 
         System.out.println(SUCCESS_MARKER
