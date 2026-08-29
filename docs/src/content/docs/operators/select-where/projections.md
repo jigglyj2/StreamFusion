@@ -297,6 +297,11 @@ Java or crossing an intermediate JVM boundary.
 `MAP_ENTRIES` is accelerated under the same conditions and returns an Arrow list of structs named
 `key` and `value`, matching Flink's `ARRAY<ROW<key, value>>` shape and preserving entry order and
 value nullability. It also composes directly with a native map constructor.
+`MAP_FROM_ARRAYS(keys, values)` stays on Flink 2.3. Some generated consumers cast Flink's internal
+`MapDataForMapFromArrays` result to `GenericMapData` and fail at runtime. A native implementation
+would make those same jobs succeed, violating observable failure parity, so EXPLAIN identifies the
+version-specific runtime contract. This can be revisited after the supported Flink line fixes the
+consumer representation.
 `ARRAY_EXCEPT` is accelerated for compatible array inputs, including arrays of nested rows and
 native `ARRAY[...]` constructors. It preserves the first occurrence of each left-side value not
 present on the right, treats null as a comparable set value, removes duplicates, and returns null

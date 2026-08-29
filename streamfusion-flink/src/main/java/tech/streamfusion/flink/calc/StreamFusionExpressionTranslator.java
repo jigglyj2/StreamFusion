@@ -78,6 +78,9 @@ abstract class StreamFusionExpressionTranslator extends StreamFusionProjectionTr
             complexFailure = StreamFusionMapConstructorTranslator.failureReason(expression);
         }
         if (complexFailure == null) {
+            complexFailure = StreamFusionMapFromArraysTranslator.failureReason(expression);
+        }
+        if (complexFailure == null) {
             complexFailure = StreamFusionCollectionTranslator.failureReason(expression, inputType);
         }
         if (complexFailure == null) {
@@ -129,6 +132,19 @@ abstract class StreamFusionExpressionTranslator extends StreamFusionProjectionTr
                 Object operand = operands.get(index);
                 org.apache.flink.table.types.logical.LogicalType operandType = expressionLogicalType(operand);
                 if (operandType == null) {
+                    String mapFromArraysFailure = StreamFusionMapFromArraysTranslator.failureReason(operand);
+                    if (mapFromArraysFailure != null) {
+                        return path
+                                + "/"
+                                + expressionName(expression)
+                                + ".operand["
+                                + index
+                                + "]/MAP_FROM_ARRAYS: "
+                                + mapFromArraysFailure
+                                + " ("
+                                + operand
+                                + ")";
+                    }
                     return path
                             + "/"
                             + expressionName(expression)
