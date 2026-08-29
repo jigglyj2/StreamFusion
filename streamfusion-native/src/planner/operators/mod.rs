@@ -10,3 +10,4 @@ pub(super) mod array_unnest;
 pub(super) mod calc;
 mod collection;
 pub(super) mod input;
+pub(super) mod union;

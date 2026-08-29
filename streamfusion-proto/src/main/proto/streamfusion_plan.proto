@@ -15,11 +15,17 @@ message Operator {
     Input input = 1;
     Calc calc = 2;
     ArrayUnnest array_unnest = 3;
+    Union union = 4;
   }
 }
 
 message Input {
   Schema schema = 1;
+  uint32 input_index = 2;
+}
+
+message Union {
+  repeated Operator inputs = 1;
 }
 
 message Calc {

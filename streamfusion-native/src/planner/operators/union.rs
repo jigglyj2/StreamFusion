@@ -9,22 +9,19 @@
 use std::sync::Arc;
 
 use datafusion::error::{DataFusionError, Result};
+use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::ExecutionPlan;
 
 use crate::proto;
 
 pub(crate) fn create(
-    input: &proto::Input,
-    external_inputs: &[Arc<dyn ExecutionPlan>],
+    _union: &proto::Union,
+    inputs: Vec<Arc<dyn ExecutionPlan>>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    external_inputs
-        .get(input.input_index as usize)
-        .cloned()
-        .ok_or_else(|| {
-            DataFusionError::Plan(format!(
-                "input index {} is outside {} external inputs",
-                input.input_index,
-                external_inputs.len()
-            ))
-        })
+    if inputs.len() < 2 {
+        return Err(DataFusionError::Plan(
+            "StreamFusion UNION ALL requires at least two inputs".to_string(),
+        ));
+    }
+    UnionExec::try_new(inputs)
 }

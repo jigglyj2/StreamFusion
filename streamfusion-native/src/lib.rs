@@ -35,7 +35,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::planner::create_plan;
+    use crate::planner::{create_plan, create_plan_with_inputs};
     use arrow::array::{Array, Int32Array, RecordBatch};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion::datasource::memory::MemorySourceConfig;
@@ -59,6 +59,7 @@ mod tests {
                                     r#type: Some(integer_type.clone()),
                                 }],
                             }),
+                            input_index: 0,
                         })),
                     })),
                     projections: vec![proto::Expression {
@@ -97,6 +98,24 @@ mod tests {
             }))),
         });
         plan
+    }
+
+    fn union_plan(input_count: u32) -> proto::NativePlan {
+        proto::NativePlan {
+            protocol_version: PLAN_PROTOCOL_VERSION,
+            root: Some(proto::Operator {
+                operator: Some(proto::operator::Operator::Union(proto::Union {
+                    inputs: (0..input_count)
+                        .map(|input_index| proto::Operator {
+                            operator: Some(proto::operator::Operator::Input(proto::Input {
+                                schema: None,
+                                input_index,
+                            })),
+                        })
+                        .collect(),
+                })),
+            }),
+        }
     }
 
     #[tokio::test]
@@ -141,6 +160,55 @@ mod tests {
 
         assert_eq!(output_values.values(), &[1, 2, 3]);
         assert_eq!(output_values.values().as_ptr(), input_pointer);
+    }
+
+    #[tokio::test]
+    async fn union_all_preserves_each_inputs_arrow_buffer() {
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let left_values = Arc::new(Int32Array::from(vec![1, 2]));
+        let right_values = Arc::new(Int32Array::from(vec![3, 4]));
+        let left_pointer = left_values.values().as_ptr();
+        let right_pointer = right_values.values().as_ptr();
+        let left_batch = RecordBatch::try_new(schema.clone(), vec![left_values]).unwrap();
+        let right_batch = RecordBatch::try_new(schema.clone(), vec![right_values]).unwrap();
+        let left =
+            MemorySourceConfig::try_new_exec(&[vec![left_batch]], schema.clone(), None).unwrap();
+        let right = MemorySourceConfig::try_new_exec(&[vec![right_batch]], schema, None).unwrap();
+
+        let plan =
+            create_plan_with_inputs(&union_plan(2).encode_to_vec(), vec![left, right]).unwrap();
+        let output = collect(plan, SessionContext::new().task_ctx())
+            .await
+            .unwrap();
+
+        assert_eq!(output.len(), 2);
+        let output_left = output[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        let output_right = output[1]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(output_left.values(), &[1, 2]);
+        assert_eq!(output_right.values(), &[3, 4]);
+        assert_eq!(output_left.values().as_ptr(), left_pointer);
+        assert_eq!(output_right.values().as_ptr(), right_pointer);
+    }
+
+    #[test]
+    fn rejects_union_input_outside_external_inputs() {
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let source = MemorySourceConfig::try_new_exec(&[vec![]], schema, None).unwrap();
+
+        let error =
+            create_plan_with_inputs(&union_plan(2).encode_to_vec(), vec![source]).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("input index 1 is outside 1 external inputs"));
     }
 
     #[test]
