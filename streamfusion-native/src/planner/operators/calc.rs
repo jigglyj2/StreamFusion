@@ -498,6 +498,13 @@ pub(super) fn create_expression(
                 .ok_or_else(|| DataFusionError::Plan("URL_ENCODE operand is empty".to_string()))?;
             expressions::url_encode::create(create_expression(operand, schema)?, schema)
         }
+        Some(proto::expression::Expression::UrlDecode(url_decode)) => {
+            let operand = url_decode
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("URL_DECODE operand is empty".to_string()))?;
+            expressions::url_decode::create(create_expression(operand, schema)?, schema)
+        }
         Some(proto::expression::Expression::Substring(substring)) => {
             let operand = substring
                 .operand

@@ -177,6 +177,7 @@ message Expression {
     BinaryString binary_string = 104;
     Unhex unhex = 105;
     UrlEncode url_encode = 106;
+    UrlDecode url_decode = 107;
   }
 }
 
@@ -501,6 +502,10 @@ message Unhex {
 }
 
 message UrlEncode {
+  Expression operand = 1;
+}
+
+message UrlDecode {
   Expression operand = 1;
 }
 

@@ -14,6 +14,7 @@ import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.proto.plan.v1.Expression;
+import tech.streamfusion.proto.plan.v1.UrlDecode;
 import tech.streamfusion.proto.plan.v1.UrlEncode;
 
 /** Translates application/x-www-form-urlencoded string functions. */
@@ -21,7 +22,9 @@ final class StreamFusionUrlFunctionTranslator extends StreamFusionComplexTypeSup
     private StreamFusionUrlFunctionTranslator() {}
 
     static Expression translate(Object expression, RowType inputType, LogicalType expectedType) {
-        if (!"URL_ENCODE".equals(functionName(expression)) || expectedType.getTypeRoot() != LogicalTypeRoot.VARCHAR) {
+        String function = functionName(expression);
+        if (!("URL_ENCODE".equals(function) || "URL_DECODE".equals(function))
+                || expectedType.getTypeRoot() != LogicalTypeRoot.VARCHAR) {
             return null;
         }
         List<?> operands = (List<?>) invoke(expression, "getOperands");
@@ -34,10 +37,15 @@ final class StreamFusionUrlFunctionTranslator extends StreamFusionComplexTypeSup
         }
         Expression operand =
                 StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, operandType);
-        return operand == null
-                ? null
-                : Expression.newBuilder()
+        if (operand == null) {
+            return null;
+        }
+        return "URL_ENCODE".equals(function)
+                ? Expression.newBuilder()
                         .setUrlEncode(UrlEncode.newBuilder().setOperand(operand))
+                        .build()
+                : Expression.newBuilder()
+                        .setUrlDecode(UrlDecode.newBuilder().setOperand(operand))
                         .build();
     }
 }

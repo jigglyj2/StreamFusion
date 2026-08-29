@@ -387,6 +387,12 @@ encoder. It matches Java's `application/x-www-form-urlencoded` rules used by Fli
 `+`, ASCII letters, digits, `.`, `-`, `*`, and `_` remain literal, and every other UTF-8 byte uses
 uppercase percent encoding. Empty strings and nulls preserve Flink behavior. Fixed-width `CHAR`
 values remain on Flink pending padding parity coverage.
+`URL_DECODE(value)` is accelerated for `VARCHAR` expressions. Its dedicated native form decoder
+maps `+` to space, accepts case-insensitive `%HH` escapes, decodes each consecutive escape run as
+UTF-8 with Java-compatible replacement for malformed byte sequences, and returns null for an
+incomplete or non-hex escape. Literal Unicode remains outside adjacent escape-run decoding, as in
+Java's `URLDecoder`. Empty strings and nulls preserve Flink behavior; fixed-width `CHAR` remains on
+Flink pending padding parity coverage.
 `STR_TO_MAP` remains on Flink. Flink treats both separators as Java regular expressions, whereas
 DataFusion's similarly named Spark function performs literal delimiter matching; using it would
 produce different keys for valid Flink expressions. StreamFusion reports this distinction in
