@@ -4,18 +4,18 @@
 use arrow::error::Result;
 use arrow::record_batch::RecordBatch;
 
-use super::{route_batch, IpcBatchFrame, KeyField};
+use super::{route_batch_by_key_group, IpcBatchFrame, KeyField};
 
-/// A schema-free Arrow frame tagged for one downstream Flink subtask.
+/// A schema-free Arrow frame tagged with one stable Flink key group.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoutedFrame {
-    destination: u32,
+    key_group: u32,
     frame: IpcBatchFrame,
 }
 
 impl RoutedFrame {
-    pub fn destination(&self) -> u32 {
-        self.destination
+    pub fn key_group(&self) -> u32 {
+        self.key_group
     }
 
     pub fn frame(&self) -> &IpcBatchFrame {
@@ -23,18 +23,17 @@ impl RoutedFrame {
     }
 }
 
-/// Computes Flink destinations and encodes independently decodable network records.
+/// Groups by Flink key group and encodes independently decodable network records.
 pub fn frame_hash_exchange_batch(
     batch: RecordBatch,
     key_fields: &[(usize, KeyField)],
     max_parallelism: u32,
-    parallelism: u32,
 ) -> Result<Vec<RoutedFrame>> {
-    route_batch(batch, key_fields, max_parallelism, parallelism)?
+    route_batch_by_key_group(batch, key_fields, max_parallelism)?
         .into_iter()
         .map(|routed| {
             Ok(RoutedFrame {
-                destination: routed.destination(),
+                key_group: routed.key_group(),
                 frame: IpcBatchFrame::encode(&routed.materialize()?)?,
             })
         })
@@ -65,36 +64,37 @@ mod tests {
         )
         .unwrap();
 
-        let frames = frame_hash_exchange_batch(batch, &[(0, KeyField::Integer)], 128, 4).unwrap();
+        let frames = frame_hash_exchange_batch(batch, &[(0, KeyField::Integer)], 128).unwrap();
 
-        assert_eq!(
-            frames
-                .iter()
-                .map(RoutedFrame::destination)
-                .collect::<Vec<_>>(),
-            vec![2, 3]
-        );
-        assert_eq!(
-            frames[0].frame().decode(Arc::clone(&schema)).unwrap(),
-            RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![
-                    Arc::new(Int32Array::from(vec![1, 42])) as ArrayRef,
-                    Arc::new(Int8Array::from(vec![0, 3])) as ArrayRef,
-                ],
-            )
-            .unwrap()
-        );
-        assert_eq!(
-            frames[1].frame().decode(schema.clone()).unwrap(),
-            RecordBatch::try_new(
-                schema,
-                vec![
-                    Arc::new(Int32Array::from(vec![-1, 0])) as ArrayRef,
-                    Arc::new(Int8Array::from(vec![1, 2])) as ArrayRef,
-                ],
-            )
-            .unwrap()
-        );
+        let mut decoded_rows = Vec::new();
+        for routed in frames {
+            let decoded = routed.frame().decode(Arc::clone(&schema)).unwrap();
+            let keys = decoded
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap();
+            let row_kinds = decoded
+                .column(1)
+                .as_any()
+                .downcast_ref::<Int8Array>()
+                .unwrap();
+            for row in 0..decoded.num_rows() {
+                let one = RecordBatch::try_new(
+                    Arc::new(Schema::new(vec![Field::new("key", DataType::Int32, false)])),
+                    vec![Arc::new(Int32Array::from(vec![keys.value(row)])) as ArrayRef],
+                )
+                .unwrap();
+                let encoded =
+                    crate::exchange::encode_binary_row(&one, 0, &[(0, KeyField::Integer)]).unwrap();
+                assert_eq!(
+                    crate::exchange::assign_key_group(&encoded, 128),
+                    routed.key_group()
+                );
+                decoded_rows.push((keys.value(row), row_kinds.value(row)));
+            }
+        }
+        decoded_rows.sort_unstable();
+        assert_eq!(decoded_rows, vec![(-1, 1), (0, 2), (1, 0), (42, 3)]);
     }
 }

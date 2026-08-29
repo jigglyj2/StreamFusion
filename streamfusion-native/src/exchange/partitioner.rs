@@ -18,6 +18,23 @@ pub struct RoutedBatch {
     rows: UInt32Array,
 }
 
+#[derive(Debug, Clone)]
+pub struct KeyGroupBatch {
+    key_group: u32,
+    batch: Arc<RecordBatch>,
+    rows: UInt32Array,
+}
+
+impl KeyGroupBatch {
+    pub fn key_group(&self) -> u32 {
+        self.key_group
+    }
+
+    pub fn materialize(&self) -> Result<RecordBatch> {
+        materialize(&self.batch, &self.rows)
+    }
+}
+
 impl RoutedBatch {
     pub fn destination(&self) -> u32 {
         self.destination
@@ -36,14 +53,49 @@ impl RoutedBatch {
     /// Routing itself remains a zero-copy selection over the input batch. A network edge must own
     /// contiguous Arrow arrays, so this is the single intentional gather in the exchange path.
     pub fn materialize(&self) -> Result<RecordBatch> {
-        let columns = self
-            .batch
-            .columns()
-            .iter()
-            .map(|column| take(column.as_ref(), &self.rows, None))
-            .collect::<Result<Vec<_>>>()?;
-        RecordBatch::try_new(Arc::clone(&self.batch.schema()), columns)
+        materialize(&self.batch, &self.rows)
     }
+}
+
+/// Groups rows by stable Flink key group so in-flight frames remain rescalable on recovery.
+pub fn route_batch_by_key_group(
+    batch: RecordBatch,
+    key_fields: &[(usize, KeyField)],
+    max_parallelism: u32,
+) -> Result<Vec<KeyGroupBatch>> {
+    if max_parallelism == 0 || max_parallelism > 32_768 {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "Flink exchange max parallelism {max_parallelism} is outside 1..=32768"
+        )));
+    }
+    let mut key_group_rows = vec![Vec::new(); max_parallelism as usize];
+    for row in 0..batch.num_rows() {
+        let key = encode_binary_row(&batch, row, key_fields)?;
+        let key_group = assign_key_group(&key, max_parallelism);
+        key_group_rows[key_group as usize].push(u32::try_from(row).map_err(|_| {
+            ArrowError::InvalidArgumentError("exchange batch exceeds UInt32 indexing".to_string())
+        })?);
+    }
+    let batch = Arc::new(batch);
+    Ok(key_group_rows
+        .into_iter()
+        .enumerate()
+        .filter(|(_, rows)| !rows.is_empty())
+        .map(|(key_group, rows)| KeyGroupBatch {
+            key_group: key_group as u32,
+            batch: Arc::clone(&batch),
+            rows: UInt32Array::from(rows),
+        })
+        .collect())
+}
+
+fn materialize(batch: &RecordBatch, rows: &UInt32Array) -> Result<RecordBatch> {
+    let columns = batch
+        .columns()
+        .iter()
+        .map(|column| take(column.as_ref(), rows, None))
+        .collect::<Result<Vec<_>>>()?;
+    RecordBatch::try_new(batch.schema(), columns)
 }
 
 /// Routes rows by Flink key group without serializing or eagerly gathering Arrow columns.

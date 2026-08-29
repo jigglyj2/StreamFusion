@@ -153,10 +153,13 @@ Appending this envelope reuses the existing Arrow data-column buffers. Watermark
 statuses, latency markers, and checkpoint barriers remain ordered Flink network control events;
 they are never disguised as rows in the Arrow stream.
 
-Hash routing first produces lightweight per-destination selection vectors over one shared input
-batch. Only immediately before a destination crosses the network does StreamFusion gather that
-selection into contiguous Arrow arrays. This is an intentional columnar gather, not row
-serialization; it preserves input order and keeps the row-kind and timestamp envelope aligned.
+Hash routing first produces lightweight per-key-group selection vectors over one shared input
+batch. Keeping each frame within one stable Flink key group allows Flink's `RANGE` channel-state
+mapper to redistribute recovered in-flight data when parallelism changes. Only immediately before
+a key-group frame crosses the network does StreamFusion gather that selection into contiguous
+Arrow arrays. This is an intentional columnar gather, not row serialization; it preserves input
+order and keeps the row-kind and timestamp envelope aligned. The runtime partitioner maps the
+frame's key group to the current downstream parallelism rather than persisting a stale destination.
 
 Keyed exchange uses Flink's key-group identity, not DataFusion's partition hash. The core native
 exchange package reproduces the two-stage Flink calculation: hash the exact Flink `BinaryRowData`

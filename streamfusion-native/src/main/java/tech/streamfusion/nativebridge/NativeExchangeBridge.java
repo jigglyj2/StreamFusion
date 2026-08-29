@@ -12,6 +12,5 @@ public final class NativeExchangeBridge {
 
     private NativeExchangeBridge() {}
 
-    public static native byte[] routeArrowBatch(
-            byte[] serializedPlan, int parallelism, long inputArrayAddress, long inputSchemaAddress);
+    public static native byte[] routeArrowBatch(byte[] serializedPlan, long inputArrayAddress, long inputSchemaAddress);
 }

@@ -18,12 +18,12 @@ public final class ArrowExchangeCDataBridge {
     private ArrowExchangeCDataBridge() {}
 
     public static List<NativeExchangeFrame> route(
-            byte[] serializedPlan, int parallelism, ArrowRowDataBatch input, BufferAllocator allocator) {
+            byte[] serializedPlan, ArrowRowDataBatch input, BufferAllocator allocator) {
         try (ArrowArray inputArray = ArrowArray.allocateNew(allocator);
                 ArrowSchema inputSchema = ArrowSchema.allocateNew(allocator)) {
             Data.exportVectorSchemaRoot(allocator, input.root(), null, inputArray, inputSchema);
             byte[] encoded = NativeExchangeBridge.routeArrowBatch(
-                    serializedPlan, parallelism, inputArray.memoryAddress(), inputSchema.memoryAddress());
+                    serializedPlan, inputArray.memoryAddress(), inputSchema.memoryAddress());
             return NativeExchangeFrames.decode(encoded);
         }
     }

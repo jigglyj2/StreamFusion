@@ -6,21 +6,21 @@ package tech.streamfusion.flink.exchange;
 
 /** One schema-free Arrow IPC frame routed to a downstream Flink subtask. */
 public final class NativeExchangeFrame {
-    private final int destination;
+    private final int keyGroup;
     private final byte[] metadata;
     private final byte[] body;
 
-    public NativeExchangeFrame(int destination, byte[] metadata, byte[] body) {
-        if (destination < 0) {
-            throw new IllegalArgumentException("Exchange destination must be non-negative");
+    public NativeExchangeFrame(int keyGroup, byte[] metadata, byte[] body) {
+        if (keyGroup < 0) {
+            throw new IllegalArgumentException("Exchange key group must be non-negative");
         }
-        this.destination = destination;
+        this.keyGroup = keyGroup;
         this.metadata = metadata.clone();
         this.body = body.clone();
     }
 
-    public int destination() {
-        return destination;
+    public int keyGroup() {
+        return keyGroup;
     }
 
     public byte[] metadata() {
