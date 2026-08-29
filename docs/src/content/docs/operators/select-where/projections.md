@@ -525,6 +525,11 @@ The remaining SQL/JSON scalar functions—including `IS JSON`, `JSON_EXISTS`, `J
 `TRY_PARSE_JSON`—stay on Flink. Their path modes, wrapper clauses, `ON EMPTY`/`ON ERROR` branches,
 number representation, and JSON logical-type serialization need one exact contract before native
 execution can replace them.
+The scalar `BITMAP_*` family stays on Flink. Flink's specialized `BITMAP` logical type, Java bitmap
+serialization bytes, signed integer domain, null behavior, and byte round trips through
+`BITMAP_TO_BYTES`/`BITMAP_FROM_BYTES` must be proven against one native bitmap implementation before
+any member can cross the Arrow boundary. Aggregate bitmap functions are additionally stateful and
+outside Calc acceleration.
 `HASH_CODE(value)` is accelerated for `VARCHAR` expressions. A dedicated native vector expression
 reproduces Java `String.hashCode()` over UTF-16 code units with wrapping 32-bit arithmetic, then
 applies Flink's overflow-preserving absolute value. This includes supplementary Unicode and the
