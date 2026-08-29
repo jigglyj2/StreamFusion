@@ -23,6 +23,8 @@ class NativeExchangeWriterOperatorTest {
         NativeExchangeWriterOperator operator = new NativeExchangeWriterOperator(
                 RowType.of(new IntType()), new byte[] {1}, 8, (plan, batch, allocator, memoryManager) -> {
                     assertThat(batch.size()).isEqualTo(1);
+                    assertThat(memoryManager.limit()).isPositive();
+                    assertThat(allocator.getLimit()).isEqualTo(memoryManager.limit());
                     return List.of(new NativeExchangeFrame(7, new byte[] {2}, new byte[] {3}));
                 });
         try (OneInputStreamOperatorTestHarness<RowData, NativeExchangeFrame> harness =

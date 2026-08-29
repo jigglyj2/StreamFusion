@@ -8,6 +8,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.dag.Transformation;
+import org.apache.flink.core.memory.ManagedMemoryUseCase;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.transformations.OneInputTransformation;
 import org.apache.flink.streaming.api.transformations.PartitionTransformation;
@@ -35,6 +36,10 @@ class StreamFusionExchangeTranslatorTest {
         assertThat(exchange.getPartitioner()).isInstanceOf(NativeExchangePartitioner.class);
         assertThat(exchange.getParallelism()).isEqualTo(ExecutionConfig.PARALLELISM_DEFAULT);
         assertThat(reader.getName()).isEqualTo("StreamFusionExchangeReader");
+        assertThat(writer.getManagedMemoryOperatorScopeUseCaseWeights())
+                .containsEntry(ManagedMemoryUseCase.OPERATOR, 1);
+        assertThat(reader.getManagedMemoryOperatorScopeUseCaseWeights())
+                .containsEntry(ManagedMemoryUseCase.OPERATOR, 1);
     }
 
     @Test
