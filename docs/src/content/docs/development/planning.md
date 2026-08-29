@@ -129,6 +129,28 @@ that failed typed protobuf serialization. Eligible plans report `Accelerated: ye
 Execution-counter and byte-parity tests remain the proof that a selected native node ran;
 EXPLAIN describes the planner decision rather than replacing runtime verification.
 
+## Native exchange contract
+
+A native exchange does not replace Flink distribution. Flink still declares the shuffle,
+maximum parallelism, downstream parallelism, checkpoint barriers, watermarks, and rescaling
+topology. StreamFusion may accelerate the data path only when it can preserve those declarations
+exactly.
+
+The wire shape is Arrow Flight-inspired: a channel negotiates one versioned Arrow schema and
+dictionary state, then sends a stream of Arrow record-batch messages that refer to that channel
+schema. A batch is never converted to `RowData` or serialized row by row between native nodes.
+Within one process, Arrow C Stream ownership passes reference-counted buffers directly. Across a
+network edge, Arrow IPC/Flight-style buffers are framed because bytes must cross the network, but
+the schema is not rebuilt or resent for every batch.
+
+Keyed exchange uses Flink's key-group identity, not DataFusion's partition hash. The native
+exchange module reproduces the two-stage Flink calculation: hash the exact Flink `BinaryRowData`
+key bytes with `BinarySegmentUtils.hashByWords`, then apply `MathUtils.murmurHash` and reduce by
+the operator's configured maximum parallelism. This is the compatibility path implemented by
+Paimon Rust's BinaryRow encoder/hash and Fluss Rust's Flink Murmur utility. Cross-language fixtures
+lock StreamFusion's first hashing primitive to Flink 2.3. Full Arrow-to-BinaryRow encoding and the
+transport remain incomplete, so no exchange is selected by the planner yet.
+
 ## Flink runner integration test
 
 The process-level integration test builds a standalone SQL job JAR and installs the `streamfusion-flink` JAR into the `lib/` directory of an Apache Flink 2.3 distribution. It also installs the separate StreamFusion planner extension into Flink's isolated planner loader and applies the minimal generic planner-extension hooks. It does not replace any Flink exec node or runtime operator class. The test then submits the job through the real CLI:
