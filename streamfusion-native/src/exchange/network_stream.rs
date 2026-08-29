@@ -80,7 +80,7 @@ impl<R: Read> Iterator for IpcExchangeReader<R> {
 mod tests {
     use std::io::Cursor;
 
-    use arrow::array::{ArrayRef, Int32Array, StringArray};
+    use arrow::array::{ArrayRef, Int32Array, Int8Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
 
     use super::*;
@@ -125,6 +125,40 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("channel schema"));
+    }
+
+    #[test]
+    fn routes_and_streams_destination_batches_with_one_schema() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int32, false),
+            Field::new("value", DataType::Utf8, false),
+            Field::new("__streamfusion_row_kind", DataType::Int8, false),
+        ]));
+        let input = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![-1, 0, 1, 42])) as ArrayRef,
+                Arc::new(StringArray::from(vec!["minus", "zero", "one", "forty-two"])) as ArrayRef,
+                Arc::new(Int8Array::from(vec![1, 2, 0, 3])) as ArrayRef,
+            ],
+        )
+        .unwrap();
+        let routed =
+            crate::exchange::route_batch(input, &[(0, crate::exchange::KeyField::Integer)], 128, 4)
+                .unwrap();
+
+        for destination in routed {
+            let expected = destination.materialize().unwrap();
+            let mut writer = IpcExchangeWriter::new(Vec::new(), Arc::clone(&schema)).unwrap();
+            writer.write(&expected).unwrap();
+            let bytes = writer.finish().unwrap();
+            let decoded = IpcExchangeReader::new(Cursor::new(bytes))
+                .unwrap()
+                .collect::<Result<Vec<_>>>()
+                .unwrap();
+
+            assert_eq!(decoded, vec![expected]);
+        }
     }
 
     fn batch(schema: &SchemaRef, keys: &[i32], values: &[&str]) -> RecordBatch {
