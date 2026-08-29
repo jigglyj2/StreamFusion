@@ -77,6 +77,7 @@ fn create_operator(
             )?;
             operators::expand::create(expand, child)
         }
+        Some(proto::operator::Operator::Values(values)) => operators::values::create(values),
         None => Err(DataFusionError::Plan(
             "StreamFusion operator is empty".to_string(),
         )),

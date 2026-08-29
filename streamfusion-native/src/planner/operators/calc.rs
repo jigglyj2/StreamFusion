@@ -50,6 +50,9 @@ pub(super) fn create_expression(
     expression: &proto::Expression,
     schema: &arrow::datatypes::Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
+    if let Some(value) = literal_scalar(expression)? {
+        return Ok(Arc::new(Literal::new(value)));
+    }
     match expression.expression.as_ref() {
         Some(proto::expression::Expression::InputReference(reference)) => {
             let index = reference.index as usize;
@@ -60,34 +63,6 @@ pub(super) fn create_expression(
                 ))
             })?;
             Ok(Arc::new(Column::new(field.name(), index)))
-        }
-        Some(proto::expression::Expression::IntegerLiteral(literal)) => Ok(Arc::new(Literal::new(
-            ScalarValue::Int32(Some(literal.value)),
-        ))),
-        Some(proto::expression::Expression::LongLiteral(literal)) => Ok(Arc::new(Literal::new(
-            ScalarValue::Int64(Some(literal.value)),
-        ))),
-        Some(proto::expression::Expression::ByteLiteral(literal)) => Ok(Arc::new(Literal::new(
-            ScalarValue::Int8(Some(literal.value.try_into().map_err(|_| {
-                DataFusionError::Plan(format!("TINYINT literal {} is out of range", literal.value))
-            })?)),
-        ))),
-        Some(proto::expression::Expression::ShortLiteral(literal)) => Ok(Arc::new(Literal::new(
-            ScalarValue::Int16(Some(literal.value.try_into().map_err(|_| {
-                DataFusionError::Plan(format!(
-                    "SMALLINT literal {} is out of range",
-                    literal.value
-                ))
-            })?)),
-        ))),
-        Some(proto::expression::Expression::FloatLiteral(literal)) => Ok(Arc::new(Literal::new(
-            ScalarValue::Float32(Some(literal.value)),
-        ))),
-        Some(proto::expression::Expression::DoubleLiteral(literal)) => Ok(Arc::new(Literal::new(
-            ScalarValue::Float64(Some(literal.value)),
-        ))),
-        Some(proto::expression::Expression::NullLiteral(literal)) => {
-            expressions::null_literal::create(literal)
         }
         Some(proto::expression::Expression::Coalesce(coalesce)) => {
             let arguments = coalesce
@@ -429,96 +404,6 @@ pub(super) fn create_expression(
                 schema,
             )
         }
-        Some(proto::expression::Expression::DateLiteral(literal)) => Ok(Arc::new(Literal::new(
-            ScalarValue::Date32(Some(literal.epoch_day)),
-        ))),
-        Some(proto::expression::Expression::TimeLiteral(literal)) => {
-            let millis = literal.millisecond_of_day;
-            let value = match literal.precision {
-                0 => ScalarValue::Time32Second(Some(millis / 1_000)),
-                1..=3 => ScalarValue::Time32Millisecond(Some(millis)),
-                4..=6 => ScalarValue::Time64Microsecond(Some(i64::from(millis) * 1_000)),
-                7..=9 => ScalarValue::Time64Nanosecond(Some(i64::from(millis) * 1_000_000)),
-                precision => {
-                    return Err(DataFusionError::Plan(format!(
-                        "TIME precision {precision} is outside Flink's supported range 0..=9"
-                    )))
-                }
-            };
-            Ok(Arc::new(Literal::new(value)))
-        }
-        Some(proto::expression::Expression::TimestampLiteral(literal)) => {
-            let millis = literal.epoch_millisecond;
-            let nanos = i64::from(literal.nano_of_millisecond);
-            let value = match literal.precision {
-                0 => ScalarValue::TimestampSecond(Some(millis / 1_000), None),
-                1..=3 => ScalarValue::TimestampMillisecond(Some(millis), None),
-                4..=6 => {
-                    ScalarValue::TimestampMicrosecond(Some(millis * 1_000 + nanos / 1_000), None)
-                }
-                7..=9 => ScalarValue::TimestampNanosecond(Some(millis * 1_000_000 + nanos), None),
-                precision => {
-                    return Err(DataFusionError::Plan(format!(
-                        "TIMESTAMP precision {precision} is outside Flink's supported range 0..=9"
-                    )))
-                }
-            };
-            Ok(Arc::new(Literal::new(value)))
-        }
-        Some(proto::expression::Expression::DecimalLiteral(literal)) => {
-            let value = literal.unscaled_value.parse::<i128>().map_err(|error| {
-                DataFusionError::Plan(format!(
-                    "DECIMAL unscaled value '{}' is invalid: {error}",
-                    literal.unscaled_value
-                ))
-            })?;
-            let precision = u8::try_from(literal.precision).map_err(|_| {
-                DataFusionError::Plan(format!(
-                    "DECIMAL precision {} exceeds Decimal128",
-                    literal.precision
-                ))
-            })?;
-            let scale = i8::try_from(literal.scale).map_err(|_| {
-                DataFusionError::Plan(format!("DECIMAL scale {} is invalid", literal.scale))
-            })?;
-            if precision == 0 || precision > 38 || scale < 0 || scale > precision as i8 {
-                return Err(DataFusionError::Plan(format!(
-                    "DECIMAL({precision}, {scale}) is outside Flink's supported range"
-                )));
-            }
-            Ok(Arc::new(Literal::new(ScalarValue::Decimal128(
-                Some(value),
-                precision,
-                scale,
-            ))))
-        }
-        Some(proto::expression::Expression::BooleanLiteral(literal)) => Ok(Arc::new(Literal::new(
-            ScalarValue::Boolean(Some(literal.value)),
-        ))),
-        Some(proto::expression::Expression::StringLiteral(literal)) => Ok(Arc::new(Literal::new(
-            ScalarValue::Utf8(Some(literal.value.clone())),
-        ))),
-        Some(proto::expression::Expression::BinaryLiteral(literal)) => {
-            let value = literal.value.clone();
-            let scalar = if literal.fixed_width {
-                let length = i32::try_from(literal.length).map_err(|_| {
-                    DataFusionError::Plan(format!(
-                        "BINARY length {} exceeds Arrow FixedSizeBinary",
-                        literal.length
-                    ))
-                })?;
-                if length <= 0 || value.len() != length as usize {
-                    return Err(DataFusionError::Plan(format!(
-                        "BINARY({length}) literal has {} bytes",
-                        value.len()
-                    )));
-                }
-                ScalarValue::FixedSizeBinary(length, Some(value))
-            } else {
-                ScalarValue::Binary(Some(value))
-            };
-            Ok(Arc::new(Literal::new(scalar)))
-        }
         Some(proto::expression::Expression::UnaryMinus(unary)) => {
             let operand = unary
                 .operand
@@ -679,4 +564,125 @@ pub(super) fn create_expression(
         Some(collection_expression) => super::collection::create(collection_expression, schema),
         None => Err(DataFusionError::Plan("expression is empty".to_string())),
     }
+}
+
+pub(super) fn literal_scalar(expression: &proto::Expression) -> Result<Option<ScalarValue>> {
+    let value = match expression.expression.as_ref() {
+        Some(proto::expression::Expression::IntegerLiteral(literal)) => {
+            ScalarValue::Int32(Some(literal.value))
+        }
+        Some(proto::expression::Expression::LongLiteral(literal)) => {
+            ScalarValue::Int64(Some(literal.value))
+        }
+        Some(proto::expression::Expression::ByteLiteral(literal)) => {
+            ScalarValue::Int8(Some(literal.value.try_into().map_err(|_| {
+                DataFusionError::Plan(format!("TINYINT literal {} is out of range", literal.value))
+            })?))
+        }
+        Some(proto::expression::Expression::ShortLiteral(literal)) => {
+            ScalarValue::Int16(Some(literal.value.try_into().map_err(|_| {
+                DataFusionError::Plan(format!(
+                    "SMALLINT literal {} is out of range",
+                    literal.value
+                ))
+            })?))
+        }
+        Some(proto::expression::Expression::FloatLiteral(literal)) => {
+            ScalarValue::Float32(Some(literal.value))
+        }
+        Some(proto::expression::Expression::DoubleLiteral(literal)) => {
+            ScalarValue::Float64(Some(literal.value))
+        }
+        Some(proto::expression::Expression::DateLiteral(literal)) => {
+            ScalarValue::Date32(Some(literal.epoch_day))
+        }
+        Some(proto::expression::Expression::TimeLiteral(literal)) => {
+            let millis = literal.millisecond_of_day;
+            match literal.precision {
+                0 => ScalarValue::Time32Second(Some(millis / 1_000)),
+                1..=3 => ScalarValue::Time32Millisecond(Some(millis)),
+                4..=6 => ScalarValue::Time64Microsecond(Some(i64::from(millis) * 1_000)),
+                7..=9 => ScalarValue::Time64Nanosecond(Some(i64::from(millis) * 1_000_000)),
+                precision => {
+                    return Err(DataFusionError::Plan(format!(
+                        "TIME precision {precision} is outside Flink's supported range 0..=9"
+                    )))
+                }
+            }
+        }
+        Some(proto::expression::Expression::TimestampLiteral(literal)) => {
+            let millis = literal.epoch_millisecond;
+            let nanos = i64::from(literal.nano_of_millisecond);
+            match literal.precision {
+                0 => ScalarValue::TimestampSecond(Some(millis / 1_000), None),
+                1..=3 => ScalarValue::TimestampMillisecond(Some(millis), None),
+                4..=6 => {
+                    ScalarValue::TimestampMicrosecond(Some(millis * 1_000 + nanos / 1_000), None)
+                }
+                7..=9 => ScalarValue::TimestampNanosecond(Some(millis * 1_000_000 + nanos), None),
+                precision => {
+                    return Err(DataFusionError::Plan(format!(
+                        "TIMESTAMP precision {precision} is outside Flink's supported range 0..=9"
+                    )))
+                }
+            }
+        }
+        Some(proto::expression::Expression::DecimalLiteral(literal)) => {
+            let unscaled = literal.unscaled_value.parse::<i128>().map_err(|error| {
+                DataFusionError::Plan(format!(
+                    "DECIMAL unscaled value '{}' is invalid: {error}",
+                    literal.unscaled_value
+                ))
+            })?;
+            let precision = u8::try_from(literal.precision).map_err(|_| {
+                DataFusionError::Plan(format!(
+                    "DECIMAL precision {} exceeds Decimal128",
+                    literal.precision
+                ))
+            })?;
+            let scale = i8::try_from(literal.scale).map_err(|_| {
+                DataFusionError::Plan(format!("DECIMAL scale {} is invalid", literal.scale))
+            })?;
+            if precision == 0 || precision > 38 || scale < 0 || scale > precision as i8 {
+                return Err(DataFusionError::Plan(format!(
+                    "DECIMAL({precision}, {scale}) is outside Flink's supported range"
+                )));
+            }
+            ScalarValue::Decimal128(Some(unscaled), precision, scale)
+        }
+        Some(proto::expression::Expression::BooleanLiteral(literal)) => {
+            ScalarValue::Boolean(Some(literal.value))
+        }
+        Some(proto::expression::Expression::StringLiteral(literal)) => {
+            ScalarValue::Utf8(Some(literal.value.clone()))
+        }
+        Some(proto::expression::Expression::BinaryLiteral(literal)) => {
+            let bytes = literal.value.clone();
+            if literal.fixed_width {
+                let length = i32::try_from(literal.length).map_err(|_| {
+                    DataFusionError::Plan(format!(
+                        "BINARY length {} exceeds Arrow FixedSizeBinary",
+                        literal.length
+                    ))
+                })?;
+                if length <= 0 || bytes.len() != length as usize {
+                    return Err(DataFusionError::Plan(format!(
+                        "BINARY({length}) literal has {} bytes",
+                        bytes.len()
+                    )));
+                }
+                ScalarValue::FixedSizeBinary(length, Some(bytes))
+            } else {
+                ScalarValue::Binary(Some(bytes))
+            }
+        }
+        Some(proto::expression::Expression::NullLiteral(literal)) => {
+            let logical_type = literal.r#type.as_ref().ok_or_else(|| {
+                DataFusionError::Plan("NULL literal has no declared type".to_string())
+            })?;
+            ScalarValue::try_new_null(&expressions::null_literal::data_type(logical_type)?)?
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some(value))
 }

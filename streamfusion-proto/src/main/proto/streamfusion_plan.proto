@@ -17,6 +17,7 @@ message Operator {
     ArrayUnnest array_unnest = 3;
     Union union = 4;
     Expand expand = 5;
+    Values values = 6;
   }
 }
 
@@ -36,6 +37,15 @@ message Expand {
 
 message ExpandProjection {
   repeated Expression expressions = 1;
+}
+
+message Values {
+  Schema schema = 1;
+  repeated ValuesRow rows = 2;
+}
+
+message ValuesRow {
+  repeated Expression values = 1;
 }
 
 message Calc {

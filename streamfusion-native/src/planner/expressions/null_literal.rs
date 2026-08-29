@@ -10,24 +10,10 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Fields, TimeUnit};
 use datafusion::error::{DataFusionError, Result};
-use datafusion::physical_expr::expressions::Literal;
-use datafusion::physical_expr::PhysicalExpr;
-use datafusion::scalar::ScalarValue;
 
 use crate::proto;
 
-pub(crate) fn create(literal: &proto::NullLiteral) -> Result<Arc<dyn PhysicalExpr>> {
-    let logical_type = literal
-        .r#type
-        .as_ref()
-        .ok_or_else(|| DataFusionError::Plan("NULL literal has no declared type".to_string()))?;
-    let data_type = data_type(logical_type)?;
-    Ok(Arc::new(Literal::new(ScalarValue::try_new_null(
-        &data_type,
-    )?)))
-}
-
-fn data_type(logical_type: &proto::LogicalType) -> Result<DataType> {
+pub(crate) fn data_type(logical_type: &proto::LogicalType) -> Result<DataType> {
     match logical_type.r#type.as_ref() {
         Some(proto::logical_type::Type::Tinyint(_)) => Ok(DataType::Int8),
         Some(proto::logical_type::Type::Smallint(_)) => Ok(DataType::Int16),
