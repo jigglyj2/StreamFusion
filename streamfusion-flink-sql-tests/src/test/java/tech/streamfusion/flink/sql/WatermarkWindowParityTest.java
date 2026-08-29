@@ -16,24 +16,29 @@ import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
 import org.apache.flink.types.Row;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
 import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 
 class WatermarkWindowParityTest extends SqlParityTestSupport {
-    private static final String SQL = "SELECT ts, window_start, window_end "
-            + "FROM TABLE(TUMBLE(TABLE watermark_input, DESCRIPTOR(ts), INTERVAL '5' SECOND))";
-
-    @Test
-    void watermarkAssignerAndNativeTumbleMatchFlinkEndToEnd() throws Exception {
-        byte[] flink = execute(false);
-        byte[] streamFusion = execute(true);
+    @ParameterizedTest
+    @ValueSource(
+            strings = {
+                "TUMBLE(TABLE watermark_input, DESCRIPTOR(ts), INTERVAL '5' SECOND)",
+                "HOP(TABLE watermark_input, DESCRIPTOR(ts), INTERVAL '2' SECOND, INTERVAL '6' SECOND)",
+                "CUMULATE(TABLE watermark_input, DESCRIPTOR(ts), INTERVAL '2' SECOND, INTERVAL '6' SECOND)"
+            })
+    void watermarkAssignerAndNativeWindowTvfsMatchFlinkEndToEnd(String windowCall) throws Exception {
+        String sql = "SELECT ts, window_start, window_end FROM TABLE(" + windowCall + ")";
+        byte[] flink = execute(sql, false);
+        byte[] streamFusion = execute(sql, true);
 
         assertThat(streamFusion).isEqualTo(flink);
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 
-    private static byte[] execute(boolean streamFusionEnabled) throws Exception {
+    private static byte[] execute(String sql, boolean streamFusionEnabled) throws Exception {
         if (streamFusionEnabled) {
             System.setProperty(
                     StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY, StreamFusionPlannerFactory.class.getName());
@@ -59,6 +64,6 @@ class WatermarkWindowParityTest extends SqlParityTestSupport {
                                 .column("ts", DataTypes.TIMESTAMP(3))
                                 .watermark("ts", "ts - INTERVAL '2' SECOND")
                                 .build()));
-        return collect(tables.executeSql(SQL));
+        return collect(tables.executeSql(sql));
     }
 }
