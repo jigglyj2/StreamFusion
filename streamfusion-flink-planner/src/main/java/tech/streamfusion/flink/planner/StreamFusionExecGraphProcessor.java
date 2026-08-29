@@ -33,6 +33,7 @@ import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecExchange;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecExpand;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecUnion;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecValues;
+import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWatermarkAssigner;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWindowTableFunction;
 import org.apache.flink.table.types.logical.RowType;
 
@@ -89,6 +90,8 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             }
         } else if (node instanceof StreamExecDropUpdateBefore) {
             // RowKind is Flink changelog metadata, so this node is always eligible.
+        } else if (node instanceof StreamExecWatermarkAssigner) {
+            // The distinct node retains Flink's generated expression and watermark state machine.
         } else if (node instanceof StreamExecExpand) {
             String reason = unsupportedReason((StreamExecExpand) node, context);
             if (reason != null) {
@@ -156,6 +159,20 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     (RowType) drop.getOutputType(),
                     "StreamFusionDropUpdateBefore");
             replacement.setInputEdges(drop.getInputEdges().stream()
+                    .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                    .collect(Collectors.toList()));
+            return replacement;
+        }
+        if (node instanceof StreamExecWatermarkAssigner) {
+            StreamExecWatermarkAssigner watermark = (StreamExecWatermarkAssigner) node;
+            StreamFusionExecWatermarkAssigner replacement = new StreamFusionExecWatermarkAssigner(
+                    watermark.getPersistedConfig(),
+                    watermarkExpression(watermark),
+                    watermarkRowtimeFieldIndex(watermark),
+                    watermark.getInputProperties().get(0),
+                    (RowType) watermark.getOutputType(),
+                    "StreamFusionWatermarkAssigner");
+            replacement.setInputEdges(watermark.getInputEdges().stream()
                     .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
                     .collect(Collectors.toList()));
             return replacement;
@@ -373,6 +390,14 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
 
     private static TimeAttributeWindowingStrategy windowStrategy(StreamExecWindowTableFunction window) {
         return (TimeAttributeWindowingStrategy) field(window, CommonExecWindowTableFunction.class, "windowingStrategy");
+    }
+
+    private static RexNode watermarkExpression(StreamExecWatermarkAssigner watermark) {
+        return (RexNode) field(watermark, StreamExecWatermarkAssigner.class, "watermarkExpr");
+    }
+
+    private static int watermarkRowtimeFieldIndex(StreamExecWatermarkAssigner watermark) {
+        return (int) field(watermark, StreamExecWatermarkAssigner.class, "rowtimeFieldIndex");
     }
 
     private static Object field(Object node, Class<?> declaringClass, String name) {
