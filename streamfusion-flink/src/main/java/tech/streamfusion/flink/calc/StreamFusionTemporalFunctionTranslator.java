@@ -35,7 +35,7 @@ final class StreamFusionTemporalFunctionTranslator extends StreamFusionComplexTy
         LogicalType operandType = logicalType(operands.get(1), inputType);
         if (field == TemporalExtractField.TEMPORAL_EXTRACT_FIELD_UNSPECIFIED
                 || operandType == null
-                || operandType.getTypeRoot() != LogicalTypeRoot.DATE) {
+                || !supports(field, operandType.getTypeRoot())) {
             return null;
         }
         Expression operand =
@@ -77,8 +77,25 @@ final class StreamFusionTemporalFunctionTranslator extends StreamFusionComplexTy
                 return TemporalExtractField.TEMPORAL_EXTRACT_FIELD_ISO_DAY_OF_WEEK;
             case "ISOYEAR":
                 return TemporalExtractField.TEMPORAL_EXTRACT_FIELD_ISO_YEAR;
+            case "HOUR":
+                return TemporalExtractField.TEMPORAL_EXTRACT_FIELD_HOUR;
+            case "MINUTE":
+                return TemporalExtractField.TEMPORAL_EXTRACT_FIELD_MINUTE;
+            case "SECOND":
+                return TemporalExtractField.TEMPORAL_EXTRACT_FIELD_SECOND;
             default:
                 return TemporalExtractField.TEMPORAL_EXTRACT_FIELD_UNSPECIFIED;
+        }
+    }
+
+    private static boolean supports(TemporalExtractField field, LogicalTypeRoot operandType) {
+        switch (field) {
+            case TEMPORAL_EXTRACT_FIELD_HOUR:
+            case TEMPORAL_EXTRACT_FIELD_MINUTE:
+            case TEMPORAL_EXTRACT_FIELD_SECOND:
+                return operandType == LogicalTypeRoot.TIME_WITHOUT_TIME_ZONE;
+            default:
+                return operandType == LogicalTypeRoot.DATE;
         }
     }
 }

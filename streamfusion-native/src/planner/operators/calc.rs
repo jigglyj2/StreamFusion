@@ -549,6 +549,9 @@ pub(super) fn create_expression(
                 proto::TemporalExtractField::DayOfWeek => "flink_dow",
                 proto::TemporalExtractField::IsoDayOfWeek => "isodow",
                 proto::TemporalExtractField::IsoYear => "isoyear",
+                proto::TemporalExtractField::Hour => "hour",
+                proto::TemporalExtractField::Minute => "minute",
+                proto::TemporalExtractField::Second => "second",
                 proto::TemporalExtractField::Unspecified => {
                     return Err(DataFusionError::Plan(
                         "EXTRACT field is unspecified".to_string(),

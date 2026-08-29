@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::{DataType, Schema, TimeUnit};
 use datafusion::common::config::ConfigOptions;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::Operator;
@@ -22,9 +22,20 @@ pub(crate) fn create(
     result_is_bigint: bool,
     schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    if operand.data_type(schema)? != DataType::Date32 {
+    let operand_type = operand.data_type(schema)?;
+    let is_time_field = matches!(field, "hour" | "minute" | "second");
+    let valid_type = if is_time_field {
+        matches!(
+            operand_type,
+            DataType::Time32(TimeUnit::Second | TimeUnit::Millisecond)
+                | DataType::Time64(TimeUnit::Microsecond | TimeUnit::Nanosecond)
+        )
+    } else {
+        operand_type == DataType::Date32
+    };
+    if !valid_type {
         return Err(DataFusionError::Plan(
-            "calendar EXTRACT currently requires Arrow Date32 input".to_string(),
+            "EXTRACT field is incompatible with its Arrow temporal input".to_string(),
         ));
     }
     let datafusion_field = if field == "flink_dow" { "dow" } else { field };
