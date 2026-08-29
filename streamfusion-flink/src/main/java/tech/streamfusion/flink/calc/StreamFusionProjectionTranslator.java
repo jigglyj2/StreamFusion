@@ -51,6 +51,10 @@ import tech.streamfusion.proto.plan.v1.WhenThen;
 abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
     protected static Expression projectionExpression(
             Object expression, RowType inputType, org.apache.flink.table.types.logical.LogicalType expectedType) {
+        Expression typeOf = StreamFusionTypeOfTranslator.translate(expression, inputType, expectedType);
+        if (typeOf != null) {
+            return typeOf;
+        }
         Expression identityCast = identityCastExpression(expression, inputType, expectedType);
         if (identityCast != null) {
             return identityCast;

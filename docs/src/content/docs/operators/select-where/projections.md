@@ -18,6 +18,12 @@ WHERE id >= 1;
 
 ## Acceleration and fallback
 
+`TYPEOF(value [, force_serializable])` is accelerated for every otherwise supported operand type.
+Like Flink's own specialized function, the Java planner derives the summary or serializable type
+name from Flink's `LogicalType` and sends that value as a native string literal, repeated once per
+input row. Nullable scalar, decimal, array, and row types have parity coverage; unsupported Flink
+types still cause whole-Calc fallback rather than using a DataFusion type name.
+
 StreamFusion can select, reorder, omit, or repeat direct input columns of these types:
 
 - `BOOLEAN`, `TINYINT`, `SMALLINT`, `INT`, `BIGINT`, `FLOAT`, and `DOUBLE`
