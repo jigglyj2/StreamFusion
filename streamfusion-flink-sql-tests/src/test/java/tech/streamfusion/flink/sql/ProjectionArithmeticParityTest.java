@@ -134,7 +134,7 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
                 "DECIMAL(20, 4)",
                 "DATE",
                 "TIME(6)",
-                "TIMESTAMP(9)");
+                "TIMESTAMP(6)");
     }
 
     @Test
@@ -200,9 +200,9 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
 
     @Test
     void nativeTimestampLiteralProjectionsMatchFlinkByteForByte() throws Exception {
-        String sql = "SELECT TIMESTAMP '1969-12-31 23:59:59.999999999', "
-                + "TIMESTAMP '1970-01-01 00:00:00', "
-                + "TIMESTAMP '2026-08-27 12:34:56.123456789' "
+        String sql = "SELECT CAST('1969-12-31 23:59:59.999999' AS TIMESTAMP(6)), "
+                + "CAST('1970-01-01 00:00:00' AS TIMESTAMP(6)), "
+                + "CAST('2026-08-27 12:34:56.123456' AS TIMESTAMP(6)) "
                 + "FROM (VALUES (1), (2)) AS input(id) WHERE id >= 1";
         assertParity(sql, true);
 

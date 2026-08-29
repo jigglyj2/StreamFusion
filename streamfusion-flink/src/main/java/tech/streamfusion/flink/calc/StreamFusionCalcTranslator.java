@@ -211,6 +211,20 @@ public final class StreamFusionCalcTranslator extends StreamFusionExpressionTran
     /** Returns {@code null} when supported, otherwise the first precise expression-path rejection. */
     public static String unsupportedReason(
             RowType inputType, RowType outputType, List<?> projections, Object condition) {
+        for (int index = 0; index < inputType.getFieldCount(); index++) {
+            String reason = StreamFusionTimestampRangeSupport.unsupportedReason(
+                    inputType.getTypeAt(index), "input[" + index + "]");
+            if (reason != null) {
+                return reason;
+            }
+        }
+        for (int index = 0; index < outputType.getFieldCount(); index++) {
+            String reason = StreamFusionTimestampRangeSupport.unsupportedReason(
+                    outputType.getTypeAt(index), "output[" + index + "]");
+            if (reason != null) {
+                return reason;
+            }
+        }
         if (projections.isEmpty()) {
             return "projection: a Calc must produce at least one column";
         }

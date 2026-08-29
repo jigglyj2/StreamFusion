@@ -36,19 +36,21 @@ boundaries, invalid values, projections, and filters have byte-parity coverage.
 whitespace, extra components, and values above 255 return null. Standard, abbreviated, boundary,
 invalid, nested `INET_NTOA(INET_ATON(...))`, projection, and filter cases have parity coverage.
 `GREATEST` and `LEAST` are accelerated when their common type is `TINYINT`, `SMALLINT`, `INT`,
-`BIGINT`, `DECIMAL`, `VARCHAR`, `DATE`, `TIME`, or timezone-free `TIMESTAMP`. DataFusion performs the
+`BIGINT`, `DECIMAL`, `VARCHAR`, `DATE`, `TIME`, or timezone-free `TIMESTAMP` at precision 0 through
+6. DataFusion performs the
 vectorized extremum comparison, wrapped in a native
 null guard so any null argument produces null as Flink requires. All widths, negative values, three
 arguments, nulls, projections, and filters have parity coverage. Floating-point, fixed-width
-`CHAR`, and `TIMESTAMP_LTZ` overloads remain on Flink with an EXPLAIN reason until their NaN,
-signed-zero, padding, and session-zone rules are independently proven. Date ordering compares
+`CHAR`, `TIMESTAMP(7..9)`, and `TIMESTAMP_LTZ` overloads remain on Flink with an EXPLAIN reason until
+their NaN, signed-zero, padding, range, and session-zone rules are independently proven. Date ordering compares
 Arrow's signed
 epoch-day representation and covers pre-epoch dates, leap days, the supported range, nulls,
 projections, and filters.
 Time and timestamp ordering uses the precision-specific Arrow Time32, Time64, and Timestamp arrays
-without timezone conversion. Precisions 0/3 for Flink `TIME` and 0/3/6/9 for `TIMESTAMP`, values
+without timezone conversion. Precisions 0/3 for Flink `TIME` and 0/3/6 for `TIMESTAMP`, values
 across the Unix epoch, fractional seconds, the supported timestamp range, nulls, and filters have
-parity coverage.
+parity coverage. Flink timestamps at precision 7 through 9 use Arrow nanoseconds, whose physical
+range is narrower than Flink's calendar range; those Calcs fall back before boundary conversion.
 Decimal extrema retain Flink's resolved common precision and scale in Arrow `Decimal128` arrays.
 Mixed-scale coercion, precision 38, negative values, nulls, projections, and filters have parity
 coverage.
@@ -65,7 +67,7 @@ StreamFusion can select, reorder, omit, or repeat direct input columns of these 
 
 - `BOOLEAN`, `TINYINT`, `SMALLINT`, `INT`, `BIGINT`, `FLOAT`, and `DOUBLE`
 - `CHAR`, `VARCHAR`, `BINARY`, and `VARBINARY`
-- `DECIMAL`, `DATE`, `TIME`, `TIMESTAMP`, and `TIMESTAMP_LTZ`
+- `DECIMAL`, `DATE`, `TIME`, `TIMESTAMP(0..6)`, and `TIMESTAMP_LTZ(0..6)`
 - `ARRAY`, `MAP`, and `ROW`, recursively containing Arrow-compatible types
 
 Complex types may be selected, reordered, omitted, or repeated as direct input references.
@@ -84,7 +86,9 @@ and computed array indexes, non-null `MAP` and `ROW` literals,
 `MULTISET`, and collection functions not explicitly listed below still fall back with the whole Calc. Nested child types, field names,
 ordering, nullability, and Arrow offsets are preserved across the native plan.
 
-Precision, scale, fixed width, and nullability are preserved. Constant `TINYINT` and
+Precision, scale, fixed width, and nullability are preserved. Timestamp precision 7 through 9
+falls back because Arrow nanosecond timestamps cannot represent Flink's complete calendar domain.
+Constant `TINYINT` and
 `SMALLINT` projections are accelerated across their complete value ranges. Computed `INT`, `BIGINT`,
 `FLOAT`, `DOUBLE`, and `DECIMAL` projections support literals and recursively nested
 addition, subtraction, and multiplication. Decimal operands retain the precision and

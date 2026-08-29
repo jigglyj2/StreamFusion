@@ -12,6 +12,7 @@ package tech.streamfusion.flink.sql;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.stream.Stream;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
@@ -35,8 +36,17 @@ class TemporalExtremumParityTest extends SqlParityTestSupport {
                 timestampQuery(0),
                 timestampQuery(3),
                 timestampQuery(6),
-                timestampQuery(9),
                 "SELECT a FROM " + timestampInput(3) + " WHERE GREATEST(a, b) = b");
+    }
+
+    @Test
+    void nanosecondTimestampExtremaFallBackAcrossFlinksCompleteCalendarRange() throws Exception {
+        assertParity(timestampQuery(9), true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
+        assertThat(StreamFusionPlanningDiagnostics.explain())
+                .contains("TIMESTAMP precision 9 stays on Flink")
+                .contains("Arrow nanosecond timestamps cannot represent Flink's complete calendar range");
     }
 
     private static String timeQuery(int precision) {
