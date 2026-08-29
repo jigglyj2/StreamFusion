@@ -23,6 +23,8 @@ import tech.streamfusion.proto.plan.v1.StringRepeat;
 import tech.streamfusion.proto.plan.v1.StringReplace;
 import tech.streamfusion.proto.plan.v1.StringReverse;
 import tech.streamfusion.proto.plan.v1.StringRight;
+import tech.streamfusion.proto.plan.v1.StringTrim;
+import tech.streamfusion.proto.plan.v1.StringTrimDirection;
 
 /** String scalar functions whose operands can remain ordinary native expressions. */
 final class StreamFusionStringFunctionTranslator extends StreamFusionComplexTypeSupport {
@@ -224,6 +226,87 @@ final class StreamFusionStringFunctionTranslator extends StreamFusionComplexType
                 : Expression.newBuilder()
                         .setStringRight(StringRight.newBuilder().setValue(value).setCount(count))
                         .build();
+    }
+
+    static Expression trim(Object expression, RowType inputType, LogicalType expectedType) {
+        if (expectedType.getTypeRoot() != LogicalTypeRoot.VARCHAR) {
+            return null;
+        }
+        String function = functionName(expression);
+        if (!("TRIM".equals(function) || "LTRIM".equals(function) || "RTRIM".equals(function))) {
+            return null;
+        }
+        java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
+        Object valueOperand;
+        Object charactersOperand = null;
+        StringTrimDirection direction;
+        if ("TRIM".equals(function) && operands.size() == 1) {
+            direction = StringTrimDirection.STRING_TRIM_DIRECTION_BOTH;
+            valueOperand = operands.get(0);
+        } else if ("TRIM".equals(function) && operands.size() == 3) {
+            String flag = invoke(operands.get(0), "getValue").toString();
+            direction = trimDirection(flag);
+            charactersOperand = operands.get(1);
+            valueOperand = operands.get(2);
+        } else if (("LTRIM".equals(function) || "RTRIM".equals(function))
+                && (operands.size() == 1 || operands.size() == 2)) {
+            direction = "LTRIM".equals(function)
+                    ? StringTrimDirection.STRING_TRIM_DIRECTION_LEADING
+                    : StringTrimDirection.STRING_TRIM_DIRECTION_TRAILING;
+            valueOperand = operands.get(0);
+            if (operands.size() == 2) {
+                charactersOperand = operands.get(1);
+            }
+        } else {
+            return null;
+        }
+        if (direction == StringTrimDirection.STRING_TRIM_DIRECTION_UNSPECIFIED) {
+            return null;
+        }
+        LogicalType valueType = logicalType(valueOperand, inputType);
+        if (valueType == null || valueType.getTypeRoot() != LogicalTypeRoot.VARCHAR) {
+            return null;
+        }
+        Expression value = StreamFusionProjectionTranslator.projectionExpression(valueOperand, inputType, valueType);
+        if (value == null) {
+            return null;
+        }
+        StringTrim.Builder trim = StringTrim.newBuilder().setValue(value).setDirection(direction);
+        if (charactersOperand != null) {
+            LogicalType charactersType = logicalType(charactersOperand, inputType);
+            boolean characterLiteral = charactersType != null
+                    && charactersType.getTypeRoot() == LogicalTypeRoot.CHAR
+                    && literal(charactersOperand, String.class) != null;
+            if (charactersType == null
+                    || (charactersType.getTypeRoot() != LogicalTypeRoot.VARCHAR && !characterLiteral)) {
+                return null;
+            }
+            LogicalType nativeCharactersType = characterLiteral
+                    ? new org.apache.flink.table.types.logical.VarCharType(
+                            org.apache.flink.table.types.logical.VarCharType.MAX_LENGTH)
+                    : charactersType;
+            Expression characters = StreamFusionProjectionTranslator.projectionExpression(
+                    charactersOperand, inputType, nativeCharactersType);
+            if (characters == null) {
+                return null;
+            }
+            trim.setCharacters(characters);
+        }
+        return Expression.newBuilder().setStringTrim(trim).build();
+    }
+
+    private static StringTrimDirection trimDirection(String flag) {
+        String normalized = flag.toUpperCase(java.util.Locale.ROOT);
+        if (normalized.contains("BOTH")) {
+            return StringTrimDirection.STRING_TRIM_DIRECTION_BOTH;
+        }
+        if (normalized.contains("LEADING")) {
+            return StringTrimDirection.STRING_TRIM_DIRECTION_LEADING;
+        }
+        if (normalized.contains("TRAILING")) {
+            return StringTrimDirection.STRING_TRIM_DIRECTION_TRAILING;
+        }
+        return StringTrimDirection.STRING_TRIM_DIRECTION_UNSPECIFIED;
     }
 
     private static boolean supportsChr(LogicalTypeRoot type) {

@@ -331,6 +331,13 @@ that every argument is non-null before invoking the vectorized concat kernel, pr
 Flink's null-if-any-argument-is-null rule (DataFusion concat alone skips nulls). Character
 literals and nested supported projections may be arguments; binary and fixed-width character
 concatenation remain fallback pending their distinct type-width rules.
+`TRIM`, `LTRIM`, and `RTRIM` are accelerated for `VARCHAR` values. Standard SQL `LEADING`,
+`TRAILING`, and `BOTH` directions and Flink's optional trim-character expressions are preserved
+as an explicit protobuf direction plus native child expressions. The one-argument forms remove
+only ASCII spaces, matching Flink rather than treating tabs or other Unicode whitespace as spaces.
+Custom character sets may be literals or computed `VARCHAR` values; null values or character sets
+produce null. A `CHAR` literal is accepted as a trim-character set, while fixed-width `CHAR` input
+values and dynamic `CHAR` character sets remain on Flink pending padding-specific parity coverage.
 `SUBSTRING` and `SUBSTR` are accelerated for `VARCHAR` with a positive literal start and an
 optional nonnegative literal length. Positions are one-based and count Unicode code points;
 zero length, starts beyond the value, empty strings, and nulls preserve Flink behavior.

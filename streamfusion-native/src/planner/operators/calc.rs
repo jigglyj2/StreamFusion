@@ -398,6 +398,23 @@ pub(super) fn create_expression(
                 });
             expressions::starts_with::create(create_expression(operand, schema)?, prefix, schema)
         }
+        Some(proto::expression::Expression::StringTrim(trim)) => {
+            let value = trim
+                .value
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("string trim value is empty".to_string()))?;
+            let characters = trim
+                .characters
+                .as_ref()
+                .map(|characters| create_expression(characters, schema))
+                .transpose()?;
+            expressions::string_trim::create(
+                create_expression(value, schema)?,
+                characters,
+                trim.direction(),
+                schema,
+            )
+        }
         Some(proto::expression::Expression::Substring(substring)) => {
             let operand = substring
                 .operand

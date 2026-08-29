@@ -203,6 +203,10 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
         if (stringEdge != null) {
             return stringEdge;
         }
+        Expression stringTrim = StreamFusionStringFunctionTranslator.trim(expression, inputType, expectedType);
+        if (stringTrim != null) {
+            return stringTrim;
+        }
         Expression arrayDistinct =
                 StreamFusionCollectionSetTranslator.arrayDistinct(expression, inputType, expectedType);
         if (arrayDistinct != null) {

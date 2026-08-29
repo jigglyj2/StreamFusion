@@ -169,6 +169,7 @@ message Expression {
     CharacterFromCode chr = 96;
     StringReverse string_reverse = 97;
     StringInitCap string_init_cap = 98;
+    StringTrim string_trim = 99;
   }
 }
 
@@ -454,6 +455,19 @@ message StringReverse {
 
 message StringInitCap {
   Expression operand = 1;
+}
+
+message StringTrim {
+  Expression value = 1;
+  Expression characters = 2;
+  StringTrimDirection direction = 3;
+}
+
+enum StringTrimDirection {
+  STRING_TRIM_DIRECTION_UNSPECIFIED = 0;
+  STRING_TRIM_DIRECTION_BOTH = 1;
+  STRING_TRIM_DIRECTION_LEADING = 2;
+  STRING_TRIM_DIRECTION_TRAILING = 3;
 }
 
 message Coalesce {

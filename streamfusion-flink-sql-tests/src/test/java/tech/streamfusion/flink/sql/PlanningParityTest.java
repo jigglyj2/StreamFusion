@@ -54,7 +54,7 @@ class PlanningParityTest extends SqlParityTestSupport {
         tableEnvironment.createTemporaryView(
                 "explain_input", environment.fromData(Row.of(" a ")).returns(Types.ROW(Types.STRING)));
 
-        assertThat(tableEnvironment.explainSql("SELECT TRIM(f0) FROM explain_input"))
+        assertThat(tableEnvironment.explainSql("SELECT TRIM(CAST(f0 AS CHAR(3))) FROM explain_input"))
                 .contains("== StreamFusion Acceleration ==")
                 .contains("Accelerated: no")
                 .contains("projection[0]/TRIM")
@@ -74,7 +74,7 @@ class PlanningParityTest extends SqlParityTestSupport {
     }
 
     @Test
-    void unsupportedNestedCalcExpressionFallsBackWithItsPath() throws Exception {
+    void nestedTrimExpressionAccelerates() throws Exception {
         String sql = "SELECT UPPER(trimmed_name) FROM ("
                 + "SELECT TRIM(name) AS trimmed_name FROM "
                 + "(VALUES (' a '), ('b')) AS input(name)"
@@ -82,7 +82,7 @@ class PlanningParityTest extends SqlParityTestSupport {
 
         assertParity(sql, true);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
     }
 
     @ParameterizedTest(name = "{0}")
