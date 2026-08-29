@@ -360,6 +360,13 @@ first-mapping-wins rule for duplicate source characters and deletion when the ta
 shorter. StreamFusion converts a null target alphabet to empty before execution because Flink
 deletes matched characters in that case; null values or source alphabets retain Flink's result.
 Fixed-width `CHAR` columns remain on Flink pending padding coverage.
+`ELT(index, value, ...)` is accelerated for `VARCHAR` values and `INTEGER` indices. A native
+DataFusion `CASE` selects the one-based value and returns
+typed null for a null, nonpositive, or out-of-range index. Both indices and values may be computed
+expressions. Other signed index widths stay on Flink because Flink 2.3 itself throws
+`ClassCastException` for valid boxed `TINYINT`, `SMALLINT`, and `BIGINT` selections; StreamFusion
+does not silently introduce behavior where baseline Flink cannot produce a result. Binary values
+and fixed-width `CHAR` columns remain on Flink pending their distinct coercion and padding coverage.
 `REPEAT(value, count)` is accelerated for supported `VARCHAR` values and `INTEGER` counts,
 including computed counts. StreamFusion widens the count inside the native plan for DataFusion's
 vectorized kernel; zero and negative counts produce the empty string as in Flink, while null

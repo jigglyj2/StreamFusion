@@ -172,6 +172,7 @@ message Expression {
     StringTrim string_trim = 99;
     StringConcatWs string_concat_ws = 100;
     StringTranslate string_translate = 101;
+    StringElt string_elt = 102;
   }
 }
 
@@ -474,6 +475,11 @@ message StringTranslate {
   Expression value = 1;
   Expression source_characters = 2;
   Expression target_characters = 3;
+}
+
+message StringElt {
+  Expression index = 1;
+  repeated Expression values = 2;
 }
 
 enum StringTrimDirection {

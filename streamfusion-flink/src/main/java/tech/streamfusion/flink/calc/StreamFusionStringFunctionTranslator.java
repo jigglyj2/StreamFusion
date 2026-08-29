@@ -17,6 +17,7 @@ import tech.streamfusion.proto.plan.v1.CharacterFromCode;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.StringAscii;
 import tech.streamfusion.proto.plan.v1.StringConcatWs;
+import tech.streamfusion.proto.plan.v1.StringElt;
 import tech.streamfusion.proto.plan.v1.StringInitCap;
 import tech.streamfusion.proto.plan.v1.StringLeft;
 import tech.streamfusion.proto.plan.v1.StringPosition;
@@ -40,6 +41,14 @@ final class StreamFusionStringFunctionTranslator extends StreamFusionComplexType
         }
         if ("OVERLAY".equals(function)) {
             return "OVERLAY stays on Flink because Flink indexes UTF-16 code units and can produce an unpaired surrogate that Arrow UTF-8 cannot represent";
+        }
+        if ("ELT".equals(function) && hasNoArgMethod(expression, "getOperands")) {
+            java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
+            LogicalType indexType =
+                    operands.isEmpty() ? null : StreamFusionExpressionTranslator.expressionLogicalType(operands.get(0));
+            if (indexType != null && indexType.getTypeRoot() != LogicalTypeRoot.INTEGER) {
+                return "ELT stays on Flink unless its index is INTEGER because Flink 2.3 throws ClassCastException for valid boxed TINYINT, SMALLINT, and BIGINT indices";
+            }
         }
         return null;
     }
@@ -378,6 +387,45 @@ final class StreamFusionStringFunctionTranslator extends StreamFusionComplexType
             }
         }
         return Expression.newBuilder().setStringTranslate(translate).build();
+    }
+
+    static Expression elt(Object expression, RowType inputType, LogicalType expectedType) {
+        if (!"ELT".equals(functionName(expression)) || expectedType.getTypeRoot() != LogicalTypeRoot.VARCHAR) {
+            return null;
+        }
+        java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
+        if (operands.size() < 2) {
+            return null;
+        }
+        LogicalType indexType = logicalType(operands.get(0), inputType);
+        if (indexType == null || indexType.getTypeRoot() != LogicalTypeRoot.INTEGER) {
+            return null;
+        }
+        Expression index = StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, indexType);
+        if (index == null) {
+            return null;
+        }
+        org.apache.flink.table.types.logical.VarCharType stringType =
+                new org.apache.flink.table.types.logical.VarCharType(
+                        org.apache.flink.table.types.logical.VarCharType.MAX_LENGTH);
+        StringElt.Builder elt = StringElt.newBuilder().setIndex(index);
+        for (int operandIndex = 1; operandIndex < operands.size(); operandIndex++) {
+            Object operand = operands.get(operandIndex);
+            LogicalType operandType = logicalType(operand, inputType);
+            boolean characterLiteral = operandType != null
+                    && operandType.getTypeRoot() == LogicalTypeRoot.CHAR
+                    && literal(operand, String.class) != null;
+            if (operandType == null || (operandType.getTypeRoot() != LogicalTypeRoot.VARCHAR && !characterLiteral)) {
+                return null;
+            }
+            Expression value = StreamFusionProjectionTranslator.projectionExpression(
+                    operand, inputType, characterLiteral ? stringType : operandType);
+            if (value == null) {
+                return null;
+            }
+            elt.addValues(value);
+        }
+        return Expression.newBuilder().setStringElt(elt).build();
     }
 
     private static StringTrimDirection trimDirection(String flag) {

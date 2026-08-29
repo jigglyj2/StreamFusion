@@ -449,6 +449,18 @@ pub(super) fn create_expression(
                 schema,
             )
         }
+        Some(proto::expression::Expression::StringElt(elt)) => {
+            let index = elt
+                .index
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("ELT index is empty".to_string()))?;
+            let values = elt
+                .values
+                .iter()
+                .map(|value| create_expression(value, schema))
+                .collect::<Result<Vec<_>>>()?;
+            expressions::string_elt::create(create_expression(index, schema)?, values, schema)
+        }
         Some(proto::expression::Expression::Substring(substring)) => {
             let operand = substring
                 .operand
