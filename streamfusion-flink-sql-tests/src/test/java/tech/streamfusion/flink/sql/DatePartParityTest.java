@@ -40,6 +40,8 @@ class DatePartParityTest extends SqlParityTestSupport {
                 "SELECT EXTRACT(DAY FROM date_value), EXTRACT(DOY FROM date_value), "
                         + "EXTRACT(DOW FROM date_value), EXTRACT(ISODOW FROM date_value), "
                         + "EXTRACT(ISOYEAR FROM date_value) FROM " + INPUT,
+                "SELECT EXTRACT(EPOCH FROM date_value) FROM " + INPUT,
+                "SELECT date_value FROM " + INPUT + " WHERE EXTRACT(EPOCH FROM date_value) < 0",
                 "SELECT date_value FROM " + INPUT + " WHERE YEAR(date_value) = 2000");
     }
 }

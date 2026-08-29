@@ -347,7 +347,10 @@ is supported too. Flink canonicalizes the convenience functions to one
 `EXTRACT` expression; the Java planner records the calendar field and Calcite result width in
 protobuf, and Rust lowers it to DataFusion's Arrow temporal kernel. ISO week boundaries, dates
 before the Unix epoch, leap days, nulls, and the supported Flink date range have parity coverage.
-Timestamp, local-time-zone, epoch, and additional calendar fields remain on Flink
+`EXTRACT(EPOCH FROM date)` is also accelerated and returns Flink's signed whole-second offset from
+the Unix epoch. Pre-epoch dates, the epoch boundary, nulls, projections, and filters have parity
+coverage.
+Timestamp, local-time-zone, and additional calendar fields remain on Flink
 until their session-zone and precision contracts are separately proven.
 `HOUR(time)`, `MINUTE(time)`, `SECOND(time)`, and their `EXTRACT` forms are accelerated for
 timezone-free `TIME`. The same protobuf expression lowers to Arrow's temporal kernel over the

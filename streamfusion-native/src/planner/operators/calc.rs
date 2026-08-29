@@ -552,6 +552,7 @@ pub(super) fn create_expression(
                 proto::TemporalExtractField::Hour => "hour",
                 proto::TemporalExtractField::Minute => "minute",
                 proto::TemporalExtractField::Second => "second",
+                proto::TemporalExtractField::Epoch => "epoch",
                 proto::TemporalExtractField::Unspecified => {
                     return Err(DataFusionError::Plan(
                         "EXTRACT field is unspecified".to_string(),

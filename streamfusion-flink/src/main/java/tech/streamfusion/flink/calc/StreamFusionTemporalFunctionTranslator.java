@@ -83,6 +83,8 @@ final class StreamFusionTemporalFunctionTranslator extends StreamFusionComplexTy
                 return TemporalExtractField.TEMPORAL_EXTRACT_FIELD_MINUTE;
             case "SECOND":
                 return TemporalExtractField.TEMPORAL_EXTRACT_FIELD_SECOND;
+            case "EPOCH":
+                return TemporalExtractField.TEMPORAL_EXTRACT_FIELD_EPOCH;
             default:
                 return TemporalExtractField.TEMPORAL_EXTRACT_FIELD_UNSPECIFIED;
         }
