@@ -89,5 +89,6 @@ pub(crate) mod string_trim;
 pub(crate) mod struct_field;
 pub(crate) mod substring;
 pub(crate) mod tangent;
+pub(crate) mod unhex;
 pub(crate) mod upper;
 mod wrapping_cast;

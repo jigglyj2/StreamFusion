@@ -175,6 +175,7 @@ message Expression {
     StringElt string_elt = 102;
     StringSplitIndex string_split_index = 103;
     BinaryString binary_string = 104;
+    Unhex unhex = 105;
   }
 }
 
@@ -491,6 +492,10 @@ message StringSplitIndex {
 }
 
 message BinaryString {
+  Expression operand = 1;
+}
+
+message Unhex {
   Expression operand = 1;
 }
 

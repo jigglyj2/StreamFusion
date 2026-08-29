@@ -377,6 +377,11 @@ splitting, which is not equivalent to DataFusion's empty-delimiter behavior.
 dedicated native vector expression widens each value to a signed 64-bit integer and emits the same
 un-padded two's-complement representation as Flink, including 64 digits for negative values and
 `0` for zero. Null values remain null.
+`UNHEX(value)` is accelerated for `VARCHAR` expressions and returns Arrow binary data. Its
+dedicated native vector expression accepts upper- or lowercase ASCII hexadecimal digits, returns
+null for invalid input, and preserves Flink's unusual odd-length rule: the leading digit is
+validated but represented by a zero byte. Empty input produces an empty byte array and null input
+remains null. Fixed-width `CHAR` values remain on Flink pending padding parity coverage.
 `STR_TO_MAP` remains on Flink. Flink treats both separators as Java regular expressions, whereas
 DataFusion's similarly named Spark function performs literal delimiter matching; using it would
 produce different keys for valid Flink expressions. StreamFusion reports this distinction in

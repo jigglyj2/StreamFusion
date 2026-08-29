@@ -21,6 +21,7 @@ import tech.streamfusion.proto.plan.v1.Sha1;
 import tech.streamfusion.proto.plan.v1.Sha2Dynamic;
 import tech.streamfusion.proto.plan.v1.ShaAlgorithm;
 import tech.streamfusion.proto.plan.v1.ShaDigest;
+import tech.streamfusion.proto.plan.v1.Unhex;
 
 /** Translates byte-oriented scalar functions into native expressions. */
 final class StreamFusionBinaryFunctionTranslator extends StreamFusionComplexTypeSupport {
@@ -79,6 +80,27 @@ final class StreamFusionBinaryFunctionTranslator extends StreamFusionComplexType
                 ? null
                 : Expression.newBuilder()
                         .setBase64Encode(Base64Encode.newBuilder().setOperand(operand))
+                        .build();
+    }
+
+    static Expression unhex(Object expression, RowType inputType, LogicalType expectedType) {
+        if (!"UNHEX".equals(functionName(expression)) || expectedType.getTypeRoot() != LogicalTypeRoot.VARBINARY) {
+            return null;
+        }
+        List<?> operands = (List<?>) invoke(expression, "getOperands");
+        if (operands.size() != 1) {
+            return null;
+        }
+        LogicalType operandType = logicalType(operands.get(0), inputType);
+        if (operandType == null || operandType.getTypeRoot() != LogicalTypeRoot.VARCHAR) {
+            return null;
+        }
+        Expression operand =
+                StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, operandType);
+        return operand == null
+                ? null
+                : Expression.newBuilder()
+                        .setUnhex(Unhex.newBuilder().setOperand(operand))
                         .build();
     }
 
