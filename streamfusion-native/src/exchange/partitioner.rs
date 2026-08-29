@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use arrow::array::UInt32Array;
+use arrow::compute::take;
 use arrow::error::{ArrowError, Result};
 use arrow::record_batch::RecordBatch;
 
@@ -28,6 +29,20 @@ impl RoutedBatch {
 
     pub fn rows(&self) -> &UInt32Array {
         &self.rows
+    }
+
+    /// Materializes this destination immediately before network serialization.
+    ///
+    /// Routing itself remains a zero-copy selection over the input batch. A network edge must own
+    /// contiguous Arrow arrays, so this is the single intentional gather in the exchange path.
+    pub fn materialize(&self) -> Result<RecordBatch> {
+        let columns = self
+            .batch
+            .columns()
+            .iter()
+            .map(|column| take(column.as_ref(), &self.rows, None))
+            .collect::<Result<Vec<_>>>()?;
+        RecordBatch::try_new(Arc::clone(&self.batch.schema()), columns)
     }
 }
 
@@ -67,7 +82,7 @@ pub fn route_batch(
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{ArrayRef, Int32Array};
+    use arrow::array::{ArrayRef, Int32Array, Int8Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
 
     use super::*;
@@ -101,6 +116,49 @@ mod tests {
                 .values()
                 .as_ptr(),
             buffer
+        );
+    }
+
+    #[test]
+    fn gathers_each_destination_with_stable_changelog_order() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int32, false),
+            Field::new("value", DataType::Utf8, false),
+            Field::new("__streamfusion_row_kind", DataType::Int8, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![-1, 0, 1, 42])) as ArrayRef,
+                Arc::new(StringArray::from(vec!["minus", "zero", "one", "forty-two"])) as ArrayRef,
+                Arc::new(Int8Array::from(vec![1, 2, 0, 3])) as ArrayRef,
+            ],
+        )
+        .unwrap();
+
+        let routed = route_batch(batch, &[(0, KeyField::Integer)], 128, 4).unwrap();
+        let destination_two = routed
+            .iter()
+            .find(|partition| partition.destination() == 2)
+            .unwrap()
+            .materialize()
+            .unwrap();
+
+        assert_eq!(
+            destination_two
+                .column(1)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap(),
+            &StringArray::from(vec!["one", "forty-two"])
+        );
+        assert_eq!(
+            destination_two
+                .column(2)
+                .as_any()
+                .downcast_ref::<Int8Array>()
+                .unwrap(),
+            &Int8Array::from(vec![0, 3])
         );
     }
 }
