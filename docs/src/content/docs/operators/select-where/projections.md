@@ -41,7 +41,8 @@ vectorized extremum comparison, wrapped in a native
 null guard so any null argument produces null as Flink requires. All widths, negative values, three
 arguments, nulls, projections, and filters have parity coverage. Floating-point, fixed-width
 `CHAR`, and `TIMESTAMP_LTZ` overloads remain on Flink with an EXPLAIN reason until their NaN,
-signed-zero, padding, and session-zone rules are independently proven. Date ordering compares Arrow's signed
+signed-zero, padding, and session-zone rules are independently proven. Date ordering compares
+Arrow's signed
 epoch-day representation and covers pre-epoch dates, leap days, the supported range, nulls,
 projections, and filters.
 Time and timestamp ordering uses the precision-specific Arrow Time32, Time64, and Timestamp arrays
@@ -51,6 +52,9 @@ parity coverage.
 Decimal extrema retain Flink's resolved common precision and scale in Arrow `Decimal128` arrays.
 Mixed-scale coercion, precision 38, negative values, nulls, projections, and filters have parity
 coverage.
+Floating extrema stay on Flink because its boxed comparison order places NaN above every numeric
+value while DataFusion's extrema kernels place it below numeric values. Runtime-generated NaN and
+infinity coverage verifies this whole-Calc fallback.
 `VARCHAR` extrema use a dedicated vector expression that compares UTF-16 code units exactly as
 Flink's Java runtime does. This intentionally differs from ordinary UTF-8 byte ordering for some
 supplementary Unicode characters. ASCII, composed and decomposed Unicode, supplementary/BMP order,

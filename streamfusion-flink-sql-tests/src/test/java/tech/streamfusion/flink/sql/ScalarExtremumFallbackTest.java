@@ -19,9 +19,9 @@ class ScalarExtremumFallbackTest extends SqlParityTestSupport {
     @Test
     void floatingExtremumFallsBackWithSemanticReason() throws Exception {
         assertParity(
-                "SELECT GREATEST(a, b), LEAST(a, b) FROM "
-                        + "(VALUES (CAST(1.0 AS DOUBLE), CAST(2.0 AS DOUBLE)), "
-                        + "(CAST(NULL AS DOUBLE), CAST(3.0 AS DOUBLE))) input(a, b)",
+                "SELECT GREATEST(a / z, b / z), LEAST(a / z, b / z) FROM "
+                        + "(VALUES (CAST(0 AS DOUBLE), CAST(1 AS DOUBLE), CAST(0 AS DOUBLE)), "
+                        + "(CAST(-1 AS DOUBLE), CAST(0 AS DOUBLE), CAST(0 AS DOUBLE))) input(a, b, z)",
                 true);
 
         assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
