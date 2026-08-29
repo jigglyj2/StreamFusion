@@ -263,6 +263,9 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
     }
 
     private String unsupportedReason(StreamExecUnion union, ProcessorContext context) {
+        if (context == null) {
+            return null;
+        }
         try {
             Class<?> translator = Class.forName(
                     UNION_TRANSLATOR_CLASS,
