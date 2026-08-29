@@ -337,7 +337,7 @@ DataFusion's vectorized kernel matches Flink by returning null for a null separa
 null values without adding their separators, retaining empty strings, and returning an empty
 string when every value is null. Fixed-width `CHAR` columns remain on Flink pending padding
 coverage; character literals are accepted as variable-width arguments.
-`TRIM`, `LTRIM`, and `RTRIM` are accelerated for `VARCHAR` values. Standard SQL `LEADING`,
+`TRIM`, `BTRIM`, `LTRIM`, and `RTRIM` are accelerated for `VARCHAR` values. Standard SQL `LEADING`,
 `TRAILING`, and `BOTH` directions and Flink's optional trim-character expressions are preserved
 as an explicit protobuf direction plus native child expressions. The one-argument forms remove
 only ASCII spaces, matching Flink rather than treating tabs or other Unicode whitespace as spaces.

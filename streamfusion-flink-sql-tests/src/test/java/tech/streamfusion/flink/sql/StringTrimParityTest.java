@@ -63,6 +63,7 @@ class StringTrimParityTest extends SqlParityTestSupport {
     private static Stream<Arguments> defaultTrimCases() {
         return Stream.of(
                 Arguments.of("both", "TRIM(metric)"),
+                Arguments.of("btrim", "BTRIM(metric)"),
                 Arguments.of("leading", "LTRIM(metric)"),
                 Arguments.of("trailing", "RTRIM(metric)"));
     }
@@ -73,7 +74,8 @@ class StringTrimParityTest extends SqlParityTestSupport {
                 Arguments.of("leading", "TRIM(LEADING trim_characters FROM text_value)"),
                 Arguments.of("trailing", "TRIM(TRAILING trim_characters FROM text_value)"),
                 Arguments.of("ltrim", "LTRIM(text_value, trim_characters)"),
-                Arguments.of("rtrim", "RTRIM(text_value, trim_characters)"));
+                Arguments.of("rtrim", "RTRIM(text_value, trim_characters)"),
+                Arguments.of("btrim", "BTRIM(text_value, trim_characters)"));
     }
 
     private static void assertNativeCalcRan() {

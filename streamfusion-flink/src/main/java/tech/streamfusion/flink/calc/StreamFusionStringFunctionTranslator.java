@@ -239,7 +239,10 @@ final class StreamFusionStringFunctionTranslator extends StreamFusionComplexType
             return null;
         }
         String function = functionName(expression);
-        if (!("TRIM".equals(function) || "LTRIM".equals(function) || "RTRIM".equals(function))) {
+        if (!("TRIM".equals(function)
+                || "LTRIM".equals(function)
+                || "RTRIM".equals(function)
+                || "BTRIM".equals(function))) {
             return null;
         }
         java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
@@ -254,11 +257,13 @@ final class StreamFusionStringFunctionTranslator extends StreamFusionComplexType
             direction = trimDirection(flag);
             charactersOperand = operands.get(1);
             valueOperand = operands.get(2);
-        } else if (("LTRIM".equals(function) || "RTRIM".equals(function))
+        } else if (("LTRIM".equals(function) || "RTRIM".equals(function) || "BTRIM".equals(function))
                 && (operands.size() == 1 || operands.size() == 2)) {
             direction = "LTRIM".equals(function)
                     ? StringTrimDirection.STRING_TRIM_DIRECTION_LEADING
-                    : StringTrimDirection.STRING_TRIM_DIRECTION_TRAILING;
+                    : "RTRIM".equals(function)
+                            ? StringTrimDirection.STRING_TRIM_DIRECTION_TRAILING
+                            : StringTrimDirection.STRING_TRIM_DIRECTION_BOTH;
             valueOperand = operands.get(0);
             if (operands.size() == 2) {
                 charactersOperand = operands.get(1);
