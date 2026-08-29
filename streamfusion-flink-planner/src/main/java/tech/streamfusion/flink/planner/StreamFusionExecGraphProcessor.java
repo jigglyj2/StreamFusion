@@ -29,6 +29,7 @@ import org.apache.flink.table.planner.plan.nodes.exec.processor.ProcessorContext
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecCalc;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecCorrelate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecDropUpdateBefore;
+import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecExchange;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecExpand;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecUnion;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecValues;
@@ -90,6 +91,14 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             // RowKind is Flink changelog metadata, so this node is always eligible.
         } else if (node instanceof StreamExecExpand) {
             String reason = unsupportedReason((StreamExecExpand) node, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
+        } else if (node instanceof StreamExecExchange) {
+            StreamExecExchange exchange = (StreamExecExchange) node;
+            String reason = StreamFusionExchangeSupport.unsupportedReason(
+                    (RowType) exchange.getOutputType(),
+                    exchange.getInputProperties().get(0).getRequiredDistribution());
             if (reason != null) {
                 rejections.add(nodePath + "\n" + reason);
             }
@@ -159,6 +168,18 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     (RowType) union.getOutputType(),
                     "StreamFusionUnionAll");
             replacement.setInputEdges(union.getInputEdges().stream()
+                    .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                    .collect(Collectors.toList()));
+            return replacement;
+        }
+        if (node instanceof StreamExecExchange) {
+            StreamExecExchange exchange = (StreamExecExchange) node;
+            StreamFusionExecExchange replacement = new StreamFusionExecExchange(
+                    exchange.getPersistedConfig(),
+                    exchange.getInputProperties().get(0),
+                    (RowType) exchange.getOutputType(),
+                    "StreamFusionExchange");
+            replacement.setInputEdges(exchange.getInputEdges().stream()
                     .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
                     .collect(Collectors.toList()));
             return replacement;
