@@ -14,6 +14,7 @@ import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.OutOfMemoryException;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.flink.core.memory.ManagedMemoryUseCase;
+import org.apache.flink.metrics.MetricGroup;
 import org.apache.flink.metrics.groups.OperatorMetricGroup;
 import org.apache.flink.runtime.execution.Environment;
 import org.apache.flink.runtime.memory.MemoryManager;
@@ -47,9 +48,10 @@ public final class FlinkManagedMemory implements AllocationListener, NativeMemor
                     "Flink assigned no OPERATOR managed memory to StreamFusion; declare a positive managed-memory weight");
         }
         FlinkManagedMemory managedMemory = new FlinkManagedMemory(memoryManager, limit, name);
-        metricGroup.gauge("streamFusionManagedMemoryUsed", managedMemory::reserved);
-        metricGroup.gauge("streamFusionManagedMemoryPeak", managedMemory::peakReserved);
-        metricGroup.gauge("streamFusionManagedMemoryLimit", managedMemory::limit);
+        MetricGroup streamFusionMetrics = metricGroup.addGroup("StreamFusion");
+        streamFusionMetrics.gauge("managedMemoryUsed", managedMemory::reserved);
+        streamFusionMetrics.gauge("managedMemoryPeak", managedMemory::peakReserved);
+        streamFusionMetrics.gauge("managedMemoryLimit", managedMemory::limit);
         return managedMemory;
     }
 

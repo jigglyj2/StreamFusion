@@ -10,6 +10,7 @@ import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.flink.memory.FlinkManagedMemory;
+import tech.streamfusion.flink.metrics.FlinkMetricParity;
 
 /** Imports Arrow IPC frames and emits lightweight RowData views with their original envelope. */
 public final class NativeExchangeReaderOperator extends AbstractStreamOperator<RowData>
@@ -43,6 +44,8 @@ public final class NativeExchangeReaderOperator extends AbstractStreamOperator<R
     public void processElement(StreamRecord<NativeExchangeFrame> element) {
         try (ArrowExchangeInputBatch batch =
                 decoder.decode(serializedPlan, element.getValue(), rowType, managedMemory.allocator(), managedMemory)) {
+            FlinkMetricParity.replacePhysicalRecords(
+                    getMetricGroup().getIOMetricGroup().getNumRecordsInCounter(), 1, batch.size());
             for (int row = 0; row < batch.size(); row++) {
                 RowData value = batch.rowView(row);
                 output.collect(

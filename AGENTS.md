@@ -73,6 +73,20 @@ nodes available for fallback; do not add acceleration branches inside Flink oper
 Also follow Comet's protobuf plan communication, Arrow batch transport, ownership, and
 metric propagation patterns unless Flink semantics require a documented difference.
 
+Preserve Flink metric compatibility for every accelerated physical operator. Publish
+the same Flink metric names, types, units, scopes, lifecycle, and update semantics as
+the Flink operator being replaced, and make their values match for identical inputs,
+control events, checkpoints, and terminal paths. Standard I/O counters must count
+logical Flink records, never internal Arrow batches or IPC frames. Preserve every
+operator-specific counter, meter, histogram, and gauge; if exact semantics cannot be
+represented, keep the operator on Flink and report the fallback reason. For fused
+native plans, carry stable plan-node identities through protobuf and propagate native
+metrics back to the corresponding Java physical nodes using Comet's metric-tree model
+so each stage remains independently observable. StreamFusion-only diagnostics must
+live in an explicitly named StreamFusion metric subgroup and must not replace or
+redefine a Flink metric. Generated parity tests must compare the complete Flink metric
+surface and values in addition to the output changelog.
+
 Account all StreamFusion native memory, including DataFusion and custom Rust data
 structures, through Flink's existing managed/off-heap memory model. StreamFusion must
 not introduce a separate deployment-time memory budget: existing Flink TaskManager

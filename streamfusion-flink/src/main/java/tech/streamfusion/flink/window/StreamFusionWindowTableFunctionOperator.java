@@ -6,6 +6,7 @@ package tech.streamfusion.flink.window;
 
 import java.util.ArrayList;
 import java.util.List;
+import org.apache.flink.metrics.Counter;
 import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
 import org.apache.flink.streaming.api.operators.BoundedOneInput;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
@@ -31,13 +32,16 @@ import tech.streamfusion.proto.plan.v1.WindowTableFunction;
 final class StreamFusionWindowTableFunctionOperator extends AbstractStreamOperator<RowData>
         implements OneInputStreamOperator<RowData, RowData>, BoundedOneInput {
     private static final int BATCH_SIZE = 1024;
+    private static final String NULL_ROW_TIME_ELEMENTS_DROPPED_METRIC_NAME = "numNullRowTimeRecordsDropped";
 
     private final RowType inputType;
     private final RowType outputType;
+    private final int timeAttributeIndex;
     private final RowDataSerializer serializer;
     private final byte[] plan;
     private final List<BufferedRow> rows = new ArrayList<>(BATCH_SIZE);
     private transient StreamFusionTaskMemory taskMemory;
+    private transient Counter numNullRowTimeRecordsDropped;
 
     StreamFusionWindowTableFunctionOperator(
             RowType inputType,
@@ -46,6 +50,7 @@ final class StreamFusionWindowTableFunctionOperator extends AbstractStreamOperat
             StreamFusionWindowTableFunctionTranslator.WindowParameters parameters) {
         this.inputType = inputType;
         this.outputType = outputType;
+        this.timeAttributeIndex = timeAttributeIndex;
         this.serializer = new RowDataSerializer(inputType);
         this.plan = createPlan(timeAttributeIndex, parameters);
     }
@@ -59,11 +64,16 @@ final class StreamFusionWindowTableFunctionOperator extends AbstractStreamOperat
                 getMetricGroup(),
                 "streamfusion-window-table-function",
                 plan);
+        numNullRowTimeRecordsDropped = getMetricGroup().counter(NULL_ROW_TIME_ELEMENTS_DROPPED_METRIC_NAME);
     }
 
     @Override
     public void processElement(StreamRecord<RowData> element) {
         RowData value = element.getValue();
+        if (value.isNullAt(timeAttributeIndex)) {
+            numNullRowTimeRecordsDropped.inc();
+            return;
+        }
         rows.add(new BufferedRow(serializer.copy(value), value.getRowKind()));
         if (rows.size() == BATCH_SIZE) {
             flushBatch();
@@ -150,6 +160,10 @@ final class StreamFusionWindowTableFunctionOperator extends AbstractStreamOperat
                 .setRoot(Operator.newBuilder().setWindowTableFunction(window))
                 .build()
                 .toByteArray();
+    }
+
+    Counter getNumNullRowTimeRecordsDropped() {
+        return numNullRowTimeRecordsDropped;
     }
 
     private static final class BufferedRow {

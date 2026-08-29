@@ -36,5 +36,7 @@ versioned plan protobuf. A dedicated Rust physical operator expands Arrow batche
 Flink-compatible `window_start`, `window_end`, and `window_time` values. It uses Flink's exact epoch
 arithmetic and emission order: newest start first for HOP and increasing end for CUMULATE. Input
 columns and the bridge selection ordinal are gathered as Arrow arrays; rows are not serialized.
+The operator also publishes Flink's `numNullRowTimeRecordsDropped` counter and updates it
+when the same per-record null-time decision is made.
 
 See the [Flink 2.3 Windowing TVFs documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/window-tvf/).

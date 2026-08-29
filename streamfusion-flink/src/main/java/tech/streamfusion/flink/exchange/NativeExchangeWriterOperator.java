@@ -20,6 +20,7 @@ import org.apache.flink.table.runtime.typeutils.RowDataSerializer;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.memory.FlinkManagedMemory;
+import tech.streamfusion.flink.metrics.FlinkMetricParity;
 
 /** Batches RowData, routes it natively by key group, and emits Arrow IPC network frames. */
 public final class NativeExchangeWriterOperator extends AbstractStreamOperator<NativeExchangeFrame>
@@ -111,11 +112,15 @@ public final class NativeExchangeWriterOperator extends AbstractStreamOperator<N
         if (records.isEmpty()) {
             return;
         }
+        int logicalRecords = records.size();
         try (ArrowRowDataBatch batch = ArrowExchangeBatch.transpose(records, inputType, managedMemory.allocator())) {
-            for (NativeExchangeFrame frame :
-                    router.route(serializedPlan, batch, managedMemory.allocator(), managedMemory)) {
+            List<NativeExchangeFrame> frames =
+                    router.route(serializedPlan, batch, managedMemory.allocator(), managedMemory);
+            for (NativeExchangeFrame frame : frames) {
                 output.collect(new StreamRecord<>(frame));
             }
+            FlinkMetricParity.replacePhysicalRecords(
+                    getMetricGroup().getIOMetricGroup().getNumRecordsOutCounter(), frames.size(), logicalRecords);
         }
         records.clear();
     }

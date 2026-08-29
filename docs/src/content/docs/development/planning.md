@@ -56,6 +56,12 @@ parent consumes the output: a chain of three calc nodes remains calc â†’ calc â†
 The stages use ordinary DataFusion execution operators and remain separately visible
 for metrics, diagnostics, and parity tests.
 
+Metric compatibility is part of operator compatibility, not optional instrumentation.
+Every accelerated node retains the metric contract of its Flink counterpart, including
+operator-specific counters and the standard logical-record I/O semantics. Internal
+Arrow batches and exchange IPC frames are never exposed as Flink record counts. See
+[Metric compatibility](../metrics/) for the current audit and rules.
+
 Adjacent Calc fusion is implemented. Java encodes `Calc(Calc(...Input))` as one native
 protobuf tree, and Rust recursively lowers it into distinct DataFusion filter and
 projection stages. Each input batch crosses JNI once for the complete chain. The hidden

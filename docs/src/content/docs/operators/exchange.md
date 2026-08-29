@@ -43,6 +43,8 @@ and rescaling. A native writer converts the input to Arrow once and Rust compute
 contains rows for one key group. Flink maps that key group to the current downstream subtask and can
 remap restored frames after rescaling with its `RANGE` channel-state mapping. A native reader decodes
 the frame and exposes lightweight `RowData` views without row-by-row serialization.
+Flink's record counters continue to report logical rows on both sides of the exchange;
+internal Arrow IPC frames are transport units and are not published as record counts.
 
 The exchange stays in StreamFusion's core Flink runtime and planner modules because that mirrors
 Flink's own module design; it is not a separately deployed connector or integration.

@@ -62,13 +62,21 @@ class StreamFusionWindowTableFunctionParityTest {
                         CumulativeWindowAssigner.of(Duration.ofMillis(10_000), Duration.ofMillis(2_000))));
 
         for (Case testCase : cases) {
-            assertThat(run(streamFusion(testCase)))
-                    .as(testCase.kind.name())
-                    .containsExactlyElementsOf(run(flink(testCase.assigner)));
+            StreamFusionWindowTableFunctionOperator streamFusion = streamFusion(testCase);
+            AlignedWindowTableFunctionOperator flink = flink(testCase.assigner);
+
+            List<String> streamFusionOutput = run(streamFusion);
+            List<String> flinkOutput = run(flink);
+
+            assertThat(streamFusionOutput).as(testCase.kind.name()).containsExactlyElementsOf(flinkOutput);
+            assertThat(streamFusion.getNumNullRowTimeRecordsDropped().getCount())
+                    .as(testCase.kind.name() + " null-row metric")
+                    .isEqualTo(flink.getNumNullRowTimeRecordsDropped().getCount())
+                    .isEqualTo(1);
         }
     }
 
-    private static OneInputStreamOperator<RowData, RowData> streamFusion(Case testCase) {
+    private static StreamFusionWindowTableFunctionOperator streamFusion(Case testCase) {
         return new StreamFusionWindowTableFunctionOperator(
                 INPUT_TYPE,
                 OUTPUT_TYPE,
@@ -77,7 +85,7 @@ class StreamFusionWindowTableFunctionParityTest {
                         testCase.kind, testCase.size, testCase.slideOrStep, testCase.offset));
     }
 
-    private static OneInputStreamOperator<RowData, RowData> flink(GroupWindowAssigner<?> assigner) {
+    private static AlignedWindowTableFunctionOperator flink(GroupWindowAssigner<?> assigner) {
         @SuppressWarnings("unchecked")
         GroupWindowAssigner<org.apache.flink.table.runtime.operators.window.TimeWindow> timeAssigner =
                 (GroupWindowAssigner<org.apache.flink.table.runtime.operators.window.TimeWindow>) assigner;
