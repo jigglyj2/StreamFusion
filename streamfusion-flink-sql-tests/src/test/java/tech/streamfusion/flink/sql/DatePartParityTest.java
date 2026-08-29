@@ -36,6 +36,10 @@ class DatePartParityTest extends SqlParityTestSupport {
         return Stream.of(
                 "SELECT YEAR(date_value), QUARTER(date_value), MONTH(date_value), WEEK(date_value) FROM " + INPUT,
                 "SELECT EXTRACT(YEAR FROM date_value), EXTRACT(MONTH FROM date_value) FROM " + INPUT,
+                "SELECT DAYOFMONTH(date_value), DAYOFYEAR(date_value), DAYOFWEEK(date_value) FROM " + INPUT,
+                "SELECT EXTRACT(DAY FROM date_value), EXTRACT(DOY FROM date_value), "
+                        + "EXTRACT(DOW FROM date_value), EXTRACT(ISODOW FROM date_value), "
+                        + "EXTRACT(ISOYEAR FROM date_value) FROM " + INPUT,
                 "SELECT date_value FROM " + INPUT + " WHERE YEAR(date_value) = 2000");
     }
 }

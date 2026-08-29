@@ -11,7 +11,8 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Schema};
 use datafusion::common::config::ConfigOptions;
 use datafusion::error::{DataFusionError, Result};
-use datafusion::physical_expr::expressions::{CastExpr, Literal};
+use datafusion::logical_expr::Operator;
+use datafusion::physical_expr::expressions::{BinaryExpr, CastExpr, Literal};
 use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 use datafusion::scalar::ScalarValue;
 
@@ -26,15 +27,25 @@ pub(crate) fn create(
             "calendar EXTRACT currently requires Arrow Date32 input".to_string(),
         ));
     }
-    let extracted = Arc::new(ScalarFunctionExpr::try_new(
+    let datafusion_field = if field == "flink_dow" { "dow" } else { field };
+    let mut extracted = Arc::new(ScalarFunctionExpr::try_new(
         datafusion_functions::datetime::date_part(),
         vec![
-            Arc::new(Literal::new(ScalarValue::Utf8(Some(field.to_string())))),
+            Arc::new(Literal::new(ScalarValue::Utf8(Some(
+                datafusion_field.to_string(),
+            )))),
             operand,
         ],
         schema,
         Arc::new(ConfigOptions::new()),
     )?) as Arc<dyn PhysicalExpr>;
+    if field == "flink_dow" {
+        extracted = Arc::new(BinaryExpr::new(
+            extracted,
+            Operator::Plus,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+        ));
+    }
     if result_is_bigint {
         Ok(Arc::new(CastExpr::new(extracted, DataType::Int64, None)))
     } else {

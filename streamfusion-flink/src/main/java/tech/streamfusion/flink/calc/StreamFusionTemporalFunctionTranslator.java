@@ -67,6 +67,16 @@ final class StreamFusionTemporalFunctionTranslator extends StreamFusionComplexTy
                 return TemporalExtractField.TEMPORAL_EXTRACT_FIELD_MONTH;
             case "WEEK":
                 return TemporalExtractField.TEMPORAL_EXTRACT_FIELD_WEEK;
+            case "DAY":
+                return TemporalExtractField.TEMPORAL_EXTRACT_FIELD_DAY;
+            case "DOY":
+                return TemporalExtractField.TEMPORAL_EXTRACT_FIELD_DAY_OF_YEAR;
+            case "DOW":
+                return TemporalExtractField.TEMPORAL_EXTRACT_FIELD_DAY_OF_WEEK;
+            case "ISODOW":
+                return TemporalExtractField.TEMPORAL_EXTRACT_FIELD_ISO_DAY_OF_WEEK;
+            case "ISOYEAR":
+                return TemporalExtractField.TEMPORAL_EXTRACT_FIELD_ISO_YEAR;
             default:
                 return TemporalExtractField.TEMPORAL_EXTRACT_FIELD_UNSPECIFIED;
         }
