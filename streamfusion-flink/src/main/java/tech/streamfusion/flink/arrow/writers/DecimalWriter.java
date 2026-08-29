@@ -21,6 +21,7 @@ package tech.streamfusion.flink.arrow.writers;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import org.apache.arrow.vector.DecimalVector;
+import org.apache.arrow.vector.util.DecimalUtility;
 import org.apache.flink.annotation.Internal;
 import org.apache.flink.table.data.ArrayData;
 import org.apache.flink.table.data.DecimalData;
@@ -63,7 +64,9 @@ public abstract class DecimalWriter<T> extends ArrowFieldWriter<T> {
             if (bigDecimal == null) {
                 ((DecimalVector) getValueVector()).setNull(getCount());
             } else {
-                ((DecimalVector) getValueVector()).setSafe(getCount(), bigDecimal);
+                DecimalVector vector = (DecimalVector) getValueVector();
+                DecimalUtility.writeBigDecimalToArrowBuf(
+                        bigDecimal, vector.getDataBuffer(), getCount(), vector.getTypeWidth());
             }
         }
     }

@@ -17,6 +17,8 @@ import org.apache.flink.types.RowKind;
 
 /** Reusable, directly written RowData-to-Arrow boundary batch. */
 public final class ArrowRowDataBatchWriter implements AutoCloseable {
+    private static final int DEFAULT_BATCH_CAPACITY = 1024;
+
     private final RowType rowType;
     private final BufferAllocator allocator;
     private final VectorSchemaRoot root;
@@ -25,10 +27,14 @@ public final class ArrowRowDataBatchWriter implements AutoCloseable {
     private boolean finished;
 
     public ArrowRowDataBatchWriter(RowType rowType, BufferAllocator allocator) {
+        this(rowType, allocator, DEFAULT_BATCH_CAPACITY);
+    }
+
+    public ArrowRowDataBatchWriter(RowType rowType, BufferAllocator allocator, int batchCapacity) {
         this.rowType = rowType;
         this.allocator = allocator;
         this.root = VectorSchemaRoot.create(ArrowUtils.toArrowSchema(rowType), allocator);
-        this.writer = ArrowUtils.createRowDataArrowWriter(root, rowType);
+        this.writer = ArrowUtils.createRowDataArrowWriter(root, rowType, batchCapacity);
     }
 
     /** Copies one row's field values directly into their Arrow column buffers. */

@@ -20,7 +20,6 @@ package tech.streamfusion.flink.arrow.writers;
 
 import org.apache.arrow.vector.TimeStampMicroVector;
 import org.apache.arrow.vector.TimeStampMilliVector;
-import org.apache.arrow.vector.TimeStampNanoVector;
 import org.apache.arrow.vector.TimeStampSecVector;
 import org.apache.arrow.vector.TimeStampVector;
 import org.apache.arrow.vector.ValueVector;
@@ -66,19 +65,17 @@ public abstract class TimestampWriter<T> extends ArrowFieldWriter<T> {
         } else {
             TimestampData timestamp = readTimestamp(in, ordinal);
 
+            long value;
             if (valueVector instanceof TimeStampSecVector) {
-                ((TimeStampSecVector) valueVector).setSafe(getCount(), timestamp.getMillisecond() / 1000);
+                value = timestamp.getMillisecond() / 1000;
             } else if (valueVector instanceof TimeStampMilliVector) {
-                ((TimeStampMilliVector) valueVector).setSafe(getCount(), timestamp.getMillisecond());
+                value = timestamp.getMillisecond();
             } else if (valueVector instanceof TimeStampMicroVector) {
-                ((TimeStampMicroVector) valueVector)
-                        .setSafe(
-                                getCount(),
-                                timestamp.getMillisecond() * 1000 + timestamp.getNanoOfMillisecond() / 1000);
+                value = timestamp.getMillisecond() * 1000 + timestamp.getNanoOfMillisecond() / 1000;
             } else {
-                ((TimeStampNanoVector) valueVector)
-                        .setSafe(getCount(), timestamp.getMillisecond() * 1_000_000 + timestamp.getNanoOfMillisecond());
+                value = timestamp.getMillisecond() * 1_000_000 + timestamp.getNanoOfMillisecond();
             }
+            ((TimeStampVector) valueVector).getDataBuffer().setLong((long) getCount() * Long.BYTES, value);
         }
     }
 

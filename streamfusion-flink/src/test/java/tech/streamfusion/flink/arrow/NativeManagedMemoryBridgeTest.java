@@ -62,6 +62,37 @@ class NativeManagedMemoryBridgeTest extends ArrowCDataBridgeTestSupport {
         assertThat(memory.reserved()).isZero();
     }
 
+    @Test
+    void reusesOneLoweredPhysicalPlanAcrossArrowBatches() {
+        byte[] plan = chainedSelectionPlan();
+        TrackingMemoryManager memory = new TrackingMemoryManager(64L << 20);
+        RowType rowType = RowType.of(new IntType(false));
+
+        try (RootAllocator allocator = new RootAllocator(64L << 20);
+                NativeExecutionContext context = new NativeExecutionContext(plan, memory)) {
+            for (int offset : new int[] {0, 10}) {
+                List<RowData> rows = List.of(
+                        GenericRowData.of(offset + 1), GenericRowData.of(offset + 2), GenericRowData.of(offset + 3));
+                try (ArrowRowDataBatch input = ArrowRowDataBatch.transpose(rows, rowType, allocator);
+                        NativeCalcResult result =
+                                ArrowCDataBridge.executeWithSelection(context, input, rowType, allocator)) {
+                    if (offset == 0) {
+                        assertThat(result.batch().size()).isEqualTo(2);
+                        assertThat(result.batch().rowView(0).getInt(0)).isEqualTo(12);
+                        assertThat(result.batch().rowView(1).getInt(0)).isEqualTo(13);
+                    } else {
+                        assertThat(result.batch().size()).isEqualTo(3);
+                        assertThat(result.batch().rowView(0).getInt(0)).isEqualTo(21);
+                        assertThat(result.batch().rowView(1).getInt(0)).isEqualTo(22);
+                        assertThat(result.batch().rowView(2).getInt(0)).isEqualTo(23);
+                    }
+                }
+            }
+        }
+
+        assertThat(memory.reserved()).isZero();
+    }
+
     private static final class TrackingMemoryManager implements NativeMemoryManager {
         private final long limit;
         private long reserved;

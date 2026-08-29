@@ -16,7 +16,6 @@ use jni::EnvUnowned;
 
 use super::common::execute_and_export;
 use crate::execution_context;
-use crate::planner::create_plan_from_decoded;
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeValuesBridge_executeArrowBatch<
@@ -38,16 +37,14 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeValuesBridge_ex
                 jni::errors::Error::JavaException
             })?;
             let rows = unsafe {
-                let plan = create_plan_from_decoded(context.plan(), Vec::new());
-                match plan {
-                    Ok(plan) => execute_and_export(
+                context.execute_plan(Vec::new(), |plan| {
+                    execute_and_export(
                         &context,
                         plan,
                         output_array_address as *mut FFI_ArrowArray,
                         output_schema_address as *mut FFI_ArrowSchema,
-                    ),
-                    Err(error) => Err(error),
-                }
+                    )
+                })
             }
             .map_err(|error| {
                 let _ = env.throw_new(

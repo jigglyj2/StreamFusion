@@ -51,13 +51,17 @@ public abstract class ArrayWriter<T> extends ArrowFieldWriter<T> {
 
     @Override
     public void doWrite(T in, int ordinal) {
-        if (!isNullAt(in, ordinal)) {
-            ((ListVector) getValueVector()).startNewValue(getCount());
+        ListVector vector = (ListVector) getValueVector();
+        if (isNullAt(in, ordinal)) {
+            vector.setNull(getCount());
+            vector.getOffsetBuffer().setInt((getCount() + 1L) * Integer.BYTES, elementWriter.getCount());
+        } else {
+            vector.startNewValue(getCount());
             ArrayData array = readArray(in, ordinal);
             for (int i = 0; i < array.size(); i++) {
                 elementWriter.write(array, i);
             }
-            ((ListVector) getValueVector()).endValue(getCount(), array.size());
+            vector.endValue(getCount(), array.size());
         }
     }
 
@@ -68,9 +72,9 @@ public abstract class ArrayWriter<T> extends ArrowFieldWriter<T> {
     }
 
     @Override
-    public void reset() {
-        super.reset();
-        elementWriter.reset();
+    public void reset(int batchCapacity) {
+        super.reset(batchCapacity);
+        elementWriter.reset(batchCapacity);
     }
 
     // ------------------------------------------------------------------------------------------

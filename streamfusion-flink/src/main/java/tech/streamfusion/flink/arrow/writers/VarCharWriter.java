@@ -28,6 +28,9 @@ import org.apache.flink.table.data.StringData;
 @Internal
 public abstract class VarCharWriter<T> extends ArrowFieldWriter<T> {
 
+    private final VariableWidthWriter variableWidthWriter;
+    private int dataOffset;
+
     public static VarCharWriter<RowData> forRow(VarCharVector varCharVector) {
         return new VarCharWriterForRow(varCharVector);
     }
@@ -40,6 +43,7 @@ public abstract class VarCharWriter<T> extends ArrowFieldWriter<T> {
 
     private VarCharWriter(VarCharVector varCharVector) {
         super(varCharVector);
+        variableWidthWriter = new VariableWidthWriter(varCharVector);
     }
 
     abstract boolean isNullAt(T in, int ordinal);
@@ -49,11 +53,21 @@ public abstract class VarCharWriter<T> extends ArrowFieldWriter<T> {
     @Override
     public void doWrite(T in, int ordinal) {
         if (isNullAt(in, ordinal)) {
-            ((VarCharVector) getValueVector()).setNull(getCount());
+            variableWidthWriter.writeNull(getCount(), dataOffset);
         } else {
-            ((VarCharVector) getValueVector())
-                    .setSafe(getCount(), readString(in, ordinal).toBytes());
+            dataOffset = variableWidthWriter.writeString(getCount(), dataOffset, readString(in, ordinal));
         }
+    }
+
+    @Override
+    protected void onVectorReallocated() {
+        variableWidthWriter.refreshDataBuffer();
+    }
+
+    @Override
+    public void reset(int batchCapacity) {
+        super.reset(batchCapacity);
+        dataOffset = 0;
     }
 
     // ------------------------------------------------------------------------------------------

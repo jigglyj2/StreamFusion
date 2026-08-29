@@ -14,12 +14,15 @@ use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::TaskContext;
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use jni::objects::{Global, JObject};
 use jni::JavaVM;
 use prost::Message;
 
 use crate::memory_pool::{FlinkMemoryPool, JvmMemoryReservationBroker};
+use crate::planner::create_plan_from_decoded;
+use crate::planner::operators::reusable_input::ReusableInputExec;
 use crate::proto;
 
 pub(crate) struct NativeExecutionContext {
@@ -27,7 +30,13 @@ pub(crate) struct NativeExecutionContext {
     runtime: tokio::runtime::Runtime,
     task_context: Arc<TaskContext>,
     memory_pool: Arc<dyn MemoryPool>,
+    physical_plan: Mutex<Option<CachedPhysicalPlan>>,
     _plan_reservation: MemoryReservation,
+}
+
+struct CachedPhysicalPlan {
+    plan: Arc<dyn ExecutionPlan>,
+    inputs: Vec<Arc<ReusableInputExec>>,
 }
 
 impl NativeExecutionContext {
@@ -55,12 +64,9 @@ impl NativeExecutionContext {
             runtime,
             task_context,
             memory_pool,
+            physical_plan: Mutex::new(None),
             _plan_reservation: plan_reservation,
         })
-    }
-
-    pub(crate) fn plan(&self) -> &proto::NativePlan {
-        &self.plan
     }
 
     pub(crate) fn runtime(&self) -> &tokio::runtime::Runtime {
@@ -73,6 +79,49 @@ impl NativeExecutionContext {
 
     pub(crate) fn reservation(&self, consumer: impl Into<String>) -> MemoryReservation {
         MemoryConsumer::new(consumer).register(&self.memory_pool)
+    }
+
+    pub(crate) fn execute_plan<T>(
+        &self,
+        batches: Vec<arrow::array::RecordBatch>,
+        execute: impl FnOnce(Arc<dyn ExecutionPlan>) -> Result<T>,
+    ) -> Result<T> {
+        let mut cached = self.physical_plan.lock().map_err(|_| {
+            DataFusionError::Internal("native physical-plan cache lock poisoned".to_string())
+        })?;
+        if cached.is_none() {
+            let inputs = batches
+                .iter()
+                .map(|batch| Arc::new(ReusableInputExec::new(batch.schema())))
+                .collect::<Vec<_>>();
+            let external_inputs = inputs
+                .iter()
+                .map(|input| Arc::clone(input) as Arc<dyn ExecutionPlan>)
+                .collect();
+            let plan = create_plan_from_decoded(&self.plan, external_inputs)?;
+            *cached = Some(CachedPhysicalPlan { plan, inputs });
+        }
+        let cached = cached.as_ref().expect("physical plan was initialized");
+        if cached.inputs.len() != batches.len() {
+            return Err(DataFusionError::Execution(format!(
+                "native plan expects {} inputs, received {}",
+                cached.inputs.len(),
+                batches.len()
+            )));
+        }
+        for (input, batch) in cached.inputs.iter().zip(batches) {
+            if let Err(error) = input.replace_batch(batch) {
+                for input in &cached.inputs {
+                    input.clear();
+                }
+                return Err(error);
+            }
+        }
+        let result = execute(Arc::clone(&cached.plan));
+        for input in &cached.inputs {
+            input.clear();
+        }
+        result
     }
 }
 

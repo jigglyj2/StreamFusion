@@ -18,7 +18,13 @@
 
 package tech.streamfusion.flink.arrow.writers;
 
+import org.apache.arrow.memory.ArrowBuf;
+import org.apache.arrow.vector.BaseFixedWidthVector;
+import org.apache.arrow.vector.BaseVariableWidthVector;
+import org.apache.arrow.vector.NullVector;
 import org.apache.arrow.vector.ValueVector;
+import org.apache.arrow.vector.complex.ListVector;
+import org.apache.arrow.vector.complex.StructVector;
 import org.apache.flink.annotation.Internal;
 import org.apache.flink.util.Preconditions;
 
@@ -36,8 +42,12 @@ public abstract class ArrowFieldWriter<IN> {
     /** The current count of elements written. */
     private int count = 0;
 
+    /** Cached capacity avoids Arrow's checked growth path for every value. */
+    private int valueCapacity;
+
     public ArrowFieldWriter(ValueVector valueVector) {
         this.valueVector = Preconditions.checkNotNull(valueVector);
+        this.valueCapacity = valueVector.getValueCapacity();
     }
 
     /** Returns the underlying container which stores the sequence of values of a column. */
@@ -55,6 +65,9 @@ public abstract class ArrowFieldWriter<IN> {
 
     /** Writes the specified ordinal of the specified row. */
     public void write(IN row, int ordinal) {
+        if (count >= valueCapacity && !(valueVector instanceof NullVector)) {
+            growValueCapacity();
+        }
         doWrite(row, ordinal);
         count += 1;
     }
@@ -64,9 +77,78 @@ public abstract class ArrowFieldWriter<IN> {
         valueVector.setValueCount(count);
     }
 
-    /** Resets the state of the writer to write the next batch of fields. */
-    public void reset() {
-        valueVector.reset();
+    /**
+     * Resets logical writer state without clearing reusable data buffers.
+     *
+     * <p>Every writer overwrites the validity bit for each logical value. Initializing the tiny
+     * validity bitmap to all-valid lets non-null fast paths write only their data while null paths
+     * clear the corresponding bit.
+     */
+    public void reset(int batchCapacity) {
+        valueVector.setValueCount(0);
         count = 0;
+        valueCapacity = valueVector.getValueCapacity();
+        resetOffsets();
+        initializeValidity(valueCapacity);
+    }
+
+    private void growValueCapacity() {
+        int previousCapacity = valueCapacity;
+        do {
+            valueVector.reAlloc();
+            valueCapacity = valueVector.getValueCapacity();
+        } while (count >= valueCapacity);
+        initializeValidity(previousCapacity, valueCapacity);
+        onVectorReallocated();
+    }
+
+    /** Refreshes writer-specific cached buffer views after Arrow grows a vector. */
+    protected void onVectorReallocated() {}
+
+    private void resetOffsets() {
+        if (valueVector instanceof BaseVariableWidthVector) {
+            BaseVariableWidthVector variableWidthVector = (BaseVariableWidthVector) valueVector;
+            variableWidthVector.setLastSet(-1);
+            variableWidthVector.getOffsetBuffer().setInt(0, 0);
+        } else if (valueVector instanceof ListVector) {
+            ListVector listVector = (ListVector) valueVector;
+            listVector.setLastSet(-1);
+            listVector.getOffsetBuffer().setInt(0, 0);
+        }
+    }
+
+    private void initializeValidity(int values) {
+        initializeValidity(0, values);
+    }
+
+    private void initializeValidity(int fromValue, int toValue) {
+        if (toValue <= fromValue) {
+            return;
+        }
+        ArrowBuf validity = null;
+        if (valueVector instanceof BaseFixedWidthVector) {
+            validity = ((BaseFixedWidthVector) valueVector).getValidityBuffer();
+        } else if (valueVector instanceof BaseVariableWidthVector) {
+            validity = ((BaseVariableWidthVector) valueVector).getValidityBuffer();
+        } else if (valueVector instanceof ListVector) {
+            validity = ((ListVector) valueVector).getValidityBuffer();
+        } else if (valueVector instanceof StructVector) {
+            validity = ((StructVector) valueVector).getValidityBuffer();
+        }
+        if (validity != null) {
+            int value = fromValue;
+            while (value < toValue && (value & 7) != 0) {
+                org.apache.arrow.vector.BitVectorHelper.setBit(validity, value++);
+            }
+            long firstByte = value / 8L;
+            long byteCount = (toValue - value) / 8L;
+            if (byteCount > 0) {
+                validity.setOne(firstByte, byteCount);
+                value += Math.toIntExact(byteCount * 8L);
+            }
+            while (value < toValue) {
+                org.apache.arrow.vector.BitVectorHelper.setBit(validity, value++);
+            }
+        }
     }
 }

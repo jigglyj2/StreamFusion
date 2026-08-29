@@ -50,7 +50,9 @@ public abstract class FloatWriter<T> extends ArrowFieldWriter<T> {
         if (isNullAt(in, ordinal)) {
             ((Float4Vector) getValueVector()).setNull(getCount());
         } else {
-            ((Float4Vector) getValueVector()).setSafe(getCount(), readFloat(in, ordinal));
+            ((Float4Vector) getValueVector())
+                    .getDataBuffer()
+                    .setFloat((long) getCount() * Float.BYTES, readFloat(in, ordinal));
         }
     }
 

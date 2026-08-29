@@ -6,11 +6,7 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
-use std::sync::Arc;
-
 use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
-use datafusion::datasource::memory::MemorySourceConfig;
-use datafusion::physical_plan::ExecutionPlan;
 use jni::errors::ThrowRuntimeExAndDefault;
 use jni::jni_str;
 use jni::objects::{JClass, JLongArray};
@@ -20,7 +16,6 @@ use jni::EnvUnowned;
 
 use super::common::{execute_and_export, import_input};
 use crate::execution_context::{self, NativeExecutionContext};
-use crate::planner::create_plan_from_decoded;
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeUnionBridge_executeArrowBatches<
@@ -108,7 +103,7 @@ unsafe fn execute_arrow_inputs(
         ));
     }
     let mut row_offset = 0;
-    let mut inputs: Vec<Arc<dyn ExecutionPlan>> = Vec::with_capacity(input_array_addresses.len());
+    let mut inputs = Vec::with_capacity(input_array_addresses.len());
     let mut input_reservations = Vec::with_capacity(input_array_addresses.len());
     for (&array_address, &schema_address) in input_array_addresses
         .iter()
@@ -124,13 +119,9 @@ unsafe fn execute_arrow_inputs(
         }?;
         row_offset += batch.num_rows();
         input_reservations.push(reservation);
-        let schema = batch.schema();
-        inputs.push(MemorySourceConfig::try_new_exec(
-            &[vec![batch]],
-            schema,
-            None,
-        )?);
+        inputs.push(batch);
     }
-    let plan = create_plan_from_decoded(context.plan(), inputs)?;
-    unsafe { execute_and_export(context, plan, output_array_address, output_schema_address) }
+    context.execute_plan(inputs, |plan| unsafe {
+        execute_and_export(context, plan, output_array_address, output_schema_address)
+    })
 }

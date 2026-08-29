@@ -27,6 +27,9 @@ import org.apache.flink.table.data.RowData;
 @Internal
 public abstract class VarBinaryWriter<T> extends ArrowFieldWriter<T> {
 
+    private final VariableWidthWriter variableWidthWriter;
+    private int dataOffset;
+
     public static VarBinaryWriter<RowData> forRow(VarBinaryVector varBinaryVector) {
         return new VarBinaryWriterForRow(varBinaryVector);
     }
@@ -39,6 +42,7 @@ public abstract class VarBinaryWriter<T> extends ArrowFieldWriter<T> {
 
     private VarBinaryWriter(VarBinaryVector varBinaryVector) {
         super(varBinaryVector);
+        variableWidthWriter = new VariableWidthWriter(varBinaryVector);
     }
 
     abstract boolean isNullAt(T in, int ordinal);
@@ -48,10 +52,21 @@ public abstract class VarBinaryWriter<T> extends ArrowFieldWriter<T> {
     @Override
     public void doWrite(T in, int ordinal) {
         if (isNullAt(in, ordinal)) {
-            ((VarBinaryVector) getValueVector()).setNull(getCount());
+            variableWidthWriter.writeNull(getCount(), dataOffset);
         } else {
-            ((VarBinaryVector) getValueVector()).setSafe(getCount(), readBinary(in, ordinal));
+            dataOffset = variableWidthWriter.writeBytes(getCount(), dataOffset, readBinary(in, ordinal));
         }
+    }
+
+    @Override
+    protected void onVectorReallocated() {
+        variableWidthWriter.refreshDataBuffer();
+    }
+
+    @Override
+    public void reset(int batchCapacity) {
+        super.reset(batchCapacity);
+        dataOffset = 0;
     }
 
     // ------------------------------------------------------------------------------------------

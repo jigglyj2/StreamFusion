@@ -50,7 +50,7 @@ public abstract class TinyIntWriter<T> extends ArrowFieldWriter<T> {
         if (isNullAt(in, ordinal)) {
             ((TinyIntVector) getValueVector()).setNull(getCount());
         } else {
-            ((TinyIntVector) getValueVector()).setSafe(getCount(), readByte(in, ordinal));
+            ((TinyIntVector) getValueVector()).getDataBuffer().setByte(getCount(), readByte(in, ordinal));
         }
     }
 

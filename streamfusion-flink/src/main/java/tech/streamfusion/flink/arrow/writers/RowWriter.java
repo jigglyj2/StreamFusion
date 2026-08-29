@@ -75,10 +75,10 @@ public abstract class RowWriter<T> extends ArrowFieldWriter<T> {
     }
 
     @Override
-    public void reset() {
-        super.reset();
+    public void reset(int batchCapacity) {
+        super.reset(batchCapacity);
         for (ArrowFieldWriter<?> fieldsWriter : fieldsWriters) {
-            fieldsWriter.reset();
+            fieldsWriter.reset(batchCapacity);
         }
     }
 

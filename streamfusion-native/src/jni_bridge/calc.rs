@@ -7,7 +7,6 @@
 //     http://www.apache.org/licenses/LICENSE-2.0
 
 use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
-use datafusion::datasource::memory::MemorySourceConfig;
 use jni::errors::ThrowRuntimeExAndDefault;
 use jni::jni_str;
 use jni::objects::JClass;
@@ -17,7 +16,6 @@ use jni::EnvUnowned;
 
 use super::common::{execute_and_export, import_input};
 use crate::execution_context::{self, NativeExecutionContext};
-use crate::planner::create_plan_from_decoded;
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeCalcBridge_executeArrowBatch<
@@ -70,8 +68,7 @@ unsafe fn execute_arrow(
 ) -> datafusion::error::Result<usize> {
     let (input_batch, _input_reservation) =
         unsafe { import_input(context, input_array_address, input_schema_address, 0) }?;
-    let schema = input_batch.schema();
-    let source = MemorySourceConfig::try_new_exec(&[vec![input_batch]], schema, None)?;
-    let plan = create_plan_from_decoded(context.plan(), vec![source])?;
-    unsafe { execute_and_export(context, plan, output_array_address, output_schema_address) }
+    context.execute_plan(vec![input_batch], |plan| unsafe {
+        execute_and_export(context, plan, output_array_address, output_schema_address)
+    })
 }

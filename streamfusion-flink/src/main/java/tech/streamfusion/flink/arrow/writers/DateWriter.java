@@ -50,7 +50,9 @@ public abstract class DateWriter<T> extends ArrowFieldWriter<T> {
         if (isNullAt(in, ordinal)) {
             ((DateDayVector) getValueVector()).setNull(getCount());
         } else {
-            ((DateDayVector) getValueVector()).setSafe(getCount(), readDate(in, ordinal));
+            ((DateDayVector) getValueVector())
+                    .getDataBuffer()
+                    .setInt((long) getCount() * Integer.BYTES, readDate(in, ordinal));
         }
     }
 

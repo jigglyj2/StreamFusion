@@ -19,6 +19,7 @@
 package tech.streamfusion.flink.arrow.writers;
 
 import org.apache.arrow.vector.BitVector;
+import org.apache.arrow.vector.BitVectorHelper;
 import org.apache.flink.annotation.Internal;
 import org.apache.flink.table.data.ArrayData;
 import org.apache.flink.table.data.RowData;
@@ -49,10 +50,13 @@ public abstract class BooleanWriter<T> extends ArrowFieldWriter<T> {
     public void doWrite(T in, int ordinal) {
         if (isNullAt(in, ordinal)) {
             ((BitVector) getValueVector()).setNull(getCount());
-        } else if (readBoolean(in, ordinal)) {
-            ((BitVector) getValueVector()).setSafe(getCount(), 1);
         } else {
-            ((BitVector) getValueVector()).setSafe(getCount(), 0);
+            BitVector vector = (BitVector) getValueVector();
+            if (readBoolean(in, ordinal)) {
+                BitVectorHelper.setBit(vector.getDataBuffer(), getCount());
+            } else {
+                BitVectorHelper.unsetBit(vector.getDataBuffer(), getCount());
+            }
         }
     }
 

@@ -14,7 +14,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use crate::{decode_plan, proto};
 
 mod expressions;
-mod operators;
+pub(crate) mod operators;
 
 pub(crate) fn arrow_schema(schema: &proto::Schema) -> Result<arrow::datatypes::SchemaRef> {
     let fields = schema

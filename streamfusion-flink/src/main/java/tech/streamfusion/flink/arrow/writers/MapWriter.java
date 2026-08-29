@@ -59,10 +59,14 @@ public abstract class MapWriter<T> extends ArrowFieldWriter<T> {
 
     @Override
     public void doWrite(T in, int ordinal) {
-        if (!isNullAt(in, ordinal)) {
-            ((MapVector) getValueVector()).startNewValue(getCount());
+        MapVector vector = (MapVector) getValueVector();
+        if (isNullAt(in, ordinal)) {
+            vector.setNull(getCount());
+            vector.getOffsetBuffer().setInt((getCount() + 1L) * Integer.BYTES, keyWriter.getCount());
+        } else {
+            vector.startNewValue(getCount());
 
-            StructVector structVector = (StructVector) ((MapVector) getValueVector()).getDataVector();
+            StructVector structVector = (StructVector) vector.getDataVector();
             MapData map = readMap(in, ordinal);
             ArrayData keys = map.keyArray();
             ArrayData values = map.valueArray();
@@ -72,8 +76,22 @@ public abstract class MapWriter<T> extends ArrowFieldWriter<T> {
                 valueWriter.write(values, i);
             }
 
-            ((MapVector) getValueVector()).endValue(getCount(), map.size());
+            vector.endValue(getCount(), map.size());
         }
+    }
+
+    @Override
+    public void finish() {
+        super.finish();
+        keyWriter.finish();
+        valueWriter.finish();
+    }
+
+    @Override
+    public void reset(int batchCapacity) {
+        super.reset(batchCapacity);
+        keyWriter.reset(batchCapacity);
+        valueWriter.reset(batchCapacity);
     }
 
     // ------------------------------------------------------------------------------------------

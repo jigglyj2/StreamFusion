@@ -185,16 +185,34 @@ public final class ArrowUtils {
 
     /** Creates an {@link ArrowWriter} for the specified {@link VectorSchemaRoot}. */
     public static ArrowWriter<RowData> createRowDataArrowWriter(VectorSchemaRoot root, RowType rowType) {
+        return createRowDataArrowWriter(root, rowType, 1024);
+    }
+
+    /** Creates a row writer whose vectors are sized once for the source-edge batch. */
+    public static ArrowWriter<RowData> createRowDataArrowWriter(
+            VectorSchemaRoot root, RowType rowType, int batchCapacity) {
         ArrowFieldWriter<RowData>[] fieldWriters =
                 new ArrowFieldWriter[root.getFieldVectors().size()];
         List<FieldVector> vectors = root.getFieldVectors();
         for (int i = 0; i < vectors.size(); i++) {
             FieldVector vector = vectors.get(i);
+            setInitialCapacity(vector, batchCapacity);
             vector.allocateNew();
             fieldWriters[i] = createArrowFieldWriterForRow(vector, rowType.getTypeAt(i));
         }
 
-        return new ArrowWriter<>(root, fieldWriters);
+        return new ArrowWriter<>(root, fieldWriters, batchCapacity);
+    }
+
+    private static void setInitialCapacity(FieldVector vector, int batchCapacity) {
+        if (vector instanceof org.apache.arrow.vector.BaseVariableWidthVector) {
+            ((org.apache.arrow.vector.BaseVariableWidthVector) vector).setInitialCapacity(batchCapacity, 32.0);
+        } else {
+            vector.setInitialCapacity(batchCapacity);
+        }
+        for (FieldVector child : vector.getChildrenFromFields()) {
+            setInitialCapacity(child, batchCapacity);
+        }
     }
 
     private static ArrowFieldWriter<RowData> createArrowFieldWriterForRow(ValueVector vector, LogicalType fieldType) {

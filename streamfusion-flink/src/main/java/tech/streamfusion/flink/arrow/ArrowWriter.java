@@ -39,11 +39,16 @@ public final class ArrowWriter<IN> {
      */
     private final ArrowFieldWriter<IN>[] fieldWriters;
 
+    private final int batchCapacity;
+
     private int rowCount;
 
-    public ArrowWriter(VectorSchemaRoot root, ArrowFieldWriter<IN>[] fieldWriters) {
+    public ArrowWriter(VectorSchemaRoot root, ArrowFieldWriter<IN>[] fieldWriters, int batchCapacity) {
         this.root = Preconditions.checkNotNull(root);
         this.fieldWriters = Preconditions.checkNotNull(fieldWriters);
+        Preconditions.checkArgument(batchCapacity > 0, "Batch capacity must be positive");
+        this.batchCapacity = batchCapacity;
+        reset();
     }
 
     /** Gets the field writers. */
@@ -72,7 +77,7 @@ public final class ArrowWriter<IN> {
         root.setRowCount(0);
         rowCount = 0;
         for (ArrowFieldWriter fieldWriter : fieldWriters) {
-            fieldWriter.reset();
+            fieldWriter.reset(batchCapacity);
         }
     }
 }

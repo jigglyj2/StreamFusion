@@ -61,13 +61,21 @@ public abstract class TimeWriter<T> extends ArrowFieldWriter<T> {
         if (isNullAt(in, ordinal)) {
             ((BaseFixedWidthVector) valueVector).setNull(getCount());
         } else if (valueVector instanceof TimeSecVector) {
-            ((TimeSecVector) valueVector).setSafe(getCount(), readTime(in, ordinal) / 1000);
+            ((BaseFixedWidthVector) valueVector)
+                    .getDataBuffer()
+                    .setInt((long) getCount() * Integer.BYTES, readTime(in, ordinal) / 1000);
         } else if (valueVector instanceof TimeMilliVector) {
-            ((TimeMilliVector) valueVector).setSafe(getCount(), readTime(in, ordinal));
+            ((BaseFixedWidthVector) valueVector)
+                    .getDataBuffer()
+                    .setInt((long) getCount() * Integer.BYTES, readTime(in, ordinal));
         } else if (valueVector instanceof TimeMicroVector) {
-            ((TimeMicroVector) valueVector).setSafe(getCount(), readTime(in, ordinal) * 1000L);
+            ((BaseFixedWidthVector) valueVector)
+                    .getDataBuffer()
+                    .setLong((long) getCount() * Long.BYTES, readTime(in, ordinal) * 1000L);
         } else {
-            ((TimeNanoVector) valueVector).setSafe(getCount(), readTime(in, ordinal) * 1000000L);
+            ((BaseFixedWidthVector) valueVector)
+                    .getDataBuffer()
+                    .setLong((long) getCount() * Long.BYTES, readTime(in, ordinal) * 1000000L);
         }
     }
 

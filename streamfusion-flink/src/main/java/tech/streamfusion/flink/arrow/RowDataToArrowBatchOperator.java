@@ -43,7 +43,7 @@ final class RowDataToArrowBatchOperator extends AbstractStreamOperator<ArrowRowD
                 getOperatorConfig(),
                 getMetricGroup(),
                 "streamfusion-source-arrow-boundary");
-        writer = new ArrowRowDataBatchWriter(rowType, managedMemory.allocator());
+        writer = new ArrowRowDataBatchWriter(rowType, managedMemory.allocator(), DEFAULT_BATCH_SIZE);
     }
 
     @Override
