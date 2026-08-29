@@ -20,6 +20,11 @@ intermediate `RowData` or copy an existing batch merely for operator handoff.
 - [Projections](projections/) lists supported result expressions and types.
 - [Filters](filters/) lists supported predicates and SQL null behavior.
 
+The test suite reflects over every public scalar definition in the pinned Flink 2.3 dependency and
+requires one recorded decision: native execution, explicit fallback, canonical Calcite rewrite, or
+non-Calc planner/runtime handling. Upgrading Flink or adding a public scalar therefore fails the
+focused catalog test until its behavior and documentation are reviewed.
+
 Java serializes the Calc chain as a recursive protobuf operator tree. The JVM/native boundary uses Arrow C Data, and
 the native result is exposed to Flink as reusable Arrow-backed `ColumnarRowData` views.
 
