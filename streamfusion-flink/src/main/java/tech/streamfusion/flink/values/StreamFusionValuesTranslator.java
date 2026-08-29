@@ -57,6 +57,13 @@ public final class StreamFusionValuesTranslator {
             }
         }
         for (int row = 0; row < tuples.size(); row++) {
+            if (tuples.get(row).size() != outputType.getFieldCount()) {
+                return "rows[" + row + "]: Flink produced " + tuples.get(row).size() + " values for "
+                        + outputType.getFieldCount() + " output fields";
+            }
+            if (tuples.get(row).isEmpty()) {
+                continue;
+            }
             String reason =
                     StreamFusionCalcTranslator.unsupportedReason(EMPTY_INPUT, outputType, tuples.get(row), null);
             if (reason != null) {

@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use arrow::array::{new_empty_array, ArrayRef, RecordBatch};
+use arrow::array::{new_empty_array, ArrayRef, RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{Field, Schema};
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::error::{DataFusionError, Result};
@@ -39,7 +39,8 @@ pub(crate) fn create(values: &proto::Values) -> Result<Arc<dyn ExecutionPlan>> {
         .collect::<Result<Vec<_>>>()?;
     let schema = Arc::new(Schema::new(fields));
     let arrays = columns(values, schema.as_ref())?;
-    let batch = RecordBatch::try_new(Arc::clone(&schema), arrays)?;
+    let options = RecordBatchOptions::new().with_row_count(Some(values.rows.len()));
+    let batch = RecordBatch::try_new_with_options(Arc::clone(&schema), arrays, &options)?;
     Ok(MemorySourceConfig::try_new_exec(
         &[vec![batch]],
         schema,
@@ -133,6 +134,22 @@ mod tests {
             names.iter().collect::<Vec<_>>(),
             vec![Some("one"), Some("two")]
         );
+    }
+
+    #[tokio::test]
+    async fn preserves_the_row_count_of_a_zero_column_seed() {
+        let values = proto::Values {
+            schema: Some(proto::Schema { fields: vec![] }),
+            rows: vec![proto::ValuesRow { values: vec![] }],
+        };
+
+        let output = collect(create(&values).unwrap(), SessionContext::new().task_ctx())
+            .await
+            .unwrap();
+
+        assert_eq!(output.len(), 1);
+        assert_eq!(output[0].num_columns(), 0);
+        assert_eq!(output[0].num_rows(), 1);
     }
 
     fn logical_type(r#type: proto::logical_type::Type, nullable: bool) -> proto::LogicalType {

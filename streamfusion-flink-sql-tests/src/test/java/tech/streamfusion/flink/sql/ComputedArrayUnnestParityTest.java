@@ -41,13 +41,15 @@ class ComputedArrayUnnestParityTest extends SqlParityTestSupport {
     void unsupportedComputedArrayExpressionFallsBackWithReason() throws Exception {
         assertDataStreamParity(
                 "SELECT item FROM computed_array_fallback_input "
-                        + "CROSS JOIN UNNEST(ARRAY[TRIM(metric)]) AS expanded(item)",
+                        + "CROSS JOIN UNNEST(ARRAY[LPAD(metric, 3, 'x')]) AS expanded(item)",
                 Types.STRING,
                 DataTypes.STRING(),
                 Arrays.asList(Row.of(" a "), Row.of("b"), Row.of((Object) null)),
                 "computed_array_fallback_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isZero();
         assertThat(StreamFusionPlanningDiagnostics.explain())
                 .contains("computed ARRAY operand")
                 .contains("has an expression that StreamFusion Calc cannot translate exactly")

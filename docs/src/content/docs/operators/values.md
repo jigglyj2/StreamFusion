@@ -21,7 +21,8 @@ StreamFusion accelerates inline VALUES rows containing nullable or non-null TINY
 SMALLINT, INT, BIGINT, FLOAT, DOUBLE, BOOLEAN, CHAR, VARCHAR, BINARY, VARBINARY,
 DECIMAL, DATE, TIME, and TIMESTAMP literals. The declared Flink nullability and
 precision are retained in the Arrow schema. An empty VALUES physical node is also
-valid and produces an empty batch with its declared schema.
+valid and produces an empty batch with its declared schema. StreamFusion also accepts
+Flink's one-row, zero-column VALUES seed for source-free expressions such as `UNNEST`.
 
 Flink can lower heterogeneous typed rows into a native `UNION ALL` whose branches project
 literals over one-row VALUES inputs. StreamFusion removes only semantic no-op casts whose
