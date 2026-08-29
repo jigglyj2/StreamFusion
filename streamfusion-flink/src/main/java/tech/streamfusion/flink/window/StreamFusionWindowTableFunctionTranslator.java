@@ -14,9 +14,12 @@ import org.apache.flink.table.planner.plan.logical.HoppingWindowSpec;
 import org.apache.flink.table.planner.plan.logical.TimeAttributeWindowingStrategy;
 import org.apache.flink.table.planner.plan.logical.TumblingWindowSpec;
 import org.apache.flink.table.planner.plan.logical.WindowSpec;
-import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
+import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
+import tech.streamfusion.flink.arrow.ArrowRowDataBatchTypeInfo;
+import tech.streamfusion.flink.arrow.StreamFusionArrowBoundaries;
+import tech.streamfusion.flink.operator.StreamFusionArrowNativeOperator;
 import tech.streamfusion.proto.plan.v1.WindowKind;
 
 /** Reflection entry point used by the planner extension for native aligned Window TVFs. */
@@ -32,16 +35,22 @@ public final class StreamFusionWindowTableFunctionTranslator {
             return null;
         }
         WindowParameters parameters = parameters(strategy.getWindow());
-        OneInputTransformation<RowData, RowData> transformation = new OneInputTransformation<>(
-                input,
+        Transformation<ArrowRowDataBatch> arrowInput = StreamFusionArrowBoundaries.toArrow(input, inputType);
+        OneInputTransformation<ArrowRowDataBatch, ArrowRowDataBatch> transformation = new OneInputTransformation<>(
+                arrowInput,
                 "streamfusion-window-table-function[" + parameters.kind + "]",
-                new StreamFusionWindowTableFunctionOperator(
-                        inputType, outputType, strategy.getTimeAttributeIndex(), parameters),
-                InternalTypeInfo.of(outputType),
+                new StreamFusionArrowNativeOperator(
+                        outputType,
+                        StreamFusionWindowTableFunctionPlan.create(strategy.getTimeAttributeIndex(), parameters),
+                        "streamfusion-window-table-function",
+                        strategy.getTimeAttributeIndex(),
+                        "numNullRowTimeRecordsDropped",
+                        false),
+                ArrowRowDataBatchTypeInfo.INSTANCE,
                 input.getParallelism(),
                 false);
         transformation.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
-        return transformation;
+        return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
     }
 
     public static String unsupportedReason(

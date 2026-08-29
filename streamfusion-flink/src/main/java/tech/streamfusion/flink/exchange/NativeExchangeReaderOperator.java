@@ -7,14 +7,14 @@ package tech.streamfusion.flink.exchange;
 import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
-import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.types.logical.RowType;
+import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.memory.FlinkManagedMemory;
 import tech.streamfusion.flink.metrics.FlinkMetricParity;
 
-/** Imports Arrow IPC frames and emits lightweight RowData views with their original envelope. */
-public final class NativeExchangeReaderOperator extends AbstractStreamOperator<RowData>
-        implements OneInputStreamOperator<NativeExchangeFrame, RowData> {
+/** Imports Arrow IPC frames and restores their Arrow payload plus Flink envelope sidecar. */
+public final class NativeExchangeReaderOperator extends AbstractStreamOperator<ArrowRowDataBatch>
+        implements OneInputStreamOperator<NativeExchangeFrame, ArrowRowDataBatch> {
     private final RowType rowType;
     private final byte[] serializedPlan;
     private final NativeExchangeFrameDecoder decoder;
@@ -46,13 +46,9 @@ public final class NativeExchangeReaderOperator extends AbstractStreamOperator<R
                 decoder.decode(serializedPlan, element.getValue(), rowType, managedMemory.allocator(), managedMemory)) {
             FlinkMetricParity.replacePhysicalRecords(
                     getMetricGroup().getIOMetricGroup().getNumRecordsInCounter(), 1, batch.size());
-            for (int row = 0; row < batch.size(); row++) {
-                RowData value = batch.rowView(row);
-                output.collect(
-                        batch.hasTimestamp(row)
-                                ? new StreamRecord<>(value, batch.timestamp(row))
-                                : new StreamRecord<>(value));
-            }
+            output.collect(new StreamRecord<>(batch.arrowBatch()));
+            FlinkMetricParity.replacePhysicalRecords(
+                    getMetricGroup().getIOMetricGroup().getNumRecordsOutCounter(), 1, batch.size());
         }
     }
 

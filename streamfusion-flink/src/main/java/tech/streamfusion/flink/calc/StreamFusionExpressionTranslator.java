@@ -228,8 +228,8 @@ abstract class StreamFusionExpressionTranslator extends StreamFusionProjectionTr
         if (directInput >= 0
                 && directInput < inputType.getFieldCount()
                 && inputType.getTypeAt(directInput).getTypeRoot() == LogicalTypeRoot.BOOLEAN) {
-            return StreamFusionIdentityCalcOperator.inputReference(
-                    directInput, StreamFusionIdentityCalcOperator.logicalType(inputType, directInput));
+            return StreamFusionCalcPlan.inputReference(
+                    directInput, StreamFusionCalcPlan.logicalType(inputType, directInput));
         }
         if (!hasNoArgMethod(expression, "getOperands")) {
             return null;
@@ -711,9 +711,8 @@ abstract class StreamFusionExpressionTranslator extends StreamFusionProjectionTr
                 && inputType.getTypeAt(directInputIndex).getTypeRoot() == LogicalTypeRoot.BOOLEAN) {
             return new StreamFusionBooleanColumnCondition(
                     directInputIndex,
-                    StreamFusionIdentityCalcOperator.inputReference(
-                            directInputIndex,
-                            StreamFusionIdentityCalcOperator.logicalType(inputType, directInputIndex)));
+                    StreamFusionCalcPlan.inputReference(
+                            directInputIndex, StreamFusionCalcPlan.logicalType(inputType, directInputIndex)));
         }
         StreamFusionCondition comparison = comparison(condition, inputType);
         if (comparison != null) {
@@ -736,8 +735,8 @@ abstract class StreamFusionExpressionTranslator extends StreamFusionProjectionTr
             return new StreamFusionLikeCondition(
                     inputIndex,
                     pattern,
-                    StreamFusionIdentityCalcOperator.inputReference(
-                            inputIndex, StreamFusionIdentityCalcOperator.logicalType(inputType, inputIndex)));
+                    StreamFusionCalcPlan.inputReference(
+                            inputIndex, StreamFusionCalcPlan.logicalType(inputType, inputIndex)));
         }
         if ("STARTSWITH".equals(functionName(condition)) || "STARTS_WITH".equals(functionName(condition))) {
             List<?> operands = (List<?>) invoke(condition, "getOperands");
@@ -755,8 +754,8 @@ abstract class StreamFusionExpressionTranslator extends StreamFusionProjectionTr
             return new StreamFusionStartsWithCondition(
                     inputIndex,
                     prefix,
-                    StreamFusionIdentityCalcOperator.inputReference(
-                            inputIndex, StreamFusionIdentityCalcOperator.logicalType(inputType, inputIndex)));
+                    StreamFusionCalcPlan.inputReference(
+                            inputIndex, StreamFusionCalcPlan.logicalType(inputType, inputIndex)));
         }
         String kind = invoke(condition, "getKind").toString();
         if ("SEARCH".equals(kind)) {
@@ -812,7 +811,7 @@ abstract class StreamFusionExpressionTranslator extends StreamFusionProjectionTr
         return new StreamFusionNullCondition(
                 inputIndex,
                 "IS_NOT_NULL".equals(kind),
-                StreamFusionIdentityCalcOperator.inputReference(
-                        inputIndex, StreamFusionIdentityCalcOperator.logicalType(inputType, inputIndex)));
+                StreamFusionCalcPlan.inputReference(
+                        inputIndex, StreamFusionCalcPlan.logicalType(inputType, inputIndex)));
     }
 }

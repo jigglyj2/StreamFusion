@@ -38,11 +38,12 @@ exchange or the other node that prevented selection.
 ## Implementation
 
 Flink still owns the network topology, control events, checkpointing, recovery, maximum parallelism,
-and rescaling. A native writer converts the input to Arrow once and Rust computes exactly the same
+and rescaling. A native writer receives the existing Arrow batch, reuses its data buffers, adds only
+the Flink record-envelope vectors, and Rust computes exactly the same
 `BinaryRowData` hash, Murmur mix, and stable key group as Flink 2.3. Each schema-free Arrow IPC frame
 contains rows for one key group. Flink maps that key group to the current downstream subtask and can
 remap restored frames after rescaling with its `RANGE` channel-state mapping. A native reader decodes
-the frame and exposes lightweight `RowData` views without row-by-row serialization.
+the frame back into an Arrow batch and restores the envelope sidecar without row materialization.
 Flink's record counters continue to report logical rows on both sides of the exchange;
 internal Arrow IPC frames are transport units and are not published as record counts.
 

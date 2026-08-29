@@ -23,8 +23,7 @@ class StreamFusionExpandPlanTest {
         Expression first = literal(1);
         Expression second = literal(2);
 
-        NativePlan plan =
-                NativePlan.parseFrom(StreamFusionExpandOperator.createPlan(List.of(List.of(first), List.of(second))));
+        NativePlan plan = NativePlan.parseFrom(StreamFusionExpandPlan.create(List.of(List.of(first), List.of(second))));
 
         assertThat(plan.getRoot().getExpand().getProjectionsList())
                 .extracting(projection ->

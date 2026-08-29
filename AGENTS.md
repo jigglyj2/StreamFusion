@@ -60,6 +60,17 @@ operator consumes an Arrow batch and completes its operation before the next ope
 consumes the resulting batch (for example, calc -> calc -> calc). Keep operator stages
 independently observable and testable.
 
+Every StreamFusion runtime operator must use an Arrow batch as its Flink data-plane input
+and output type. The only RowData operators allowed in an accelerated topology are the
+explicit RowData-to-Arrow adapter immediately after a non-native source and the explicit
+Arrow-to-RowData view adapter immediately before a non-native sink. Java-side control
+operators such as watermark assignment may inspect zero-copy RowData views over an Arrow
+batch, but must still accept and emit the Arrow batch and must never transpose, buffer,
+or reconstruct its payload as rows. VALUES emits Arrow directly; UNION ALL forwards Arrow
+batches; changelog filters select Arrow ranges; and exchange adds/removes only its metadata
+vectors around Arrow IPC. Add a topology/source guard test whenever operator plumbing changes
+so a RowData-shaped internal operator or operator-local transpose cannot regress silently.
+
 Build the native physical-plan and expression tree on the Java planner side and encode
 it as a versioned Protocol Buffers contract for Rust to decode and lower to DataFusion,
 following Comet's operator protobuf model. Protobuf is the control/plan format; Arrow C

@@ -23,7 +23,7 @@ import tech.streamfusion.proto.plan.v1.NativePlan;
 class StreamFusionUnionPlanTest {
     @Test
     void createsOneIndexedNativeInputPerFlinkInput() throws Exception {
-        NativePlan plan = NativePlan.parseFrom(StreamFusionUnionOperator.createPlan(3));
+        NativePlan plan = NativePlan.parseFrom(StreamFusionUnionPlan.create(3));
 
         assertThat(plan.getRoot().getUnion().getInputsList())
                 .extracting(operator -> operator.getInput().getInputIndex())

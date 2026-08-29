@@ -10,9 +10,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import org.apache.arrow.memory.RootAllocator;
-import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.table.data.GenericRowData;
-import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.types.logical.IntType;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.types.RowKind;
@@ -30,12 +28,15 @@ class NativeExchangeCDataRoundTripTest {
         insert.setRowKind(RowKind.INSERT);
         GenericRowData delete = GenericRowData.of(42);
         delete.setRowKind(RowKind.DELETE);
-        List<StreamRecord<RowData>> input = List.of(new StreamRecord<>(insert, 100L), new StreamRecord<>(delete));
-
         List<ResultRow> output = new ArrayList<>();
         try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
-                ArrowRowDataBatch batch = ArrowExchangeBatch.transpose(input, rowType, allocator)) {
-            List<NativeExchangeFrame> frames = ArrowExchangeCDataBridge.route(plan, batch, allocator);
+                ArrowRowDataBatch input = ArrowRowDataBatch.transpose(List.of(insert, delete), rowType, allocator)
+                        .withEnvelope(
+                                new RowKind[] {RowKind.INSERT, RowKind.DELETE},
+                                new boolean[] {true, false},
+                                new long[] {100, 0});
+                ArrowExchangeBatch.EnvelopeBatch envelope = ArrowExchangeBatch.withEnvelope(input, rowType)) {
+            List<NativeExchangeFrame> frames = ArrowExchangeCDataBridge.route(plan, envelope.batch(), allocator);
             for (NativeExchangeFrame frame : frames) {
                 try (ArrowExchangeInputBatch decoded =
                         ArrowExchangeInputCDataBridge.decode(plan, frame, rowType, allocator)) {

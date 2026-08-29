@@ -288,8 +288,7 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
         }
         if (isNullLiteral(expression) && supportsNullLiteral(expectedType.getTypeRoot())) {
             return Expression.newBuilder()
-                    .setNullLiteral(NullLiteral.newBuilder()
-                            .setType(StreamFusionIdentityCalcOperator.logicalType(expectedType)))
+                    .setNullLiteral(NullLiteral.newBuilder().setType(StreamFusionCalcPlan.logicalType(expectedType)))
                     .build();
         }
         if ("COALESCE".equals(functionName(expression)) || "IFNULL".equals(functionName(expression))) {
@@ -455,8 +454,8 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
                     || inputType.getTypeAt(inputIndex).getTypeRoot() != expectedType) {
                 return null;
             }
-            return StreamFusionIdentityCalcOperator.inputReference(
-                    inputIndex, StreamFusionIdentityCalcOperator.logicalType(inputType, inputIndex));
+            return StreamFusionCalcPlan.inputReference(
+                    inputIndex, StreamFusionCalcPlan.logicalType(inputType, inputIndex));
         }
         if (expectedType == LogicalTypeRoot.BINARY || expectedType == LogicalTypeRoot.VARBINARY) {
             byte[] literal = literal(expression, byte[].class);
@@ -711,8 +710,8 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
             if (inputDecimal.getPrecision() != precision || inputDecimal.getScale() != scale) {
                 return null;
             }
-            return StreamFusionIdentityCalcOperator.inputReference(
-                    inputIndex, StreamFusionIdentityCalcOperator.logicalType(inputType, inputIndex));
+            return StreamFusionCalcPlan.inputReference(
+                    inputIndex, StreamFusionCalcPlan.logicalType(inputType, inputIndex));
         }
 
         BigDecimal literal = literal(expression, BigDecimal.class);
@@ -918,8 +917,8 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
             return null;
         }
         Substring.Builder nativeSubstring = Substring.newBuilder()
-                .setOperand(StreamFusionIdentityCalcOperator.inputReference(
-                        inputIndex, StreamFusionIdentityCalcOperator.logicalType(inputType, inputIndex)))
+                .setOperand(StreamFusionCalcPlan.inputReference(
+                        inputIndex, StreamFusionCalcPlan.logicalType(inputType, inputIndex)))
                 .setStart(start);
         if (operands.size() == 3) {
             nativeSubstring.setLength(length);

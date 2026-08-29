@@ -16,10 +16,12 @@ import org.apache.flink.core.memory.ManagedMemoryUseCase;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.transformations.LegacySourceTransformation;
 import org.apache.flink.table.data.RowData;
-import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
+import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
+import tech.streamfusion.flink.arrow.ArrowRowDataBatchTypeInfo;
+import tech.streamfusion.flink.arrow.StreamFusionArrowBoundaries;
 import tech.streamfusion.flink.calc.StreamFusionCalcTranslator;
 import tech.streamfusion.flink.calc.StreamFusionTimestampRangeSupport;
 import tech.streamfusion.proto.plan.v1.Expression;
@@ -41,17 +43,17 @@ public final class StreamFusionValuesTranslator {
         if (unsupportedReason(outputType, tuples) != null) {
             return null;
         }
-        LegacySourceTransformation<RowData> transformation = new LegacySourceTransformation<>(
+        LegacySourceTransformation<ArrowRowDataBatch> transformation = new LegacySourceTransformation<>(
                 "streamfusion-values",
                 new StreamFusionValuesSourceOperator(createPlan(outputType, tuples), outputType),
-                InternalTypeInfo.of(outputType),
+                ArrowRowDataBatchTypeInfo.INSTANCE,
                 1,
                 Boundedness.BOUNDED,
                 true);
         transformation.setDescription("StreamFusionValues");
         transformation.setMaxParallelism(1);
         transformation.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
-        return transformation;
+        return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
     }
 
     public static String unsupportedReason(RowType outputType, List<List<?>> tuples) {

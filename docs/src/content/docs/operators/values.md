@@ -39,7 +39,7 @@ that fallback keeps the complete query on Flink.
 The Java planner serializes the typed rows and schema into the versioned StreamFusion
 protobuf. Rust constructs DataFusion scalar columns and a `MemorySourceConfig` directly;
 the JNI call has no input Arrow array. The resulting Arrow batch crosses the C Data
-boundary once and is exposed to Flink as lightweight RowData views. Native execution
+boundary once and remains the internal Arrow payload until the sink-edge view adapter. Native execution
 therefore does not create a fake input batch or decode rows before constructing Arrow
 columns.
 

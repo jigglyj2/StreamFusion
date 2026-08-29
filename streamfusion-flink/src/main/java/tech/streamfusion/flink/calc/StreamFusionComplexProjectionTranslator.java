@@ -134,8 +134,8 @@ final class StreamFusionComplexProjectionTranslator extends StreamFusionComplexT
                 return null;
             }
             currentType = inputType.getTypeAt(inputIndex);
-            current = StreamFusionIdentityCalcOperator.inputReference(
-                    inputIndex, StreamFusionIdentityCalcOperator.logicalType(inputType, inputIndex));
+            current = StreamFusionCalcPlan.inputReference(
+                    inputIndex, StreamFusionCalcPlan.logicalType(inputType, inputIndex));
         } else {
             currentType = logicalType(base, inputType);
             if (currentType == null) {

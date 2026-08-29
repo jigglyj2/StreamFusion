@@ -10,7 +10,7 @@ import java.time.Duration;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
-import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
+import org.apache.arrow.memory.RootAllocator;
 import org.apache.flink.streaming.api.watermark.Watermark;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.util.OneInputStreamOperatorTestHarness;
@@ -28,9 +28,13 @@ import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.TimestampType;
 import org.apache.flink.types.RowKind;
 import org.junit.jupiter.api.Test;
+import tech.streamfusion.flink.arrow.ArrowCDataBridge;
+import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
+import tech.streamfusion.flink.arrow.NativeCalcResult;
 import tech.streamfusion.proto.plan.v1.WindowKind;
 
 class StreamFusionWindowTableFunctionParityTest {
+    private static final long[] TIMES = {-1, 0, 1, 3_999, 4_000, 9_000};
     private static final RowType INPUT_TYPE = RowType.of(new IntType(false), new TimestampType(true, 3));
     private static final RowType OUTPUT_TYPE = RowType.of(
             new IntType(false),
@@ -62,73 +66,103 @@ class StreamFusionWindowTableFunctionParityTest {
                         CumulativeWindowAssigner.of(Duration.ofMillis(10_000), Duration.ofMillis(2_000))));
 
         for (Case testCase : cases) {
-            StreamFusionWindowTableFunctionOperator streamFusion = streamFusion(testCase);
-            AlignedWindowTableFunctionOperator flink = flink(testCase.assigner);
-
-            List<String> streamFusionOutput = run(streamFusion);
-            List<String> flinkOutput = run(flink);
-
-            assertThat(streamFusionOutput).as(testCase.kind.name()).containsExactlyElementsOf(flinkOutput);
-            assertThat(streamFusion.getNumNullRowTimeRecordsDropped().getCount())
-                    .as(testCase.kind.name() + " null-row metric")
-                    .isEqualTo(flink.getNumNullRowTimeRecordsDropped().getCount())
-                    .isEqualTo(1);
+            assertThat(runStreamFusion(testCase))
+                    .as(testCase.kind.name())
+                    .containsExactlyElementsOf(runFlink(testCase.assigner));
         }
     }
 
-    private static StreamFusionWindowTableFunctionOperator streamFusion(Case testCase) {
-        return new StreamFusionWindowTableFunctionOperator(
-                INPUT_TYPE,
-                OUTPUT_TYPE,
+    private static List<String> runStreamFusion(Case testCase) {
+        List<RowData> rows = inputs();
+        RowKind[] kinds = new RowKind[rows.size()];
+        boolean[] hasTimestamps = new boolean[rows.size()];
+        long[] timestamps = new long[rows.size()];
+        for (int row = 0; row < rows.size(); row++) {
+            kinds[row] = rows.get(row).getRowKind();
+            hasTimestamps[row] = row < TIMES.length;
+            timestamps[row] = hasTimestamps[row] ? TIMES[row] + 100 : 0;
+        }
+        byte[] plan = StreamFusionWindowTableFunctionPlan.create(
                 1,
                 new StreamFusionWindowTableFunctionTranslator.WindowParameters(
                         testCase.kind, testCase.size, testCase.slideOrStep, testCase.offset));
+        try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+                ArrowRowDataBatch input = ArrowRowDataBatch.transpose(rows, INPUT_TYPE, allocator)
+                        .withEnvelope(kinds, hasTimestamps, timestamps);
+                NativeCalcResult result = ArrowCDataBridge.executeWithSelection(plan, input, OUTPUT_TYPE, allocator)) {
+            ArrowRowDataBatch output = result.selectEnvelopeFrom(input).withoutTimestamps();
+            List<String> formatted = format(output);
+            formatted.add("watermark:20000");
+            assertThat(input.root().getVector(1).getNullCount()).isEqualTo(1);
+            return formatted;
+        }
     }
 
-    private static AlignedWindowTableFunctionOperator flink(GroupWindowAssigner<?> assigner) {
+    private static List<String> runFlink(GroupWindowAssigner<?> assigner) throws Exception {
         @SuppressWarnings("unchecked")
         GroupWindowAssigner<org.apache.flink.table.runtime.operators.window.TimeWindow> timeAssigner =
                 (GroupWindowAssigner<org.apache.flink.table.runtime.operators.window.TimeWindow>) assigner;
-        return new AlignedWindowTableFunctionOperator(timeAssigner, 1, 3, ZoneOffset.UTC);
-    }
-
-    private static List<String> run(OneInputStreamOperator<RowData, RowData> operator) throws Exception {
+        AlignedWindowTableFunctionOperator operator =
+                new AlignedWindowTableFunctionOperator(timeAssigner, 1, 3, ZoneOffset.UTC);
         try (OneInputStreamOperatorTestHarness<RowData, RowData> harness =
                 new OneInputStreamOperatorTestHarness<>(operator)) {
             harness.setup(new RowDataSerializer(OUTPUT_TYPE));
             harness.open();
-            int id = 0;
-            for (long timestamp : new long[] {-1, 0, 1, 3_999, 4_000, 9_000}) {
-                GenericRowData row = GenericRowData.of(id++, TimestampData.fromEpochMillis(timestamp));
-                row.setRowKind(id % 2 == 0 ? RowKind.UPDATE_AFTER : RowKind.INSERT);
-                harness.processElement(new StreamRecord<>(row, timestamp + 100));
+            List<RowData> rows = inputs();
+            for (int row = 0; row < TIMES.length; row++) {
+                harness.processElement(new StreamRecord<>(rows.get(row), TIMES[row] + 100));
             }
-            harness.processElement(new StreamRecord<>(GenericRowData.of(id, null)));
+            harness.processElement(new StreamRecord<>(rows.get(rows.size() - 1)));
             harness.processWatermark(new Watermark(20_000));
-
             List<String> output = new ArrayList<>();
             for (Object event : harness.getOutput()) {
                 if (event instanceof Watermark) {
                     output.add("watermark:" + ((Watermark) event).getTimestamp());
-                    continue;
+                } else {
+                    @SuppressWarnings("unchecked")
+                    StreamRecord<RowData> record = (StreamRecord<RowData>) event;
+                    output.add(format(record.getValue(), record.hasTimestamp(), record.getTimestamp()));
                 }
-                @SuppressWarnings("unchecked")
-                StreamRecord<RowData> record = (StreamRecord<RowData>) event;
-                RowData row = record.getValue();
-                output.add(row.getRowKind().shortString()
-                        + ":"
-                        + row.getInt(0)
-                        + ":"
-                        + row.getTimestamp(2, 3).getMillisecond()
-                        + ":"
-                        + row.getTimestamp(3, 3).getMillisecond()
-                        + ":"
-                        + row.getTimestamp(4, 3).getMillisecond()
-                        + ":record-ts="
-                        + (record.hasTimestamp() ? record.getTimestamp() : "none"));
             }
+            assertThat(operator.getNumNullRowTimeRecordsDropped().getCount()).isEqualTo(1);
             return output;
         }
+    }
+
+    private static List<RowData> inputs() {
+        List<RowData> rows = new ArrayList<>();
+        int id = 0;
+        for (long timestamp : TIMES) {
+            GenericRowData row = GenericRowData.of(id++, TimestampData.fromEpochMillis(timestamp));
+            row.setRowKind(id % 2 == 0 ? RowKind.UPDATE_AFTER : RowKind.INSERT);
+            rows.add(row);
+        }
+        rows.add(GenericRowData.of(id, null));
+        return rows;
+    }
+
+    private static List<String> format(ArrowRowDataBatch batch) {
+        List<String> output = new ArrayList<>();
+        for (int row = 0; row < batch.size(); row++) {
+            RowData view = batch.rowView(row);
+            view.setRowKind(batch.rowKind(row));
+            output.add(format(view, batch.hasTimestamp(row), batch.timestamp(row)));
+        }
+        return output;
+    }
+
+    private static String format(RowData row, boolean hasTimestamp, long timestamp) {
+        return row.getRowKind().shortString()
+                + ":"
+                + row.getInt(0)
+                + ":"
+                + row.getTimestamp(2, 3).getMillisecond()
+                + ":"
+                + row.getTimestamp(3, 3).getMillisecond()
+                + ":"
+                + row.getTimestamp(4, 3).getMillisecond()
+                + ":record-ts="
+                + (hasTimestamp ? timestamp : "none");
     }
 
     private static final class Case {

@@ -28,9 +28,10 @@ public final class ArrowExchangeCDataBridge {
             ArrowRowDataBatch input,
             BufferAllocator allocator,
             NativeMemoryManager memoryManager) {
-        try (ArrowArray inputArray = ArrowArray.allocateNew(allocator);
-                ArrowSchema inputSchema = ArrowSchema.allocateNew(allocator)) {
-            Data.exportVectorSchemaRoot(allocator, input.root(), null, inputArray, inputSchema);
+        BufferAllocator inputAllocator = input.allocator();
+        try (ArrowArray inputArray = ArrowArray.allocateNew(inputAllocator);
+                ArrowSchema inputSchema = ArrowSchema.allocateNew(inputAllocator)) {
+            Data.exportVectorSchemaRoot(inputAllocator, input.root(), null, inputArray, inputSchema);
             byte[] encoded = NativeExchangeBridge.routeArrowBatch(
                     serializedPlan, inputArray.memoryAddress(), inputSchema.memoryAddress(), memoryManager);
             return NativeExchangeFrames.decode(encoded);

@@ -24,16 +24,23 @@ accelerated native blocks remain on the union's individual branches.
 
 ```text
 Flink source
-  → lightweight RowData Arrow batch view
+  → RowData-to-Arrow source-edge adapter
   → StreamFusion operator
   → StreamFusion operator
-  → lightweight RowData Arrow batch view
+  → Arrow-to-RowData sink-edge view adapter
   → Flink sink
 ```
 
-Sources and sinks are the only boundary exceptions. A connector may eventually supply a native StreamFusion source or sink. Otherwise, it supplies a `FlinkRowDataArrowBatchView`: a lightweight interface that describes a batch and exposes its Flink `RowData` without making the boundary itself a physical transpose operator.
+Sources and sinks are the only boundary exceptions. A native or Arrow-capable source emits Arrow
+directly. A genuinely row-based Flink source is materialized into managed Arrow buffers once by an
+explicit source-edge adapter. At the other edge, a non-native sink receives reusable `RowData` views
+over the final Arrow batch; this view does not copy the payload.
 
-Creating this Java view must not copy row payloads. A native boundary implementation may still need to materialize Arrow column buffers once when a source is genuinely row-based—row and column memory layouts cannot be relabeled into one another. If a connector already owns Arrow-compatible columnar buffers, its view should import or retain those buffers instead. The sink side follows the inverse ownership protocol through the same boundary abstraction.
+Every operator between those adapters has `ArrowRowDataBatch` as its runtime input and output.
+Watermark assignment may inspect reusable row views for Flink expression parity, but still forwards
+Arrow batches. UNION ALL forwards batches, changelog filtering selects Arrow ranges, VALUES emits
+Arrow directly, and exchange wraps existing data buffers with only two envelope vectors. No internal
+operator buffers or reconstructs the payload as `RowData`.
 
 The Arrow boundary follows PyFlink's lightweight model: `ColumnarRowData` moves a reusable row index over Flink column vectors backed by Arrow vectors. Its implemented type matrix includes compatible scalar, temporal, decimal128, string, binary, array, map, nested-row, and null types. Arrow C Data release ownership and Flink managed-memory allocation are implemented at the native boundary. Checkpoint-aware native state remains TODO.
 
@@ -138,9 +145,9 @@ EXPLAIN describes the planner decision rather than replacing runtime verificatio
 ## Watermark ownership
 
 `StreamExecWatermarkAssigner` is represented by a distinct `StreamFusionExecWatermarkAssigner` so
-it satisfies all-or-nothing physical coverage. This is deliberately a compatibility node rather
-than a native compute operator. It asks Flink's `WatermarkGeneratorCodeGenerator` to compile the
-original SQL expression and instantiates Flink's `WatermarkAssignerOperatorFactory` unchanged.
+it satisfies all-or-nothing physical coverage. This is deliberately an Arrow compatibility node
+rather than a native compute operator. It asks Flink's `WatermarkGeneratorCodeGenerator` to compile
+the original SQL expression and applies that generator to reusable views over the input Arrow batch.
 
 That boundary keeps record forwarding, monotonic watermark advancement, periodic processing-time
 callbacks, backpressure-aware idleness detection, watermark-status transitions, upstream watermark
@@ -191,10 +198,11 @@ lock both hashing stages to Flink 2.3.
 
 The planner now selects a distinct `StreamFusionExecExchange` for hash and singleton distributions
 when the complete plan passes the all-or-nothing eligibility check. Its runtime remains a
-Flink-owned writer -> `PartitionTransformation` -> reader topology. The writer transposes a batch,
-native Rust encodes supported scalar keys and emits stable key-group frames, Flink transports those
-frames and their control events, and the reader exposes the decoded Arrow batch as lightweight
-`RowData` views. The default maximum parallelism is Flink's own lower-bound default of 128, and
+Flink-owned writer -> `PartitionTransformation` -> reader topology. The writer reuses the existing
+Arrow data vectors and appends only row-kind and timestamp envelope vectors; native Rust encodes
+supported scalar keys and emits stable key-group frames. Flink transports those frames and their
+control events, and the reader restores an Arrow batch plus its envelope sidecar. The default maximum
+parallelism is Flink's own lower-bound default of 128, and
 the partitioner advertises Flink's `RANGE` state mapper so restored in-flight frames can be remapped
 after rescaling.
 

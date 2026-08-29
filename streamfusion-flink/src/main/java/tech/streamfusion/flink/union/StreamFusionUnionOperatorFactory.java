@@ -18,27 +18,25 @@ package tech.streamfusion.flink.union;
 import org.apache.flink.streaming.api.operators.AbstractStreamOperatorFactory;
 import org.apache.flink.streaming.api.operators.StreamOperator;
 import org.apache.flink.streaming.api.operators.StreamOperatorParameters;
-import org.apache.flink.table.data.RowData;
-import org.apache.flink.table.types.logical.RowType;
+import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 
 /** Creates one StreamFusion multi-input operator for a UNION ALL physical node. */
-final class StreamFusionUnionOperatorFactory extends AbstractStreamOperatorFactory<RowData> {
+final class StreamFusionUnionOperatorFactory extends AbstractStreamOperatorFactory<ArrowRowDataBatch> {
     private final int inputCount;
-    private final RowType rowType;
 
-    StreamFusionUnionOperatorFactory(int inputCount, RowType rowType) {
+    StreamFusionUnionOperatorFactory(int inputCount) {
         this.inputCount = inputCount;
-        this.rowType = rowType;
     }
 
     @Override
     @SuppressWarnings("unchecked")
-    public <T extends StreamOperator<RowData>> T createStreamOperator(StreamOperatorParameters<RowData> parameters) {
-        return (T) new StreamFusionUnionOperator(parameters, inputCount, rowType);
+    public <T extends StreamOperator<ArrowRowDataBatch>> T createStreamOperator(
+            StreamOperatorParameters<ArrowRowDataBatch> parameters) {
+        return (T) new StreamFusionArrowUnionOperator(parameters, inputCount);
     }
 
     @Override
     public Class<? extends StreamOperator> getStreamOperatorClass(ClassLoader classLoader) {
-        return StreamFusionUnionOperator.class;
+        return StreamFusionArrowUnionOperator.class;
     }
 }

@@ -14,7 +14,6 @@ import org.apache.flink.streaming.api.operators.Output;
 import org.apache.flink.streaming.api.operators.StreamSource;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.runtime.tasks.OperatorChain;
-import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.ArrowValuesCDataBridge;
@@ -23,7 +22,7 @@ import tech.streamfusion.flink.memory.StreamFusionTaskMemory;
 /** Bounded native VALUES source with task-scoped Flink managed memory. */
 @SuppressWarnings("deprecation")
 final class StreamFusionValuesSourceOperator
-        extends StreamSource<RowData, StreamFusionValuesSourceOperator.EmptySourceFunction> {
+        extends StreamSource<ArrowRowDataBatch, StreamFusionValuesSourceOperator.EmptySourceFunction> {
     private final byte[] serializedPlan;
     private final RowType outputType;
     private transient StreamFusionTaskMemory taskMemory;
@@ -46,13 +45,14 @@ final class StreamFusionValuesSourceOperator
     }
 
     @Override
-    public void run(Object lockingObject, Output<StreamRecord<RowData>> collector, OperatorChain<?, ?> operatorChain) {
+    public void run(
+            Object lockingObject,
+            Output<StreamRecord<ArrowRowDataBatch>> collector,
+            OperatorChain<?, ?> operatorChain) {
         try (ArrowRowDataBatch batch =
                 ArrowValuesCDataBridge.execute(taskMemory.executionContext(), outputType, taskMemory.allocator())) {
-            for (int row = 0; row < batch.size(); row++) {
-                synchronized (lockingObject) {
-                    collector.collect(new StreamRecord<>(batch.rowView(row)));
-                }
+            synchronized (lockingObject) {
+                collector.collect(new StreamRecord<>(batch));
             }
         }
     }
@@ -69,11 +69,11 @@ final class StreamFusionValuesSourceOperator
         }
     }
 
-    static final class EmptySourceFunction implements SourceFunction<RowData> {
+    static final class EmptySourceFunction implements SourceFunction<ArrowRowDataBatch> {
         private static final long serialVersionUID = 1L;
 
         @Override
-        public void run(SourceContext<RowData> context) {}
+        public void run(SourceContext<ArrowRowDataBatch> context) {}
 
         @Override
         public void cancel() {}

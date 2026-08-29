@@ -1,32 +1,34 @@
 /*
  * Copyright 2026 StreamFusion Authors
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ * Licensed under the Apache License, Version 2.0
  */
-package tech.streamfusion.flink.changelog;
+package tech.streamfusion.flink.watermark;
 
 import org.apache.flink.api.dag.Transformation;
 import org.apache.flink.core.memory.ManagedMemoryUseCase;
 import org.apache.flink.streaming.api.transformations.OneInputTransformation;
 import org.apache.flink.table.data.RowData;
+import org.apache.flink.table.runtime.generated.GeneratedWatermarkGenerator;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatchTypeInfo;
 import tech.streamfusion.flink.arrow.StreamFusionArrowBoundaries;
 
-/** Runtime translation entry point for StreamFusion's changelog metadata filter. */
-public final class StreamFusionDropUpdateBeforeTranslator {
-    private StreamFusionDropUpdateBeforeTranslator() {}
+/** Reflection entry point for the Arrow-native watermark operator. */
+public final class StreamFusionWatermarkTranslator {
+    private StreamFusionWatermarkTranslator() {}
 
-    public static Transformation<RowData> translate(Transformation<RowData> input, RowType rowType) {
+    public static Transformation<RowData> translate(
+            Transformation<RowData> input,
+            RowType rowType,
+            int rowtimeFieldIndex,
+            long idleTimeout,
+            GeneratedWatermarkGenerator generator) {
+        Transformation<ArrowRowDataBatch> arrowInput = StreamFusionArrowBoundaries.toArrow(input, rowType);
         OneInputTransformation<ArrowRowDataBatch, ArrowRowDataBatch> transformation = new OneInputTransformation<>(
-                StreamFusionArrowBoundaries.toArrow(input, rowType),
-                "streamfusion-drop-update-before",
-                new StreamFusionDropUpdateBeforeOperator(),
+                arrowInput,
+                "streamfusion-arrow-watermark-assigner",
+                new StreamFusionArrowWatermarkAssignerOperatorFactory(rowtimeFieldIndex, idleTimeout, generator),
                 ArrowRowDataBatchTypeInfo.INSTANCE,
                 input.getParallelism(),
                 false);

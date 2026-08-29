@@ -1,0 +1,54 @@
+/*
+ * Copyright 2026 StreamFusion Authors
+ * Licensed under the Apache License, Version 2.0
+ */
+package tech.streamfusion.flink.arrow;
+
+import org.apache.flink.api.dag.Transformation;
+import org.apache.flink.core.memory.ManagedMemoryUseCase;
+import org.apache.flink.streaming.api.transformations.OneInputTransformation;
+import org.apache.flink.table.data.RowData;
+import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
+import org.apache.flink.table.types.logical.RowType;
+
+/** Inserts source/sink Arrow boundaries and never inserts them between StreamFusion operators. */
+public final class StreamFusionArrowBoundaries {
+    private StreamFusionArrowBoundaries() {}
+
+    @SuppressWarnings("unchecked")
+    public static Transformation<ArrowRowDataBatch> toArrow(Transformation<RowData> input, RowType rowType) {
+        if (((Object) input.getOutputType()) instanceof ArrowRowDataBatchTypeInfo) {
+            return (Transformation<ArrowRowDataBatch>) (Transformation<?>) input;
+        }
+        OneInputTransformation<RowData, ArrowRowDataBatch> boundary = new OneInputTransformation<>(
+                input,
+                "streamfusion-rowdata-to-arrow",
+                new RowDataToArrowBatchOperator(rowType),
+                ArrowRowDataBatchTypeInfo.INSTANCE,
+                input.getParallelism(),
+                false);
+        boundary.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
+        return boundary;
+    }
+
+    @SuppressWarnings("unchecked")
+    public static Transformation<RowData> toRowData(Transformation<RowData> input, RowType rowType) {
+        if (!(((Object) input.getOutputType()) instanceof ArrowRowDataBatchTypeInfo)) {
+            return input;
+        }
+        Transformation<ArrowRowDataBatch> arrowInput = (Transformation<ArrowRowDataBatch>) (Transformation<?>) input;
+        return new OneInputTransformation<>(
+                arrowInput,
+                "streamfusion-arrow-to-rowdata",
+                new ArrowBatchToRowDataOperator(),
+                InternalTypeInfo.of(rowType),
+                input.getParallelism(),
+                false);
+    }
+
+    /** Bridges Flink planner's RowData generic while retaining Arrow runtime type information. */
+    @SuppressWarnings("unchecked")
+    public static Transformation<RowData> asPlannerTransformation(Transformation<ArrowRowDataBatch> transformation) {
+        return (Transformation<RowData>) (Transformation<?>) transformation;
+    }
+}

@@ -9,6 +9,8 @@
  */
 package tech.streamfusion.flink.planner;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Optional;
 import org.apache.calcite.rex.RexNode;
@@ -23,16 +25,13 @@ import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeConfig;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeContext;
 import org.apache.flink.table.planner.plan.nodes.exec.InputProperty;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecNode;
-import org.apache.flink.table.planner.plan.nodes.exec.utils.ExecNodeUtil;
 import org.apache.flink.table.planner.utils.JavaScalaConversionUtil;
 import org.apache.flink.table.runtime.generated.GeneratedWatermarkGenerator;
-import org.apache.flink.table.runtime.operators.wmassigners.WatermarkAssignerOperatorFactory;
-import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
 import org.apache.flink.table.types.logical.RowType;
 
 /** StreamFusion physical node that retains Flink's watermark state machine and coordination. */
 public final class StreamFusionExecWatermarkAssigner extends ExecNodeBase<RowData> implements StreamExecNode<RowData> {
-    private static final String TRANSFORMATION_NAME = "streamfusion-watermark-assigner";
+    private static final String TRANSLATOR_CLASS = "tech.streamfusion.flink.watermark.StreamFusionWatermarkTranslator";
 
     private final RexNode watermarkExpression;
     private final int rowtimeFieldIndex;
@@ -69,14 +68,22 @@ public final class StreamFusionExecWatermarkAssigner extends ExecNodeBase<RowDat
                 JavaScalaConversionUtil.toScala(Optional.empty()));
         long idleTimeout = config.get(ExecutionConfigOptions.TABLE_EXEC_SOURCE_IDLE_TIMEOUT)
                 .toMillis();
-        WatermarkAssignerOperatorFactory factory =
-                new WatermarkAssignerOperatorFactory(rowtimeFieldIndex, idleTimeout, generator);
-        return ExecNodeUtil.createOneInputTransformation(
-                input,
-                createTransformationMeta(TRANSFORMATION_NAME, config),
-                factory,
-                InternalTypeInfo.of(getOutputType()),
-                input.getParallelism(),
-                false);
+        try {
+            Class<?> translator = Class.forName(
+                    TRANSLATOR_CLASS, true, planner.getFlinkContext().getClassLoader());
+            Method method = translator.getMethod(
+                    "translate",
+                    Transformation.class,
+                    RowType.class,
+                    int.class,
+                    long.class,
+                    GeneratedWatermarkGenerator.class);
+            return (Transformation<RowData>)
+                    method.invoke(null, input, (RowType) getOutputType(), rowtimeFieldIndex, idleTimeout, generator);
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
+            throw new IllegalStateException("Could not invoke the StreamFusion Arrow watermark runtime", e);
+        } catch (InvocationTargetException e) {
+            throw new IllegalStateException("StreamFusion Arrow watermark translation failed", e.getCause());
+        }
     }
 }

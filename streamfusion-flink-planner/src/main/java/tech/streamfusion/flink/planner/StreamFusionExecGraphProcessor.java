@@ -19,6 +19,7 @@ import org.apache.calcite.rex.RexNode;
 import org.apache.flink.table.planner.plan.logical.TimeAttributeWindowingStrategy;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecEdge;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNode;
+import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeBase;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeGraph;
 import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecCalc;
 import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecCorrelate;
@@ -133,6 +134,19 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
     }
 
     private ExecNode<?> convert(ExecNode<?> node) {
+        if (isSinkBoundary(node)) {
+            for (int index = 0; index < node.getInputEdges().size(); index++) {
+                ExecEdge edge = node.getInputEdges().get(index);
+                ExecNode<?> convertedSource = convert(edge.getSource());
+                StreamFusionExecSinkBoundary boundary = new StreamFusionExecSinkBoundary(
+                        ((ExecNodeBase<?>) node).getPersistedConfig(),
+                        node.getInputProperties().get(index),
+                        (RowType) edge.getOutputType());
+                boundary.setInputEdges(List.of(copyEdge(edge, convertedSource, boundary)));
+                node.replaceInputEdge(index, copyEdge(edge, boundary, node));
+            }
+            return node;
+        }
         if (node instanceof StreamExecValues) {
             StreamExecValues values = (StreamExecValues) node;
             return new StreamFusionExecValues(

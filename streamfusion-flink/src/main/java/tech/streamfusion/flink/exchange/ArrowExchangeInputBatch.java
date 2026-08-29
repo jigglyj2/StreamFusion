@@ -14,6 +14,7 @@ import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.types.RowKind;
 import tech.streamfusion.flink.arrow.ArrowReader;
+import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.ArrowUtils;
 
 /** Owns one received Arrow frame and exposes user rows plus Flink's record envelope. */
@@ -22,6 +23,7 @@ public final class ArrowExchangeInputBatch implements AutoCloseable {
     private final ArrowReader rows;
     private final TinyIntVector rowKinds;
     private final BigIntVector timestamps;
+    private final ArrowRowDataBatch batch;
 
     public ArrowExchangeInputBatch(VectorSchemaRoot root, RowType rowType) {
         int fieldCount = rowType.getFieldCount();
@@ -37,6 +39,16 @@ public final class ArrowExchangeInputBatch implements AutoCloseable {
         this.rows = ArrowUtils.createArrowReader(visible, rowType);
         this.rowKinds = (TinyIntVector) root.getVector(fieldCount);
         this.timestamps = (BigIntVector) root.getVector(fieldCount + 1);
+        RowKind[] kinds = new RowKind[root.getRowCount()];
+        boolean[] timestampPresence = new boolean[root.getRowCount()];
+        long[] timestampValues = new long[root.getRowCount()];
+        for (int row = 0; row < root.getRowCount(); row++) {
+            kinds[row] = RowKind.fromByteValue(rowKinds.get(row));
+            timestampPresence[row] = !timestamps.isNull(row);
+            timestampValues[row] = timestampPresence[row] ? timestamps.get(row) : Long.MIN_VALUE;
+        }
+        this.batch =
+                ArrowRowDataBatch.borrowed(visible, rowType).withEnvelope(kinds, timestampPresence, timestampValues);
     }
 
     public int size() {
@@ -47,6 +59,10 @@ public final class ArrowExchangeInputBatch implements AutoCloseable {
         RowData value = rows.read(row);
         value.setRowKind(RowKind.fromByteValue(rowKinds.get(row)));
         return value;
+    }
+
+    public ArrowRowDataBatch arrowBatch() {
+        return batch;
     }
 
     public boolean hasTimestamp(int row) {

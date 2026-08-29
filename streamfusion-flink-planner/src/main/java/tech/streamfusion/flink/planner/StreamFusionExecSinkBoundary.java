@@ -1,11 +1,6 @@
 /*
  * Copyright 2026 StreamFusion Authors
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ * Licensed under the Apache License, Version 2.0
  */
 package tech.streamfusion.flink.planner;
 
@@ -23,36 +18,34 @@ import org.apache.flink.table.planner.plan.nodes.exec.InputProperty;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecNode;
 import org.apache.flink.table.types.logical.RowType;
 
-/** StreamFusion physical node for Flink's planner-inserted UPDATE_BEFORE filter. */
-public final class StreamFusionExecDropUpdateBefore extends ExecNodeBase<RowData> implements StreamExecNode<RowData> {
-    private static final String TRANSLATOR_CLASS =
-            "tech.streamfusion.flink.changelog.StreamFusionDropUpdateBeforeTranslator";
+/** Ends a connected StreamFusion Arrow region immediately before a Flink sink. */
+final class StreamFusionExecSinkBoundary extends ExecNodeBase<RowData> implements StreamExecNode<RowData> {
+    private static final String TRANSLATOR_CLASS = "tech.streamfusion.flink.arrow.StreamFusionArrowBoundaryTranslator";
 
-    public StreamFusionExecDropUpdateBefore(
-            ReadableConfig persistedConfig, InputProperty inputProperty, RowType outputType, String description) {
+    StreamFusionExecSinkBoundary(ReadableConfig persistedConfig, InputProperty inputProperty, RowType outputType) {
         super(
                 ExecNodeContext.newNodeId(),
-                new ExecNodeContext("streamfusion-exec-drop-update-before_1"),
+                new ExecNodeContext("streamfusion-exec-sink-boundary_1"),
                 persistedConfig,
                 List.of(inputProperty),
                 outputType,
-                description);
+                "StreamFusionArrowToRowData");
     }
 
-    @SuppressWarnings("unchecked")
     @Override
+    @SuppressWarnings("unchecked")
     protected Transformation<RowData> translateToPlanInternal(PlannerBase planner, ExecNodeConfig config) {
         Transformation<RowData> input =
                 (Transformation<RowData>) getInputEdges().get(0).translateToPlan(planner);
         try {
             Class<?> translator = Class.forName(
                     TRANSLATOR_CLASS, true, planner.getFlinkContext().getClassLoader());
-            Method translate = translator.getMethod("translate", Transformation.class, RowType.class);
-            return (Transformation<RowData>) translate.invoke(null, input, (RowType) getOutputType());
+            Method method = translator.getMethod("toRowData", Transformation.class, RowType.class);
+            return (Transformation<RowData>) method.invoke(null, input, (RowType) getOutputType());
         } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
-            throw new IllegalStateException("Could not invoke the StreamFusion UPDATE_BEFORE runtime", e);
+            throw new IllegalStateException("Could not invoke the StreamFusion Arrow sink boundary", e);
         } catch (InvocationTargetException e) {
-            throw new IllegalStateException("StreamFusion UPDATE_BEFORE translation failed", e.getCause());
+            throw new IllegalStateException("StreamFusion Arrow sink boundary failed", e.getCause());
         }
     }
 }

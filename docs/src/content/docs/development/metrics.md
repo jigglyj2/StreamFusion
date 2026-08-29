@@ -30,7 +30,7 @@ The current operator-specific audit is:
 | Values | Flink `ValuesInputFormat` source | No additional reference metrics; standard Flink source metrics are retained. |
 | Aligned Window TVF | Flink `AlignedWindowTableFunctionOperator` | Publishes `numNullRowTimeRecordsDropped` and increments it at the same per-record decision point. |
 | Drop Update Before | Flink `StreamFilter` with `DropUpdateBeforeFunction` | No additional reference metrics; standard Flink metrics are retained. |
-| Watermark Assigner | Flink `WatermarkAssignerOperatorFactory` | Uses Flink's operator directly, including its metrics and backpressure listener lifecycle. |
+| Watermark Assigner | Flink `WatermarkAssignerOperatorFactory` | Uses Flink's generated watermark expression and state machine over Arrow-backed row views, including backpressure-aware idleness and matching lifecycle metrics. |
 | Hash/Singleton Exchange | Flink `PartitionTransformation` | Network transport remains Flink-owned; operator/task record counters report logical rows rather than native IPC frames. |
 
 StreamFusion-specific diagnostics are additive and use distinct names; they do not

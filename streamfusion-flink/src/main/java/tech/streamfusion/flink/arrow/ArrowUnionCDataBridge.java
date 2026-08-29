@@ -72,11 +72,12 @@ public final class ArrowUnionCDataBridge {
             long[] arrayAddresses = new long[inputs.size()];
             long[] schemaAddresses = new long[inputs.size()];
             for (int index = 0; index < inputs.size(); index++) {
-                ArrowArray inputArray = ArrowArray.allocateNew(allocator);
-                ArrowSchema inputSchema = ArrowSchema.allocateNew(allocator);
+                BufferAllocator inputAllocator = inputs.get(index).allocator();
+                ArrowArray inputArray = ArrowArray.allocateNew(inputAllocator);
+                ArrowSchema inputSchema = ArrowSchema.allocateNew(inputAllocator);
                 inputArrays.add(inputArray);
                 inputSchemas.add(inputSchema);
-                Data.exportVectorSchemaRoot(allocator, inputs.get(index).root(), null, inputArray, inputSchema);
+                Data.exportVectorSchemaRoot(inputAllocator, inputs.get(index).root(), null, inputArray, inputSchema);
                 arrayAddresses[index] = inputArray.memoryAddress();
                 schemaAddresses[index] = inputSchema.memoryAddress();
             }
@@ -87,14 +88,15 @@ public final class ArrowUnionCDataBridge {
             }
             VectorSchemaRoot output = Data.importVectorSchemaRoot(allocator, outputArray, outputSchema, dictionaries);
             output.setRowCount((int) rowCount);
-            return removeSelection(output, outputType);
+            return removeSelection(output, outputType, allocator);
         } finally {
             inputArrays.forEach(ArrowArray::close);
             inputSchemas.forEach(ArrowSchema::close);
         }
     }
 
-    private static NativeCalcResult removeSelection(VectorSchemaRoot output, RowType outputType) {
+    private static NativeCalcResult removeSelection(
+            VectorSchemaRoot output, RowType outputType, BufferAllocator allocator) {
         int ordinalIndex = output.getFieldVectors().size() - 1;
         FieldVector ordinalVector = output.getVector(ordinalIndex);
         if (!(ordinalVector instanceof IntVector)) {
@@ -108,7 +110,7 @@ public final class ArrowUnionCDataBridge {
         }
         VectorSchemaRoot visibleOutput = output.removeVector(ordinalIndex);
         ordinalVector.close();
-        return new NativeCalcResult(ArrowRowDataBatch.wrap(visibleOutput, outputType), inputRows);
+        return new NativeCalcResult(ArrowRowDataBatch.wrap(visibleOutput, outputType, allocator), inputRows);
     }
 
     @FunctionalInterface

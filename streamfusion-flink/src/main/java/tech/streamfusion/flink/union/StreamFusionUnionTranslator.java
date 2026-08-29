@@ -17,11 +17,12 @@ package tech.streamfusion.flink.union;
 
 import java.util.List;
 import org.apache.flink.api.dag.Transformation;
-import org.apache.flink.core.memory.ManagedMemoryUseCase;
 import org.apache.flink.streaming.api.transformations.MultipleInputTransformation;
 import org.apache.flink.table.data.RowData;
-import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
 import org.apache.flink.table.types.logical.RowType;
+import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
+import tech.streamfusion.flink.arrow.ArrowRowDataBatchTypeInfo;
+import tech.streamfusion.flink.arrow.StreamFusionArrowBoundaries;
 import tech.streamfusion.flink.calc.StreamFusionTimestampRangeSupport;
 
 /** Reflection entry point used by the planner extension for native UNION ALL. */
@@ -45,14 +46,15 @@ public final class StreamFusionUnionTranslator {
         }
         int parallelism =
                 inputs.stream().mapToInt(Transformation::getParallelism).max().orElse(1);
-        MultipleInputTransformation<RowData> transformation = new MultipleInputTransformation<>(
+        MultipleInputTransformation<ArrowRowDataBatch> transformation = new MultipleInputTransformation<>(
                 "streamfusion-union-all[" + inputs.size() + "]",
-                new StreamFusionUnionOperatorFactory(inputs.size(), rowType),
-                InternalTypeInfo.of(rowType),
+                new StreamFusionUnionOperatorFactory(inputs.size()),
+                ArrowRowDataBatchTypeInfo.INSTANCE,
                 parallelism,
                 false);
-        inputs.forEach(transformation::addInput);
-        transformation.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
-        return transformation;
+        inputs.stream()
+                .map(input -> StreamFusionArrowBoundaries.toArrow(input, rowType))
+                .forEach(transformation::addInput);
+        return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
     }
 }

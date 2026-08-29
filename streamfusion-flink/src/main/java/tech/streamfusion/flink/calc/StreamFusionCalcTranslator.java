@@ -15,8 +15,11 @@ import org.apache.flink.api.dag.Transformation;
 import org.apache.flink.core.memory.ManagedMemoryUseCase;
 import org.apache.flink.streaming.api.transformations.OneInputTransformation;
 import org.apache.flink.table.data.RowData;
-import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
 import org.apache.flink.table.types.logical.RowType;
+import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
+import tech.streamfusion.flink.arrow.ArrowRowDataBatchTypeInfo;
+import tech.streamfusion.flink.arrow.StreamFusionArrowBoundaries;
+import tech.streamfusion.flink.operator.StreamFusionArrowNativeOperator;
 import tech.streamfusion.flink.unnest.StreamFusionArrayUnnestTranslator;
 import tech.streamfusion.proto.plan.v1.Expression;
 
@@ -33,7 +36,7 @@ public final class StreamFusionCalcTranslator extends StreamFusionExpressionTran
     /** Reuses Calc's parity-checked Flink-to-protobuf type mapping. */
     public static tech.streamfusion.proto.plan.v1.LogicalType operatorLogicalType(
             org.apache.flink.table.types.logical.LogicalType type) {
-        return StreamFusionIdentityCalcOperator.logicalType(type);
+        return StreamFusionCalcPlan.logicalType(type);
     }
 
     public static Transformation<RowData> translate(
@@ -85,17 +88,17 @@ public final class StreamFusionCalcTranslator extends StreamFusionExpressionTran
             nativeConditions.add(conditionExpression(conditions.get(stage), stageInputType));
         }
         RowType outputType = outputTypes.get(outputTypes.size() - 1);
-        StreamFusionIdentityCalcOperator operator = new StreamFusionIdentityCalcOperator(
-                inputTypes.get(0), outputType, nativeProjectionStages, nativeConditions);
-        OneInputTransformation<RowData, RowData> transformation = new OneInputTransformation<>(
-                input,
+        byte[] plan = StreamFusionCalcPlan.create(inputTypes.get(0), nativeProjectionStages, nativeConditions);
+        Transformation<ArrowRowDataBatch> arrowInput = StreamFusionArrowBoundaries.toArrow(input, inputTypes.get(0));
+        OneInputTransformation<ArrowRowDataBatch, ArrowRowDataBatch> transformation = new OneInputTransformation<>(
+                arrowInput,
                 "streamfusion-calc-chain[" + inputTypes.size() + "]",
-                operator,
-                InternalTypeInfo.of(outputType),
+                new StreamFusionArrowNativeOperator(outputType, plan, "streamfusion-calc"),
+                ArrowRowDataBatchTypeInfo.INSTANCE,
                 input.getParallelism(),
                 false);
         transformation.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
-        return transformation;
+        return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
     }
 
     /** Fuses an array UNNEST and every immediately following Calc into one native plan. */
@@ -182,9 +185,7 @@ public final class StreamFusionCalcTranslator extends StreamFusionExpressionTran
             nativeConditions.add(conditionExpression(conditions.get(stage), stageInputType));
         }
         RowType outputType = outputTypes.get(outputTypes.size() - 1);
-        StreamFusionIdentityCalcOperator operator = new StreamFusionIdentityCalcOperator(
-                unnestInputTypes.get(0),
-                outputType,
+        byte[] plan = StreamFusionCalcPlan.createFusedUnnest(
                 arrayIndexes,
                 withOrdinalities,
                 preserveEmpty,
@@ -193,15 +194,17 @@ public final class StreamFusionCalcTranslator extends StreamFusionExpressionTran
                 unnestOutputFieldCounts,
                 nativeProjectionStages,
                 nativeConditions);
-        OneInputTransformation<RowData, RowData> transformation = new OneInputTransformation<>(
-                input,
+        Transformation<ArrowRowDataBatch> arrowInput =
+                StreamFusionArrowBoundaries.toArrow(input, unnestInputTypes.get(0));
+        OneInputTransformation<ArrowRowDataBatch, ArrowRowDataBatch> transformation = new OneInputTransformation<>(
+                arrowInput,
                 "streamfusion-array-unnest-calc-chain[" + inputTypes.size() + "]",
-                operator,
-                InternalTypeInfo.of(outputType),
+                new StreamFusionArrowNativeOperator(outputType, plan, "streamfusion-array-unnest-calc"),
+                ArrowRowDataBatchTypeInfo.INSTANCE,
                 input.getParallelism(),
                 false);
         transformation.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
-        return transformation;
+        return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
     }
 
     public static boolean canTranslate(RowType inputType, RowType outputType, List<?> projections, Object condition) {

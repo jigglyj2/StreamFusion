@@ -24,10 +24,9 @@ class StreamFusionCalcChainPlanTest {
     @Test
     void serializesAdjacentCalcsAsOneNestedNativePlan() throws Exception {
         RowType rowType = RowType.of(new IntType(false));
-        Expression value = StreamFusionIdentityCalcOperator.inputReference(
-                0, StreamFusionIdentityCalcOperator.logicalType(rowType, 0));
+        Expression value = StreamFusionCalcPlan.inputReference(0, StreamFusionCalcPlan.logicalType(rowType, 0));
 
-        byte[] bytes = StreamFusionIdentityCalcOperator.createPlan(
+        byte[] bytes = StreamFusionCalcPlan.create(
                 rowType, List.of(List.of(value), List.of(value)), Arrays.asList(null, null));
 
         NativePlan plan = NativePlan.parseFrom(bytes);

@@ -27,6 +27,11 @@ public final class NativeCalcResult implements AutoCloseable {
         return inputRows[outputRow];
     }
 
+    /** Propagates Flink record metadata while leaving the data entirely Arrow-backed. */
+    public ArrowRowDataBatch selectEnvelopeFrom(ArrowRowDataBatch input) {
+        return batch.selectEnvelopeFrom(input, inputRows);
+    }
+
     @Override
     public void close() {
         batch.close();

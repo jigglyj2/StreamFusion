@@ -21,9 +21,12 @@ import org.apache.flink.api.dag.Transformation;
 import org.apache.flink.core.memory.ManagedMemoryUseCase;
 import org.apache.flink.streaming.api.transformations.OneInputTransformation;
 import org.apache.flink.table.data.RowData;
-import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
 import org.apache.flink.table.types.logical.RowType;
+import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
+import tech.streamfusion.flink.arrow.ArrowRowDataBatchTypeInfo;
+import tech.streamfusion.flink.arrow.StreamFusionArrowBoundaries;
 import tech.streamfusion.flink.calc.StreamFusionCalcTranslator;
+import tech.streamfusion.flink.operator.StreamFusionArrowNativeOperator;
 import tech.streamfusion.proto.plan.v1.Expression;
 
 /** Reflection entry point used by the planner extension for native Expand. */
@@ -44,15 +47,17 @@ public final class StreamFusionExpandTranslator {
             }
             nativeProjects.add(expressions);
         }
-        OneInputTransformation<RowData, RowData> transformation = new OneInputTransformation<>(
-                input,
+        Transformation<ArrowRowDataBatch> arrowInput = StreamFusionArrowBoundaries.toArrow(input, inputType);
+        OneInputTransformation<ArrowRowDataBatch, ArrowRowDataBatch> transformation = new OneInputTransformation<>(
+                arrowInput,
                 "streamfusion-expand[" + projects.size() + "]",
-                new StreamFusionExpandOperator(inputType, outputType, nativeProjects),
-                InternalTypeInfo.of(outputType),
+                new StreamFusionArrowNativeOperator(
+                        outputType, StreamFusionExpandPlan.create(nativeProjects), "streamfusion-expand"),
+                ArrowRowDataBatchTypeInfo.INSTANCE,
                 input.getParallelism(),
                 false);
         transformation.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
-        return transformation;
+        return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
     }
 
     public static String unsupportedReason(RowType inputType, RowType outputType, List<List<?>> projects) {

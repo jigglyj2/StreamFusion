@@ -32,7 +32,7 @@ public final class ArrowCDataBridge {
                 allocator,
                 (inputArray, inputSchema, outputArray, outputSchema) -> NativeCalcBridge.executeArrow(
                         serializedPlan, inputArray, inputSchema, outputArray, outputSchema));
-        return ArrowRowDataBatch.wrap(output, outputType);
+        return ArrowRowDataBatch.wrap(output, outputType, allocator);
     }
 
     public static ArrowRowDataBatch execute(
@@ -42,7 +42,7 @@ public final class ArrowCDataBridge {
                 allocator,
                 (inputArray, inputSchema, outputArray, outputSchema) ->
                         NativeCalcBridge.executeArrow(context, inputArray, inputSchema, outputArray, outputSchema));
-        return ArrowRowDataBatch.wrap(output, outputType);
+        return ArrowRowDataBatch.wrap(output, outputType, allocator);
     }
 
     public static NativeCalcResult executeWithSelection(
@@ -52,7 +52,7 @@ public final class ArrowCDataBridge {
                 allocator,
                 (inputArray, inputSchema, outputArray, outputSchema) -> NativeCalcBridge.executeArrow(
                         serializedPlan, inputArray, inputSchema, outputArray, outputSchema));
-        return removeSelection(output, outputType);
+        return removeSelection(output, outputType, allocator);
     }
 
     public static NativeCalcResult executeWithSelection(
@@ -62,10 +62,11 @@ public final class ArrowCDataBridge {
                 allocator,
                 (inputArray, inputSchema, outputArray, outputSchema) ->
                         NativeCalcBridge.executeArrow(context, inputArray, inputSchema, outputArray, outputSchema));
-        return removeSelection(output, outputType);
+        return removeSelection(output, outputType, allocator);
     }
 
-    private static NativeCalcResult removeSelection(VectorSchemaRoot output, RowType outputType) {
+    private static NativeCalcResult removeSelection(
+            VectorSchemaRoot output, RowType outputType, BufferAllocator allocator) {
         int ordinalIndex = output.getFieldVectors().size() - 1;
         FieldVector ordinalVector = output.getVector(ordinalIndex);
         if (!(ordinalVector instanceof IntVector)) {
@@ -79,17 +80,18 @@ public final class ArrowCDataBridge {
         }
         VectorSchemaRoot visibleOutput = output.removeVector(ordinalIndex);
         ordinalVector.close();
-        return new NativeCalcResult(ArrowRowDataBatch.wrap(visibleOutput, outputType), inputRows);
+        return new NativeCalcResult(ArrowRowDataBatch.wrap(visibleOutput, outputType, allocator), inputRows);
     }
 
     private static VectorSchemaRoot executeNative(
             ArrowRowDataBatch input, BufferAllocator allocator, NativeCalcInvocation invocation) {
-        try (ArrowArray inputArray = ArrowArray.allocateNew(allocator);
-                ArrowSchema inputSchema = ArrowSchema.allocateNew(allocator);
+        BufferAllocator inputAllocator = input.allocator();
+        try (ArrowArray inputArray = ArrowArray.allocateNew(inputAllocator);
+                ArrowSchema inputSchema = ArrowSchema.allocateNew(inputAllocator);
                 ArrowArray outputArray = ArrowArray.allocateNew(allocator);
                 ArrowSchema outputSchema = ArrowSchema.allocateNew(allocator);
                 CDataDictionaryProvider dictionaries = new CDataDictionaryProvider()) {
-            Data.exportVectorSchemaRoot(allocator, input.root(), null, inputArray, inputSchema);
+            Data.exportVectorSchemaRoot(inputAllocator, input.root(), null, inputArray, inputSchema);
             long rowCount = invocation.execute(
                     inputArray.memoryAddress(),
                     inputSchema.memoryAddress(),

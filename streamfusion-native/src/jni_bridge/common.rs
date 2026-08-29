@@ -82,7 +82,7 @@ pub(super) unsafe fn execute_and_export(
         ));
     }
     let output_schema = plan.schema();
-    let batches = context
+    let mut batches = context
         .runtime()
         .block_on(collect(plan, context.task_context()))?;
     let output_reservation = context.reservation("native Arrow output");
@@ -98,11 +98,13 @@ pub(super) unsafe fn execute_and_export(
     // As in Comet's buffered operators, account a newly produced batch before it can
     // proceed. The concat reservation is acquired before allocating the combined batch.
     output_reservation.try_grow(collected_bytes)?;
-    if !batches.is_empty() {
+    if batches.len() > 1 {
         output_reservation.try_grow(collected_bytes)?;
     }
     let output_batch = if batches.is_empty() {
         RecordBatch::new_empty(output_schema)
+    } else if batches.len() == 1 {
+        batches.pop().expect("one collected batch")
     } else {
         arrow::compute::concat_batches(&output_schema, batches.iter())?
     };

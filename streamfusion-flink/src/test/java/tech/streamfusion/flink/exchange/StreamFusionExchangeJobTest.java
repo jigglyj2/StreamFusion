@@ -22,6 +22,7 @@ import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
 import org.apache.flink.table.types.logical.IntType;
 import org.apache.flink.table.types.logical.RowType;
 import org.junit.jupiter.api.Test;
+import tech.streamfusion.flink.arrow.StreamFusionArrowBoundaries;
 
 class StreamFusionExchangeJobTest {
     @Test
@@ -34,8 +35,9 @@ class StreamFusionExchangeJobTest {
         StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();
         environment.setParallelism(2);
         DataStream<RowData> source = environment.fromCollection(rows).returns(InternalTypeInfo.of(rowType));
-        Transformation<RowData> exchange =
+        Transformation<RowData> arrowExchange =
                 StreamFusionExchangeTranslator.hash(source.getTransformation(), rowType, new int[] {0}, 128);
+        Transformation<RowData> exchange = StreamFusionArrowBoundaries.toRowData(arrowExchange, rowType);
 
         List<RoutedValue> results = new DataStream<>(environment, exchange)
                 .map(new CaptureSubtask())

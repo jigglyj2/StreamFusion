@@ -18,14 +18,17 @@ import org.apache.flink.core.memory.ManagedMemoryUseCase;
 import org.apache.flink.streaming.api.transformations.OneInputTransformation;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.planner.calcite.FlinkTypeFactory;
-import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
 import org.apache.flink.table.types.logical.ArrayType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.MapType;
 import org.apache.flink.table.types.logical.MultisetType;
 import org.apache.flink.table.types.logical.RowType;
+import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
+import tech.streamfusion.flink.arrow.ArrowRowDataBatchTypeInfo;
+import tech.streamfusion.flink.arrow.StreamFusionArrowBoundaries;
 import tech.streamfusion.flink.calc.StreamFusionCalcTranslator;
+import tech.streamfusion.flink.operator.StreamFusionArrowNativeOperator;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.UnnestCollection;
 
@@ -76,23 +79,18 @@ public final class StreamFusionArrayUnnestTranslator {
             collections.add(collection(stageInput, invocation));
             collectionExpressions.add(collectionExpression(stageInput, invocation));
         }
-        StreamFusionArrayUnnestOperator operator = new StreamFusionArrayUnnestOperator(
-                inputTypes.get(0),
-                outputTypes.get(stageCount - 1),
-                arrayIndexes,
-                withOrdinalities,
-                preserveEmpty,
-                collections,
-                collectionExpressions);
-        OneInputTransformation<RowData, RowData> transformation = new OneInputTransformation<>(
-                input,
+        byte[] plan = StreamFusionArrayUnnestPlan.create(
+                arrayIndexes, withOrdinalities, preserveEmpty, collections, collectionExpressions);
+        Transformation<ArrowRowDataBatch> arrowInput = StreamFusionArrowBoundaries.toArrow(input, inputTypes.get(0));
+        OneInputTransformation<ArrowRowDataBatch, ArrowRowDataBatch> transformation = new OneInputTransformation<>(
+                arrowInput,
                 "streamfusion-array-unnest-chain[" + stageCount + "]",
-                operator,
-                InternalTypeInfo.of(outputTypes.get(stageCount - 1)),
+                new StreamFusionArrowNativeOperator(outputTypes.get(stageCount - 1), plan, "streamfusion-array-unnest"),
+                ArrowRowDataBatchTypeInfo.INSTANCE,
                 input.getParallelism(),
                 false);
         transformation.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
-        return transformation;
+        return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
     }
 
     /** Returns null only for the narrow correlate shape whose Flink semantics are reproduced exactly. */

@@ -13,8 +13,10 @@ import org.apache.flink.streaming.api.transformations.PartitionTransformation;
 import org.apache.flink.streaming.runtime.partitioner.GlobalPartitioner;
 import org.apache.flink.streaming.runtime.partitioner.StreamPartitioner;
 import org.apache.flink.table.data.RowData;
-import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
 import org.apache.flink.table.types.logical.RowType;
+import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
+import tech.streamfusion.flink.arrow.ArrowRowDataBatchTypeInfo;
+import tech.streamfusion.flink.arrow.StreamFusionArrowBoundaries;
 
 /** Builds the Flink-owned runtime topology around the native Arrow exchange data path. */
 public final class StreamFusionExchangeTranslator {
@@ -37,8 +39,8 @@ public final class StreamFusionExchangeTranslator {
             byte[] plan,
             StreamPartitioner<NativeExchangeFrame> partitioner,
             boolean singleton) {
-        OneInputTransformation<RowData, NativeExchangeFrame> writer = new OneInputTransformation<>(
-                input,
+        OneInputTransformation<ArrowRowDataBatch, NativeExchangeFrame> writer = new OneInputTransformation<>(
+                StreamFusionArrowBoundaries.toArrow(input, rowType),
                 "StreamFusionExchangeWriter",
                 SimpleOperatorFactory.of(new NativeExchangeWriterOperator(rowType, plan)),
                 NativeExchangeFrameTypeInfo.INSTANCE,
@@ -47,14 +49,14 @@ public final class StreamFusionExchangeTranslator {
         PartitionTransformation<NativeExchangeFrame> exchange = new PartitionTransformation<>(writer, partitioner);
         exchange.setOutputType(NativeExchangeFrameTypeInfo.INSTANCE);
         exchange.setParallelism(singleton ? 1 : ExecutionConfig.PARALLELISM_DEFAULT);
-        OneInputTransformation<NativeExchangeFrame, RowData> reader = new OneInputTransformation<>(
+        OneInputTransformation<NativeExchangeFrame, ArrowRowDataBatch> reader = new OneInputTransformation<>(
                 exchange,
                 "StreamFusionExchangeReader",
                 SimpleOperatorFactory.of(new NativeExchangeReaderOperator(rowType, plan)),
-                InternalTypeInfo.of(rowType),
+                ArrowRowDataBatchTypeInfo.INSTANCE,
                 exchange.getParallelism());
         reader.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
-        reader.setOutputType(InternalTypeInfo.of(rowType));
-        return reader;
+        reader.setOutputType(ArrowRowDataBatchTypeInfo.INSTANCE);
+        return StreamFusionArrowBoundaries.asPlannerTransformation(reader);
     }
 }
