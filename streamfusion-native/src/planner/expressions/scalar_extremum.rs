@@ -25,6 +25,9 @@ pub(crate) fn create(
         DataFusionError::Plan("GREATEST/LEAST requires at least one argument".to_string())
     })?;
     let data_type = first.data_type(schema)?;
+    if data_type == DataType::Utf8 {
+        return super::string_extremum::create(arguments, greatest, schema);
+    }
     if !matches!(
         data_type,
         DataType::Int8

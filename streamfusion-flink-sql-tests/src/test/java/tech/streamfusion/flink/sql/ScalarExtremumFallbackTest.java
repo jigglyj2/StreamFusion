@@ -27,7 +27,7 @@ class ScalarExtremumFallbackTest extends SqlParityTestSupport {
         assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
         assertThat(StreamFusionPlanningDiagnostics.explain())
                 .contains(
-                        "currently accelerates signed integer, DECIMAL, DATE, TIME, and timezone-free TIMESTAMP common types")
+                        "currently accelerates signed integer, DECIMAL, VARCHAR, DATE, TIME, and timezone-free TIMESTAMP common types")
                 .contains("floating NaN/signed-zero")
                 .contains("Accelerated: no");
     }

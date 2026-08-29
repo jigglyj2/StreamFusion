@@ -47,7 +47,7 @@ final class StreamFusionScalarExtremumTranslator extends StreamFusionComplexType
         String function = functionName(expression);
         if ("GREATEST".equals(function) || "LEAST".equals(function)) {
             return function
-                    + " currently accelerates signed integer, DECIMAL, DATE, TIME, and timezone-free TIMESTAMP common types; floating NaN/signed-zero, string ordering, and TIMESTAMP_LTZ session-zone behavior require separate parity audits";
+                    + " currently accelerates signed integer, DECIMAL, VARCHAR, DATE, TIME, and timezone-free TIMESTAMP common types; floating NaN/signed-zero, fixed-width CHAR padding, and TIMESTAMP_LTZ session-zone behavior require separate parity audits";
         }
         return null;
     }
@@ -58,6 +58,7 @@ final class StreamFusionScalarExtremumTranslator extends StreamFusionComplexType
                 || root == LogicalTypeRoot.INTEGER
                 || root == LogicalTypeRoot.BIGINT
                 || root == LogicalTypeRoot.DECIMAL
+                || root == LogicalTypeRoot.VARCHAR
                 || root == LogicalTypeRoot.DATE
                 || root == LogicalTypeRoot.TIME_WITHOUT_TIME_ZONE
                 || root == LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE;

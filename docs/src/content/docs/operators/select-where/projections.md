@@ -36,12 +36,12 @@ boundaries, invalid values, projections, and filters have byte-parity coverage.
 whitespace, extra components, and values above 255 return null. Standard, abbreviated, boundary,
 invalid, nested `INET_NTOA(INET_ATON(...))`, projection, and filter cases have parity coverage.
 `GREATEST` and `LEAST` are accelerated when their common type is `TINYINT`, `SMALLINT`, `INT`,
-`BIGINT`, `DECIMAL`, `DATE`, `TIME`, or timezone-free `TIMESTAMP`. DataFusion performs the
+`BIGINT`, `DECIMAL`, `VARCHAR`, `DATE`, `TIME`, or timezone-free `TIMESTAMP`. DataFusion performs the
 vectorized extremum comparison, wrapped in a native
 null guard so any null argument produces null as Flink requires. All widths, negative values, three
-arguments, nulls, projections, and filters have parity coverage. Floating-point, string, and
-`TIMESTAMP_LTZ` overloads remain on Flink with an EXPLAIN reason until their NaN, signed-zero,
-collation, and session-zone rules are independently proven. Date ordering compares Arrow's signed
+arguments, nulls, projections, and filters have parity coverage. Floating-point, fixed-width
+`CHAR`, and `TIMESTAMP_LTZ` overloads remain on Flink with an EXPLAIN reason until their NaN,
+signed-zero, padding, and session-zone rules are independently proven. Date ordering compares Arrow's signed
 epoch-day representation and covers pre-epoch dates, leap days, the supported range, nulls,
 projections, and filters.
 Time and timestamp ordering uses the precision-specific Arrow Time32, Time64, and Timestamp arrays
@@ -51,6 +51,11 @@ parity coverage.
 Decimal extrema retain Flink's resolved common precision and scale in Arrow `Decimal128` arrays.
 Mixed-scale coercion, precision 38, negative values, nulls, projections, and filters have parity
 coverage.
+`VARCHAR` extrema use a dedicated vector expression that compares UTF-16 code units exactly as
+Flink's Java runtime does. This intentionally differs from ordinary UTF-8 byte ordering for some
+supplementary Unicode characters. ASCII, composed and decomposed Unicode, supplementary/BMP order,
+empty values, nulls, projections, and filters have parity coverage. Fixed-width `CHAR` remains on
+Flink pending padding-specific parity work.
 
 StreamFusion can select, reorder, omit, or repeat direct input columns of these types:
 
