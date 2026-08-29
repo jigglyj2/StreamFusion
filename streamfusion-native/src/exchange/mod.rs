@@ -7,6 +7,7 @@ mod key_group;
 mod native_channel;
 mod network_stream;
 mod partitioner;
+mod record_metadata;
 
 pub use binary_row::{encode_binary_row, KeyField};
 pub use control::decode_exchange_plan;
@@ -14,3 +15,6 @@ pub use key_group::{assign_key_group, binary_row_hash, flink_murmur_hash};
 pub use native_channel::{native_batch_channel, NativeBatchReceiver, NativeBatchSender};
 pub use network_stream::{IpcExchangeReader, IpcExchangeWriter};
 pub use partitioner::{route_batch, RoutedBatch};
+pub use record_metadata::{
+    attach_record_metadata, ROW_KIND_COLUMN, STREAM_RECORD_TIMESTAMP_COLUMN,
+};

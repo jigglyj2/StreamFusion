@@ -143,6 +143,13 @@ Within one process, Arrow C Stream ownership passes reference-counted buffers di
 network edge, Arrow IPC/Flight-style buffers are framed because bytes must cross the network, but
 the schema is not rebuilt or resent for every batch.
 
+Flink's record envelope remains part of the data contract. StreamFusion appends a non-null
+`__streamfusion_row_kind` byte column using Flink's stable `RowKind.toByteValue()` encoding and,
+when records carry timestamps, a nullable `__streamfusion_stream_record_timestamp` 64-bit column.
+Appending this envelope reuses the existing Arrow data-column buffers. Watermarks, watermark
+statuses, latency markers, and checkpoint barriers remain ordered Flink network control events;
+they are never disguised as rows in the Arrow stream.
+
 Keyed exchange uses Flink's key-group identity, not DataFusion's partition hash. The core native
 exchange package reproduces the two-stage Flink calculation: hash the exact Flink `BinaryRowData`
 key bytes with `BinarySegmentUtils.hashByWords`, then apply `MathUtils.murmurHash` and reduce by
