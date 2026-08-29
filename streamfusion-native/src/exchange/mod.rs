@@ -1,5 +1,5 @@
 // Copyright 2026 StreamFusion Authors
-// Licensed under the Apache License, Version 2.0
+// Licensed under the Apache License, Version 2.0.
 
 mod binary_row;
 mod key_group;

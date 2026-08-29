@@ -6,7 +6,11 @@ We are creating a Flink accelerator on top of Apache DataFusion. This means we'l
 
 ## Project Structure & Module Organization
 
-Structure this project like Flink. We should have different optional maven modules for different extension points.
+Structure this project like Flink and use Flink's own module boundaries as the default model.
+Core planner and runtime machinery such as exchange belongs with the corresponding core
+StreamFusion planner/runtime package, just as it does in Flink; do not create a standalone Maven
+module merely to isolate a core subsystem. Use separate optional Maven modules for genuinely
+optional extension points such as connectors, formats, and independently packaged integrations.
 
 ## Build, Test, and Development Commands
 

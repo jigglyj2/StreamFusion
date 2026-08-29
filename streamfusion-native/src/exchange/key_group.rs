@@ -1,5 +1,5 @@
 // Copyright 2026 StreamFusion Authors
-// Licensed under the Apache License, Version 2.0
+// Licensed under the Apache License, Version 2.0.
 
 // Mirrors Flink BinarySegmentUtils.hashByWords (also implemented by paimon-rust)
 // followed by Flink MathUtils.murmurHash (also implemented by fluss-rust).

@@ -1,5 +1,5 @@
 // Copyright 2026 StreamFusion Authors
-// Licensed under the Apache License, Version 2.0
+// Licensed under the Apache License, Version 2.0.
 
 use std::sync::Arc;
 
@@ -7,7 +7,7 @@ use arrow::array::UInt32Array;
 use arrow::error::{ArrowError, Result};
 use arrow::record_batch::RecordBatch;
 
-use crate::{assign_key_group, encode_binary_row, KeyField};
+use super::{assign_key_group, encode_binary_row, KeyField};
 
 /// One destination's lightweight selection over a shared Arrow batch.
 #[derive(Debug, Clone)]
