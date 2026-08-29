@@ -170,6 +170,7 @@ message Expression {
     StringReverse string_reverse = 97;
     StringInitCap string_init_cap = 98;
     StringTrim string_trim = 99;
+    StringConcatWs string_concat_ws = 100;
   }
 }
 
@@ -461,6 +462,11 @@ message StringTrim {
   Expression value = 1;
   Expression characters = 2;
   StringTrimDirection direction = 3;
+}
+
+message StringConcatWs {
+  Expression separator = 1;
+  repeated Expression values = 2;
 }
 
 enum StringTrimDirection {

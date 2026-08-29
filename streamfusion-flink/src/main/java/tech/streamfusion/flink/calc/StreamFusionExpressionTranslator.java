@@ -589,7 +589,11 @@ abstract class StreamFusionExpressionTranslator extends StreamFusionProjectionTr
             case BOOLEAN:
                 return new org.apache.flink.table.types.logical.BooleanType(nullable);
             case CHAR:
-                return new CharType(nullable, precision);
+                // Calcite assigns CHAR(0) to the empty string literal, while Flink's
+                // LogicalType deliberately rejects zero-width CHAR. The width is only
+                // used here to classify the expression; preserve the CHAR family with
+                // the smallest valid logical width.
+                return new CharType(nullable, Math.max(1, precision));
             case VARCHAR:
                 return new org.apache.flink.table.types.logical.VarCharType(nullable, precision);
             case BINARY:

@@ -207,6 +207,10 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
         if (stringTrim != null) {
             return stringTrim;
         }
+        Expression stringConcatWs = StreamFusionStringFunctionTranslator.concatWs(expression, inputType, expectedType);
+        if (stringConcatWs != null) {
+            return stringConcatWs;
+        }
         Expression arrayDistinct =
                 StreamFusionCollectionSetTranslator.arrayDistinct(expression, inputType, expectedType);
         if (arrayDistinct != null) {

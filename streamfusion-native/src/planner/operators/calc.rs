@@ -415,6 +415,22 @@ pub(super) fn create_expression(
                 schema,
             )
         }
+        Some(proto::expression::Expression::StringConcatWs(concat_ws)) => {
+            let separator = concat_ws
+                .separator
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("CONCAT_WS separator is empty".to_string()))?;
+            let values = concat_ws
+                .values
+                .iter()
+                .map(|value| create_expression(value, schema))
+                .collect::<Result<Vec<_>>>()?;
+            expressions::string_concat_ws::create(
+                create_expression(separator, schema)?,
+                values,
+                schema,
+            )
+        }
         Some(proto::expression::Expression::Substring(substring)) => {
             let operand = substring
                 .operand

@@ -16,6 +16,7 @@ import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.proto.plan.v1.CharacterFromCode;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.StringAscii;
+import tech.streamfusion.proto.plan.v1.StringConcatWs;
 import tech.streamfusion.proto.plan.v1.StringInitCap;
 import tech.streamfusion.proto.plan.v1.StringLeft;
 import tech.streamfusion.proto.plan.v1.StringPosition;
@@ -293,6 +294,41 @@ final class StreamFusionStringFunctionTranslator extends StreamFusionComplexType
             trim.setCharacters(characters);
         }
         return Expression.newBuilder().setStringTrim(trim).build();
+    }
+
+    static Expression concatWs(Object expression, RowType inputType, LogicalType expectedType) {
+        if (!"CONCAT_WS".equals(functionName(expression)) || expectedType.getTypeRoot() != LogicalTypeRoot.VARCHAR) {
+            return null;
+        }
+        java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
+        if (operands.size() < 2) {
+            return null;
+        }
+        org.apache.flink.table.types.logical.VarCharType stringType =
+                new org.apache.flink.table.types.logical.VarCharType(
+                        org.apache.flink.table.types.logical.VarCharType.MAX_LENGTH);
+        StringConcatWs.Builder concatWs = StringConcatWs.newBuilder();
+        for (int index = 0; index < operands.size(); index++) {
+            Object operand = operands.get(index);
+            LogicalType operandType = logicalType(operand, inputType);
+            boolean characterLiteral = operandType != null
+                    && operandType.getTypeRoot() == LogicalTypeRoot.CHAR
+                    && literal(operand, String.class) != null;
+            if (operandType == null || (operandType.getTypeRoot() != LogicalTypeRoot.VARCHAR && !characterLiteral)) {
+                return null;
+            }
+            Expression argument = StreamFusionProjectionTranslator.projectionExpression(
+                    operand, inputType, characterLiteral ? stringType : operandType);
+            if (argument == null) {
+                return null;
+            }
+            if (index == 0) {
+                concatWs.setSeparator(argument);
+            } else {
+                concatWs.addValues(argument);
+            }
+        }
+        return Expression.newBuilder().setStringConcatWs(concatWs).build();
     }
 
     private static StringTrimDirection trimDirection(String flag) {

@@ -331,6 +331,12 @@ that every argument is non-null before invoking the vectorized concat kernel, pr
 Flink's null-if-any-argument-is-null rule (DataFusion concat alone skips nulls). Character
 literals and nested supported projections may be arguments; binary and fixed-width character
 concatenation remain fallback pending their distinct type-width rules.
+`CONCAT_WS(separator, value, ...)` is accelerated for a supported `VARCHAR` separator and one
+or more supported `VARCHAR` values. The separator and values may be computed expressions.
+DataFusion's vectorized kernel matches Flink by returning null for a null separator, skipping
+null values without adding their separators, retaining empty strings, and returning an empty
+string when every value is null. Fixed-width `CHAR` columns remain on Flink pending padding
+coverage; character literals are accepted as variable-width arguments.
 `TRIM`, `LTRIM`, and `RTRIM` are accelerated for `VARCHAR` values. Standard SQL `LEADING`,
 `TRAILING`, and `BOTH` directions and Flink's optional trim-character expressions are preserved
 as an explicit protobuf direction plus native child expressions. The one-argument forms remove
