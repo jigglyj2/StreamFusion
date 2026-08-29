@@ -16,6 +16,24 @@ use crate::{decode_plan, proto};
 mod expressions;
 mod operators;
 
+pub(crate) fn arrow_schema(schema: &proto::Schema) -> Result<arrow::datatypes::SchemaRef> {
+    let fields = schema
+        .fields
+        .iter()
+        .map(|field| {
+            let logical_type = field.r#type.as_ref().ok_or_else(|| {
+                DataFusionError::Plan(format!("field {} type is missing", field.name))
+            })?;
+            Ok(arrow::datatypes::Field::new(
+                &field.name,
+                expressions::null_literal::data_type(logical_type)?,
+                logical_type.nullable,
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Arc::new(arrow::datatypes::Schema::new(fields)))
+}
+
 pub fn create_plan(bytes: &[u8], input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
     create_plan_with_inputs(bytes, vec![input])
 }
