@@ -143,8 +143,8 @@ Within one process, Arrow C Stream ownership passes reference-counted buffers di
 network edge, Arrow IPC/Flight-style buffers are framed because bytes must cross the network, but
 the schema is not rebuilt or resent for every batch.
 
-Keyed exchange uses Flink's key-group identity, not DataFusion's partition hash. The native
-exchange module reproduces the two-stage Flink calculation: hash the exact Flink `BinaryRowData`
+Keyed exchange uses Flink's key-group identity, not DataFusion's partition hash. The core native
+exchange package reproduces the two-stage Flink calculation: hash the exact Flink `BinaryRowData`
 key bytes with `BinarySegmentUtils.hashByWords`, then apply `MathUtils.murmurHash` and reduce by
 the operator's configured maximum parallelism. This is the compatibility path implemented by
 Paimon Rust's BinaryRow encoder/hash and Fluss Rust's Flink Murmur utility. Cross-language fixtures
