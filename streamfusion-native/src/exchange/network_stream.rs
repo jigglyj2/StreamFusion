@@ -2,7 +2,6 @@
 // Licensed under the Apache License, Version 2.0.
 
 use std::io::{Read, Write};
-use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use arrow::error::{ArrowError, Result};
@@ -79,6 +78,7 @@ impl<R: Read> Iterator for IpcExchangeReader<R> {
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
+    use std::sync::Arc;
 
     use arrow::array::{ArrayRef, Int32Array, Int8Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};

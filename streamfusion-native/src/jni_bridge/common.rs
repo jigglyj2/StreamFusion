@@ -19,15 +19,7 @@ pub(super) unsafe fn import_input(
     input_schema_address: *mut FFI_ArrowSchema,
     row_offset: usize,
 ) -> datafusion::error::Result<RecordBatch> {
-    if input_array_address.is_null() || input_schema_address.is_null() {
-        return Err(datafusion::error::DataFusionError::Execution(
-            "Arrow C Data input address was null".to_string(),
-        ));
-    }
-    let ffi_array = unsafe { FFI_ArrowArray::from_raw(input_array_address) };
-    let ffi_schema = unsafe { FFI_ArrowSchema::from_raw(input_schema_address) };
-    let input_data = unsafe { from_ffi(ffi_array, &ffi_schema) }?;
-    let input_batch = RecordBatch::from(StructArray::from(input_data));
+    let input_batch = unsafe { import_record_batch(input_array_address, input_schema_address) }?;
     let row_count = input_batch.num_rows();
     let mut fields = input_batch
         .schema()
@@ -48,6 +40,21 @@ pub(super) unsafe fn import_input(
         Arc::new(Schema::new(fields)),
         columns,
     )?)
+}
+
+pub(super) unsafe fn import_record_batch(
+    input_array_address: *mut FFI_ArrowArray,
+    input_schema_address: *mut FFI_ArrowSchema,
+) -> datafusion::error::Result<RecordBatch> {
+    if input_array_address.is_null() || input_schema_address.is_null() {
+        return Err(datafusion::error::DataFusionError::Execution(
+            "Arrow C Data input address was null".to_string(),
+        ));
+    }
+    let ffi_array = unsafe { FFI_ArrowArray::from_raw(input_array_address) };
+    let ffi_schema = unsafe { FFI_ArrowSchema::from_raw(input_schema_address) };
+    let input_data = unsafe { from_ffi(ffi_array, &ffi_schema) }?;
+    Ok(RecordBatch::from(StructArray::from(input_data)))
 }
 
 pub(super) unsafe fn execute_and_export(
