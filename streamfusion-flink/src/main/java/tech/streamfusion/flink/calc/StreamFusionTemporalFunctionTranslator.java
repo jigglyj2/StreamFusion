@@ -85,6 +85,8 @@ final class StreamFusionTemporalFunctionTranslator extends StreamFusionComplexTy
                 return TemporalExtractField.TEMPORAL_EXTRACT_FIELD_SECOND;
             case "EPOCH":
                 return TemporalExtractField.TEMPORAL_EXTRACT_FIELD_EPOCH;
+            case "MILLISECOND":
+                return TemporalExtractField.TEMPORAL_EXTRACT_FIELD_MILLISECOND;
             default:
                 return TemporalExtractField.TEMPORAL_EXTRACT_FIELD_UNSPECIFIED;
         }
@@ -95,6 +97,7 @@ final class StreamFusionTemporalFunctionTranslator extends StreamFusionComplexTy
             case TEMPORAL_EXTRACT_FIELD_HOUR:
             case TEMPORAL_EXTRACT_FIELD_MINUTE:
             case TEMPORAL_EXTRACT_FIELD_SECOND:
+            case TEMPORAL_EXTRACT_FIELD_MILLISECOND:
                 return operandType == LogicalTypeRoot.TIME_WITHOUT_TIME_ZONE;
             default:
                 return operandType == LogicalTypeRoot.DATE;

@@ -23,7 +23,7 @@ pub(crate) fn create(
     schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let operand_type = operand.data_type(schema)?;
-    let is_time_field = matches!(field, "hour" | "minute" | "second");
+    let is_time_field = matches!(field, "hour" | "minute" | "second" | "flink_millisecond");
     let valid_type = if is_time_field {
         matches!(
             operand_type,
@@ -38,7 +38,11 @@ pub(crate) fn create(
             "EXTRACT field is incompatible with its Arrow temporal input".to_string(),
         ));
     }
-    let datafusion_field = if field == "flink_dow" { "dow" } else { field };
+    let datafusion_field = match field {
+        "flink_dow" => "dow",
+        "flink_millisecond" => "millisecond",
+        field => field,
+    };
     let mut extracted = Arc::new(ScalarFunctionExpr::try_new(
         datafusion_functions::datetime::date_part(),
         vec![
@@ -55,6 +59,12 @@ pub(crate) fn create(
             extracted,
             Operator::Plus,
             Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+        ));
+    } else if field == "flink_millisecond" {
+        extracted = Arc::new(BinaryExpr::new(
+            extracted,
+            Operator::Modulo,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(1_000)))),
         ));
     }
     if result_is_bigint {

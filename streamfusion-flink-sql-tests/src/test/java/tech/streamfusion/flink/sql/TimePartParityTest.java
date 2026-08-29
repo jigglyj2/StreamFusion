@@ -32,8 +32,8 @@ class TimePartParityTest extends SqlParityTestSupport {
         return Stream.of(
                 "SELECT HOUR(time_value), MINUTE(time_value), SECOND(time_value) FROM " + input(0),
                 "SELECT HOUR(time_value), MINUTE(time_value), SECOND(time_value) FROM " + input(3),
-                "SELECT HOUR(time_value), MINUTE(time_value), SECOND(time_value) FROM " + input(6),
-                "SELECT HOUR(time_value), MINUTE(time_value), SECOND(time_value) FROM " + input(9),
+                subsecondQuery(0),
+                subsecondQuery(3),
                 "SELECT EXTRACT(HOUR FROM time_value), EXTRACT(MINUTE FROM time_value), "
                         + "EXTRACT(SECOND FROM time_value) FROM "
                         + input(3),
@@ -49,6 +49,26 @@ class TimePartParityTest extends SqlParityTestSupport {
                 + precision
                 + "))), "
                 + "(CAST(TIME '23:59:59' AS TIME("
+                + precision
+                + "))), "
+                + "(CAST(NULL AS TIME("
+                + precision
+                + ")))) input(time_value)";
+    }
+
+    private static String subsecondQuery(int precision) {
+        return "SELECT EXTRACT(MILLISECOND FROM time_value) FROM " + subsecondInput(precision);
+    }
+
+    private static String subsecondInput(int precision) {
+        return "(VALUES "
+                + "(CAST('00:00:00.000000000' AS TIME("
+                + precision
+                + "))), "
+                + "(CAST('12:34:56.123456789' AS TIME("
+                + precision
+                + "))), "
+                + "(CAST('22:11:22.987654321' AS TIME("
                 + precision
                 + "))), "
                 + "(CAST(NULL AS TIME("

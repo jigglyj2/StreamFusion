@@ -352,11 +352,11 @@ the Unix epoch. Pre-epoch dates, the epoch boundary, nulls, projections, and fil
 coverage.
 Timestamp, local-time-zone, and additional calendar fields remain on Flink
 until their session-zone and precision contracts are separately proven.
-`HOUR(time)`, `MINUTE(time)`, `SECOND(time)`, and their `EXTRACT` forms are accelerated for
-timezone-free `TIME`. The same protobuf expression lowers to Arrow's temporal kernel over the
-precision-appropriate Time32 or Time64 vector. Midnight, end-of-day values, multiple precisions,
-nulls, projections, and filters have parity coverage. Timestamp and local-time-zone extraction
-remain on Flink.
+`HOUR(time)`, `MINUTE(time)`, `SECOND(time)`, `EXTRACT(MILLISECOND FROM time)`, and their applicable
+`EXTRACT` forms are accelerated for timezone-free `TIME`. The same protobuf expression lowers to
+Arrow's temporal kernel over the corresponding Time32 vector. Midnight, end-of-day and fractional
+values, Flink's supported precisions 0/3, nulls, projections, and filters have parity coverage.
+Microsecond/nanosecond fields, timestamp, and local-time-zone extraction remain on Flink.
 `CHAR_LENGTH` and `CHARACTER_LENGTH` are accelerated for `VARCHAR` operands. DataFusion's
 Unicode kernel counts UTF-8 code points, matching Flink for ASCII, multibyte text, emoji,
 combining marks, embedded NUL characters, empty strings, and nulls. `CHAR` operands remain
