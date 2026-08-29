@@ -141,7 +141,10 @@ dictionary state, then sends a stream of Arrow record-batch messages that refer 
 schema. A batch is never converted to `RowData` or serialized row by row between native nodes.
 Within one process, Arrow C Stream ownership passes reference-counted buffers directly. Across a
 network edge, Arrow IPC/Flight-style buffers are framed because bytes must cross the network, but
-the schema is not rebuilt or resent for every batch.
+the schema is not rebuilt or resent for every batch. Each Flink network record contains an Arrow
+IPC record-batch metadata message and its columnar body, independently decodable against the
+versioned schema stored in the exchange plan. It does not contain an IPC schema message. Dictionary
+encoded batches currently fall back because exact support requires per-channel dictionary state.
 
 Flink's record envelope remains part of the data contract. StreamFusion appends a non-null
 `__streamfusion_row_kind` byte column using Flink's stable `RowKind.toByteValue()` encoding and,

@@ -1,6 +1,7 @@
 // Copyright 2026 StreamFusion Authors
 // Licensed under the Apache License, Version 2.0.
 
+mod batch_frame;
 mod binary_row;
 mod control;
 mod exchange_writer;
@@ -10,6 +11,7 @@ mod network_stream;
 mod partitioner;
 mod record_metadata;
 
+pub use batch_frame::IpcBatchFrame;
 pub use binary_row::{encode_binary_row, KeyField};
 pub use control::decode_exchange_plan;
 pub use exchange_writer::HashExchangeWriter;
