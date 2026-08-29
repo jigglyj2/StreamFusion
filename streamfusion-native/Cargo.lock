@@ -2394,6 +2394,7 @@ dependencies = [
  "datafusion",
  "datafusion-functions",
  "datafusion-functions-nested",
+ "futures",
  "jni",
  "prost",
  "prost-build",
