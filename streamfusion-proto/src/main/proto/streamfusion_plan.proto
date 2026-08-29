@@ -16,6 +16,7 @@ message Operator {
     Calc calc = 2;
     ArrayUnnest array_unnest = 3;
     Union union = 4;
+    Expand expand = 5;
   }
 }
 
@@ -26,6 +27,15 @@ message Input {
 
 message Union {
   repeated Operator inputs = 1;
+}
+
+message Expand {
+  Operator input = 1;
+  repeated ExpandProjection projections = 2;
+}
+
+message ExpandProjection {
+  repeated Expression expressions = 1;
 }
 
 message Calc {

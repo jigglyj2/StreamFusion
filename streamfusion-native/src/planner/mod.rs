@@ -67,6 +67,16 @@ fn create_operator(
                 .collect::<Result<Vec<_>>>()?;
             operators::union::create(union, children)
         }
+        Some(proto::operator::Operator::Expand(expand)) => {
+            let child = create_operator(
+                expand
+                    .input
+                    .as_ref()
+                    .ok_or_else(|| DataFusionError::Plan("expand has no input".to_string()))?,
+                external_inputs,
+            )?;
+            operators::expand::create(expand, child)
+        }
         None => Err(DataFusionError::Plan(
             "StreamFusion operator is empty".to_string(),
         )),
