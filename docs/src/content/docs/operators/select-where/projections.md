@@ -357,6 +357,10 @@ until their session-zone and precision contracts are separately proven.
 Arrow's temporal kernel over the corresponding Time32 vector. Midnight, end-of-day and fractional
 values, Flink's supported precisions 0/3, nulls, projections, and filters have parity coverage.
 Microsecond/nanosecond fields, timestamp, and local-time-zone extraction remain on Flink.
+Their EXPLAIN fallback identifies the unresolved session-zone and subsecond precision contract.
+Interval extraction likewise remains on Flink pending signed-field decomposition parity, while
+`MILLENNIUM`, `CENTURY`, and `DECADE` date extraction remains there pending BCE and year-zero
+calendar parity. StreamFusion reports those reasons rather than a generic unsupported expression.
 `CHAR_LENGTH` and `CHARACTER_LENGTH` are accelerated for `VARCHAR` operands. DataFusion's
 Unicode kernel counts UTF-8 code points, matching Flink for ASCII, multibyte text, emoji,
 combining marks, embedded NUL characters, empty strings, and nulls. `CHAR` operands remain

@@ -50,6 +50,45 @@ final class StreamFusionTemporalFunctionTranslator extends StreamFusionComplexTy
                         .build();
     }
 
+    static String failureReason(Object expression, RowType inputType) {
+        if (!"EXTRACT".equals(functionName(expression)) || !hasNoArgMethod(expression, "getOperands")) {
+            return null;
+        }
+        List<?> operands = (List<?>) invoke(expression, "getOperands");
+        if (operands.size() != 2) {
+            return "EXTRACT planner shape is not parity-approved";
+        }
+        LogicalType operandType = logicalType(operands.get(1), inputType);
+        if (operandType == null) {
+            return "EXTRACT operand type could not be resolved safely";
+        }
+        LogicalTypeRoot root = operandType.getTypeRoot();
+        if (root == LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE
+                || root == LogicalTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE) {
+            return "timestamp EXTRACT stays on Flink until session-zone and subsecond precision semantics are parity-proven";
+        }
+        if (root == LogicalTypeRoot.INTERVAL_DAY_TIME || root == LogicalTypeRoot.INTERVAL_YEAR_MONTH) {
+            return "interval EXTRACT stays on Flink until signed interval field decomposition is parity-proven";
+        }
+        if (root == LogicalTypeRoot.TIME_WITHOUT_TIME_ZONE) {
+            return "TIME EXTRACT field "
+                    + fieldName(operands.get(0))
+                    + " is outside Flink 2.3's accelerated hour/minute/second/millisecond contract";
+        }
+        if (root == LogicalTypeRoot.DATE) {
+            return "DATE EXTRACT field "
+                    + fieldName(operands.get(0))
+                    + " stays on Flink until BCE and year-zero calendar conventions are parity-proven";
+        }
+        return "EXTRACT operand type " + root + " is not parity-approved";
+    }
+
+    private static String fieldName(Object expression) {
+        return hasNoArgMethod(expression, "getValue") && invoke(expression, "getValue") != null
+                ? invoke(expression, "getValue").toString()
+                : "UNKNOWN";
+    }
+
     private static TemporalExtractField field(Object expression) {
         if (!hasNoArgMethod(expression, "getValue")) {
             return TemporalExtractField.TEMPORAL_EXTRACT_FIELD_UNSPECIFIED;
