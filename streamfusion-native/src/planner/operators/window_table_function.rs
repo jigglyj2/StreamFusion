@@ -30,12 +30,26 @@ pub(crate) fn create(
     child: Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     validate(window)?;
-    let index = window.time_attribute_index as usize;
-    let field = child.schema().fields().get(index).cloned().ok_or_else(|| {
-        DataFusionError::Plan(format!(
-            "Window TVF time attribute index {index} is outside its input"
-        ))
+    let child_schema = child.schema();
+    let visible_count = child_schema.fields().len().checked_sub(1).ok_or_else(|| {
+        DataFusionError::Plan("Window TVF input has no selection ordinal".to_string())
     })?;
+    if child_schema.field(visible_count).name() != "__streamfusion_input_row" {
+        return Err(DataFusionError::Plan(
+            "Window TVF selection ordinal must be the final input column".to_string(),
+        ));
+    }
+    let index = window.time_attribute_index as usize;
+    let field = child_schema
+        .fields()
+        .get(index)
+        .filter(|_| index < visible_count)
+        .cloned()
+        .ok_or_else(|| {
+            DataFusionError::Plan(format!(
+                "Window TVF time attribute index {index} is outside its input"
+            ))
+        })?;
     if !matches!(field.data_type(), DataType::Timestamp(_, _)) {
         return Err(DataFusionError::Plan(format!(
             "Window TVF time attribute must be a timestamp, got {}",
@@ -58,7 +72,14 @@ struct WindowTableFunctionExec {
 
 impl WindowTableFunctionExec {
     fn new(input: Arc<dyn ExecutionPlan>, window: proto::WindowTableFunction) -> Self {
-        let mut fields = input.schema().fields().iter().cloned().collect::<Vec<_>>();
+        let input_schema = input.schema();
+        let ordinal_index = input_schema.fields().len() - 1;
+        let mut fields = input_schema
+            .fields()
+            .iter()
+            .take(ordinal_index)
+            .cloned()
+            .collect::<Vec<_>>();
         fields.extend(["window_start", "window_end", "window_time"].map(|name| {
             Arc::new(Field::new(
                 name,
@@ -66,6 +87,7 @@ impl WindowTableFunctionExec {
                 false,
             ))
         }));
+        fields.push(Arc::clone(&input_schema.fields()[ordinal_index]));
         let schema = Arc::new(Schema::new(fields));
         let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(Arc::clone(&schema)),
@@ -159,9 +181,11 @@ fn expand_batch(
         }
     }
     let indices = UInt32Array::from(indices);
+    let ordinal_index = batch.num_columns() - 1;
     let mut columns = batch
         .columns()
         .iter()
+        .take(ordinal_index)
         .map(|column| take(column.as_ref(), &indices, None))
         .collect::<arrow::error::Result<Vec<ArrayRef>>>()?;
     columns.push(Arc::new(TimestampMillisecondArray::from(starts)));
@@ -171,6 +195,7 @@ fn expand_batch(
             .map(|end| end.wrapping_sub(1))
             .collect::<Vec<_>>(),
     )));
+    columns.push(take(batch.column(ordinal_index).as_ref(), &indices, None)?);
     Ok(RecordBatch::try_new(schema, columns)?)
 }
 
@@ -345,6 +370,7 @@ mod tests {
                 DataType::Timestamp(TimeUnit::Millisecond, None),
                 true,
             ),
+            Field::new("__streamfusion_input_row", DataType::Int32, false),
         ]));
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
@@ -355,6 +381,7 @@ mod tests {
                     None,
                     Some(5_000),
                 ])),
+                Arc::new(Int32Array::from(vec![0, 1, 2])),
             ],
         )
         .unwrap();
@@ -384,6 +411,15 @@ mod tests {
                 .unwrap()
                 .values(),
             &[4_999, 9_999]
+        );
+        assert_eq!(
+            output[0]
+                .column(5)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .values(),
+            &[0, 2]
         );
     }
 
