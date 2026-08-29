@@ -6,9 +6,11 @@ description: How accelerated operators preserve Flink's metric contract.
 StreamFusion treats metrics as part of Flink runtime compatibility. An accelerated
 physical operator publishes every metric that its Flink counterpart publishes with the
 same name, type, unit, scope, lifecycle, and meaning. Given the same records, control
-events, checkpoints, and terminal path, the values must also match. A metric that cannot
-be reproduced exactly is a fallback condition rather than a reason to silently omit or
-reinterpret it.
+events, checkpoints, and terminal path, deterministic counters and values must also
+match. Runtime-dependent timings, rates, and physical byte counts keep Flink's
+definitions but measure the actual accelerated execution; they are not forged to look
+like an unaccelerated run. A metric whose semantics cannot be reproduced exactly is a
+fallback condition rather than a reason to silently omit or reinterpret it.
 
 Flink's operator runtime continues to own the standard record-rate, watermark, latency,
 busy-time, idle-time, and backpressure metrics. StreamFusion operators emit through the
