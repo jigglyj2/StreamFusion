@@ -4,6 +4,7 @@
 use datafusion::error::{DataFusionError, Result};
 use prost::Message;
 
+use crate::exchange::KeyField;
 use crate::proto;
 
 pub fn decode_exchange_plan(bytes: &[u8]) -> Result<proto::NativeExchangePlan> {
@@ -12,6 +13,57 @@ pub fn decode_exchange_plan(bytes: &[u8]) -> Result<proto::NativeExchangePlan> {
     })?;
     validate(&plan)?;
     Ok(plan)
+}
+
+pub fn exchange_key_fields(plan: &proto::NativeExchangePlan) -> Result<Vec<(usize, KeyField)>> {
+    let schema = plan
+        .schema
+        .as_ref()
+        .ok_or_else(|| DataFusionError::Plan("exchange schema is required".to_string()))?;
+    plan.key_indices
+        .iter()
+        .map(|index| {
+            let logical_type = schema.fields[*index as usize]
+                .r#type
+                .as_ref()
+                .and_then(|logical_type| logical_type.r#type.as_ref())
+                .ok_or_else(|| {
+                    DataFusionError::Plan(format!(
+                        "exchange key {index} does not have a logical type"
+                    ))
+                })?;
+            let key_field = match logical_type {
+                proto::logical_type::Type::Boolean(_) => KeyField::Boolean,
+                proto::logical_type::Type::Tinyint(_) => KeyField::TinyInt,
+                proto::logical_type::Type::Smallint(_) => KeyField::SmallInt,
+                proto::logical_type::Type::Integer(_) => KeyField::Integer,
+                proto::logical_type::Type::Bigint(_) => KeyField::BigInt,
+                proto::logical_type::Type::Float(_) => KeyField::Float,
+                proto::logical_type::Type::Double(_) => KeyField::Double,
+                proto::logical_type::Type::FixedChar(_) | proto::logical_type::Type::Varchar(_) => {
+                    KeyField::String
+                }
+                proto::logical_type::Type::FixedBinary(_) | proto::logical_type::Type::Binary(_) => {
+                    KeyField::Binary
+                }
+                proto::logical_type::Type::Date(_) => KeyField::Date,
+                proto::logical_type::Type::Time(_) => KeyField::Time,
+                proto::logical_type::Type::Timestamp(precision)
+                | proto::logical_type::Type::TimestampLtz(precision) => KeyField::Timestamp {
+                    precision: precision.precision as u8,
+                },
+                proto::logical_type::Type::Decimal(decimal) => KeyField::Decimal {
+                    precision: decimal.precision as u8,
+                },
+                unsupported => {
+                    return Err(DataFusionError::Plan(format!(
+                        "exchange key {index} type {unsupported:?} has no exact Flink BinaryRow encoding"
+                    )))
+                }
+            };
+            Ok((*index as usize, key_field))
+        })
+        .collect()
 }
 
 fn validate(plan: &proto::NativeExchangePlan) -> Result<()> {
@@ -245,5 +297,13 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("nullable BIGINT"));
+    }
+
+    #[test]
+    fn lowers_validated_key_types_for_the_native_partitioner() {
+        assert_eq!(
+            exchange_key_fields(&plan()).unwrap(),
+            vec![(0, KeyField::Integer)]
+        );
     }
 }
