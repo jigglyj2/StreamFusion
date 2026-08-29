@@ -533,6 +533,9 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
         }
         String kind = invoke(expression, "getKind").toString();
         List<?> operands = (List<?>) invoke(expression, "getOperands");
+        if ("PLUS_PREFIX".equals(kind)) {
+            return operands.size() == 1 ? projectionExpression(operands.get(0), inputType, expectedType) : null;
+        }
         if ("MINUS_PREFIX".equals(kind)) {
             if (operands.size() != 1) {
                 return null;
@@ -660,6 +663,9 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
 
         String kind = invoke(expression, "getKind").toString();
         List<?> operands = (List<?>) invoke(expression, "getOperands");
+        if ("PLUS_PREFIX".equals(kind)) {
+            return operands.size() == 1 ? decimalProjectionExpression(operands.get(0), inputType) : null;
+        }
         if ("MINUS_PREFIX".equals(kind)) {
             if (operands.size() != 1) {
                 return null;

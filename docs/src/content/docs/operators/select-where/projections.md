@@ -104,9 +104,12 @@ Searched and simple `CASE` projections and three-argument `IF` are accelerated w
 condition and result branch is otherwise supported and Flink assigns one common result type.
 Conditions are evaluated in order, null conditions do not match, and the final `ELSE` value
 is required. Any unsupported condition or branch causes whole-Calc fallback.
+Unary `+` is accelerated for every otherwise supported numeric expression by eliminating the
+identity node on the Java planner side. The operand remains an independently encoded native
+expression, so this does not introduce a redundant DataFusion kernel or batch copy.
 
 Integer division or remainder by zero or a non-literal divisor, decimal division and
-remainder, floating-point remainder, unary plus, non-decimal mixed-width arithmetic, non-finite
+remainder, floating-point remainder, non-decimal mixed-width arithmetic, non-finite
 floating-point literals, arithmetic on other types, converting casts, and unlisted functions currently
 fall back to Flink, except for the lossless casts and functions listed above. The Calc also falls back if its
 filter is unsupported.
