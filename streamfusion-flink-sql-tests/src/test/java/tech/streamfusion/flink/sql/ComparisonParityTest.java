@@ -175,7 +175,7 @@ class ComparisonParityTest extends SqlParityTestSupport {
 
     @ParameterizedTest(name = "TIME({0})")
     @MethodSource("nativeTimePrecisionCases")
-    void castTimePrecisionFallsBackAndMatchesFlinkByteForByte(int precision) throws Exception {
+    void castTimePrecisionAcceleratesAndMatchesFlinkByteForByte(int precision) throws Exception {
         String type = "TIME(" + precision + ")";
         String sql = "SELECT payload FROM (VALUES "
                 + "(CAST(TIME '00:00:00.000' AS "
@@ -190,7 +190,7 @@ class ComparisonParityTest extends SqlParityTestSupport {
                 + ") <= event_time";
         assertParity(sql, true);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
     }
 
     private static Stream<Integer> nativeTimePrecisionCases() {
