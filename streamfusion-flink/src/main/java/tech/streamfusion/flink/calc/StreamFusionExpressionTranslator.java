@@ -81,6 +81,9 @@ abstract class StreamFusionExpressionTranslator extends StreamFusionProjectionTr
             complexFailure = StreamFusionMapFromArraysTranslator.failureReason(expression);
         }
         if (complexFailure == null) {
+            complexFailure = StreamFusionMapUnionTranslator.failureReason(expression);
+        }
+        if (complexFailure == null) {
             complexFailure = StreamFusionCollectionTranslator.failureReason(expression, inputType);
         }
         if (complexFailure == null) {
@@ -141,6 +144,19 @@ abstract class StreamFusionExpressionTranslator extends StreamFusionProjectionTr
                                 + index
                                 + "]/MAP_FROM_ARRAYS: "
                                 + mapFromArraysFailure
+                                + " ("
+                                + operand
+                                + ")";
+                    }
+                    String mapUnionFailure = StreamFusionMapUnionTranslator.failureReason(operand);
+                    if (mapUnionFailure != null) {
+                        return path
+                                + "/"
+                                + expressionName(expression)
+                                + ".operand["
+                                + index
+                                + "]/MAP_UNION: "
+                                + mapUnionFailure
                                 + " ("
                                 + operand
                                 + ")";

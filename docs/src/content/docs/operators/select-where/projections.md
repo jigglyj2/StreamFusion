@@ -302,6 +302,10 @@ value nullability. It also composes directly with a native map constructor.
 would make those same jobs succeed, violating observable failure parity, so EXPLAIN identifies the
 version-specific runtime contract. This can be revisited after the supported Flink line fixes the
 consumer representation.
+`MAP_UNION(map, ...)` also stays on Flink 2.3. Its private `MapDataForMapUnion` representation uses
+rightmost-map precedence, permits null keys, and can be observed by representation-sensitive
+generated consumers. Arrow maps require non-null keys, so StreamFusion reports this incompatibility
+instead of dropping keys or changing which Flink jobs fail.
 `ARRAY_EXCEPT` is accelerated for compatible array inputs, including arrays of nested rows and
 native `ARRAY[...]` constructors. It preserves the first occurrence of each left-side value not
 present on the right, treats null as a comparable set value, removes duplicates, and returns null
