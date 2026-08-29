@@ -34,7 +34,8 @@ pub(crate) fn data_type(logical_type: &proto::LogicalType) -> Result<DataType> {
         }
         Some(proto::logical_type::Type::Date(_)) => Ok(DataType::Date32),
         Some(proto::logical_type::Type::Time(precision)) => time_type(precision.precision),
-        Some(proto::logical_type::Type::Timestamp(precision)) => {
+        Some(proto::logical_type::Type::Timestamp(precision))
+        | Some(proto::logical_type::Type::TimestampLtz(precision)) => {
             Ok(DataType::Timestamp(time_unit(precision.precision)?, None))
         }
         Some(proto::logical_type::Type::Decimal(decimal)) => {
@@ -131,5 +132,25 @@ fn time_unit(precision: u32) -> Result<TimeUnit> {
         _ => Err(DataFusionError::Plan(format!(
             "temporal precision {precision} is outside Flink's supported range"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maps_flink_local_zoned_timestamps_for_exchange_schemas() {
+        let logical_type = proto::LogicalType {
+            nullable: true,
+            r#type: Some(proto::logical_type::Type::TimestampLtz(
+                proto::PrecisionType { precision: 6 },
+            )),
+        };
+
+        assert_eq!(
+            data_type(&logical_type).unwrap(),
+            DataType::Timestamp(TimeUnit::Microsecond, None)
+        );
     }
 }
