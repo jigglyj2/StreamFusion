@@ -17,6 +17,12 @@ message NativeExchangePlan {
   repeated uint32 key_indices = 4;
   uint32 max_parallelism = 5;
   ExchangeTransport transport = 6;
+  ExchangeMetadataColumns metadata_columns = 7;
+}
+
+message ExchangeMetadataColumns {
+  uint32 row_kind_index = 1;
+  optional uint32 stream_record_timestamp_index = 2;
 }
 
 enum ExchangeDistribution {
