@@ -272,7 +272,8 @@ class ComparisonParityTest extends SqlParityTestSupport {
     }
 
     private static Stream<Arguments> nativeUnknownPredicateCases() {
-        return Stream.of(Arguments.of("is-unknown", "flag IS UNKNOWN"));
+        return Stream.of(
+                Arguments.of("is-unknown", "flag IS UNKNOWN"), Arguments.of("is-not-unknown", "flag IS NOT UNKNOWN"));
     }
 
     @ParameterizedTest(name = "{0}")

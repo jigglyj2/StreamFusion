@@ -75,8 +75,9 @@ complex type listed on the [projection coverage page](../projections/). For `ARR
 and `ROW`, the predicate checks the top-level value; nested child nulls do not make the
 container null.
 For a direct boolean input, `IS UNKNOWN` is accelerated through the same null-check path.
-`IS NOT UNKNOWN` is not yet claimed because Flink normalizes that form differently before
-physical planning.
+`IS NOT UNKNOWN` is accelerated through the corresponding non-null check. Flink normalizes
+both forms before physical planning, so they reuse the same native null predicates as `IS NULL`
+and `IS NOT NULL`.
 
 Supported comparisons and null checks can be recursively composed with `AND`, `OR`, and
 `NOT`. StreamFusion preserves SQL's three-valued boolean logic: true, false, and unknown
