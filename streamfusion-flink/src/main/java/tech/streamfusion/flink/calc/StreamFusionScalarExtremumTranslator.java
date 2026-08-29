@@ -28,7 +28,7 @@ final class StreamFusionScalarExtremumTranslator extends StreamFusionComplexType
             return null;
         }
         List<?> operands = (List<?>) invoke(expression, "getOperands");
-        if (operands.isEmpty()) {
+        if (operands.isEmpty() || operands.stream().anyMatch(operand -> referencesFixedChar(operand, inputType))) {
             return null;
         }
         ScalarExtremum.Builder extremum = ScalarExtremum.newBuilder().setGreatest("GREATEST".equals(function));
@@ -62,5 +62,17 @@ final class StreamFusionScalarExtremumTranslator extends StreamFusionComplexType
                 || root == LogicalTypeRoot.DATE
                 || root == LogicalTypeRoot.TIME_WITHOUT_TIME_ZONE
                 || root == LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE;
+    }
+
+    private static boolean referencesFixedChar(Object expression, RowType inputType) {
+        int index = inputIndex(expression);
+        if (index >= 0 && index < inputType.getFieldCount()) {
+            return inputType.getTypeAt(index).getTypeRoot() == LogicalTypeRoot.CHAR;
+        }
+        if (!hasNoArgMethod(expression, "getOperands")) {
+            return false;
+        }
+        List<?> operands = (List<?>) invoke(expression, "getOperands");
+        return operands.stream().anyMatch(operand -> referencesFixedChar(operand, inputType));
     }
 }
