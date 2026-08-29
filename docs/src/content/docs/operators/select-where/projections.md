@@ -111,6 +111,11 @@ adding a duplicate native operator.
 Unary `+` is accelerated for every otherwise supported numeric expression by eliminating the
 identity node on the Java planner side. The operand remains an independently encoded native
 expression, so this does not introduce a redundant DataFusion kernel or batch copy.
+`TRY_CAST` is accelerated when it preserves the complete type or performs a lossless widening from
+`TINYINT` through `BIGINT`. These conversions cannot take the failure branch, so they reuse the
+parity-approved native cast expressions. Parsing, narrowing, floating, temporal, and nested
+conversions stay on Flink because their exact null-on-failure boundary is not yet proven; the
+restriction appears in `EXPLAIN`.
 
 Integer division or remainder by zero or a non-literal divisor, decimal division and
 remainder, floating-point remainder, non-decimal mixed-width arithmetic, non-finite

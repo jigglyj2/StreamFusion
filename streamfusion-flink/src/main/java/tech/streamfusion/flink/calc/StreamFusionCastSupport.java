@@ -29,6 +29,19 @@ final class StreamFusionCastSupport {
                 .getOrDefault(target, CastKind.CAST_KIND_UNSPECIFIED);
     }
 
+    static boolean isInfallibleTryCast(LogicalTypeRoot source, LogicalTypeRoot target) {
+        if (source == target) {
+            return true;
+        }
+        return source == LogicalTypeRoot.TINYINT
+                        && (target == LogicalTypeRoot.SMALLINT
+                                || target == LogicalTypeRoot.INTEGER
+                                || target == LogicalTypeRoot.BIGINT)
+                || source == LogicalTypeRoot.SMALLINT
+                        && (target == LogicalTypeRoot.INTEGER || target == LogicalTypeRoot.BIGINT)
+                || source == LogicalTypeRoot.INTEGER && target == LogicalTypeRoot.BIGINT;
+    }
+
     static LogicalType targetType(LogicalTypeRoot target, boolean nullable) {
         LogicalType.Builder type = LogicalType.newBuilder().setNullable(nullable);
         switch (target) {

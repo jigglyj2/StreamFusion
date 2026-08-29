@@ -386,8 +386,7 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
 
     private static Expression identityCastExpression(
             Object expression, RowType inputType, org.apache.flink.table.types.logical.LogicalType expectedType) {
-        if (!expression.getClass().getSimpleName().equals("RexCall")
-                || !"CAST".equals(invoke(expression, "getKind").toString())) {
+        if (!expression.getClass().getSimpleName().equals("RexCall") || !isCastKind(expression)) {
             return null;
         }
         List<?> operands = (List<?>) invoke(expression, "getOperands");
@@ -584,8 +583,7 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
 
     protected static Expression wideningCastExpression(
             Object expression, RowType inputType, LogicalTypeRoot expectedType) {
-        if (!expression.getClass().getSimpleName().equals("RexCall")
-                || !"CAST".equals(invoke(expression, "getKind").toString())) {
+        if (!expression.getClass().getSimpleName().equals("RexCall") || !isCastKind(expression)) {
             return null;
         }
         List<?> operands = (List<?>) invoke(expression, "getOperands");
@@ -595,6 +593,10 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
         org.apache.flink.table.types.logical.LogicalType sourceType =
                 StreamFusionExpressionTranslator.expressionLogicalType(operands.get(0));
         if (sourceType == null) {
+            return null;
+        }
+        if (isTryCast(expression)
+                && !StreamFusionCastSupport.isInfallibleTryCast(sourceType.getTypeRoot(), expectedType)) {
             return null;
         }
         CastKind castKind = StreamFusionCastSupport.kind(sourceType.getTypeRoot(), expectedType);
@@ -612,6 +614,15 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
                         .setTargetType(StreamFusionCastSupport.targetType(expectedType, nullable))
                         .setKind(castKind))
                 .build();
+    }
+
+    private static boolean isCastKind(Object expression) {
+        String kind = invoke(expression, "getKind").toString();
+        return "CAST".equals(kind) || isTryCast(expression);
+    }
+
+    private static boolean isTryCast(Object expression) {
+        return "TRY_CAST".equals(functionName(expression));
     }
 
     protected static Expression booleanProjectionExpression(Object expression, RowType inputType) {
