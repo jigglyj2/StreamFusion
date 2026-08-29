@@ -21,7 +21,7 @@ class NativeExchangeWriterOperatorTest {
     @Test
     void flushesBufferedArrowDataBeforeWatermarks() throws Exception {
         NativeExchangeWriterOperator operator = new NativeExchangeWriterOperator(
-                RowType.of(new IntType()), new byte[] {1}, 8, (plan, batch, allocator) -> {
+                RowType.of(new IntType()), new byte[] {1}, 8, (plan, batch, allocator, memoryManager) -> {
                     assertThat(batch.size()).isEqualTo(1);
                     return List.of(new NativeExchangeFrame(7, new byte[] {2}, new byte[] {3}));
                 });
@@ -42,7 +42,7 @@ class NativeExchangeWriterOperatorTest {
     void flushesBeforeCheckpointAndBoundedCompletion() throws Exception {
         int[] routedBatches = {0};
         NativeExchangeWriterOperator operator = new NativeExchangeWriterOperator(
-                RowType.of(new IntType()), new byte[] {1}, 8, (plan, batch, allocator) -> {
+                RowType.of(new IntType()), new byte[] {1}, 8, (plan, batch, allocator, memoryManager) -> {
                     routedBatches[0]++;
                     return List.of(new NativeExchangeFrame(0, new byte[0], new byte[0]));
                 });

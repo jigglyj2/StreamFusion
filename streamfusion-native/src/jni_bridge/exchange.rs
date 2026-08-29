@@ -2,17 +2,28 @@
 // Licensed under the Apache License, Version 2.0.
 
 use arrow::array::{Array, StructArray};
+use std::mem::size_of;
+use std::sync::Arc;
+
 use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 use datafusion::error::{DataFusionError, Result};
 use jni::errors::ThrowRuntimeExAndDefault;
 use jni::jni_str;
-use jni::objects::{JByteArray, JClass};
+use jni::objects::{JByteArray, JClass, JObject};
 use jni::strings::JNIString;
 use jni::sys::{jbyteArray, jlong};
 use jni::EnvUnowned;
 
 use super::common::import_record_batch;
 use crate::exchange::{decode_exchange_plan, exchange_key_fields, frame_hash_exchange_batch};
+use crate::memory_pool::{
+    HostMemoryReservation, JvmMemoryReservationBroker, MemoryReservationBroker,
+};
+
+struct AccountedBytes {
+    bytes: Vec<u8>,
+    _reservation: HostMemoryReservation,
+}
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeExchangeBridge_routeArrowBatch<
@@ -23,15 +34,22 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeExchangeBridge_
     serialized_plan: JByteArray<'caller>,
     input_array_address: jlong,
     input_schema_address: jlong,
+    memory_manager: JObject<'caller>,
 ) -> jbyteArray {
     unowned_env
         .with_env(|env| -> jni::errors::Result<_> {
             let plan_bytes = env.convert_byte_array(serialized_plan)?;
+            let broker: Arc<dyn MemoryReservationBroker> =
+                Arc::new(JvmMemoryReservationBroker::new(
+                    env.get_java_vm()?,
+                    env.new_global_ref(memory_manager)?,
+                ));
             let routed = unsafe {
                 route(
                     &plan_bytes,
                     input_array_address as *mut FFI_ArrowArray,
                     input_schema_address as *mut FFI_ArrowSchema,
+                    broker,
                 )
             };
             let encoded = routed.map_err(|error| {
@@ -41,7 +59,8 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeExchangeBridge_
                 );
                 jni::errors::Error::JavaException
             })?;
-            Ok(env.byte_array_from_slice(&encoded)?.into_raw())
+            env.byte_array_from_slice(&encoded.bytes)
+                .map(|array| array.into_raw())
         })
         .resolve::<ThrowRuntimeExAndDefault>()
 }
@@ -57,9 +76,37 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeExchangeBridge_
     body: JByteArray<'caller>,
     output_array_address: jlong,
     output_schema_address: jlong,
+    memory_manager: JObject<'caller>,
 ) -> jlong {
     unowned_env
         .with_env(|env| -> jni::errors::Result<_> {
+            let broker: Arc<dyn MemoryReservationBroker> =
+                Arc::new(JvmMemoryReservationBroker::new(
+                    env.get_java_vm()?,
+                    env.new_global_ref(memory_manager)?,
+                ));
+            let mut reservation = HostMemoryReservation::new(broker, "native exchange decode");
+            let plan_size = serialized_plan.len(env)?;
+            let metadata_size = metadata.len(env)?;
+            let body_size = body.len(env)?;
+            let input_size = plan_size
+                .checked_add(metadata_size)
+                .and_then(|bytes| bytes.checked_add(body_size))
+                .and_then(|bytes| bytes.checked_add(body_size))
+                .ok_or_else(|| {
+                    let _ = env.throw_new(
+                        jni_str!("java/lang/IllegalStateException"),
+                        JNIString::new("native exchange decode accounting overflowed usize"),
+                    );
+                    jni::errors::Error::JavaException
+                })?;
+            reservation.try_grow(input_size).map_err(|error| {
+                let _ = env.throw_new(
+                    jni_str!("java/lang/IllegalStateException"),
+                    JNIString::new(error.to_string()),
+                );
+                jni::errors::Error::JavaException
+            })?;
             let plan_bytes = env.convert_byte_array(serialized_plan)?;
             let metadata = env.convert_byte_array(metadata)?;
             let body = env.convert_byte_array(body)?;
@@ -70,6 +117,7 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeExchangeBridge_
                     body,
                     output_array_address as *mut FFI_ArrowArray,
                     output_schema_address as *mut FFI_ArrowSchema,
+                    &mut reservation,
                 )
             }
             .map_err(|error| {
@@ -88,12 +136,43 @@ unsafe fn route(
     plan_bytes: &[u8],
     input_array_address: *mut FFI_ArrowArray,
     input_schema_address: *mut FFI_ArrowSchema,
-) -> Result<Vec<u8>> {
+    broker: Arc<dyn MemoryReservationBroker>,
+) -> Result<AccountedBytes> {
     let plan = decode_exchange_plan(plan_bytes)?;
     let keys = exchange_key_fields(&plan)?;
     let batch = unsafe { import_record_batch(input_array_address, input_schema_address) }?;
+
+    // Routing materializes at most one copy of the input columns across the key-group
+    // batches. Reserve that working set before asking Arrow to allocate it.
+    let mut reservation = HostMemoryReservation::new(broker, "native exchange buffers");
+    reservation.try_grow(batch.get_array_memory_size())?;
     let frames = frame_hash_exchange_batch(batch, &keys, plan.max_parallelism)?;
-    encode_frames(&frames)
+    let frame_bytes = frames.iter().try_fold(
+        frames
+            .capacity()
+            .saturating_mul(size_of::<crate::exchange::RoutedFrame>()),
+        |bytes, routed| {
+            bytes
+                .checked_add(routed.frame().metadata.capacity())
+                .and_then(|bytes| bytes.checked_add(routed.frame().body.capacity()))
+                .ok_or_else(|| {
+                    DataFusionError::ResourcesExhausted(
+                        "native exchange frame accounting overflowed usize".to_string(),
+                    )
+                })
+        },
+    )?;
+    reservation.resize(frame_bytes)?;
+
+    let encoded_size = encode_frames_size(&frames)?;
+    reservation.try_grow(encoded_size)?;
+    let bytes = encode_frames_with_capacity(&frames, encoded_size)?;
+    drop(frames);
+    reservation.resize(bytes.capacity())?;
+    Ok(AccountedBytes {
+        bytes,
+        _reservation: reservation,
+    })
 }
 
 unsafe fn decode(
@@ -102,6 +181,7 @@ unsafe fn decode(
     body: Vec<u8>,
     output_array_address: *mut FFI_ArrowArray,
     output_schema_address: *mut FFI_ArrowSchema,
+    reservation: &mut HostMemoryReservation,
 ) -> Result<usize> {
     if output_array_address.is_null() || output_schema_address.is_null() {
         return Err(DataFusionError::Execution(
@@ -115,6 +195,16 @@ unsafe fn decode(
             .ok_or_else(|| DataFusionError::Plan("exchange schema is required".to_string()))?,
     )?;
     let batch = crate::exchange::IpcBatchFrame { metadata, body }.decode(schema)?;
+    reservation.resize(
+        plan_bytes
+            .len()
+            .checked_add(batch.get_array_memory_size())
+            .ok_or_else(|| {
+                DataFusionError::ResourcesExhausted(
+                    "native exchange decoded batch accounting overflowed usize".to_string(),
+                )
+            })?,
+    )?;
     let rows = batch.num_rows();
     let output_data = StructArray::from(batch).to_data();
     let output_array = FFI_ArrowArray::new(&output_data);
@@ -126,8 +216,31 @@ unsafe fn decode(
     Ok(rows)
 }
 
+#[cfg(test)]
 fn encode_frames(frames: &[crate::exchange::RoutedFrame]) -> Result<Vec<u8>> {
-    let mut bytes = Vec::new();
+    let capacity = encode_frames_size(frames)?;
+    encode_frames_with_capacity(frames, capacity)
+}
+
+fn encode_frames_size(frames: &[crate::exchange::RoutedFrame]) -> Result<usize> {
+    frames.iter().try_fold(4usize, |bytes, routed| {
+        bytes
+            .checked_add(12)
+            .and_then(|bytes| bytes.checked_add(routed.frame().metadata.len()))
+            .and_then(|bytes| bytes.checked_add(routed.frame().body.len()))
+            .ok_or_else(|| {
+                DataFusionError::ResourcesExhausted(
+                    "native exchange JNI output accounting overflowed usize".to_string(),
+                )
+            })
+    })
+}
+
+fn encode_frames_with_capacity(
+    frames: &[crate::exchange::RoutedFrame],
+    capacity: usize,
+) -> Result<Vec<u8>> {
+    let mut bytes = Vec::with_capacity(capacity);
     write_u32(&mut bytes, frames.len(), "frame count")?;
     for routed in frames {
         bytes.extend_from_slice(&routed.key_group().to_le_bytes());

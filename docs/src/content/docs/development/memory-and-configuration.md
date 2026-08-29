@@ -17,17 +17,24 @@ operator-scoped managed-memory allocation, whose total is determined by
 using Flink's managed-memory consumer weights. StreamFusion must not treat
 `taskmanager.memory.task.off-heap.size` as an extra untracked allowance.
 
-The intended runtime bridge is:
+The runtime bridge is:
 
 1. The generated Flink transformation declares the `OPERATOR` managed-memory use case.
 2. Flink assigns the operator its fraction of TaskManager managed memory.
-3. A native memory-pool adapter exposes that exact budget to DataFusion and to a shared
-   StreamFusion allocator used by non-DataFusion Rust code.
+3. A task-scoped broker reserves and releases bytes through Flink's `MemoryManager`.
+   Arrow Java allocators and the native DataFusion memory pool use the same broker and
+   therefore the same operator limit.
 4. Every reservation and release is reflected in that adapter. A refused reservation
    asks a spill-capable operator to spill; if it cannot, execution fails with a useful
    resource error rather than allocating beyond Flink's limit.
 5. Closing, cancellation, and failure release reservations, with leak checks covering
    each terminal path.
+
+The broker, Arrow allocator, decoded protobuf plan, Tokio runtime, and DataFusion task
+context live for the Flink operator's task lifetime. Native execution contexts are
+closed before the Arrow allocator so outstanding DataFusion reservations return to
+Flink before imported Arrow buffers are checked and released. The operator exposes its
+current, peak, and assigned managed-memory bytes as Flink metrics.
 
 This is modeled on Apache DataFusion Comet's unified off-heap path. Comet implements a
 DataFusion `MemoryPool` that calls a JVM `CometTaskMemoryManager` over JNI. That adapter
@@ -37,9 +44,22 @@ can trigger spilling. StreamFusion should preserve that single-authority design 
 using Flink's managed-memory APIs and lifecycle instead of copying Spark-specific
 configuration or task classes.
 
-The bridge is a design requirement and is not implemented yet. Until allocations can
-be completely accounted this way, native execution must not be presented as production
-ready.
+DataFusion reservations and production Arrow boundary allocations are accounted by this
+bridge. Native exchange JNI output is also reserved while it is copied into its
+producer-owned Java result. Ordinary Rust memory follows Comet's pattern too: Rust's
+system allocator remains responsible for the physical allocation, while task-owned
+plans, vectors, maps, scratch buffers, and custom operator state hold RAII reservations
+from the same DataFusion pool. Dropping the Rust owner returns the reservation to Flink.
+
+Arrow and other batch-producing kernels can learn the exact buffer size only after
+building one batch. Like Comet's buffered operators, StreamFusion charges that newly
+produced batch before allowing it to continue; a refused reservation drops it and fails
+with a resource error. Additional copies whose size is predictable, such as concatenated
+output or encoded exchange buffers, are reserved before allocation. When Rust-produced
+Arrow buffers cross the C Data boundary, Arrow Java's foreign-allocation wrapper assumes
+their accounting for the remainder of their lifetime. New custom Rust operators must use
+the shared reservation APIs for any data structures that DataFusion's `MemoryPool` does
+not already track; adding an unbounded allocator is not an acceptable fallback.
 
 ## Configuration policy
 

@@ -11,7 +11,6 @@ package tech.streamfusion.flink.unnest;
 
 import java.util.ArrayList;
 import java.util.List;
-import org.apache.arrow.memory.RootAllocator;
 import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
 import org.apache.flink.streaming.api.operators.BoundedOneInput;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
@@ -23,6 +22,7 @@ import org.apache.flink.types.RowKind;
 import tech.streamfusion.flink.arrow.ArrowCDataBridge;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.NativeCalcResult;
+import tech.streamfusion.flink.memory.StreamFusionTaskMemory;
 import tech.streamfusion.proto.plan.v1.ArrayUnnest;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.Input;
@@ -41,6 +41,7 @@ final class StreamFusionArrayUnnestOperator extends AbstractStreamOperator<RowDa
     private final byte[] serializedPlan;
     private final List<RowData> rows = new ArrayList<>(BATCH_SIZE);
     private final List<RowKind> rowKinds = new ArrayList<>(BATCH_SIZE);
+    private transient StreamFusionTaskMemory taskMemory;
 
     StreamFusionArrayUnnestOperator(
             RowType inputType,
@@ -101,6 +102,17 @@ final class StreamFusionArrayUnnestOperator extends AbstractStreamOperator<RowDa
     }
 
     @Override
+    public void open() throws Exception {
+        super.open();
+        taskMemory = StreamFusionTaskMemory.create(
+                getContainingTask().getEnvironment(),
+                getOperatorConfig(),
+                getMetricGroup(),
+                "streamfusion-array-unnest",
+                serializedPlan);
+    }
+
+    @Override
     public void processElement(StreamRecord<RowData> element) {
         RowData row = element.getValue();
         rows.add(serializer.copy(row));
@@ -124,10 +136,9 @@ final class StreamFusionArrayUnnestOperator extends AbstractStreamOperator<RowDa
         if (rows.isEmpty()) {
             return;
         }
-        try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
-                ArrowRowDataBatch inputBatch = ArrowRowDataBatch.transpose(rows, inputType, allocator);
-                NativeCalcResult nativeResult =
-                        ArrowCDataBridge.executeWithSelection(serializedPlan, inputBatch, outputType, allocator)) {
+        try (ArrowRowDataBatch inputBatch = ArrowRowDataBatch.transpose(rows, inputType, taskMemory.allocator());
+                NativeCalcResult nativeResult = ArrowCDataBridge.executeWithSelection(
+                        taskMemory.executionContext(), inputBatch, outputType, taskMemory.allocator())) {
             ArrowRowDataBatch outputBatch = nativeResult.batch();
             for (int index = 0; index < outputBatch.size(); index++) {
                 RowData row = outputBatch.rowView(index);
@@ -141,5 +152,17 @@ final class StreamFusionArrayUnnestOperator extends AbstractStreamOperator<RowDa
         }
         rows.clear();
         rowKinds.clear();
+    }
+
+    @Override
+    public void close() throws Exception {
+        try {
+            if (taskMemory != null) {
+                taskMemory.close();
+                taskMemory = null;
+            }
+        } finally {
+            super.close();
+        }
     }
 }

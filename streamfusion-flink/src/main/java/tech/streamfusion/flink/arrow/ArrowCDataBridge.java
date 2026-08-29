@@ -19,6 +19,7 @@ import org.apache.arrow.vector.IntVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.nativebridge.NativeCalcBridge;
+import tech.streamfusion.nativebridge.NativeExecutionContext;
 
 /** Ownership-safe Arrow C Data transfer for one native execution batch. */
 public final class ArrowCDataBridge {
@@ -26,13 +27,45 @@ public final class ArrowCDataBridge {
 
     public static ArrowRowDataBatch execute(
             byte[] serializedPlan, ArrowRowDataBatch input, RowType outputType, BufferAllocator allocator) {
-        VectorSchemaRoot output = executeNative(serializedPlan, input, allocator);
+        VectorSchemaRoot output = executeNative(
+                input,
+                allocator,
+                (inputArray, inputSchema, outputArray, outputSchema) -> NativeCalcBridge.executeArrow(
+                        serializedPlan, inputArray, inputSchema, outputArray, outputSchema));
+        return ArrowRowDataBatch.wrap(output, outputType);
+    }
+
+    public static ArrowRowDataBatch execute(
+            NativeExecutionContext context, ArrowRowDataBatch input, RowType outputType, BufferAllocator allocator) {
+        VectorSchemaRoot output = executeNative(
+                input,
+                allocator,
+                (inputArray, inputSchema, outputArray, outputSchema) ->
+                        NativeCalcBridge.executeArrow(context, inputArray, inputSchema, outputArray, outputSchema));
         return ArrowRowDataBatch.wrap(output, outputType);
     }
 
     public static NativeCalcResult executeWithSelection(
             byte[] serializedPlan, ArrowRowDataBatch input, RowType outputType, BufferAllocator allocator) {
-        VectorSchemaRoot output = executeNative(serializedPlan, input, allocator);
+        VectorSchemaRoot output = executeNative(
+                input,
+                allocator,
+                (inputArray, inputSchema, outputArray, outputSchema) -> NativeCalcBridge.executeArrow(
+                        serializedPlan, inputArray, inputSchema, outputArray, outputSchema));
+        return removeSelection(output, outputType);
+    }
+
+    public static NativeCalcResult executeWithSelection(
+            NativeExecutionContext context, ArrowRowDataBatch input, RowType outputType, BufferAllocator allocator) {
+        VectorSchemaRoot output = executeNative(
+                input,
+                allocator,
+                (inputArray, inputSchema, outputArray, outputSchema) ->
+                        NativeCalcBridge.executeArrow(context, inputArray, inputSchema, outputArray, outputSchema));
+        return removeSelection(output, outputType);
+    }
+
+    private static NativeCalcResult removeSelection(VectorSchemaRoot output, RowType outputType) {
         int ordinalIndex = output.getFieldVectors().size() - 1;
         FieldVector ordinalVector = output.getVector(ordinalIndex);
         if (!(ordinalVector instanceof IntVector)) {
@@ -50,15 +83,14 @@ public final class ArrowCDataBridge {
     }
 
     private static VectorSchemaRoot executeNative(
-            byte[] serializedPlan, ArrowRowDataBatch input, BufferAllocator allocator) {
+            ArrowRowDataBatch input, BufferAllocator allocator, NativeCalcInvocation invocation) {
         try (ArrowArray inputArray = ArrowArray.allocateNew(allocator);
                 ArrowSchema inputSchema = ArrowSchema.allocateNew(allocator);
                 ArrowArray outputArray = ArrowArray.allocateNew(allocator);
                 ArrowSchema outputSchema = ArrowSchema.allocateNew(allocator);
                 CDataDictionaryProvider dictionaries = new CDataDictionaryProvider()) {
             Data.exportVectorSchemaRoot(allocator, input.root(), null, inputArray, inputSchema);
-            long rowCount = NativeCalcBridge.executeArrow(
-                    serializedPlan,
+            long rowCount = invocation.execute(
                     inputArray.memoryAddress(),
                     inputSchema.memoryAddress(),
                     outputArray.memoryAddress(),
@@ -70,5 +102,10 @@ public final class ArrowCDataBridge {
             output.setRowCount((int) rowCount);
             return output;
         }
+    }
+
+    @FunctionalInterface
+    private interface NativeCalcInvocation {
+        long execute(long inputArray, long inputSchema, long outputArray, long outputSchema);
     }
 }

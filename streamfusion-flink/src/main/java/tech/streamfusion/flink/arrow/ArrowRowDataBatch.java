@@ -18,6 +18,7 @@ import org.apache.flink.table.types.logical.RowType;
 
 /** Owns a transposed Arrow batch and exposes reusable, non-materializing Flink row views. */
 public final class ArrowRowDataBatch implements AutoCloseable {
+    private static final long TEST_ALLOCATOR_LIMIT = 64L * 1024 * 1024;
     private final BufferAllocator allocator;
     private final boolean ownsAllocator;
     private final VectorSchemaRoot root;
@@ -31,8 +32,8 @@ public final class ArrowRowDataBatch implements AutoCloseable {
         this.reader = ArrowUtils.createArrowReader(root, rowType);
     }
 
-    public static ArrowRowDataBatch transpose(List<? extends RowData> rows, RowType rowType) {
-        BufferAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+    static ArrowRowDataBatch transpose(List<? extends RowData> rows, RowType rowType) {
+        BufferAllocator allocator = new RootAllocator(TEST_ALLOCATOR_LIMIT);
         return transpose(rows, rowType, allocator, true);
     }
 

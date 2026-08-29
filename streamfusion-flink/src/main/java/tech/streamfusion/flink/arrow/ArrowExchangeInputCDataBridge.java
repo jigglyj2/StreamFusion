@@ -14,6 +14,7 @@ import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.flink.exchange.ArrowExchangeInputBatch;
 import tech.streamfusion.flink.exchange.NativeExchangeFrame;
 import tech.streamfusion.nativebridge.NativeExchangeBridge;
+import tech.streamfusion.nativebridge.NativeMemoryManager;
 
 /** Imports one schema-free native exchange frame through Arrow C Data. */
 public final class ArrowExchangeInputCDataBridge {
@@ -21,6 +22,15 @@ public final class ArrowExchangeInputCDataBridge {
 
     public static ArrowExchangeInputBatch decode(
             byte[] serializedPlan, NativeExchangeFrame frame, RowType rowType, BufferAllocator allocator) {
+        return decode(serializedPlan, frame, rowType, allocator, NativeMemoryManager.unbounded());
+    }
+
+    public static ArrowExchangeInputBatch decode(
+            byte[] serializedPlan,
+            NativeExchangeFrame frame,
+            RowType rowType,
+            BufferAllocator allocator,
+            NativeMemoryManager memoryManager) {
         try (ArrowArray outputArray = ArrowArray.allocateNew(allocator);
                 ArrowSchema outputSchema = ArrowSchema.allocateNew(allocator);
                 CDataDictionaryProvider dictionaries = new CDataDictionaryProvider()) {
@@ -29,7 +39,8 @@ public final class ArrowExchangeInputCDataBridge {
                     frame.metadata(),
                     frame.body(),
                     outputArray.memoryAddress(),
-                    outputSchema.memoryAddress());
+                    outputSchema.memoryAddress(),
+                    memoryManager);
             if (rows < 0 || rows > Integer.MAX_VALUE) {
                 throw new IllegalStateException("Native exchange returned invalid row count " + rows);
             }

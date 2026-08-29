@@ -27,8 +27,21 @@ public final class NativeCalcBridge {
             long inputSchemaAddress,
             long outputArrayAddress,
             long outputSchemaAddress) {
+        try (NativeExecutionContext context =
+                new NativeExecutionContext(serializedPlan, NativeMemoryManager.unbounded())) {
+            return executeArrow(
+                    context, inputArrayAddress, inputSchemaAddress, outputArrayAddress, outputSchemaAddress);
+        }
+    }
+
+    public static long executeArrow(
+            NativeExecutionContext context,
+            long inputArrayAddress,
+            long inputSchemaAddress,
+            long outputArrayAddress,
+            long outputSchemaAddress) {
         long rows = executeArrowBatch(
-                serializedPlan, inputArrayAddress, inputSchemaAddress, outputArrayAddress, outputSchemaAddress);
+                context.handle(), inputArrayAddress, inputSchemaAddress, outputArrayAddress, outputSchemaAddress);
         EXECUTED_BATCHES.incrementAndGet();
         return rows;
     }
@@ -42,7 +55,7 @@ public final class NativeCalcBridge {
     }
 
     private static native long executeArrowBatch(
-            byte[] serializedPlan,
+            long executionContext,
             long inputArrayAddress,
             long inputSchemaAddress,
             long outputArrayAddress,

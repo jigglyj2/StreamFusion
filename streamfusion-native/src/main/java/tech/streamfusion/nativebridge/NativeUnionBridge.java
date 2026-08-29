@@ -33,8 +33,21 @@ public final class NativeUnionBridge {
             long[] inputSchemaAddresses,
             long outputArrayAddress,
             long outputSchemaAddress) {
+        try (NativeExecutionContext context =
+                new NativeExecutionContext(serializedPlan, NativeMemoryManager.unbounded())) {
+            return executeArrow(
+                    context, inputArrayAddresses, inputSchemaAddresses, outputArrayAddress, outputSchemaAddress);
+        }
+    }
+
+    public static long executeArrow(
+            NativeExecutionContext context,
+            long[] inputArrayAddresses,
+            long[] inputSchemaAddresses,
+            long outputArrayAddress,
+            long outputSchemaAddress) {
         long rows = executeArrowBatches(
-                serializedPlan, inputArrayAddresses, inputSchemaAddresses, outputArrayAddress, outputSchemaAddress);
+                context.handle(), inputArrayAddresses, inputSchemaAddresses, outputArrayAddress, outputSchemaAddress);
         EXECUTED_BATCHES.incrementAndGet();
         return rows;
     }
@@ -48,7 +61,7 @@ public final class NativeUnionBridge {
     }
 
     private static native long executeArrowBatches(
-            byte[] serializedPlan,
+            long executionContext,
             long[] inputArrayAddresses,
             long[] inputSchemaAddresses,
             long outputArrayAddress,

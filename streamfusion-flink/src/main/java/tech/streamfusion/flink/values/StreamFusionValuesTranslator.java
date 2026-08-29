@@ -10,8 +10,11 @@
 package tech.streamfusion.flink.values;
 
 import java.util.List;
+import org.apache.flink.api.connector.source.Boundedness;
 import org.apache.flink.api.dag.Transformation;
+import org.apache.flink.core.memory.ManagedMemoryUseCase;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.api.transformations.LegacySourceTransformation;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
 import org.apache.flink.table.types.logical.LogicalType;
@@ -38,15 +41,16 @@ public final class StreamFusionValuesTranslator {
         if (unsupportedReason(outputType, tuples) != null) {
             return null;
         }
-        StreamFusionValuesInputFormat inputFormat =
-                new StreamFusionValuesInputFormat(createPlan(outputType, tuples), outputType);
-        Transformation<RowData> transformation = environment
-                .createInput(inputFormat, InternalTypeInfo.of(outputType))
-                .getTransformation();
-        transformation.setName("streamfusion-values");
+        LegacySourceTransformation<RowData> transformation = new LegacySourceTransformation<>(
+                "streamfusion-values",
+                new StreamFusionValuesSourceOperator(createPlan(outputType, tuples), outputType),
+                InternalTypeInfo.of(outputType),
+                1,
+                Boundedness.BOUNDED,
+                true);
         transformation.setDescription("StreamFusionValues");
-        transformation.setParallelism(1);
         transformation.setMaxParallelism(1);
+        transformation.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
         return transformation;
     }
 

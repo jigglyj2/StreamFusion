@@ -6,7 +6,6 @@ package tech.streamfusion.flink.window;
 
 import java.util.ArrayList;
 import java.util.List;
-import org.apache.arrow.memory.RootAllocator;
 import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
 import org.apache.flink.streaming.api.operators.BoundedOneInput;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
@@ -22,6 +21,7 @@ import org.apache.flink.types.RowKind;
 import tech.streamfusion.flink.arrow.ArrowCDataBridge;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.NativeCalcResult;
+import tech.streamfusion.flink.memory.StreamFusionTaskMemory;
 import tech.streamfusion.proto.plan.v1.Input;
 import tech.streamfusion.proto.plan.v1.NativePlan;
 import tech.streamfusion.proto.plan.v1.Operator;
@@ -37,6 +37,7 @@ final class StreamFusionWindowTableFunctionOperator extends AbstractStreamOperat
     private final RowDataSerializer serializer;
     private final byte[] plan;
     private final List<BufferedRow> rows = new ArrayList<>(BATCH_SIZE);
+    private transient StreamFusionTaskMemory taskMemory;
 
     StreamFusionWindowTableFunctionOperator(
             RowType inputType,
@@ -47,6 +48,17 @@ final class StreamFusionWindowTableFunctionOperator extends AbstractStreamOperat
         this.outputType = outputType;
         this.serializer = new RowDataSerializer(inputType);
         this.plan = createPlan(timeAttributeIndex, parameters);
+    }
+
+    @Override
+    public void open() throws Exception {
+        super.open();
+        taskMemory = StreamFusionTaskMemory.create(
+                getContainingTask().getEnvironment(),
+                getOperatorConfig(),
+                getMetricGroup(),
+                "streamfusion-window-table-function",
+                plan);
     }
 
     @Override
@@ -98,9 +110,9 @@ final class StreamFusionWindowTableFunctionOperator extends AbstractStreamOperat
         }
         List<RowData> values = new ArrayList<>(rows.size());
         rows.forEach(row -> values.add(row.value));
-        try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
-                ArrowRowDataBatch input = ArrowRowDataBatch.transpose(values, inputType, allocator);
-                NativeCalcResult result = ArrowCDataBridge.executeWithSelection(plan, input, outputType, allocator)) {
+        try (ArrowRowDataBatch input = ArrowRowDataBatch.transpose(values, inputType, taskMemory.allocator());
+                NativeCalcResult result = ArrowCDataBridge.executeWithSelection(
+                        taskMemory.executionContext(), input, outputType, taskMemory.allocator())) {
             for (int index = 0; index < result.batch().size(); index++) {
                 BufferedRow source = rows.get(result.inputRow(index));
                 RowData outputRow = result.batch().rowView(index);
@@ -109,6 +121,18 @@ final class StreamFusionWindowTableFunctionOperator extends AbstractStreamOperat
             }
         }
         rows.clear();
+    }
+
+    @Override
+    public void close() throws Exception {
+        try {
+            if (taskMemory != null) {
+                taskMemory.close();
+                taskMemory = null;
+            }
+        } finally {
+            super.close();
+        }
     }
 
     static byte[] createPlan(

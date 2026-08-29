@@ -13,6 +13,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::error::{DataFusionError, Result};
+use datafusion::execution::memory_pool::MemoryConsumer;
 use datafusion::execution::TaskContext;
 use datafusion::physical_expr::{EquivalenceProperties, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::EmissionType;
@@ -151,10 +152,14 @@ impl ExecutionPlan for WindowTableFunctionExec {
         let schema = Arc::clone(&self.schema);
         let output_schema = Arc::clone(&schema);
         let window = self.window.clone();
-        let stream = self
-            .input
-            .execute(partition, context)?
-            .map(move |batch| expand_batch(batch?, &window, Arc::clone(&output_schema)));
+        let memory_pool = Arc::clone(&context.runtime_env().memory_pool);
+        let reservation =
+            MemoryConsumer::new("StreamFusionWindowTableFunctionExec").register(&memory_pool);
+        let stream = self.input.execute(partition, context)?.map(move |batch| {
+            let output = expand_batch(batch?, &window, Arc::clone(&output_schema))?;
+            reservation.try_resize(output.get_array_memory_size())?;
+            Ok(output)
+        });
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
     }
 }

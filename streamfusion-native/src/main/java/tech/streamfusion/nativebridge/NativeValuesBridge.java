@@ -22,7 +22,14 @@ public final class NativeValuesBridge {
     private NativeValuesBridge() {}
 
     public static long executeArrow(byte[] serializedPlan, long outputArrayAddress, long outputSchemaAddress) {
-        long rows = executeArrowBatch(serializedPlan, outputArrayAddress, outputSchemaAddress);
+        try (NativeExecutionContext context =
+                new NativeExecutionContext(serializedPlan, NativeMemoryManager.unbounded())) {
+            return executeArrow(context, outputArrayAddress, outputSchemaAddress);
+        }
+    }
+
+    public static long executeArrow(NativeExecutionContext context, long outputArrayAddress, long outputSchemaAddress) {
+        long rows = executeArrowBatch(context.handle(), outputArrayAddress, outputSchemaAddress);
         EXECUTED_BATCHES.incrementAndGet();
         return rows;
     }
@@ -36,5 +43,5 @@ public final class NativeValuesBridge {
     }
 
     private static native long executeArrowBatch(
-            byte[] serializedPlan, long outputArrayAddress, long outputSchemaAddress);
+            long executionContext, long outputArrayAddress, long outputSchemaAddress);
 }

@@ -17,7 +17,6 @@ package tech.streamfusion.flink.union;
 
 import java.util.ArrayList;
 import java.util.List;
-import org.apache.arrow.memory.RootAllocator;
 import org.apache.flink.streaming.api.operators.AbstractInput;
 import org.apache.flink.streaming.api.operators.AbstractStreamOperatorV2;
 import org.apache.flink.streaming.api.operators.BoundedMultiInput;
@@ -36,6 +35,7 @@ import org.apache.flink.types.RowKind;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.ArrowUnionCDataBridge;
 import tech.streamfusion.flink.arrow.NativeCalcResult;
+import tech.streamfusion.flink.memory.StreamFusionTaskMemory;
 import tech.streamfusion.proto.plan.v1.Input.Builder;
 import tech.streamfusion.proto.plan.v1.NativePlan;
 import tech.streamfusion.proto.plan.v1.Operator;
@@ -51,7 +51,9 @@ final class StreamFusionUnionOperator extends AbstractStreamOperatorV2<RowData>
     private final RowDataSerializer serializer;
     private final byte[] serializedPlan;
     private final List<List<BufferedRow>> rowsByInput;
+    private final transient org.apache.flink.runtime.execution.Environment environment;
     private int bufferedRows;
+    private transient StreamFusionTaskMemory taskMemory;
 
     StreamFusionUnionOperator(StreamOperatorParameters<RowData> parameters, int inputCount, RowType rowType) {
         super(parameters, inputCount);
@@ -60,12 +62,20 @@ final class StreamFusionUnionOperator extends AbstractStreamOperatorV2<RowData>
         }
         this.inputCount = inputCount;
         this.rowType = rowType;
+        this.environment = parameters.getContainingTask().getEnvironment();
         this.serializer = new RowDataSerializer(rowType);
         this.serializedPlan = createPlan(inputCount);
         this.rowsByInput = new ArrayList<>(inputCount);
         for (int index = 0; index < inputCount; index++) {
             rowsByInput.add(new ArrayList<>());
         }
+    }
+
+    @Override
+    public void open() throws Exception {
+        super.open();
+        taskMemory = StreamFusionTaskMemory.create(
+                environment, getOperatorConfig(), getMetricGroup(), "streamfusion-union", serializedPlan);
     }
 
     @Override
@@ -113,27 +123,37 @@ final class StreamFusionUnionOperator extends AbstractStreamOperatorV2<RowData>
             return;
         }
         List<BufferedRow> metadata = new ArrayList<>(bufferedRows);
-        try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE)) {
-            List<ArrowRowDataBatch> inputs = new ArrayList<>(inputCount);
-            try {
-                for (List<BufferedRow> inputRows : rowsByInput) {
-                    List<RowData> values = new ArrayList<>(inputRows.size());
-                    for (BufferedRow row : inputRows) {
-                        values.add(row.value);
-                        metadata.add(row);
-                    }
-                    inputs.add(ArrowRowDataBatch.transpose(values, rowType, allocator));
+        List<ArrowRowDataBatch> inputs = new ArrayList<>(inputCount);
+        try {
+            for (List<BufferedRow> inputRows : rowsByInput) {
+                List<RowData> values = new ArrayList<>(inputRows.size());
+                for (BufferedRow row : inputRows) {
+                    values.add(row.value);
+                    metadata.add(row);
                 }
-                try (NativeCalcResult nativeResult =
-                        ArrowUnionCDataBridge.executeWithSelection(serializedPlan, inputs, rowType, allocator)) {
-                    emit(nativeResult, metadata);
-                }
-            } finally {
-                inputs.forEach(ArrowRowDataBatch::close);
+                inputs.add(ArrowRowDataBatch.transpose(values, rowType, taskMemory.allocator()));
             }
+            try (NativeCalcResult nativeResult = ArrowUnionCDataBridge.executeWithSelection(
+                    taskMemory.executionContext(), inputs, rowType, taskMemory.allocator())) {
+                emit(nativeResult, metadata);
+            }
+        } finally {
+            inputs.forEach(ArrowRowDataBatch::close);
         }
         rowsByInput.forEach(List::clear);
         bufferedRows = 0;
+    }
+
+    @Override
+    public void close() throws Exception {
+        try {
+            if (taskMemory != null) {
+                taskMemory.close();
+                taskMemory = null;
+            }
+        } finally {
+            super.close();
+        }
     }
 
     private void emit(NativeCalcResult nativeResult, List<BufferedRow> metadata) {

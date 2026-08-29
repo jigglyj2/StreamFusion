@@ -13,13 +13,14 @@ use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::physical_plan::ExecutionPlan;
 use jni::errors::ThrowRuntimeExAndDefault;
 use jni::jni_str;
-use jni::objects::{JByteArray, JClass, JLongArray};
+use jni::objects::{JClass, JLongArray};
 use jni::strings::JNIString;
 use jni::sys::jlong;
 use jni::EnvUnowned;
 
 use super::common::{execute_and_export, import_input};
-use crate::planner::create_plan_with_inputs;
+use crate::execution_context::{self, NativeExecutionContext};
+use crate::planner::create_plan_from_decoded;
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeUnionBridge_executeArrowBatches<
@@ -27,7 +28,7 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeUnionBridge_exe
 >(
     mut unowned_env: EnvUnowned<'caller>,
     _class: JClass<'caller>,
-    serialized_plan: JByteArray<'caller>,
+    execution_context: jlong,
     input_array_addresses: JLongArray<'caller>,
     input_schema_addresses: JLongArray<'caller>,
     output_array_address: jlong,
@@ -35,7 +36,13 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeUnionBridge_exe
 ) -> jlong {
     unowned_env
         .with_env(|env| -> jni::errors::Result<_> {
-            let plan = env.convert_byte_array(serialized_plan)?;
+            let context = execution_context::get(execution_context).map_err(|error| {
+                let _ = env.throw_new(
+                    jni_str!("java/lang/IllegalStateException"),
+                    JNIString::new(error.to_string()),
+                );
+                jni::errors::Error::JavaException
+            })?;
             let input_count = input_array_addresses.len(env)?;
             if input_schema_addresses.len(env)? != input_count {
                 let _ = env.throw_new(
@@ -44,13 +51,32 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeUnionBridge_exe
                 );
                 return Err(jni::errors::Error::JavaException);
             }
+            let address_reservation = context.reservation("native UNION JNI addresses");
+            let address_bytes = input_count
+                .checked_mul(std::mem::size_of::<jlong>() * 2)
+                .ok_or_else(|| {
+                    let _ = env.throw_new(
+                        jni_str!("java/lang/IllegalStateException"),
+                        JNIString::new("native UNION address accounting overflowed usize"),
+                    );
+                    jni::errors::Error::JavaException
+                })?;
+            address_reservation
+                .try_grow(address_bytes)
+                .map_err(|error| {
+                    let _ = env.throw_new(
+                        jni_str!("java/lang/IllegalStateException"),
+                        JNIString::new(error.to_string()),
+                    );
+                    jni::errors::Error::JavaException
+                })?;
             let mut arrays = vec![0; input_count];
             let mut schemas = vec![0; input_count];
             input_array_addresses.get_region(env, 0, &mut arrays)?;
             input_schema_addresses.get_region(env, 0, &mut schemas)?;
             let rows = unsafe {
                 execute_arrow_inputs(
-                    &plan,
+                    &context,
                     &arrays,
                     &schemas,
                     output_array_address as *mut FFI_ArrowArray,
@@ -70,7 +96,7 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeUnionBridge_exe
 }
 
 unsafe fn execute_arrow_inputs(
-    plan: &[u8],
+    context: &NativeExecutionContext,
     input_array_addresses: &[jlong],
     input_schema_addresses: &[jlong],
     output_array_address: *mut FFI_ArrowArray,
@@ -83,18 +109,21 @@ unsafe fn execute_arrow_inputs(
     }
     let mut row_offset = 0;
     let mut inputs: Vec<Arc<dyn ExecutionPlan>> = Vec::with_capacity(input_array_addresses.len());
+    let mut input_reservations = Vec::with_capacity(input_array_addresses.len());
     for (&array_address, &schema_address) in input_array_addresses
         .iter()
         .zip(input_schema_addresses.iter())
     {
-        let batch = unsafe {
+        let (batch, reservation) = unsafe {
             import_input(
+                context,
                 array_address as *mut FFI_ArrowArray,
                 schema_address as *mut FFI_ArrowSchema,
                 row_offset,
             )
         }?;
         row_offset += batch.num_rows();
+        input_reservations.push(reservation);
         let schema = batch.schema();
         inputs.push(MemorySourceConfig::try_new_exec(
             &[vec![batch]],
@@ -102,6 +131,6 @@ unsafe fn execute_arrow_inputs(
             None,
         )?);
     }
-    let plan = create_plan_with_inputs(plan, inputs)?;
-    unsafe { execute_and_export(plan, output_array_address, output_schema_address) }
+    let plan = create_plan_from_decoded(context.plan(), inputs)?;
+    unsafe { execute_and_export(context, plan, output_array_address, output_schema_address) }
 }

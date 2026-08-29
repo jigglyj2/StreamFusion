@@ -26,6 +26,7 @@ import org.apache.arrow.vector.FieldVector;
 import org.apache.arrow.vector.IntVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.flink.table.types.logical.RowType;
+import tech.streamfusion.nativebridge.NativeExecutionContext;
 import tech.streamfusion.nativebridge.NativeUnionBridge;
 
 /** Ownership-safe Arrow C Data transfer for one native multi-input UNION ALL batch. */
@@ -34,6 +35,32 @@ public final class ArrowUnionCDataBridge {
 
     public static NativeCalcResult executeWithSelection(
             byte[] serializedPlan, List<ArrowRowDataBatch> inputs, RowType outputType, BufferAllocator allocator) {
+        return executeWithSelection(
+                inputs,
+                outputType,
+                allocator,
+                (arrays, schemas, outputArray, outputSchema) ->
+                        NativeUnionBridge.executeArrow(serializedPlan, arrays, schemas, outputArray, outputSchema));
+    }
+
+    public static NativeCalcResult executeWithSelection(
+            NativeExecutionContext context,
+            List<ArrowRowDataBatch> inputs,
+            RowType outputType,
+            BufferAllocator allocator) {
+        return executeWithSelection(
+                inputs,
+                outputType,
+                allocator,
+                (arrays, schemas, outputArray, outputSchema) ->
+                        NativeUnionBridge.executeArrow(context, arrays, schemas, outputArray, outputSchema));
+    }
+
+    private static NativeCalcResult executeWithSelection(
+            List<ArrowRowDataBatch> inputs,
+            RowType outputType,
+            BufferAllocator allocator,
+            NativeUnionInvocation invocation) {
         if (inputs.size() < 2) {
             throw new IllegalArgumentException("Native UNION ALL requires at least two inputs");
         }
@@ -53,12 +80,8 @@ public final class ArrowUnionCDataBridge {
                 arrayAddresses[index] = inputArray.memoryAddress();
                 schemaAddresses[index] = inputSchema.memoryAddress();
             }
-            long rowCount = NativeUnionBridge.executeArrow(
-                    serializedPlan,
-                    arrayAddresses,
-                    schemaAddresses,
-                    outputArray.memoryAddress(),
-                    outputSchema.memoryAddress());
+            long rowCount = invocation.execute(
+                    arrayAddresses, schemaAddresses, outputArray.memoryAddress(), outputSchema.memoryAddress());
             if (rowCount < 0 || rowCount > Integer.MAX_VALUE) {
                 throw new IllegalStateException("Native UNION ALL returned invalid row count " + rowCount);
             }
@@ -86,5 +109,10 @@ public final class ArrowUnionCDataBridge {
         VectorSchemaRoot visibleOutput = output.removeVector(ordinalIndex);
         ordinalVector.close();
         return new NativeCalcResult(ArrowRowDataBatch.wrap(visibleOutput, outputType), inputRows);
+    }
+
+    @FunctionalInterface
+    private interface NativeUnionInvocation {
+        long execute(long[] inputArrays, long[] inputSchemas, long outputArray, long outputSchema);
     }
 }

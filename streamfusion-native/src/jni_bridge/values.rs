@@ -9,13 +9,14 @@
 use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 use jni::errors::ThrowRuntimeExAndDefault;
 use jni::jni_str;
-use jni::objects::{JByteArray, JClass};
+use jni::objects::JClass;
 use jni::strings::JNIString;
 use jni::sys::jlong;
 use jni::EnvUnowned;
 
 use super::common::execute_and_export;
-use crate::planner::create_plan_with_inputs;
+use crate::execution_context;
+use crate::planner::create_plan_from_decoded;
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeValuesBridge_executeArrowBatch<
@@ -23,17 +24,24 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeValuesBridge_ex
 >(
     mut unowned_env: EnvUnowned<'caller>,
     _class: JClass<'caller>,
-    serialized_plan: JByteArray<'caller>,
+    execution_context: jlong,
     output_array_address: jlong,
     output_schema_address: jlong,
 ) -> jlong {
     unowned_env
         .with_env(|env| -> jni::errors::Result<_> {
-            let plan = env.convert_byte_array(serialized_plan)?;
+            let context = execution_context::get(execution_context).map_err(|error| {
+                let _ = env.throw_new(
+                    jni_str!("java/lang/IllegalStateException"),
+                    JNIString::new(error.to_string()),
+                );
+                jni::errors::Error::JavaException
+            })?;
             let rows = unsafe {
-                let plan = create_plan_with_inputs(&plan, Vec::new());
+                let plan = create_plan_from_decoded(context.plan(), Vec::new());
                 match plan {
                     Ok(plan) => execute_and_export(
+                        &context,
                         plan,
                         output_array_address as *mut FFI_ArrowArray,
                         output_schema_address as *mut FFI_ArrowSchema,

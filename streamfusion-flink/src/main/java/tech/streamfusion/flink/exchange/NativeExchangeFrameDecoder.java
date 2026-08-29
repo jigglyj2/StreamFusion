@@ -8,13 +8,18 @@ import java.io.Serializable;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.flink.arrow.ArrowExchangeInputCDataBridge;
+import tech.streamfusion.nativebridge.NativeMemoryManager;
 
 /** Injectable receiving boundary for native exchange runtime tests. */
 @FunctionalInterface
 interface NativeExchangeFrameDecoder extends Serializable {
-    NativeExchangeFrameDecoder JNI =
-            (plan, frame, rowType, allocator) -> ArrowExchangeInputCDataBridge.decode(plan, frame, rowType, allocator);
+    NativeExchangeFrameDecoder JNI = (plan, frame, rowType, allocator, memoryManager) ->
+            ArrowExchangeInputCDataBridge.decode(plan, frame, rowType, allocator, memoryManager);
 
     ArrowExchangeInputBatch decode(
-            byte[] serializedPlan, NativeExchangeFrame frame, RowType rowType, BufferAllocator allocator);
+            byte[] serializedPlan,
+            NativeExchangeFrame frame,
+            RowType rowType,
+            BufferAllocator allocator,
+            NativeMemoryManager memoryManager);
 }

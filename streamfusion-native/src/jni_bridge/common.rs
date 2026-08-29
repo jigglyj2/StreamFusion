@@ -11,16 +11,29 @@ use std::sync::Arc;
 use arrow::array::{Array, Int32Array, RecordBatch, StructArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::ffi::{from_ffi, FFI_ArrowArray, FFI_ArrowSchema};
+use datafusion::execution::memory_pool::MemoryReservation;
 use datafusion::physical_plan::{collect, ExecutionPlan};
-use datafusion::prelude::SessionContext;
+
+use crate::execution_context::NativeExecutionContext;
 
 pub(super) unsafe fn import_input(
+    context: &NativeExecutionContext,
     input_array_address: *mut FFI_ArrowArray,
     input_schema_address: *mut FFI_ArrowSchema,
     row_offset: usize,
-) -> datafusion::error::Result<RecordBatch> {
+) -> datafusion::error::Result<(RecordBatch, MemoryReservation)> {
     let input_batch = unsafe { import_record_batch(input_array_address, input_schema_address) }?;
     let row_count = input_batch.num_rows();
+    let reservation = context.reservation("native input-row ordinal");
+    reservation.try_grow(
+        row_count
+            .checked_mul(std::mem::size_of::<i32>())
+            .ok_or_else(|| {
+                datafusion::error::DataFusionError::ResourcesExhausted(
+                    "input-row ordinal accounting overflowed usize".to_string(),
+                )
+            })?,
+    )?;
     let mut fields = input_batch
         .schema()
         .fields()
@@ -36,10 +49,10 @@ pub(super) unsafe fn import_input(
     columns.push(Arc::new(Int32Array::from_iter_values(
         (row_offset..row_offset + row_count).map(|index| index as i32),
     )));
-    Ok(RecordBatch::try_new(
-        Arc::new(Schema::new(fields)),
-        columns,
-    )?)
+    Ok((
+        RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)?,
+        reservation,
+    ))
 }
 
 pub(super) unsafe fn import_record_batch(
@@ -58,6 +71,7 @@ pub(super) unsafe fn import_record_batch(
 }
 
 pub(super) unsafe fn execute_and_export(
+    context: &NativeExecutionContext,
     plan: Arc<dyn ExecutionPlan>,
     output_array_address: *mut FFI_ArrowArray,
     output_schema_address: *mut FFI_ArrowSchema,
@@ -68,15 +82,33 @@ pub(super) unsafe fn execute_and_export(
         ));
     }
     let output_schema = plan.schema();
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .build()
-        .map_err(|error| datafusion::error::DataFusionError::External(Box::new(error)))?;
-    let batches = runtime.block_on(collect(plan, SessionContext::new().task_ctx()))?;
+    let batches = context
+        .runtime()
+        .block_on(collect(plan, context.task_context()))?;
+    let output_reservation = context.reservation("native Arrow output");
+    let collected_bytes = batches.iter().try_fold(0usize, |bytes, batch| {
+        bytes
+            .checked_add(batch.get_array_memory_size())
+            .ok_or_else(|| {
+                datafusion::error::DataFusionError::ResourcesExhausted(
+                    "native Arrow output accounting overflowed usize".to_string(),
+                )
+            })
+    })?;
+    // As in Comet's buffered operators, account a newly produced batch before it can
+    // proceed. The concat reservation is acquired before allocating the combined batch.
+    output_reservation.try_grow(collected_bytes)?;
+    if !batches.is_empty() {
+        output_reservation.try_grow(collected_bytes)?;
+    }
     let output_batch = if batches.is_empty() {
         RecordBatch::new_empty(output_schema)
     } else {
         arrow::compute::concat_batches(&output_schema, batches.iter())?
     };
+    let output_bytes = output_batch.get_array_memory_size();
+    drop(batches);
+    output_reservation.try_resize(output_bytes)?;
     let rows = output_batch.num_rows();
     let output_data = StructArray::from(output_batch).to_data();
     let output_array = FFI_ArrowArray::new(&output_data);

@@ -25,7 +25,6 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
-import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.BigIntVector;
 import org.apache.arrow.vector.BitVector;
 import org.apache.arrow.vector.DateDayVector;
@@ -131,15 +130,6 @@ import tech.streamfusion.flink.arrow.writers.VarCharWriter;
 public final class ArrowUtils {
 
     private static final Logger LOG = LoggerFactory.getLogger(ArrowUtils.class);
-
-    private static RootAllocator rootAllocator;
-
-    public static synchronized RootAllocator getRootAllocator() {
-        if (rootAllocator == null) {
-            rootAllocator = new RootAllocator(Long.MAX_VALUE);
-        }
-        return rootAllocator;
-    }
 
     public static void checkArrowUsable() {
         // Arrow requires the property io.netty.tryReflectionSetAccessible to

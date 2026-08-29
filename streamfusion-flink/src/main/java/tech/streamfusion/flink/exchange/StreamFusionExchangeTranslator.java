@@ -6,6 +6,7 @@ package tech.streamfusion.flink.exchange;
 
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.dag.Transformation;
+import org.apache.flink.core.memory.ManagedMemoryUseCase;
 import org.apache.flink.streaming.api.operators.SimpleOperatorFactory;
 import org.apache.flink.streaming.api.transformations.OneInputTransformation;
 import org.apache.flink.streaming.api.transformations.PartitionTransformation;
@@ -42,6 +43,7 @@ public final class StreamFusionExchangeTranslator {
                 SimpleOperatorFactory.of(new NativeExchangeWriterOperator(rowType, plan)),
                 NativeExchangeFrameTypeInfo.INSTANCE,
                 input.getParallelism());
+        writer.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
         PartitionTransformation<NativeExchangeFrame> exchange = new PartitionTransformation<>(writer, partitioner);
         exchange.setOutputType(NativeExchangeFrameTypeInfo.INSTANCE);
         exchange.setParallelism(singleton ? 1 : ExecutionConfig.PARALLELISM_DEFAULT);
@@ -51,6 +53,7 @@ public final class StreamFusionExchangeTranslator {
                 SimpleOperatorFactory.of(new NativeExchangeReaderOperator(rowType, plan)),
                 InternalTypeInfo.of(rowType),
                 exchange.getParallelism());
+        reader.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
         reader.setOutputType(InternalTypeInfo.of(rowType));
         return reader;
     }

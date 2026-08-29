@@ -43,6 +43,13 @@ pub fn create_plan_with_inputs(
     inputs: Vec<Arc<dyn ExecutionPlan>>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let plan = decode_plan(bytes)?;
+    create_plan_from_decoded(&plan, inputs)
+}
+
+pub(crate) fn create_plan_from_decoded(
+    plan: &proto::NativePlan,
+    inputs: Vec<Arc<dyn ExecutionPlan>>,
+) -> Result<Arc<dyn ExecutionPlan>> {
     create_operator(
         plan.root
             .as_ref()

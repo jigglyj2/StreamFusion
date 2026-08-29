@@ -6,7 +6,6 @@ package tech.streamfusion.flink.exchange;
 
 import java.util.ArrayList;
 import java.util.List;
-import org.apache.arrow.memory.RootAllocator;
 import org.apache.flink.runtime.event.WatermarkEvent;
 import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
 import org.apache.flink.streaming.api.operators.BoundedOneInput;
@@ -20,6 +19,7 @@ import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.runtime.typeutils.RowDataSerializer;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
+import tech.streamfusion.flink.memory.FlinkManagedMemory;
 
 /** Batches RowData, routes it natively by key group, and emits Arrow IPC network frames. */
 public final class NativeExchangeWriterOperator extends AbstractStreamOperator<NativeExchangeFrame>
@@ -32,6 +32,7 @@ public final class NativeExchangeWriterOperator extends AbstractStreamOperator<N
     private final int batchSize;
     private final NativeExchangeBatchRouter router;
     private final List<StreamRecord<RowData>> records;
+    private transient FlinkManagedMemory managedMemory;
 
     public NativeExchangeWriterOperator(RowType inputType, byte[] serializedPlan) {
         this(inputType, serializedPlan, DEFAULT_BATCH_SIZE, NativeExchangeBatchRouter.JNI);
@@ -48,6 +49,13 @@ public final class NativeExchangeWriterOperator extends AbstractStreamOperator<N
         this.batchSize = batchSize;
         this.router = router;
         this.records = new ArrayList<>(batchSize);
+    }
+
+    @Override
+    public void open() throws Exception {
+        super.open();
+        managedMemory = FlinkManagedMemory.create(
+                getContainingTask().getEnvironment(), getOperatorConfig(), getMetricGroup(), "streamfusion-exchange");
     }
 
     @Override
@@ -103,12 +111,24 @@ public final class NativeExchangeWriterOperator extends AbstractStreamOperator<N
         if (records.isEmpty()) {
             return;
         }
-        try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
-                ArrowRowDataBatch batch = ArrowExchangeBatch.transpose(records, inputType, allocator)) {
-            for (NativeExchangeFrame frame : router.route(serializedPlan, batch, allocator)) {
+        try (ArrowRowDataBatch batch = ArrowExchangeBatch.transpose(records, inputType, managedMemory.allocator())) {
+            for (NativeExchangeFrame frame :
+                    router.route(serializedPlan, batch, managedMemory.allocator(), managedMemory)) {
                 output.collect(new StreamRecord<>(frame));
             }
         }
         records.clear();
+    }
+
+    @Override
+    public void close() throws Exception {
+        try {
+            if (managedMemory != null) {
+                managedMemory.close();
+                managedMemory = null;
+            }
+        } finally {
+            super.close();
+        }
     }
 }

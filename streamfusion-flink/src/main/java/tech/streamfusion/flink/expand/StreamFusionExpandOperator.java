@@ -17,7 +17,6 @@ package tech.streamfusion.flink.expand;
 
 import java.util.ArrayList;
 import java.util.List;
-import org.apache.arrow.memory.RootAllocator;
 import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
 import org.apache.flink.streaming.api.operators.BoundedOneInput;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
@@ -33,6 +32,7 @@ import org.apache.flink.types.RowKind;
 import tech.streamfusion.flink.arrow.ArrowCDataBridge;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.NativeCalcResult;
+import tech.streamfusion.flink.memory.StreamFusionTaskMemory;
 import tech.streamfusion.proto.plan.v1.Expand;
 import tech.streamfusion.proto.plan.v1.ExpandProjection;
 import tech.streamfusion.proto.plan.v1.Expression;
@@ -50,12 +50,24 @@ final class StreamFusionExpandOperator extends AbstractStreamOperator<RowData>
     private final RowDataSerializer serializer;
     private final byte[] serializedPlan;
     private final List<BufferedRow> rows = new ArrayList<>(BATCH_SIZE);
+    private transient StreamFusionTaskMemory taskMemory;
 
     StreamFusionExpandOperator(RowType inputType, RowType outputType, List<List<Expression>> projections) {
         this.inputType = inputType;
         this.outputType = outputType;
         this.serializer = new RowDataSerializer(inputType);
         this.serializedPlan = createPlan(projections);
+    }
+
+    @Override
+    public void open() throws Exception {
+        super.open();
+        taskMemory = StreamFusionTaskMemory.create(
+                getContainingTask().getEnvironment(),
+                getOperatorConfig(),
+                getMetricGroup(),
+                "streamfusion-expand",
+                serializedPlan);
     }
 
     @Override
@@ -108,13 +120,24 @@ final class StreamFusionExpandOperator extends AbstractStreamOperator<RowData>
         }
         List<RowData> values = new ArrayList<>(rows.size());
         rows.forEach(row -> values.add(row.value));
-        try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
-                ArrowRowDataBatch inputBatch = ArrowRowDataBatch.transpose(values, inputType, allocator);
-                NativeCalcResult nativeResult =
-                        ArrowCDataBridge.executeWithSelection(serializedPlan, inputBatch, outputType, allocator)) {
+        try (ArrowRowDataBatch inputBatch = ArrowRowDataBatch.transpose(values, inputType, taskMemory.allocator());
+                NativeCalcResult nativeResult = ArrowCDataBridge.executeWithSelection(
+                        taskMemory.executionContext(), inputBatch, outputType, taskMemory.allocator())) {
             emit(nativeResult);
         }
         rows.clear();
+    }
+
+    @Override
+    public void close() throws Exception {
+        try {
+            if (taskMemory != null) {
+                taskMemory.close();
+                taskMemory = null;
+            }
+        } finally {
+            super.close();
+        }
     }
 
     private void emit(NativeCalcResult nativeResult) {
