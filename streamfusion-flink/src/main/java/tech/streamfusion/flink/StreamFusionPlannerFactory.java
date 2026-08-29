@@ -22,6 +22,7 @@ import org.apache.flink.table.delegation.Planner;
 import org.apache.flink.table.delegation.PlannerFactory;
 import tech.streamfusion.nativebridge.NativeCalcBridge;
 import tech.streamfusion.nativebridge.NativeUnionBridge;
+import tech.streamfusion.nativebridge.NativeValuesBridge;
 
 /** Entry point loaded by the StreamFusion Flink planner patch. */
 public final class StreamFusionPlannerFactory implements PlannerFactory {
@@ -73,11 +74,16 @@ public final class StreamFusionPlannerFactory implements PlannerFactory {
         return NativeUnionBridge.executedBatchCount();
     }
 
+    public static long nativeValuesBatchCount() {
+        return NativeValuesBridge.executedBatchCount();
+    }
+
     public static void resetMetrics() {
         CREATED_PLANNERS.set(0);
         StreamFusionPlanner.resetMetrics();
         NativeCalcBridge.resetMetrics();
         NativeUnionBridge.resetMetrics();
+        NativeValuesBridge.resetMetrics();
         System.clearProperty(EXEC_GRAPH_PROCESSOR_PROPERTY);
     }
 }

@@ -30,6 +30,12 @@ public final class StreamFusionCalcTranslator extends StreamFusionExpressionTran
         return projectionExpression(expression, inputType, expectedType);
     }
 
+    /** Reuses Calc's parity-checked Flink-to-protobuf type mapping. */
+    public static tech.streamfusion.proto.plan.v1.LogicalType operatorLogicalType(
+            org.apache.flink.table.types.logical.LogicalType type) {
+        return StreamFusionIdentityCalcOperator.logicalType(type);
+    }
+
     public static Transformation<RowData> translate(
             Transformation<RowData> input,
             RowType inputType,

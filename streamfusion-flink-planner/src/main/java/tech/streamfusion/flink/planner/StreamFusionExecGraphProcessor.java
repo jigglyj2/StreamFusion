@@ -28,6 +28,7 @@ import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecCalc;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecCorrelate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecExpand;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecUnion;
+import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecValues;
 import org.apache.flink.table.types.logical.RowType;
 
 /** All-or-nothing physical rule modelled after Comet's distinct accelerator exec nodes. */
@@ -36,6 +37,7 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
     private static final String UNNEST_TRANSLATOR_CLASS =
             "tech.streamfusion.flink.unnest.StreamFusionArrayUnnestTranslator";
     private static final String EXPAND_TRANSLATOR_CLASS = "tech.streamfusion.flink.expand.StreamFusionExpandTranslator";
+    private static final String VALUES_TRANSLATOR_CLASS = "tech.streamfusion.flink.values.StreamFusionValuesTranslator";
 
     @Override
     public ExecNodeGraph process(ExecNodeGraph graph, ProcessorContext context) {
@@ -60,7 +62,12 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
 
     private void collectRejections(ExecNode<?> node, ProcessorContext context, String path, List<String> rejections) {
         String nodePath = path + "/" + node.getClass().getSimpleName();
-        if (node.getInputEdges().isEmpty()) {
+        if (node instanceof StreamExecValues) {
+            String reason = unsupportedReason((StreamExecValues) node, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
+        } else if (node.getInputEdges().isEmpty()) {
             return;
         } else if (node instanceof StreamExecCalc) {
             String reason = unsupportedReason((StreamExecCalc) node, context);
@@ -91,6 +98,14 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
     }
 
     private ExecNode<?> convert(ExecNode<?> node) {
+        if (node instanceof StreamExecValues) {
+            StreamExecValues values = (StreamExecValues) node;
+            return new StreamFusionExecValues(
+                    values.getPersistedConfig(),
+                    values.getTuples(),
+                    (RowType) values.getOutputType(),
+                    "StreamFusionValues");
+        }
         if (node instanceof StreamExecCalc) {
             StreamExecCalc calc = (StreamExecCalc) node;
             StreamFusionExecCalc replacement = new StreamFusionExecCalc(
@@ -223,6 +238,21 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             throw new IllegalStateException("Could not inspect StreamFusion Expand support", e);
         } catch (InvocationTargetException e) {
             throw new IllegalStateException("StreamFusion Expand support inspection failed", e.getCause());
+        }
+    }
+
+    private String unsupportedReason(StreamExecValues values, ProcessorContext context) {
+        try {
+            Class<?> translator = Class.forName(
+                    VALUES_TRANSLATOR_CLASS,
+                    true,
+                    context.getPlanner().getFlinkContext().getClassLoader());
+            Method method = translator.getMethod("unsupportedReason", RowType.class, List.class);
+            return (String) method.invoke(null, (RowType) values.getOutputType(), values.getTuples());
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
+            throw new IllegalStateException("Could not inspect StreamFusion VALUES support", e);
+        } catch (InvocationTargetException e) {
+            throw new IllegalStateException("StreamFusion VALUES support inspection failed", e.getCause());
         }
     }
 

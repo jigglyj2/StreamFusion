@@ -1,0 +1,54 @@
+// Copyright 2026 StreamFusion Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+
+use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
+use jni::errors::ThrowRuntimeExAndDefault;
+use jni::jni_str;
+use jni::objects::{JByteArray, JClass};
+use jni::strings::JNIString;
+use jni::sys::jlong;
+use jni::EnvUnowned;
+
+use super::common::execute_and_export;
+use crate::planner::create_plan_with_inputs;
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeValuesBridge_executeArrowBatch<
+    'caller,
+>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    serialized_plan: JByteArray<'caller>,
+    output_array_address: jlong,
+    output_schema_address: jlong,
+) -> jlong {
+    unowned_env
+        .with_env(|env| -> jni::errors::Result<_> {
+            let plan = env.convert_byte_array(serialized_plan)?;
+            let rows = unsafe {
+                let plan = create_plan_with_inputs(&plan, Vec::new());
+                match plan {
+                    Ok(plan) => execute_and_export(
+                        plan,
+                        output_array_address as *mut FFI_ArrowArray,
+                        output_schema_address as *mut FFI_ArrowSchema,
+                    ),
+                    Err(error) => Err(error),
+                }
+            }
+            .map_err(|error| {
+                let _ = env.throw_new(
+                    jni_str!("java/lang/IllegalStateException"),
+                    JNIString::new(error.to_string()),
+                );
+                jni::errors::Error::JavaException
+            })?;
+            Ok(rows as jlong)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
