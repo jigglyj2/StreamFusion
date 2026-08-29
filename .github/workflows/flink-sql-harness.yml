@@ -74,9 +74,10 @@ jobs:
           test
 
       - name: Run StreamFusion SQL parity harness
+        timeout-minutes: 20
         run: >-
           mvn --batch-mode --threads 1C -Dexec.skip=true
-          -pl streamfusion-flink-sql-tests test
+          -pl streamfusion-flink-sql-tests -am test
 
       - name: Download the Flink runner distribution
         shell: bash

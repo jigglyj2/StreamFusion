@@ -40,8 +40,10 @@ import org.apache.flink.table.types.DataType;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.CloseableIterator;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.extension.ExtendWith;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
 
+@ExtendWith(SharedMiniClusterExtension.class)
 abstract class SqlParityTestSupport {
     protected static final String BATCH_SQL = "SELECT id, UPPER(name), amount * 2 "
             + "FROM (VALUES (2, 'beta', 2.50), (1, 'alpha', 1.25), "
