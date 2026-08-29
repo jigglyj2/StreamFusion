@@ -23,6 +23,10 @@ Like Flink's own specialized function, the Java planner derives the summary or s
 name from Flink's `LogicalType` and sends that value as a native string literal, repeated once per
 input row. Nullable scalar, decimal, array, and row types have parity coverage; unsupported Flink
 types still cause whole-Calc fallback rather than using a DataFusion type name.
+`IFNULL(value, replacement)` is accelerated by lowering Flink's distinct Rex call to the same
+versioned protobuf expression as `COALESCE`. Both arguments must resolve to a parity-approved
+common type; integer, widened `BIGINT`, string, null, projection, and filter behavior have generated
+byte-parity coverage.
 
 StreamFusion can select, reorder, omit, or repeat direct input columns of these types:
 

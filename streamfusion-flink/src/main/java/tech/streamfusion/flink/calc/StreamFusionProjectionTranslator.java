@@ -279,9 +279,9 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
                             .setType(StreamFusionIdentityCalcOperator.logicalType(expectedType)))
                     .build();
         }
-        if ("COALESCE".equals(functionName(expression))) {
+        if ("COALESCE".equals(functionName(expression)) || "IFNULL".equals(functionName(expression))) {
             List<?> operands = (List<?>) invoke(expression, "getOperands");
-            if (operands.size() < 2) {
+            if (operands.size() < 2 || ("IFNULL".equals(functionName(expression)) && operands.size() != 2)) {
                 return null;
             }
             Coalesce.Builder coalesce = Coalesce.newBuilder();
