@@ -408,6 +408,12 @@ reproduces Java `String.hashCode()` over UTF-16 code units with wrapping 32-bit 
 applies Flink's overflow-preserving absolute value. This includes supplementary Unicode and the
 `Integer.MIN_VALUE` hash edge case. Nulls remain null; fixed-width `CHAR` and other internal
 type-specific hash overloads remain on Flink.
+`IS_ALPHA` and `IS_DIGIT` remain on Flink because their Commons Lang implementations classify
+individual UTF-16 code units with the JVM's `Character` tables. Native Unicode scalar predicates
+disagree for supplementary characters and may use a different Unicode-data version. `IS_DECIMAL`
+also remains on Flink because it delegates character input to Java's integer, long, and double
+parsers, including Java-specific syntax and overflow behavior. Each function reports its precise
+parity dependency in `EXPLAIN` instead of substituting a similar native predicate or parser.
 `STR_TO_MAP` remains on Flink. Flink treats both separators as Java regular expressions, whereas
 DataFusion's similarly named Spark function performs literal delimiter matching; using it would
 produce different keys for valid Flink expressions. StreamFusion reports this distinction in
