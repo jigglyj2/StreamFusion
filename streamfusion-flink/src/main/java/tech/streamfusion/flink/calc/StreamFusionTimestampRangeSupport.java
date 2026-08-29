@@ -18,10 +18,10 @@ import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.TimestampType;
 
 /** Rejects timestamp shapes whose complete Flink value domain cannot fit an Arrow physical type. */
-final class StreamFusionTimestampRangeSupport {
+public final class StreamFusionTimestampRangeSupport {
     private StreamFusionTimestampRangeSupport() {}
 
-    static String unsupportedReason(LogicalType type, String path) {
+    public static String unsupportedReason(LogicalType type, String path) {
         switch (type.getTypeRoot()) {
             case TIMESTAMP_WITHOUT_TIME_ZONE:
                 return timestampReason(((TimestampType) type).getPrecision(), path);

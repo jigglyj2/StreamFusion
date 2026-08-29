@@ -11,6 +11,7 @@ package tech.streamfusion.flink.sql;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.sql.Timestamp;
 import java.util.List;
 import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -18,6 +19,7 @@ import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.types.Row;
 import org.junit.jupiter.api.Test;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
+import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 
 class SetOperationParityTest extends SqlParityTestSupport {
     private static final String LEFT =
@@ -43,6 +45,21 @@ class SetOperationParityTest extends SqlParityTestSupport {
                 "union_input");
 
         assertThat(StreamFusionPlannerFactory.nativeUnionBatchCount()).isGreaterThan(0);
+    }
+
+    @Test
+    void sourceOnlyNanosecondTimestampUnionFallsBackBeforeArrowConversion() throws Exception {
+        String branch = "SELECT metric FROM timestamp_union_input";
+        assertDataStreamParity(
+                branch + " UNION ALL " + branch,
+                Types.SQL_TIMESTAMP,
+                List.of(Row.of(Timestamp.valueOf("9999-12-30 22:11:22.987654321"))),
+                "timestamp_union_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeUnionBatchCount()).isZero();
+        assertThat(StreamFusionPlanningDiagnostics.explain())
+                .contains("StreamExecUnion")
+                .contains("TIMESTAMP precision 9 stays on Flink");
     }
 
     @Test

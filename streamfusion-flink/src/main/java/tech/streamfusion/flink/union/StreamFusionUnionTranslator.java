@@ -22,13 +22,25 @@ import org.apache.flink.streaming.api.transformations.MultipleInputTransformatio
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
 import org.apache.flink.table.types.logical.RowType;
+import tech.streamfusion.flink.calc.StreamFusionTimestampRangeSupport;
 
 /** Reflection entry point used by the planner extension for native UNION ALL. */
 public final class StreamFusionUnionTranslator {
     private StreamFusionUnionTranslator() {}
 
+    public static String unsupportedReason(RowType rowType) {
+        for (int index = 0; index < rowType.getFieldCount(); index++) {
+            String reason = StreamFusionTimestampRangeSupport.unsupportedReason(
+                    rowType.getTypeAt(index), "fields[" + index + "]");
+            if (reason != null) {
+                return reason;
+            }
+        }
+        return null;
+    }
+
     public static Transformation<RowData> translate(List<Transformation<RowData>> inputs, RowType rowType) {
-        if (inputs.size() < 2) {
+        if (inputs.size() < 2 || unsupportedReason(rowType) != null) {
             return null;
         }
         int parallelism =

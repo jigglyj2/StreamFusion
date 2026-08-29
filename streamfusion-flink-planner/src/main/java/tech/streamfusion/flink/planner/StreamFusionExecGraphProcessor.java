@@ -38,6 +38,7 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             "tech.streamfusion.flink.unnest.StreamFusionArrayUnnestTranslator";
     private static final String EXPAND_TRANSLATOR_CLASS = "tech.streamfusion.flink.expand.StreamFusionExpandTranslator";
     private static final String VALUES_TRANSLATOR_CLASS = "tech.streamfusion.flink.values.StreamFusionValuesTranslator";
+    private static final String UNION_TRANSLATOR_CLASS = "tech.streamfusion.flink.union.StreamFusionUnionTranslator";
 
     @Override
     public ExecNodeGraph process(ExecNodeGraph graph, ProcessorContext context) {
@@ -81,6 +82,11 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             }
         } else if (node instanceof StreamExecExpand) {
             String reason = unsupportedReason((StreamExecExpand) node, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
+        } else if (node instanceof StreamExecUnion) {
+            String reason = unsupportedReason((StreamExecUnion) node, context);
             if (reason != null) {
                 rejections.add(nodePath + "\n" + reason);
             }
@@ -253,6 +259,21 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             throw new IllegalStateException("Could not inspect StreamFusion VALUES support", e);
         } catch (InvocationTargetException e) {
             throw new IllegalStateException("StreamFusion VALUES support inspection failed", e.getCause());
+        }
+    }
+
+    private String unsupportedReason(StreamExecUnion union, ProcessorContext context) {
+        try {
+            Class<?> translator = Class.forName(
+                    UNION_TRANSLATOR_CLASS,
+                    true,
+                    context.getPlanner().getFlinkContext().getClassLoader());
+            Method method = translator.getMethod("unsupportedReason", RowType.class);
+            return (String) method.invoke(null, (RowType) union.getOutputType());
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
+            throw new IllegalStateException("Could not inspect StreamFusion UNION ALL support", e);
+        } catch (InvocationTargetException e) {
+            throw new IllegalStateException("StreamFusion UNION ALL support inspection failed", e.getCause());
         }
     }
 

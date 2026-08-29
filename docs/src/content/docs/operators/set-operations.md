@@ -24,6 +24,10 @@ each individual input. Flink does not define a stable ordering between different
 inputs. A rejected node in any branch causes the entire query to fall back under the
 normal all-or-nothing rule.
 
+The common row type must also fit Arrow's complete value domain. In particular,
+`TIMESTAMP(7..9)` and nested occurrences of it fall back before boundary conversion because
+Arrow nanosecond timestamps cannot represent Flink's complete calendar range.
+
 `UNION`/`UNION DISTINCT` is not accelerated because it adds deduplication. `INTERSECT`,
 `EXCEPT`, `IN`, and `EXISTS` also remain on Flink. Their equality, null, keyed-state,
 retention, and changelog behavior needs dedicated parity work. EXPLAIN reports the

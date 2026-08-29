@@ -16,6 +16,7 @@ import org.apache.flink.table.types.logical.ArrayType;
 import org.apache.flink.table.types.logical.IntType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.RowType;
+import org.apache.flink.table.types.logical.TimestampType;
 import org.apache.flink.table.types.logical.VarCharType;
 import org.junit.jupiter.api.Test;
 import tech.streamfusion.proto.plan.v1.NativePlan;
@@ -48,5 +49,14 @@ class StreamFusionValuesTranslatorTest {
 
         assertThat(StreamFusionValuesTranslator.unsupportedReason(output, List.of(List.of())))
                 .isEqualTo("fields[0]: VALUES complex type ARRAY<INT> has no parity-approved native literal mapping");
+    }
+
+    @Test
+    void rejectsNanosecondTimestampValuesOutsideArrowsCalendarRange() {
+        RowType output = RowType.of(new TimestampType(9));
+
+        assertThat(StreamFusionValuesTranslator.unsupportedReason(output, List.of()))
+                .contains("fields[0]: TIMESTAMP precision 9 stays on Flink")
+                .contains("Arrow nanosecond timestamps cannot represent Flink's complete calendar range");
     }
 }

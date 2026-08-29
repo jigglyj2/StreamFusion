@@ -18,6 +18,7 @@ import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.flink.calc.StreamFusionCalcTranslator;
+import tech.streamfusion.flink.calc.StreamFusionTimestampRangeSupport;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.Field;
 import tech.streamfusion.proto.plan.v1.NativePlan;
@@ -51,6 +52,11 @@ public final class StreamFusionValuesTranslator {
 
     public static String unsupportedReason(RowType outputType, List<List<?>> tuples) {
         for (int field = 0; field < outputType.getFieldCount(); field++) {
+            String timestampReason = StreamFusionTimestampRangeSupport.unsupportedReason(
+                    outputType.getTypeAt(field), "fields[" + field + "]");
+            if (timestampReason != null) {
+                return timestampReason;
+            }
             LogicalTypeRoot typeRoot = outputType.getTypeAt(field).getTypeRoot();
             if (typeRoot == LogicalTypeRoot.ARRAY
                     || typeRoot == LogicalTypeRoot.MAP
