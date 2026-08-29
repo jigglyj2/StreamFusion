@@ -136,9 +136,9 @@ maximum parallelism, downstream parallelism, checkpoint barriers, watermarks, an
 topology. StreamFusion may accelerate the data path only when it can preserve those declarations
 exactly.
 
-The wire shape is Arrow Flight-inspired: a channel negotiates one versioned Arrow schema and
-dictionary state, then sends a stream of Arrow record-batch messages that refer to that channel
-schema. A batch is never converted to `RowData` or serialized row by row between native nodes.
+The wire shape is Arrow Flight-inspired: the versioned exchange plan carries one Arrow schema,
+then the channel sends Arrow record-batch messages that refer to that schema. A batch is never
+converted to `RowData` or serialized row by row between native nodes.
 Within one process, Arrow C Stream ownership passes reference-counted buffers directly. Across a
 network edge, Arrow IPC/Flight-style buffers are framed because bytes must cross the network, but
 the schema is not rebuilt or resent for every batch. Each Flink network record contains an Arrow
@@ -162,12 +162,28 @@ order and keeps the row-kind and timestamp envelope aligned. The runtime partiti
 frame's key group to the current downstream parallelism rather than persisting a stale destination.
 
 Keyed exchange uses Flink's key-group identity, not DataFusion's partition hash. The core native
-exchange package reproduces the two-stage Flink calculation: hash the exact Flink `BinaryRowData`
+exchange code reproduces the two-stage Flink calculation: hash the exact Flink `BinaryRowData`
 key bytes with `BinarySegmentUtils.hashByWords`, then apply `MathUtils.murmurHash` and reduce by
 the operator's configured maximum parallelism. This is the compatibility path implemented by
 Paimon Rust's BinaryRow encoder/hash and Fluss Rust's Flink Murmur utility. Cross-language fixtures
-lock StreamFusion's first hashing primitive to Flink 2.3. Full Arrow-to-BinaryRow encoding and the
-transport remain incomplete, so no exchange is selected by the planner yet.
+lock both hashing stages to Flink 2.3.
+
+The planner now selects a distinct `StreamFusionExecExchange` for hash and singleton distributions
+when the complete plan passes the all-or-nothing eligibility check. Its runtime remains a
+Flink-owned writer -> `PartitionTransformation` -> reader topology. The writer transposes a batch,
+native Rust encodes supported scalar keys and emits stable key-group frames, Flink transports those
+frames and their control events, and the reader exposes the decoded Arrow batch as lightweight
+`RowData` views. The default maximum parallelism is Flink's own lower-bound default of 128, and
+the partitioner advertises Flink's `RANGE` state mapper so restored in-flight frames can be remapped
+after rescaling.
+
+Hash keys currently support booleans, integral and floating-point numbers, decimals, character and
+binary strings, dates, times, and both timestamp families, including nullable and composite keys.
+`ARRAY`, `MAP`, `MULTISET`, and `ROW` hash keys fall back with an EXPLAIN reason. Those complex types
+may still appear in non-key columns. Boundary types that Arrow cannot represent over Flink's full
+value domain, and dictionary-encoded IPC batches that would require channel dictionary state, also
+fall back rather than approximate Flink behavior. A real local Flink runner test exercises the
+native writer, Flink network partition, and native reader at parallelism two.
 
 ## Flink runner integration test
 

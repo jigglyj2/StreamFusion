@@ -20,6 +20,7 @@ This matrix follows the query operations documented by Flink 2.3, including the 
 | [Joins](joins/) | **No** | By join type | DataFusion batch joins or custom streaming state |
 | [Window joins](window-join/) | **No** | Yes | Custom window-aware streaming join |
 | [Set operations](set-operations/) | **Partial** (`UNION ALL`) | By operation | Flink-compatible union wiring; DataFusion or native keyed state for future operations |
+| [Exchange](exchange/) | **Partial** (hash and singleton) | Yes | Native Flink-compatible key grouping with Flink-owned network transport |
 | [Table and collection expansion](table-expansion/) | **Partial** (scalar array `UNNEST`) | Yes | DataFusion `UnnestExec` with Flink-compatible correlate semantics |
 | [ORDER BY](order-by/) | **No** | Bounded inputs | DataFusion sort |
 | [LIMIT](limit/) | **No** | Bounded inputs | DataFusion limit |
