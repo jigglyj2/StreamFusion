@@ -27,6 +27,10 @@ types still cause whole-Calc fallback rather than using a DataFusion type name.
 versioned protobuf expression as `COALESCE`. Both arguments must resolve to a parity-approved
 common type; integer, widened `BIGINT`, string, null, projection, and filter behavior have generated
 byte-parity coverage.
+`INET_NTOA(integer)` is accelerated for `TINYINT`, `SMALLINT`, `INT`, and `BIGINT`. Rust widens the
+Arrow integer without loss and formats values in Flink's unsigned IPv4 range `[0, 4294967295]` as
+dotted decimal; null, negative, and out-of-range values return null. All integer widths, both range
+boundaries, invalid values, projections, and filters have byte-parity coverage.
 
 StreamFusion can select, reorder, omit, or repeat direct input columns of these types:
 

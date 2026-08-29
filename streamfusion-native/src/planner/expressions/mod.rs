@@ -49,6 +49,7 @@ pub(crate) mod floor;
 pub(crate) mod hexadecimal;
 pub(crate) mod hyperbolic_sine;
 pub(crate) mod hyperbolic_tangent;
+pub(crate) mod inet_ntoa;
 pub(crate) mod json_quote;
 pub(crate) mod like;
 pub(crate) mod lower;

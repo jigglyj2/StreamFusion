@@ -182,7 +182,12 @@ message Expression {
     StringHashCode string_hash_code = 109;
     NumericTruncate numeric_truncate = 110;
     TemporalExtract temporal_extract = 111;
+    InetNtoa inet_ntoa = 112;
   }
+}
+
+message InetNtoa {
+  Expression operand = 1;
 }
 
 message StructField {

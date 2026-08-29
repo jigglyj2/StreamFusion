@@ -491,6 +491,13 @@ pub(super) fn create_expression(
                 .ok_or_else(|| DataFusionError::Plan("UNHEX operand is empty".to_string()))?;
             expressions::unhex::create(create_expression(operand, schema)?, schema)
         }
+        Some(proto::expression::Expression::InetNtoa(inet_ntoa)) => {
+            let operand = inet_ntoa
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("INET_NTOA operand is empty".to_string()))?;
+            expressions::inet_ntoa::create(create_expression(operand, schema)?, schema)
+        }
         Some(proto::expression::Expression::UrlEncode(url_encode)) => {
             let operand = url_encode
                 .operand
