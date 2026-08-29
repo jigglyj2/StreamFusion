@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::Operator;
-use datafusion::physical_expr::expressions::{BinaryExpr, Column, Literal, NegativeExpr};
+use datafusion::physical_expr::expressions::{BinaryExpr, CastExpr, Column, Literal, NegativeExpr};
 use datafusion::physical_expr::expressions::{IsNotNullExpr, IsNullExpr, NotExpr};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::filter::FilterExec;
@@ -695,21 +695,34 @@ pub(super) fn create_expression(
                     ));
                 }
             };
-            Ok(Arc::new(BinaryExpr::new(
-                create_expression(
-                    arithmetic.left.as_ref().ok_or_else(|| {
-                        DataFusionError::Plan("arithmetic left operand is empty".to_string())
-                    })?,
-                    schema,
-                )?,
-                operator,
-                create_expression(
-                    arithmetic.right.as_ref().ok_or_else(|| {
-                        DataFusionError::Plan("arithmetic right operand is empty".to_string())
-                    })?,
-                    schema,
-                )?,
-            )))
+            let left = create_expression(
+                arithmetic.left.as_ref().ok_or_else(|| {
+                    DataFusionError::Plan("arithmetic left operand is empty".to_string())
+                })?,
+                schema,
+            )?;
+            let right = create_expression(
+                arithmetic.right.as_ref().ok_or_else(|| {
+                    DataFusionError::Plan("arithmetic right operand is empty".to_string())
+                })?,
+                schema,
+            )?;
+            if let Some(result_type) = arithmetic.result_type.as_ref() {
+                let target_type = expressions::null_literal::data_type(result_type)?;
+                if !matches!(target_type, arrow::datatypes::DataType::Decimal128(_, _)) {
+                    return Err(DataFusionError::Plan(
+                        "arithmetic result type is only supported for DECIMAL".to_string(),
+                    ));
+                }
+                let left = flink_decimal_operand(left, schema)?;
+                let right = flink_decimal_operand(right, schema)?;
+                let decimal = Arc::new(BinaryExpr::new(left, operator, right));
+                if decimal.data_type(schema)? == target_type {
+                    return Ok(decimal);
+                }
+                return Ok(Arc::new(CastExpr::new(decimal, target_type, None)));
+            }
+            Ok(Arc::new(BinaryExpr::new(left, operator, right)))
         }
         Some(proto::expression::Expression::NullCheck(null_check)) => {
             let operand = create_expression(
@@ -761,6 +774,29 @@ pub(super) fn create_expression(
         Some(collection_expression) => super::collection::create(collection_expression, schema),
         None => Err(DataFusionError::Plan("expression is empty".to_string())),
     }
+}
+
+fn flink_decimal_operand(
+    operand: Arc<dyn PhysicalExpr>,
+    schema: &arrow::datatypes::Schema,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    use arrow::datatypes::DataType;
+
+    let target = match operand.data_type(schema)? {
+        DataType::Decimal128(_, _) => return Ok(operand),
+        DataType::Int8 => DataType::Decimal128(3, 0),
+        DataType::Int16 => DataType::Decimal128(5, 0),
+        DataType::Int32 => DataType::Decimal128(10, 0),
+        // Flink reserves 19 decimal digits for BIGINT; DataFusion's generic
+        // coercion uses 20, which changes the inferred result precision.
+        DataType::Int64 => DataType::Decimal128(19, 0),
+        other => {
+            return Err(DataFusionError::Plan(format!(
+                "Flink decimal arithmetic does not support operand type {other}"
+            )))
+        }
+    };
+    Ok(Arc::new(CastExpr::new(operand, target, None)))
 }
 
 pub(super) fn literal_scalar(expression: &proto::Expression) -> Result<Option<ScalarValue>> {

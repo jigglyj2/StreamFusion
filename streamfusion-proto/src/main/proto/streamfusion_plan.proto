@@ -819,6 +819,10 @@ message Arithmetic {
   Expression left = 1;
   Expression right = 2;
   ArithmeticOperator operator = 3;
+  // Exact result type selected by Flink for decimal arithmetic. When present,
+  // native execution applies Flink's integral-to-decimal coercion before the
+  // operation and normalizes the result to this precision and scale.
+  LogicalType result_type = 4;
 }
 
 enum ArithmeticOperator {

@@ -17,6 +17,7 @@ import org.apache.flink.table.data.TimestampData;
 import org.apache.flink.table.types.logical.DecimalType;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
+import tech.streamfusion.flink.proto.FlinkLogicalTypeProto;
 import tech.streamfusion.proto.plan.v1.Arithmetic;
 import tech.streamfusion.proto.plan.v1.ArithmeticOperator;
 import tech.streamfusion.proto.plan.v1.BinaryLiteral;
@@ -552,6 +553,7 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
             return null;
         }
         String kind = invoke(expression, "getKind").toString();
+        String arithmeticKind = "MOD".equals(functionName(expression)) ? "MOD" : kind;
         List<?> operands = (List<?>) invoke(expression, "getOperands");
         if ("PLUS_PREFIX".equals(kind)) {
             return operands.size() == 1 ? projectionExpression(operands.get(0), inputType, expectedType) : null;
@@ -567,32 +569,31 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
                             .setUnaryMinus(UnaryMinus.newBuilder().setOperand(operand))
                             .build();
         }
-        if ("DIVIDE".equals(kind) || "MOD".equals(kind)) {
+        if ("DIVIDE".equals(arithmeticKind) || "MOD".equals(arithmeticKind)) {
             if (operands.size() != 2) {
                 return null;
             }
-            if ("DIVIDE".equals(kind) && expectedType == LogicalTypeRoot.DOUBLE) {
+            if ("DIVIDE".equals(arithmeticKind) && expectedType == LogicalTypeRoot.DOUBLE) {
                 // IEEE-754 division is defined for zero divisors and remains vectorized.
             } else {
-                boolean nonzeroLiteralDivisor = expectedType == LogicalTypeRoot.INTEGER
-                        ? integerLiteral(operands.get(1)) != null && integerLiteral(operands.get(1)) != 0
-                        : expectedType == LogicalTypeRoot.BIGINT
-                                && longLiteral(operands.get(1)) != null
-                                && longLiteral(operands.get(1)) != 0;
+                Integer integerDivisor = integerLiteral(operands.get(1));
+                Long longDivisor = longLiteral(operands.get(1));
+                boolean nonzeroLiteralDivisor =
+                        (integerDivisor != null && integerDivisor != 0) || (longDivisor != null && longDivisor != 0);
                 if (!nonzeroLiteralDivisor) {
                     return null;
                 }
             }
         }
-        ArithmeticOperator operator = arithmeticOperator(kind);
+        ArithmeticOperator operator = arithmeticOperator(arithmeticKind);
         if (operator == null) {
             return null;
         }
         if (operands.size() != 2) {
             return null;
         }
-        Expression left = projectionExpression(operands.get(0), inputType, expectedType);
-        Expression right = projectionExpression(operands.get(1), inputType, expectedType);
+        Expression left = arithmeticOperand(operands.get(0), inputType, expectedType);
+        Expression right = arithmeticOperand(operands.get(1), inputType, expectedType);
         if (left == null || right == null) {
             return null;
         }
@@ -600,6 +601,35 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
                 .setArithmetic(
                         Arithmetic.newBuilder().setLeft(left).setRight(right).setOperator(operator))
                 .build();
+    }
+
+    private static Expression arithmeticOperand(Object operand, RowType inputType, LogicalTypeRoot expectedType) {
+        Expression translated = projectionExpression(operand, inputType, expectedType);
+        if (translated != null) {
+            return translated;
+        }
+        org.apache.flink.table.types.logical.LogicalType operandType =
+                StreamFusionExpressionTranslator.expressionLogicalType(operand);
+        if (operandType == null) {
+            return null;
+        }
+        translated = projectionExpression(operand, inputType, operandType);
+        if (translated == null) {
+            return null;
+        }
+        if (operandType.getTypeRoot() == expectedType) {
+            return translated;
+        }
+        CastKind castKind = StreamFusionCastSupport.kind(operandType.getTypeRoot(), expectedType);
+        return castKind == CastKind.CAST_KIND_UNSPECIFIED
+                ? null
+                : Expression.newBuilder()
+                        .setCast(Cast.newBuilder()
+                                .setOperand(translated)
+                                .setTargetType(
+                                        StreamFusionCastSupport.targetType(expectedType, operandType.isNullable()))
+                                .setKind(castKind))
+                        .build();
     }
 
     protected static Expression wideningCastExpression(
@@ -657,6 +687,11 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
     }
 
     protected static Expression decimalProjectionExpression(Object expression, RowType inputType) {
+        return decimalProjectionExpression(expression, inputType, null);
+    }
+
+    private static Expression decimalProjectionExpression(
+            Object expression, RowType inputType, DecimalType requestedResultType) {
         Object expressionType = invoke(expression, "getType");
         if (!"DECIMAL".equals(invoke(expressionType, "getSqlTypeName").toString())) {
             return null;
@@ -695,14 +730,29 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
 
         String kind = invoke(expression, "getKind").toString();
         List<?> operands = (List<?>) invoke(expression, "getOperands");
+        if (isCastKind(expression)) {
+            if (operands.size() != 1 || !hasNoArgMethod(operands.get(0), "getOperands")) {
+                return null;
+            }
+            String operandKind = invoke(operands.get(0), "getKind").toString();
+            if (arithmeticOperator(operandKind) == null) {
+                return null;
+            }
+            return decimalProjectionExpression(
+                    operands.get(0),
+                    inputType,
+                    new DecimalType((boolean) invoke(expressionType, "isNullable"), precision, scale));
+        }
         if ("PLUS_PREFIX".equals(kind)) {
-            return operands.size() == 1 ? decimalProjectionExpression(operands.get(0), inputType) : null;
+            return operands.size() == 1
+                    ? decimalProjectionExpression(operands.get(0), inputType, requestedResultType)
+                    : null;
         }
         if ("MINUS_PREFIX".equals(kind)) {
             if (operands.size() != 1) {
                 return null;
             }
-            Expression operand = decimalProjectionExpression(operands.get(0), inputType);
+            Expression operand = decimalProjectionExpression(operands.get(0), inputType, requestedResultType);
             return operand == null
                     ? null
                     : Expression.newBuilder()
@@ -719,15 +769,41 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
         if (operands.size() != 2) {
             return null;
         }
-        Expression left = decimalProjectionExpression(operands.get(0), inputType);
-        Expression right = decimalProjectionExpression(operands.get(1), inputType);
+        Expression left = decimalArithmeticOperand(operands.get(0), inputType);
+        Expression right = decimalArithmeticOperand(operands.get(1), inputType);
         if (left == null || right == null) {
             return null;
         }
+        DecimalType resultType = requestedResultType == null
+                ? new DecimalType((boolean) invoke(expressionType, "isNullable"), precision, scale)
+                : requestedResultType;
         return Expression.newBuilder()
-                .setArithmetic(
-                        Arithmetic.newBuilder().setLeft(left).setRight(right).setOperator(operator))
+                .setArithmetic(Arithmetic.newBuilder()
+                        .setLeft(left)
+                        .setRight(right)
+                        .setOperator(operator)
+                        .setResultType(FlinkLogicalTypeProto.serialize(resultType)))
                 .build();
+    }
+
+    private static Expression decimalArithmeticOperand(Object operand, RowType inputType) {
+        org.apache.flink.table.types.logical.LogicalType operandType =
+                StreamFusionExpressionTranslator.expressionLogicalType(operand);
+        if (operandType == null) {
+            return null;
+        }
+        if (operandType.getTypeRoot() == LogicalTypeRoot.DECIMAL) {
+            return decimalProjectionExpression(operand, inputType);
+        }
+        switch (operandType.getTypeRoot()) {
+            case TINYINT:
+            case SMALLINT:
+            case INTEGER:
+            case BIGINT:
+                return projectionExpression(operand, inputType, operandType);
+            default:
+                return null;
+        }
     }
 
     protected static ArithmeticOperator arithmeticOperator(String kind) {

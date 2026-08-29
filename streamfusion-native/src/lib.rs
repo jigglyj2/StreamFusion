@@ -39,7 +39,7 @@ mod tests {
 
     use super::*;
     use crate::planner::{create_plan, create_plan_with_inputs};
-    use arrow::array::{Array, Int32Array, RecordBatch};
+    use arrow::array::{Array, Decimal128Array, Int32Array, Int64Array, RecordBatch};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion::datasource::memory::MemorySourceConfig;
     use datafusion::physical_plan::collect;
@@ -121,6 +121,66 @@ mod tests {
         }
     }
 
+    fn q1_decimal_plan() -> proto::NativePlan {
+        let bigint_type = proto::LogicalType {
+            nullable: false,
+            r#type: Some(proto::logical_type::Type::Bigint(proto::EmptyType {})),
+        };
+        let result_type = proto::LogicalType {
+            nullable: false,
+            r#type: Some(proto::logical_type::Type::Decimal(proto::DecimalType {
+                precision: 23,
+                scale: 3,
+            })),
+        };
+        let reference = proto::Expression {
+            expression: Some(proto::expression::Expression::InputReference(
+                proto::InputReference {
+                    index: 0,
+                    r#type: Some(bigint_type.clone()),
+                },
+            )),
+        };
+        let factor = proto::Expression {
+            expression: Some(proto::expression::Expression::DecimalLiteral(
+                proto::DecimalLiteral {
+                    unscaled_value: "908".to_string(),
+                    precision: 4,
+                    scale: 3,
+                },
+            )),
+        };
+        proto::NativePlan {
+            protocol_version: PLAN_PROTOCOL_VERSION,
+            root: Some(proto::Operator {
+                operator: Some(proto::operator::Operator::Calc(Box::new(proto::Calc {
+                    input: Some(Box::new(proto::Operator {
+                        operator: Some(proto::operator::Operator::Input(proto::Input {
+                            schema: Some(proto::Schema {
+                                fields: vec![proto::Field {
+                                    name: "price".to_string(),
+                                    r#type: Some(bigint_type),
+                                }],
+                            }),
+                            input_index: 0,
+                        })),
+                    })),
+                    projections: vec![proto::Expression {
+                        expression: Some(proto::expression::Expression::Arithmetic(Box::new(
+                            proto::Arithmetic {
+                                left: Some(Box::new(factor)),
+                                right: Some(Box::new(reference)),
+                                operator: proto::ArithmeticOperator::Multiply.into(),
+                                result_type: Some(result_type),
+                            },
+                        ))),
+                    }],
+                    condition: None,
+                }))),
+            }),
+        }
+    }
+
     #[tokio::test]
     async fn identity_calc_runs_as_datafusion_projection_without_copying_values() {
         let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
@@ -163,6 +223,34 @@ mod tests {
 
         assert_eq!(output_values.values(), &[1, 2, 3]);
         assert_eq!(output_values.values().as_ptr(), input_pointer);
+    }
+
+    #[tokio::test]
+    async fn q1_decimal_multiplication_uses_flinks_bigint_precision() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "price",
+            DataType::Int64,
+            false,
+        )]));
+        let prices = Int64Array::from(vec![-100, 0, 100, i64::MAX]);
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(prices)]).unwrap();
+        let source = MemorySourceConfig::try_new_exec(&[vec![batch]], schema, None).unwrap();
+        let plan = create_plan(&q1_decimal_plan().encode_to_vec(), source).unwrap();
+
+        let output = collect(plan, SessionContext::new().task_ctx())
+            .await
+            .unwrap();
+        let values = output[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Decimal128Array>()
+            .unwrap();
+
+        assert_eq!(values.data_type(), &DataType::Decimal128(23, 3));
+        assert_eq!(
+            values.values(),
+            &[-90_800, 0, 90_800, i128::from(i64::MAX) * 908]
+        );
     }
 
     #[tokio::test]
