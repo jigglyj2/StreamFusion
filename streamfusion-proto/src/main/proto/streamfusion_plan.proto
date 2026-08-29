@@ -510,6 +510,7 @@ message Like {
 message StartsWith {
   Expression operand = 1;
   string prefix = 2;
+  Expression prefix_expression = 3;
 }
 
 message Substring {

@@ -190,15 +190,18 @@ abstract class StreamFusionExpressionTranslator extends StreamFusionProjectionTr
         if (("STARTSWITH".equals(functionName(expression)) || "STARTS_WITH".equals(functionName(expression)))
                 && operands.size() == 2) {
             org.apache.flink.table.types.logical.LogicalType valueType = expressionLogicalType(operands.get(0));
+            org.apache.flink.table.types.logical.LogicalType prefixType = expressionLogicalType(operands.get(1));
             Expression value = valueType == null || valueType.getTypeRoot() != LogicalTypeRoot.VARCHAR
                     ? null
                     : projectionExpression(operands.get(0), inputType, valueType);
-            String prefix = literal(operands.get(1), String.class);
+            Expression prefix = prefixType == null || prefixType.getTypeRoot() != LogicalTypeRoot.VARCHAR
+                    ? null
+                    : projectionExpression(operands.get(1), inputType, prefixType);
             if (value != null && prefix != null) {
                 return Expression.newBuilder()
                         .setStartsWith(tech.streamfusion.proto.plan.v1.StartsWith.newBuilder()
                                 .setOperand(value)
-                                .setPrefix(prefix))
+                                .setPrefixExpression(prefix))
                         .build();
             }
         }

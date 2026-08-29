@@ -11,22 +11,17 @@ use std::sync::Arc;
 use arrow::datatypes::Schema;
 use datafusion::common::config::ConfigOptions;
 use datafusion::error::Result;
-use datafusion::physical_expr::expressions::Literal;
 use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr};
-use datafusion::scalar::ScalarValue;
 use datafusion_functions::string::starts_with;
 
 pub(crate) fn create(
     operand: Arc<dyn PhysicalExpr>,
-    prefix: &str,
+    prefix: Arc<dyn PhysicalExpr>,
     schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     Ok(Arc::new(ScalarFunctionExpr::try_new(
         starts_with(),
-        vec![
-            operand,
-            Arc::new(Literal::new(ScalarValue::Utf8(Some(prefix.to_string())))),
-        ],
+        vec![operand, prefix],
         schema,
         Arc::new(ConfigOptions::new()),
     )?))

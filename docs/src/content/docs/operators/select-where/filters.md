@@ -123,10 +123,11 @@ Dynamic patterns, fixed-width `CHAR`, backslash-containing patterns, and explici
 clauses cause whole-Calc fallback until their coercion and escape rules have dedicated parity
 coverage.
 
-`STARTSWITH` is accelerated for a supported `VARCHAR` expression and a literal prefix. Prefix
-characters are matched literally (including `%` and `_`), an empty prefix matches every
-non-null string, and a null input remains unknown. Dynamic prefixes, `CHAR`, and binary
-arguments currently fall back pending separate type-specific coverage.
+`STARTSWITH` is accelerated for two supported `VARCHAR` expressions, in filters or boolean
+projections. Prefix characters are matched literally (including `%` and `_`), an empty prefix
+matches every non-null string, and a null value or prefix produces unknown. Literal and dynamic
+prefixes use the same DataFusion vector expression. `CHAR` and binary arguments currently fall
+back pending separate type-specific coverage.
 
 The same safe positive-literal `SUBSTRING` and `SUBSTR` forms documented for projections
 may participate in any ordered or null-safe comparison with a `VARCHAR` literal, in either

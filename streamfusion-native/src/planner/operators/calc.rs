@@ -386,11 +386,17 @@ pub(super) fn create_expression(
                 .operand
                 .as_ref()
                 .ok_or_else(|| DataFusionError::Plan("STARTS_WITH operand is empty".to_string()))?;
-            expressions::starts_with::create(
-                create_expression(operand, schema)?,
-                &starts_with.prefix,
-                schema,
-            )
+            let prefix = starts_with
+                .prefix_expression
+                .as_ref()
+                .map(|prefix| create_expression(prefix, schema))
+                .transpose()?
+                .unwrap_or_else(|| {
+                    Arc::new(Literal::new(ScalarValue::Utf8(Some(
+                        starts_with.prefix.clone(),
+                    ))))
+                });
+            expressions::starts_with::create(create_expression(operand, schema)?, prefix, schema)
         }
         Some(proto::expression::Expression::Substring(substring)) => {
             let operand = substring

@@ -80,4 +80,17 @@ class NativePlanTest {
         assertThat(LogicalType.parseFrom(binary.toByteArray())).isEqualTo(binary);
         assertThat(LogicalType.parseFrom(character.toByteArray())).isEqualTo(character);
     }
+
+    @Test
+    void dynamicStartsWithRoundTripsThroughProtobuf() throws Exception {
+        Expression expression = Expression.newBuilder()
+                .setStartsWith(StartsWith.newBuilder()
+                        .setOperand(Expression.newBuilder()
+                                .setInputReference(InputReference.newBuilder().setIndex(0)))
+                        .setPrefixExpression(Expression.newBuilder()
+                                .setInputReference(InputReference.newBuilder().setIndex(1))))
+                .build();
+
+        assertThat(Expression.parseFrom(expression.toByteArray())).isEqualTo(expression);
+    }
 }
