@@ -15,6 +15,7 @@ import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
 import org.apache.flink.table.types.logical.LogicalType;
+import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.flink.calc.StreamFusionCalcTranslator;
 import tech.streamfusion.proto.plan.v1.Expression;
@@ -50,6 +51,14 @@ public final class StreamFusionValuesTranslator {
 
     public static String unsupportedReason(RowType outputType, List<List<?>> tuples) {
         for (int field = 0; field < outputType.getFieldCount(); field++) {
+            LogicalTypeRoot typeRoot = outputType.getTypeAt(field).getTypeRoot();
+            if (typeRoot == LogicalTypeRoot.ARRAY
+                    || typeRoot == LogicalTypeRoot.MAP
+                    || typeRoot == LogicalTypeRoot.MULTISET
+                    || typeRoot == LogicalTypeRoot.ROW) {
+                return "fields[" + field + "]: VALUES complex type " + outputType.getTypeAt(field)
+                        + " has no parity-approved native literal mapping";
+            }
             try {
                 StreamFusionCalcTranslator.operatorLogicalType(outputType.getTypeAt(field));
             } catch (IllegalArgumentException error) {

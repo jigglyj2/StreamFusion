@@ -11,10 +11,13 @@ package tech.streamfusion.flink.sql;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.junit.jupiter.api.Test;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
 
 class ValuesParityTest extends SqlParityTestSupport {
+    private static final String COMPLEX_VALUES = "VALUES (ARRAY[1, 2]), (ARRAY[3, CAST(NULL AS INT)])";
     private static final String ALL_SCALAR_TYPES = "SELECT * FROM (VALUES ("
             + "CAST(1 AS TINYINT), CAST(2 AS SMALLINT), 3, CAST(4 AS BIGINT), "
             + "CAST(1.5 AS FLOAT), CAST(2.5 AS DOUBLE), TRUE, CAST('abc' AS CHAR(3)), "
@@ -41,5 +44,25 @@ class ValuesParityTest extends SqlParityTestSupport {
         assertThat(StreamFusionPlannerFactory.nativeValuesBatchCount()).isGreaterThan(0);
         assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
         assertThat(StreamFusionPlannerFactory.nativeUnionBatchCount()).isGreaterThan(0);
+    }
+
+    @Test
+    void complexValuesFallBackAndMatchFlinkByteForByte() throws Exception {
+        assertParity(COMPLEX_VALUES, true);
+
+        assertThat(StreamFusionPlannerFactory.nativeValuesBatchCount()).isZero();
+    }
+
+    @Test
+    void explainIdentifiesTheUnsupportedComplexValuesExpression() {
+        System.setProperty(
+                StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY, StreamFusionPlannerFactory.class.getName());
+        StreamTableEnvironment tableEnvironment =
+                StreamTableEnvironment.create(StreamExecutionEnvironment.getExecutionEnvironment());
+
+        assertThat(tableEnvironment.explainSql(COMPLEX_VALUES))
+                .contains("Accelerated: no")
+                .contains("StreamExecCalc")
+                .contains("CAST.operand[0]: Calcite type is not supported");
     }
 }
