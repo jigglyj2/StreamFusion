@@ -120,6 +120,9 @@ abstract class StreamFusionExpressionTranslator extends StreamFusionProjectionTr
             complexFailure = StreamFusionTemporalFunctionTranslator.failureReason(expression, inputType);
         }
         if (complexFailure == null) {
+            complexFailure = StreamFusionTemporalContextFunctionTranslator.failureReason(expression);
+        }
+        if (complexFailure == null) {
             complexFailure = StreamFusionScalarExtremumTranslator.failureReason(expression);
         }
         if (complexFailure != null) {

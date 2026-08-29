@@ -404,6 +404,15 @@ the Unix epoch. Pre-epoch dates, the epoch boundary, nulls, projections, and fil
 coverage.
 Timestamp, local-time-zone, and additional calendar fields remain on Flink
 until their session-zone and precision contracts are separately proven.
+`CURRENT_DATE`, `CURRENT_TIME`, `LOCALTIME`, `CURRENT_TIMESTAMP`, `NOW`,
+`CURRENT_ROW_TIMESTAMP`, and `LOCALTIMESTAMP` stay on Flink because their values are bound to
+Flink's job, per-row, and configured session-clock lifecycle. StreamFusion does not independently
+sample a native clock and risk different values within one logical query.
+`DATE_FORMAT`, `FROM_UNIXTIME`, `UNIX_TIMESTAMP`, `TO_DATE`, `TO_TIMESTAMP`,
+`TO_TIMESTAMP_LTZ`, and `CONVERT_TZ` stay on Flink pending exact Java pattern, locale, invalid-input,
+DST gap/overlap, session-zone, and precision parity. `TIMESTAMPDIFF`, temporal overlap, and `AT`
+likewise stay on Flink until their calendar-unit truncation, interval, overflow, and zone contracts
+are proven. EXPLAIN distinguishes these runtime-context restrictions from an unknown expression.
 `HOUR(time)`, `MINUTE(time)`, `SECOND(time)`, `EXTRACT(MILLISECOND FROM time)`, and their applicable
 `EXTRACT` forms are accelerated for timezone-free `TIME`. The same protobuf expression lowers to
 Arrow's temporal kernel over the corresponding Time32 vector. Midnight, end-of-day and fractional
