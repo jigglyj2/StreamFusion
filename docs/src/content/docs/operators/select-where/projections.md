@@ -530,6 +530,10 @@ serialization bytes, signed integer domain, null behavior, and byte round trips 
 `BITMAP_TO_BYTES`/`BITMAP_FROM_BYTES` must be proven against one native bitmap implementation before
 any member can cross the Arrow boundary. Aggregate bitmap functions are additionally stateful and
 outside Calc acceleration.
+`OBJECT_OF` and `OBJECT_UPDATE` stay on Flink. These functions create class-backed structured
+values whose classloader identity, class name, field order, constructors, and JVM object
+materialization are part of the contract. StreamFusion does not substitute a superficially similar
+Arrow struct until both the native plan and RowData boundary can preserve that identity exactly.
 `HASH_CODE(value)` is accelerated for `VARCHAR` expressions. A dedicated native vector expression
 reproduces Java `String.hashCode()` over UTF-16 code units with wrapping 32-bit arithmetic, then
 applies Flink's overflow-preserving absolute value. This includes supplementary Unicode and the

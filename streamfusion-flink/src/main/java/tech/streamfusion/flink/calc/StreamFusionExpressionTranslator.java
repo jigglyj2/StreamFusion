@@ -108,6 +108,9 @@ abstract class StreamFusionExpressionTranslator extends StreamFusionProjectionTr
             complexFailure = StreamFusionBitmapFunctionTranslator.failureReason(expression);
         }
         if (complexFailure == null) {
+            complexFailure = StreamFusionStructuredObjectFunctionTranslator.failureReason(expression);
+        }
+        if (complexFailure == null) {
             complexFailure = StreamFusionTryCastTranslator.failureReason(expression);
         }
         if (complexFailure == null) {
