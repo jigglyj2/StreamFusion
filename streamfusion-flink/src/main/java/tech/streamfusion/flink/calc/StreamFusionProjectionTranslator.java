@@ -63,6 +63,10 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
         if (inetAton != null) {
             return inetAton;
         }
+        Expression scalarExtremum = StreamFusionScalarExtremumTranslator.translate(expression, inputType, expectedType);
+        if (scalarExtremum != null) {
+            return scalarExtremum;
+        }
         Expression identityCast = identityCastExpression(expression, inputType, expectedType);
         if (identityCast != null) {
             return identityCast;

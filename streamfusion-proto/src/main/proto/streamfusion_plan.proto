@@ -184,6 +184,7 @@ message Expression {
     TemporalExtract temporal_extract = 111;
     InetNtoa inet_ntoa = 112;
     InetAton inet_aton = 113;
+    ScalarExtremum scalar_extremum = 114;
   }
 }
 
@@ -193,6 +194,11 @@ message InetNtoa {
 
 message InetAton {
   Expression operand = 1;
+}
+
+message ScalarExtremum {
+  repeated Expression arguments = 1;
+  bool greatest = 2;
 }
 
 message StructField {

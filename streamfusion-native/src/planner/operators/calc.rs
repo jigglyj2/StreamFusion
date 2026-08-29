@@ -505,6 +505,14 @@ pub(super) fn create_expression(
                 .ok_or_else(|| DataFusionError::Plan("INET_ATON operand is empty".to_string()))?;
             expressions::inet_aton::create(create_expression(operand, schema)?, schema)
         }
+        Some(proto::expression::Expression::ScalarExtremum(extremum)) => {
+            let arguments = extremum
+                .arguments
+                .iter()
+                .map(|argument| create_expression(argument, schema))
+                .collect::<Result<Vec<_>>>()?;
+            expressions::scalar_extremum::create(arguments, extremum.greatest, schema)
+        }
         Some(proto::expression::Expression::UrlEncode(url_encode)) => {
             let operand = url_encode
                 .operand

@@ -66,6 +66,7 @@ pub(crate) mod numeric_truncate;
 pub(crate) mod power;
 pub(crate) mod radians;
 pub(crate) mod row_constructor;
+pub(crate) mod scalar_extremum;
 pub(crate) mod sha1;
 pub(crate) mod sha2_dynamic;
 pub(crate) mod sha_digest;
