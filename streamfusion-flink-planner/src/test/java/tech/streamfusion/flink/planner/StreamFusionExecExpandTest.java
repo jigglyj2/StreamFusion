@@ -1,0 +1,39 @@
+/*
+ * Copyright 2026 StreamFusion Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ */
+package tech.streamfusion.flink.planner;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.util.List;
+import org.apache.calcite.rel.type.RelDataTypeFactory;
+import org.apache.calcite.rel.type.RelDataTypeSystem;
+import org.apache.calcite.rex.RexInputRef;
+import org.apache.flink.configuration.Configuration;
+import org.apache.flink.table.planner.calcite.FlinkTypeFactory;
+import org.apache.flink.table.planner.plan.nodes.exec.InputProperty;
+import org.apache.flink.table.types.logical.IntType;
+import org.apache.flink.table.types.logical.RowType;
+import org.junit.jupiter.api.Test;
+
+class StreamFusionExecExpandTest {
+    @Test
+    void representsExpandWithADistinctStreamFusionPhysicalNode() {
+        RowType rowType = RowType.of(new IntType(false));
+        RelDataTypeFactory typeFactory = new FlinkTypeFactory(getClass().getClassLoader(), RelDataTypeSystem.DEFAULT);
+        RexInputRef input =
+                new RexInputRef(0, typeFactory.createSqlType(org.apache.calcite.sql.type.SqlTypeName.INTEGER));
+
+        StreamFusionExecExpand expand = new StreamFusionExecExpand(
+                new Configuration(), List.of(List.of(input), List.of(input)), InputProperty.DEFAULT, rowType, "expand");
+
+        assertThat(expand).isInstanceOf(org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecExpand.class);
+        assertThat(expand.getDescription()).isEqualTo("expand");
+    }
+}
