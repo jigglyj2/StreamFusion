@@ -115,8 +115,7 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             if (reason != null) {
                 rejections.add(nodePath + "\n" + reason);
             }
-        } else if (!(node instanceof StreamExecUnion)
-                && !node.getClass().getSimpleName().equals("StreamExecSink")) {
+        } else if (!(node instanceof StreamExecUnion) && !isSinkBoundary(node)) {
             rejections.add(nodePath + "\noperator has no StreamFusion physical implementation");
         }
         for (int index = 0; index < node.getInputEdges().size(); index++) {
@@ -126,6 +125,11 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     nodePath + "/input[" + index + "]",
                     rejections);
         }
+    }
+
+    private static boolean isSinkBoundary(ExecNode<?> node) {
+        String nodeName = node.getClass().getSimpleName();
+        return nodeName.equals("StreamExecSink") || nodeName.equals("StreamExecLegacySink");
     }
 
     private ExecNode<?> convert(ExecNode<?> node) {

@@ -62,7 +62,7 @@ public final class NexmarkSqlJob {
                 + "'json.timestamp-format.standard'='ISO-8601')";
     }
 
-    private static void createViews(TableEnvironment tables) {
+    static void createViews(TableEnvironment tables) {
         tables.executeSql(
                 "CREATE VIEW person AS SELECT person.id, person.name, person.emailAddress, person.creditCard, person.city, person.state, person.`dateTime`, person.extra FROM nexmark_events WHERE event_type=0");
         tables.executeSql(

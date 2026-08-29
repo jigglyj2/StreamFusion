@@ -31,3 +31,38 @@ mvn -pl streamfusion-nexmark-benchmarks -am -Pbenchmark-integration verify
 ```
 
 The benchmark is intentionally opt-in and does not run in the normal pull-request or push workflow. It provisions Kafka and runs both engines, so it should be invoked for deliberate performance and integration validation rather than for unrelated changes.
+
+## RowData boundary variant
+
+The Kafka-free variant uses the generator and `RowData` deserializer from the local
+[`nexmark`](https://github.com/nexmark/nexmark) checkout. A thin benchmark-only table-source adapter
+marks finite `events.num` runs as bounded and signals completion after assigning all four upstream
+Source V2 splits; it does not replace the upstream generator or reader checkpoint state. Those
+splits emit Flink internal `RowData`, and a black-hole table sink consumes `RowData` after the SQL
+plan. Both source and query run at parallelism four, and checkpointing uses `EXACTLY_ONCE`. This variant isolates
+planner and native-operator throughput from broker, JSON, and result-materialization costs. Because
+the black-hole sink does not retain results, it is not a result-parity test and does not replace the
+Kafka-in/Kafka-out north-star benchmark.
+
+Current all-or-nothing coverage can fully accelerate q0 (pass-through), q1 (decimal currency
+conversion), q2 (selection), and q22 (URL directory extraction). q3, q4, q5, q7, q8, q9, q11, q12, q13,
+q15, q16, q17, q18, q19, q20, and q23 require an unimplemented join, aggregation, rank, or
+deduplication operator. q10 uses unsupported `DATE_FORMAT`; q14 uses a Java UDF, mixed decimal
+arithmetic beyond the q1 conversion shape, and timestamp calendar extraction; q21 uses Java-regex
+semantics. Those queries remain whole-plan Flink fallback.
+
+Build the local Nexmark connector against this project's Flink version:
+
+```shell
+mvn -f /root/data/nexmark/pom.xml -pl nexmark-flink \
+  -Dflink.version=2.3.0 -DskipTests package
+```
+
+Then run all four currently accelerable queries through both Flink and StreamFusion:
+
+```shell
+mvn -pl streamfusion-nexmark-benchmarks -am \
+  -Pbenchmark-integration,rowdata-nexmark-integration \
+  -Dnexmark.generator.jar=/root/data/nexmark/nexmark-flink/target/nexmark-flink-0.3-SNAPSHOT.jar \
+  -Dit.test=LocalRowDataNexmarkBenchmarkIT verify
+```

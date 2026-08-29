@@ -11,6 +11,7 @@
     <name>StreamFusion Nexmark Benchmarks</name>
     <dependencies>
         <dependency><groupId>tech.streamfusion</groupId><artifactId>streamfusion-flink</artifactId><version>${revision}</version></dependency>
+        <dependency><groupId>tech.streamfusion</groupId><artifactId>streamfusion-flink-planner</artifactId><version>${revision}</version></dependency>
         <dependency><groupId>org.apache.flink</groupId><artifactId>flink-clients</artifactId></dependency>
         <dependency><groupId>org.apache.flink</groupId><artifactId>flink-table-api-java-bridge</artifactId></dependency>
         <dependency><groupId>org.apache.flink</groupId><artifactId>flink-table-planner_2.12</artifactId></dependency>
@@ -46,11 +47,62 @@
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-failsafe-plugin</artifactId>
                         <version>${maven.failsafe.plugin.version}</version>
+                        <configuration>
+                            <useModulePath>false</useModulePath>
+                            <argLine>--add-opens=java.base/java.nio=ALL-UNNAMED</argLine>
+                        </configuration>
                         <executions>
                             <execution>
                                 <goals><goal>integration-test</goal><goal>verify</goal></goals>
                             </execution>
                         </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <profile>
+            <id>rowdata-nexmark-integration</id>
+            <dependencies>
+                <dependency>
+                    <groupId>com.github.nexmark</groupId>
+                    <artifactId>nexmark-flink</artifactId>
+                    <version>0.3-SNAPSHOT</version>
+                    <scope>system</scope>
+                    <systemPath>${nexmark.generator.jar}</systemPath>
+                </dependency>
+            </dependencies>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>build-helper-maven-plugin</artifactId>
+                        <version>3.6.1</version>
+                        <executions>
+                            <execution>
+                                <id>add-bounded-nexmark-adapter</id>
+                                <phase>generate-sources</phase>
+                                <goals><goal>add-source</goal><goal>add-resource</goal></goals>
+                                <configuration>
+                                    <sources><source>src/rowdata-nexmark/java</source></sources>
+                                    <resources>
+                                        <resource><directory>src/rowdata-nexmark/resources</directory></resource>
+                                    </resources>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>com.diffplug.spotless</groupId>
+                        <artifactId>spotless-maven-plugin</artifactId>
+                        <configuration>
+                            <java>
+                                <includes>
+                                    <include>src/main/java/**/*.java</include>
+                                    <include>src/test/java/**/*.java</include>
+                                    <include>src/rowdata-nexmark/java/**/*.java</include>
+                                </includes>
+                            </java>
+                        </configuration>
                     </plugin>
                 </plugins>
             </build>

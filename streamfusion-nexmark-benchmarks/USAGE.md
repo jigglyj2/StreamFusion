@@ -38,3 +38,26 @@ SQL from `src/main/resources/nexmark`, creates bounded Kafka input and exactly-o
 Kafka output tables, configures the hashmap state backend with mini-batching disabled,
 and waits for the Flink job to finish. The five arguments are the Kafka bootstrap
 address, input topic, output topic, query name, and `flink` or `streamfusion` engine.
+
+## RowData SQL job
+
+`LocalRowDataNexmarkBenchmark` removes both Kafka edges. A benchmark-only adapter around the
+generator in `/root/data/nexmark` marks a finite `events.num` run as bounded and signals completion
+after assigning its four checkpointed Source V2 splits. The upstream generator, RowData
+deserializer, reader, and split checkpoint state remain in use. The SQL plan runs at parallelism four
+and a black-hole table sink consumes `RowData`. Checkpointing uses exactly-once mode. It currently
+runs the fully accelerable q0, q1, q2, and q22 queries through both unmodified Flink and StreamFusion.
+Because the black-hole sink does not retain results, this variant measures execution throughput
+rather than output parity.
+
+Build the generator against Flink 2.3 and run all four with:
+
+```
+mvn -f /root/data/nexmark/pom.xml -pl nexmark-flink \
+  -Dflink.version=2.3.0 -DskipTests package
+
+mvn -pl streamfusion-nexmark-benchmarks -am \
+  -Pbenchmark-integration,rowdata-nexmark-integration \
+  -Dnexmark.generator.jar=/root/data/nexmark/nexmark-flink/target/nexmark-flink-0.3-SNAPSHOT.jar \
+  -Dit.test=LocalRowDataNexmarkBenchmarkIT verify
+```
