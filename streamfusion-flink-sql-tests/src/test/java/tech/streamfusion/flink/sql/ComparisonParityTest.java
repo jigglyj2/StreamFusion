@@ -27,6 +27,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
+import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 
 class ComparisonParityTest extends SqlParityTestSupport {
     @ParameterizedTest(name = "{0}")
@@ -415,7 +416,8 @@ class ComparisonParityTest extends SqlParityTestSupport {
 
     @ParameterizedTest(name = "TIMESTAMP {0}")
     @MethodSource("nativeTimestampDataStreamRangeCases")
-    void nativeTimestampDataStreamRangesMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {
+    void nanosecondTimestampDataStreamRangesFallBackAndMatchFlinkByteForByte(String ignoredName, String predicate)
+            throws Exception {
         assertDataStreamParity(
                 "SELECT metric FROM timestamp_input WHERE " + predicate,
                 Types.SQL_TIMESTAMP,
@@ -426,7 +428,8 @@ class ComparisonParityTest extends SqlParityTestSupport {
                         Row.of(java.sql.Timestamp.valueOf("2030-01-01 00:00:00.000"))),
                 "timestamp_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("TIMESTAMP precision 9 stays on Flink");
     }
 
     private static Stream<Arguments> nativeTimestampDataStreamRangeCases() {

@@ -15,6 +15,8 @@ import java.time.LocalDateTime;
 import java.util.stream.Stream;
 import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.table.api.DataTypes;
+import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.types.Row;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -32,10 +34,13 @@ class TemporalContextFallbackTest extends SqlParityTestSupport {
         StreamTableEnvironment tableEnvironment = StreamTableEnvironment.create(environment);
         tableEnvironment.createTemporaryView(
                 "temporal_input",
-                environment
-                        .fromData(Row.of(LocalDateTime.parse("2024-03-10T02:30:00")))
-                        .returns(Types.ROW(Types.LOCAL_DATE_TIME)));
-
+                tableEnvironment.fromDataStream(
+                        environment
+                                .fromData(Row.of(LocalDateTime.parse("2024-03-10T02:30:00")))
+                                .returns(Types.ROW_NAMED(new String[] {"event_timestamp"}, Types.LOCAL_DATE_TIME)),
+                        Schema.newBuilder()
+                                .column("event_timestamp", DataTypes.TIMESTAMP(6))
+                                .build()));
         assertThat(tableEnvironment.explainSql(sql))
                 .contains("Accelerated: no")
                 .contains(reason)
@@ -46,11 +51,11 @@ class TemporalContextFallbackTest extends SqlParityTestSupport {
         return Stream.of(
                 Arguments.of(
                         "clock lifecycle",
-                        "SELECT f0, CURRENT_ROW_TIMESTAMP() FROM temporal_input",
+                        "SELECT event_timestamp, CURRENT_ROW_TIMESTAMP() FROM temporal_input",
                         "job, row, and session clock lifecycle"),
                 Arguments.of(
                         "format and timezone",
-                        "SELECT DATE_FORMAT(f0, 'yyyy-MM-dd HH:mm:ss') FROM temporal_input",
+                        "SELECT DATE_FORMAT(event_timestamp, 'yyyy-MM-dd HH:mm:ss') FROM temporal_input",
                         "Java pattern parsing, locale, session-zone, DST gap/overlap"));
     }
 }
