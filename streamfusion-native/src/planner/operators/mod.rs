@@ -13,3 +13,4 @@ pub(super) mod expand;
 pub(super) mod input;
 pub(super) mod union;
 pub(super) mod values;
+pub(super) mod window_table_function;

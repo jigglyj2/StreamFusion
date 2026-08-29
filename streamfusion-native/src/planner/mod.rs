@@ -78,6 +78,15 @@ fn create_operator(
             operators::expand::create(expand, child)
         }
         Some(proto::operator::Operator::Values(values)) => operators::values::create(values),
+        Some(proto::operator::Operator::WindowTableFunction(window)) => {
+            let child = create_operator(
+                window.input.as_ref().ok_or_else(|| {
+                    DataFusionError::Plan("window table function has no input".to_string())
+                })?,
+                external_inputs,
+            )?;
+            operators::window_table_function::create(window, child)
+        }
         None => Err(DataFusionError::Plan(
             "StreamFusion operator is empty".to_string(),
         )),

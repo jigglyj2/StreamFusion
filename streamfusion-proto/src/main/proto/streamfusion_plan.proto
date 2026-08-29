@@ -18,7 +18,24 @@ message Operator {
     Union union = 4;
     Expand expand = 5;
     Values values = 6;
+    WindowTableFunction window_table_function = 7;
   }
+}
+
+message WindowTableFunction {
+  Operator input = 1;
+  uint32 time_attribute_index = 2;
+  WindowKind kind = 3;
+  int64 size_millis = 4;
+  int64 slide_or_step_millis = 5;
+  int64 offset_millis = 6;
+}
+
+enum WindowKind {
+  WINDOW_KIND_UNSPECIFIED = 0;
+  WINDOW_KIND_TUMBLE = 1;
+  WINDOW_KIND_HOP = 2;
+  WINDOW_KIND_CUMULATE = 3;
 }
 
 message Input {
