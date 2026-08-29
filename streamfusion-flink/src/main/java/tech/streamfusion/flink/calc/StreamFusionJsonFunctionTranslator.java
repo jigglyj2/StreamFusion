@@ -21,9 +21,24 @@ final class StreamFusionJsonFunctionTranslator extends StreamFusionComplexTypeSu
     private StreamFusionJsonFunctionTranslator() {}
 
     static String failureReason(Object expression) {
-        return "JSON_UNQUOTE".equals(functionName(expression))
-                ? "JSON_UNQUOTE stays on Flink because its pass-through behavior depends on Flink's shaded Jackson JSON validator and has not been proven identical to a native validator"
-                : null;
+        String function = functionName(expression);
+        if ("JSON_UNQUOTE".equals(function)) {
+            return "JSON_UNQUOTE stays on Flink because its pass-through behavior depends on Flink's shaded Jackson JSON validator and has not been proven identical to a native validator";
+        }
+        if ("IS_JSON".equals(function)
+                || "JSON_EXISTS".equals(function)
+                || "JSON_VALUE".equals(function)
+                || "JSON_QUERY".equals(function)
+                || "JSON_STRING".equals(function)
+                || "JSON_OBJECT".equals(function)
+                || "JSON_ARRAY".equals(function)
+                || "JSON".equals(function)
+                || "PARSE_JSON".equals(function)
+                || "TRY_PARSE_JSON".equals(function)) {
+            return function
+                    + " stays on Flink until SQL/JSON path modes, wrapper clauses, ON EMPTY/ON ERROR behavior, numeric representation, and Flink JSON logical-type serialization are byte-parity proven";
+        }
+        return null;
     }
 
     static Expression translate(Object expression, RowType inputType, LogicalType expectedType) {

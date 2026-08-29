@@ -507,6 +507,9 @@ installed providers, malformed-input replacement, and unsupported-charset failur
 the running JVM. StreamFusion reports that environment-dependent contract in `EXPLAIN` until a
 native implementation is proven against the complete Java `Charset` behavior, rather than
 supporting only a convenient list of encodings.
+`PRINTF(format, value, ...)` stays on Flink because `java.util.Formatter` defines its locale,
+argument conversions, numeric rounding, and invalid-format exceptions. A similar Rust formatter is
+not a byte-parity implementation, so EXPLAIN records the JVM dependency.
 `JSON_QUOTE(value)` is accelerated for `VARCHAR` expressions by a dedicated native vector
 expression. It wraps the value in quotes, escapes Flink's ASCII quote, backslash, slash, and control
 characters, and emits lowercase `\\u` escapes for every non-ASCII UTF-16 code unit. StreamFusion
@@ -517,6 +520,11 @@ fixed-width `CHAR` stays on Flink pending padding parity coverage.
 configuration, unescapes only valid quoted JSON strings, and returns invalid JSON unchanged. No
 native validator has yet been proven to accept and reject exactly the same edge cases, so
 StreamFusion reports that dependency in `EXPLAIN` rather than approximating pass-through behavior.
+The remaining SQL/JSON scalar functions—including `IS JSON`, `JSON_EXISTS`, `JSON_VALUE`,
+`JSON_QUERY`, `JSON_STRING`, `JSON_OBJECT`, `JSON_ARRAY`, `JSON`, `PARSE_JSON`, and
+`TRY_PARSE_JSON`—stay on Flink. Their path modes, wrapper clauses, `ON EMPTY`/`ON ERROR` branches,
+number representation, and JSON logical-type serialization need one exact contract before native
+execution can replace them.
 `HASH_CODE(value)` is accelerated for `VARCHAR` expressions. A dedicated native vector expression
 reproduces Java `String.hashCode()` over UTF-16 code units with wrapping 32-bit arithmetic, then
 applies Flink's overflow-preserving absolute value. This includes supplementary Unicode and the
