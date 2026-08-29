@@ -10,6 +10,7 @@
 package tech.streamfusion.flink.calc;
 
 import java.util.List;
+import org.apache.flink.table.types.logical.IntType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
@@ -31,6 +32,7 @@ import tech.streamfusion.proto.plan.v1.Floor;
 import tech.streamfusion.proto.plan.v1.HyperbolicSine;
 import tech.streamfusion.proto.plan.v1.HyperbolicTangent;
 import tech.streamfusion.proto.plan.v1.NaturalLogarithm;
+import tech.streamfusion.proto.plan.v1.NumericTruncate;
 import tech.streamfusion.proto.plan.v1.Power;
 import tech.streamfusion.proto.plan.v1.Radians;
 import tech.streamfusion.proto.plan.v1.Sign;
@@ -43,6 +45,14 @@ final class StreamFusionNumericFunctionTranslator extends StreamFusionRexSupport
     private StreamFusionNumericFunctionTranslator() {}
 
     static String failureReason(Object expression) {
+        if ("TRUNCATE".equals(functionName(expression))) {
+            LogicalType resultType = StreamFusionExpressionTranslator.expressionLogicalType(expression);
+            if (resultType == null
+                    || (resultType.getTypeRoot() != LogicalTypeRoot.INTEGER
+                            && resultType.getTypeRoot() != LogicalTypeRoot.BIGINT)) {
+                return "TRUNCATE stays on Flink unless its result is INTEGER or BIGINT; Flink 2.3 generates incompatible assignments for narrow integers, while decimal and floating overloads still need exact DecimalData conversion and non-finite error parity";
+            }
+        }
         if ("COSH".equals(functionName(expression))) {
             return "COSH stays on Flink because DataFusion differs from Flink by one ULP for finite DOUBLE inputs";
         }
@@ -97,6 +107,24 @@ final class StreamFusionNumericFunctionTranslator extends StreamFusionRexSupport
             if (baseExpression != null && exponentExpression != null) {
                 return Expression.newBuilder()
                         .setPower(Power.newBuilder().setBase(baseExpression).setExponent(exponentExpression))
+                        .build();
+            }
+        }
+        if ("TRUNCATE".equals(function)
+                && (operands.size() == 1 || operands.size() == 2)
+                && isIntegral(expectedType.getTypeRoot())) {
+            Expression operand =
+                    StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, expectedType);
+            Expression scale = operands.size() == 1
+                    ? Expression.newBuilder()
+                            .setIntegerLiteral(tech.streamfusion.proto.plan.v1.IntegerLiteral.newBuilder()
+                                    .setValue(0))
+                            .build()
+                    : StreamFusionProjectionTranslator.projectionExpression(operands.get(1), inputType, new IntType());
+            if (operand != null && scale != null) {
+                return Expression.newBuilder()
+                        .setNumericTruncate(
+                                NumericTruncate.newBuilder().setOperand(operand).setScale(scale))
                         .build();
             }
         }
@@ -179,6 +207,10 @@ final class StreamFusionNumericFunctionTranslator extends StreamFusionRexSupport
                     .build();
         }
         return null;
+    }
+
+    private static boolean isIntegral(LogicalTypeRoot type) {
+        return type == LogicalTypeRoot.INTEGER || type == LogicalTypeRoot.BIGINT;
     }
 
     private static Expression unary(Object expression, RowType inputType, LogicalType expectedType, UnaryKind kind) {

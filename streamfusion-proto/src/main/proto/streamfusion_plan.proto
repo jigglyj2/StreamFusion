@@ -180,6 +180,7 @@ message Expression {
     UrlDecode url_decode = 107;
     JsonQuote json_quote = 108;
     StringHashCode string_hash_code = 109;
+    NumericTruncate numeric_truncate = 110;
   }
 }
 
@@ -517,6 +518,11 @@ message JsonQuote {
 
 message StringHashCode {
   Expression operand = 1;
+}
+
+message NumericTruncate {
+  Expression operand = 1;
+  Expression scale = 2;
 }
 
 enum StringTrimDirection {

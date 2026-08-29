@@ -290,6 +290,13 @@ raises an error for zero to a negative power while Flink returns IEEE infinity.
 for non-finite values while DataFusion returns a value, so native acceleration would otherwise make
 job success depend on which engine planned the same data. Integer and decimal rounding remain
 deferred until they have separate typed parity contracts.
+`TRUNCATE(value [, scale])` is accelerated for `INTEGER` and `BIGINT`, including a dynamic integer
+scale. The dedicated native expression truncates toward zero at the requested decimal position,
+preserves the original integer width, returns the input unchanged for nonnegative scales, and
+returns zero when a negative scale is wider than the type. Narrow integers remain on Flink because
+Flink 2.3's generated implementation has incompatible return assignments; accelerating them would
+hide an observable Flink failure. Decimal and floating-point overloads remain on Flink pending
+exact `DecimalData` conversion and non-finite error parity. `EXPLAIN` reports these restrictions.
 `SINH` and `TANH` are accelerated under the same `DOUBLE` coercion contract and remain distinct
 native stages. Generated parity coverage includes finite values, overflow, signed zero, infinities,
 NaN, and nulls. `COSH` stays on Flink with an explicit EXPLAIN reason because DataFusion's kernel

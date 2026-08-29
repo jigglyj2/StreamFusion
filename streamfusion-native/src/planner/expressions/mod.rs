@@ -60,6 +60,7 @@ pub(crate) mod map_values;
 pub(crate) mod md5;
 pub(crate) mod natural_logarithm;
 pub(crate) mod null_literal;
+pub(crate) mod numeric_truncate;
 pub(crate) mod power;
 pub(crate) mod radians;
 pub(crate) mod row_constructor;

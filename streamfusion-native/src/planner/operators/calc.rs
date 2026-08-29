@@ -519,6 +519,21 @@ pub(super) fn create_expression(
                 .ok_or_else(|| DataFusionError::Plan("HASH_CODE operand is empty".to_string()))?;
             expressions::string_hash_code::create(create_expression(operand, schema)?, schema)
         }
+        Some(proto::expression::Expression::NumericTruncate(truncate)) => {
+            let operand = truncate
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("TRUNCATE operand is empty".to_string()))?;
+            let scale = truncate
+                .scale
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("TRUNCATE scale is empty".to_string()))?;
+            expressions::numeric_truncate::create(
+                create_expression(operand, schema)?,
+                create_expression(scale, schema)?,
+                schema,
+            )
+        }
         Some(proto::expression::Expression::Substring(substring)) => {
             let operand = substring
                 .operand
