@@ -77,6 +77,7 @@ pub(crate) mod string_concat_ws;
 pub(crate) mod string_count_support;
 pub(crate) mod string_elt;
 pub(crate) mod string_ends_with;
+pub(crate) mod string_hash_code;
 pub(crate) mod string_init_cap;
 pub(crate) mod string_left;
 pub(crate) mod string_position;

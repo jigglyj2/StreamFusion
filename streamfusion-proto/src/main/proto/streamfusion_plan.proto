@@ -179,6 +179,7 @@ message Expression {
     UrlEncode url_encode = 106;
     UrlDecode url_decode = 107;
     JsonQuote json_quote = 108;
+    StringHashCode string_hash_code = 109;
   }
 }
 
@@ -511,6 +512,10 @@ message UrlDecode {
 }
 
 message JsonQuote {
+  Expression operand = 1;
+}
+
+message StringHashCode {
   Expression operand = 1;
 }
 

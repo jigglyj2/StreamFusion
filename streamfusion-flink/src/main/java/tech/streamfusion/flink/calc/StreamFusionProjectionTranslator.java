@@ -234,6 +234,10 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
         if (binaryString != null) {
             return binaryString;
         }
+        Expression stringHashCode = StreamFusionStringFunctionTranslator.hashCode(expression, inputType, expectedType);
+        if (stringHashCode != null) {
+            return stringHashCode;
+        }
         Expression urlFunction = StreamFusionUrlFunctionTranslator.translate(expression, inputType, expectedType);
         if (urlFunction != null) {
             return urlFunction;

@@ -403,6 +403,11 @@ fixed-width `CHAR` stays on Flink pending padding parity coverage.
 configuration, unescapes only valid quoted JSON strings, and returns invalid JSON unchanged. No
 native validator has yet been proven to accept and reject exactly the same edge cases, so
 StreamFusion reports that dependency in `EXPLAIN` rather than approximating pass-through behavior.
+`HASH_CODE(value)` is accelerated for `VARCHAR` expressions. A dedicated native vector expression
+reproduces Java `String.hashCode()` over UTF-16 code units with wrapping 32-bit arithmetic, then
+applies Flink's overflow-preserving absolute value. This includes supplementary Unicode and the
+`Integer.MIN_VALUE` hash edge case. Nulls remain null; fixed-width `CHAR` and other internal
+type-specific hash overloads remain on Flink.
 `STR_TO_MAP` remains on Flink. Flink treats both separators as Java regular expressions, whereas
 DataFusion's similarly named Spark function performs literal delimiter matching; using it would
 produce different keys for valid Flink expressions. StreamFusion reports this distinction in

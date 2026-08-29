@@ -512,6 +512,13 @@ pub(super) fn create_expression(
                 .ok_or_else(|| DataFusionError::Plan("JSON_QUOTE operand is empty".to_string()))?;
             expressions::json_quote::create(create_expression(operand, schema)?, schema)
         }
+        Some(proto::expression::Expression::StringHashCode(hash_code)) => {
+            let operand = hash_code
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("HASH_CODE operand is empty".to_string()))?;
+            expressions::string_hash_code::create(create_expression(operand, schema)?, schema)
+        }
         Some(proto::expression::Expression::Substring(substring)) => {
             let operand = substring
                 .operand

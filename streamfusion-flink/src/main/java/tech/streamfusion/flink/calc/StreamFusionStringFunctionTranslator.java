@@ -19,6 +19,7 @@ import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.StringAscii;
 import tech.streamfusion.proto.plan.v1.StringConcatWs;
 import tech.streamfusion.proto.plan.v1.StringElt;
+import tech.streamfusion.proto.plan.v1.StringHashCode;
 import tech.streamfusion.proto.plan.v1.StringInitCap;
 import tech.streamfusion.proto.plan.v1.StringLeft;
 import tech.streamfusion.proto.plan.v1.StringPosition;
@@ -490,6 +491,27 @@ final class StreamFusionStringFunctionTranslator extends StreamFusionComplexType
                 ? null
                 : Expression.newBuilder()
                         .setBinaryString(BinaryString.newBuilder().setOperand(operand))
+                        .build();
+    }
+
+    static Expression hashCode(Object expression, RowType inputType, LogicalType expectedType) {
+        if (!"HASH_CODE".equals(functionName(expression)) || expectedType.getTypeRoot() != LogicalTypeRoot.INTEGER) {
+            return null;
+        }
+        java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
+        if (operands.size() != 1) {
+            return null;
+        }
+        LogicalType operandType = logicalType(operands.get(0), inputType);
+        if (operandType == null || operandType.getTypeRoot() != LogicalTypeRoot.VARCHAR) {
+            return null;
+        }
+        Expression operand =
+                StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, operandType);
+        return operand == null
+                ? null
+                : Expression.newBuilder()
+                        .setStringHashCode(StringHashCode.newBuilder().setOperand(operand))
                         .build();
     }
 
