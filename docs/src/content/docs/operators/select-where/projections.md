@@ -52,7 +52,7 @@ accelerated, as are constant `DATE` values, including dates before the Unix epoc
 Unary minus is accelerated for the same numeric types.
 Direct `DOUBLE` division is accelerated for arbitrary supported operands. It follows
 IEEE-754 semantics for positive and negative zero divisors, infinities, and NaN results.
-`FLOAT` division falls back because Flink plans that expression with widening casts.
+Finite `FLOAT` arithmetic is also accelerated when Flink's inferred result remains `FLOAT`.
 Boolean projections can recursively compose direct boolean columns and constants with
 `NOT`, `AND`, and `OR` using SQL's three-valued logic. Every comparison and null-check
 shape listed on the [filter coverage page](../filters/) can also be projected as a boolean
@@ -67,6 +67,8 @@ and divisor restriction. A planner representation that wraps a negative `BIGINT`
 in a cast or unary expression falls back because it is no longer a direct literal.
 Lossless signed-integer widening projections are accelerated: `TINYINT` to `SMALLINT`,
 `INT`, or `BIGINT`; `SMALLINT` to `INT` or `BIGINT`; and `INT` to `BIGINT`.
+The operand may be any recursively supported native expression, not only an input column;
+the cast remains a distinct protobuf/DataFusion expression after its child is evaluated.
 Integer-to-floating projections are accelerated for every signed integer source and
 `FLOAT` or `DOUBLE` target. Wider integer inputs use the same IEEE-754 rounding as Flink;
 parity coverage includes the `FLOAT` and `DOUBLE` precision cliffs and integer extrema.

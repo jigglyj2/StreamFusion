@@ -546,20 +546,23 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
         if (operands.size() != 1) {
             return null;
         }
-        int inputIndex = inputIndex(operands.get(0));
-        if (inputIndex < 0 || inputIndex >= inputType.getFieldCount()) {
+        org.apache.flink.table.types.logical.LogicalType sourceType =
+                StreamFusionExpressionTranslator.expressionLogicalType(operands.get(0));
+        if (sourceType == null) {
             return null;
         }
-        LogicalTypeRoot sourceType = inputType.getTypeAt(inputIndex).getTypeRoot();
-        CastKind castKind = StreamFusionCastSupport.kind(sourceType, expectedType);
+        CastKind castKind = StreamFusionCastSupport.kind(sourceType.getTypeRoot(), expectedType);
         if (castKind == CastKind.CAST_KIND_UNSPECIFIED) {
+            return null;
+        }
+        Expression operand = projectionExpression(operands.get(0), inputType, sourceType);
+        if (operand == null) {
             return null;
         }
         boolean nullable = (boolean) invoke(invoke(expression, "getType"), "isNullable");
         return Expression.newBuilder()
                 .setCast(Cast.newBuilder()
-                        .setOperand(StreamFusionIdentityCalcOperator.inputReference(
-                                inputIndex, StreamFusionIdentityCalcOperator.logicalType(inputType, inputIndex)))
+                        .setOperand(operand)
                         .setTargetType(StreamFusionCastSupport.targetType(expectedType, nullable))
                         .setKind(castKind))
                 .build();

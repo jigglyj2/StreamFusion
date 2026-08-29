@@ -381,7 +381,7 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
 
     private static Stream<Arguments> nativeFloatingPointArithmeticCases() {
         return Stream.of(
-                Arguments.of("FLOAT cast shape falls back", floatingPointArithmeticSql("FLOAT"), false),
+                Arguments.of("FLOAT", floatingPointArithmeticSql("FLOAT"), true),
                 Arguments.of("DOUBLE", nativeDoubleArithmeticSql(), true));
     }
 
