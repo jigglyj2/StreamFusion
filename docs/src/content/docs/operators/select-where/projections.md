@@ -104,6 +104,10 @@ Searched and simple `CASE` projections and three-argument `IF` are accelerated w
 condition and result branch is otherwise supported and Flink assigns one common result type.
 Conditions are evaluated in order, null conditions do not match, and the final `ELSE` value
 is required. Any unsupported condition or branch causes whole-Calc fallback.
+`NULLIF(left, right)` is accelerated for otherwise supported comparable types after Flink rewrites
+it to its canonical conditional form. StreamFusion serializes that comparison and ordered result
+selection through the existing protobuf expressions, preserving three-valued null behavior without
+adding a duplicate native operator.
 Unary `+` is accelerated for every otherwise supported numeric expression by eliminating the
 identity node on the Java planner side. The operand remains an independently encoded native
 expression, so this does not introduce a redundant DataFusion kernel or batch copy.
