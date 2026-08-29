@@ -477,6 +477,13 @@ pub(super) fn create_expression(
                 schema,
             )
         }
+        Some(proto::expression::Expression::BinaryString(binary_string)) => {
+            let operand = binary_string
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("BIN operand is empty".to_string()))?;
+            expressions::binary_string::create(create_expression(operand, schema)?, schema)
+        }
         Some(proto::expression::Expression::Substring(substring)) => {
             let operand = substring
                 .operand

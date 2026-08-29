@@ -373,6 +373,14 @@ DataFusion `string_to_array` plus dynamic array extraction, preserving Flink's z
 empty tokens, and null result for negative, out-of-range, empty-input, or null arguments. Empty
 and dynamic delimiters stay on Flink because an empty delimiter activates Java whitespace
 splitting, which is not equivalent to DataFusion's empty-delimiter behavior.
+`BIN(value)` is accelerated for `TINYINT`, `SMALLINT`, `INTEGER`, and `BIGINT` expressions. A
+dedicated native vector expression widens each value to a signed 64-bit integer and emits the same
+un-padded two's-complement representation as Flink, including 64 digits for negative values and
+`0` for zero. Null values remain null.
+`STR_TO_MAP` remains on Flink. Flink treats both separators as Java regular expressions, whereas
+DataFusion's similarly named Spark function performs literal delimiter matching; using it would
+produce different keys for valid Flink expressions. StreamFusion reports this distinction in
+`EXPLAIN` instead of approximating the result.
 `REPEAT(value, count)` is accelerated for supported `VARCHAR` values and `INTEGER` counts,
 including computed counts. StreamFusion widens the count inside the native plan for DataFusion's
 vectorized kernel; zero and negative counts produce the empty string as in Flink, while null

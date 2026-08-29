@@ -13,6 +13,7 @@ import org.apache.flink.table.types.logical.IntType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
+import tech.streamfusion.proto.plan.v1.BinaryString;
 import tech.streamfusion.proto.plan.v1.CharacterFromCode;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.StringAscii;
@@ -57,6 +58,9 @@ final class StreamFusionStringFunctionTranslator extends StreamFusionComplexType
             if (delimiter == null || delimiter.isEmpty()) {
                 return "SPLIT_INDEX stays on Flink unless its delimiter is a nonempty string literal because Flink's empty delimiter invokes Java whitespace splitting and dynamic delimiters cannot exclude that incompatible mode";
             }
+        }
+        if ("STR_TO_MAP".equals(function)) {
+            return "STR_TO_MAP stays on Flink because Flink treats both delimiters as Java regular expressions, while DataFusion's Spark-compatible function performs literal delimiter matching";
         }
         return null;
     }
@@ -465,6 +469,27 @@ final class StreamFusionStringFunctionTranslator extends StreamFusionComplexType
                                 .setValue(value)
                                 .setDelimiter(delimiter)
                                 .setIndex(index))
+                        .build();
+    }
+
+    static Expression binaryString(Object expression, RowType inputType, LogicalType expectedType) {
+        if (!"BIN".equals(functionName(expression)) || expectedType.getTypeRoot() != LogicalTypeRoot.VARCHAR) {
+            return null;
+        }
+        java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
+        if (operands.size() != 1) {
+            return null;
+        }
+        LogicalType operandType = logicalType(operands.get(0), inputType);
+        if (operandType == null || !supportsChr(operandType.getTypeRoot())) {
+            return null;
+        }
+        Expression operand =
+                StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, operandType);
+        return operand == null
+                ? null
+                : Expression.newBuilder()
+                        .setBinaryString(BinaryString.newBuilder().setOperand(operand))
                         .build();
     }
 

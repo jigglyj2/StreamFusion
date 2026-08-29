@@ -31,6 +31,7 @@ pub(crate) mod array_slice;
 pub(crate) mod array_sort;
 pub(crate) mod array_union;
 pub(crate) mod base64_encode;
+pub(crate) mod binary_string;
 pub(crate) mod cardinality;
 pub(crate) mod cast;
 pub(crate) mod ceiling;

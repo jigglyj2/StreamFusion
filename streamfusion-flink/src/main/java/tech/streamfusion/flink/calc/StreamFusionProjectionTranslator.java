@@ -225,6 +225,11 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
         if (stringSplitIndex != null) {
             return stringSplitIndex;
         }
+        Expression binaryString =
+                StreamFusionStringFunctionTranslator.binaryString(expression, inputType, expectedType);
+        if (binaryString != null) {
+            return binaryString;
+        }
         Expression arrayDistinct =
                 StreamFusionCollectionSetTranslator.arrayDistinct(expression, inputType, expectedType);
         if (arrayDistinct != null) {
