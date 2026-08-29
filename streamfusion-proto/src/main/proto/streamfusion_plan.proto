@@ -10,6 +10,27 @@ message NativePlan {
   Operator root = 2;
 }
 
+message NativeExchangePlan {
+  uint32 protocol_version = 1;
+  Schema schema = 2;
+  ExchangeDistribution distribution = 3;
+  repeated uint32 key_indices = 4;
+  uint32 max_parallelism = 5;
+  ExchangeTransport transport = 6;
+}
+
+enum ExchangeDistribution {
+  EXCHANGE_DISTRIBUTION_UNSPECIFIED = 0;
+  EXCHANGE_DISTRIBUTION_SINGLETON = 1;
+  EXCHANGE_DISTRIBUTION_HASH = 2;
+}
+
+enum ExchangeTransport {
+  EXCHANGE_TRANSPORT_UNSPECIFIED = 0;
+  EXCHANGE_TRANSPORT_ARROW_C_STREAM = 1;
+  EXCHANGE_TRANSPORT_ARROW_IPC_STREAM = 2;
+}
+
 message Operator {
   oneof operator {
     Input input = 1;
