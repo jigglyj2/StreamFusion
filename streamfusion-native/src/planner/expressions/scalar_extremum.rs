@@ -27,16 +27,16 @@ pub(crate) fn create(
     let data_type = first.data_type(schema)?;
     if !matches!(
         data_type,
-        DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64
+        DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 | DataType::Date32
     ) {
         return Err(DataFusionError::Plan(
-            "GREATEST/LEAST requires one signed integer type for every argument".to_string(),
+            "GREATEST/LEAST requires one parity-approved type for every argument".to_string(),
         ));
     }
     for argument in &arguments {
         if argument.data_type(schema)? != data_type {
             return Err(DataFusionError::Plan(
-                "GREATEST/LEAST requires one signed integer type for every argument".to_string(),
+                "GREATEST/LEAST requires one parity-approved type for every argument".to_string(),
             ));
         }
     }

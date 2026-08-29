@@ -26,7 +26,7 @@ class ScalarExtremumFallbackTest extends SqlParityTestSupport {
 
         assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
         assertThat(StreamFusionPlanningDiagnostics.explain())
-                .contains("currently accelerates only signed integer common types")
+                .contains("currently accelerates only signed integer and DATE common types")
                 .contains("floating NaN/signed-zero")
                 .contains("Accelerated: no");
     }

@@ -35,12 +35,15 @@ boundaries, invalid values, projections, and filters have byte-parity coverage.
 `a`, `a.b`, `a.b.c`, and `a.b.c.d` forms and decimal leading zeros. Empty components, non-digits,
 whitespace, extra components, and values above 255 return null. Standard, abbreviated, boundary,
 invalid, nested `INET_NTOA(INET_ATON(...))`, projection, and filter cases have parity coverage.
-`GREATEST` and `LEAST` are accelerated when their common type is `TINYINT`, `SMALLINT`, `INT`, or
-`BIGINT`. DataFusion performs the vectorized extremum comparison, wrapped in a native null guard so
-any null argument produces null as Flink requires. All widths, negative values, three arguments,
-nulls, projections, and filters have parity coverage. Floating-point, decimal, string, and temporal
+`GREATEST` and `LEAST` are accelerated when their common type is `TINYINT`, `SMALLINT`, `INT`,
+`BIGINT`, or `DATE`. DataFusion performs the vectorized extremum comparison, wrapped in a native
+null guard so any null argument produces null as Flink requires. All widths, negative values, three
+arguments, nulls, projections, and filters have parity coverage. Floating-point, decimal, string,
+and time/timestamp
 overloads remain on Flink with an EXPLAIN reason until their NaN, signed-zero, coercion, collation,
-and precision rules are independently proven.
+and time/timestamp precision rules are independently proven. Date ordering compares Arrow's signed
+epoch-day representation and covers pre-epoch dates, leap days, the supported range, nulls,
+projections, and filters.
 
 StreamFusion can select, reorder, omit, or repeat direct input columns of these types:
 

@@ -23,7 +23,7 @@ final class StreamFusionScalarExtremumTranslator extends StreamFusionComplexType
     static Expression translate(Object expression, RowType inputType, LogicalType expectedType) {
         String function = functionName(expression);
         if ((!("GREATEST".equals(function) || "LEAST".equals(function)))
-                || !isInteger(expectedType.getTypeRoot())
+                || !isSupported(expectedType.getTypeRoot())
                 || !hasNoArgMethod(expression, "getOperands")) {
             return null;
         }
@@ -47,15 +47,16 @@ final class StreamFusionScalarExtremumTranslator extends StreamFusionComplexType
         String function = functionName(expression);
         if ("GREATEST".equals(function) || "LEAST".equals(function)) {
             return function
-                    + " currently accelerates only signed integer common types; floating NaN/signed-zero, decimal coercion, string ordering, and temporal precision require separate parity audits";
+                    + " currently accelerates only signed integer and DATE common types; floating NaN/signed-zero, decimal coercion, string ordering, and time/timestamp precision require separate parity audits";
         }
         return null;
     }
 
-    private static boolean isInteger(LogicalTypeRoot root) {
+    private static boolean isSupported(LogicalTypeRoot root) {
         return root == LogicalTypeRoot.TINYINT
                 || root == LogicalTypeRoot.SMALLINT
                 || root == LogicalTypeRoot.INTEGER
-                || root == LogicalTypeRoot.BIGINT;
+                || root == LogicalTypeRoot.BIGINT
+                || root == LogicalTypeRoot.DATE;
     }
 }
