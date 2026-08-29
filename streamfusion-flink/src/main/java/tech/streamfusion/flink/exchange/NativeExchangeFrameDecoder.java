@@ -4,13 +4,14 @@
  */
 package tech.streamfusion.flink.exchange;
 
+import java.io.Serializable;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.flink.arrow.ArrowExchangeInputCDataBridge;
 
 /** Injectable receiving boundary for native exchange runtime tests. */
 @FunctionalInterface
-interface NativeExchangeFrameDecoder {
+interface NativeExchangeFrameDecoder extends Serializable {
     NativeExchangeFrameDecoder JNI =
             (plan, frame, rowType, allocator) -> ArrowExchangeInputCDataBridge.decode(plan, frame, rowType, allocator);
 
