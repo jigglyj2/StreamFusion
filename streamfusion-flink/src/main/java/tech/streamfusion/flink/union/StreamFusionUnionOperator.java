@@ -97,7 +97,11 @@ final class StreamFusionUnionOperator extends AbstractStreamOperatorV2<RowData>
         rowsByInput
                 .get(inputIndex)
                 .add(new BufferedRow(
-                        serializer.copy(row), row.getRowKind(), element.hasTimestamp(), element.getTimestamp()));
+                        serializer.copy(row),
+                        row.getRowKind(),
+                        element.hasTimestamp(),
+                        element.getTimestamp(),
+                        bufferedRows));
         bufferedRows++;
         if (bufferedRows == BATCH_SIZE) {
             flushBatch();
@@ -134,8 +138,16 @@ final class StreamFusionUnionOperator extends AbstractStreamOperatorV2<RowData>
 
     private void emit(NativeCalcResult nativeResult, List<BufferedRow> metadata) {
         ArrowRowDataBatch outputBatch = nativeResult.batch();
+        int[] inputRows = new int[outputBatch.size()];
+        int[] arrivalIndexes = new int[metadata.size()];
         for (int index = 0; index < outputBatch.size(); index++) {
-            int inputRow = nativeResult.inputRow(index);
+            inputRows[index] = nativeResult.inputRow(index);
+        }
+        for (int index = 0; index < metadata.size(); index++) {
+            arrivalIndexes[index] = metadata.get(index).arrivalIndex;
+        }
+        for (int index : UnionEmissionOrder.restore(inputRows, arrivalIndexes)) {
+            int inputRow = inputRows[index];
             if (inputRow < 0 || inputRow >= metadata.size()) {
                 throw new IllegalStateException("Native UNION ALL returned invalid input-row ordinal " + inputRow);
             }
@@ -202,12 +214,14 @@ final class StreamFusionUnionOperator extends AbstractStreamOperatorV2<RowData>
         private final RowKind rowKind;
         private final boolean hasTimestamp;
         private final long timestamp;
+        private final int arrivalIndex;
 
-        private BufferedRow(RowData value, RowKind rowKind, boolean hasTimestamp, long timestamp) {
+        private BufferedRow(RowData value, RowKind rowKind, boolean hasTimestamp, long timestamp, int arrivalIndex) {
             this.value = value;
             this.rowKind = rowKind;
             this.hasTimestamp = hasTimestamp;
             this.timestamp = timestamp;
+            this.arrivalIndex = arrivalIndex;
         }
     }
 }
