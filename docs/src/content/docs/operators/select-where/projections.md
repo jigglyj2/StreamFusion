@@ -36,18 +36,21 @@ boundaries, invalid values, projections, and filters have byte-parity coverage.
 whitespace, extra components, and values above 255 return null. Standard, abbreviated, boundary,
 invalid, nested `INET_NTOA(INET_ATON(...))`, projection, and filter cases have parity coverage.
 `GREATEST` and `LEAST` are accelerated when their common type is `TINYINT`, `SMALLINT`, `INT`,
-`BIGINT`, `DATE`, `TIME`, or timezone-free `TIMESTAMP`. DataFusion performs the vectorized extremum comparison, wrapped in a native
+`BIGINT`, `DECIMAL`, `DATE`, `TIME`, or timezone-free `TIMESTAMP`. DataFusion performs the
+vectorized extremum comparison, wrapped in a native
 null guard so any null argument produces null as Flink requires. All widths, negative values, three
-arguments, nulls, projections, and filters have parity coverage. Floating-point, decimal, string,
-and `TIMESTAMP_LTZ`
-overloads remain on Flink with an EXPLAIN reason until their NaN, signed-zero, coercion, collation,
-and session-zone rules are independently proven. Date ordering compares Arrow's signed
+arguments, nulls, projections, and filters have parity coverage. Floating-point, string, and
+`TIMESTAMP_LTZ` overloads remain on Flink with an EXPLAIN reason until their NaN, signed-zero,
+collation, and session-zone rules are independently proven. Date ordering compares Arrow's signed
 epoch-day representation and covers pre-epoch dates, leap days, the supported range, nulls,
 projections, and filters.
 Time and timestamp ordering uses the precision-specific Arrow Time32, Time64, and Timestamp arrays
 without timezone conversion. Precisions 0/3 for Flink `TIME` and 0/3/6/9 for `TIMESTAMP`, values
 across the Unix epoch, fractional seconds, the supported timestamp range, nulls, and filters have
 parity coverage.
+Decimal extrema retain Flink's resolved common precision and scale in Arrow `Decimal128` arrays.
+Mixed-scale coercion, precision 38, negative values, nulls, projections, and filters have parity
+coverage.
 
 StreamFusion can select, reorder, omit, or repeat direct input columns of these types:
 

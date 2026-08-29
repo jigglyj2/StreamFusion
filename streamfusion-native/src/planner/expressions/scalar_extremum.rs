@@ -31,6 +31,7 @@ pub(crate) fn create(
             | DataType::Int16
             | DataType::Int32
             | DataType::Int64
+            | DataType::Decimal128(_, _)
             | DataType::Date32
             | DataType::Time32(TimeUnit::Second | TimeUnit::Millisecond)
             | DataType::Time64(TimeUnit::Microsecond | TimeUnit::Nanosecond)
