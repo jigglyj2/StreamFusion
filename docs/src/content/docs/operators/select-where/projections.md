@@ -405,6 +405,10 @@ UTF-8 with Java-compatible replacement for malformed byte sequences, and returns
 incomplete or non-hex escape. Literal Unicode remains outside adjacent escape-run decoding, as in
 Java's `URLDecoder`. Empty strings and nulls preserve Flink behavior; fixed-width `CHAR` remains on
 Flink pending padding parity coverage.
+`PARSE_URL(value, part [, key])` remains on Flink because its accepted URL grammar, normalization,
+component extraction, and malformed-input behavior come from `java.net.URL`. Native URL parsers
+make observably different decisions for valid edge cases, so `EXPLAIN` records the JVM parser
+dependency rather than approximating it.
 `ENCODE(value, charset)` and `DECODE(value, charset)` remain on Flink. Their charset aliases,
 installed providers, malformed-input replacement, and unsupported-charset failures are defined by
 the running JVM. StreamFusion reports that environment-dependent contract in `EXPLAIN` until a

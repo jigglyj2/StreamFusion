@@ -21,6 +21,13 @@ import tech.streamfusion.proto.plan.v1.UrlEncode;
 final class StreamFusionUrlFunctionTranslator extends StreamFusionComplexTypeSupport {
     private StreamFusionUrlFunctionTranslator() {}
 
+    static String failureReason(Object expression) {
+        if ("PARSE_URL".equals(functionName(expression))) {
+            return "PARSE_URL stays on Flink because URL acceptance, normalization, component extraction, and malformed-input handling are defined by java.net.URL and differ from native URL parsers";
+        }
+        return null;
+    }
+
     static Expression translate(Object expression, RowType inputType, LogicalType expectedType) {
         String function = functionName(expression);
         if (!("URL_ENCODE".equals(function) || "URL_DECODE".equals(function))
