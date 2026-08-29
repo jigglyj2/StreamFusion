@@ -11,35 +11,52 @@ package tech.streamfusion.flink.sql;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.stream.Stream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
 
 class GroupingSetsParityTest extends SqlParityTestSupport {
-    private static final String SQL = "SELECT category, SUM(amount) FROM "
-            + "(VALUES ('a', 1), ('b', 2), ('a', 3)) AS input(category, amount) "
-            + "GROUP BY GROUPING SETS ((category), ())";
-
-    @Test
-    void groupingSetsFallBackAsAWholeAndMatchFlinkByteForByte() throws Exception {
-        assertParity(SQL, true);
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("queries")
+    void expandFormsFallBackAsAWholeAndMatchFlinkByteForByte(String ignoredName, String sql) throws Exception {
+        assertParity(sql, true);
 
         assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
     }
 
-    @Test
-    void explainAttributesFallbackToTheUnsupportedAggregate() {
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("queries")
+    void explainAttributesFallbackToTheUnsupportedAggregate(String ignoredName, String sql) {
         System.setProperty(
                 StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY, StreamFusionPlannerFactory.class.getName());
         StreamTableEnvironment tableEnvironment =
                 StreamTableEnvironment.create(StreamExecutionEnvironment.getExecutionEnvironment());
 
-        assertThat(tableEnvironment.explainSql(SQL))
+        assertThat(tableEnvironment.explainSql(sql))
                 .contains("== StreamFusion Acceleration ==")
                 .contains("Accelerated: no")
                 .contains("StreamExecGroupAggregate")
                 .contains("operator has no StreamFusion physical implementation")
                 .doesNotContain("StreamExecExpand: operator has no StreamFusion physical implementation");
+    }
+
+    private static Stream<Arguments> queries() {
+        String input = "(VALUES ('a', 'east', 1), ('b', 'west', 2), ('a', 'west', 3)) "
+                + "AS input(category, region, amount) ";
+        return Stream.of(
+                Arguments.of(
+                        "grouping sets",
+                        "SELECT category, region, SUM(amount) FROM " + input
+                                + "GROUP BY GROUPING SETS ((category), (region), ())"),
+                Arguments.of(
+                        "rollup",
+                        "SELECT category, region, SUM(amount) FROM " + input + "GROUP BY ROLLUP (category, region)"),
+                Arguments.of(
+                        "cube",
+                        "SELECT category, region, SUM(amount) FROM " + input + "GROUP BY CUBE (category, region)"));
     }
 }
