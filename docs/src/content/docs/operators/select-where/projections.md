@@ -430,6 +430,11 @@ parity dependency in `EXPLAIN` instead of substituting a similar native predicat
 DataFusion's similarly named Spark function performs literal delimiter matching; using it would
 produce different keys for valid Flink expressions. StreamFusion reports this distinction in
 `EXPLAIN` instead of approximating the result.
+`REGEXP`, `REGEXP_COUNT`, `REGEXP_EXTRACT`, `REGEXP_EXTRACT_ALL`, `REGEXP_INSTR`,
+`REGEXP_SUBSTR`, `REGEXP_REPLACE`, and the `SIMILAR TO` predicates remain on Flink. They use Java
+`Pattern` syntax, matching, capture, and replacement semantics, including constructs such as
+look-around and backreferences that Rust/DataFusion regex deliberately does not implement.
+`EXPLAIN` identifies the regex-engine dependency rather than accepting only an undocumented subset.
 `REPEAT(value, count)` is accelerated for supported `VARCHAR` values and `INTEGER` counts,
 including computed counts. StreamFusion widens the count inside the native plan for DataFusion's
 vectorized kernel; zero and negative counts produce the empty string as in Flink, while null
