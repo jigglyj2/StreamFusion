@@ -367,6 +367,12 @@ expressions. Other signed index widths stay on Flink because Flink 2.3 itself th
 `ClassCastException` for valid boxed `TINYINT`, `SMALLINT`, and `BIGINT` selections; StreamFusion
 does not silently introduce behavior where baseline Flink cannot produce a result. Binary values
 and fixed-width `CHAR` columns remain on Flink pending their distinct coercion and padding coverage.
+`SPLIT_INDEX(value, delimiter, index)` is accelerated for a supported `VARCHAR` value, a nonempty
+literal delimiter, and a supported `INTEGER` index expression. StreamFusion lowers it to
+DataFusion `string_to_array` plus dynamic array extraction, preserving Flink's zero-based index,
+empty tokens, and null result for negative, out-of-range, empty-input, or null arguments. Empty
+and dynamic delimiters stay on Flink because an empty delimiter activates Java whitespace
+splitting, which is not equivalent to DataFusion's empty-delimiter behavior.
 `REPEAT(value, count)` is accelerated for supported `VARCHAR` values and `INTEGER` counts,
 including computed counts. StreamFusion widens the count inside the native plan for DataFusion's
 vectorized kernel; zero and negative counts produce the empty string as in Flink, while null

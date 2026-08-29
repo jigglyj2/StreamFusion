@@ -25,6 +25,7 @@ import tech.streamfusion.proto.plan.v1.StringRepeat;
 import tech.streamfusion.proto.plan.v1.StringReplace;
 import tech.streamfusion.proto.plan.v1.StringReverse;
 import tech.streamfusion.proto.plan.v1.StringRight;
+import tech.streamfusion.proto.plan.v1.StringSplitIndex;
 import tech.streamfusion.proto.plan.v1.StringTranslate;
 import tech.streamfusion.proto.plan.v1.StringTrim;
 import tech.streamfusion.proto.plan.v1.StringTrimDirection;
@@ -48,6 +49,13 @@ final class StreamFusionStringFunctionTranslator extends StreamFusionComplexType
                     operands.isEmpty() ? null : StreamFusionExpressionTranslator.expressionLogicalType(operands.get(0));
             if (indexType != null && indexType.getTypeRoot() != LogicalTypeRoot.INTEGER) {
                 return "ELT stays on Flink unless its index is INTEGER because Flink 2.3 throws ClassCastException for valid boxed TINYINT, SMALLINT, and BIGINT indices";
+            }
+        }
+        if ("SPLIT_INDEX".equals(function) && hasNoArgMethod(expression, "getOperands")) {
+            java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
+            String delimiter = operands.size() == 3 ? literal(operands.get(1), String.class) : null;
+            if (delimiter == null || delimiter.isEmpty()) {
+                return "SPLIT_INDEX stays on Flink unless its delimiter is a nonempty string literal because Flink's empty delimiter invokes Java whitespace splitting and dynamic delimiters cannot exclude that incompatible mode";
             }
         }
         return null;
@@ -426,6 +434,38 @@ final class StreamFusionStringFunctionTranslator extends StreamFusionComplexType
             elt.addValues(value);
         }
         return Expression.newBuilder().setStringElt(elt).build();
+    }
+
+    static Expression splitIndex(Object expression, RowType inputType, LogicalType expectedType) {
+        if (!"SPLIT_INDEX".equals(functionName(expression)) || expectedType.getTypeRoot() != LogicalTypeRoot.VARCHAR) {
+            return null;
+        }
+        java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
+        if (operands.size() != 3) {
+            return null;
+        }
+        String delimiter = literal(operands.get(1), String.class);
+        if (delimiter == null || delimiter.isEmpty()) {
+            return null;
+        }
+        LogicalType valueType = logicalType(operands.get(0), inputType);
+        LogicalType indexType = logicalType(operands.get(2), inputType);
+        if (valueType == null
+                || valueType.getTypeRoot() != LogicalTypeRoot.VARCHAR
+                || indexType == null
+                || indexType.getTypeRoot() != LogicalTypeRoot.INTEGER) {
+            return null;
+        }
+        Expression value = StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, valueType);
+        Expression index = StreamFusionProjectionTranslator.projectionExpression(operands.get(2), inputType, indexType);
+        return value == null || index == null
+                ? null
+                : Expression.newBuilder()
+                        .setStringSplitIndex(StringSplitIndex.newBuilder()
+                                .setValue(value)
+                                .setDelimiter(delimiter)
+                                .setIndex(index))
+                        .build();
     }
 
     private static StringTrimDirection trimDirection(String flag) {

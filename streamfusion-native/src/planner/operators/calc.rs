@@ -461,6 +461,22 @@ pub(super) fn create_expression(
                 .collect::<Result<Vec<_>>>()?;
             expressions::string_elt::create(create_expression(index, schema)?, values, schema)
         }
+        Some(proto::expression::Expression::StringSplitIndex(split_index)) => {
+            let value = split_index
+                .value
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("SPLIT_INDEX value is empty".to_string()))?;
+            let index = split_index
+                .index
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("SPLIT_INDEX index is empty".to_string()))?;
+            expressions::string_split_index::create(
+                create_expression(value, schema)?,
+                &split_index.delimiter,
+                create_expression(index, schema)?,
+                schema,
+            )
+        }
         Some(proto::expression::Expression::Substring(substring)) => {
             let operand = substring
                 .operand

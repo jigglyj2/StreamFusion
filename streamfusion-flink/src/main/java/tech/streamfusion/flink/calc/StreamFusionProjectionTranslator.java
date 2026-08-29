@@ -220,6 +220,11 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
         if (stringElt != null) {
             return stringElt;
         }
+        Expression stringSplitIndex =
+                StreamFusionStringFunctionTranslator.splitIndex(expression, inputType, expectedType);
+        if (stringSplitIndex != null) {
+            return stringSplitIndex;
+        }
         Expression arrayDistinct =
                 StreamFusionCollectionSetTranslator.arrayDistinct(expression, inputType, expectedType);
         if (arrayDistinct != null) {

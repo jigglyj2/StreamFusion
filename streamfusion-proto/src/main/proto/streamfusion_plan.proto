@@ -173,6 +173,7 @@ message Expression {
     StringConcatWs string_concat_ws = 100;
     StringTranslate string_translate = 101;
     StringElt string_elt = 102;
+    StringSplitIndex string_split_index = 103;
   }
 }
 
@@ -480,6 +481,12 @@ message StringTranslate {
 message StringElt {
   Expression index = 1;
   repeated Expression values = 2;
+}
+
+message StringSplitIndex {
+  Expression value = 1;
+  string delimiter = 2;
+  Expression index = 3;
 }
 
 enum StringTrimDirection {
