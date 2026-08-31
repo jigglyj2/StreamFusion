@@ -14,6 +14,7 @@ mod execution_context;
 mod jni_bridge;
 mod memory_pool;
 pub mod planner;
+mod state;
 
 pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/streamfusion.plan.v1.rs"));

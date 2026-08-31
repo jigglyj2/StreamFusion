@@ -112,6 +112,9 @@ fn create_operator(
             )?;
             operators::window_table_function::create(window, child)
         }
+        Some(proto::operator::Operator::Deduplicate(_)) => Err(DataFusionError::Plan(
+            "Deduplicate requires a persistent stateful execution handle".to_string(),
+        )),
         None => Err(DataFusionError::Plan(
             "StreamFusion operator is empty".to_string(),
         )),

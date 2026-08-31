@@ -66,7 +66,9 @@ import org.apache.flink.table.types.logical.BinaryType;
 import org.apache.flink.table.types.logical.BooleanType;
 import org.apache.flink.table.types.logical.CharType;
 import org.apache.flink.table.types.logical.DateType;
+import org.apache.flink.table.types.logical.DayTimeIntervalType;
 import org.apache.flink.table.types.logical.DecimalType;
+import org.apache.flink.table.types.logical.DistinctType;
 import org.apache.flink.table.types.logical.DoubleType;
 import org.apache.flink.table.types.logical.FloatType;
 import org.apache.flink.table.types.logical.IntType;
@@ -78,11 +80,14 @@ import org.apache.flink.table.types.logical.MultisetType;
 import org.apache.flink.table.types.logical.NullType;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.SmallIntType;
+import org.apache.flink.table.types.logical.StructuredType;
 import org.apache.flink.table.types.logical.TimeType;
 import org.apache.flink.table.types.logical.TimestampType;
 import org.apache.flink.table.types.logical.TinyIntType;
 import org.apache.flink.table.types.logical.VarBinaryType;
 import org.apache.flink.table.types.logical.VarCharType;
+import org.apache.flink.table.types.logical.YearMonthIntervalType;
+import org.apache.flink.table.types.logical.utils.LogicalTypeChecks;
 import org.apache.flink.table.types.logical.utils.LogicalTypeDefaultVisitor;
 import org.apache.flink.util.Preconditions;
 import org.slf4j.Logger;
@@ -152,20 +157,21 @@ public final class ArrowUtils {
     }
 
     private static Field toArrowField(String fieldName, LogicalType logicalType) {
+        LogicalType physicalType = physicalType(logicalType);
         FieldType fieldType = new FieldType(
-                logicalType.isNullable(), logicalType.accept(LogicalTypeToArrowTypeConverter.INSTANCE), null);
+                logicalType.isNullable(), physicalType.accept(LogicalTypeToArrowTypeConverter.INSTANCE), null);
         List<Field> children = null;
-        if (logicalType instanceof ArrayType) {
-            children = Collections.singletonList(toArrowField("element", ((ArrayType) logicalType).getElementType()));
-        } else if (logicalType instanceof RowType) {
-            RowType rowType = (RowType) logicalType;
+        if (physicalType instanceof ArrayType) {
+            children = Collections.singletonList(toArrowField("element", ((ArrayType) physicalType).getElementType()));
+        } else if (physicalType instanceof RowType) {
+            RowType rowType = (RowType) physicalType;
             children = new ArrayList<>(rowType.getFieldCount());
             for (RowType.RowField field : rowType.getFields()) {
                 children.add(toArrowField(field.getName(), field.getType()));
             }
-        } else if (logicalType instanceof MapType || logicalType instanceof MultisetType) {
-            LogicalType keyType = mapKeyType(logicalType);
-            LogicalType valueType = mapValueType(logicalType);
+        } else if (physicalType instanceof MapType || physicalType instanceof MultisetType) {
+            LogicalType keyType = mapKeyType(physicalType);
+            LogicalType valueType = mapValueType(physicalType);
             Preconditions.checkArgument(!keyType.isNullable(), "Map and multiset key types should be non-nullable");
             children = Collections.singletonList(new Field(
                     "items",
@@ -173,6 +179,18 @@ public final class ArrowUtils {
                     Arrays.asList(toArrowField("key", keyType), toArrowField("value", valueType))));
         }
         return new Field(fieldName, fieldType, children);
+    }
+
+    private static LogicalType physicalType(LogicalType type) {
+        while (type instanceof DistinctType) {
+            type = ((DistinctType) type).getSourceType();
+        }
+        if (type instanceof StructuredType) {
+            List<LogicalType> fieldTypes = LogicalTypeChecks.getFieldTypes(type);
+            List<String> fieldNames = LogicalTypeChecks.getFieldNames(type);
+            return RowType.of(fieldTypes.toArray(new LogicalType[0]), fieldNames.toArray(new String[0]));
+        }
+        return type;
     }
 
     private static LogicalType mapKeyType(LogicalType type) {
@@ -216,6 +234,7 @@ public final class ArrowUtils {
     }
 
     private static ArrowFieldWriter<RowData> createArrowFieldWriterForRow(ValueVector vector, LogicalType fieldType) {
+        fieldType = physicalType(fieldType);
         if (vector instanceof TinyIntVector) {
             return TinyIntWriter.forRow((TinyIntVector) vector);
         } else if (vector instanceof SmallIntVector) {
@@ -286,6 +305,7 @@ public final class ArrowUtils {
 
     private static ArrowFieldWriter<ArrayData> createArrowFieldWriterForArray(
             ValueVector vector, LogicalType fieldType) {
+        fieldType = physicalType(fieldType);
         if (vector instanceof TinyIntVector) {
             return TinyIntWriter.forArray((TinyIntVector) vector);
         } else if (vector instanceof SmallIntVector) {
@@ -366,6 +386,7 @@ public final class ArrowUtils {
     }
 
     public static ColumnVector createColumnVector(ValueVector vector, LogicalType fieldType) {
+        fieldType = physicalType(fieldType);
         if (vector instanceof TinyIntVector) {
             return new ArrowTinyIntColumnVector((TinyIntVector) vector);
         } else if (vector instanceof SmallIntVector) {
@@ -493,6 +514,18 @@ public final class ArrowUtils {
         @Override
         public ArrowType visit(DateType dateType) {
             return new ArrowType.Date(DateUnit.DAY);
+        }
+
+        @Override
+        public ArrowType visit(YearMonthIntervalType intervalType) {
+            // Flink's internal representation is a signed month count.
+            return new ArrowType.Int(32, true);
+        }
+
+        @Override
+        public ArrowType visit(DayTimeIntervalType intervalType) {
+            // Flink's internal representation is a signed millisecond count.
+            return new ArrowType.Int(64, true);
         }
 
         @Override

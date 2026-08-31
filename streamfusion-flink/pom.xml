@@ -19,6 +19,12 @@
             <version>${project.version}</version>
         </dependency>
         <dependency>
+            <groupId>tech.streamfusion</groupId>
+            <artifactId>streamfusion-state-rocksdb</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
             <groupId>org.apache.arrow</groupId>
             <artifactId>arrow-vector</artifactId>
         </dependency>
@@ -40,6 +46,12 @@
             <artifactId>flink-runtime</artifactId>
             <version>${flink.version}</version>
             <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-statebackend-rocksdb</artifactId>
+            <version>${flink.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>

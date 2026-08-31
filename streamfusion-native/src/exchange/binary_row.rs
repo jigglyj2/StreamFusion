@@ -2,10 +2,10 @@
 // Licensed under the Apache License, Version 2.0.
 
 use arrow::array::{
-    Array, BinaryArray, BooleanArray, Date32Array, Decimal128Array, Float32Array, Float64Array,
-    Int16Array, Int32Array, Int64Array, Int8Array, StringArray, Time32MillisecondArray,
-    Time32SecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray,
+    Array, BinaryArray, BooleanArray, Date32Array, Decimal128Array, FixedSizeBinaryArray,
+    Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, StringArray,
+    Time32MillisecondArray, Time32SecondArray, TimestampMicrosecondArray,
+    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
 };
 use arrow::datatypes::{DataType, TimeUnit};
 use arrow::error::{ArrowError, Result};
@@ -27,6 +27,38 @@ pub enum KeyField {
     Time,
     Timestamp { precision: u8 },
     Decimal { precision: u8 },
+}
+
+impl KeyField {
+    pub fn from_arrow_type(data_type: &DataType) -> Result<Self> {
+        match data_type {
+            DataType::Boolean => Ok(Self::Boolean),
+            DataType::Int8 => Ok(Self::TinyInt),
+            DataType::Int16 => Ok(Self::SmallInt),
+            DataType::Int32 => Ok(Self::Integer),
+            DataType::Int64 => Ok(Self::BigInt),
+            DataType::Float32 => Ok(Self::Float),
+            DataType::Float64 => Ok(Self::Double),
+            DataType::Utf8 => Ok(Self::String),
+            DataType::Binary | DataType::FixedSizeBinary(_) => Ok(Self::Binary),
+            DataType::Date32 => Ok(Self::Date),
+            DataType::Time32(TimeUnit::Second | TimeUnit::Millisecond) => Ok(Self::Time),
+            DataType::Timestamp(unit, _) => Ok(Self::Timestamp {
+                precision: match unit {
+                    TimeUnit::Second => 0,
+                    TimeUnit::Millisecond => 3,
+                    TimeUnit::Microsecond => 6,
+                    TimeUnit::Nanosecond => 9,
+                },
+            }),
+            DataType::Decimal128(precision, _) => Ok(Self::Decimal {
+                precision: *precision,
+            }),
+            other => Err(ArrowError::InvalidArgumentError(format!(
+                "Flink BinaryRow key does not support Arrow type {other}"
+            ))),
+        }
+    }
 }
 
 /// Encodes selected Arrow values as the exact bytes hashed by Flink's BinaryRowData key selector.
@@ -81,9 +113,20 @@ pub fn encode_binary_row(
                 position,
                 value::<StringArray>(array, row)?.value(row).as_bytes(),
             ),
-            KeyField::Binary => {
-                writer.write_bytes(position, value::<BinaryArray>(array, row)?.value(row))
-            }
+            KeyField::Binary => match array.data_type() {
+                DataType::Binary => {
+                    writer.write_bytes(position, value::<BinaryArray>(array, row)?.value(row))
+                }
+                DataType::FixedSizeBinary(_) => writer.write_bytes(
+                    position,
+                    value::<FixedSizeBinaryArray>(array, row)?.value(row),
+                ),
+                other => {
+                    return Err(ArrowError::CastError(format!(
+                        "Flink binary key requires Arrow Binary or FixedSizeBinary, got {other}"
+                    )))
+                }
+            },
             KeyField::Date => writer.write_fixed(
                 position,
                 &value::<Date32Array>(array, row)?.value(row).to_le_bytes(),

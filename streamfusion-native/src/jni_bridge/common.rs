@@ -134,6 +134,19 @@ pub(super) unsafe fn execute_and_export(
     let output_bytes = output_batch.get_array_memory_size();
     drop(batches);
     output_reservation.try_resize(output_bytes)?;
+    unsafe { export_record_batch(output_batch, output_array_address, output_schema_address) }
+}
+
+pub(super) unsafe fn export_record_batch(
+    output_batch: RecordBatch,
+    output_array_address: *mut FFI_ArrowArray,
+    output_schema_address: *mut FFI_ArrowSchema,
+) -> datafusion::error::Result<usize> {
+    if output_array_address.is_null() {
+        return Err(datafusion::error::DataFusionError::Execution(
+            "Arrow C Data output array address was null".to_string(),
+        ));
+    }
     let rows = output_batch.num_rows();
     let output_data = StructArray::from(output_batch).to_data();
     let output_array = FFI_ArrowArray::new(&output_data);

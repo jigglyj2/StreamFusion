@@ -42,7 +42,7 @@ Arrow batches. UNION ALL forwards batches, changelog filtering selects Arrow ran
 Arrow directly, and exchange wraps existing data buffers with only two envelope vectors. No internal
 operator buffers or reconstructs the payload as `RowData`.
 
-The Arrow boundary follows PyFlink's lightweight model: `ColumnarRowData` moves a reusable row index over Flink column vectors backed by Arrow vectors. Its implemented type matrix includes compatible scalar, temporal, decimal128, string, binary, array, map, nested-row, and null types. Arrow C Data release ownership and Flink managed-memory allocation are implemented at the native boundary. Checkpoint-aware native state remains TODO.
+The Arrow boundary follows PyFlink's lightweight model: `ColumnarRowData` moves a reusable row index over Flink column vectors backed by Arrow vectors. Its implemented type matrix includes compatible scalar, temporal, decimal128, string, binary, array, map, nested-row, and null types. Arrow C Data release ownership and Flink managed-memory allocation are implemented at native boundaries. The native deduplicate path also accounts native keyed state through Flink managed memory and participates in Flink checkpoints, rescaling, and savepoints.
 
 ## Native batch pipeline
 

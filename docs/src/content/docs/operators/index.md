@@ -27,7 +27,7 @@ This matrix follows the query operations documented by Flink 2.3, including the 
 | [LIMIT](limit/) | **No** | Bounded inputs | DataFusion limit |
 | [Top-N](top-n/) | **No** | Yes | Custom keyed ranking state |
 | [Window Top-N](window-top-n/) | **No** | Yes | Custom per-window ranking state |
-| [Deduplication](deduplication/) | **No** | Yes | Custom keyed first/last-row state |
+| [Deduplication](deduplication/) | **Partial** (row-time keep-last, including Q18) | Yes | Native batched raw keyed state |
 | [Window deduplication](window-deduplication/) | **No** | Yes | Custom per-window keyed state |
 | [Pattern recognition](pattern-recognition/) | **No** | Potentially | Custom streaming NFA; no DataFusion equivalent |
 | [Changelog conversion](changelog-conversion/) | **Partial** (`DropUpdateBefore`) | Not generally a compute target | Preserve Flink row-kind conversion |

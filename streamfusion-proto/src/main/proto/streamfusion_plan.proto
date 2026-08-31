@@ -46,7 +46,20 @@ message Operator {
     Expand expand = 5;
     Values values = 6;
     WindowTableFunction window_table_function = 7;
+    Deduplicate deduplicate = 8;
   }
+}
+
+// Timer-free keyed deduplication. The initial runtime supports insert-only rowtime input,
+// keeps the greatest ordering value, and emits INSERT followed by UPDATE_AFTER changes.
+message Deduplicate {
+  Operator input = 1;
+  repeated uint32 key_indices = 2;
+  uint32 order_index = 3;
+  bool keep_last = 4;
+  bool generate_insert = 5;
+  bool input_changelog = 6;
+  bool generate_update_before = 7;
 }
 
 message WindowTableFunction {

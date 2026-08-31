@@ -125,6 +125,9 @@ impl MemoryReservationBroker for JvmMemoryReservationBroker {
     }
 
     fn release(&self, bytes: usize) -> Result<()> {
+        if bytes == 0 {
+            return Ok(());
+        }
         let bytes = i64::try_from(bytes).map_err(|_| {
             DataFusionError::Internal(format!(
                 "native release of {bytes} bytes exceeds the JVM reservation range"
@@ -266,7 +269,7 @@ impl Drop for FlinkMemoryPool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests_support {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use datafusion::execution::memory_pool::{MemoryConsumer, MemoryPool};
@@ -274,9 +277,22 @@ mod tests {
     use super::*;
 
     #[derive(Debug)]
-    struct TestBroker {
+    pub(crate) struct TestBroker {
         reserved: AtomicUsize,
         limit: usize,
+    }
+
+    impl TestBroker {
+        pub(crate) fn new(limit: usize) -> Self {
+            Self {
+                reserved: AtomicUsize::new(0),
+                limit,
+            }
+        }
+
+        pub(crate) fn reserved(&self) -> usize {
+            self.reserved.load(Ordering::Relaxed)
+        }
     }
 
     impl MemoryReservationBroker for TestBroker {
@@ -294,7 +310,6 @@ mod tests {
             Ok(())
         }
     }
-
     #[test]
     fn accounts_datafusion_reservations_in_host_broker() {
         let broker = Arc::new(TestBroker {

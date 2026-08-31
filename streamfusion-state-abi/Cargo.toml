@@ -1,0 +1,10 @@
+[package]
+name = "streamfusion-state-abi"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.94"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+arrow = { version = "59.2.0", features = ["ffi"] }

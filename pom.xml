@@ -14,6 +14,7 @@
 
     <modules>
         <module>streamfusion-proto</module>
+        <module>streamfusion-state-rocksdb</module>
         <module>streamfusion-native</module>
         <module>streamfusion-flink-planner</module>
         <module>streamfusion-flink</module>

@@ -1,0 +1,18 @@
+[package]
+name = "streamfusion-state-rocksdb"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.94"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+arrow = { version = "59.2.0", features = ["ffi"] }
+rocksdb = { version = "0.25.0", default-features = false }
+streamfusion-state-abi = { path = "../streamfusion-state-abi" }
+
+[dev-dependencies]
+tempfile = "3.23.0"

@@ -147,6 +147,20 @@ public final class ArrowRowDataBatch implements AutoCloseable {
         return this;
     }
 
+    /** Replaces changelog kinds while retaining selected record timestamps. */
+    public ArrowRowDataBatch withRowKinds(RowKind[] kinds) {
+        int rows = size();
+        if (kinds.length != rows) {
+            throw new IllegalArgumentException("Arrow RowKind count does not match the batch");
+        }
+        boolean nonInsert = false;
+        for (int row = 0; row < rows && !nonInsert; row++) {
+            nonInsert = kinds[row] != RowKind.INSERT;
+        }
+        this.rowKinds = nonInsert ? java.util.Arrays.copyOf(kinds, rows) : null;
+        return this;
+    }
+
     /** Returns the reusable row view used by PyFlink's Arrow reader model. */
     public RowData rowView(int rowId) {
         if (rowId < 0 || rowId >= size()) {

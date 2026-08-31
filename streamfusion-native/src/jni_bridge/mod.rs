@@ -8,6 +8,7 @@
 
 mod calc;
 mod common;
+mod deduplicate;
 mod exchange;
 mod execution_context;
 mod union;

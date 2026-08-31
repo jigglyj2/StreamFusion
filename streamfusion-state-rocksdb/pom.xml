@@ -9,27 +9,9 @@
         <version>${revision}</version>
     </parent>
 
-    <artifactId>streamfusion-native</artifactId>
+    <artifactId>streamfusion-state-rocksdb</artifactId>
     <packaging>jar</packaging>
-    <name>StreamFusion : Native DataFusion Runtime</name>
-
-    <dependencies>
-        <dependency>
-            <groupId>tech.streamfusion</groupId>
-            <artifactId>streamfusion-proto</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.junit.jupiter</groupId>
-            <artifactId>junit-jupiter</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.assertj</groupId>
-            <artifactId>assertj-core</artifactId>
-            <scope>test</scope>
-        </dependency>
-    </dependencies>
+    <name>StreamFusion : Native RocksDB State Backend</name>
 
     <build>
         <plugins>
@@ -51,6 +33,7 @@
                             </arguments>
                             <environmentVariables>
                                 <CARGO_TARGET_DIR>${project.build.directory}/rust</CARGO_TARGET_DIR>
+                                <CARGO_BUILD_JOBS>4</CARGO_BUILD_JOBS>
                                 <RUSTFLAGS>-C target-cpu=native</RUSTFLAGS>
                             </environmentVariables>
                         </configuration>
@@ -60,7 +43,6 @@
                         <phase>test</phase>
                         <goals><goal>exec</goal></goals>
                         <configuration>
-                            <skip>${skipTests}</skip>
                             <executable>cargo</executable>
                             <arguments>
                                 <argument>test</argument>
@@ -68,7 +50,7 @@
                             </arguments>
                             <environmentVariables>
                                 <CARGO_TARGET_DIR>${project.build.directory}/rust</CARGO_TARGET_DIR>
-                                <STREAMFUSION_TEST_ROCKSDB_PLUGIN>${project.parent.basedir}/streamfusion-state-rocksdb/target/rust/release/libstreamfusion_state_rocksdb.so</STREAMFUSION_TEST_ROCKSDB_PLUGIN>
+                                <CARGO_BUILD_JOBS>4</CARGO_BUILD_JOBS>
                             </environmentVariables>
                         </configuration>
                     </execution>
@@ -80,7 +62,7 @@
                 <directory>${project.build.directory}/rust/release</directory>
                 <targetPath>META-INF/native/linux-x86_64</targetPath>
                 <includes>
-                    <include>libstreamfusion_native.so</include>
+                    <include>libstreamfusion_state_rocksdb.so</include>
                 </includes>
             </resource>
         </resources>

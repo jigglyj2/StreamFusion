@@ -16,11 +16,14 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
 import org.apache.calcite.rex.RexNode;
+import org.apache.flink.configuration.ReadableConfig;
+import org.apache.flink.table.api.config.ExecutionConfigOptions;
 import org.apache.flink.table.planner.plan.logical.TimeAttributeWindowingStrategy;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecEdge;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNode;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeBase;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeGraph;
+import org.apache.flink.table.planner.plan.nodes.exec.StateMetadata;
 import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecCalc;
 import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecCorrelate;
 import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecExpand;
@@ -29,6 +32,7 @@ import org.apache.flink.table.planner.plan.nodes.exec.processor.ExecNodeGraphPro
 import org.apache.flink.table.planner.plan.nodes.exec.processor.ProcessorContext;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecCalc;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecCorrelate;
+import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecDeduplicate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecDropUpdateBefore;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecExchange;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecExpand;
@@ -37,6 +41,7 @@ import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecValues;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWatermarkAssigner;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWindowTableFunction;
 import org.apache.flink.table.types.logical.RowType;
+import org.apache.flink.util.TimeUtils;
 
 /** All-or-nothing physical rule modelled after Comet's distinct accelerator exec nodes. */
 public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProcessor {
@@ -48,6 +53,8 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
     private static final String UNION_TRANSLATOR_CLASS = "tech.streamfusion.flink.union.StreamFusionUnionTranslator";
     private static final String WINDOW_TRANSLATOR_CLASS =
             "tech.streamfusion.flink.window.StreamFusionWindowTableFunctionTranslator";
+    private static final String DEDUPLICATE_TRANSLATOR_CLASS =
+            "tech.streamfusion.flink.deduplicate.StreamFusionDeduplicateTranslator";
 
     @Override
     public ExecNodeGraph process(ExecNodeGraph graph, ProcessorContext context) {
@@ -86,6 +93,11 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             }
         } else if (node instanceof StreamExecCorrelate) {
             String reason = unsupportedReason((StreamExecCorrelate) node, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
+        } else if (node instanceof StreamExecDeduplicate) {
+            String reason = unsupportedReason((StreamExecDeduplicate) node, context);
             if (reason != null) {
                 rejections.add(nodePath + "\n" + reason);
             }
@@ -133,7 +145,7 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         return nodeName.equals("StreamExecSink") || nodeName.equals("StreamExecLegacySink");
     }
 
-    private ExecNode<?> convert(ExecNode<?> node) {
+    ExecNode<?> convert(ExecNode<?> node) {
         if (isSinkBoundary(node)) {
             for (int index = 0; index < node.getInputEdges().size(); index++) {
                 ExecEdge edge = node.getInputEdges().get(index);
@@ -165,6 +177,24 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     (RowType) calc.getOutputType(),
                     "StreamFusionCalc");
             replacement.setInputEdges(calc.getInputEdges().stream()
+                    .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                    .collect(Collectors.toList()));
+            return replacement;
+        }
+        if (node instanceof StreamExecDeduplicate) {
+            StreamExecDeduplicate deduplicate = (StreamExecDeduplicate) node;
+            StreamFusionExecDeduplicate replacement = new StreamFusionExecDeduplicate(
+                    deduplicate.getPersistedConfig(),
+                    uniqueKeys(deduplicate),
+                    booleanField(deduplicate, "isRowtime"),
+                    booleanField(deduplicate, "keepLastRow"),
+                    booleanField(deduplicate, "outputInsertOnly"),
+                    booleanField(deduplicate, "generateUpdateBefore"),
+                    stateMetadata(deduplicate),
+                    deduplicate.getInputProperties().get(0),
+                    (RowType) deduplicate.getOutputType(),
+                    "StreamFusionDeduplicate");
+            replacement.setInputEdges(deduplicate.getInputEdges().stream()
                     .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
                     .collect(Collectors.toList()));
             return replacement;
@@ -298,6 +328,42 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         }
     }
 
+    private String unsupportedReason(StreamExecDeduplicate deduplicate, ProcessorContext context) {
+        ExecEdge input = deduplicate.getInputEdges().get(0);
+        try {
+            Class<?> translator = Class.forName(
+                    DEDUPLICATE_TRANSLATOR_CLASS,
+                    true,
+                    context.getPlanner().getFlinkContext().getClassLoader());
+            Method method = translator.getMethod(
+                    "unsupportedReason",
+                    RowType.class,
+                    RowType.class,
+                    int[].class,
+                    boolean.class,
+                    boolean.class,
+                    boolean.class,
+                    boolean.class,
+                    long.class,
+                    ReadableConfig.class);
+            return (String) method.invoke(
+                    null,
+                    (RowType) input.getOutputType(),
+                    (RowType) deduplicate.getOutputType(),
+                    uniqueKeys(deduplicate),
+                    booleanField(deduplicate, "isRowtime"),
+                    booleanField(deduplicate, "keepLastRow"),
+                    booleanField(deduplicate, "outputInsertOnly"),
+                    booleanField(deduplicate, "generateUpdateBefore"),
+                    stateTtl(deduplicate),
+                    deduplicate.getPersistedConfig());
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
+            throw new IllegalStateException("Could not inspect StreamFusion Deduplicate support", e);
+        } catch (InvocationTargetException e) {
+            throw new IllegalStateException("StreamFusion Deduplicate support inspection failed", e.getCause());
+        }
+    }
+
     private String unsupportedReason(StreamExecCorrelate correlate, ProcessorContext context) {
         ExecEdge input = correlate.getInputEdges().get(0);
         Object joinType = field(correlate, CommonExecCorrelate.class, "joinType");
@@ -416,6 +482,30 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
 
     private static int watermarkRowtimeFieldIndex(StreamExecWatermarkAssigner watermark) {
         return (int) field(watermark, StreamExecWatermarkAssigner.class, "rowtimeFieldIndex");
+    }
+
+    private static int[] uniqueKeys(StreamExecDeduplicate deduplicate) {
+        return ((int[]) field(deduplicate, StreamExecDeduplicate.class, "uniqueKeys")).clone();
+    }
+
+    private static boolean booleanField(StreamExecDeduplicate deduplicate, String name) {
+        return (boolean) field(deduplicate, StreamExecDeduplicate.class, name);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<StateMetadata> stateMetadata(StreamExecDeduplicate deduplicate) {
+        return (List<StateMetadata>) field(deduplicate, StreamExecDeduplicate.class, "stateMetadataList");
+    }
+
+    private static long stateTtl(StreamExecDeduplicate deduplicate) {
+        List<StateMetadata> metadata = stateMetadata(deduplicate);
+        if (metadata == null || metadata.isEmpty()) {
+            return deduplicate
+                    .getPersistedConfig()
+                    .get(ExecutionConfigOptions.IDLE_STATE_RETENTION)
+                    .toMillis();
+        }
+        return TimeUtils.parseDuration(metadata.get(0).getStateTtl()).toMillis();
     }
 
     private static Object field(Object node, Class<?> declaringClass, String name) {

@@ -9,6 +9,7 @@
 pub(super) mod array_unnest;
 pub(super) mod calc;
 mod collection;
+pub(crate) mod deduplicate;
 pub(super) mod expand;
 pub(super) mod input;
 pub(crate) mod reusable_input;
