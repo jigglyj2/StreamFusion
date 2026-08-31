@@ -29,14 +29,20 @@ pub(super) fn create(
                 schema,
             )
         }
-        ArrayElement(element) => expressions::array_element::create(
-            create_expression(
+        ArrayElement(element) => {
+            let array = create_expression(
                 required(&element.array, "array element is missing its array")?,
                 schema,
-            )?,
-            element.index,
-            schema,
-        ),
+            )?;
+            match element.index_expression.as_ref() {
+                Some(index) => expressions::array_element::create_dynamic(
+                    array,
+                    create_expression(index, schema)?,
+                    schema,
+                ),
+                None => expressions::array_element::create(array, element.index, schema),
+            }
+        }
         MapElement(element) => expressions::map_element::create(
             create_expression(
                 required(&element.map, "map element is missing its map")?,
@@ -65,13 +71,17 @@ pub(super) fn create(
             )?,
             schema,
         ),
-        ArrayContains(contains) => binary(
-            &contains.array,
-            &contains.needle,
-            "array contains is missing its array",
-            "array contains is missing its needle",
+        ArrayContains(contains) => expressions::array_contains::create(
+            create_expression(
+                required(&contains.array, "array contains is missing its array")?,
+                schema,
+            )?,
+            create_expression(
+                required(&contains.needle, "array contains is missing its needle")?,
+                schema,
+            )?,
+            contains.needle_nullable,
             schema,
-            expressions::array_contains::create,
         ),
         ArrayReverse(reverse) => expressions::array_reverse::create(
             create_expression(
@@ -112,13 +122,17 @@ pub(super) fn create(
             schema,
             expressions::array_position::create,
         ),
-        ArrayRemove(remove) => binary(
-            &remove.array,
-            &remove.needle,
-            "array remove is missing its array",
-            "array remove is missing its needle",
+        ArrayRemove(remove) => expressions::array_remove::create(
+            create_expression(
+                required(&remove.array, "array remove is missing its array")?,
+                schema,
+            )?,
+            create_expression(
+                required(&remove.needle, "array remove is missing its needle")?,
+                schema,
+            )?,
+            remove.needle_nullable,
             schema,
-            expressions::array_remove::create,
         ),
         ArrayMinimum(minimum) => expressions::array_minimum::create(
             create_expression(
@@ -167,15 +181,26 @@ pub(super) fn create(
             sort.null_first,
             schema,
         ),
-        ArraySlice(slice) => expressions::array_slice::create(
-            create_expression(
+        ArraySlice(slice) => {
+            let array = create_expression(
                 required(&slice.array, "array slice is missing its array")?,
                 schema,
-            )?,
-            slice.start,
-            slice.end,
-            schema,
-        ),
+            )?;
+            if let Some(start) = slice.start_expression.as_ref() {
+                expressions::array_slice::create_dynamic(
+                    array,
+                    create_expression(start, schema)?,
+                    slice
+                        .end_expression
+                        .as_ref()
+                        .map(|end| create_expression(end, schema))
+                        .transpose()?,
+                    schema,
+                )
+            } else {
+                expressions::array_slice::create(array, slice.start, slice.end, schema)
+            }
+        }
         RowConstructor(constructor) => {
             if constructor.field_names.len() != constructor.fields.len() {
                 return Err(DataFusionError::Plan(

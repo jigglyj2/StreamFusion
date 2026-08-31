@@ -12,8 +12,10 @@ package tech.streamfusion.flink.sql;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.Arrays;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.table.api.DataTypes;
+import org.apache.flink.table.types.DataType;
 import org.apache.flink.types.Row;
 import org.junit.jupiter.api.Test;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
@@ -38,7 +40,7 @@ class CollectionRemovalParityTest extends SqlParityTestSupport {
     }
 
     @Test
-    void nullableArrayRemoveNeedleFallsBackWithSemanticReason() throws Exception {
+    void nullableArrayRemoveNeedleRemovesNullElementsNatively() throws Exception {
         assertDataStreamParity(
                 "SELECT ARRAY_REMOVE(metric, CAST(NULL AS INT)) FROM array_input",
                 Types.OBJECT_ARRAY(Types.INT),
@@ -46,8 +48,32 @@ class CollectionRemovalParityTest extends SqlParityTestSupport {
                 Arrays.asList(Row.of((Object) new Integer[] {1, null, 2, null}), Row.of((Object) null)),
                 "array_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
-        assertThat(StreamFusionPlanningDiagnostics.explain())
-                .contains("Flink removes null elements while DataFusion returns null");
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isGreaterThan(0);
+    }
+
+    @Test
+    void perRowNullableArrayRemoveNeedleUsesBothNativeBranches() throws Exception {
+        TypeInformation<Row> metricType =
+                Types.ROW_NAMED(new String[] {"items", "needle"}, Types.OBJECT_ARRAY(Types.INT), Types.INT);
+        DataType logicalType = DataTypes.ROW(
+                DataTypes.FIELD("items", DataTypes.ARRAY(DataTypes.INT())), DataTypes.FIELD("needle", DataTypes.INT()));
+
+        assertDataStreamParity(
+                "SELECT ARRAY_REMOVE(metric.items, metric.needle) FROM dynamic_array_remove_input",
+                metricType,
+                logicalType,
+                Arrays.asList(
+                        Row.of(Row.of(new Integer[] {1, 2, null, 2}, 2)),
+                        Row.of(Row.of(new Integer[] {1, 2, null, 2}, null)),
+                        Row.of(Row.of(new Integer[] {}, null)),
+                        Row.of(Row.of(null, 1)),
+                        Row.of((Object) null)),
+                "dynamic_array_remove_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isGreaterThan(0);
     }
 }

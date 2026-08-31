@@ -45,7 +45,7 @@ final class StreamFusionArrayConstructorTranslator extends StreamFusionRexSuppor
         }
         java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
         return operands.isEmpty()
-                ? "empty ARRAY constructors stay on Flink until a correctly typed empty Arrow array is encoded"
+                ? "empty ARRAY constructors are rejected by Flink 2.3 SQL validation before physical planning"
                 : null;
     }
 

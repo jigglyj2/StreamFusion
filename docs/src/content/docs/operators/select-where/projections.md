@@ -74,15 +74,16 @@ Complex types may be selected, reordered, omitted, or repeated as direct input r
 Named `ROW` fields may also be projected or used inside supported expressions, including
 chains through nested rows. A null parent row produces a null child value, matching Flink.
 Typed `NULL` literals are accelerated for `ARRAY`, `MAP`, and `ROW`, including recursively
-nested arrays and rows. One-based `ARRAY` access is accelerated for positive integer literal
-indexes; a null array, null element, or index beyond the array length produces null. The
+nested arrays and rows. One-based `ARRAY` access is accelerated for literal and computed `INT`
+indexes; a null array, null index, null element, nonpositive index, or index beyond the array
+length produces null. Flink rejects a nonpositive literal during validation, while the native
+runtime adapter preserves its per-row behavior for a computed nonpositive value. The
 selected element may itself be complex, so expressions such as `rows[1].name` are supported.
 Map lookup is accelerated when both the map and key are otherwise supported expressions of
 the declared map types; present values, present null values, absent keys, and null maps match
 Flink's scalar result. `CARDINALITY` is accelerated for maps and arrays of any supported nesting
 depth, returning an `INT` count or null for a null collection. A dedicated native expression counts
-only the outer array, matching Flink rather than DataFusion's recursive leaf count. Zero, negative,
-and computed array indexes, non-null `MAP` and `ROW` literals,
+only the outer array, matching Flink rather than DataFusion's recursive leaf count. Non-null `MAP` and `ROW` literals,
 `MULTISET`, and collection functions not explicitly listed below still fall back with the whole Calc. Nested child types, field names,
 ordering, nullability, and Arrow offsets are preserved across the native plan.
 
@@ -195,11 +196,11 @@ Array and map `CARDINALITY` use a dedicated vector expression over Arrow offsets
 outer offset pair for each row, so nested arrays match Flink's outer-cardinality semantics without
 walking or materializing child values. Arrow list and map offsets cap a single row's result within
 the signed 32-bit range.
-`ARRAY_CONTAINS` is accelerated in projections and filters when its needle is provably
-non-null and both arguments otherwise lower natively. Null arrays yield null, and null elements
-do not prevent a non-null needle from matching another element. Nullable needles remain on
-Flink with an EXPLAIN reason: Flink treats a null needle as a search for a null element, whereas
-DataFusion returns null without searching the array.
+`ARRAY_CONTAINS` is accelerated in projections and filters when both arguments otherwise lower
+natively. Null arrays yield null, and null elements do not prevent a non-null needle from matching
+another element. For a null needle, a dedicated Arrow expression searches the element-validity
+range and returns true exactly when the array contains a null, preserving Flink's behavior where
+DataFusion's stock kernel would return null.
 `ARRAY_REVERSE` is accelerated for Arrow-compatible element types, including nested `ROW`
 elements and nullable elements. It lowers directly to DataFusion's vectorized array reversal;
 null and empty arrays retain Flink's behavior, and the resulting Arrow array stays inside the
@@ -222,11 +223,11 @@ the array or search value is null. StreamFusion wraps DataFusion's vectorized se
 input-null guard and converts DataFusion's missing-match null to Flink's `INT` zero. This follows
 the same semantic-adapter model as Comet's array-position implementation while retaining the
 upstream DataFusion kernel.
-`ARRAY_REMOVE` is accelerated when its array and search value otherwise lower natively and the
-search value is provably non-null. It removes every matching value, preserves null elements and
-input order, and returns null for a null array. Nullable search values cause whole-Calc fallback
-with an EXPLAIN reason because Flink removes null elements when the search value is null, while
-DataFusion's remove-all kernel returns null instead.
+`ARRAY_REMOVE` is accelerated when its array and search value otherwise lower natively. It removes
+every matching value, preserves input order, and returns null for a null array. Non-null needles
+use DataFusion's vectorized remove-all kernel. For a null needle, a dedicated Arrow expression
+copies only the non-null child ranges into a new list, matching Flink instead of DataFusion's null
+result.
 `ARRAY_MIN` and `ARRAY_MAX` are accelerated for arrays of `TINYINT`, `SMALLINT`, `INT`,
 `BIGINT`, `DECIMAL`, `VARCHAR`, and `DATE`. Null elements are ignored; empty, all-null, and null
 arrays produce null. Rust uses DataFusion's vectorized extrema kernels. `FLOAT` and `DOUBLE`
@@ -252,10 +253,10 @@ and last when descending, matching Flink. Floating-point arrays stay on Flink be
 signed-zero ordering is not yet parity-approved; dynamic or null controls also produce an explicit
 EXPLAIN fallback.
 `ARRAY_SLICE` is accelerated for Arrow-compatible arrays when its start and optional inclusive
-end positions are non-null integer literals. Positive, zero, negative, and out-of-range positions
-use DataFusion's vectorized one-based slice kernel, whose clamping and negative-from-end behavior
-matches Flink; the omitted end is represented natively as an unbounded upper position. Dynamic or
-null positions remain on Flink with an explicit EXPLAIN reason.
+end positions are otherwise supported `INT` expressions. Positive, zero, negative, and out-of-range
+positions use DataFusion's vectorized one-based slice kernel, with an Arrow-native adapter for
+Flink's explicit end-zero rule. Null bounds produce null, and an omitted end is represented
+natively as an unbounded upper position.
 `ELEMENT(array)` is accelerated for otherwise supported arrays. A singleton array returns its value,
 an empty or null array returns null, and an array with more than one element raises an execution
 error. StreamFusion uses a dedicated vector expression rather than unchecked indexed access so
@@ -280,8 +281,8 @@ Non-empty `ARRAY[...]` value constructors are accelerated when every element is 
 supported expression of Flink's resolved common element type. This includes arrays containing
 dynamic scalar values, arrays, or rows. Java serializes each element independently and Rust
 lowers the constructor to DataFusion's vectorized `make_array`; no materialized collection is
-sent through protobuf. Empty constructors remain on Flink with an EXPLAIN reason because
-DataFusion's untyped `List<Null>` result cannot preserve Flink's declared element type.
+sent through protobuf. Flink 2.3 rejects empty `ARRAY[]` constructors during SQL validation before
+a physical plan or inferred element type exists, so there is no native operator case to replace.
 Non-empty typed `ROW(...)` constructors are accelerated when every field expression lowers
 natively. Java serializes Flink's resolved field names and expressions in the plan protobuf; Rust
 interleaves those names with the native field expressions and lowers the constructor to
@@ -292,8 +293,9 @@ Non-empty typed `MAP[...]` constructors are accelerated when every key is a uniq
 literal and every value expression lowers natively. Java separates the resolved key/value pairs in
 the protobuf; Rust builds Arrow key and value lists and passes them directly to DataFusion's map
 constructor. Dynamic, null, or duplicate keys remain on Flink with an EXPLAIN reason because Flink
-uses last-value-wins semantics for duplicate keys while DataFusion rejects them. Empty maps remain
-fallback until the protobuf carries an explicit Arrow key/value type for an empty constructor.
+uses last-value-wins semantics for duplicate keys while DataFusion rejects them. Flink 2.3 rejects
+empty `MAP[]` constructors during SQL validation before a physical plan or inferred key/value type
+exists, so there is no native operator case to replace.
 `MAP_KEYS` and `MAP_VALUES` are accelerated for otherwise native map expressions. They lower
 directly to DataFusion's Arrow map projection kernels and preserve entry order, null maps, and
 nullable values. They can consume a native `MAP[...]` constructor without materializing the map in

@@ -353,6 +353,39 @@ class ArrayUnnestParityTest extends SqlParityTestSupport {
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 
+    @Test
+    void nativeRowArrayUnnestPreservesNestedMapFields() throws Exception {
+        java.util.LinkedHashMap<String, Integer> populated = new java.util.LinkedHashMap<>();
+        populated.put("first", 1);
+        populated.put("missing", null);
+        java.util.List<Row> inputs = Arrays.asList(
+                Row.of((Object) new Row[] {
+                    Row.of("populated", populated),
+                    Row.of("empty", new java.util.LinkedHashMap<>()),
+                    Row.of("null", null)
+                }),
+                Row.of((Object) new Row[] {}),
+                Row.of((Object) null));
+        org.apache.flink.api.common.typeinfo.TypeInformation<Row[]> externalType = Types.OBJECT_ARRAY(Types.ROW_NAMED(
+                new String[] {"label", "attributes"}, Types.STRING, Types.MAP(Types.STRING, Types.INT)));
+        org.apache.flink.table.types.DataType logicalType = DataTypes.ARRAY(DataTypes.ROW(
+                DataTypes.FIELD("label", DataTypes.STRING()),
+                DataTypes.FIELD("attributes", DataTypes.MAP(DataTypes.STRING().notNull(), DataTypes.INT()))));
+
+        assertDataStreamParity(
+                "SELECT label, attributes FROM nested_map_row_array_unnest_input "
+                        + "LEFT JOIN UNNEST(metric) AS expanded(label, attributes) ON TRUE",
+                externalType,
+                logicalType,
+                inputs,
+                "nested_map_row_array_unnest_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isEqualTo(1);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
     private static byte[] executeChangelog(java.util.List<Row> rows, boolean streamFusionEnabled) throws Exception {
         if (streamFusionEnabled) {
             System.setProperty(

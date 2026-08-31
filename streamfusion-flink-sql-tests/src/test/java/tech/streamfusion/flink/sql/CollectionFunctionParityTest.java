@@ -20,8 +20,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.table.api.DataTypes;
+import org.apache.flink.table.types.DataType;
 import org.apache.flink.types.Row;
 import org.junit.jupiter.api.Test;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
@@ -54,7 +56,7 @@ class CollectionFunctionParityTest extends SqlParityTestSupport {
     }
 
     @Test
-    void nullableArrayContainsNeedleFallsBackWithSemanticReason() throws Exception {
+    void nullableArrayContainsNeedleUsesFlinkNullSearchSemanticsNatively() throws Exception {
         assertDataStreamParity(
                 "SELECT ARRAY_CONTAINS(metric, CAST(NULL AS INT)) FROM nullable_needle_input",
                 Types.OBJECT_ARRAY(Types.INT),
@@ -65,9 +67,29 @@ class CollectionFunctionParityTest extends SqlParityTestSupport {
                         Row.of((Object) null)),
                 "nullable_needle_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
-        assertThat(StreamFusionPlanningDiagnostics.explain())
-                .contains("Flink searches for null while DataFusion returns null without searching");
+        assertNativeCalcRan();
+    }
+
+    @Test
+    void perRowNullableArrayContainsNeedleUsesBothNativeBranches() throws Exception {
+        TypeInformation<Row> metricType =
+                Types.ROW_NAMED(new String[] {"items", "needle"}, Types.OBJECT_ARRAY(Types.INT), Types.INT);
+        DataType logicalType = DataTypes.ROW(
+                DataTypes.FIELD("items", DataTypes.ARRAY(DataTypes.INT())), DataTypes.FIELD("needle", DataTypes.INT()));
+
+        assertDataStreamParity(
+                "SELECT ARRAY_CONTAINS(metric.items, metric.needle) FROM dynamic_array_contains_input",
+                metricType,
+                logicalType,
+                Arrays.asList(
+                        Row.of(Row.of(new Integer[] {1, null, 3}, 3)),
+                        Row.of(Row.of(new Integer[] {1, null, 3}, null)),
+                        Row.of(Row.of(new Integer[] {1, 2, 3}, null)),
+                        Row.of(Row.of(null, 1)),
+                        Row.of((Object) null)),
+                "dynamic_array_contains_input");
+
+        assertNativeCalcRan();
     }
 
     @Test

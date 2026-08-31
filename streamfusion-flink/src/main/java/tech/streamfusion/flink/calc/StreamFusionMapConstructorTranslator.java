@@ -50,7 +50,7 @@ final class StreamFusionMapConstructorTranslator extends StreamFusionRexSupport 
         }
         java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
         if (operands.isEmpty()) {
-            return "empty MAP constructors stay on Flink until an explicitly typed empty Arrow map is encoded";
+            return "empty MAP constructors are rejected by Flink 2.3 SQL validation before physical planning";
         }
         return hasUniqueLiteralKeys(operands)
                 ? null

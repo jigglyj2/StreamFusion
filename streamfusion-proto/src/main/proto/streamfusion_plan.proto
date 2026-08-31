@@ -254,6 +254,7 @@ message StructField {
 message ArrayElement {
   Expression array = 1;
   int64 index = 2;
+  optional Expression index_expression = 3;
 }
 
 message MapElement {
@@ -272,6 +273,7 @@ message Element {
 message ArrayContains {
   Expression array = 1;
   Expression needle = 2;
+  bool needle_nullable = 3;
 }
 
 message ArrayReverse {
@@ -323,6 +325,7 @@ message ArrayExcept {
 message ArrayRemove {
   Expression array = 1;
   Expression needle = 2;
+  bool needle_nullable = 3;
 }
 
 message ArrayMinimum {
@@ -354,6 +357,8 @@ message ArraySlice {
   Expression array = 1;
   int64 start = 2;
   optional int64 end = 3;
+  optional Expression start_expression = 4;
+  optional Expression end_expression = 5;
 }
 
 message RowConstructor {

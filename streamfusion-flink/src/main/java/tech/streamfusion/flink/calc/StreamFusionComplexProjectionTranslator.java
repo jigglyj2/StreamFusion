@@ -39,10 +39,10 @@ final class StreamFusionComplexProjectionTranslator extends StreamFusionComplexT
         if ("ITEM".equals(kind) && operands.size() == 2) {
             LogicalType collection = logicalType(operands.get(0), inputType);
             if (collection instanceof ArrayType) {
-                Integer index = integerLiteral(operands.get(1));
-                if (index == null || index <= 0) {
-                    return "ARRAY access requires a positive integer literal index; zero, negative, and "
-                            + "computed indexes have not passed Flink parity coverage";
+                LogicalType index = logicalType(operands.get(1), inputType);
+                if (index == null
+                        || index.getTypeRoot() != org.apache.flink.table.types.logical.LogicalTypeRoot.INTEGER) {
+                    return "ARRAY access requires an INT index expression";
                 }
             }
         }
@@ -69,18 +69,25 @@ final class StreamFusionComplexProjectionTranslator extends StreamFusionComplexT
         if (!elementType.copy(expectedType.isNullable()).equals(expectedType)) {
             return null;
         }
-        Integer index = integerLiteral(operands.get(1));
-        if (index == null || index <= 0) {
+        LogicalType indexType = logicalType(operands.get(1), inputType);
+        if (indexType == null
+                || indexType.getTypeRoot() != org.apache.flink.table.types.logical.LogicalTypeRoot.INTEGER) {
             return null;
         }
         Expression array =
                 StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, collectionType);
-        return array == null
-                ? null
-                : Expression.newBuilder()
-                        .setArrayElement(
-                                ArrayElement.newBuilder().setArray(array).setIndex(index))
-                        .build();
+        Expression index = StreamFusionProjectionTranslator.projectionExpression(operands.get(1), inputType, indexType);
+        if (array == null || index == null) {
+            return null;
+        }
+        Integer literalIndex = integerLiteral(operands.get(1));
+        ArrayElement.Builder element = ArrayElement.newBuilder().setArray(array);
+        if (literalIndex != null) {
+            element.setIndex(literalIndex);
+        } else {
+            element.setIndexExpression(index);
+        }
+        return Expression.newBuilder().setArrayElement(element).build();
     }
 
     static Expression mapElement(Object expression, RowType inputType, LogicalType expectedType) {

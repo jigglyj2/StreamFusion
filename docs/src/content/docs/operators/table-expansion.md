@@ -63,7 +63,8 @@ StreamFusion accelerates the operation when all of the following are true:
   expression the Calc expression translator supports exactly.
 - The element is a supported scalar Arrow boundary type, including numeric, boolean, character,
   binary, decimal, date, time, and timestamp values; a non-empty `ROW` recursively composed of
-  those types and arrays; or an `ARRAY` recursively containing another supported array element.
+  those types, arrays, and maps with supported keys and recursively supported values; an `ARRAY`
+  recursively containing another supported array element; or such a supported map value.
 - The correlate has no additional condition and its output preserves every input field before
   appending the array element or map key/value fields with exactly Flink's types.
 - Every other internal node in the plan has a StreamFusion implementation.
@@ -77,9 +78,10 @@ into its named fields and omit null row elements, matching Flink. For supported 
 the synthetic row also has a null position when ordinality is requested. Map expansion preserves
 the paired key and value arrays and assigns positions in Flink's stored `MapData` entry order; SQL
 map ordering is not otherwise guaranteed. In left expansion of arrays of rows, null and empty
-collections still produce exactly one synthetic all-null row. Unsupported computed collection
-expressions, rows containing maps or multisets, maps with collection keys or values outside the
-documented scalar/row/recursively nested-array shapes,
+collections still produce exactly one synthetic all-null row. Map-valued fields inside expanded
+rows remain Arrow map children and are not materialized in Java. Unsupported computed collection
+expressions, rows containing multisets, maps with collection keys or values outside the
+documented recursive shapes,
 nullable row-array elements with ordinality, and multisets with nullable or direct array elements,
 `UNNEST(MAP_ENTRIES(map))` (because Flink 2.3 reports nullable entry rows while preserving a
 non-null map-key output),

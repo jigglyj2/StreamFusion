@@ -367,6 +367,10 @@ public final class StreamFusionArrayUnnestTranslator {
             return row.getFieldCount() > 0
                     && row.getChildren().stream().allMatch(StreamFusionArrayUnnestTranslator::isSupportedArrayElement);
         }
+        if (element instanceof MapType) {
+            MapType map = (MapType) element;
+            return isSupportedElement(map.getKeyType()) && isSupportedArrayElement(map.getValueType());
+        }
         return element instanceof ArrayType && isSupportedArrayElement(((ArrayType) element).getElementType());
     }
 

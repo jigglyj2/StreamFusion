@@ -43,19 +43,6 @@ final class StreamFusionCollectionTranslator extends StreamFusionComplexTypeSupp
         java.util.List<?> operands = hasNoArgMethod(expression, "getOperands")
                 ? (java.util.List<?>) invoke(expression, "getOperands")
                 : java.util.Collections.emptyList();
-        if ("ARRAY_CONTAINS".equals(function) && operands.size() == 2) {
-            LogicalType needle = logicalType(operands.get(1), inputType);
-            if (needle != null && needle.isNullable()) {
-                return "ARRAY_CONTAINS with a nullable needle stays on Flink because Flink searches for null "
-                        + "while DataFusion returns null without searching";
-            }
-        }
-        if ("ARRAY_REMOVE".equals(function) && operands.size() == 2) {
-            LogicalType needle = logicalType(operands.get(1), inputType);
-            if (needle != null && needle.isNullable()) {
-                return "ARRAY_REMOVE with a nullable needle stays on Flink because Flink removes null elements while DataFusion returns null";
-            }
-        }
         if (("ARRAY_MIN".equals(function) || "ARRAY_MAX".equals(function)) && operands.size() == 1) {
             LogicalType collection = logicalType(operands.get(0), inputType);
             if (collection instanceof ArrayType) {
@@ -93,13 +80,6 @@ final class StreamFusionCollectionTranslator extends StreamFusionComplexTypeSupp
             for (int index = 1; index < operands.size(); index++) {
                 if (literal(operands.get(index), Boolean.class) == null) {
                     return "ARRAY_SORT stays on Flink unless its ascending and null-order controls are non-null boolean literals";
-                }
-            }
-        }
-        if ("ARRAY_SLICE".equals(function) && (operands.size() == 2 || operands.size() == 3)) {
-            for (int index = 1; index < operands.size(); index++) {
-                if (literal(operands.get(index), Integer.class) == null) {
-                    return "ARRAY_SLICE stays on Flink unless its start and optional end positions are non-null integer literals";
                 }
             }
         }
@@ -166,18 +146,20 @@ final class StreamFusionCollectionTranslator extends StreamFusionComplexTypeSupp
         }
         LogicalType elementType = ((ArrayType) collectionType).getElementType();
         LogicalType needleType = logicalType(operands.get(1), inputType);
-        if (needleType == null || needleType.isNullable()) {
+        if (needleType == null) {
             return null;
         }
         Expression array =
                 StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, collectionType);
         Expression needle = StreamFusionProjectionTranslator.projectionExpression(
-                operands.get(1), inputType, elementType.copy(false));
+                operands.get(1), inputType, elementType.copy(needleType.isNullable()));
         return array == null || needle == null
                 ? null
                 : Expression.newBuilder()
-                        .setArrayContains(
-                                ArrayContains.newBuilder().setArray(array).setNeedle(needle))
+                        .setArrayContains(ArrayContains.newBuilder()
+                                .setArray(array)
+                                .setNeedle(needle)
+                                .setNeedleNullable(needleType.isNullable()))
                         .build();
     }
 
@@ -291,17 +273,20 @@ final class StreamFusionCollectionTranslator extends StreamFusionComplexTypeSupp
         }
         LogicalType arrayType = logicalType(operands.get(0), inputType);
         LogicalType needleType = logicalType(operands.get(1), inputType);
-        if (!(arrayType instanceof ArrayType) || needleType == null || needleType.isNullable()) {
+        if (!(arrayType instanceof ArrayType) || needleType == null) {
             return null;
         }
         LogicalType elementType = ((ArrayType) arrayType).getElementType();
         Expression array = StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, arrayType);
         Expression needle = StreamFusionProjectionTranslator.projectionExpression(
-                operands.get(1), inputType, elementType.copy(false));
+                operands.get(1), inputType, elementType.copy(needleType.isNullable()));
         return array == null || needle == null
                 ? null
                 : Expression.newBuilder()
-                        .setArrayRemove(ArrayRemove.newBuilder().setArray(array).setNeedle(needle))
+                        .setArrayRemove(ArrayRemove.newBuilder()
+                                .setArray(array)
+                                .setNeedle(needle)
+                                .setNeedleNullable(needleType.isNullable()))
                         .build();
     }
 
@@ -431,18 +416,34 @@ final class StreamFusionCollectionTranslator extends StreamFusionComplexTypeSupp
             return null;
         }
         LogicalType arrayType = logicalType(operands.get(0), inputType);
-        Integer start = literal(operands.get(1), Integer.class);
-        Integer end = operands.size() == 3 ? literal(operands.get(2), Integer.class) : null;
-        if (!(arrayType instanceof ArrayType) || start == null || (operands.size() == 3 && end == null)) {
+        LogicalType startType = logicalType(operands.get(1), inputType);
+        LogicalType endType = operands.size() == 3 ? logicalType(operands.get(2), inputType) : null;
+        if (!(arrayType instanceof ArrayType)
+                || startType == null
+                || startType.getTypeRoot() != LogicalTypeRoot.INTEGER
+                || (operands.size() == 3 && (endType == null || endType.getTypeRoot() != LogicalTypeRoot.INTEGER))) {
             return null;
         }
         Expression array = StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, arrayType);
-        if (array == null) {
+        Expression startExpression =
+                StreamFusionProjectionTranslator.projectionExpression(operands.get(1), inputType, startType);
+        Expression endExpression = operands.size() == 3
+                ? StreamFusionProjectionTranslator.projectionExpression(operands.get(2), inputType, endType)
+                : null;
+        if (array == null || startExpression == null || (operands.size() == 3 && endExpression == null)) {
             return null;
         }
-        ArraySlice.Builder slice = ArraySlice.newBuilder().setArray(array).setStart(start.longValue());
-        if (end != null) {
-            slice.setEnd(end.longValue());
+        ArraySlice.Builder slice = ArraySlice.newBuilder().setArray(array).setStartExpression(startExpression);
+        Integer start = literal(operands.get(1), Integer.class);
+        if (start != null) {
+            slice.setStart(start.longValue());
+        }
+        if (operands.size() == 3) {
+            slice.setEndExpression(endExpression);
+            Integer end = literal(operands.get(2), Integer.class);
+            if (end != null) {
+                slice.setEnd(end.longValue());
+            }
         }
         return Expression.newBuilder().setArraySlice(slice).build();
     }

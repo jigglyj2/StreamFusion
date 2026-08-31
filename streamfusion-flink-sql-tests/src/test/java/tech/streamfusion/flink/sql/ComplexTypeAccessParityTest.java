@@ -66,6 +66,32 @@ class ComplexTypeAccessParityTest extends SqlParityTestSupport {
     }
 
     @Test
+    void computedArrayIndexesMatchFlinkForNullNonpositiveAndOutOfRangeValues() throws Exception {
+        TypeInformation<Row> metricType =
+                Types.ROW_NAMED(new String[] {"items", "item_index"}, Types.OBJECT_ARRAY(Types.INT), Types.INT);
+        DataType logicalType = DataTypes.ROW(
+                DataTypes.FIELD("items", DataTypes.ARRAY(DataTypes.INT())),
+                DataTypes.FIELD("item_index", DataTypes.INT()));
+
+        assertDataStreamParity(
+                "SELECT metric.items[metric.item_index] FROM computed_array_index_input",
+                metricType,
+                logicalType,
+                Arrays.asList(
+                        Row.of(Row.of(new Integer[] {10, null, 30}, 1)),
+                        Row.of(Row.of(new Integer[] {10, null, 30}, 2)),
+                        Row.of(Row.of(new Integer[] {10, null, 30}, 0)),
+                        Row.of(Row.of(new Integer[] {10, null, 30}, -1)),
+                        Row.of(Row.of(new Integer[] {10, null, 30}, 4)),
+                        Row.of(Row.of(new Integer[] {10, null, 30}, null)),
+                        Row.of(Row.of(null, 1)),
+                        Row.of((Object) null)),
+                "computed_array_index_input");
+
+        assertNativeCalcRan();
+    }
+
+    @Test
     void rowFieldsInsideArraysMatchFlinkByteForByte() throws Exception {
         TypeInformation<Row> rowType = Types.ROW_NAMED(new String[] {"label", "amount"}, Types.STRING, Types.INT);
         assertDataStreamParity(
