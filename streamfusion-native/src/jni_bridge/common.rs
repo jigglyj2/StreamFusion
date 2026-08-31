@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use arrow::array::{Array, Int32Array, RecordBatch, StructArray};
 use arrow::datatypes::{DataType, Field, Schema};
-use arrow::ffi::{from_ffi, FFI_ArrowArray, FFI_ArrowSchema};
+use arrow::ffi::{from_ffi, from_ffi_and_data_type, FFI_ArrowArray, FFI_ArrowSchema};
 use datafusion::execution::memory_pool::MemoryReservation;
 use datafusion::physical_plan::{collect, ExecutionPlan};
 
@@ -20,9 +20,17 @@ pub(super) unsafe fn import_input(
     context: &NativeExecutionContext,
     input_array_address: *mut FFI_ArrowArray,
     input_schema_address: *mut FFI_ArrowSchema,
+    input_index: usize,
     row_offset: usize,
 ) -> datafusion::error::Result<(RecordBatch, MemoryReservation)> {
-    let input_batch = unsafe { import_record_batch(input_array_address, input_schema_address) }?;
+    let input_batch = if input_schema_address.is_null() {
+        let schema = context.input_schema(input_index)?;
+        unsafe { import_record_batch_with_schema(input_array_address, schema)? }
+    } else {
+        let batch = unsafe { import_record_batch(input_array_address, input_schema_address) }?;
+        context.remember_input_schema(input_index, batch.schema())?;
+        batch
+    };
     let row_count = input_batch.num_rows();
     let reservation = context.reservation("native input-row ordinal");
     reservation.try_grow(
@@ -70,15 +78,30 @@ pub(super) unsafe fn import_record_batch(
     Ok(RecordBatch::from(StructArray::from(input_data)))
 }
 
+unsafe fn import_record_batch_with_schema(
+    input_array_address: *mut FFI_ArrowArray,
+    schema: Arc<Schema>,
+) -> datafusion::error::Result<RecordBatch> {
+    if input_array_address.is_null() {
+        return Err(datafusion::error::DataFusionError::Execution(
+            "Arrow C Data input address was null".to_string(),
+        ));
+    }
+    let ffi_array = unsafe { FFI_ArrowArray::from_raw(input_array_address) };
+    let input_data =
+        unsafe { from_ffi_and_data_type(ffi_array, DataType::Struct(schema.fields().clone())) }?;
+    Ok(RecordBatch::from(StructArray::from(input_data)))
+}
+
 pub(super) unsafe fn execute_and_export(
     context: &NativeExecutionContext,
     plan: Arc<dyn ExecutionPlan>,
     output_array_address: *mut FFI_ArrowArray,
     output_schema_address: *mut FFI_ArrowSchema,
 ) -> datafusion::error::Result<usize> {
-    if output_array_address.is_null() || output_schema_address.is_null() {
+    if output_array_address.is_null() {
         return Err(datafusion::error::DataFusionError::Execution(
-            "Arrow C Data output address was null".to_string(),
+            "Arrow C Data output array address was null".to_string(),
         ));
     }
     let output_schema = plan.schema();
@@ -114,10 +137,16 @@ pub(super) unsafe fn execute_and_export(
     let rows = output_batch.num_rows();
     let output_data = StructArray::from(output_batch).to_data();
     let output_array = FFI_ArrowArray::new(&output_data);
-    let output_schema = FFI_ArrowSchema::try_from(output_data.data_type())?;
+    let output_schema = if output_schema_address.is_null() {
+        None
+    } else {
+        Some(FFI_ArrowSchema::try_from(output_data.data_type())?)
+    };
     unsafe {
         std::ptr::write(output_array_address, output_array);
-        std::ptr::write(output_schema_address, output_schema);
+        if let Some(output_schema) = output_schema {
+            std::ptr::write(output_schema_address, output_schema);
+        }
     }
     Ok(rows)
 }

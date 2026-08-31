@@ -48,11 +48,9 @@ public abstract class FloatWriter<T> extends ArrowFieldWriter<T> {
     @Override
     public void doWrite(T in, int ordinal) {
         if (isNullAt(in, ordinal)) {
-            ((Float4Vector) getValueVector()).setNull(getCount());
+            writeNull();
         } else {
-            ((Float4Vector) getValueVector())
-                    .getDataBuffer()
-                    .setFloat((long) getCount() * Float.BYTES, readFloat(in, ordinal));
+            dataBuffer().setFloat((long) getCount() * Float.BYTES, readFloat(in, ordinal));
         }
     }
 

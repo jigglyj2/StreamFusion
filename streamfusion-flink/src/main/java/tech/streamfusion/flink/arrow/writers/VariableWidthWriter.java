@@ -15,6 +15,7 @@ import org.apache.flink.table.data.binary.BinaryStringData;
 final class VariableWidthWriter {
     private final BaseVariableWidthVector vector;
     private ArrowBuf dataBuffer;
+    private ArrowBuf offsetBuffer;
     private int dataCapacity;
     private MemorySegment dataSegment;
 
@@ -29,7 +30,7 @@ final class VariableWidthWriter {
             binary.ensureMaterialized();
             int length = binary.getSizeInBytes();
             ensureDataCapacity(dataOffset, length);
-            writeOffsets(vector, index, dataOffset, length);
+            writeOffsets(index, dataOffset, length);
             copySegments(binary.getSegments(), binary.getOffset(), dataSegment, dataOffset, length);
             vector.setLastSet(index);
             return dataOffset + length;
@@ -39,21 +40,21 @@ final class VariableWidthWriter {
 
     int writeBytes(int index, int dataOffset, byte[] value) {
         ensureDataCapacity(dataOffset, value.length);
-        writeOffsets(vector, index, dataOffset, value.length);
+        writeOffsets(index, dataOffset, value.length);
         dataBuffer.setBytes(dataOffset, value);
         vector.setLastSet(index);
         return dataOffset + value.length;
     }
 
-    void writeNull(int index, int dataOffset) {
-        vector.getOffsetBuffer().setInt((long) index * Integer.BYTES, dataOffset);
-        vector.getOffsetBuffer().setInt((long) (index + 1) * Integer.BYTES, dataOffset);
-        vector.setNull(index);
+    void writeNullOffsets(int index, int dataOffset) {
+        offsetBuffer.setInt((long) index * Integer.BYTES, dataOffset);
+        offsetBuffer.setInt((long) (index + 1) * Integer.BYTES, dataOffset);
         vector.setLastSet(index);
     }
 
     void refreshDataBuffer() {
         dataBuffer = vector.getDataBuffer();
+        offsetBuffer = vector.getOffsetBuffer();
         dataCapacity = Math.toIntExact(dataBuffer.capacity());
         dataSegment = MemorySegmentFactory.wrapOffHeapMemory(dataBuffer.nioBuffer(0, dataCapacity));
     }
@@ -69,9 +70,9 @@ final class VariableWidthWriter {
         }
     }
 
-    private static void writeOffsets(BaseVariableWidthVector vector, int index, int offset, int length) {
-        vector.getOffsetBuffer().setInt((long) index * Integer.BYTES, offset);
-        vector.getOffsetBuffer().setInt((long) (index + 1) * Integer.BYTES, offset + length);
+    private void writeOffsets(int index, int offset, int length) {
+        offsetBuffer.setInt((long) index * Integer.BYTES, offset);
+        offsetBuffer.setInt((long) (index + 1) * Integer.BYTES, offset + length);
     }
 
     private static void copySegments(

@@ -39,6 +39,12 @@ public abstract class ArrowFieldWriter<IN> {
     /** Container which is used to store the written sequence of values of a column. */
     private final ValueVector valueVector;
 
+    /** Cached buffer views avoid Arrow's reference-count lookup on every field write. */
+    private ArrowBuf dataBuffer;
+
+    private ArrowBuf validityBuffer;
+    private ArrowBuf offsetBuffer;
+
     /** The current count of elements written. */
     private int count = 0;
 
@@ -48,6 +54,7 @@ public abstract class ArrowFieldWriter<IN> {
     public ArrowFieldWriter(ValueVector valueVector) {
         this.valueVector = Preconditions.checkNotNull(valueVector);
         this.valueCapacity = valueVector.getValueCapacity();
+        refreshBuffers();
     }
 
     /** Returns the underlying container which stores the sequence of values of a column. */
@@ -58,6 +65,19 @@ public abstract class ArrowFieldWriter<IN> {
     /** Returns the current count of elements written. */
     public int getCount() {
         return count;
+    }
+
+    protected final ArrowBuf dataBuffer() {
+        return dataBuffer;
+    }
+
+    protected final ArrowBuf offsetBuffer() {
+        return offsetBuffer;
+    }
+
+    /** Clears the current validity bit; reset pre-initializes every in-capacity bit as valid. */
+    protected final void writeNull() {
+        org.apache.arrow.vector.BitVectorHelper.unsetBit(validityBuffer, count);
     }
 
     /** Sets the field value as the field at the specified ordinal of the specified row. */
@@ -98,6 +118,7 @@ public abstract class ArrowFieldWriter<IN> {
             valueVector.reAlloc();
             valueCapacity = valueVector.getValueCapacity();
         } while (count >= valueCapacity);
+        refreshBuffers();
         initializeValidity(previousCapacity, valueCapacity);
         onVectorReallocated();
     }
@@ -125,30 +146,44 @@ public abstract class ArrowFieldWriter<IN> {
         if (toValue <= fromValue) {
             return;
         }
-        ArrowBuf validity = null;
-        if (valueVector instanceof BaseFixedWidthVector) {
-            validity = ((BaseFixedWidthVector) valueVector).getValidityBuffer();
-        } else if (valueVector instanceof BaseVariableWidthVector) {
-            validity = ((BaseVariableWidthVector) valueVector).getValidityBuffer();
-        } else if (valueVector instanceof ListVector) {
-            validity = ((ListVector) valueVector).getValidityBuffer();
-        } else if (valueVector instanceof StructVector) {
-            validity = ((StructVector) valueVector).getValidityBuffer();
+        ArrowBuf validity = validityBuffer;
+        if (validity == null) {
+            return;
         }
-        if (validity != null) {
-            int value = fromValue;
-            while (value < toValue && (value & 7) != 0) {
-                org.apache.arrow.vector.BitVectorHelper.setBit(validity, value++);
-            }
-            long firstByte = value / 8L;
-            long byteCount = (toValue - value) / 8L;
-            if (byteCount > 0) {
-                validity.setOne(firstByte, byteCount);
-                value += Math.toIntExact(byteCount * 8L);
-            }
-            while (value < toValue) {
-                org.apache.arrow.vector.BitVectorHelper.setBit(validity, value++);
-            }
+        int value = fromValue;
+        while (value < toValue && (value & 7) != 0) {
+            org.apache.arrow.vector.BitVectorHelper.setBit(validity, value++);
+        }
+        long firstByte = value / 8L;
+        long byteCount = (toValue - value) / 8L;
+        if (byteCount > 0) {
+            validity.setOne(firstByte, byteCount);
+            value += Math.toIntExact(byteCount * 8L);
+        }
+        while (value < toValue) {
+            org.apache.arrow.vector.BitVectorHelper.setBit(validity, value++);
+        }
+    }
+
+    private void refreshBuffers() {
+        dataBuffer = null;
+        validityBuffer = null;
+        offsetBuffer = null;
+        if (valueVector instanceof BaseFixedWidthVector) {
+            BaseFixedWidthVector vector = (BaseFixedWidthVector) valueVector;
+            dataBuffer = vector.getDataBuffer();
+            validityBuffer = vector.getValidityBuffer();
+        } else if (valueVector instanceof BaseVariableWidthVector) {
+            BaseVariableWidthVector vector = (BaseVariableWidthVector) valueVector;
+            dataBuffer = vector.getDataBuffer();
+            validityBuffer = vector.getValidityBuffer();
+            offsetBuffer = vector.getOffsetBuffer();
+        } else if (valueVector instanceof ListVector) {
+            ListVector vector = (ListVector) valueVector;
+            validityBuffer = vector.getValidityBuffer();
+            offsetBuffer = vector.getOffsetBuffer();
+        } else if (valueVector instanceof StructVector) {
+            validityBuffer = ((StructVector) valueVector).getValidityBuffer();
         }
     }
 }

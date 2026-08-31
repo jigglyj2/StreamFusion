@@ -57,16 +57,15 @@ public abstract class DecimalWriter<T> extends ArrowFieldWriter<T> {
     @Override
     public void doWrite(T in, int ordinal) {
         if (isNullAt(in, ordinal)) {
-            ((DecimalVector) getValueVector()).setNull(getCount());
+            writeNull();
         } else {
             BigDecimal bigDecimal = readDecimal(in, ordinal).toBigDecimal();
             bigDecimal = normalize(bigDecimal, precision, scale);
             if (bigDecimal == null) {
-                ((DecimalVector) getValueVector()).setNull(getCount());
+                writeNull();
             } else {
                 DecimalVector vector = (DecimalVector) getValueVector();
-                DecimalUtility.writeBigDecimalToArrowBuf(
-                        bigDecimal, vector.getDataBuffer(), getCount(), vector.getTypeWidth());
+                DecimalUtility.writeBigDecimalToArrowBuf(bigDecimal, dataBuffer(), getCount(), vector.getTypeWidth());
             }
         }
     }

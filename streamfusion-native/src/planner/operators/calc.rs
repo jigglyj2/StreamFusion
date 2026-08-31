@@ -8,12 +8,14 @@
 
 use std::sync::Arc;
 
+use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::Operator;
 use datafusion::physical_expr::expressions::{BinaryExpr, CastExpr, Column, Literal, NegativeExpr};
 use datafusion::physical_expr::expressions::{IsNotNullExpr, IsNullExpr, NotExpr};
+use datafusion::physical_expr::utils::collect_columns;
 use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_plan::filter::FilterExec;
+use datafusion::physical_plan::filter::FilterExecBuilder;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::scalar::ScalarValue;
@@ -24,26 +26,86 @@ pub(crate) fn create(
     calc: &proto::Calc,
     child: Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let child = match calc.condition.as_ref() {
-        Some(condition) => Arc::new(FilterExec::try_new(
-            create_expression(condition, child.schema().as_ref())?,
-            child,
-        )?) as Arc<dyn ExecutionPlan>,
-        None => child,
-    };
-    let child_schema = child.schema();
-    let expressions = calc
+    let input_schema = child.schema();
+    let mut expressions = calc
         .projections
         .iter()
         .enumerate()
         .map(|(index, expression)| {
             Ok((
-                create_expression(expression, child_schema.as_ref())?,
+                create_expression(expression, input_schema.as_ref())?,
                 format!("projection_{index}"),
             ))
         })
         .collect::<Result<Vec<_>>>()?;
+    let child = match calc.condition.as_ref() {
+        Some(condition) => {
+            let predicate = create_expression(condition, input_schema.as_ref())?;
+            let projection = referenced_input_columns(&expressions, input_schema.fields().len());
+            if projection.len() < input_schema.fields().len() {
+                let filter = FilterExecBuilder::new(predicate, child)
+                    .apply_projection(Some(projection.clone()))?
+                    .build()?;
+                expressions = expressions
+                    .into_iter()
+                    .map(|(expression, name)| Ok((remap_columns(expression, &projection)?, name)))
+                    .collect::<Result<Vec<_>>>()?;
+                Arc::new(filter) as Arc<dyn ExecutionPlan>
+            } else {
+                Arc::new(FilterExecBuilder::new(predicate, child).build()?)
+                    as Arc<dyn ExecutionPlan>
+            }
+        }
+        None => child,
+    };
     Ok(Arc::new(ProjectionExec::try_new(expressions, child)?))
+}
+
+/// Columns retained by FilterExec after evaluating its predicate.
+///
+/// The predicate itself is evaluated against the unprojected input, so only columns consumed by
+/// the final projection need to survive the filter. This avoids copying unrelated nested and
+/// variable-width buffers from wide Flink rows.
+fn referenced_input_columns(
+    expressions: &[(Arc<dyn PhysicalExpr>, String)],
+    input_field_count: usize,
+) -> Vec<usize> {
+    let mut columns = expressions
+        .iter()
+        .flat_map(|(expression, _)| collect_columns(expression))
+        .map(|column| column.index())
+        .collect::<Vec<_>>();
+    columns.sort_unstable();
+    columns.dedup();
+    if columns.is_empty() && input_field_count != 0 {
+        columns.push(0);
+    }
+    columns
+}
+
+fn remap_columns(
+    expression: Arc<dyn PhysicalExpr>,
+    retained_input_columns: &[usize],
+) -> Result<Arc<dyn PhysicalExpr>> {
+    expression
+        .transform_down(|expression| {
+            let Some(column) = expression.downcast_ref::<Column>() else {
+                return Ok(Transformed::no(expression));
+            };
+            let index = retained_input_columns
+                .binary_search(&column.index())
+                .map_err(|_| {
+                    DataFusionError::Internal(format!(
+                        "Calc projection column {} was not retained by its filter",
+                        column.index()
+                    ))
+                })?;
+            Ok(Transformed::yes(Arc::new(Column::new(
+                column.name(),
+                index,
+            ))))
+        })
+        .data()
 }
 
 pub(super) fn create_expression(

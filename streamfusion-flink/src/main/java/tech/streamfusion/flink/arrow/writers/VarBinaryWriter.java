@@ -52,7 +52,8 @@ public abstract class VarBinaryWriter<T> extends ArrowFieldWriter<T> {
     @Override
     public void doWrite(T in, int ordinal) {
         if (isNullAt(in, ordinal)) {
-            variableWidthWriter.writeNull(getCount(), dataOffset);
+            writeNull();
+            variableWidthWriter.writeNullOffsets(getCount(), dataOffset);
         } else {
             dataOffset = variableWidthWriter.writeBytes(getCount(), dataOffset, readBinary(in, ordinal));
         }

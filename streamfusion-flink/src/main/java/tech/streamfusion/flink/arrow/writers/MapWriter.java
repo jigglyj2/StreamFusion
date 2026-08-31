@@ -61,8 +61,8 @@ public abstract class MapWriter<T> extends ArrowFieldWriter<T> {
     public void doWrite(T in, int ordinal) {
         MapVector vector = (MapVector) getValueVector();
         if (isNullAt(in, ordinal)) {
-            vector.setNull(getCount());
-            vector.getOffsetBuffer().setInt((getCount() + 1L) * Integer.BYTES, keyWriter.getCount());
+            writeNull();
+            offsetBuffer().setInt((getCount() + 1L) * Integer.BYTES, keyWriter.getCount());
         } else {
             vector.startNewValue(getCount());
 

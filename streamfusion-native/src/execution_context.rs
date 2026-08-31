@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use arrow::datatypes::SchemaRef;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
@@ -31,6 +32,7 @@ pub(crate) struct NativeExecutionContext {
     task_context: Arc<TaskContext>,
     memory_pool: Arc<dyn MemoryPool>,
     physical_plan: Mutex<Option<CachedPhysicalPlan>>,
+    input_schemas: Mutex<Vec<SchemaRef>>,
     _plan_reservation: MemoryReservation,
 }
 
@@ -65,6 +67,7 @@ impl NativeExecutionContext {
             task_context,
             memory_pool,
             physical_plan: Mutex::new(None),
+            input_schemas: Mutex::new(Vec::new()),
             _plan_reservation: plan_reservation,
         })
     }
@@ -79,6 +82,43 @@ impl NativeExecutionContext {
 
     pub(crate) fn reservation(&self, consumer: impl Into<String>) -> MemoryReservation {
         MemoryConsumer::new(consumer).register(&self.memory_pool)
+    }
+
+    pub(crate) fn remember_input_schema(&self, input: usize, schema: SchemaRef) -> Result<()> {
+        let mut schemas = self.input_schemas.lock().map_err(|_| {
+            DataFusionError::Internal("native input-schema cache lock poisoned".to_string())
+        })?;
+        if input < schemas.len() {
+            if schemas[input].as_ref() != schema.as_ref() {
+                return Err(DataFusionError::Execution(format!(
+                    "native input {input} schema changed after C Data negotiation"
+                )));
+            }
+            return Ok(());
+        }
+        if input != schemas.len() {
+            return Err(DataFusionError::Internal(format!(
+                "native input schema {input} arrived before input {}",
+                schemas.len()
+            )));
+        }
+        schemas.push(schema);
+        Ok(())
+    }
+
+    pub(crate) fn input_schema(&self, input: usize) -> Result<SchemaRef> {
+        self.input_schemas
+            .lock()
+            .map_err(|_| {
+                DataFusionError::Internal("native input-schema cache lock poisoned".to_string())
+            })?
+            .get(input)
+            .cloned()
+            .ok_or_else(|| {
+                DataFusionError::Execution(format!(
+                    "native input {input} omitted its schema before C Data negotiation"
+                ))
+            })
     }
 
     pub(crate) fn execute_plan<T>(

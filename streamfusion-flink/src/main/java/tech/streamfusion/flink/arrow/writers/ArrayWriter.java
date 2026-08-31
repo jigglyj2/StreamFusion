@@ -53,8 +53,8 @@ public abstract class ArrayWriter<T> extends ArrowFieldWriter<T> {
     public void doWrite(T in, int ordinal) {
         ListVector vector = (ListVector) getValueVector();
         if (isNullAt(in, ordinal)) {
-            vector.setNull(getCount());
-            vector.getOffsetBuffer().setInt((getCount() + 1L) * Integer.BYTES, elementWriter.getCount());
+            writeNull();
+            offsetBuffer().setInt((getCount() + 1L) * Integer.BYTES, elementWriter.getCount());
         } else {
             vector.startNewValue(getCount());
             ArrayData array = readArray(in, ordinal);

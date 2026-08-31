@@ -49,13 +49,12 @@ public abstract class BooleanWriter<T> extends ArrowFieldWriter<T> {
     @Override
     public void doWrite(T in, int ordinal) {
         if (isNullAt(in, ordinal)) {
-            ((BitVector) getValueVector()).setNull(getCount());
+            writeNull();
         } else {
-            BitVector vector = (BitVector) getValueVector();
             if (readBoolean(in, ordinal)) {
-                BitVectorHelper.setBit(vector.getDataBuffer(), getCount());
+                BitVectorHelper.setBit(dataBuffer(), getCount());
             } else {
-                BitVectorHelper.unsetBit(vector.getDataBuffer(), getCount());
+                BitVectorHelper.unsetBit(dataBuffer(), getCount());
             }
         }
     }

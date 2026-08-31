@@ -31,6 +31,27 @@ public final class StreamFusionArrowBoundaries {
         return boundary;
     }
 
+    /** Inserts a source boundary that writes only fields consumed by the first native operator. */
+    public static Transformation<ArrowRowDataBatch> toArrow(
+            Transformation<RowData> input, RowType projectedType, int[] inputFieldOrdinals) {
+        if (((Object) input.getOutputType()) instanceof ArrowRowDataBatchTypeInfo) {
+            throw new IllegalArgumentException("Cannot project an Arrow input at an internal operator boundary");
+        }
+        OneInputTransformation<RowData, ArrowRowDataBatch> boundary = new OneInputTransformation<>(
+                input,
+                "streamfusion-rowdata-to-arrow",
+                new RowDataToArrowBatchOperator(projectedType, inputFieldOrdinals),
+                ArrowRowDataBatchTypeInfo.INSTANCE,
+                input.getParallelism(),
+                false);
+        boundary.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
+        return boundary;
+    }
+
+    public static boolean isArrow(Transformation<RowData> input) {
+        return ((Object) input.getOutputType()) instanceof ArrowRowDataBatchTypeInfo;
+    }
+
     @SuppressWarnings("unchecked")
     public static Transformation<RowData> toRowData(Transformation<RowData> input, RowType rowType) {
         if (!(((Object) input.getOutputType()) instanceof ArrowRowDataBatchTypeInfo)) {

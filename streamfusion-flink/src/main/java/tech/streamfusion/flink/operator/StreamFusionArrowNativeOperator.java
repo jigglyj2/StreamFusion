@@ -26,6 +26,7 @@ public final class StreamFusionArrowNativeOperator extends AbstractStreamOperato
     private final @Nullable String nullMetricName;
     private final boolean preserveRecordTimestamps;
     private transient StreamFusionTaskMemory taskMemory;
+    private transient ArrowCDataBridge.ReusableExecution nativeExecution;
     private transient Counter nullMetric;
 
     public StreamFusionArrowNativeOperator(RowType outputType, byte[] serializedPlan, String memoryConsumerName) {
@@ -65,6 +66,8 @@ public final class StreamFusionArrowNativeOperator extends AbstractStreamOperato
                 getMetricGroup(),
                 memoryConsumerName,
                 serializedPlan);
+        nativeExecution = new ArrowCDataBridge.ReusableExecution(
+                taskMemory.executionContext(), outputType, taskMemory.allocator());
         if (nullMetricName != null) {
             nullMetric = getMetricGroup().counter(nullMetricName);
         }
@@ -76,24 +79,33 @@ public final class StreamFusionArrowNativeOperator extends AbstractStreamOperato
         if (nullMetric != null) {
             nullMetric.inc(input.root().getVector(nullMetricFieldIndex).getNullCount());
         }
-        try (NativeCalcResult result = ArrowCDataBridge.executeWithSelection(
-                taskMemory.executionContext(), input, outputType, taskMemory.allocator())) {
-            ArrowRowDataBatch outputBatch = result.selectEnvelopeFrom(input);
-            if (!preserveRecordTimestamps) {
-                outputBatch.withoutTimestamps();
+        if (input.hasTrivialEnvelope()) {
+            try (ArrowRowDataBatch outputBatch = nativeExecution.execute(input)) {
+                emitOutput(input, outputBatch);
             }
-            output.collect(new StreamRecord<>(outputBatch));
-            FlinkMetricParity.replacePhysicalRecords(
-                    getMetricGroup().getIOMetricGroup().getNumRecordsInCounter(), 1, input.size());
-            FlinkMetricParity.replacePhysicalRecords(
-                    getMetricGroup().getIOMetricGroup().getNumRecordsOutCounter(), 1, outputBatch.size());
+        } else {
+            try (NativeCalcResult result = nativeExecution.executeWithSelection(input)) {
+                emitOutput(input, result.selectEnvelopeFrom(input));
+            }
         }
+    }
+
+    private void emitOutput(ArrowRowDataBatch input, ArrowRowDataBatch outputBatch) {
+        if (!preserveRecordTimestamps) {
+            outputBatch.withoutTimestamps();
+        }
+        output.collect(new StreamRecord<>(outputBatch));
+        FlinkMetricParity.replacePhysicalRecords(
+                getMetricGroup().getIOMetricGroup().getNumRecordsInCounter(), 1, input.size());
+        FlinkMetricParity.replacePhysicalRecords(
+                getMetricGroup().getIOMetricGroup().getNumRecordsOutCounter(), 1, outputBatch.size());
     }
 
     @Override
     public void close() throws Exception {
         try {
             if (taskMemory != null) {
+                nativeExecution = null;
                 taskMemory.close();
                 taskMemory = null;
             }

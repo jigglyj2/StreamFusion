@@ -56,10 +56,9 @@ public abstract class RowWriter<T> extends ArrowFieldWriter<T> {
         RowData row;
         if (isNullAt(in, ordinal)) {
             row = nullRow;
-            ((StructVector) getValueVector()).setNull(getCount());
+            writeNull();
         } else {
             row = readRow(in, ordinal);
-            ((StructVector) getValueVector()).setIndexDefined(getCount());
         }
         for (int i = 0; i < fieldsWriters.length; i++) {
             fieldsWriters[i].write(row, i);

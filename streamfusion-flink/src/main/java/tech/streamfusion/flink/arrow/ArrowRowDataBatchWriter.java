@@ -46,6 +46,15 @@ public final class ArrowRowDataBatchWriter implements AutoCloseable {
         rowCount++;
     }
 
+    /** Copies only selected top-level fields into their compact Arrow schema. */
+    public void write(RowData row, int[] fieldOrdinals) {
+        if (finished) {
+            throw new IllegalStateException("Reset the Arrow batch writer before writing another batch");
+        }
+        writer.write(row, fieldOrdinals);
+        rowCount++;
+    }
+
     /** Finishes the current vectors and borrows them until the returned batch is closed. */
     public ArrowRowDataBatch finishBatch() {
         if (finished) {

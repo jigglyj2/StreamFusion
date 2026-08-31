@@ -48,11 +48,9 @@ public abstract class DoubleWriter<T> extends ArrowFieldWriter<T> {
     @Override
     public void doWrite(T in, int ordinal) {
         if (isNullAt(in, ordinal)) {
-            ((Float8Vector) getValueVector()).setNull(getCount());
+            writeNull();
         } else {
-            ((Float8Vector) getValueVector())
-                    .getDataBuffer()
-                    .setDouble((long) getCount() * Double.BYTES, readDouble(in, ordinal));
+            dataBuffer().setDouble((long) getCount() * Double.BYTES, readDouble(in, ordinal));
         }
     }
 

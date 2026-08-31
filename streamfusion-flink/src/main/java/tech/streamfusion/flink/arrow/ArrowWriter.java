@@ -64,6 +64,17 @@ public final class ArrowWriter<IN> {
         rowCount++;
     }
 
+    /** Writes a projected row without constructing a RowData wrapper. */
+    public void write(IN row, int[] fieldOrdinals) {
+        if (fieldOrdinals.length != fieldWriters.length) {
+            throw new IllegalArgumentException("Arrow field projection does not match its schema");
+        }
+        for (int i = 0; i < fieldWriters.length; i++) {
+            fieldWriters[i].write(row, fieldOrdinals[i]);
+        }
+        rowCount++;
+    }
+
     /** Finishes the writing of the current row batch. */
     public void finish() {
         root.setRowCount(rowCount);

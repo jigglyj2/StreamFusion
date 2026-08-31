@@ -67,7 +67,7 @@ unsafe fn execute_arrow(
     output_schema_address: *mut FFI_ArrowSchema,
 ) -> datafusion::error::Result<usize> {
     let (input_batch, _input_reservation) =
-        unsafe { import_input(context, input_array_address, input_schema_address, 0) }?;
+        unsafe { import_input(context, input_array_address, input_schema_address, 0, 0) }?;
     context.execute_plan(vec![input_batch], |plan| unsafe {
         execute_and_export(context, plan, output_array_address, output_schema_address)
     })

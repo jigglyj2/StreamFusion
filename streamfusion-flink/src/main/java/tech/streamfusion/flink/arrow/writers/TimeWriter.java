@@ -18,7 +18,6 @@
 
 package tech.streamfusion.flink.arrow.writers;
 
-import org.apache.arrow.vector.BaseFixedWidthVector;
 import org.apache.arrow.vector.TimeMicroVector;
 import org.apache.arrow.vector.TimeMilliVector;
 import org.apache.arrow.vector.TimeNanoVector;
@@ -59,23 +58,15 @@ public abstract class TimeWriter<T> extends ArrowFieldWriter<T> {
     public void doWrite(T in, int ordinal) {
         ValueVector valueVector = getValueVector();
         if (isNullAt(in, ordinal)) {
-            ((BaseFixedWidthVector) valueVector).setNull(getCount());
+            writeNull();
         } else if (valueVector instanceof TimeSecVector) {
-            ((BaseFixedWidthVector) valueVector)
-                    .getDataBuffer()
-                    .setInt((long) getCount() * Integer.BYTES, readTime(in, ordinal) / 1000);
+            dataBuffer().setInt((long) getCount() * Integer.BYTES, readTime(in, ordinal) / 1000);
         } else if (valueVector instanceof TimeMilliVector) {
-            ((BaseFixedWidthVector) valueVector)
-                    .getDataBuffer()
-                    .setInt((long) getCount() * Integer.BYTES, readTime(in, ordinal));
+            dataBuffer().setInt((long) getCount() * Integer.BYTES, readTime(in, ordinal));
         } else if (valueVector instanceof TimeMicroVector) {
-            ((BaseFixedWidthVector) valueVector)
-                    .getDataBuffer()
-                    .setLong((long) getCount() * Long.BYTES, readTime(in, ordinal) * 1000L);
+            dataBuffer().setLong((long) getCount() * Long.BYTES, readTime(in, ordinal) * 1000L);
         } else {
-            ((BaseFixedWidthVector) valueVector)
-                    .getDataBuffer()
-                    .setLong((long) getCount() * Long.BYTES, readTime(in, ordinal) * 1000000L);
+            dataBuffer().setLong((long) getCount() * Long.BYTES, readTime(in, ordinal) * 1000000L);
         }
     }
 

@@ -48,6 +48,23 @@ class ArrowRowDataBatchWriterTest {
     }
 
     @Test
+    void writesOnlyProjectedTopLevelFieldsWithoutARowWrapper() {
+        RowType projectedType = RowType.of(new VarCharType(), new IntType());
+        try (RootAllocator allocator = new RootAllocator();
+                ArrowRowDataBatchWriter writer = new ArrowRowDataBatchWriter(projectedType, allocator)) {
+            writer.write(
+                    GenericRowData.of(11, StringData.fromString("discarded"), StringData.fromString("kept"), 42),
+                    new int[] {2, 3});
+
+            try (ArrowRowDataBatch batch = writer.finishBatch()) {
+                assertThat(batch.root().getFieldVectors()).hasSize(2);
+                assertThat(batch.rowView(0).getString(0).toString()).isEqualTo("kept");
+                assertThat(batch.rowView(0).getInt(1)).isEqualTo(42);
+            }
+        }
+    }
+
+    @Test
     void reusesTheSameManagedArrowVectorsAcrossBatches() {
         try (RootAllocator allocator = new RootAllocator();
                 ArrowRowDataBatchWriter writer = new ArrowRowDataBatchWriter(ROW_TYPE, allocator)) {

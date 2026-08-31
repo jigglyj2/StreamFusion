@@ -48,11 +48,9 @@ public abstract class IntWriter<T> extends ArrowFieldWriter<T> {
     @Override
     public void doWrite(T in, int ordinal) {
         if (isNullAt(in, ordinal)) {
-            ((IntVector) getValueVector()).setNull(getCount());
+            writeNull();
         } else {
-            ((IntVector) getValueVector())
-                    .getDataBuffer()
-                    .setInt((long) getCount() * Integer.BYTES, readInt(in, ordinal));
+            dataBuffer().setInt((long) getCount() * Integer.BYTES, readInt(in, ordinal));
         }
     }
 

@@ -24,6 +24,7 @@ final class RowDataToArrowBatchOperator extends AbstractStreamOperator<ArrowRowD
     static final int DEFAULT_BATCH_SIZE = 8192;
 
     private final RowType rowType;
+    private final int[] fieldOrdinals;
     private final RowKind[] rowKinds = new RowKind[DEFAULT_BATCH_SIZE];
     private final boolean[] hasTimestamps = new boolean[DEFAULT_BATCH_SIZE];
     private final long[] timestamps = new long[DEFAULT_BATCH_SIZE];
@@ -32,7 +33,12 @@ final class RowDataToArrowBatchOperator extends AbstractStreamOperator<ArrowRowD
     private transient ArrowRowDataBatchWriter writer;
 
     RowDataToArrowBatchOperator(RowType rowType) {
+        this(rowType, null);
+    }
+
+    RowDataToArrowBatchOperator(RowType rowType, int[] fieldOrdinals) {
         this.rowType = rowType;
+        this.fieldOrdinals = fieldOrdinals == null ? null : fieldOrdinals.clone();
     }
 
     @Override
@@ -49,7 +55,11 @@ final class RowDataToArrowBatchOperator extends AbstractStreamOperator<ArrowRowD
     @Override
     public void processElement(StreamRecord<RowData> element) {
         RowData row = element.getValue();
-        writer.write(row);
+        if (fieldOrdinals == null) {
+            writer.write(row);
+        } else {
+            writer.write(row, fieldOrdinals);
+        }
         rowKinds[rowCount] = row.getRowKind();
         hasTimestamps[rowCount] = element.hasTimestamp();
         timestamps[rowCount] = element.hasTimestamp() ? element.getTimestamp() : Long.MIN_VALUE;

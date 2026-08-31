@@ -48,11 +48,9 @@ public abstract class DateWriter<T> extends ArrowFieldWriter<T> {
     @Override
     public void doWrite(T in, int ordinal) {
         if (isNullAt(in, ordinal)) {
-            ((DateDayVector) getValueVector()).setNull(getCount());
+            writeNull();
         } else {
-            ((DateDayVector) getValueVector())
-                    .getDataBuffer()
-                    .setInt((long) getCount() * Integer.BYTES, readDate(in, ordinal));
+            dataBuffer().setInt((long) getCount() * Integer.BYTES, readDate(in, ordinal));
         }
     }
 

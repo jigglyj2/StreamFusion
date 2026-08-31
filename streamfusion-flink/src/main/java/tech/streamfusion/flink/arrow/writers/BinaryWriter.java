@@ -48,7 +48,7 @@ public abstract class BinaryWriter<T> extends ArrowFieldWriter<T> {
     @Override
     public void doWrite(T in, int ordinal) {
         if (isNullAt(in, ordinal)) {
-            ((FixedSizeBinaryVector) getValueVector()).setNull(getCount());
+            writeNull();
         } else {
             FixedSizeBinaryVector vector = (FixedSizeBinaryVector) getValueVector();
             byte[] value = readBinary(in, ordinal);
@@ -56,7 +56,7 @@ public abstract class BinaryWriter<T> extends ArrowFieldWriter<T> {
                 throw new IllegalArgumentException(
                         "Expected " + vector.getByteWidth() + " binary bytes, got " + value.length);
             }
-            vector.getDataBuffer().setBytes((long) getCount() * vector.getByteWidth(), value);
+            dataBuffer().setBytes((long) getCount() * vector.getByteWidth(), value);
         }
     }
 

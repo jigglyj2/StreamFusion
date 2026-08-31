@@ -105,15 +105,17 @@ unsafe fn execute_arrow_inputs(
     let mut row_offset = 0;
     let mut inputs = Vec::with_capacity(input_array_addresses.len());
     let mut input_reservations = Vec::with_capacity(input_array_addresses.len());
-    for (&array_address, &schema_address) in input_array_addresses
+    for (input_index, (&array_address, &schema_address)) in input_array_addresses
         .iter()
         .zip(input_schema_addresses.iter())
+        .enumerate()
     {
         let (batch, reservation) = unsafe {
             import_input(
                 context,
                 array_address as *mut FFI_ArrowArray,
                 schema_address as *mut FFI_ArrowSchema,
+                input_index,
                 row_offset,
             )
         }?;

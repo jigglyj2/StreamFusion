@@ -53,7 +53,8 @@ public abstract class VarCharWriter<T> extends ArrowFieldWriter<T> {
     @Override
     public void doWrite(T in, int ordinal) {
         if (isNullAt(in, ordinal)) {
-            variableWidthWriter.writeNull(getCount(), dataOffset);
+            writeNull();
+            variableWidthWriter.writeNullOffsets(getCount(), dataOffset);
         } else {
             dataOffset = variableWidthWriter.writeString(getCount(), dataOffset, readString(in, ordinal));
         }

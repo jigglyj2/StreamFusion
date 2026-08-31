@@ -22,8 +22,50 @@ import org.apache.flink.table.types.logical.IntType;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.VarCharType;
 import org.junit.jupiter.api.Test;
+import tech.streamfusion.nativebridge.NativeExecutionContext;
+import tech.streamfusion.nativebridge.NativeMemoryManager;
 
 class ArrowCalcChainBridgeTest extends ArrowCDataBridgeTestSupport {
+    @Test
+    void negotiatesTheCDataSchemaOnceForAReusableTaskExecution() {
+        RowType rowType = RowType.of(new IntType(false));
+        byte[] plan = selectionPlan();
+        try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+                NativeExecutionContext context = new NativeExecutionContext(plan, NativeMemoryManager.unbounded());
+                ArrowRowDataBatch first = ArrowRowDataBatch.transpose(
+                        List.of(GenericRowData.of(3), GenericRowData.of(1)), rowType, allocator);
+                ArrowRowDataBatch second = ArrowRowDataBatch.transpose(
+                        List.of(GenericRowData.of(2), GenericRowData.of(4)), rowType, allocator)) {
+            ArrowCDataBridge.ReusableExecution execution =
+                    new ArrowCDataBridge.ReusableExecution(context, rowType, allocator);
+            try (NativeCalcResult firstResult = execution.executeWithSelection(first);
+                    NativeCalcResult secondResult = execution.executeWithSelection(second)) {
+                assertThat(firstResult.batch().size()).isEqualTo(1);
+                assertThat(firstResult.batch().rowView(0).getInt(0)).isEqualTo(3);
+                assertThat(secondResult.batch().size()).isEqualTo(1);
+                assertThat(secondResult.batch().rowView(0).getInt(0)).isEqualTo(4);
+            }
+        }
+    }
+
+    @Test
+    void skipsMaterializingInputOrdinalsForInsertOnlyBatches() {
+        RowType rowType = RowType.of(new IntType(false));
+        try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+                NativeExecutionContext context =
+                        new NativeExecutionContext(selectionPlan(), NativeMemoryManager.unbounded());
+                ArrowRowDataBatch input = ArrowRowDataBatch.transpose(
+                        List.of(GenericRowData.of(3), GenericRowData.of(1)), rowType, allocator)) {
+            ArrowCDataBridge.ReusableExecution execution =
+                    new ArrowCDataBridge.ReusableExecution(context, rowType, allocator);
+            try (ArrowRowDataBatch output = execution.execute(input)) {
+                assertThat(output.size()).isEqualTo(1);
+                assertThat(output.rowView(0).getInt(0)).isEqualTo(3);
+                assertThat(output.hasTrivialEnvelope()).isTrue();
+            }
+        }
+    }
+
     @Test
     void executesAdjacentCalcsInOneNativePlanAndPreservesInputOrdinals() {
         RowType inputType = RowType.of(new IntType(false));

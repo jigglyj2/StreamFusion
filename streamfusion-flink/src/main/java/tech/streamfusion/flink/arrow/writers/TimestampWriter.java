@@ -61,7 +61,7 @@ public abstract class TimestampWriter<T> extends ArrowFieldWriter<T> {
     public void doWrite(T in, int ordinal) {
         ValueVector valueVector = getValueVector();
         if (isNullAt(in, ordinal)) {
-            ((TimeStampVector) valueVector).setNull(getCount());
+            writeNull();
         } else {
             TimestampData timestamp = readTimestamp(in, ordinal);
 
@@ -75,7 +75,7 @@ public abstract class TimestampWriter<T> extends ArrowFieldWriter<T> {
             } else {
                 value = timestamp.getMillisecond() * 1_000_000 + timestamp.getNanoOfMillisecond();
             }
-            ((TimeStampVector) valueVector).getDataBuffer().setLong((long) getCount() * Long.BYTES, value);
+            dataBuffer().setLong((long) getCount() * Long.BYTES, value);
         }
     }
 

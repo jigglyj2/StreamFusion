@@ -31,7 +31,9 @@ public final class ArrowRowDataBatch implements AutoCloseable {
     private final VectorSchemaRoot root;
     private final RowType rowType;
     private final ArrowReader reader;
+    /** Null arrays represent the overwhelmingly common INSERT/no-record-timestamp envelope. */
     private RowKind[] rowKinds;
+
     private boolean[] hasTimestamps;
     private long[] timestamps;
 
@@ -47,9 +49,6 @@ public final class ArrowRowDataBatch implements AutoCloseable {
         this.root = root;
         this.rowType = rowType;
         this.reader = ArrowUtils.createArrowReader(root, rowType);
-        this.rowKinds = defaultRowKinds(root.getRowCount());
-        this.hasTimestamps = new boolean[root.getRowCount()];
-        this.timestamps = new long[root.getRowCount()];
     }
 
     static ArrowRowDataBatch transpose(List<? extends RowData> rows, RowType rowType) {
@@ -106,9 +105,15 @@ public final class ArrowRowDataBatch implements AutoCloseable {
         if (kinds.length < rows || timestampPresence.length < rows || recordTimestamps.length < rows) {
             throw new IllegalArgumentException("Arrow batch envelope is shorter than the batch");
         }
-        this.rowKinds = java.util.Arrays.copyOf(kinds, rows);
-        this.hasTimestamps = java.util.Arrays.copyOf(timestampPresence, rows);
-        this.timestamps = java.util.Arrays.copyOf(recordTimestamps, rows);
+        boolean nonInsert = false;
+        boolean anyTimestamp = false;
+        for (int row = 0; row < rows && (!nonInsert || !anyTimestamp); row++) {
+            nonInsert |= kinds[row] != RowKind.INSERT;
+            anyTimestamp |= timestampPresence[row];
+        }
+        this.rowKinds = nonInsert ? java.util.Arrays.copyOf(kinds, rows) : null;
+        this.hasTimestamps = anyTimestamp ? java.util.Arrays.copyOf(timestampPresence, rows) : null;
+        this.timestamps = anyTimestamp ? java.util.Arrays.copyOf(recordTimestamps, rows) : null;
         return this;
     }
 
@@ -117,17 +122,24 @@ public final class ArrowRowDataBatch implements AutoCloseable {
         if (inputRows.length != size()) {
             throw new IllegalArgumentException("Native selection length does not match the Arrow output");
         }
-        RowKind[] selectedKinds = new RowKind[inputRows.length];
-        boolean[] selectedTimestampPresence = new boolean[inputRows.length];
-        long[] selectedTimestamps = new long[inputRows.length];
+        if (input.hasTrivialEnvelope()) {
+            return this;
+        }
+        RowKind[] selectedKinds = input.rowKinds == null ? null : new RowKind[inputRows.length];
+        boolean[] selectedTimestampPresence = input.hasTimestamps == null ? null : new boolean[inputRows.length];
+        long[] selectedTimestamps = input.timestamps == null ? null : new long[inputRows.length];
         for (int outputRow = 0; outputRow < inputRows.length; outputRow++) {
             int inputRow = inputRows[outputRow];
             if (inputRow < 0 || inputRow >= input.size()) {
                 throw new IllegalStateException("Native operator returned invalid input-row ordinal " + inputRow);
             }
-            selectedKinds[outputRow] = input.rowKind(inputRow);
-            selectedTimestampPresence[outputRow] = input.hasTimestamp(inputRow);
-            selectedTimestamps[outputRow] = input.timestamp(inputRow);
+            if (selectedKinds != null) {
+                selectedKinds[outputRow] = input.rowKinds[inputRow];
+            }
+            if (selectedTimestampPresence != null) {
+                selectedTimestampPresence[outputRow] = input.hasTimestamps[inputRow];
+                selectedTimestamps[outputRow] = input.timestamps[inputRow];
+            }
         }
         this.rowKinds = selectedKinds;
         this.hasTimestamps = selectedTimestampPresence;
@@ -160,32 +172,49 @@ public final class ArrowRowDataBatch implements AutoCloseable {
     }
 
     public RowKind rowKind(int row) {
-        return rowKinds[row];
+        return rowKinds == null ? RowKind.INSERT : rowKinds[row];
     }
 
     public boolean hasTimestamp(int row) {
-        return hasTimestamps[row];
+        return hasTimestamps != null && hasTimestamps[row];
     }
 
     public long timestamp(int row) {
-        return timestamps[row];
+        return timestamps == null ? Long.MIN_VALUE : timestamps[row];
+    }
+
+    public boolean hasTrivialEnvelope() {
+        return rowKinds == null && hasTimestamps == null;
     }
 
     /** Clears StreamRecord timestamps for Flink operators whose outputs never carry them. */
     public ArrowRowDataBatch withoutTimestamps() {
-        this.hasTimestamps = new boolean[size()];
-        this.timestamps = new long[size()];
+        this.hasTimestamps = null;
+        this.timestamps = null;
         return this;
     }
 
     /** Creates a Java-safe Arrow slice, copying only buffers Arrow Java cannot represent sliced. */
+    public ArrowRowDataBatch slice(int offset, int length) {
+        return slice(offset, length, allocator());
+    }
+
+    /**
+     * Creates a Java-safe Arrow slice using a compatible allocator.
+     *
+     * <p>Arrow can retain or transfer a buffer only within the allocator tree that already owns it.
+     * Runtime operators should therefore use {@link #slice(int, int)}; the explicit allocator form
+     * is retained for boundary tests and callers that already share the same root allocator.
+     */
     public ArrowRowDataBatch slice(int offset, int length, BufferAllocator allocator) {
         VectorSchemaRoot slicedRoot = ArrowBatchRebaser.rebase(root, offset, length, allocator);
         ArrowRowDataBatch sliced = wrap(slicedRoot, rowType);
-        return sliced.withEnvelope(
-                java.util.Arrays.copyOfRange(rowKinds, offset, offset + length),
-                java.util.Arrays.copyOfRange(hasTimestamps, offset, offset + length),
-                java.util.Arrays.copyOfRange(timestamps, offset, offset + length));
+        sliced.rowKinds = rowKinds == null ? null : java.util.Arrays.copyOfRange(rowKinds, offset, offset + length);
+        sliced.hasTimestamps =
+                hasTimestamps == null ? null : java.util.Arrays.copyOfRange(hasTimestamps, offset, offset + length);
+        sliced.timestamps =
+                timestamps == null ? null : java.util.Arrays.copyOfRange(timestamps, offset, offset + length);
+        return sliced;
     }
 
     @Override
@@ -196,12 +225,6 @@ public final class ArrowRowDataBatch implements AutoCloseable {
         if (ownsAllocator) {
             allocator.close();
         }
-    }
-
-    private static RowKind[] defaultRowKinds(int rows) {
-        RowKind[] kinds = new RowKind[rows];
-        java.util.Arrays.fill(kinds, RowKind.INSERT);
-        return kinds;
     }
 
     private static BufferAllocator vectorAllocator(VectorSchemaRoot root) {
