@@ -29,11 +29,14 @@ class NativeExchangeFramesTest {
                 .put(new byte[] {40, 41})
                 .array();
 
-        assertThat(NativeExchangeFrames.decode(encoded))
-                .usingRecursiveFieldByFieldElementComparator()
-                .containsExactly(
-                        new NativeExchangeFrame(1, new byte[] {10, 11}, new byte[] {20, 21, 22}),
-                        new NativeExchangeFrame(3, new byte[] {30}, new byte[] {40, 41}));
+        java.util.List<NativeExchangeFrame> frames = NativeExchangeFrames.decode(encoded);
+        assertThat(frames).hasSize(2);
+        assertThat(frames.get(0).keyGroup()).isEqualTo(1);
+        assertThat(frames.get(0).metadata()).containsExactly(10, 11);
+        assertThat(frames.get(0).body()).containsExactly(20, 21, 22);
+        assertThat(frames.get(1).keyGroup()).isEqualTo(3);
+        assertThat(frames.get(1).metadata()).containsExactly(30);
+        assertThat(frames.get(1).body()).containsExactly(40, 41);
     }
 
     @Test

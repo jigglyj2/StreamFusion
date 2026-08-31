@@ -10,7 +10,6 @@
 package tech.streamfusion.flink.changelog;
 
 import org.apache.flink.api.dag.Transformation;
-import org.apache.flink.core.memory.ManagedMemoryUseCase;
 import org.apache.flink.streaming.api.transformations.OneInputTransformation;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.types.logical.RowType;
@@ -30,7 +29,6 @@ public final class StreamFusionDropUpdateBeforeTranslator {
                 ArrowRowDataBatchTypeInfo.INSTANCE,
                 input.getParallelism(),
                 false);
-        transformation.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
         return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
     }
 }

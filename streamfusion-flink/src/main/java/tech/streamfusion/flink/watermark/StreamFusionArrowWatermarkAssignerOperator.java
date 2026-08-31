@@ -18,7 +18,6 @@ import org.apache.flink.streaming.runtime.watermarkstatus.WatermarkStatus;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.runtime.generated.WatermarkGenerator;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
-import tech.streamfusion.flink.memory.FlinkManagedMemory;
 import tech.streamfusion.flink.metrics.FlinkMetricParity;
 
 /** Flink's watermark state machine over Arrow batches, without a RowData operator boundary. */
@@ -37,7 +36,6 @@ final class StreamFusionArrowWatermarkAssignerOperator extends AbstractStreamOpe
     private transient long processedElements;
     private transient long lastIdleCheckProcessedElements = -1;
     private transient PausableRelativeClock inputActivityClock;
-    private transient FlinkManagedMemory managedMemory;
 
     StreamFusionArrowWatermarkAssignerOperator(
             StreamOperatorParameters<ArrowRowDataBatch> parameters,
@@ -55,11 +53,6 @@ final class StreamFusionArrowWatermarkAssignerOperator extends AbstractStreamOpe
     @Override
     public void open() throws Exception {
         super.open();
-        managedMemory = FlinkManagedMemory.create(
-                getContainingTask().getEnvironment(),
-                getOperatorConfig(),
-                getMetricGroup(),
-                "streamfusion-arrow-watermark");
         inputActivityClock =
                 new PausableRelativeClock(getProcessingTimeService().getClock());
         getContainingTask()
@@ -121,7 +114,7 @@ final class StreamFusionArrowWatermarkAssignerOperator extends AbstractStreamOpe
             output.collect(new StreamRecord<>(batch));
             return;
         }
-        try (ArrowRowDataBatch slice = batch.slice(offset, length, managedMemory.allocator())) {
+        try (ArrowRowDataBatch slice = batch.slice(offset, length)) {
             output.collect(new StreamRecord<>(slice));
         }
     }
@@ -190,10 +183,6 @@ final class StreamFusionArrowWatermarkAssignerOperator extends AbstractStreamOpe
                         .unregisterBackPressureListener(inputActivityClock);
             }
             FunctionUtils.closeFunction(watermarkGenerator);
-            if (managedMemory != null) {
-                managedMemory.close();
-                managedMemory = null;
-            }
         } finally {
             super.close();
         }

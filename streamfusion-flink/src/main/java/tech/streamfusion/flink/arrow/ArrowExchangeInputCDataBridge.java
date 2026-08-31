@@ -36,8 +36,8 @@ public final class ArrowExchangeInputCDataBridge {
                 CDataDictionaryProvider dictionaries = new CDataDictionaryProvider()) {
             long rows = NativeExchangeBridge.decodeArrowBatch(
                     serializedPlan,
-                    frame.metadata(),
-                    frame.body(),
+                    frame.ipcPayload(),
+                    frame.metadataLength(),
                     outputArray.memoryAddress(),
                     outputSchema.memoryAddress(),
                     memoryManager);

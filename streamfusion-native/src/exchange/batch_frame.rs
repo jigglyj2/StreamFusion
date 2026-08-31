@@ -56,6 +56,34 @@ impl IpcBatchFrame {
             &message.version(),
         )
     }
+
+    /// Decodes a contiguous metadata/body payload without cloning its Arrow body buffers.
+    pub(crate) fn decode_contiguous(
+        payload: Vec<u8>,
+        metadata_length: usize,
+        schema: SchemaRef,
+    ) -> Result<RecordBatch> {
+        if metadata_length > payload.len() {
+            return Err(ArrowError::ParseError(
+                "exchange IPC metadata exceeds its payload".to_string(),
+            ));
+        }
+        let payload = Buffer::from(payload);
+        let message = root_as_message(&payload[..metadata_length]).map_err(|error| {
+            ArrowError::ParseError(format!("invalid exchange IPC metadata: {error}"))
+        })?;
+        let batch = message.header_as_record_batch().ok_or_else(|| {
+            ArrowError::ParseError("exchange IPC frame is not a record batch".to_string())
+        })?;
+        read_record_batch(
+            &payload.slice(metadata_length),
+            batch,
+            schema,
+            &HashMap::new(),
+            None,
+            &message.version(),
+        )
+    }
 }
 
 #[cfg(test)]

@@ -16,34 +16,28 @@ import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.types.RowKind;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
-import tech.streamfusion.flink.memory.FlinkManagedMemory;
 import tech.streamfusion.flink.metrics.FlinkMetricParity;
 
 /** Drops UPDATE_BEFORE envelope entries without materializing the Arrow payload as rows. */
 final class StreamFusionDropUpdateBeforeOperator extends AbstractStreamOperator<ArrowRowDataBatch>
         implements OneInputStreamOperator<ArrowRowDataBatch, ArrowRowDataBatch> {
-    private transient FlinkManagedMemory managedMemory;
-
-    @Override
-    public void open() throws Exception {
-        super.open();
-        managedMemory = FlinkManagedMemory.create(
-                getContainingTask().getEnvironment(),
-                getOperatorConfig(),
-                getMetricGroup(),
-                "streamfusion-drop-update-before");
-    }
-
     @Override
     public void processElement(StreamRecord<ArrowRowDataBatch> element) {
         ArrowRowDataBatch batch = element.getValue();
         int emitted = 0;
         int emittedBatches = 0;
-        for (int[] run : retainedRuns(batch)) {
-            int length = run[1];
-            emitted += length;
-            emittedBatches++;
-            emitRun(element, batch, run[0], length);
+        int runStart = -1;
+        for (int row = 0; row <= batch.size(); row++) {
+            boolean keep = row < batch.size() && batch.rowKind(row) != RowKind.UPDATE_BEFORE;
+            if (keep && runStart < 0) {
+                runStart = row;
+            } else if (!keep && runStart >= 0) {
+                int length = row - runStart;
+                emitted += length;
+                emittedBatches++;
+                emitRun(element, batch, runStart, length);
+                runStart = -1;
+            }
         }
         FlinkMetricParity.replacePhysicalRecords(
                 getMetricGroup().getIOMetricGroup().getNumRecordsInCounter(), 1, batch.size());
@@ -71,20 +65,8 @@ final class StreamFusionDropUpdateBeforeOperator extends AbstractStreamOperator<
             output.collect(element);
             return;
         }
-        try (ArrowRowDataBatch selected = batch.slice(offset, length, managedMemory.allocator())) {
+        try (ArrowRowDataBatch selected = batch.slice(offset, length)) {
             output.collect(new StreamRecord<>(selected));
-        }
-    }
-
-    @Override
-    public void close() throws Exception {
-        try {
-            if (managedMemory != null) {
-                managedMemory.close();
-                managedMemory = null;
-            }
-        } finally {
-            super.close();
         }
     }
 }

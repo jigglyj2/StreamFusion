@@ -11,7 +11,7 @@ use jni::errors::ThrowRuntimeExAndDefault;
 use jni::jni_str;
 use jni::objects::{JByteArray, JClass, JObject};
 use jni::strings::JNIString;
-use jni::sys::{jbyteArray, jlong};
+use jni::sys::{jbyteArray, jint, jlong};
 use jni::EnvUnowned;
 
 use super::common::import_record_batch;
@@ -72,8 +72,8 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeExchangeBridge_
     mut unowned_env: EnvUnowned<'caller>,
     _class: JClass<'caller>,
     serialized_plan: JByteArray<'caller>,
-    metadata: JByteArray<'caller>,
-    body: JByteArray<'caller>,
+    payload: JByteArray<'caller>,
+    metadata_length: jint,
     output_array_address: jlong,
     output_schema_address: jlong,
     memory_manager: JObject<'caller>,
@@ -87,19 +87,14 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeExchangeBridge_
                 ));
             let mut reservation = HostMemoryReservation::new(broker, "native exchange decode");
             let plan_size = serialized_plan.len(env)?;
-            let metadata_size = metadata.len(env)?;
-            let body_size = body.len(env)?;
-            let input_size = plan_size
-                .checked_add(metadata_size)
-                .and_then(|bytes| bytes.checked_add(body_size))
-                .and_then(|bytes| bytes.checked_add(body_size))
-                .ok_or_else(|| {
-                    let _ = env.throw_new(
-                        jni_str!("java/lang/IllegalStateException"),
-                        JNIString::new("native exchange decode accounting overflowed usize"),
-                    );
-                    jni::errors::Error::JavaException
-                })?;
+            let payload_size = payload.len(env)?;
+            let input_size = plan_size.checked_add(payload_size).ok_or_else(|| {
+                let _ = env.throw_new(
+                    jni_str!("java/lang/IllegalStateException"),
+                    JNIString::new("native exchange decode accounting overflowed usize"),
+                );
+                jni::errors::Error::JavaException
+            })?;
             reservation.try_grow(input_size).map_err(|error| {
                 let _ = env.throw_new(
                     jni_str!("java/lang/IllegalStateException"),
@@ -108,13 +103,18 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeExchangeBridge_
                 jni::errors::Error::JavaException
             })?;
             let plan_bytes = env.convert_byte_array(serialized_plan)?;
-            let metadata = env.convert_byte_array(metadata)?;
-            let body = env.convert_byte_array(body)?;
+            let payload = env.convert_byte_array(payload)?;
             let rows = unsafe {
                 decode(
                     &plan_bytes,
-                    metadata,
-                    body,
+                    payload,
+                    usize::try_from(metadata_length).map_err(|_| {
+                        let _ = env.throw_new(
+                            jni_str!("java/lang/IllegalArgumentException"),
+                            JNIString::new("exchange IPC metadata length was negative"),
+                        );
+                        jni::errors::Error::JavaException
+                    })?,
                     output_array_address as *mut FFI_ArrowArray,
                     output_schema_address as *mut FFI_ArrowSchema,
                     &mut reservation,
@@ -177,8 +177,8 @@ unsafe fn route(
 
 unsafe fn decode(
     plan_bytes: &[u8],
-    metadata: Vec<u8>,
-    body: Vec<u8>,
+    payload: Vec<u8>,
+    metadata_length: usize,
     output_array_address: *mut FFI_ArrowArray,
     output_schema_address: *mut FFI_ArrowSchema,
     reservation: &mut HostMemoryReservation,
@@ -194,7 +194,8 @@ unsafe fn decode(
             .as_ref()
             .ok_or_else(|| DataFusionError::Plan("exchange schema is required".to_string()))?,
     )?;
-    let batch = crate::exchange::IpcBatchFrame { metadata, body }.decode(schema)?;
+    let batch =
+        crate::exchange::IpcBatchFrame::decode_contiguous(payload, metadata_length, schema)?;
     reservation.resize(
         plan_bytes
             .len()

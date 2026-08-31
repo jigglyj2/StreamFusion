@@ -29,11 +29,12 @@ public final class NativeExchangeFrames {
             if (metadataLength > input.remaining() || bodyLength > input.remaining() - metadataLength) {
                 throw new IllegalArgumentException("Native exchange frame exceeds its JNI envelope");
             }
-            byte[] metadata = new byte[metadataLength];
-            byte[] body = new byte[bodyLength];
-            input.get(metadata);
-            input.get(body);
-            frames.add(new NativeExchangeFrame(keyGroup, metadata, body));
+            int metadataOffset = input.position();
+            input.position(metadataOffset + metadataLength);
+            int bodyOffset = input.position();
+            input.position(bodyOffset + bodyLength);
+            frames.add(NativeExchangeFrame.wrapPayload(
+                    keyGroup, encoded, metadataOffset, metadataLength, bodyOffset, bodyLength));
         }
         if (input.hasRemaining()) {
             throw new IllegalArgumentException("Native exchange JNI envelope has trailing bytes");

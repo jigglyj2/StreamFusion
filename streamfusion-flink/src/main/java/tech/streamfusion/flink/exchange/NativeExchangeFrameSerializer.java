@@ -45,13 +45,10 @@ public final class NativeExchangeFrameSerializer extends TypeSerializerSingleton
 
     @Override
     public void serialize(NativeExchangeFrame frame, DataOutputView target) throws IOException {
-        byte[] metadata = frame.metadata();
-        byte[] body = frame.body();
         target.writeInt(frame.keyGroup());
-        target.writeInt(metadata.length);
-        target.writeInt(body.length);
-        target.write(metadata);
-        target.write(body);
+        target.writeInt(frame.metadataLength());
+        target.writeInt(frame.bodyLength());
+        frame.writePayloadTo(target);
     }
 
     @Override
@@ -59,11 +56,13 @@ public final class NativeExchangeFrameSerializer extends TypeSerializerSingleton
         int keyGroup = nonNegative(source.readInt(), "key group");
         int metadataLength = nonNegative(source.readInt(), "metadata length");
         int bodyLength = nonNegative(source.readInt(), "body length");
-        byte[] metadata = new byte[metadataLength];
-        byte[] body = new byte[bodyLength];
-        source.readFully(metadata);
-        source.readFully(body);
-        return new NativeExchangeFrame(keyGroup, metadata, body);
+        long payloadLength = (long) metadataLength + bodyLength;
+        if (payloadLength > Integer.MAX_VALUE) {
+            throw new IOException("Native exchange frame exceeds Java's array limit");
+        }
+        byte[] payload = new byte[(int) payloadLength];
+        source.readFully(payload);
+        return NativeExchangeFrame.wrapPayload(keyGroup, payload, 0, metadataLength, metadataLength, bodyLength);
     }
 
     @Override

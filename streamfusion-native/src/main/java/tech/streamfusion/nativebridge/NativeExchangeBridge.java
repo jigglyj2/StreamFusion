@@ -21,10 +21,13 @@ public final class NativeExchangeBridge {
 
     public static long decodeArrowBatch(
             byte[] serializedPlan, byte[] metadata, byte[] body, long outputArrayAddress, long outputSchemaAddress) {
+        byte[] payload = new byte[Math.addExact(metadata.length, body.length)];
+        System.arraycopy(metadata, 0, payload, 0, metadata.length);
+        System.arraycopy(body, 0, payload, metadata.length, body.length);
         return decodeArrowBatch(
                 serializedPlan,
-                metadata,
-                body,
+                payload,
+                metadata.length,
                 outputArrayAddress,
                 outputSchemaAddress,
                 NativeMemoryManager.unbounded());
@@ -32,8 +35,8 @@ public final class NativeExchangeBridge {
 
     public static native long decodeArrowBatch(
             byte[] serializedPlan,
-            byte[] metadata,
-            byte[] body,
+            byte[] payload,
+            int metadataLength,
             long outputArrayAddress,
             long outputSchemaAddress,
             NativeMemoryManager memoryManager);
