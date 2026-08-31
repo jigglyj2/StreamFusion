@@ -59,6 +59,7 @@
                         <phase>test</phase>
                         <goals><goal>exec</goal></goals>
                         <configuration>
+                            <skip>${skipTests}</skip>
                             <executable>cargo</executable>
                             <arguments>
                                 <argument>test</argument>
