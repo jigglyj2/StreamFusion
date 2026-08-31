@@ -7,11 +7,11 @@ sidebar:
 
 **Current status:** inner/cross and left `UNNEST`, with or without `WITH ORDINALITY`, over directly
 referenced arrays of supported scalar values are accelerated. Inner/cross expansion also supports
-arrays of scalar-field rows. Inner/cross and left expansion of maps with supported scalar or
-scalar-field row keys and scalar, scalar-array, or row values composed of scalars and scalar arrays
+arrays of rows whose fields are scalars or recursively nested arrays. Inner/cross and left expansion of maps with supported scalar or
+scalar-field row keys and scalar, recursively nested array, or row values composed of scalars and recursively nested arrays
 is accelerated, with or without ordinality. The same forms accelerate multisets of supported
-non-null scalar or row elements composed of scalars and scalar arrays. Arrays whose
-elements are scalar arrays are also accelerated, with each inner array remaining one output value.
+non-null scalar or row elements composed of scalars and recursively nested arrays. Arrays whose
+elements are recursively nested arrays are also accelerated, with each inner array remaining one output value.
 Computed collection operands are accelerated when their complete expression is supported by
 StreamFusion Calc. This includes `ARRAY[...]`, supported array and map functions, and nested row
 fields containing supported arrays, maps, or multisets. Other table functions and expansion forms
@@ -62,8 +62,8 @@ StreamFusion accelerates the operation when all of the following are true:
 - The function has one `ARRAY`, `MAP`, or `MULTISET` operand that is either a direct field or an
   expression the Calc expression translator supports exactly.
 - The element is a supported scalar Arrow boundary type, including numeric, boolean, character,
-  binary, decimal, date, time, and timestamp values; a non-empty `ROW` composed of those types and
-  scalar arrays; or an `ARRAY` of one of those scalar types.
+  binary, decimal, date, time, and timestamp values; a non-empty `ROW` recursively composed of
+  those types and arrays; or an `ARRAY` recursively containing another supported array element.
 - The correlate has no additional condition and its output preserves every input field before
   appending the array element or map key/value fields with exactly Flink's types.
 - Every other internal node in the plan has a StreamFusion implementation.
@@ -78,10 +78,9 @@ the synthetic row also has a null position when ordinality is requested. Map exp
 the paired key and value arrays and assigns positions in Flink's stored `MapData` entry order; SQL
 map ordering is not otherwise guaranteed. In left expansion of arrays of rows, null and empty
 collections still produce exactly one synthetic all-null row. Unsupported computed collection
-expressions, rows containing maps, multisets, or arrays nested more than one level, arrays
-nested more than one level, maps with collection keys or collection values outside the documented
-scalar-array shapes,
-nullable row-array elements with ordinality, multisets with nullable or array elements or collections nested more than one level,
+expressions, rows containing maps or multisets, maps with collection keys or values outside the
+documented scalar/row/recursively nested-array shapes,
+nullable row-array elements with ordinality, and multisets with nullable or direct array elements,
 `UNNEST(MAP_ENTRIES(map))` (because Flink 2.3 reports nullable entry rows while preserving a
 non-null map-key output),
 user-defined table functions, and correlate

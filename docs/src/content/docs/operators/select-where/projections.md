@@ -79,9 +79,9 @@ indexes; a null array, null element, or index beyond the array length produces n
 selected element may itself be complex, so expressions such as `rows[1].name` are supported.
 Map lookup is accelerated when both the map and key are otherwise supported expressions of
 the declared map types; present values, present null values, absent keys, and null maps match
-Flink's scalar result. `CARDINALITY` is accelerated for maps and non-nested arrays, returning
-an `INT` count or null for a null collection. Nested-array cardinality remains on Flink because
-Flink counts the outer array while DataFusion recursively counts leaf elements. Zero, negative,
+Flink's scalar result. `CARDINALITY` is accelerated for maps and arrays of any supported nesting
+depth, returning an `INT` count or null for a null collection. A dedicated native expression counts
+only the outer array, matching Flink rather than DataFusion's recursive leaf count. Zero, negative,
 and computed array indexes, non-null `MAP` and `ROW` literals,
 `MULTISET`, and collection functions not explicitly listed below still fall back with the whole Calc. Nested child types, field names,
 ordering, nullability, and Arrow offsets are preserved across the native plan.
@@ -191,9 +191,10 @@ DataFusion's `map_extract` returns a one-element nullable list rather than Flink
 value. StreamFusion follows Comet's composition model and immediately applies
 `array_element(..., 1)` within the same native expression tree, producing the Flink scalar
 shape without crossing the JVM boundary.
-Flat-array and map `CARDINALITY` lower to DataFusion's vectorized nested-type function. Its
-unsigned result is safely narrowed to Flink's `INT`: Arrow list and map offsets cap a single
-row's collection length within the signed 32-bit range.
+Array and map `CARDINALITY` use a dedicated vector expression over Arrow offsets. It reads only the
+outer offset pair for each row, so nested arrays match Flink's outer-cardinality semantics without
+walking or materializing child values. Arrow list and map offsets cap a single row's result within
+the signed 32-bit range.
 `ARRAY_CONTAINS` is accelerated in projections and filters when its needle is provably
 non-null and both arguments otherwise lower natively. Null arrays yield null, and null elements
 do not prevent a non-null needle from matching another element. Nullable needles remain on
@@ -255,11 +256,10 @@ end positions are non-null integer literals. Positive, zero, negative, and out-o
 use DataFusion's vectorized one-based slice kernel, whose clamping and negative-from-end behavior
 matches Flink; the omitted end is represented natively as an unbounded upper position. Dynamic or
 null positions remain on Flink with an explicit EXPLAIN reason.
-`ELEMENT(array)` currently stays on Flink. A singleton array returns its value and an empty or null
-array returns null, but Flink raises a runtime error when the array contains more than one element.
-DataFusion's indexed access does not enforce that cardinality contract, so StreamFusion reports the
-semantic mismatch in EXPLAIN instead of approximating it. A future native implementation requires a
-dedicated checked expression that preserves the same runtime failure.
+`ELEMENT(array)` is accelerated for otherwise supported arrays. A singleton array returns its value,
+an empty or null array returns null, and an array with more than one element raises an execution
+error. StreamFusion uses a dedicated vector expression rather than unchecked indexed access so
+Flink's cardinality contract is preserved for scalar and nested element types.
 `ARRAY_DISTINCT` is accelerated for Arrow-compatible element types, including nested `ROW`
 elements. It preserves the first occurrence order, retains at most one null element, and
 preserves null and empty arrays. Rust lowers it directly to DataFusion's vectorized set kernel;

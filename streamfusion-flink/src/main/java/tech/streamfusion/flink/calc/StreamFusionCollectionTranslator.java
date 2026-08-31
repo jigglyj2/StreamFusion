@@ -27,6 +27,7 @@ import tech.streamfusion.proto.plan.v1.ArrayReverse;
 import tech.streamfusion.proto.plan.v1.ArraySlice;
 import tech.streamfusion.proto.plan.v1.ArraySort;
 import tech.streamfusion.proto.plan.v1.Cardinality;
+import tech.streamfusion.proto.plan.v1.Element;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.MapEntries;
 import tech.streamfusion.proto.plan.v1.MapKeys;
@@ -42,13 +43,6 @@ final class StreamFusionCollectionTranslator extends StreamFusionComplexTypeSupp
         java.util.List<?> operands = hasNoArgMethod(expression, "getOperands")
                 ? (java.util.List<?>) invoke(expression, "getOperands")
                 : java.util.Collections.emptyList();
-        if ("CARDINALITY".equals(function) && operands.size() == 1) {
-            LogicalType collection = logicalType(operands.get(0), inputType);
-            if (collection instanceof ArrayType && ((ArrayType) collection).getElementType() instanceof ArrayType) {
-                return "nested ARRAY CARDINALITY stays on Flink because DataFusion recursively counts leaf "
-                        + "elements while Flink counts the outer array";
-            }
-        }
         if ("ARRAY_CONTAINS".equals(function) && operands.size() == 2) {
             LogicalType needle = logicalType(operands.get(1), inputType);
             if (needle != null && needle.isNullable()) {
@@ -109,9 +103,6 @@ final class StreamFusionCollectionTranslator extends StreamFusionComplexTypeSupp
                 }
             }
         }
-        if ("ELEMENT".equals(function) && operands.size() == 1) {
-            return "ELEMENT stays on Flink because Flink raises a runtime error for arrays with more than one element while DataFusion indexed access does not";
-        }
         return null;
     }
 
@@ -127,15 +118,36 @@ final class StreamFusionCollectionTranslator extends StreamFusionComplexTypeSupp
         if (!(collectionType instanceof ArrayType) && !(collectionType instanceof MapType)) {
             return null;
         }
-        if (collectionType instanceof ArrayType && ((ArrayType) collectionType).getElementType() instanceof ArrayType) {
-            return null;
-        }
         Expression collection =
                 StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, collectionType);
         return collection == null
                 ? null
                 : Expression.newBuilder()
                         .setCardinality(Cardinality.newBuilder().setCollection(collection))
+                        .build();
+    }
+
+    static Expression element(Object expression, RowType inputType, LogicalType expectedType) {
+        if (!"ELEMENT".equals(functionName(expression))) {
+            return null;
+        }
+        java.util.List<?> operands = (java.util.List<?>) invoke(expression, "getOperands");
+        if (operands.size() != 1) {
+            return null;
+        }
+        LogicalType arrayType = logicalType(operands.get(0), inputType);
+        if (!(arrayType instanceof ArrayType)
+                || !((ArrayType) arrayType)
+                        .getElementType()
+                        .copy(expectedType.isNullable())
+                        .equals(expectedType)) {
+            return null;
+        }
+        Expression array = StreamFusionProjectionTranslator.projectionExpression(operands.get(0), inputType, arrayType);
+        return array == null
+                ? null
+                : Expression.newBuilder()
+                        .setElement(Element.newBuilder().setArray(array))
                         .build();
     }
 

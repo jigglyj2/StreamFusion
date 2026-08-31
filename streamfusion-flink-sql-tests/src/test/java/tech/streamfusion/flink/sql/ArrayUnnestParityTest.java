@@ -304,6 +304,55 @@ class ArrayUnnestParityTest extends SqlParityTestSupport {
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 
+    @Test
+    void nativeDeeplyNestedArrayUnnestPreservesTheNestedElement() throws Exception {
+        java.util.List<Row> inputs = Arrays.asList(
+                Row.of((Object) new Integer[][][] {
+                    new Integer[][] {new Integer[] {1, null}, new Integer[] {2}}, new Integer[][] {}, null
+                }),
+                Row.of((Object) new Integer[][][] {}),
+                Row.of((Object) null));
+
+        assertDataStreamParity(
+                "SELECT item, ord_idx FROM deeply_nested_array_unnest_input "
+                        + "LEFT JOIN UNNEST(metric) WITH ORDINALITY AS expanded(item, ord_idx) ON TRUE",
+                Types.OBJECT_ARRAY(Types.OBJECT_ARRAY(Types.OBJECT_ARRAY(Types.INT))),
+                DataTypes.ARRAY(DataTypes.ARRAY(DataTypes.ARRAY(DataTypes.INT()))),
+                inputs,
+                "deeply_nested_array_unnest_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isEqualTo(1);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
+    @Test
+    void nativeRowArrayUnnestPreservesDeeplyNestedArrayFields() throws Exception {
+        java.util.List<Row> inputs = Arrays.asList(
+                Row.of((Object) new Row[] {Row.of("deep", new Integer[][] {new Integer[] {1}, new Integer[] {2, 3}})}),
+                Row.of((Object) new Row[] {}),
+                Row.of((Object) null));
+        org.apache.flink.api.common.typeinfo.TypeInformation<Row[]> externalType = Types.OBJECT_ARRAY(Types.ROW_NAMED(
+                new String[] {"label", "values"}, Types.STRING, Types.OBJECT_ARRAY(Types.OBJECT_ARRAY(Types.INT))));
+        org.apache.flink.table.types.DataType logicalType = DataTypes.ARRAY(DataTypes.ROW(
+                DataTypes.FIELD("label", DataTypes.STRING()),
+                DataTypes.FIELD("values", DataTypes.ARRAY(DataTypes.ARRAY(DataTypes.INT())))));
+
+        assertDataStreamParity(
+                "SELECT label, nested_values FROM deeply_nested_row_array_unnest_input "
+                        + "LEFT JOIN UNNEST(metric) AS expanded(label, nested_values) ON TRUE",
+                externalType,
+                logicalType,
+                inputs,
+                "deeply_nested_row_array_unnest_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isEqualTo(1);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
     private static byte[] executeChangelog(java.util.List<Row> rows, boolean streamFusionEnabled) throws Exception {
         if (streamFusionEnabled) {
             System.setProperty(

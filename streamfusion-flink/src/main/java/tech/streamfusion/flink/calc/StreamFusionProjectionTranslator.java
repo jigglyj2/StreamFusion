@@ -103,6 +103,10 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
         if (cardinality != null) {
             return cardinality;
         }
+        Expression element = StreamFusionCollectionTranslator.element(expression, inputType, expectedType);
+        if (element != null) {
+            return element;
+        }
         Expression arrayContains = StreamFusionCollectionTranslator.arrayContains(expression, inputType, expectedType);
         if (arrayContains != null) {
             return arrayContains;

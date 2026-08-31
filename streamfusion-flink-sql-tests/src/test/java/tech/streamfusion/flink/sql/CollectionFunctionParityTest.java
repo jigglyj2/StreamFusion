@@ -101,7 +101,7 @@ class CollectionFunctionParityTest extends SqlParityTestSupport {
     }
 
     @Test
-    void nestedArrayCardinalityFallsBackWithSemanticReason() throws Exception {
+    void nestedArrayCardinalityCountsOnlyTheOuterArray() throws Exception {
         assertDataStreamParity(
                 "SELECT CARDINALITY(metric) FROM nested_array_input",
                 Types.OBJECT_ARRAY(Types.OBJECT_ARRAY(Types.INT)),
@@ -112,9 +112,7 @@ class CollectionFunctionParityTest extends SqlParityTestSupport {
                         Row.of((Object) null)),
                 "nested_array_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
-        assertThat(StreamFusionPlanningDiagnostics.explain())
-                .contains("DataFusion recursively counts leaf elements while Flink counts the outer array");
+        assertNativeCalcRan();
     }
 
     private static void assertNativeCalcRan() {

@@ -229,6 +229,7 @@ message Expression {
     InetNtoa inet_ntoa = 112;
     InetAton inet_aton = 113;
     ScalarExtremum scalar_extremum = 114;
+    Element element = 115;
   }
 }
 
@@ -262,6 +263,10 @@ message MapElement {
 
 message Cardinality {
   Expression collection = 1;
+}
+
+message Element {
+  Expression array = 1;
 }
 
 message ArrayContains {

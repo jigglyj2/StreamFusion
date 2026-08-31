@@ -359,23 +359,15 @@ public final class StreamFusionArrayUnnestTranslator {
     }
 
     private static boolean isSupportedArrayElement(LogicalType element) {
-        if (isSupportedElement(element)) {
+        if (isScalarBoundaryType(element.getTypeRoot())) {
             return true;
         }
         if (element instanceof RowType) {
             RowType row = (RowType) element;
             return row.getFieldCount() > 0
-                    && row.getChildren().stream().allMatch(child -> {
-                        if (isScalarBoundaryType(child.getTypeRoot())) {
-                            return true;
-                        }
-                        return child instanceof ArrayType
-                                && isScalarBoundaryType(
-                                        ((ArrayType) child).getElementType().getTypeRoot());
-                    });
+                    && row.getChildren().stream().allMatch(StreamFusionArrayUnnestTranslator::isSupportedArrayElement);
         }
-        return element instanceof ArrayType
-                && isScalarBoundaryType(((ArrayType) element).getElementType().getTypeRoot());
+        return element instanceof ArrayType && isSupportedArrayElement(((ArrayType) element).getElementType());
     }
 
     private static Object invoke(Object target, String methodName) {

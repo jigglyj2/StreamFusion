@@ -58,6 +58,13 @@ pub(super) fn create(
             )?,
             schema,
         ),
+        Element(element) => expressions::element::create(
+            create_expression(
+                required(&element.array, "element is missing its array")?,
+                schema,
+            )?,
+            schema,
+        ),
         ArrayContains(contains) => binary(
             &contains.array,
             &contains.needle,
