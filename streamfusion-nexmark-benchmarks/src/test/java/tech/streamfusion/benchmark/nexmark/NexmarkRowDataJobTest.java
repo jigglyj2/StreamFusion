@@ -18,12 +18,13 @@ class NexmarkRowDataJobTest {
     }
 
     @Test
-    void createsBlackholeSinksForEveryAccelerableQuery() throws Exception {
+    void createsResultSinksForEveryAccelerableQuery() throws Exception {
         for (String query : NexmarkRowDataQueryCatalog.supportedQueries()) {
             assertThat(NexmarkRowDataJob.sinkDdl(query))
                     .as(query)
                     .contains("CREATE TABLE nexmark_output")
-                    .contains("'connector'='blackhole'");
+                    .contains("'connector'='streamfusion-benchmark-result'")
+                    .contains("'run-id'='test-run'");
         }
         assertThat(NexmarkRowDataJob.sinkDdl("q1")).contains("price DECIMAL(23, 3)");
     }

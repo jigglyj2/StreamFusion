@@ -33,6 +33,7 @@ The current operator-specific audit is:
 | Watermark Assigner | Flink `WatermarkAssignerOperatorFactory` | Uses Flink's generated watermark expression and state machine over Arrow-backed row views, including backpressure-aware idleness and matching lifecycle metrics. |
 | Hash/Singleton Exchange | Flink `PartitionTransformation` | Network transport remains Flink-owned; operator/task record counters report logical rows rather than native IPC frames. |
 | Group Aggregate | Flink `GroupAggFunction` | Flink has no additional operator counter in this timer-free shape. Standard IO counters are corrected from Arrow batches to logical rows; native state/changelog/checkpoint diagnostics are additive. |
+| Window Aggregate | Flink window aggregate functions and trigger operators | Standard IO/watermark metrics remain Flink-owned. Native state, changelog, late-row, event/processing timer, pending-timer, and checkpoint diagnostics are additive and updated at the corresponding state or timer decision. |
 | Row-time Keep-last Deduplicate | Flink `RowTimeDeduplicateFunction` | Flink has no additional operator counter in the supported insert-only/no-TTL shape. Standard IO counters are corrected to logical rows; native state/changelog/checkpoint diagnostics are additive. |
 
 StreamFusion-specific diagnostics are additive and use distinct names; they do not replace Flink
@@ -43,6 +44,7 @@ metrics. Native keyed operators publish these metrics under their operator's `St
 | Processing | `processedBatches`, `processedRows`, `emittedRows`, `processingFailures` |
 | Changelog | `emittedInserts`, `emittedUpdateBefores`, `emittedUpdateAfters`, `emittedDeletes` |
 | State calls | `stateReadBatches`, `stateWriteBatches`, `rocksDbBackend` |
+| Window lifecycle | `lateRecordsDropped`, `timerRegistrations`, `timerDeletions`, `timersFired`, `pendingEventTimeTimers`, `pendingProcessingTimeTimers` |
 | Snapshot | `checkpoints`, `alignedCheckpoints`, `unalignedCheckpoints`, `canonicalSavepoints`, `incrementalCheckpoints`, `checkpointBytes`, `checkpointDurationNanos`, `checkpointFailures` |
 | Incremental RocksDB | `incrementalUploadedBytes`, `incrementalReusedBytes` |
 | Restore | `restores`, `restoreBytes`, `restoreDurationNanos`, `restoreFailures` |

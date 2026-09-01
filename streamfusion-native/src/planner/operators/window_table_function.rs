@@ -204,7 +204,7 @@ fn expand_batch(
     Ok(RecordBatch::try_new(schema, columns)?)
 }
 
-fn timestamp_millis(array: &ArrayRef, row: usize) -> Result<Option<i64>> {
+pub(super) fn timestamp_millis(array: &ArrayRef, row: usize) -> Result<Option<i64>> {
     if array.is_null(row) {
         return Ok(None);
     }
@@ -289,7 +289,10 @@ fn window_start(timestamp: i64, offset: i64, size: i64) -> i64 {
     }
 }
 
-fn assign_windows(window: &proto::WindowTableFunction, timestamp: i64) -> Vec<(i64, i64)> {
+pub(super) fn assign_windows(
+    window: &proto::WindowTableFunction,
+    timestamp: i64,
+) -> Vec<(i64, i64)> {
     match proto::WindowKind::try_from(window.kind).expect("validated kind") {
         proto::WindowKind::Tumble => {
             let start = window_start(timestamp, window.offset_millis, window.size_millis);
@@ -317,6 +320,9 @@ fn assign_windows(window: &proto::WindowTableFunction, timestamp: i64) -> Vec<(i
                 end = end.wrapping_add(step);
             }
             windows
+        }
+        proto::WindowKind::Session => {
+            vec![(timestamp, timestamp.saturating_add(window.size_millis))]
         }
         proto::WindowKind::Unspecified => unreachable!(),
     }

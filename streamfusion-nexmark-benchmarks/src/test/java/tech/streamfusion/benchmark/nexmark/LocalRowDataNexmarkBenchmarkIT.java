@@ -34,6 +34,9 @@ class LocalRowDataNexmarkBenchmarkIT {
 
         assertThat(flink.completed()).isTrue();
         assertThat(streamFusion.completed()).isTrue();
+        assertThat(streamFusion.debugRows()).containsExactlyElementsOf(flink.debugRows());
+        assertThat(streamFusion.outputRows()).isEqualTo(flink.outputRows());
+        assertThat(streamFusion.outputSha256()).isEqualTo(flink.outputSha256());
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
         assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
     }
@@ -52,6 +55,22 @@ class LocalRowDataNexmarkBenchmarkIT {
         assertThat(streamFusion.completed()).isTrue();
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
         assertThat(streamFusion.nativeGroupAggregateBatches()).isGreaterThan(0);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"hashmap", "rocksdb"})
+    void q11SessionWindowsMatchFlinkOnBothStateBackends(String backend) throws Exception {
+        LocalRowDataNexmarkBenchmark.RunResult flink =
+                LocalRowDataNexmarkBenchmark.run(1_000, "q11", false, backend, 1);
+        LocalRowDataNexmarkBenchmark.RunResult streamFusion =
+                LocalRowDataNexmarkBenchmark.run(1_000, "q11", true, backend, 1);
+
+        assertThat(streamFusion.completed()).isTrue();
+        assertThat(streamFusion.debugRows()).containsExactlyElementsOf(flink.debugRows());
+        assertThat(streamFusion.outputRows()).isEqualTo(flink.outputRows());
+        assertThat(streamFusion.outputSha256()).isEqualTo(flink.outputSha256());
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        assertThat(streamFusion.nativeWindowAggregateBatches()).isGreaterThan(0);
     }
 
     private static boolean isPresent(String className) {

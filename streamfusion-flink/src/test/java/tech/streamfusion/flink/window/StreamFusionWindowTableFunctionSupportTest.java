@@ -42,7 +42,7 @@ class StreamFusionWindowTableFunctionSupportTest {
                         output,
                         new TimeAttributeWindowingStrategy(
                                 new SessionWindowSpec(Duration.ofSeconds(5), new int[] {0}), rowtime, 1)))
-                .contains("SessionWindowSpec");
+                .contains("standalone SESSION TVF requires the native merging-window operator");
     }
 
     private static RowType outputType(org.apache.flink.table.types.logical.LogicalType timeType) {

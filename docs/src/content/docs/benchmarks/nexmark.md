@@ -41,15 +41,20 @@ Source V2 splits; it does not replace the upstream generator or reader checkpoin
 splits emit Flink internal `RowData`, and a black-hole table sink consumes `RowData` after the SQL
 plan. Both source and query run at parallelism four, and checkpointing uses `EXACTLY_ONCE`. This variant isolates
 planner and native-operator throughput from broker, JSON, and result-materialization costs. Because
-the black-hole sink does not retain results, it is not a result-parity test and does not replace the
-Kafka-in/Kafka-out north-star benchmark.
+the benchmark result sink serializes and hashes the complete sorted changelog rather than discarding
+it. The bounded adapter seeds each source split deterministically and restores the upstream
+generator position, so Flink and StreamFusion receive identical events. This remains a Kafka-free
+operator benchmark and does not replace the Kafka-in/Kafka-out north-star benchmark.
 
 Current all-or-nothing coverage can fully accelerate q0 (pass-through), q1 (decimal currency
-conversion), q2 (selection), and q22 (URL directory extraction). q3, q4, q5, q7, q8, q9, q11, q12, q13,
-q15, q16, q17, q19, q20, and q23 require an unimplemented join, aggregation, or rank operator. q10
+conversion), q2 (selection), q11 (event-time session aggregation), and q22 (URL directory
+extraction). q3, q4, q5, q7, q8, q9, q13, q15, q16, q17, q19, q20, and q23 require an unimplemented
+join or rank operator. q10
 uses unsupported `DATE_FORMAT`; q14 uses a Java UDF, mixed decimal
 arithmetic beyond the q1 conversion shape, and timestamp calendar extraction; q21 uses Java-regex
-semantics. Those queries remain whole-plan Flink fallback.
+semantics. Q12's processing-time SQL is catalogued, but a max-speed bounded source completes before
+its first ten-second timer and therefore produces an empty result; it is not counted as result or
+acceleration evidence. Those queries remain whole-plan Flink fallback.
 
 Build the local Nexmark connector against this project's Flink version:
 
@@ -70,7 +75,8 @@ mvn -pl streamfusion-nexmark-benchmarks -am \
 `LocalRowDataNexmarkBenchmark` also accepts an event count, comma-separated query list, and an
 engine selector (`flink`, `streamfusion`, or `both`) for standalone measurements. It reports
 end-to-end elapsed time, input-event throughput, native calc batches, and native group-aggregate
-batches. The `group-aggregate` and `select-distinct` cases exercise both native state backends over
+batches. It also reports native window-aggregate batches and a row count plus SHA-256 for the full
+result changelog. The `group-aggregate` and `select-distinct` cases exercise both native state backends over
 the bounded bid stream; they are focused operator workloads rather than numbered Nexmark queries.
 Performance reports
 must come from separate, unprofiled JVM forks built with release-mode native code; profiler runs
@@ -83,6 +89,20 @@ events, the native in-memory path processed 365,779 events/s versus Flink's 377,
 RowData materialization, and exchange-boundary work; they did not expose an obvious
 SELECT-DISTINCT state-loop allocation or Java hot spot. These are local diagnostic results, not
 portable performance claims.
+
+On the September 1, 2026 local release/native-CPU Q11 run over five million deterministic events,
+StreamFusion's in-memory session aggregate processed 648,986 events/s versus Flink's 627,817
+events/s. Direct native RocksDB processed 526,714 events/s versus Flink RocksDB's 361,980 events/s.
+All four runs produced 99,930 result rows and SHA-256
+`7bd08ff1fbf1713ed178f847657729a5b69e4fae28d0f7626a5fc71327217d62`. Native CPU profiling
+found and removed two quadratic paths: replaying every historical session contribution and scanning
+the complete timer set after every registration. Post-fix memory profiles are led by timer snapshot,
+session merge, Arrow filtering, state-batch, and key encoding work rather than one dominant loop.
+RocksDB samples are primarily skip-list lookup/insertion, comparison, compaction, and `MultiGet`.
+JFR allocation profiles for both backends are dominated by the Nexmark generator, Flink `RowData`
+and binary-string materialization, memory-segment wrapping/copying, and Arrow envelopes; all custom
+Rust state, timer, scratch, RocksDB cache/write-buffer, and exported Arrow allocations remain charged
+to Flink managed memory. These are local diagnostic results, not portable performance claims.
 
 ## Q18 RowData profiling target
 

@@ -52,6 +52,7 @@ message Operator {
     WindowTableFunction window_table_function = 7;
     Deduplicate deduplicate = 8;
     GroupAggregate group_aggregate = 9;
+    WindowAggregate window_aggregate = 10;
   }
 }
 
@@ -75,6 +76,32 @@ message GroupAggregate {
   repeated AggregateCall aggregate_calls = 3;
   bool generate_update_before = 4;
   bool input_changelog = 5;
+}
+
+// Stateful SQL window aggregation. Grouping rows and accumulators are opaque native state;
+// timers and state are partitioned with the same Flink key groups and snapshot envelope.
+message WindowAggregate {
+  Operator input = 1;
+  repeated uint32 grouping_indices = 2;
+  repeated AggregateCall aggregate_calls = 3;
+  bool input_changelog = 4;
+  uint32 time_attribute_index = 5;
+  WindowKind kind = 6;
+  int64 size_millis = 7;
+  int64 slide_or_step_millis = 8;
+  int64 offset_millis = 9;
+  bool processing_time = 10;
+  repeated WindowProperty window_properties = 11;
+  Schema input_schema = 12;
+  Schema output_schema = 13;
+  string shift_time_zone = 14;
+}
+
+enum WindowProperty {
+  WINDOW_PROPERTY_UNSPECIFIED = 0;
+  WINDOW_PROPERTY_START = 1;
+  WINDOW_PROPERTY_END = 2;
+  WINDOW_PROPERTY_TIME = 3;
 }
 
 message AggregateCall {
@@ -108,6 +135,7 @@ enum WindowKind {
   WINDOW_KIND_TUMBLE = 1;
   WINDOW_KIND_HOP = 2;
   WINDOW_KIND_CUMULATE = 3;
+  WINDOW_KIND_SESSION = 4;
 }
 
 message Input {

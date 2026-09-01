@@ -64,11 +64,12 @@ public final class NexmarkSqlJob {
 
     static void createViews(TableEnvironment tables) {
         tables.executeSql(
-                "CREATE VIEW person AS SELECT person.id, person.name, person.emailAddress, person.creditCard, person.city, person.state, person.`dateTime`, person.extra FROM nexmark_events WHERE event_type=0");
+                "CREATE VIEW person AS SELECT person.id, person.name, person.emailAddress, person.creditCard, person.city, person.state, event_time AS `dateTime`, person.extra FROM nexmark_events WHERE event_type=0");
         tables.executeSql(
-                "CREATE VIEW auction AS SELECT auction.id, auction.itemName, auction.description, auction.initialBid, auction.reserve, auction.`dateTime`, auction.expires, auction.seller, auction.category, auction.extra FROM nexmark_events WHERE event_type=1");
+                "CREATE VIEW auction AS SELECT auction.id, auction.itemName, auction.description, auction.initialBid, auction.reserve, event_time AS `dateTime`, auction.expires, auction.seller, auction.category, auction.extra FROM nexmark_events WHERE event_type=1");
         tables.executeSql(
-                "CREATE VIEW bid AS SELECT bid.auction, bid.bidder, bid.price, bid.channel, bid.url, bid.`dateTime`, bid.extra FROM nexmark_events WHERE event_type=2");
+                "CREATE VIEW bid AS SELECT bid.auction, bid.bidder, bid.price, bid.channel, bid.url, event_time AS `dateTime`, bid.extra FROM nexmark_events WHERE event_type=2");
+        tables.executeSql("CREATE VIEW bid_with_proc_time AS SELECT *, PROCTIME() AS p_time FROM bid");
     }
 
     private static String sinkDdl(String bootstrap, String topic) {

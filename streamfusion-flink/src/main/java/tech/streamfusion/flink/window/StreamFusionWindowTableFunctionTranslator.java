@@ -11,6 +11,7 @@ import org.apache.flink.streaming.api.transformations.OneInputTransformation;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.planner.plan.logical.CumulativeWindowSpec;
 import org.apache.flink.table.planner.plan.logical.HoppingWindowSpec;
+import org.apache.flink.table.planner.plan.logical.SessionWindowSpec;
 import org.apache.flink.table.planner.plan.logical.TimeAttributeWindowingStrategy;
 import org.apache.flink.table.planner.plan.logical.TumblingWindowSpec;
 import org.apache.flink.table.planner.plan.logical.WindowSpec;
@@ -68,6 +69,9 @@ public final class StreamFusionWindowTableFunctionTranslator {
         if (outputType.getFieldCount() != inputType.getFieldCount() + 3) {
             return "output: aligned Window TVF must append window_start, window_end, and window_time";
         }
+        if (strategy.getWindow() instanceof SessionWindowSpec) {
+            return "window: standalone SESSION TVF requires the native merging-window operator";
+        }
         try {
             parameters(strategy.getWindow());
             return null;
@@ -97,6 +101,11 @@ public final class StreamFusionWindowTableFunctionTranslator {
                     cumulate.getMaxSize().toMillis(),
                     cumulate.getStep().toMillis(),
                     millis(cumulate.getOffset()));
+        }
+        if (spec instanceof SessionWindowSpec) {
+            SessionWindowSpec session = (SessionWindowSpec) spec;
+            return new WindowParameters(
+                    WindowKind.WINDOW_KIND_SESSION, session.getGap().toMillis(), 0, 0);
         }
         throw new IllegalArgumentException(spec.getClass().getSimpleName() + " is not an aligned Window TVF");
     }

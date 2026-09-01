@@ -16,6 +16,8 @@ import java.util.LinkedList;
 import java.util.List;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.connector.source.Boundedness;
+import org.apache.flink.api.connector.source.SourceReader;
+import org.apache.flink.api.connector.source.SourceReaderContext;
 import org.apache.flink.api.connector.source.SplitEnumerator;
 import org.apache.flink.api.connector.source.SplitEnumeratorContext;
 import org.apache.flink.table.data.RowData;
@@ -23,13 +25,21 @@ import org.apache.flink.util.Preconditions;
 
 /** Corrects the boundedness advertised by the finite local Nexmark generator. */
 final class StreamFusionBoundedNexmarkSource extends NexmarkSource {
+    private final GeneratorConfig config;
+
     StreamFusionBoundedNexmarkSource(GeneratorConfig config, TypeInformation<RowData> outputType) {
         super(config, outputType);
+        this.config = config;
     }
 
     @Override
     public Boundedness getBoundedness() {
         return Boundedness.BOUNDED;
+    }
+
+    @Override
+    public SourceReader<RowData, NexmarkSourceSplit> createReader(SourceReaderContext context) {
+        return new StreamFusionDeterministicNexmarkSourceReader(context, config);
     }
 
     @Override

@@ -8,7 +8,9 @@ sidebar:
 **Current status:** Partially accelerated.
 
 StreamFusion has a distinct native physical operator for the row-semantics `TUMBLE`, `HOP`, and
-`CUMULATE` TVFs. `SESSION` remains on Flink.
+`CUMULATE` TVFs. A `SESSION` TVF used directly as a row-producing operator remains on Flink;
+`SESSION` followed by a supported window aggregate is collapsed into the native stateful window
+aggregate and is accelerated.
 
 ## SQL example
 

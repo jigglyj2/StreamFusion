@@ -17,7 +17,7 @@ import org.apache.flink.table.api.TableEnvironment;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
 
-/** Runs Nexmark's RowData generator through SQL into Flink's RowData blackhole sink. */
+/** Runs Nexmark's RowData generator through SQL into a deterministic changelog result sink. */
 public final class NexmarkRowDataJob {
     public static final int PARALLELISM = 4;
     public static final long CHECKPOINT_INTERVAL_MILLIS = 1_000;
@@ -25,19 +25,33 @@ public final class NexmarkRowDataJob {
 
     private NexmarkRowDataJob() {}
 
-    public static void run(long eventCount, String query, boolean streamFusion) throws Exception {
-        run(eventCount, query, streamFusion, "hashmap");
+    public static BenchmarkResultStore.Result run(long eventCount, String query, boolean streamFusion)
+            throws Exception {
+        return run(eventCount, query, streamFusion, "hashmap");
     }
 
-    public static void run(long eventCount, String query, boolean streamFusion, String stateBackend) throws Exception {
+    public static BenchmarkResultStore.Result run(
+            long eventCount, String query, boolean streamFusion, String stateBackend) throws Exception {
+        return run(eventCount, query, streamFusion, stateBackend, PARALLELISM);
+    }
+
+    static BenchmarkResultStore.Result run(
+            long eventCount, String query, boolean streamFusion, String stateBackend, int parallelism)
+            throws Exception {
         if (eventCount <= 0) {
             throw new IllegalArgumentException("eventCount must be positive");
+        }
+        if (parallelism <= 0) {
+            throw new IllegalArgumentException("parallelism must be positive");
         }
         if (!stateBackend.equals("hashmap") && !stateBackend.equals("rocksdb")) {
             throw new IllegalArgumentException("stateBackend must be hashmap or rocksdb: " + stateBackend);
         }
         configurePlanner(streamFusion);
+        String resultRunId = java.util.UUID.randomUUID().toString();
+        BenchmarkResultStore.begin(resultRunId);
         Path checkpointDirectory = Files.createTempDirectory("streamfusion-nexmark-checkpoints-");
+        boolean completed = false;
         try {
             TableEnvironment tables = TableEnvironment.create(EnvironmentSettings.inStreamingMode());
             // Keep the local comparison out of Flink's tiny embedded-cluster defaults. Both
@@ -58,16 +72,21 @@ public final class NexmarkRowDataJob {
                     .setString("execution.checkpointing.interval", CHECKPOINT_INTERVAL_MILLIS + " ms");
             tables.getConfig().getConfiguration().setString("execution.checkpointing.mode", "EXACTLY_ONCE");
             tables.getConfig().getConfiguration().setString("execution.checkpointing.max-concurrent-checkpoints", "1");
-            tables.getConfig().getConfiguration().set(CoreOptions.DEFAULT_PARALLELISM, PARALLELISM);
+            tables.getConfig().getConfiguration().set(CoreOptions.DEFAULT_PARALLELISM, parallelism);
             tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ENABLED, false);
-            tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, PARALLELISM);
+            tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, parallelism);
 
             tables.executeSql(sourceDdl(eventCount));
             NexmarkSqlJob.createViews(tables);
-            tables.executeSql(sinkDdl(query));
+            tables.executeSql(sinkDdl(query, resultRunId));
             tables.executeSql("INSERT INTO nexmark_output\n" + NexmarkRowDataQueryCatalog.load(query))
                     .await();
+            completed = true;
+            return BenchmarkResultStore.finish(resultRunId);
         } finally {
+            if (!completed) {
+                BenchmarkResultStore.finish(resultRunId);
+            }
             deleteDirectory(checkpointDirectory);
         }
     }
@@ -81,11 +100,15 @@ public final class NexmarkRowDataJob {
                 + "WATERMARK FOR event_time AS event_time - INTERVAL '4' SECOND) WITH ("
                 + "'connector'='streamfusion-nexmark-bounded','events.num'='"
                 + eventCount
-                + "','first-event.rate'='2147483647','next-event.rate'='2147483647',"
+                + "','events.start-time'='1600000000000','first-event.rate'='2147483647','next-event.rate'='2147483647',"
                 + "'max-emit-speed'='true','keep-alive'='false')";
     }
 
     static String sinkDdl(String query) throws IOException {
+        return sinkDdl(query, "test-run");
+    }
+
+    static String sinkDdl(String query, String runId) throws IOException {
         String columns;
         switch (query) {
             case "q0":
@@ -107,10 +130,18 @@ public final class NexmarkRowDataJob {
             case "select-distinct":
                 columns = "bidder BIGINT";
                 break;
+            case "q11":
+            case "q12":
+                columns = "bidder BIGINT, bid_count BIGINT, starttime TIMESTAMP(3), endtime TIMESTAMP(3)";
+                break;
             default:
                 throw new IOException("Nexmark query is not fully accelerable: " + query);
         }
-        return "CREATE TABLE nexmark_output (" + columns + ") WITH ('connector'='blackhole')";
+        return "CREATE TABLE nexmark_output ("
+                + columns
+                + ") WITH ('connector'='streamfusion-benchmark-result','run-id'='"
+                + runId
+                + "')";
     }
 
     private static void configurePlanner(boolean streamFusion) {

@@ -16,7 +16,7 @@ This matrix follows the query operations documented by Flink 2.3, including the 
 | [Windowing TVFs](window-tvf/) | **Partial** (`TUMBLE`, `HOP`, `CUMULATE`) | Yes | Native aligned-window assignment compatible with Flink |
 | [Watermark assignment](watermark-assignment/) | **Plan-compatible** | Flink-owned | Distinct StreamFusion node delegating Flink's exact timer and idleness runtime |
 | [Group aggregation](group-aggregation/) | **Partial** (timer-free keyed) | Yes | Native keyed state and Arrow aggregate kernels |
-| [Window aggregation](window-aggregation/) | **No** | Yes | Native window state and DataFusion aggregate kernels |
+| [Window aggregation](window-aggregation/) | **Partial** (`TUMBLE`, `HOP`, `CUMULATE`, `SESSION`) | Yes | Native keyed window state, timers, and Arrow aggregate kernels |
 | [OVER aggregation](over-aggregation/) | **No** | Yes | Native ordered state and aggregate kernels |
 | [Joins](joins/) | **No** | By join type | DataFusion batch joins or custom streaming state |
 | [Window joins](window-join/) | **No** | Yes | Custom window-aware streaming join |

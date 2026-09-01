@@ -44,6 +44,7 @@ class StreamFusionStatefulOperatorMetricsTest {
             metrics.processed(input, output);
         }
         metrics.processingFailed();
+        metrics.nativeWindowStatistics(2, 3, 4, 5, 6);
         CheckpointStorageLocationReference location = CheckpointStorageLocationReference.getDefault();
         metrics.checkpointCompleted(
                 CheckpointOptions.alignedNoTimeout(CheckpointType.CHECKPOINT, location), 100, -1, 0, 10);
@@ -65,8 +66,11 @@ class StreamFusionStatefulOperatorMetricsTest {
         assertThat(group.count("emittedUpdateBefores")).isEqualTo(1);
         assertThat(group.count("emittedUpdateAfters")).isEqualTo(1);
         assertThat(group.count("emittedDeletes")).isEqualTo(1);
-        assertThat(group.count("stateReadBatches")).isEqualTo(1);
-        assertThat(group.count("stateWriteBatches")).isEqualTo(1);
+        assertThat(group.count("stateReadBatches")).isEqualTo(3);
+        assertThat(group.count("stateWriteBatches")).isEqualTo(4);
+        assertThat(group.count("timersRegistered")).isEqualTo(4);
+        assertThat(group.count("timersDeleted")).isEqualTo(5);
+        assertThat(group.count("timersFired")).isEqualTo(6);
         assertThat(group.count("processingFailures")).isEqualTo(1);
         assertThat(group.count("checkpoints")).isEqualTo(3);
         assertThat(group.count("alignedCheckpoints")).isEqualTo(1);

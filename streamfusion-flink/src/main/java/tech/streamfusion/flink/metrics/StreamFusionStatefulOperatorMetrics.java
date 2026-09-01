@@ -24,6 +24,12 @@ public final class StreamFusionStatefulOperatorMetrics {
     private final Counter stateReadBatches;
     private final Counter stateWriteBatches;
     private final Counter processingFailures;
+    private final Counter watermarksAdvanced;
+    private final Counter eventTimeTimersFired;
+    private final Counter processingTimeTimersFired;
+    private final Counter timersRegistered;
+    private final Counter timersDeleted;
+    private final Counter timersFired;
     private final Counter checkpoints;
     private final Counter alignedCheckpoints;
     private final Counter unalignedCheckpoints;
@@ -51,6 +57,12 @@ public final class StreamFusionStatefulOperatorMetrics {
         stateReadBatches = metrics.counter("stateReadBatches");
         stateWriteBatches = metrics.counter("stateWriteBatches");
         processingFailures = metrics.counter("processingFailures");
+        watermarksAdvanced = metrics.counter("watermarksAdvanced");
+        eventTimeTimersFired = metrics.counter("eventTimeTimersFired");
+        processingTimeTimersFired = metrics.counter("processingTimeTimersFired");
+        timersRegistered = metrics.counter("timersRegistered");
+        timersDeleted = metrics.counter("timersDeleted");
+        timersFired = metrics.counter("timersFired");
         checkpoints = metrics.counter("checkpoints");
         alignedCheckpoints = metrics.counter("alignedCheckpoints");
         unalignedCheckpoints = metrics.counter("unalignedCheckpoints");
@@ -69,11 +81,15 @@ public final class StreamFusionStatefulOperatorMetrics {
     }
 
     public void processed(ArrowRowDataBatch input, ArrowRowDataBatch output) {
+        processedWithoutStateCalls(input, output);
+        stateReadBatches.inc();
+        stateWriteBatches.inc();
+    }
+
+    public void processedWithoutStateCalls(ArrowRowDataBatch input, ArrowRowDataBatch output) {
         processedBatches.inc();
         processedRows.inc(input.size());
         emittedRows.inc(output.size());
-        stateReadBatches.inc();
-        stateWriteBatches.inc();
         for (int row = 0; row < output.size(); row++) {
             RowKind kind = output.rowKind(row);
             switch (kind) {
@@ -95,8 +111,47 @@ public final class StreamFusionStatefulOperatorMetrics {
         }
     }
 
+    public void nativeWindowStatistics(long stateReads, long stateWrites, long registered, long deleted, long fired) {
+        stateReadBatches.inc(stateReads);
+        stateWriteBatches.inc(stateWrites);
+        timersRegistered.inc(registered);
+        timersDeleted.inc(deleted);
+        timersFired.inc(fired);
+    }
+
     public void processingFailed() {
         processingFailures.inc();
+    }
+
+    public void watermarkAdvanced() {
+        watermarksAdvanced.inc();
+    }
+
+    public void timerOutput(ArrowRowDataBatch output, boolean processingTime) {
+        emittedRows.inc(output.size());
+        if (processingTime) {
+            processingTimeTimersFired.inc(output.size());
+        } else {
+            eventTimeTimersFired.inc(output.size());
+        }
+        for (int row = 0; row < output.size(); row++) {
+            switch (output.rowKind(row)) {
+                case INSERT:
+                    emittedInserts.inc();
+                    break;
+                case UPDATE_BEFORE:
+                    emittedUpdateBefores.inc();
+                    break;
+                case UPDATE_AFTER:
+                    emittedUpdateAfters.inc();
+                    break;
+                case DELETE:
+                    emittedDeletes.inc();
+                    break;
+                default:
+                    throw new IllegalStateException("Unknown Flink row kind " + output.rowKind(row));
+            }
+        }
     }
 
     public void checkpointCompleted(

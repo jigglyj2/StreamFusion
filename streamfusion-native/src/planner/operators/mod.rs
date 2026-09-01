@@ -17,4 +17,5 @@ pub(crate) mod reusable_input;
 mod select_distinct;
 pub(super) mod union;
 pub(super) mod values;
+pub(crate) mod window_aggregate;
 pub(super) mod window_table_function;

@@ -19,7 +19,7 @@ public final class LocalRowDataNexmarkBenchmark {
                 for (String backend : backends) {
                     RunResult result = run(events, query, streamFusion, backend);
                     System.out.printf(
-                            "%s engine=%s state_backend=%s input_events=%d elapsed_seconds=%.6f input_events_per_second=%.2f native_calc_batches=%d native_group_aggregate_batches=%d%n",
+                            "%s engine=%s state_backend=%s input_events=%d elapsed_seconds=%.6f input_events_per_second=%.2f native_calc_batches=%d native_group_aggregate_batches=%d native_window_aggregate_batches=%d output_rows=%d output_sha256=%s%n",
                             query,
                             streamFusion ? "streamfusion" : "flink",
                             backend,
@@ -27,7 +27,10 @@ public final class LocalRowDataNexmarkBenchmark {
                             result.elapsedSeconds(),
                             result.recordsPerSecond(events),
                             result.nativeCalcBatches(),
-                            result.nativeGroupAggregateBatches());
+                            result.nativeGroupAggregateBatches(),
+                            result.nativeWindowAggregateBatches(),
+                            result.outputRows(),
+                            result.outputSha256());
                 }
             }
         }
@@ -38,13 +41,22 @@ public final class LocalRowDataNexmarkBenchmark {
     }
 
     static RunResult run(long events, String query, boolean streamFusion, String backend) throws Exception {
+        return run(events, query, streamFusion, backend, NexmarkRowDataJob.PARALLELISM);
+    }
+
+    static RunResult run(long events, String query, boolean streamFusion, String backend, int parallelism)
+            throws Exception {
         StreamFusionPlannerFactory.resetMetrics();
         long start = System.nanoTime();
-        NexmarkRowDataJob.run(events, query, streamFusion, backend);
+        BenchmarkResultStore.Result output = NexmarkRowDataJob.run(events, query, streamFusion, backend, parallelism);
         return new RunResult(
                 System.nanoTime() - start,
                 StreamFusionPlannerFactory.nativeCalcBatchCount(),
-                StreamFusionPlannerFactory.nativeGroupAggregateBatchCount());
+                StreamFusionPlannerFactory.nativeGroupAggregateBatchCount(),
+                StreamFusionPlannerFactory.nativeWindowAggregateBatchCount(),
+                output.rowCount(),
+                output.sha256(),
+                output.debugRows());
     }
 
     static List<Boolean> engines(String engine) {
@@ -78,11 +90,26 @@ public final class LocalRowDataNexmarkBenchmark {
         private final long elapsedNanos;
         private final long nativeCalcBatches;
         private final long nativeGroupAggregateBatches;
+        private final long nativeWindowAggregateBatches;
+        private final long outputRows;
+        private final String outputSha256;
+        private final List<String> debugRows;
 
-        private RunResult(long elapsedNanos, long nativeCalcBatches, long nativeGroupAggregateBatches) {
+        private RunResult(
+                long elapsedNanos,
+                long nativeCalcBatches,
+                long nativeGroupAggregateBatches,
+                long nativeWindowAggregateBatches,
+                long outputRows,
+                String outputSha256,
+                List<String> debugRows) {
             this.elapsedNanos = elapsedNanos;
             this.nativeCalcBatches = nativeCalcBatches;
             this.nativeGroupAggregateBatches = nativeGroupAggregateBatches;
+            this.nativeWindowAggregateBatches = nativeWindowAggregateBatches;
+            this.outputRows = outputRows;
+            this.outputSha256 = outputSha256;
+            this.debugRows = List.copyOf(debugRows);
         }
 
         private double recordsPerSecond(long inputRows) {
@@ -99,6 +126,22 @@ public final class LocalRowDataNexmarkBenchmark {
 
         long nativeGroupAggregateBatches() {
             return nativeGroupAggregateBatches;
+        }
+
+        long nativeWindowAggregateBatches() {
+            return nativeWindowAggregateBatches;
+        }
+
+        long outputRows() {
+            return outputRows;
+        }
+
+        String outputSha256() {
+            return outputSha256;
+        }
+
+        List<String> debugRows() {
+            return debugRows;
         }
 
         boolean completed() {

@@ -4,6 +4,7 @@
 mod memory;
 mod rocks_plugin;
 mod snapshot;
+mod timer;
 
 use std::borrow::Cow;
 use std::path::Path;
@@ -12,6 +13,7 @@ use datafusion::error::Result;
 
 pub(crate) use memory::MemoryKeyedState;
 pub(crate) use rocks_plugin::RocksPluginKeyedState;
+pub(crate) use timer::{NativeTimerService, TimerDomain, TimerKey};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct StateKeyRef<'a> {

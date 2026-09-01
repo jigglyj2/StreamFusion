@@ -1,1 +1,2 @@
 com.github.nexmark.flink.source.StreamFusionBoundedNexmarkTableSourceFactory
+tech.streamfusion.benchmark.nexmark.BenchmarkResultDynamicTableSinkFactory

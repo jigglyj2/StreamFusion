@@ -15,10 +15,13 @@ import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
+import org.apache.calcite.rex.RexCall;
+import org.apache.calcite.rex.RexInputRef;
 import org.apache.calcite.rex.RexNode;
 import org.apache.flink.configuration.ReadableConfig;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
 import org.apache.flink.table.planner.plan.logical.TimeAttributeWindowingStrategy;
+import org.apache.flink.table.planner.plan.logical.WindowingStrategy;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecEdge;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNode;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeBase;
@@ -36,11 +39,16 @@ import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecDeduplica
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecDropUpdateBefore;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecExchange;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecExpand;
+import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecGlobalWindowAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecGroupAggregate;
+import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecLocalWindowAggregate;
+import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecMiniBatchAssigner;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecUnion;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecValues;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWatermarkAssigner;
+import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWindowAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWindowTableFunction;
+import org.apache.flink.table.runtime.groupwindow.NamedWindowProperty;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.util.TimeUtils;
 
@@ -58,6 +66,8 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             "tech.streamfusion.flink.deduplicate.StreamFusionDeduplicateTranslator";
     private static final String GROUP_AGGREGATE_TRANSLATOR_CLASS =
             "tech.streamfusion.flink.aggregate.StreamFusionGroupAggregateTranslator";
+    private static final String WINDOW_AGGREGATE_TRANSLATOR_CLASS =
+            "tech.streamfusion.flink.window.StreamFusionWindowAggregateTranslator";
 
     @Override
     public ExecNodeGraph process(ExecNodeGraph graph, ProcessorContext context) {
@@ -109,8 +119,40 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             if (reason != null) {
                 rejections.add(nodePath + "\n" + reason);
             }
+        } else if (node instanceof StreamExecGlobalWindowAggregate) {
+            TwoPhaseWindowAggregate twoPhase = twoPhaseWindowAggregate((StreamExecGlobalWindowAggregate) node);
+            if (twoPhase == null) {
+                rejections.add(nodePath
+                        + "\nglobal window aggregate: expected LocalWindowAggregate -> Exchange -> "
+                        + "GlobalWindowAggregate so the native operator can consume original rows");
+                return;
+            }
+            String reason = unsupportedReason(twoPhase, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
+            collectRejections(twoPhase.inputEdge.getSource(), context, nodePath + "/native-input", rejections);
+            return;
+        } else if (node instanceof StreamExecLocalWindowAggregate) {
+            rejections.add(
+                    nodePath + "\nlocal window aggregate: native acceleration requires its paired global aggregate");
+        } else if (node instanceof StreamExecWindowAggregate) {
+            ProcessingTimeWindowAggregate folded = processingTimeWindowAggregate((StreamExecWindowAggregate) node);
+            String reason = folded == null
+                    ? unsupportedReason((StreamExecWindowAggregate) node, context)
+                    : unsupportedReason(folded, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
+            if (folded != null) {
+                collectRejections(folded.inputEdge.getSource(), context, nodePath + "/native-input", rejections);
+                return;
+            }
         } else if (node instanceof StreamExecDropUpdateBefore) {
             // RowKind is Flink changelog metadata, so this node is always eligible.
+        } else if (node instanceof StreamExecMiniBatchAssigner) {
+            // Native stateful operators already consume Arrow mini-batches. The latency-marker
+            // assigner is folded into the native stateful node during conversion.
         } else if (node instanceof StreamExecWatermarkAssigner) {
             // The distinct node retains Flink's generated expression and watermark state machine.
         } else if (node instanceof StreamExecExpand) {
@@ -225,6 +267,60 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     .collect(Collectors.toList()));
             return replacement;
         }
+        if (node instanceof StreamExecGlobalWindowAggregate) {
+            TwoPhaseWindowAggregate twoPhase = twoPhaseWindowAggregate((StreamExecGlobalWindowAggregate) node);
+            if (twoPhase == null) {
+                throw new IllegalStateException("Selected malformed two-phase window aggregate");
+            }
+            StreamExecGlobalWindowAggregate global = twoPhase.global;
+            StreamExecLocalWindowAggregate local = twoPhase.local;
+            StreamFusionExecWindowAggregate replacement = new StreamFusionExecWindowAggregate(
+                    global.getPersistedConfig(),
+                    localWindowGrouping(local),
+                    localWindowAggregateCalls(local),
+                    localWindowing(local),
+                    globalWindowProperties(global),
+                    globalWindowNeedRetraction(global),
+                    local.getInputProperties().get(0),
+                    (RowType) global.getOutputType(),
+                    "StreamFusionWindowAggregate");
+            replacement.setInputEdges(
+                    List.of(copyEdge(twoPhase.inputEdge, convert(twoPhase.inputEdge.getSource()), replacement)));
+            return replacement;
+        }
+        if (node instanceof StreamExecWindowAggregate) {
+            StreamExecWindowAggregate aggregate = (StreamExecWindowAggregate) node;
+            ProcessingTimeWindowAggregate folded = processingTimeWindowAggregate(aggregate);
+            if (folded != null) {
+                StreamFusionExecWindowAggregate replacement = new StreamFusionExecWindowAggregate(
+                        aggregate.getPersistedConfig(),
+                        folded.grouping,
+                        folded.aggregateCalls,
+                        folded.windowing,
+                        windowProperties(aggregate),
+                        windowNeedRetraction(aggregate),
+                        folded.inputProperty,
+                        (RowType) aggregate.getOutputType(),
+                        "StreamFusionWindowAggregate");
+                replacement.setInputEdges(
+                        List.of(copyEdge(folded.inputEdge, convert(folded.inputEdge.getSource()), replacement)));
+                return replacement;
+            }
+            StreamFusionExecWindowAggregate replacement = new StreamFusionExecWindowAggregate(
+                    aggregate.getPersistedConfig(),
+                    windowGrouping(aggregate),
+                    windowAggregateCalls(aggregate),
+                    windowing(aggregate),
+                    windowProperties(aggregate),
+                    windowNeedRetraction(aggregate),
+                    aggregate.getInputProperties().get(0),
+                    (RowType) aggregate.getOutputType(),
+                    "StreamFusionWindowAggregate");
+            replacement.setInputEdges(aggregate.getInputEdges().stream()
+                    .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                    .collect(Collectors.toList()));
+            return replacement;
+        }
         if (node instanceof StreamExecDropUpdateBefore) {
             StreamExecDropUpdateBefore drop = (StreamExecDropUpdateBefore) node;
             StreamFusionExecDropUpdateBefore replacement = new StreamFusionExecDropUpdateBefore(
@@ -236,6 +332,10 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
                     .collect(Collectors.toList()));
             return replacement;
+        }
+        if (node instanceof StreamExecMiniBatchAssigner) {
+            ExecEdge edge = node.getInputEdges().get(0);
+            return convert(edge.getSource());
         }
         if (node instanceof StreamExecWatermarkAssigner) {
             StreamExecWatermarkAssigner watermark = (StreamExecWatermarkAssigner) node;
@@ -434,6 +534,108 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         }
     }
 
+    private String unsupportedReason(StreamExecWindowAggregate aggregate, ProcessorContext context) {
+        ExecEdge input = aggregate.getInputEdges().get(0);
+        try {
+            Class<?> translator = Class.forName(
+                    WINDOW_AGGREGATE_TRANSLATOR_CLASS,
+                    true,
+                    context.getPlanner().getFlinkContext().getClassLoader());
+            Method method = translator.getMethod(
+                    "unsupportedReason",
+                    RowType.class,
+                    RowType.class,
+                    int[].class,
+                    org.apache.calcite.rel.core.AggregateCall[].class,
+                    WindowingStrategy.class,
+                    NamedWindowProperty[].class,
+                    boolean.class,
+                    ReadableConfig.class);
+            return (String) method.invoke(
+                    null,
+                    (RowType) input.getOutputType(),
+                    (RowType) aggregate.getOutputType(),
+                    windowGrouping(aggregate),
+                    windowAggregateCalls(aggregate),
+                    windowing(aggregate),
+                    windowProperties(aggregate),
+                    windowNeedRetraction(aggregate),
+                    aggregate.getPersistedConfig());
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
+            throw new IllegalStateException("Could not inspect StreamFusion WindowAggregate support", e);
+        } catch (InvocationTargetException e) {
+            throw new IllegalStateException("StreamFusion WindowAggregate support inspection failed", e.getCause());
+        }
+    }
+
+    private String unsupportedReason(ProcessingTimeWindowAggregate aggregate, ProcessorContext context) {
+        try {
+            Class<?> translator = Class.forName(
+                    WINDOW_AGGREGATE_TRANSLATOR_CLASS,
+                    true,
+                    context.getPlanner().getFlinkContext().getClassLoader());
+            Method method = translator.getMethod(
+                    "unsupportedReason",
+                    RowType.class,
+                    RowType.class,
+                    int[].class,
+                    org.apache.calcite.rel.core.AggregateCall[].class,
+                    WindowingStrategy.class,
+                    NamedWindowProperty[].class,
+                    boolean.class,
+                    ReadableConfig.class);
+            return (String) method.invoke(
+                    null,
+                    (RowType) aggregate.inputEdge.getOutputType(),
+                    (RowType) aggregate.node.getOutputType(),
+                    aggregate.grouping,
+                    aggregate.aggregateCalls,
+                    aggregate.windowing,
+                    windowProperties(aggregate.node),
+                    windowNeedRetraction(aggregate.node),
+                    aggregate.node.getPersistedConfig());
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
+            throw new IllegalStateException("Could not inspect folded processing-time WindowAggregate support", e);
+        } catch (InvocationTargetException e) {
+            throw new IllegalStateException(
+                    "Folded processing-time WindowAggregate support inspection failed", e.getCause());
+        }
+    }
+
+    private String unsupportedReason(TwoPhaseWindowAggregate aggregate, ProcessorContext context) {
+        try {
+            Class<?> translator = Class.forName(
+                    WINDOW_AGGREGATE_TRANSLATOR_CLASS,
+                    true,
+                    context.getPlanner().getFlinkContext().getClassLoader());
+            Method method = translator.getMethod(
+                    "unsupportedReason",
+                    RowType.class,
+                    RowType.class,
+                    int[].class,
+                    org.apache.calcite.rel.core.AggregateCall[].class,
+                    WindowingStrategy.class,
+                    NamedWindowProperty[].class,
+                    boolean.class,
+                    ReadableConfig.class);
+            return (String) method.invoke(
+                    null,
+                    (RowType) aggregate.inputEdge.getOutputType(),
+                    (RowType) aggregate.global.getOutputType(),
+                    localWindowGrouping(aggregate.local),
+                    localWindowAggregateCalls(aggregate.local),
+                    localWindowing(aggregate.local),
+                    globalWindowProperties(aggregate.global),
+                    globalWindowNeedRetraction(aggregate.global),
+                    aggregate.global.getPersistedConfig());
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
+            throw new IllegalStateException("Could not inspect StreamFusion two-phase WindowAggregate support", e);
+        } catch (InvocationTargetException e) {
+            throw new IllegalStateException(
+                    "StreamFusion two-phase WindowAggregate support inspection failed", e.getCause());
+        }
+    }
+
     private String unsupportedReason(StreamExecCorrelate correlate, ProcessorContext context) {
         ExecEdge input = correlate.getInputEdges().get(0);
         Object joinType = field(correlate, CommonExecCorrelate.class, "joinType");
@@ -610,6 +812,185 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     .toMillis();
         }
         return TimeUtils.parseDuration(metadata.get(0).getStateTtl()).toMillis();
+    }
+
+    private static int[] windowGrouping(StreamExecWindowAggregate aggregate) {
+        return ((int[]) field(aggregate, StreamExecWindowAggregate.class, "grouping")).clone();
+    }
+
+    private static org.apache.calcite.rel.core.AggregateCall[] windowAggregateCalls(
+            StreamExecWindowAggregate aggregate) {
+        return ((org.apache.calcite.rel.core.AggregateCall[])
+                        field(aggregate, StreamExecWindowAggregate.class, "aggCalls"))
+                .clone();
+    }
+
+    private static WindowingStrategy windowing(StreamExecWindowAggregate aggregate) {
+        return (WindowingStrategy) field(aggregate, StreamExecWindowAggregate.class, "windowing");
+    }
+
+    private static NamedWindowProperty[] windowProperties(StreamExecWindowAggregate aggregate) {
+        return ((NamedWindowProperty[]) field(aggregate, StreamExecWindowAggregate.class, "namedWindowProperties"))
+                .clone();
+    }
+
+    private static boolean windowNeedRetraction(StreamExecWindowAggregate aggregate) {
+        return (boolean) field(aggregate, StreamExecWindowAggregate.class, "needRetraction");
+    }
+
+    private static TwoPhaseWindowAggregate twoPhaseWindowAggregate(StreamExecGlobalWindowAggregate global) {
+        if (global.getInputEdges().size() != 1) {
+            return null;
+        }
+        ExecNode<?> exchange = global.getInputEdges().get(0).getSource();
+        if (!(exchange instanceof StreamExecExchange)
+                || exchange.getInputEdges().size() != 1) {
+            return null;
+        }
+        ExecNode<?> local = exchange.getInputEdges().get(0).getSource();
+        if (!(local instanceof StreamExecLocalWindowAggregate)
+                || local.getInputEdges().size() != 1) {
+            return null;
+        }
+        return new TwoPhaseWindowAggregate(
+                global,
+                (StreamExecLocalWindowAggregate) local,
+                local.getInputEdges().get(0));
+    }
+
+    /**
+     * Flink materializes {@code PROCTIME()} in a Calc directly below the distribution required by
+     * a one-phase processing-time window. The native window operator reads Flink's processing-time
+     * service instead of that synthetic column, so fold the Calc and its exchange while remapping
+     * every real projected field back to the original input.
+     */
+    private static ProcessingTimeWindowAggregate processingTimeWindowAggregate(StreamExecWindowAggregate node) {
+        WindowingStrategy originalWindowing = windowing(node);
+        if (!(originalWindowing instanceof TimeAttributeWindowingStrategy) || !originalWindowing.isProctime()) {
+            return null;
+        }
+        ExecEdge aggregateInput = node.getInputEdges().get(0);
+        if (!(aggregateInput.getSource() instanceof StreamExecExchange)) {
+            return null;
+        }
+        StreamExecExchange exchange = (StreamExecExchange) aggregateInput.getSource();
+        ExecEdge exchangeInput = exchange.getInputEdges().get(0);
+        if (!(exchangeInput.getSource() instanceof StreamExecCalc)) {
+            return null;
+        }
+        StreamExecCalc calc = (StreamExecCalc) exchangeInput.getSource();
+        if (condition(calc) != null) {
+            return null;
+        }
+        List<RexNode> projects = projection(calc);
+        int timeIndex = ((TimeAttributeWindowingStrategy) originalWindowing).getTimeAttributeIndex();
+        if (timeIndex < 0 || timeIndex >= projects.size() || !isProctimeCall(projects.get(timeIndex))) {
+            return null;
+        }
+        int[] sourceIndex = new int[projects.size()];
+        java.util.Arrays.fill(sourceIndex, -1);
+        for (int index = 0; index < projects.size(); index++) {
+            RexNode project = projects.get(index);
+            if (index == timeIndex) {
+                continue;
+            }
+            if (!(project instanceof RexInputRef)) {
+                return null;
+            }
+            sourceIndex[index] = ((RexInputRef) project).getIndex();
+        }
+        int[] remappedGrouping = windowGrouping(node);
+        for (int index = 0; index < remappedGrouping.length; index++) {
+            int projected = remappedGrouping[index];
+            if (projected < 0 || projected >= sourceIndex.length || sourceIndex[projected] < 0) {
+                return null;
+            }
+            remappedGrouping[index] = sourceIndex[projected];
+        }
+        org.apache.calcite.rel.core.AggregateCall[] calls = windowAggregateCalls(node);
+        for (int index = 0; index < calls.length; index++) {
+            List<Integer> remappedArguments =
+                    new ArrayList<>(calls[index].getArgList().size());
+            for (int projected : calls[index].getArgList()) {
+                if (projected < 0 || projected >= sourceIndex.length || sourceIndex[projected] < 0) {
+                    return null;
+                }
+                remappedArguments.add(sourceIndex[projected]);
+            }
+            calls[index] = calls[index].withArgList(remappedArguments);
+        }
+        TimeAttributeWindowingStrategy remappedWindowing = new TimeAttributeWindowingStrategy(
+                originalWindowing.getWindow(), originalWindowing.getTimeAttributeType(), 0);
+        ExecEdge calcInput = calc.getInputEdges().get(0);
+        return new ProcessingTimeWindowAggregate(
+                node, calcInput, calc.getInputProperties().get(0), remappedGrouping, calls, remappedWindowing);
+    }
+
+    private static boolean isProctimeCall(RexNode expression) {
+        return expression instanceof RexCall
+                && ((RexCall) expression).getOperator().getName().equalsIgnoreCase("PROCTIME");
+    }
+
+    private static int[] localWindowGrouping(StreamExecLocalWindowAggregate aggregate) {
+        return ((int[]) field(aggregate, StreamExecLocalWindowAggregate.class, "grouping")).clone();
+    }
+
+    private static org.apache.calcite.rel.core.AggregateCall[] localWindowAggregateCalls(
+            StreamExecLocalWindowAggregate aggregate) {
+        return ((org.apache.calcite.rel.core.AggregateCall[])
+                        field(aggregate, StreamExecLocalWindowAggregate.class, "aggCalls"))
+                .clone();
+    }
+
+    private static WindowingStrategy localWindowing(StreamExecLocalWindowAggregate aggregate) {
+        return (WindowingStrategy) field(aggregate, StreamExecLocalWindowAggregate.class, "windowing");
+    }
+
+    private static NamedWindowProperty[] globalWindowProperties(StreamExecGlobalWindowAggregate aggregate) {
+        return ((NamedWindowProperty[])
+                        field(aggregate, StreamExecGlobalWindowAggregate.class, "namedWindowProperties"))
+                .clone();
+    }
+
+    private static boolean globalWindowNeedRetraction(StreamExecGlobalWindowAggregate aggregate) {
+        return (boolean) field(aggregate, StreamExecGlobalWindowAggregate.class, "needRetraction");
+    }
+
+    private static final class TwoPhaseWindowAggregate {
+        private final StreamExecGlobalWindowAggregate global;
+        private final StreamExecLocalWindowAggregate local;
+        private final ExecEdge inputEdge;
+
+        private TwoPhaseWindowAggregate(
+                StreamExecGlobalWindowAggregate global, StreamExecLocalWindowAggregate local, ExecEdge inputEdge) {
+            this.global = global;
+            this.local = local;
+            this.inputEdge = inputEdge;
+        }
+    }
+
+    private static final class ProcessingTimeWindowAggregate {
+        private final StreamExecWindowAggregate node;
+        private final ExecEdge inputEdge;
+        private final org.apache.flink.table.planner.plan.nodes.exec.InputProperty inputProperty;
+        private final int[] grouping;
+        private final org.apache.calcite.rel.core.AggregateCall[] aggregateCalls;
+        private final TimeAttributeWindowingStrategy windowing;
+
+        private ProcessingTimeWindowAggregate(
+                StreamExecWindowAggregate node,
+                ExecEdge inputEdge,
+                org.apache.flink.table.planner.plan.nodes.exec.InputProperty inputProperty,
+                int[] grouping,
+                org.apache.calcite.rel.core.AggregateCall[] aggregateCalls,
+                TimeAttributeWindowingStrategy windowing) {
+            this.node = node;
+            this.inputEdge = inputEdge;
+            this.inputProperty = inputProperty;
+            this.grouping = grouping;
+            this.aggregateCalls = aggregateCalls;
+            this.windowing = windowing;
+        }
     }
 
     private static Object field(Object node, Class<?> declaringClass, String name) {

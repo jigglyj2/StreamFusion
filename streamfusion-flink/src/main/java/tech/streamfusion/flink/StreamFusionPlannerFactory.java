@@ -24,6 +24,7 @@ import tech.streamfusion.nativebridge.NativeCalcBridge;
 import tech.streamfusion.nativebridge.NativeGroupAggregateBridge;
 import tech.streamfusion.nativebridge.NativeUnionBridge;
 import tech.streamfusion.nativebridge.NativeValuesBridge;
+import tech.streamfusion.nativebridge.NativeWindowAggregateBridge;
 
 /** Entry point loaded by the StreamFusion Flink planner patch. */
 public final class StreamFusionPlannerFactory implements PlannerFactory {
@@ -79,6 +80,10 @@ public final class StreamFusionPlannerFactory implements PlannerFactory {
         return NativeGroupAggregateBridge.executedBatchCount();
     }
 
+    public static long nativeWindowAggregateBatchCount() {
+        return NativeWindowAggregateBridge.executedBatchCount();
+    }
+
     public static long nativeValuesBatchCount() {
         return NativeValuesBridge.executedBatchCount();
     }
@@ -88,6 +93,7 @@ public final class StreamFusionPlannerFactory implements PlannerFactory {
         StreamFusionPlanner.resetMetrics();
         NativeCalcBridge.resetMetrics();
         NativeGroupAggregateBridge.resetMetrics();
+        NativeWindowAggregateBridge.resetMetrics();
         NativeUnionBridge.resetMetrics();
         NativeValuesBridge.resetMetrics();
         System.clearProperty(EXEC_GRAPH_PROCESSOR_PROPERTY);

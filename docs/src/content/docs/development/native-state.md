@@ -34,7 +34,8 @@ serializer, verify unchanged SST identity and reduced checkpointed bytes, restor
 handle, and rescale native RocksDB state 1-to-2-to-1. Canonical savepoints deliberately remain SFS1
 raw keyed state so they can move between the native memory and RocksDB implementations.
 
-The focused recovery matrix is shared by native group aggregation and deduplication:
+The focused recovery matrix is shared by native group aggregation, deduplication, SELECT DISTINCT,
+and window aggregation. Window cases include pending event-time and processing-time timers:
 
 | Recovery path | Memory state | RocksDB state |
 | --- | --- | --- |

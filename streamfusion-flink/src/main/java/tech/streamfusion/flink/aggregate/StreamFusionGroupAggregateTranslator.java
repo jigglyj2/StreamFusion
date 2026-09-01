@@ -146,7 +146,7 @@ public final class StreamFusionGroupAggregateTranslator {
         return null;
     }
 
-    private static String unsupportedCall(RowType inputType, LogicalType outputType, AggregateCall call) {
+    public static String unsupportedCall(RowType inputType, LogicalType outputType, AggregateCall call) {
         if (call.isDistinct()) {
             return "DISTINCT is not implemented";
         }

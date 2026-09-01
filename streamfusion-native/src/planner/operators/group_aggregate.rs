@@ -48,17 +48,17 @@ pub(crate) struct GroupAggregateProcessor {
 }
 
 #[derive(Clone)]
-struct Call {
-    function: proto::AggregateFunction,
-    input_index: Option<usize>,
-    input_type: Option<DataType>,
-    output_type: DataType,
-    retractable: bool,
+pub(super) struct Call {
+    pub(super) function: proto::AggregateFunction,
+    pub(super) input_index: Option<usize>,
+    pub(super) input_type: Option<DataType>,
+    pub(super) output_type: DataType,
+    pub(super) retractable: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct AccumulatorState {
-    row_count: i64,
+pub(super) struct AccumulatorState {
+    pub(super) row_count: i64,
     accumulators: Vec<Accumulator>,
 }
 
@@ -74,7 +74,7 @@ enum Accumulator {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum AggregateValue {
+pub(super) enum AggregateValue {
     Boolean(bool),
     Int(i128),
     Float32(u32),
@@ -542,7 +542,7 @@ impl GroupAggregateProcessor {
 }
 
 impl AccumulatorState {
-    fn new(calls: &[Call]) -> Self {
+    pub(super) fn new(calls: &[Call]) -> Self {
         Self {
             row_count: 0,
             accumulators: calls
@@ -568,79 +568,72 @@ impl AccumulatorState {
         }
     }
 
-    fn apply(
+    pub(super) fn apply(
         &mut self,
         calls: &[Call],
         batch: &RecordBatch,
         row: usize,
         accumulate: bool,
     ) -> Result<()> {
+        let values = row_aggregate_values(calls, batch, row)?;
+        self.apply_values(calls, &values, accumulate)
+    }
+
+    pub(super) fn apply_values(
+        &mut self,
+        calls: &[Call],
+        values: &[Option<AggregateValue>],
+        accumulate: bool,
+    ) -> Result<()> {
+        if values.len() != calls.len() {
+            return Err(DataFusionError::Internal(format!(
+                "aggregate contribution has {} values for {} calls",
+                values.len(),
+                calls.len()
+            )));
+        }
         let delta = if accumulate { 1 } else { -1 };
         self.row_count = self.row_count.wrapping_add(delta);
-        for (call, accumulator) in calls.iter().zip(&mut self.accumulators) {
+        for ((call, accumulator), value) in calls.iter().zip(&mut self.accumulators).zip(values) {
             match accumulator {
                 Accumulator::Count(count) => {
-                    let present = call
-                        .input_index
-                        .is_none_or(|index| !batch.column(index).is_null(row));
+                    let present = call.input_index.is_none() || value.is_some();
                     if present {
                         *count = count.wrapping_add(delta);
                     }
                 }
                 Accumulator::Sum { value: sum, count } => {
-                    let value = aggregate_value(
-                        batch
-                            .column(call.input_index.expect("SUM has an input"))
-                            .as_ref(),
-                        row,
-                    )?;
-                    if let Some(value) = value {
+                    if let Some(value) = value.as_ref() {
                         *sum = if let Some(current) = sum.as_ref() {
                             if accumulate {
-                                aggregate_add(current, &value, &call.output_type)?
+                                aggregate_add(current, value, &call.output_type)?
                             } else {
-                                aggregate_sub(current, &value, &call.output_type)?
+                                aggregate_sub(current, value, &call.output_type)?
                             }
                         } else if accumulate {
-                            Some(value)
+                            Some(value.clone())
                         } else {
-                            aggregate_sub(
-                                &zero_value(&call.output_type),
-                                &value,
-                                &call.output_type,
-                            )?
+                            aggregate_sub(&zero_value(&call.output_type), value, &call.output_type)?
                         };
                         *count = count.wrapping_add(delta);
                     }
                 }
                 Accumulator::AppendExtremum(extremum) => {
-                    let value = aggregate_value(
-                        batch
-                            .column(call.input_index.expect("MIN/MAX has an input"))
-                            .as_ref(),
-                        row,
-                    )?;
-                    if let Some(value) = value {
+                    if let Some(value) = value.as_ref() {
                         *extremum = Some(match (extremum.as_ref(), call.function) {
                             (Some(current), proto::AggregateFunction::Min) => {
-                                flink_append_extremum(current, &value, true)
+                                flink_append_extremum(current, value, true)
                             }
                             (Some(current), proto::AggregateFunction::Max) => {
-                                flink_append_extremum(current, &value, false)
+                                flink_append_extremum(current, value, false)
                             }
-                            (None, _) => value,
+                            (None, _) => value.clone(),
                             _ => unreachable!("validated extremum function"),
                         });
                     }
                 }
                 Accumulator::Extremum(values) => {
-                    let value = aggregate_value(
-                        batch
-                            .column(call.input_index.expect("MIN/MAX has an input"))
-                            .as_ref(),
-                        row,
-                    )?;
-                    if let Some(value) = value {
+                    if let Some(value) = value.as_ref() {
                         let count = values.entry(value.clone()).or_default();
                         *count = count.wrapping_add(delta);
                         if *count == 0 {
@@ -653,7 +646,80 @@ impl AccumulatorState {
         Ok(())
     }
 
-    fn values(&self, calls: &[Call]) -> Vec<Option<AggregateValue>> {
+    /// Merge another accumulator namespace into this one using the same arithmetic and
+    /// extremum semantics as row-by-row accumulation. Session windows use this when Flink's
+    /// merging-window set coalesces namespaces; replaying every historical input row here is
+    /// both unnecessary and quadratic for long-lived sessions.
+    pub(super) fn merge(&mut self, calls: &[Call], other: &Self) -> Result<()> {
+        if self.accumulators.len() != calls.len() || other.accumulators.len() != calls.len() {
+            return Err(DataFusionError::Internal(
+                "aggregate accumulator shape does not match its calls".to_string(),
+            ));
+        }
+        self.row_count = self.row_count.wrapping_add(other.row_count);
+        for ((call, accumulator), other) in calls
+            .iter()
+            .zip(&mut self.accumulators)
+            .zip(&other.accumulators)
+        {
+            match (accumulator, other) {
+                (Accumulator::Count(value), Accumulator::Count(other)) => {
+                    *value = value.wrapping_add(*other);
+                }
+                (
+                    Accumulator::Sum { value, count },
+                    Accumulator::Sum {
+                        value: other_value,
+                        count: other_count,
+                    },
+                ) => {
+                    if *other_count != 0 {
+                        *value = match (value.as_ref(), other_value.as_ref()) {
+                            (Some(left), Some(right)) => {
+                                aggregate_add(left, right, &call.output_type)?
+                            }
+                            (None, Some(right)) if *count == 0 => Some(right.clone()),
+                            // A populated SUM with no value represents an overflowed decimal.
+                            // Preserve that state rather than incorrectly resurrecting a value.
+                            _ => None,
+                        };
+                        *count = count.wrapping_add(*other_count);
+                    }
+                }
+                (Accumulator::AppendExtremum(value), Accumulator::AppendExtremum(other_value)) => {
+                    if let Some(other_value) = other_value {
+                        *value = Some(match (value.as_ref(), call.function) {
+                            (Some(current), proto::AggregateFunction::Min) => {
+                                flink_append_extremum(current, other_value, true)
+                            }
+                            (Some(current), proto::AggregateFunction::Max) => {
+                                flink_append_extremum(current, other_value, false)
+                            }
+                            (None, _) => other_value.clone(),
+                            _ => unreachable!("validated extremum function"),
+                        });
+                    }
+                }
+                (Accumulator::Extremum(values), Accumulator::Extremum(other_values)) => {
+                    for (value, other_count) in other_values {
+                        let count = values.entry(value.clone()).or_default();
+                        *count = count.wrapping_add(*other_count);
+                        if *count == 0 {
+                            values.remove(value);
+                        }
+                    }
+                }
+                _ => {
+                    return Err(DataFusionError::Internal(
+                        "aggregate accumulator variants do not match their calls".to_string(),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn values(&self, calls: &[Call]) -> Vec<Option<AggregateValue>> {
         calls
             .iter()
             .zip(&self.accumulators)
@@ -682,6 +748,20 @@ impl AccumulatorState {
     }
 }
 
+pub(super) fn row_aggregate_values(
+    calls: &[Call],
+    batch: &RecordBatch,
+    row: usize,
+) -> Result<Vec<Option<AggregateValue>>> {
+    calls
+        .iter()
+        .map(|call| match call.input_index {
+            Some(index) => aggregate_value(batch.column(index).as_ref(), row),
+            None => Ok(None),
+        })
+        .collect()
+}
+
 fn validate_plan(plan: &proto::GroupAggregate, max_parallelism: u32) -> Result<()> {
     if max_parallelism == 0 {
         return Err(DataFusionError::Plan(
@@ -696,7 +776,7 @@ fn validate_plan(plan: &proto::GroupAggregate, max_parallelism: u32) -> Result<(
     Ok(())
 }
 
-fn lower_call(call: &proto::AggregateCall) -> Result<Call> {
+pub(super) fn lower_call(call: &proto::AggregateCall) -> Result<Call> {
     let function = proto::AggregateFunction::try_from(call.function).map_err(|_| {
         DataFusionError::Plan(format!("unknown aggregate function {}", call.function))
     })?;
@@ -930,7 +1010,10 @@ fn aggregate_value(array: &dyn Array, row: usize) -> Result<Option<AggregateValu
     Ok(Some(AggregateValue::Int(value)))
 }
 
-fn aggregate_array(values: &[Option<AggregateValue>], data_type: &DataType) -> Result<ArrayRef> {
+pub(super) fn aggregate_array(
+    values: &[Option<AggregateValue>],
+    data_type: &DataType,
+) -> Result<ArrayRef> {
     Ok(match data_type {
         DataType::Int8 => Arc::new(Int8Array::from_iter(
             values
@@ -1289,7 +1372,7 @@ fn value_operation_error(
     ))
 }
 
-fn encode_state(state: &AccumulatorState) -> Vec<u8> {
+pub(super) fn encode_state(state: &AccumulatorState) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(32 + state.accumulators.len() * 24);
     bytes.extend_from_slice(STATE_MAGIC);
     bytes.push(STATE_VERSION);
@@ -1329,7 +1412,7 @@ fn encode_state(state: &AccumulatorState) -> Vec<u8> {
     bytes
 }
 
-fn decode_state(bytes: &[u8], calls: &[Call]) -> Result<AccumulatorState> {
+pub(super) fn decode_state(bytes: &[u8], calls: &[Call]) -> Result<AccumulatorState> {
     let mut cursor = Cursor::new(bytes);
     if cursor.read_exact(4)? != STATE_MAGIC {
         return Err(DataFusionError::Execution(

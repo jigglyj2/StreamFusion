@@ -136,6 +136,7 @@ public abstract class AbstractStreamFusionArrowKeyedStateOperator extends Abstra
             statefulMetrics.restoreFailed();
             throw failure;
         }
+        afterNativeStateInitialized(context);
     }
 
     @Override
@@ -159,8 +160,25 @@ public abstract class AbstractStreamFusionArrowKeyedStateOperator extends Abstra
         statefulMetrics.processed(input, output);
     }
 
+    protected final void recordProcessedWithoutStateCalls(ArrowRowDataBatch input, ArrowRowDataBatch output) {
+        statefulMetrics.processedWithoutStateCalls(input, output);
+    }
+
+    protected final void recordNativeWindowStatistics(
+            long stateReads, long stateWrites, long registered, long deleted, long fired) {
+        statefulMetrics.nativeWindowStatistics(stateReads, stateWrites, registered, deleted, fired);
+    }
+
     protected final void recordProcessingFailure() {
         statefulMetrics.processingFailed();
+    }
+
+    protected final void recordTimerOutput(ArrowRowDataBatch output, boolean processingTime) {
+        statefulMetrics.timerOutput(output, processingTime);
+    }
+
+    protected final void recordWatermark() {
+        statefulMetrics.watermarkAdvanced();
     }
 
     protected final List<byte[]> preencodeKeys(
@@ -244,6 +262,7 @@ public abstract class AbstractStreamFusionArrowKeyedStateOperator extends Abstra
     @Override
     public final void snapshotState(StateSnapshotContext context) throws Exception {
         super.snapshotState(context);
+        beforeNativeStateSnapshot(context);
         if (!writeRawKeyedSnapshot) {
             return;
         }
@@ -369,6 +388,12 @@ public abstract class AbstractStreamFusionArrowKeyedStateOperator extends Abstra
             long handle, Path checkpointDirectory, int firstKeyGroup, int lastKeyGroup, long memoryLimit);
 
     protected abstract void destroyHandle(long handle);
+
+    /** Operator-specific state restored after the native key-group payloads. */
+    protected void afterNativeStateInitialized(StateInitializationContext context) throws Exception {}
+
+    /** Operator-specific state captured alongside the native key-group payloads. */
+    protected void beforeNativeStateSnapshot(StateSnapshotContext context) throws Exception {}
 
     private static void deleteDirectory(Path directory) throws IOException {
         if (directory == null || !Files.exists(directory)) {
