@@ -47,9 +47,9 @@ after assigning its four checkpointed Source V2 splits. The upstream generator, 
 deserializer, reader, and split checkpoint state remain in use. The SQL plan runs at parallelism four
 and a black-hole table sink consumes `RowData`. Checkpointing uses exactly-once mode. It currently
 runs the fully accelerable q0, q1, q2, and q22 queries through both unmodified Flink and StreamFusion.
-The additional `group-aggregate` case uses the Nexmark bid stream to exercise keyed `COUNT(*)`,
-`SUM`, `MIN`, and `MAX`; it is a focused state-operator benchmark rather than an official numbered
-Nexmark query.
+The additional `group-aggregate` and `select-distinct` cases use the Nexmark bid stream to exercise
+keyed `COUNT(*)`/`SUM`/`MIN`/`MAX` and counted DISTINCT respectively; they are focused
+state-operator benchmarks rather than official numbered Nexmark queries.
 Because the black-hole sink does not retain results, this variant measures execution throughput
 rather than output parity.
 

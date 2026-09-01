@@ -40,10 +40,15 @@ class LocalRowDataNexmarkBenchmarkIT {
 
     @ParameterizedTest
     @ValueSource(strings = {"hashmap", "rocksdb"})
-    void runsNativeGroupAggregateOnBothStateBackends(String backend) throws Exception {
+    void runsNativeStatefulOperatorsOnBothStateBackends(String backend) throws Exception {
         LocalRowDataNexmarkBenchmark.RunResult streamFusion =
                 LocalRowDataNexmarkBenchmark.run(1_000, "group-aggregate", true, backend);
 
+        assertThat(streamFusion.completed()).isTrue();
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        assertThat(streamFusion.nativeGroupAggregateBatches()).isGreaterThan(0);
+
+        streamFusion = LocalRowDataNexmarkBenchmark.run(1_000, "select-distinct", true, backend);
         assertThat(streamFusion.completed()).isTrue();
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
         assertThat(streamFusion.nativeGroupAggregateBatches()).isGreaterThan(0);

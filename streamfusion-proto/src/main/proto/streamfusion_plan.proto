@@ -25,6 +25,8 @@ message NativeExchangePlan {
 message ExchangeMetadataColumns {
   uint32 row_kind_index = 1;
   optional uint32 stream_record_timestamp_index = 2;
+  // Optional input-only BinaryRowData key sidecar. It is used for routing and is not transported.
+  optional uint32 routing_key_index = 3;
 }
 
 enum ExchangeDistribution {

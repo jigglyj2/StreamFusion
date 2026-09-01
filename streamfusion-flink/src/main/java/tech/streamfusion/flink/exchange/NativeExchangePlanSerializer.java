@@ -4,6 +4,7 @@
  */
 package tech.streamfusion.flink.exchange;
 
+import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.flink.proto.FlinkLogicalTypeProto;
 import tech.streamfusion.proto.plan.v1.ExchangeDistribution;
@@ -30,6 +31,11 @@ public final class NativeExchangePlanSerializer {
                 .setPreserveKeyGroups(preserveKeyGroups);
         for (int key : keys) {
             plan.addKeyIndices(key);
+        }
+        if (requiresPreencodedKeys(rowType, keys)) {
+            plan.setMetadataColumns(plan.getMetadataColumnsBuilder()
+                    .setRoutingKeyIndex(
+                            ArrowExchangeBatch.exchangeRowType(rowType).getFieldCount()));
         }
         return plan.build().toByteArray();
     }
@@ -60,5 +66,33 @@ public final class NativeExchangePlanSerializer {
                 .setMetadataColumns(ExchangeMetadataColumns.newBuilder()
                         .setRowKindIndex(rowKindIndex)
                         .setStreamRecordTimestampIndex(rowKindIndex + 1));
+    }
+
+    static boolean requiresPreencodedKeys(RowType rowType, int[] keys) {
+        for (int key : keys) {
+            LogicalTypeRoot root = rowType.getTypeAt(key).getTypeRoot();
+            switch (root) {
+                case BOOLEAN:
+                case TINYINT:
+                case SMALLINT:
+                case INTEGER:
+                case BIGINT:
+                case FLOAT:
+                case DOUBLE:
+                case CHAR:
+                case VARCHAR:
+                case BINARY:
+                case VARBINARY:
+                case DECIMAL:
+                case DATE:
+                case TIME_WITHOUT_TIME_ZONE:
+                case TIMESTAMP_WITHOUT_TIME_ZONE:
+                case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
+                    break;
+                default:
+                    return true;
+            }
+        }
+        return false;
     }
 }

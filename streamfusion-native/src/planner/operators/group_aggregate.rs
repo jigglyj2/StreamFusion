@@ -20,6 +20,7 @@ use hashbrown::HashMap;
 use crate::exchange::{assign_key_group, encode_binary_row, KeyField};
 use crate::memory_pool::HostMemoryReservation;
 use crate::planner::expressions::null_literal;
+use crate::planner::operators::select_distinct::{apply_count_change, CountChange};
 use crate::state::{
     KeyedState, MemoryKeyedState, RocksPluginKeyedState, StateKey, StateKeyRef, StateMutation,
 };
@@ -288,6 +289,37 @@ impl GroupAggregateProcessor {
         for row in 0..batch.num_rows() {
             let key_index = row_key_indices[row];
             let accumulate = self.accumulates(&batch, row)?;
+            if self.calls.is_empty() {
+                let previous_count = staged_values[key_index]
+                    .as_ref()
+                    .map(|state| state.row_count);
+                let input_row = u32::try_from(row).map_err(|_| {
+                    DataFusionError::Execution(
+                        "select distinct batch exceeds UInt32 indexing".to_string(),
+                    )
+                })?;
+                match apply_count_change(previous_count, accumulate) {
+                    CountChange::Ignored => continue,
+                    CountChange::Present(count, emit_insert) => {
+                        staged_values[key_index] = Some(AccumulatorState {
+                            row_count: count,
+                            accumulators: Vec::new(),
+                        });
+                        if emit_insert {
+                            events.push(input_row, INSERT, Vec::new());
+                        }
+                    }
+                    CountChange::Removed => {
+                        staged_values[key_index] = Some(AccumulatorState {
+                            row_count: 0,
+                            accumulators: Vec::new(),
+                        });
+                        events.push(input_row, DELETE, Vec::new());
+                    }
+                }
+                touched[key_index] = true;
+                continue;
+            }
             let first_row = staged_values[key_index]
                 .as_ref()
                 .is_none_or(|state| state.row_count == 0);
@@ -659,11 +691,6 @@ fn validate_plan(plan: &proto::GroupAggregate, max_parallelism: u32) -> Result<(
     if plan.grouping_indices.is_empty() {
         return Err(DataFusionError::Plan(
             "group aggregate requires at least one grouping field".to_string(),
-        ));
-    }
-    if plan.aggregate_calls.is_empty() {
-        return Err(DataFusionError::Plan(
-            "group aggregate requires at least one aggregate call".to_string(),
         ));
     }
     Ok(())
@@ -1597,6 +1624,43 @@ mod tests {
         .encode_to_vec()
     }
 
+    fn distinct_plan() -> Vec<u8> {
+        proto::NativePlan {
+            protocol_version: crate::PLAN_PROTOCOL_VERSION,
+            root: Some(proto::Operator {
+                operator: Some(proto::operator::Operator::GroupAggregate(Box::new(
+                    proto::GroupAggregate {
+                        input: Some(Box::new(proto::Operator {
+                            operator: Some(proto::operator::Operator::Input(proto::Input {
+                                schema: None,
+                                input_index: 0,
+                            })),
+                        })),
+                        grouping_indices: vec![0],
+                        aggregate_calls: Vec::new(),
+                        generate_update_before: false,
+                        input_changelog: true,
+                    },
+                ))),
+            }),
+        }
+        .encode_to_vec()
+    }
+
+    fn distinct_processor() -> GroupAggregateProcessor {
+        GroupAggregateProcessor::new(
+            &distinct_plan(),
+            128,
+            0,
+            127,
+            HostMemoryReservation::new(
+                Arc::new(TestBroker::new(1 << 30)),
+                "test select distinct state",
+            ),
+        )
+        .unwrap()
+    }
+
     fn processor(input_changelog: bool, update_before: bool) -> GroupAggregateProcessor {
         processor_range(input_changelog, update_before, 0, 127)
     }
@@ -1713,6 +1777,47 @@ mod tests {
                 .iter()
                 .collect::<Vec<_>>(),
             vec![Some(30), Some(10), Some(10)]
+        );
+    }
+
+    #[test]
+    fn select_distinct_count_restores_and_emits_the_final_delete() {
+        let mut source = distinct_processor();
+        let inserted = source
+            .process_arrow(batch(
+                vec![7, 7],
+                vec![Some(10), Some(20)],
+                Some(vec![INSERT, UPDATE_AFTER]),
+            ))
+            .unwrap();
+        assert_eq!(inserted.num_rows(), 1);
+        let key = encode_binary_row(
+            &batch(vec![7], vec![Some(10)], None),
+            0,
+            &[(0, KeyField::BigInt)],
+        )
+        .unwrap();
+        let key_group = assign_key_group(&key, 128);
+        let snapshot = source.snapshot_key_group(key_group).unwrap();
+
+        let mut restored = distinct_processor();
+        restored.restore_key_group(key_group, &snapshot).unwrap();
+        let output = restored
+            .process_arrow(batch(
+                vec![7, 7],
+                vec![Some(20), Some(10)],
+                Some(vec![UPDATE_BEFORE, DELETE]),
+            ))
+            .unwrap();
+        assert_eq!(output.num_rows(), 1);
+        assert_eq!(
+            output
+                .column(output.num_columns() - 1)
+                .as_any()
+                .downcast_ref::<Int8Array>()
+                .unwrap()
+                .value(0),
+            DELETE
         );
     }
 

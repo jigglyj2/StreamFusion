@@ -18,18 +18,17 @@ FROM auction
 GROUP BY seller;
 ```
 
-The aggregation in this example is not accelerated yet, so the all-or-nothing rule currently keeps
-the complete query on Flink. It illustrates where Flink introduces the exchange; StreamFusion's
-runtime and planner-node tests exercise an eligible exchange independently until an accelerated SQL
-operator needs redistribution.
+This aggregation and its exchange can be accelerated when the aggregate calls and boundary types
+are supported.
 
 ## Acceleration and fallback
 
-Hash distribution is eligible for nullable or composite keys made from booleans, numeric and decimal
-values, character or binary strings, dates, times, and timestamp values. Singleton distribution is
-also eligible. Complex `ARRAY`, `MAP`, `MULTISET`, or `ROW` hash keys fall back because their exact
-Flink `BinaryRowData` key encoding is not implemented. Complex non-key columns remain supported when
-their boundary representation is supported.
+Hash distribution is eligible for nullable or composite keys across supported Flink SQL types,
+including intervals, `ARRAY`, `MAP`, `MULTISET`, `ROW`, distinct types, and nested combinations.
+Scalar keys are encoded directly in Rust. For key shapes without an independently proven native
+encoder, the Java writer adds one input-only opaque `BinaryRowData` key sidecar. Rust hashes those
+canonical bytes directly and strips the sidecar before network transport. Singleton distribution is
+also eligible.
 
 Unsupported distributions, Arrow-incompatible boundary types, dictionary-encoded IPC batches, or
 any other unsupported node in the graph cause whole-plan fallback. EXPLAIN identifies the rejected

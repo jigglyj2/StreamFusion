@@ -14,6 +14,8 @@ use arrow::record_batch::RecordBatch;
 /// Flink logical key types whose BinaryRow encoding has been proven independently.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyField {
+    /// A complete BinaryRowData key encoded by Flink and supplied as an input-only sidecar.
+    PreencodedBinaryRow,
     Boolean,
     TinyInt,
     SmallInt,
@@ -25,8 +27,12 @@ pub enum KeyField {
     Binary,
     Date,
     Time,
-    Timestamp { precision: u8 },
-    Decimal { precision: u8 },
+    Timestamp {
+        precision: u8,
+    },
+    Decimal {
+        precision: u8,
+    },
 }
 
 impl KeyField {
@@ -73,6 +79,29 @@ pub fn encode_binary_row(
             batch.num_rows()
         )));
     }
+    if fields
+        .iter()
+        .any(|(_, kind)| *kind == KeyField::PreencodedBinaryRow)
+    {
+        if fields.len() != 1 || fields[0].1 != KeyField::PreencodedBinaryRow {
+            return Err(ArrowError::InvalidArgumentError(
+                "a preencoded BinaryRow key must be the only exchange key field".to_string(),
+            ));
+        }
+        let array = batch.column(fields[0].0);
+        if array.is_null(row) {
+            return Err(ArrowError::InvalidArgumentError(
+                "a preencoded BinaryRow exchange key cannot be null".to_string(),
+            ));
+        }
+        return match array.data_type() {
+            DataType::Binary => Ok(value::<BinaryArray>(array, row)?.value(row).to_vec()),
+            other => Err(ArrowError::CastError(format!(
+                "a preencoded BinaryRow exchange key requires Arrow Binary, got {other}"
+            ))),
+        };
+    }
+
     let mut writer = BinaryRowWriter::new(fields.len());
     for (position, (column_index, kind)) in fields.iter().copied().enumerate() {
         let array = batch.column(column_index);
@@ -81,6 +110,7 @@ pub fn encode_binary_row(
             continue;
         }
         match kind {
+            KeyField::PreencodedBinaryRow => unreachable!("handled before BinaryRow encoding"),
             KeyField::Boolean => writer.write_fixed(
                 position,
                 &[u8::from(value::<BooleanArray>(array, row)?.value(row))],

@@ -9,10 +9,12 @@ import java.util.List;
 import org.apache.arrow.vector.BigIntVector;
 import org.apache.arrow.vector.FieldVector;
 import org.apache.arrow.vector.TinyIntVector;
+import org.apache.arrow.vector.VarBinaryVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.flink.table.types.logical.BigIntType;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.TinyIntType;
+import org.apache.flink.table.types.logical.VarBinaryType;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.ArrowUtils;
 
@@ -25,10 +27,16 @@ public final class ArrowExchangeBatch {
 
     /** Adds only the Flink envelope vectors; the user-data vectors remain shared zero-copy. */
     public static EnvelopeBatch withEnvelope(ArrowRowDataBatch input, RowType rowType) {
+        return withEnvelope(input, rowType, null);
+    }
+
+    /** Adds the Flink envelope and an optional input-only opaque routing-key vector. */
+    public static EnvelopeBatch withEnvelope(ArrowRowDataBatch input, RowType rowType, List<byte[]> routingKeys) {
         RowType metadataType = RowType.of(
                 new org.apache.flink.table.types.logical.LogicalType[] {new TinyIntType(false), new BigIntType(true)},
                 new String[] {ROW_KIND_COLUMN, TIMESTAMP_COLUMN});
         VectorSchemaRoot metadata = VectorSchemaRoot.create(ArrowUtils.toArrowSchema(metadataType), input.allocator());
+        VarBinaryVector routingKey = null;
         try {
             TinyIntVector rowKinds = (TinyIntVector) metadata.getVector(0);
             BigIntVector timestamps = (BigIntVector) metadata.getVector(1);
@@ -48,12 +56,29 @@ public final class ArrowExchangeBatch {
 
             List<FieldVector> vectors = new ArrayList<>(input.root().getFieldVectors());
             vectors.addAll(metadata.getFieldVectors());
+            if (routingKeys != null) {
+                if (routingKeys.size() != input.size()) {
+                    throw new IllegalArgumentException("Exchange routing key count does not match the batch");
+                }
+                routingKey = new VarBinaryVector("__streamfusion_routing_key", input.allocator());
+                routingKey.allocateNew();
+                for (int row = 0; row < input.size(); row++) {
+                    routingKey.setSafe(row, routingKeys.get(row));
+                }
+                routingKey.setValueCount(input.size());
+                vectors.add(routingKey);
+            }
             VectorSchemaRoot combined = new VectorSchemaRoot(vectors);
             combined.setRowCount(input.size());
-            ArrowRowDataBatch exchangeBatch =
-                    ArrowRowDataBatch.borrowed(combined, exchangeRowType(rowType), input.allocator());
-            return new EnvelopeBatch(exchangeBatch, metadata);
+            ArrowRowDataBatch exchangeBatch = ArrowRowDataBatch.borrowed(
+                    combined,
+                    routingKey == null ? exchangeRowType(rowType) : exchangeInputRowType(rowType),
+                    input.allocator());
+            return new EnvelopeBatch(exchangeBatch, metadata, routingKey);
         } catch (RuntimeException | Error failure) {
+            if (routingKey != null) {
+                routingKey.close();
+            }
             metadata.close();
             throw failure;
         }
@@ -66,14 +91,23 @@ public final class ArrowExchangeBatch {
         return new RowType(rowType.isNullable(), fields);
     }
 
+    private static RowType exchangeInputRowType(RowType rowType) {
+        List<RowType.RowField> fields = new ArrayList<>(exchangeRowType(rowType).getFields());
+        fields.add(
+                new RowType.RowField("__streamfusion_routing_key", new VarBinaryType(false, VarBinaryType.MAX_LENGTH)));
+        return new RowType(rowType.isNullable(), fields);
+    }
+
     /** Owns the two envelope vectors, never the shared input data vectors. */
     public static final class EnvelopeBatch implements AutoCloseable {
         private final ArrowRowDataBatch batch;
         private final VectorSchemaRoot metadata;
+        private final VarBinaryVector routingKey;
 
-        private EnvelopeBatch(ArrowRowDataBatch batch, VectorSchemaRoot metadata) {
+        private EnvelopeBatch(ArrowRowDataBatch batch, VectorSchemaRoot metadata, VarBinaryVector routingKey) {
             this.batch = batch;
             this.metadata = metadata;
+            this.routingKey = routingKey;
         }
 
         public ArrowRowDataBatch batch() {
@@ -82,6 +116,9 @@ public final class ArrowExchangeBatch {
 
         @Override
         public void close() {
+            if (routingKey != null) {
+                routingKey.close();
+            }
             metadata.close();
         }
     }

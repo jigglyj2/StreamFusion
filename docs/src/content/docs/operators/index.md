@@ -10,12 +10,12 @@ This matrix follows the query operations documented by Flink 2.3, including the 
 | Operator | Accelerated today? | Future acceleration target | Intended implementation |
 | --- | --- | --- | --- |
 | [SELECT & WHERE](select-where/) | **Partial** | Yes | DataFusion projections and filters |
-| [SELECT DISTINCT](select-distinct/) | **No** | Yes | DataFusion distinct or native keyed state |
+| [SELECT DISTINCT](select-distinct/) | **Yes** (timer-free streaming) | Yes | Native counted keyed state |
 | [WITH](with/) | **No** | Not directly | Inlined by Flink; accelerate resulting operators |
 | [VALUES](values/) | **Partial** (scalar literals) | Yes | Source-free native Arrow batch |
 | [Windowing TVFs](window-tvf/) | **Partial** (`TUMBLE`, `HOP`, `CUMULATE`) | Yes | Native aligned-window assignment compatible with Flink |
 | [Watermark assignment](watermark-assignment/) | **Plan-compatible** | Flink-owned | Distinct StreamFusion node delegating Flink's exact timer and idleness runtime |
-| [Group aggregation](group-aggregation/) | **No** | Yes | DataFusion aggregates with Flink-managed state |
+| [Group aggregation](group-aggregation/) | **Partial** (timer-free keyed) | Yes | Native keyed state and Arrow aggregate kernels |
 | [Window aggregation](window-aggregation/) | **No** | Yes | Native window state and DataFusion aggregate kernels |
 | [OVER aggregation](over-aggregation/) | **No** | Yes | Native ordered state and aggregate kernels |
 | [Joins](joins/) | **No** | By join type | DataFusion batch joins or custom streaming state |

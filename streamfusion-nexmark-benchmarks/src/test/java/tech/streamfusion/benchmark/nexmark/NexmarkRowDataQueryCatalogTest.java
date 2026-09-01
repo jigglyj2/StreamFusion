@@ -9,7 +9,7 @@ class NexmarkRowDataQueryCatalogTest {
     @Test
     void containsOnlyQueriesWithCompleteNativeOperatorCoverage() throws Exception {
         assertThat(NexmarkRowDataQueryCatalog.supportedQueries())
-                .containsExactly("q0", "q1", "q2", "q22", "group-aggregate");
+                .containsExactly("q0", "q1", "q2", "q22", "group-aggregate", "select-distinct");
         for (String query : NexmarkRowDataQueryCatalog.supportedQueries()) {
             assertThat(NexmarkRowDataQueryCatalog.load(query))
                     .contains("SELECT")

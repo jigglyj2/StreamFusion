@@ -4,7 +4,12 @@
  */
 package tech.streamfusion.flink.proto;
 
+import java.util.List;
+import org.apache.flink.table.types.logical.DistinctType;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
+import org.apache.flink.table.types.logical.RowType;
+import org.apache.flink.table.types.logical.StructuredType;
+import org.apache.flink.table.types.logical.utils.LogicalTypeChecks;
 import tech.streamfusion.proto.plan.v1.CollectionType;
 import tech.streamfusion.proto.plan.v1.DecimalType;
 import tech.streamfusion.proto.plan.v1.EmptyType;
@@ -19,6 +24,7 @@ public final class FlinkLogicalTypeProto {
     private FlinkLogicalTypeProto() {}
 
     public static LogicalType serialize(org.apache.flink.table.types.logical.LogicalType flinkType) {
+        flinkType = physicalType(flinkType);
         LogicalType.Builder type = LogicalType.newBuilder().setNullable(flinkType.isNullable());
         LogicalTypeRoot root = flinkType.getTypeRoot();
         switch (root) {
@@ -72,6 +78,10 @@ public final class FlinkLogicalTypeProto {
                                 .setPrecision(decimal.getPrecision())
                                 .setScale(decimal.getScale()))
                         .build();
+            case INTERVAL_YEAR_MONTH:
+                return type.setInteger(EmptyType.getDefaultInstance()).build();
+            case INTERVAL_DAY_TIME:
+                return type.setBigint(EmptyType.getDefaultInstance()).build();
             case ARRAY:
                 org.apache.flink.table.types.logical.ArrayType array =
                         (org.apache.flink.table.types.logical.ArrayType) flinkType;
@@ -104,5 +114,21 @@ public final class FlinkLogicalTypeProto {
             default:
                 throw new IllegalArgumentException("Unsupported native type " + flinkType);
         }
+    }
+
+    private static org.apache.flink.table.types.logical.LogicalType physicalType(
+            org.apache.flink.table.types.logical.LogicalType type) {
+        boolean nullable = type.isNullable();
+        while (type instanceof DistinctType) {
+            type = ((DistinctType) type).getSourceType();
+        }
+        if (type instanceof StructuredType) {
+            List<org.apache.flink.table.types.logical.LogicalType> fieldTypes = LogicalTypeChecks.getFieldTypes(type);
+            List<String> fieldNames = LogicalTypeChecks.getFieldNames(type);
+            type = RowType.of(
+                    fieldTypes.toArray(new org.apache.flink.table.types.logical.LogicalType[0]),
+                    fieldNames.toArray(new String[0]));
+        }
+        return type.copy(nullable);
     }
 }

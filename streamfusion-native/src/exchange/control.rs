@@ -16,6 +16,13 @@ pub fn decode_exchange_plan(bytes: &[u8]) -> Result<proto::NativeExchangePlan> {
 }
 
 pub fn exchange_key_fields(plan: &proto::NativeExchangePlan) -> Result<Vec<(usize, KeyField)>> {
+    if let Some(index) = plan
+        .metadata_columns
+        .as_ref()
+        .and_then(|metadata| metadata.routing_key_index)
+    {
+        return Ok(vec![(index as usize, KeyField::PreencodedBinaryRow)]);
+    }
     let schema = plan
         .schema
         .as_ref()
@@ -129,6 +136,18 @@ fn validate(plan: &proto::NativeExchangePlan) -> Result<()> {
             ));
         }
     }
+    if let Some(routing_key_index) = metadata.routing_key_index {
+        if distribution != proto::ExchangeDistribution::Hash {
+            return Err(DataFusionError::Plan(
+                "exchange routing-key sidecar requires hash distribution".to_string(),
+            ));
+        }
+        if routing_key_index as usize != schema.fields.len() {
+            return Err(DataFusionError::Plan(format!(
+                "exchange routing-key sidecar index {routing_key_index} must immediately follow the transport schema"
+            )));
+        }
+    }
     match distribution {
         proto::ExchangeDistribution::Hash => {
             if plan.key_indices.is_empty() {
@@ -220,6 +239,7 @@ mod tests {
             metadata_columns: Some(proto::ExchangeMetadataColumns {
                 row_kind_index: 1,
                 stream_record_timestamp_index: None,
+                routing_key_index: None,
             }),
         }
     }

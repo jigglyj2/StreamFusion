@@ -69,9 +69,20 @@ mvn -pl streamfusion-nexmark-benchmarks -am \
 
 `LocalRowDataNexmarkBenchmark` also accepts an event count, comma-separated query list, and an
 engine selector (`flink`, `streamfusion`, or `both`) for standalone measurements. It reports
-end-to-end elapsed time, input-event throughput, and native calc batch count. Performance reports
+end-to-end elapsed time, input-event throughput, native calc batches, and native group-aggregate
+batches. The `group-aggregate` and `select-distinct` cases exercise both native state backends over
+the bounded bid stream; they are focused operator workloads rather than numbered Nexmark queries.
+Performance reports
 must come from separate, unprofiled JVM forks built with release-mode native code; profiler runs
 are diagnostic artifacts rather than benchmark measurements.
+
+On the September 1, 2026 local release/native-CPU `select-distinct` run over two million generated
+events, the native in-memory path processed 365,779 events/s versus Flink's 377,002 events/s
+(97.0% parity). Native RocksDB processed 351,723 events/s versus Flink RocksDB's 343,327 events/s
+(a 2.4% gain). Separate JFR samples for both native backends were dominated by Nexmark generation,
+RowData materialization, and exchange-boundary work; they did not expose an obvious
+SELECT-DISTINCT state-loop allocation or Java hot spot. These are local diagnostic results, not
+portable performance claims.
 
 ## Q18 RowData profiling target
 

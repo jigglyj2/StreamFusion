@@ -23,6 +23,7 @@ final class StreamFusionArrowGroupAggregateOperator extends AbstractStreamFusion
     private final RowType outputType;
     private final boolean inputChangelog;
     private final boolean preencodeKeys;
+    private final boolean selectDistinct;
     private final RowDataKeySelector keySelector;
 
     StreamFusionArrowGroupAggregateOperator(
@@ -32,10 +33,11 @@ final class StreamFusionArrowGroupAggregateOperator extends AbstractStreamFusion
             byte[] serializedPlan,
             boolean inputChangelog,
             RowDataKeySelector keySelector) {
-        super(serializedPlan, "group aggregate");
+        super(serializedPlan, grouping.length == outputType.getFieldCount() ? "select distinct" : "group aggregate");
         this.outputType = outputType;
         this.inputChangelog = inputChangelog;
         this.preencodeKeys = requiresPreencodedKeys(inputType, grouping);
+        this.selectDistinct = grouping.length == outputType.getFieldCount();
         this.keySelector = keySelector;
     }
 
@@ -50,7 +52,9 @@ final class StreamFusionArrowGroupAggregateOperator extends AbstractStreamFusion
                     }
                 }
             }
-            List<byte[]> keys = preencodeKeys ? preencodeKeys(input, keySelector, "group aggregate") : null;
+            List<byte[]> keys = preencodeKeys
+                    ? preencodeKeys(input, keySelector, selectDistinct ? "select distinct" : "group aggregate")
+                    : null;
             try (ArrowRowDataBatch outputBatch = ArrowGroupAggregateCDataBridge.execute(
                     nativeHandle(), input, keys, inputChangelog, outputType, allocator(), memoryManager())) {
                 int physicalOutputRecords = 0;

@@ -104,6 +104,9 @@ public final class NexmarkRowDataJob {
             case "group-aggregate":
                 columns = "bidder BIGINT, bids BIGINT, spend BIGINT, minimum_price BIGINT, maximum_price BIGINT";
                 break;
+            case "select-distinct":
+                columns = "bidder BIGINT";
+                break;
             default:
                 throw new IOException("Nexmark query is not fully accelerable: " + query);
         }

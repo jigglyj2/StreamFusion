@@ -11,6 +11,7 @@ import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.BigIntVector;
 import org.apache.arrow.vector.IntVector;
 import org.apache.arrow.vector.TinyIntVector;
+import org.apache.arrow.vector.VarBinaryVector;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.types.logical.IntType;
 import org.apache.flink.table.types.logical.RowType;
@@ -44,6 +45,21 @@ class ArrowExchangeBatchTest {
             BigIntVector timestamps = (BigIntVector) batch.root().getVector(ArrowExchangeBatch.TIMESTAMP_COLUMN);
             assertThat(timestamps.get(0)).isEqualTo(123L);
             assertThat(timestamps.isNull(1)).isTrue();
+        }
+    }
+
+    @Test
+    void appendsCanonicalRoutingKeysAfterTransportMetadata() {
+        RowType rowType = RowType.of(new IntType());
+        byte[] routingKey = new byte[] {1, 2, 3, 4};
+        try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+                ArrowRowDataBatch input =
+                        ArrowRowDataBatch.transpose(List.of(GenericRowData.of(10)), rowType, allocator);
+                ArrowExchangeBatch.EnvelopeBatch envelope =
+                        ArrowExchangeBatch.withEnvelope(input, rowType, List.of(routingKey))) {
+            assertThat(envelope.batch().root().getFieldVectors()).hasSize(4);
+            VarBinaryVector keys = (VarBinaryVector) envelope.batch().root().getVector(3);
+            assertThat(keys.get(0)).isEqualTo(routingKey);
         }
     }
 }

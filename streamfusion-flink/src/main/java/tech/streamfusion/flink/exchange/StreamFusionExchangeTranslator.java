@@ -38,24 +38,25 @@ public final class StreamFusionExchangeTranslator {
             throw new IllegalArgumentException("Native hash exchange parallelism must be positive");
         }
         byte[] plan = NativeExchangePlanSerializer.hash(rowType, keys, maxParallelism, parallelism, preserveKeyGroups);
-        return translate(input, rowType, plan, new NativeExchangePartitioner(maxParallelism), false);
+        return translate(input, rowType, keys, plan, new NativeExchangePartitioner(maxParallelism), false);
     }
 
     public static Transformation<RowData> singleton(Transformation<RowData> input, RowType rowType) {
         byte[] plan = NativeExchangePlanSerializer.singleton(rowType);
-        return translate(input, rowType, plan, new GlobalPartitioner<>(), true);
+        return translate(input, rowType, new int[0], plan, new GlobalPartitioner<>(), true);
     }
 
     private static Transformation<RowData> translate(
             Transformation<RowData> input,
             RowType rowType,
+            int[] keys,
             byte[] plan,
             StreamPartitioner<NativeExchangeFrame> partitioner,
             boolean singleton) {
         OneInputTransformation<ArrowRowDataBatch, NativeExchangeFrame> writer = new OneInputTransformation<>(
                 StreamFusionArrowBoundaries.toArrow(input, rowType),
                 "StreamFusionExchangeWriter",
-                SimpleOperatorFactory.of(new NativeExchangeWriterOperator(rowType, plan)),
+                SimpleOperatorFactory.of(new NativeExchangeWriterOperator(rowType, keys, plan)),
                 NativeExchangeFrameTypeInfo.INSTANCE,
                 input.getParallelism());
         int upstreamMaxParallelism = inheritedMaxParallelism(input);

@@ -5,12 +5,16 @@
 package tech.streamfusion.flink.planner;
 
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Set;
 import org.apache.flink.table.planner.plan.nodes.exec.InputProperty;
 import org.apache.flink.table.planner.plan.nodes.exec.InputProperty.HashDistribution;
+import org.apache.flink.table.types.logical.DistinctType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
+import org.apache.flink.table.types.logical.StructuredType;
+import org.apache.flink.table.types.logical.utils.LogicalTypeChecks;
 
 /** Exact support matrix for the native Arrow exchange boundary. */
 final class StreamFusionExchangeSupport {
@@ -31,18 +35,12 @@ final class StreamFusionExchangeSupport {
             LogicalTypeRoot.TIME_WITHOUT_TIME_ZONE,
             LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE,
             LogicalTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE,
+            LogicalTypeRoot.INTERVAL_YEAR_MONTH,
+            LogicalTypeRoot.INTERVAL_DAY_TIME,
             LogicalTypeRoot.ARRAY,
             LogicalTypeRoot.MAP,
             LogicalTypeRoot.MULTISET,
             LogicalTypeRoot.ROW);
-    private static final Set<LogicalTypeRoot> KEY_TYPES = EnumSet.copyOf(BOUNDARY_TYPES);
-
-    static {
-        KEY_TYPES.remove(LogicalTypeRoot.ARRAY);
-        KEY_TYPES.remove(LogicalTypeRoot.MAP);
-        KEY_TYPES.remove(LogicalTypeRoot.MULTISET);
-        KEY_TYPES.remove(LogicalTypeRoot.ROW);
-    }
 
     private StreamFusionExchangeSupport() {}
 
@@ -62,18 +60,24 @@ final class StreamFusionExchangeSupport {
             if (keys.length == 0) {
                 return "native hash exchange requires at least one key";
             }
-            for (int key : keys) {
-                LogicalType type = rowType.getTypeAt(key);
-                if (!KEY_TYPES.contains(type.getTypeRoot())) {
-                    return "exchange key " + key + " type " + type.asSummaryString()
-                            + " has no exact Flink BinaryRow encoding";
-                }
-            }
         }
         return null;
     }
 
     private static String unsupportedBoundaryType(LogicalType type) {
+        while (type instanceof DistinctType) {
+            type = ((DistinctType) type).getSourceType();
+        }
+        if (type instanceof StructuredType) {
+            List<LogicalType> fields = LogicalTypeChecks.getFieldTypes(type);
+            for (LogicalType field : fields) {
+                String reason = unsupportedBoundaryType(field);
+                if (reason != null) {
+                    return reason;
+                }
+            }
+            return null;
+        }
         if (!BOUNDARY_TYPES.contains(type.getTypeRoot())) {
             return type.asSummaryString() + " has no Arrow exchange representation";
         }

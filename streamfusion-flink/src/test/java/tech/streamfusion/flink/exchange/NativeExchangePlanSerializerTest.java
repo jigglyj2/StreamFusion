@@ -6,6 +6,7 @@ package tech.streamfusion.flink.exchange;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import org.apache.flink.table.types.logical.ArrayType;
 import org.apache.flink.table.types.logical.IntType;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.VarCharType;
@@ -44,5 +45,16 @@ class NativeExchangePlanSerializerTest {
 
         assertThat(plan.getParallelism()).isEqualTo(4);
         assertThat(plan.getPreserveKeyGroups()).isFalse();
+    }
+
+    @Test
+    void recordsAnInputOnlyCanonicalRoutingKeyForComplexKeys() throws Exception {
+        RowType rowType = RowType.of(new ArrayType(new IntType()));
+
+        NativeExchangePlan plan =
+                NativeExchangePlan.parseFrom(NativeExchangePlanSerializer.hash(rowType, new int[] {0}, 128));
+
+        assertThat(plan.getMetadataColumns().hasRoutingKeyIndex()).isTrue();
+        assertThat(plan.getMetadataColumns().getRoutingKeyIndex()).isEqualTo(3);
     }
 }

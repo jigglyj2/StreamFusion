@@ -15,7 +15,9 @@ use jni::sys::{jbyteArray, jint, jlong};
 use jni::EnvUnowned;
 
 use super::common::import_record_batch;
-use crate::exchange::{decode_exchange_plan, exchange_key_fields, frame_hash_exchange_batch};
+use crate::exchange::{
+    decode_exchange_plan, exchange_key_fields, frame_hash_exchange_batch_projected,
+};
 use crate::memory_pool::{
     HostMemoryReservation, JvmMemoryReservationBroker, MemoryReservationBroker,
 };
@@ -176,12 +178,19 @@ unsafe fn route(
     // batches. Reserve that working set before asking Arrow to allocate it.
     let mut reservation = HostMemoryReservation::new(broker, "native exchange buffers");
     reservation.try_grow(batch.get_array_memory_size())?;
-    let frames = frame_hash_exchange_batch(
+    let transport_column_count = plan
+        .schema
+        .as_ref()
+        .ok_or_else(|| DataFusionError::Plan("exchange schema is required".to_string()))?
+        .fields
+        .len();
+    let frames = frame_hash_exchange_batch_projected(
         batch,
         &keys,
         plan.max_parallelism,
         plan.parallelism,
         plan.preserve_key_groups,
+        transport_column_count,
     )?;
     let frame_bytes = frames.iter().try_fold(
         frames

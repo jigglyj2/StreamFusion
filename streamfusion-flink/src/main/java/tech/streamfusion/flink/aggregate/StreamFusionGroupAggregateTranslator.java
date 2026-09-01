@@ -79,7 +79,7 @@ public final class StreamFusionGroupAggregateTranslator {
         Transformation<ArrowRowDataBatch> arrowInput = StreamFusionArrowBoundaries.toArrow(partitionedInput, inputType);
         OneInputTransformation<ArrowRowDataBatch, ArrowRowDataBatch> transformation = new OneInputTransformation<>(
                 arrowInput,
-                "streamfusion-group-aggregate",
+                calls.length == 0 ? "streamfusion-select-distinct" : "streamfusion-group-aggregate",
                 new StreamFusionArrowGroupAggregateOperator(
                         inputType, outputType, grouping, plan, needRetraction, keySelector),
                 ArrowRowDataBatchTypeInfo.INSTANCE,
@@ -107,8 +107,8 @@ public final class StreamFusionGroupAggregateTranslator {
         if (grouping.length == 0) {
             return "key: the initial native group aggregate requires at least one grouping field";
         }
-        if (calls.length == 0 || calls.length != retractable.length) {
-            return "aggregate: calls and retraction requirements must be equally sized and non-empty";
+        if (calls.length != retractable.length) {
+            return "aggregate: calls and retraction requirements must be equally sized";
         }
         if (outputType.getFieldCount() != grouping.length + calls.length) {
             return "schema: group aggregate output must contain grouping fields followed by aggregate values";

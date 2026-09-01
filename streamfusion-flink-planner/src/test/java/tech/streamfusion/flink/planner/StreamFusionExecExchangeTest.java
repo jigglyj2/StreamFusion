@@ -31,14 +31,13 @@ class StreamFusionExecExchangeTest {
     }
 
     @Test
-    void explainsComplexHashKeyFallbackPrecisely() {
+    void supportsComplexHashKeysThroughOpaqueRoutingSidecars() {
         InputProperty input = InputProperty.builder()
                 .requiredDistribution(InputProperty.hashDistribution(new int[] {0}))
                 .build();
         RowType rowType = RowType.of(new ArrayType(new IntType()));
 
         assertThat(StreamFusionExchangeSupport.unsupportedReason(rowType, input.getRequiredDistribution()))
-                .contains("exchange key 0")
-                .contains("no exact Flink BinaryRow encoding");
+                .isNull();
     }
 }

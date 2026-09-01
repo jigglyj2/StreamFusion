@@ -15,7 +15,9 @@ mod record_metadata;
 pub use batch_frame::IpcBatchFrame;
 pub use binary_row::{encode_binary_row, KeyField};
 pub use control::{decode_exchange_plan, exchange_key_fields};
-pub use exchange_framer::{frame_hash_exchange_batch, RoutedFrame};
+pub use exchange_framer::{
+    frame_hash_exchange_batch, frame_hash_exchange_batch_projected, RoutedFrame,
+};
 pub use exchange_writer::HashExchangeWriter;
 pub use key_group::{assign_key_group, binary_row_hash, flink_murmur_hash};
 pub use native_channel::{native_batch_channel, NativeBatchReceiver, NativeBatchSender};
