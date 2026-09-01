@@ -6,6 +6,7 @@ package tech.streamfusion.flink.aggregate;
 
 import java.nio.file.Path;
 import java.util.List;
+import org.apache.flink.streaming.api.operators.BoundedOneInput;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.table.runtime.keyselector.RowDataKeySelector;
@@ -19,7 +20,7 @@ import tech.streamfusion.nativebridge.NativeMemoryManager;
 
 /** Timer-free keyed group aggregate whose input and output remain Arrow-backed. */
 final class StreamFusionArrowGroupAggregateOperator extends AbstractStreamFusionArrowKeyedStateOperator
-        implements OneInputStreamOperator<ArrowRowDataBatch, ArrowRowDataBatch> {
+        implements OneInputStreamOperator<ArrowRowDataBatch, ArrowRowDataBatch>, BoundedOneInput {
     private final RowType outputType;
     private final boolean inputChangelog;
     private final boolean preencodeKeys;

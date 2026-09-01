@@ -6,6 +6,7 @@ package tech.streamfusion.flink.sql;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.List;
 import org.apache.flink.api.common.typeinfo.Types;
@@ -15,6 +16,7 @@ import org.apache.flink.table.api.EnvironmentSettings;
 import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
+import org.apache.flink.table.api.config.TableConfigOptions;
 import org.apache.flink.types.Row;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -38,14 +40,42 @@ class WatermarkWindowParityTest extends SqlParityTestSupport {
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 
+    @org.junit.jupiter.api.Test
+    void timestampLtzTvfMatchesFlinkAcrossDstGapAndOverlap() throws Exception {
+        byte[] flink = executeLtz(false);
+        byte[] streamFusion = executeLtz(true);
+
+        assertThat(streamFusion).isEqualTo(flink);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
+    private static byte[] executeLtz(boolean streamFusionEnabled) throws Exception {
+        configure(streamFusionEnabled);
+        StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();
+        environment.setParallelism(1);
+        StreamTableEnvironment tables = StreamTableEnvironment.create(
+                environment, EnvironmentSettings.newInstance().inStreamingMode().build());
+        tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+        tables.getConfig().set(TableConfigOptions.LOCAL_TIME_ZONE, "America/Los_Angeles");
+        tables.createTemporaryView(
+                "ltz_tvf_input",
+                tables.fromDataStream(
+                        environment.fromCollection(
+                                List.of(
+                                        Row.of(Instant.parse("2021-03-14T09:30:00Z")),
+                                        Row.of(Instant.parse("2021-11-07T08:30:00Z")),
+                                        Row.of(Instant.parse("2021-11-07T09:30:00Z"))),
+                                Types.ROW_NAMED(new String[] {"ts"}, Types.INSTANT)),
+                        Schema.newBuilder()
+                                .column("ts", DataTypes.TIMESTAMP_LTZ(3))
+                                .watermark("ts", "ts - INTERVAL '1' SECOND")
+                                .build()));
+        return collect(tables.executeSql("SELECT ts, window_start, window_end, window_time FROM TABLE("
+                + "TUMBLE(TABLE ltz_tvf_input, DESCRIPTOR(ts), INTERVAL '1' HOUR))"));
+    }
+
     private static byte[] execute(String sql, boolean streamFusionEnabled) throws Exception {
-        if (streamFusionEnabled) {
-            System.setProperty(
-                    StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY, StreamFusionPlannerFactory.class.getName());
-        } else {
-            System.clearProperty(StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY);
-            StreamFusionPlannerFactory.resetMetrics();
-        }
+        configure(streamFusionEnabled);
         StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();
         environment.setParallelism(1);
         StreamTableEnvironment tables = StreamTableEnvironment.create(
@@ -65,5 +95,15 @@ class WatermarkWindowParityTest extends SqlParityTestSupport {
                                 .watermark("ts", "ts - INTERVAL '2' SECOND")
                                 .build()));
         return collect(tables.executeSql(sql));
+    }
+
+    private static void configure(boolean streamFusionEnabled) {
+        if (streamFusionEnabled) {
+            System.setProperty(
+                    StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY, StreamFusionPlannerFactory.class.getName());
+        } else {
+            System.clearProperty(StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY);
+            StreamFusionPlannerFactory.resetMetrics();
+        }
     }
 }

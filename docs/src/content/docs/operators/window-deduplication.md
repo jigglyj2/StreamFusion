@@ -32,6 +32,10 @@ add candidates; UPDATE_BEFORE and DELETE remove an exact candidate, so retractin
 the next eligible row. The operator performs one backend batch read and one atomic write per Arrow
 batch, registers native event-time timers, and emits the final INSERT when the window closes.
 
+Flink 2.3 rejects updating input before constructing the Window Deduplicate physical node, so
+current SQL plans reach this path as append-only. Direct native changelog, restore, and rescaling
+tests cover all four RowKinds for compatibility with future planner shapes.
+
 Memory and direct RocksDB use the same canonical key-group/timer snapshot bytes. Canonical
 savepoints can change backend and rescale; ordinary RocksDB checkpoints use the shared incremental
 SST lifecycle.

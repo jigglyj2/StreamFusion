@@ -20,24 +20,27 @@ FROM TABLE(TUMBLE(TABLE bid, DESCRIPTOR(dateTime), INTERVAL '10' SECOND));
 
 ## Acceleration and fallback
 
-An aligned Window TVF is eligible when its descriptor is an event-time `TIMESTAMP` column and its
-output is the input row followed by `window_start`, `window_end`, and `window_time`. Native session
-TVFs additionally support event time or processing time, `TIMESTAMP` or `TIMESTAMP_LTZ`, arbitrary
+An aligned Window TVF is eligible when its descriptor is an event-time `TIMESTAMP` or
+`TIMESTAMP_LTZ` column and its output is the input row followed by `window_start`, `window_end`, and
+`window_time`. Native session TVFs additionally support event time or processing time, arbitrary
 partition-key and payload types, local time zones, and daylight-saving transitions. Sizes, slides,
 steps, offsets, negative timestamps, null timestamps, changelog kinds, and control-event ordering
 follow Flink. A null event timestamp drops the row, as it does in Flink.
 
-Aligned processing-time and `TIMESTAMP_LTZ` TVFs, an invalid descriptor, async-state mode,
-changelog-state wrapping, or an unsupported surrounding node produce an EXPLAIN fallback reason. A
-declared SQL watermark is eligible through StreamFusion's distinct, Flink-managed watermark node,
-so supported event-time TVFs can accelerate end to end.
+Aligned processing-time TVFs require a per-record JVM clock reading and remain on Flink; native
+processing-time window aggregation and the keyed SESSION TVF use Flink's processing-time service.
+An invalid descriptor, async-state mode, changelog-state wrapping, or an unsupported surrounding
+node produces an EXPLAIN fallback reason. A declared SQL watermark is eligible through
+StreamFusion's distinct, Flink-managed watermark node, so supported event-time TVFs can accelerate
+end to end.
 
 ## Implementation
 
 Java encodes the time-column ordinal, window kind, and millisecond size/slide/step/offset in the
 versioned plan protobuf. A dedicated Rust physical operator expands Arrow batches and appends
 Flink-compatible `window_start`, `window_end`, and `window_time` values. It uses Flink's exact epoch
-arithmetic and emission order: newest start first for HOP and increasing end for CUMULATE. Input
+arithmetic, local-time-zone shifts, daylight-saving gap/overlap resolution, and emission order:
+newest start first for HOP and increasing end for CUMULATE. Input
 columns and the bridge selection ordinal are gathered as Arrow arrays; rows are not serialized.
 The operator also publishes Flink's `numNullRowTimeRecordsDropped` counter and updates it
 when the same per-record null-time decision is made.

@@ -1100,7 +1100,7 @@ impl WindowAggregateProcessor {
     }
 }
 
-fn local_to_epoch(local: NaiveDateTime, zone: Tz) -> Result<i64> {
+pub(super) fn local_to_epoch(local: NaiveDateTime, zone: Tz) -> Result<i64> {
     match zone.from_local_datetime(&local) {
         LocalResult::Single(value) => Ok(value.timestamp_millis()),
         // LocalDateTime.atZone, which Flink uses for a window-time property, selects the

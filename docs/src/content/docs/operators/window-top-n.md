@@ -34,6 +34,10 @@ Flink comparator once per window, selects the constant rank range, and transpose
 rows. This avoids per-record JNI while keeping comparison semantics byte-for-byte aligned with
 Flink.
 
+Flink 2.3 rejects updating input before constructing the Window Top-N physical node, so current SQL
+plans reach this path as append-only. Direct native changelog, restore, and rescaling tests cover
+all four RowKinds for compatibility with future planner shapes.
+
 State and timers use the canonical backend-neutral savepoint representation and the same aligned,
 unaligned, incremental RocksDB, restore, and rescaling lifecycle as other native keyed operators.
 

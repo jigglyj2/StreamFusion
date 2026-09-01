@@ -20,5 +20,6 @@ pub(super) mod union;
 pub(super) mod values;
 pub(crate) mod window_aggregate;
 pub(crate) mod window_deduplicate;
+pub(crate) mod window_join;
 pub(crate) mod window_rank;
 pub(super) mod window_table_function;

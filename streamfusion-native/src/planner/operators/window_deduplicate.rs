@@ -187,9 +187,22 @@ impl WindowDeduplicateProcessor {
 
     pub(crate) fn process_arrow(&mut self, batch: RecordBatch) -> Result<RecordBatch> {
         self.prepare_schema(batch.schema())?;
-        let base_reservation = batch
-            .get_array_memory_size()
-            .saturating_add(batch.num_rows().saturating_mul(192));
+        // Input Arrow buffers are already charged by the Flink-backed Arrow allocator. Reserve
+        // only Rust-owned copies and collection nodes created while staging this batch.
+        let stored_rows = batch
+            .column(self.stored_row_index.expect("schema prepared"))
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .expect("stored-row type checked while processing");
+        let copied_rows = stored_rows.iter().flatten().map(<[u8]>::len).sum::<usize>();
+        let copied_keys = self
+            .preencoded_key_index
+            .and_then(|index| batch.column(index).as_any().downcast_ref::<BinaryArray>())
+            .map(|keys| keys.iter().flatten().map(<[u8]>::len).sum::<usize>())
+            .unwrap_or(0);
+        let base_reservation = copied_rows
+            .saturating_add(copied_keys)
+            .saturating_add(batch.num_rows().saturating_mul(160));
         self.scratch_reservation.resize(base_reservation)?;
         let result = self.process_arrow_accounted(&batch);
         match result {
@@ -752,6 +765,34 @@ mod tests {
         let decoded = decode_state(&encode_state(&state)).unwrap();
         assert_eq!(winner(&decoded.candidates, true).unwrap().row, vec![4]);
         assert_eq!(winner(&decoded.candidates, false).unwrap().row, vec![1, 2]);
+    }
+
+    #[test]
+    fn accounts_dedup_rows_timers_and_state_in_host_memory() {
+        let broker = Arc::new(TestBroker::new(64 << 20));
+        let mut processor = WindowDeduplicateProcessor::new(
+            &plan(true),
+            128,
+            0,
+            127,
+            HostMemoryReservation::new(broker.clone(), "window dedup accounting"),
+        )
+        .unwrap();
+        let empty_state = broker.reserved();
+        let output = processor
+            .process_arrow(batch(
+                &[7, 8],
+                &[10, 20],
+                &[100, 100],
+                &[b"left", b"right"],
+                &[INSERT, INSERT],
+            ))
+            .unwrap();
+
+        assert!(broker.reserved() > empty_state);
+        drop(output);
+        drop(processor);
+        assert_eq!(broker.reserved(), 0);
     }
 
     #[test]

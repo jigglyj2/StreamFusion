@@ -33,6 +33,7 @@ import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecExpand;
 import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecWindowTableFunction;
 import org.apache.flink.table.planner.plan.nodes.exec.processor.ExecNodeGraphProcessor;
 import org.apache.flink.table.planner.plan.nodes.exec.processor.ProcessorContext;
+import org.apache.flink.table.planner.plan.nodes.exec.spec.JoinSpec;
 import org.apache.flink.table.planner.plan.nodes.exec.spec.PartitionSpec;
 import org.apache.flink.table.planner.plan.nodes.exec.spec.SortSpec;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecCalc;
@@ -50,6 +51,7 @@ import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecValues;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWatermarkAssigner;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWindowAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWindowDeduplicate;
+import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWindowJoin;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWindowRank;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWindowTableFunction;
 import org.apache.flink.table.runtime.groupwindow.NamedWindowProperty;
@@ -79,6 +81,8 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             "tech.streamfusion.flink.window.StreamFusionWindowDeduplicateTranslator";
     private static final String WINDOW_RANK_TRANSLATOR_CLASS =
             "tech.streamfusion.flink.window.StreamFusionWindowRankTranslator";
+    private static final String WINDOW_JOIN_TRANSLATOR_CLASS =
+            "tech.streamfusion.flink.window.StreamFusionWindowJoinTranslator";
 
     @Override
     public ExecNodeGraph process(ExecNodeGraph graph, ProcessorContext context) {
@@ -166,6 +170,11 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             }
         } else if (node instanceof StreamExecWindowRank) {
             String reason = unsupportedReason((StreamExecWindowRank) node, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
+        } else if (node instanceof StreamExecWindowJoin) {
+            String reason = unsupportedReason((StreamExecWindowJoin) node, context);
             if (reason != null) {
                 rejections.add(nodePath + "\n" + reason);
             }
@@ -373,6 +382,22 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     (RowType) rank.getOutputType(),
                     "StreamFusionWindowRank");
             replacement.setInputEdges(rank.getInputEdges().stream()
+                    .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                    .collect(Collectors.toList()));
+            return replacement;
+        }
+        if (node instanceof StreamExecWindowJoin) {
+            StreamExecWindowJoin join = (StreamExecWindowJoin) node;
+            StreamFusionExecWindowJoin replacement = new StreamFusionExecWindowJoin(
+                    join.getPersistedConfig(),
+                    windowJoinSpec(join),
+                    windowJoinLeftWindowing(join),
+                    windowJoinRightWindowing(join),
+                    join.getInputProperties().get(0),
+                    join.getInputProperties().get(1),
+                    (RowType) join.getOutputType(),
+                    "StreamFusionWindowJoin");
+            replacement.setInputEdges(join.getInputEdges().stream()
                     .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
                     .collect(Collectors.toList()));
             return replacement;
@@ -617,6 +642,39 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             throw new IllegalStateException("Could not inspect StreamFusion WindowRank support", e);
         } catch (InvocationTargetException e) {
             throw new IllegalStateException("StreamFusion WindowRank support inspection failed", e.getCause());
+        }
+    }
+
+    private String unsupportedReason(StreamExecWindowJoin join, ProcessorContext context) {
+        ExecEdge left = join.getInputEdges().get(0);
+        ExecEdge right = join.getInputEdges().get(1);
+        try {
+            Class<?> translator = Class.forName(
+                    WINDOW_JOIN_TRANSLATOR_CLASS,
+                    true,
+                    context.getPlanner().getFlinkContext().getClassLoader());
+            Method method = translator.getMethod(
+                    "unsupportedReason",
+                    RowType.class,
+                    RowType.class,
+                    RowType.class,
+                    JoinSpec.class,
+                    WindowingStrategy.class,
+                    WindowingStrategy.class,
+                    ReadableConfig.class);
+            return (String) method.invoke(
+                    null,
+                    (RowType) left.getOutputType(),
+                    (RowType) right.getOutputType(),
+                    (RowType) join.getOutputType(),
+                    windowJoinSpec(join),
+                    windowJoinLeftWindowing(join),
+                    windowJoinRightWindowing(join),
+                    join.getPersistedConfig());
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
+            throw new IllegalStateException("Could not inspect StreamFusion WindowJoin support", e);
+        } catch (InvocationTargetException e) {
+            throw new IllegalStateException("StreamFusion WindowJoin support inspection failed", e.getCause());
         }
     }
 
@@ -994,6 +1052,18 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
 
     private static WindowingStrategy windowRankWindowing(StreamExecWindowRank rank) {
         return (WindowingStrategy) field(rank, StreamExecWindowRank.class, "windowing");
+    }
+
+    private static JoinSpec windowJoinSpec(StreamExecWindowJoin join) {
+        return (JoinSpec) field(join, StreamExecWindowJoin.class, "joinSpec");
+    }
+
+    private static WindowingStrategy windowJoinLeftWindowing(StreamExecWindowJoin join) {
+        return (WindowingStrategy) field(join, StreamExecWindowJoin.class, "leftWindowing");
+    }
+
+    private static WindowingStrategy windowJoinRightWindowing(StreamExecWindowJoin join) {
+        return (WindowingStrategy) field(join, StreamExecWindowJoin.class, "rightWindowing");
     }
 
     private static org.apache.calcite.rel.core.AggregateCall[] windowAggregateCalls(

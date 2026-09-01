@@ -39,17 +39,18 @@ The Kafka-free variant uses the generator and `RowData` deserializer from the lo
 marks finite `events.num` runs as bounded and signals completion after assigning all four upstream
 Source V2 splits; it does not replace the upstream generator or reader checkpoint state. Those
 splits emit Flink internal `RowData`, and a black-hole table sink consumes `RowData` after the SQL
-plan. Both source and query run at parallelism four, and checkpointing uses `EXACTLY_ONCE`. This variant isolates
-planner and native-operator throughput from broker, JSON, and result-materialization costs. Because
-the benchmark result sink serializes and hashes the complete sorted changelog rather than discarding
-it. The bounded adapter seeds each source split deterministically and restores the upstream
+plan. Both source and query run at parallelism four, and checkpointing uses `EXACTLY_ONCE`. This
+variant isolates planner and native-operator throughput from broker and JSON costs. The benchmark
+result sink serializes and hashes the complete sorted changelog rather than discarding it. The
+bounded adapter seeds each source split deterministically and restores the upstream
 generator position, so Flink and StreamFusion receive identical events. This remains a Kafka-free
 operator benchmark and does not replace the Kafka-in/Kafka-out north-star benchmark.
 
 Current all-or-nothing coverage can fully accelerate q0 (pass-through), q1 (decimal currency
-conversion), q2 (selection), q11 (event-time session aggregation), and q22 (URL directory
-extraction). q3, q4, q5, q7, q8, q9, q13, q15, q16, q17, q19, q20, and q23 require an unimplemented
-join or rank operator. q10
+conversion), q2 (selection), q8 (tumbling aggregates plus Window Join), q11 (event-time session
+aggregation), and q22 (URL directory extraction). q3, q4, q5, q7, q9, q13, q15, q16, q17, q19,
+q20, and q23 still require an unsupported non-window join, interval join, rank, or surrounding
+operator. q10
 uses unsupported `DATE_FORMAT`; q14 uses a Java UDF, mixed decimal
 arithmetic beyond the q1 conversion shape, and timestamp calendar extraction; q21 uses Java-regex
 semantics. Q12's processing-time SQL is catalogued, but a max-speed bounded source completes before
@@ -63,7 +64,7 @@ mvn -f /root/data/nexmark/pom.xml -pl nexmark-flink \
   -Dflink.version=2.3.0 -DskipTests package
 ```
 
-Then run all four currently accelerable queries through both Flink and StreamFusion:
+Then run the complete currently accelerable query set through both Flink and StreamFusion:
 
 ```shell
 mvn -pl streamfusion-nexmark-benchmarks -am \
@@ -74,9 +75,9 @@ mvn -pl streamfusion-nexmark-benchmarks -am \
 
 `LocalRowDataNexmarkBenchmark` also accepts an event count, comma-separated query list, and an
 engine selector (`flink`, `streamfusion`, or `both`) for standalone measurements. It reports
-end-to-end elapsed time, input-event throughput, native calc batches, and native group-aggregate
-batches. It also reports native window-aggregate batches and a row count plus SHA-256 for the full
-result changelog. The `group-aggregate` and `select-distinct` cases exercise both native state backends over
+end-to-end elapsed time, input-event throughput, native calc batches, native group-aggregate
+batches, native window-aggregate batches, native Window Join batches, and a row count plus SHA-256
+for the full result changelog. The `group-aggregate` and `select-distinct` cases exercise both native state backends over
 the bounded bid stream; they are focused operator workloads rather than numbered Nexmark queries.
 Performance reports
 must come from separate, unprofiled JVM forks built with release-mode native code; profiler runs
@@ -103,6 +104,19 @@ JFR allocation profiles for both backends are dominated by the Nexmark generator
 and binary-string materialization, memory-segment wrapping/copying, and Arrow envelopes; all custom
 Rust state, timer, scratch, RocksDB cache/write-buffer, and exported Arrow allocations remain charged
 to Flink managed memory. These are local diagnostic results, not portable performance claims.
+
+On the same machine, a parallelism-four Q8 release run over one million deterministic events
+produced 10,562 rows and SHA-256
+`5e77d99014bf46d7710eec84aaf795005ccdf71a9c023a2094c6e837a2207fab` in all four cases.
+StreamFusion memory processed 169,345 events/s versus Flink's 180,375 events/s (93.9% parity).
+Direct native RocksDB processed 157,744 events/s versus Flink RocksDB's 76,588 events/s (2.06x).
+Separate JFR runs, excluded from those measurements, found no dominant Java Window Join loop: CPU
+samples were led by Arrow/RowData field access, Nexmark generation, binary-row materialization, and
+Flink unsafe-memory checks. Allocation samples were led by the required opaque `BinaryRowData`
+copies, memory-segment wrappers, generated strings/rows, Arrow foreign-buffer wrappers, and source
+deserialization. Native state, timer, scratch, output, RocksDB cache, and write-buffer allocations
+are covered by host-memory reservation tests and remain charged to Flink managed memory. These are
+local diagnostic results, not portable performance claims.
 
 ## Q18 RowData profiling target
 

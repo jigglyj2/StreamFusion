@@ -17,6 +17,7 @@ import org.apache.flink.metrics.Meter;
 import org.apache.flink.metrics.MeterView;
 import org.apache.flink.runtime.state.StateInitializationContext;
 import org.apache.flink.runtime.state.StateSnapshotContext;
+import org.apache.flink.streaming.api.operators.BoundedOneInput;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
 import org.apache.flink.streaming.api.watermark.Watermark;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
@@ -34,7 +35,9 @@ import tech.streamfusion.nativebridge.NativeSessionWindowTableFunctionBridge;
 
 /** Native keyed merging SESSION Window TVF with event-time and processing-time timers. */
 final class StreamFusionArrowSessionWindowTableFunctionOperator extends AbstractStreamFusionArrowKeyedStateOperator
-        implements OneInputStreamOperator<ArrowRowDataBatch, ArrowRowDataBatch>, ProcessingTimeCallback {
+        implements OneInputStreamOperator<ArrowRowDataBatch, ArrowRowDataBatch>,
+                BoundedOneInput,
+                ProcessingTimeCallback {
     private final RowType inputType;
     private final RowType outputType;
     private final int[] partitionKeys;

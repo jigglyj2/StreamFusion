@@ -5,9 +5,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use ahash::RandomState;
-use arrow::array::{
-    Array, ArrayRef, BinaryArray, BinaryBuilder, Int32Array, Int64Array, Int8Array,
-};
+use arrow::array::{Array, ArrayRef, BinaryArray, BinaryBuilder, Int32Array, Int8Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use chrono::Utc;
@@ -30,27 +28,26 @@ const INSERT: i8 = 0;
 const UPDATE_BEFORE: i8 = 1;
 const UPDATE_AFTER: i8 = 2;
 const DELETE: i8 = 3;
-const STATE_MAGIC: &[u8; 4] = b"SFWR";
+const STATE_MAGIC: &[u8; 4] = b"SFWJ";
 const STATE_VERSION: u8 = 1;
 const WINDOW_KEY_PREFIX: u8 = 1;
-const TIMER_STATE_KEY: &[u8] = b"\0streamfusion-window-rank-timers";
+const TIMER_STATE_KEY: &[u8] = b"\0streamfusion-window-join-timers";
 
-/// Native window Top-N buffering. Java performs one generated-comparator sort per fired window.
-pub(crate) struct WindowRankProcessor {
-    plan: proto::WindowRank,
+/// Two-input Window Join storage. Complete rows are opaque until Java applies Flink's condition.
+pub(crate) struct WindowJoinProcessor {
+    plan: proto::WindowJoin,
     shift_time_zone: Tz,
     max_parallelism: u32,
     state: Box<dyn KeyedState>,
     timers: NativeTimerService,
-    input_schema: Option<SchemaRef>,
-    key_fields: Vec<(usize, KeyField)>,
-    preencoded_key_index: Option<usize>,
-    stored_row_index: Option<usize>,
-    sort_row_index: Option<usize>,
-    input_kind_index: Option<usize>,
+    schemas: [Option<SchemaRef>; 2],
+    key_fields: [Vec<(usize, KeyField)>; 2],
+    preencoded_key_indices: [Option<usize>; 2],
+    stored_row_indices: [Option<usize>; 2],
+    input_kind_indices: [Option<usize>; 2],
     current_event_time: i64,
     scratch_reservation: HostMemoryReservation,
-    late_records_dropped: u64,
+    late_records_dropped: [u64; 2],
     state_read_batches: u64,
     state_write_batches: u64,
     timer_registrations: u64,
@@ -58,27 +55,20 @@ pub(crate) struct WindowRankProcessor {
     timers_fired: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Candidate {
-    sequence: u64,
-    row: Vec<u8>,
-    sort_key: Vec<u8>,
-}
-
-#[derive(Default)]
-struct WindowState {
-    next_sequence: u64,
-    candidates: Vec<Candidate>,
+#[derive(Default, Debug, PartialEq, Eq)]
+struct JoinWindowState {
+    left: Vec<Vec<u8>>,
+    right: Vec<Vec<u8>>,
 }
 
 struct StagedWindow {
     key: StateKey,
     window_end: i64,
-    value: WindowState,
+    value: JoinWindowState,
     touched: bool,
 }
 
-impl WindowRankProcessor {
+impl WindowJoinProcessor {
     pub(crate) fn new(
         serialized_plan: &[u8],
         max_parallelism: u32,
@@ -86,8 +76,8 @@ impl WindowRankProcessor {
         last_key_group: u32,
         state_reservation: HostMemoryReservation,
     ) -> Result<Self> {
-        let scratch = state_reservation.sibling("native window rank batch scratch and output");
-        let timers = state_reservation.sibling("native window rank timers");
+        let scratch = state_reservation.sibling("native window join batch scratch and output");
+        let timers = state_reservation.sibling("native window join timers");
         let state = Box::new(MemoryKeyedState::new(
             first_key_group,
             last_key_group,
@@ -114,7 +104,7 @@ impl WindowRankProcessor {
         memory_limit: usize,
         reservation: HostMemoryReservation,
     ) -> Result<Self> {
-        let timers = reservation.sibling("native window rank timers");
+        let timers = reservation.sibling("native window join timers");
         let state = Box::new(RocksPluginKeyedState::open(
             plugin_path,
             database_path,
@@ -142,14 +132,15 @@ impl WindowRankProcessor {
         timer_reservation: HostMemoryReservation,
         scratch_reservation: HostMemoryReservation,
     ) -> Result<Self> {
-        let root = decode_plan(serialized_plan)?
+        let native_plan = decode_plan(serialized_plan)?;
+        let root = native_plan
             .root
-            .ok_or_else(|| DataFusionError::Plan("window rank plan has no root".to_string()))?;
+            .ok_or_else(|| DataFusionError::Plan("window join plan has no root".to_string()))?;
         let plan = match root.operator {
-            Some(proto::operator::Operator::WindowRank(plan)) => *plan,
+            Some(proto::operator::Operator::WindowJoin(plan)) => plan,
             _ => {
                 return Err(DataFusionError::Plan(
-                    "window rank handle requires a WindowRank root".to_string(),
+                    "window join handle requires a WindowJoin root".to_string(),
                 ));
             }
         };
@@ -159,7 +150,7 @@ impl WindowRankProcessor {
         } else {
             plan.shift_time_zone.parse::<Tz>().map_err(|error| {
                 DataFusionError::Plan(format!(
-                    "invalid window rank shift time zone {}: {error}",
+                    "invalid window join shift time zone {}: {error}",
                     plan.shift_time_zone
                 ))
             })?
@@ -170,15 +161,14 @@ impl WindowRankProcessor {
             max_parallelism,
             state,
             timers: NativeTimerService::new(first_key_group, last_key_group, timer_reservation)?,
-            input_schema: None,
-            key_fields: Vec::new(),
-            preencoded_key_index: None,
-            stored_row_index: None,
-            sort_row_index: None,
-            input_kind_index: None,
+            schemas: [None, None],
+            key_fields: [Vec::new(), Vec::new()],
+            preencoded_key_indices: [None, None],
+            stored_row_indices: [None, None],
+            input_kind_indices: [None, None],
             current_event_time: i64::MIN,
             scratch_reservation,
-            late_records_dropped: 0,
+            late_records_dropped: [0, 0],
             state_read_batches: 0,
             state_write_batches: 0,
             timer_registrations: 0,
@@ -187,25 +177,24 @@ impl WindowRankProcessor {
         })
     }
 
-    pub(crate) fn process_arrow(&mut self, batch: RecordBatch) -> Result<RecordBatch> {
-        self.prepare_schema(batch.schema())?;
-        // Arrow input buffers have already consumed Flink managed memory. This reservation covers
-        // only the opaque row/sort-key/key copies and Rust collection nodes below.
-        let stored_rows = binary_column(&batch, self.stored_row_index, "stored row")?;
-        let sort_rows = binary_column(&batch, self.sort_row_index, "sort key")?;
+    pub(crate) fn process_arrow(&mut self, side: usize, batch: RecordBatch) -> Result<RecordBatch> {
+        if side > 1 {
+            return Err(DataFusionError::Execution(
+                "window join side must be zero or one".to_string(),
+            ));
+        }
+        self.prepare_schema(side, batch.schema())?;
+        let stored_rows = binary_column(&batch, self.stored_row_indices[side], "stored row")?;
         let copied_rows = stored_rows.iter().flatten().map(<[u8]>::len).sum::<usize>();
-        let copied_sort = sort_rows.iter().flatten().map(<[u8]>::len).sum::<usize>();
-        let copied_keys = self
-            .preencoded_key_index
+        let copied_keys = self.preencoded_key_indices[side]
             .and_then(|index| batch.column(index).as_any().downcast_ref::<BinaryArray>())
             .map(|keys| keys.iter().flatten().map(<[u8]>::len).sum::<usize>())
             .unwrap_or(0);
         let base = copied_rows
-            .saturating_add(copied_sort)
             .saturating_add(copied_keys)
-            .saturating_add(batch.num_rows().saturating_mul(176));
+            .saturating_add(batch.num_rows().saturating_mul(144));
         self.scratch_reservation.resize(base)?;
-        let result = self.process_arrow_accounted(&batch);
+        let result = self.process_arrow_accounted(side, &batch);
         match result {
             Ok(output) => self.finish_output(output, base),
             Err(error) => {
@@ -215,19 +204,16 @@ impl WindowRankProcessor {
         }
     }
 
-    fn process_arrow_accounted(&mut self, batch: &RecordBatch) -> Result<RecordBatch> {
-        let stored_rows = binary_column(batch, self.stored_row_index, "stored row")?;
-        let sort_rows = binary_column(batch, self.sort_row_index, "sort key")?;
+    fn process_arrow_accounted(&mut self, side: usize, batch: &RecordBatch) -> Result<RecordBatch> {
+        let stored_rows = binary_column(batch, self.stored_row_indices[side], "stored row")?;
         let kinds = batch
-            .column(self.input_kind_index.expect("schema prepared"))
+            .column(self.input_kind_indices[side].expect("schema prepared"))
             .as_any()
             .downcast_ref::<Int8Array>()
             .ok_or_else(|| {
-                DataFusionError::Execution(
-                    "window rank RowKind metadata is not Arrow Int8".to_string(),
-                )
+                DataFusionError::Execution("window join RowKinds are not Int8".to_string())
             })?;
-        let window_end_column = batch.column(self.plan.window_end_index as usize);
+        let window_end_column = batch.column(self.window_end_index(side));
         let mut unique = HashMap::<StateKey, usize, RandomState>::with_capacity_and_hasher(
             batch.num_rows(),
             RandomState::new(),
@@ -239,10 +225,10 @@ impl WindowRankProcessor {
             };
             let deadline = self.timer_timestamp(window_end.saturating_sub(1))?;
             if deadline <= self.current_event_time {
-                self.late_records_dropped = self.late_records_dropped.saturating_add(1);
+                self.late_records_dropped[side] = self.late_records_dropped[side].saturating_add(1);
                 continue;
             }
-            let group_key = self.group_key(batch, row)?;
+            let group_key = self.group_key(side, batch, row)?;
             let key_group = assign_key_group(&group_key, self.max_parallelism);
             let state_key = window_state_key(key_group, &group_key, window_end);
             let next = unique.len();
@@ -256,12 +242,7 @@ impl WindowRankProcessor {
                     )));
                 }
             };
-            changes.push((
-                index,
-                accumulate,
-                stored_rows.value(row).to_vec(),
-                sort_rows.value(row).to_vec(),
-            ));
+            changes.push((index, accumulate, stored_rows.value(row).to_vec()));
         }
         if unique.is_empty() {
             return self.empty_output();
@@ -272,7 +253,7 @@ impl WindowRankProcessor {
         }
         let keys = ordered_keys
             .into_iter()
-            .map(|key| key.expect("window rank state index is populated"))
+            .map(|key| key.expect("window join state index is populated"))
             .collect::<Vec<_>>();
         let refs = keys
             .iter()
@@ -298,53 +279,50 @@ impl WindowRankProcessor {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        let mut dirty_timer_groups = BTreeSet::new();
-        for (index, accumulate, row, sort_key) in changes {
+        let mut dirty_groups = BTreeSet::new();
+        for (index, accumulate, row) in changes {
             let entry = &mut staged[index];
-            let was_empty = entry.value.candidates.is_empty();
-            if accumulate {
-                let sequence = entry.value.next_sequence;
-                entry.value.next_sequence = sequence.checked_add(1).ok_or_else(|| {
-                    DataFusionError::Execution("window rank sequence number overflow".to_string())
-                })?;
-                entry.value.candidates.push(Candidate {
-                    sequence,
-                    row,
-                    sort_key,
-                });
+            let was_empty = entry.value.left.is_empty() && entry.value.right.is_empty();
+            let values = if side == 0 {
+                &mut entry.value.left
             } else {
-                let Some(index) =
-                    entry.value.candidates.iter().position(|candidate| {
-                        candidate.row == row && candidate.sort_key == sort_key
-                    })
-                else {
-                    return Err(DataFusionError::Execution(
-                        "window rank received a retraction without a matching row".to_string(),
-                    ));
-                };
-                entry.value.candidates.remove(index);
+                &mut entry.value.right
+            };
+            if accumulate {
+                values.push(row);
+            } else {
+                let position = values
+                    .iter()
+                    .position(|candidate| *candidate == row)
+                    .ok_or_else(|| {
+                        DataFusionError::Execution(
+                            "window join received a retraction without a matching row".to_string(),
+                        )
+                    })?;
+                values.remove(position);
             }
+            let is_empty = entry.value.left.is_empty() && entry.value.right.is_empty();
             let timer = TimerKey {
                 timestamp: self.timer_timestamp(entry.window_end.saturating_sub(1))?,
                 key: entry.key.key.clone(),
                 namespace: entry.window_end.to_le_bytes().to_vec(),
             };
-            if was_empty && !entry.value.candidates.is_empty() {
+            if was_empty && !is_empty {
                 if self
                     .timers
                     .register(entry.key.key_group, TimerDomain::EventTime, timer)?
                 {
                     self.timer_registrations = self.timer_registrations.saturating_add(1);
-                    dirty_timer_groups.insert(entry.key.key_group);
+                    dirty_groups.insert(entry.key.key_group);
                 }
             } else if !was_empty
-                && entry.value.candidates.is_empty()
+                && is_empty
                 && self
                     .timers
                     .delete(entry.key.key_group, TimerDomain::EventTime, &timer)?
             {
                 self.timer_deletions = self.timer_deletions.saturating_add(1);
-                dirty_timer_groups.insert(entry.key.key_group);
+                dirty_groups.insert(entry.key.key_group);
             }
             entry.touched = true;
         }
@@ -353,10 +331,11 @@ impl WindowRankProcessor {
             .filter(|entry| entry.touched)
             .map(|entry| StateMutation {
                 key: entry.key,
-                value: (!entry.value.candidates.is_empty()).then(|| encode_state(&entry.value)),
+                value: (!(entry.value.left.is_empty() && entry.value.right.is_empty()))
+                    .then(|| encode_state(&entry.value)),
             })
             .collect::<Vec<_>>();
-        self.append_timer_mutations(&mut mutations, dirty_timer_groups)?;
+        self.append_timer_mutations(&mut mutations, dirty_groups)?;
         if !mutations.is_empty() {
             self.state.write_batch(mutations)?;
             self.state_write_batches = self.state_write_batches.saturating_add(1);
@@ -383,7 +362,7 @@ impl WindowRankProcessor {
             .collect::<Vec<_>>();
         let states = self.state.get_batch(&refs)?;
         self.state_read_batches = self.state_read_batches.saturating_add(1);
-        let mut output = Vec::<(i32, Candidate)>::new();
+        let mut rows = Vec::new();
         let mut mutations = Vec::with_capacity(fired.len() * 2);
         let mut dirty_groups = BTreeSet::new();
         for (group, (timer, state)) in fired.into_iter().zip(states).enumerate() {
@@ -391,14 +370,12 @@ impl WindowRankProcessor {
             if let Some(state) = state {
                 let state = decode_state(state.as_ref())?;
                 let group = i32::try_from(group).map_err(|_| {
-                    DataFusionError::Execution("window rank timer batch exceeds Int32".to_string())
+                    DataFusionError::Execution(
+                        "window join fired group count exceeds i32".to_string(),
+                    )
                 })?;
-                output.extend(
-                    state
-                        .candidates
-                        .into_iter()
-                        .map(|candidate| (group, candidate)),
-                );
+                rows.extend(state.left.into_iter().map(|row| (group, 0, row)));
+                rows.extend(state.right.into_iter().map(|row| (group, 1, row)));
             }
             mutations.push(StateMutation {
                 key: StateKey {
@@ -411,11 +388,11 @@ impl WindowRankProcessor {
         self.append_timer_mutations(&mut mutations, dirty_groups)?;
         self.state.write_batch(mutations)?;
         self.state_write_batches = self.state_write_batches.saturating_add(1);
-        let output = output_batch(output)?;
+        let output = output_batch(rows)?;
         self.finish_output(output, 0)
     }
 
-    pub(crate) fn late_records_dropped(&self) -> u64 {
+    pub(crate) fn late_records_dropped(&self) -> [u64; 2] {
         self.late_records_dropped
     }
 
@@ -469,70 +446,56 @@ impl WindowRankProcessor {
         Ok(())
     }
 
-    fn group_key(&self, batch: &RecordBatch, row: usize) -> Result<Vec<u8>> {
-        match self.preencoded_key_index {
-            Some(index) => Ok(batch
-                .column(index)
-                .as_any()
-                .downcast_ref::<BinaryArray>()
-                .ok_or_else(|| {
-                    DataFusionError::Execution(
-                        "window rank preencoded key is not Binary".to_string(),
-                    )
-                })?
+    fn group_key(&self, side: usize, batch: &RecordBatch, row: usize) -> Result<Vec<u8>> {
+        match self.preencoded_key_indices[side] {
+            Some(index) => Ok(binary_column(batch, Some(index), "preencoded key")?
                 .value(row)
                 .to_vec()),
-            None if self.key_fields.is_empty() => Ok(Vec::new()),
-            None => Ok(encode_binary_row(batch, row, &self.key_fields)?),
+            None if self.key_fields[side].is_empty() => Ok(Vec::new()),
+            None => Ok(encode_binary_row(batch, row, &self.key_fields[side])?),
         }
     }
 
-    fn prepare_schema(&mut self, schema: SchemaRef) -> Result<()> {
-        if let Some(expected) = &self.input_schema {
+    fn prepare_schema(&mut self, side: usize, schema: SchemaRef) -> Result<()> {
+        if let Some(expected) = &self.schemas[side] {
             if expected.as_ref() != schema.as_ref() {
-                return Err(DataFusionError::Execution(
-                    "window rank input schema changed while running".to_string(),
-                ));
+                return Err(DataFusionError::Execution(format!(
+                    "window join input {side} schema changed while running"
+                )));
             }
             return Ok(());
         }
-        self.preencoded_key_index = metadata_index(&schema, "__streamfusion_key");
-        self.stored_row_index = metadata_index(&schema, "__streamfusion_stored_row");
-        self.sort_row_index = metadata_index(&schema, "__streamfusion_sort_key");
-        self.input_kind_index = metadata_index(&schema, "__streamfusion_input_row_kind");
-        if self.stored_row_index.is_none()
-            || self.sort_row_index.is_none()
-            || self.input_kind_index.is_none()
-        {
+        self.preencoded_key_indices[side] = metadata_index(&schema, "__streamfusion_key");
+        self.stored_row_indices[side] = metadata_index(&schema, "__streamfusion_stored_row");
+        self.input_kind_indices[side] = metadata_index(&schema, "__streamfusion_input_row_kind");
+        if self.stored_row_indices[side].is_none() || self.input_kind_indices[side].is_none() {
             return Err(DataFusionError::Execution(
-                "window rank requires stored-row, sort-key, and RowKind metadata".to_string(),
+                "window join requires stored-row and RowKind metadata".to_string(),
             ));
         }
         let visible_count = [
-            self.preencoded_key_index,
-            self.stored_row_index,
-            self.sort_row_index,
-            self.input_kind_index,
+            self.preencoded_key_indices[side],
+            self.stored_row_indices[side],
+            self.input_kind_indices[side],
             Some(schema.fields().len()),
         ]
         .into_iter()
         .flatten()
         .min()
         .unwrap();
-        if self.plan.window_end_index as usize >= visible_count {
-            return Err(DataFusionError::Plan(
-                "window rank end index is outside the visible row".to_string(),
-            ));
+        if self.window_end_index(side) >= visible_count {
+            return Err(DataFusionError::Plan(format!(
+                "window join input {side} window end is outside the visible row"
+            )));
         }
-        if self.preencoded_key_index.is_none() {
-            self.key_fields = self
-                .plan
-                .partition_key_indices
+        if self.preencoded_key_indices[side].is_none() {
+            self.key_fields[side] = self
+                .key_indices(side)
                 .iter()
                 .map(|&index| {
                     let field = schema.fields().get(index as usize).ok_or_else(|| {
                         arrow::error::ArrowError::SchemaError(format!(
-                            "window rank partition index {index} is outside the input"
+                            "window join input {side} key {index} is outside the visible row"
                         ))
                     })?;
                     Ok((
@@ -542,18 +505,34 @@ impl WindowRankProcessor {
                 })
                 .collect::<std::result::Result<Vec<_>, arrow::error::ArrowError>>()?;
         }
-        self.input_schema = Some(schema);
+        self.schemas[side] = Some(schema);
         Ok(())
     }
 
-    fn timer_timestamp(&self, window_millis: i64) -> Result<i64> {
-        if self.shift_time_zone == chrono_tz::UTC || window_millis == i64::MAX {
-            return Ok(window_millis);
+    fn key_indices(&self, side: usize) -> &[u32] {
+        if side == 0 {
+            &self.plan.left_key_indices
+        } else {
+            &self.plan.right_key_indices
         }
-        let local = chrono::DateTime::<Utc>::from_timestamp_millis(window_millis)
+    }
+
+    fn window_end_index(&self, side: usize) -> usize {
+        if side == 0 {
+            self.plan.left_window_end_index as usize
+        } else {
+            self.plan.right_window_end_index as usize
+        }
+    }
+
+    fn timer_timestamp(&self, local_millis: i64) -> Result<i64> {
+        if self.shift_time_zone == chrono_tz::UTC || local_millis == i64::MAX {
+            return Ok(local_millis);
+        }
+        let local = chrono::DateTime::<Utc>::from_timestamp_millis(local_millis)
             .ok_or_else(|| {
                 DataFusionError::Execution(format!(
-                    "window rank timer {window_millis} is outside chrono's range"
+                    "window join timer {local_millis} is outside chrono's range"
                 ))
             })?
             .naive_utc();
@@ -573,22 +552,24 @@ impl WindowRankProcessor {
     }
 }
 
-fn validate_plan(plan: &proto::WindowRank, max_parallelism: u32) -> Result<()> {
-    if max_parallelism == 0 || plan.rank_start == 0 || plan.rank_end < plan.rank_start {
-        return Err(DataFusionError::Plan(
-            "window rank requires positive max parallelism and a valid one-based range".to_string(),
-        ));
-    }
-    if plan.sort_key_indices.is_empty()
-        || plan.sort_key_indices.len() != plan.sort_ascending.len()
-        || plan.sort_key_indices.len() != plan.sort_nulls_last.len()
-        || plan.input_schema.is_none()
+fn validate_plan(plan: &proto::WindowJoin, max_parallelism: u32) -> Result<()> {
+    if max_parallelism == 0
+        || plan.left_key_indices.len() != plan.right_key_indices.len()
+        || plan.left_schema.is_none()
+        || plan.right_schema.is_none()
     {
         return Err(DataFusionError::Plan(
-            "window rank sort contract or input schema is invalid".to_string(),
+            "window join key/schema contract is invalid".to_string(),
         ));
     }
     Ok(())
+}
+
+fn metadata_index(schema: &SchemaRef, name: &str) -> Option<usize> {
+    schema
+        .fields()
+        .iter()
+        .position(|field| field.name() == name)
 }
 
 fn binary_column<'a>(
@@ -597,19 +578,14 @@ fn binary_column<'a>(
     description: &str,
 ) -> Result<&'a BinaryArray> {
     batch
-        .column(index.expect("schema prepared"))
+        .column(index.ok_or_else(|| {
+            DataFusionError::Execution(format!("window join has no {description} column"))
+        })?)
         .as_any()
         .downcast_ref::<BinaryArray>()
         .ok_or_else(|| {
-            DataFusionError::Execution(format!("window rank {description} is not Arrow Binary"))
+            DataFusionError::Execution(format!("window join {description} is not Arrow Binary"))
         })
-}
-
-fn metadata_index(schema: &SchemaRef, name: &str) -> Option<usize> {
-    schema
-        .fields()
-        .iter()
-        .position(|field| field.name() == name)
 }
 
 fn window_state_key(key_group: u32, group_key: &[u8], window_end: i64) -> StateKey {
@@ -623,123 +599,87 @@ fn window_state_key(key_group: u32, group_key: &[u8], window_end: i64) -> StateK
 fn decode_window_end(key: &[u8]) -> Result<i64> {
     if key.len() < 9 || key[0] != WINDOW_KEY_PREFIX {
         return Err(DataFusionError::Execution(
-            "window rank state key is malformed".to_string(),
+            "window join state key is malformed".to_string(),
         ));
     }
     Ok(i64::from_be_bytes(key[key.len() - 8..].try_into().unwrap()))
 }
 
-fn encode_state(state: &WindowState) -> Vec<u8> {
+fn encode_state(state: &JoinWindowState) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(STATE_MAGIC);
     bytes.push(STATE_VERSION);
-    bytes.extend_from_slice(&state.next_sequence.to_le_bytes());
-    bytes.extend_from_slice(&(state.candidates.len() as u32).to_le_bytes());
-    for candidate in &state.candidates {
-        bytes.extend_from_slice(&candidate.sequence.to_le_bytes());
-        bytes.extend_from_slice(&(candidate.row.len() as u32).to_le_bytes());
-        bytes.extend_from_slice(&(candidate.sort_key.len() as u32).to_le_bytes());
-        bytes.extend_from_slice(&candidate.row);
-        bytes.extend_from_slice(&candidate.sort_key);
+    for rows in [&state.left, &state.right] {
+        bytes.extend_from_slice(&(rows.len() as u32).to_le_bytes());
+        for row in rows {
+            bytes.extend_from_slice(&(row.len() as u32).to_le_bytes());
+            bytes.extend_from_slice(row);
+        }
     }
     bytes
 }
 
-fn decode_state(bytes: &[u8]) -> Result<WindowState> {
-    if bytes.len() < 17 || &bytes[..4] != STATE_MAGIC || bytes[4] != STATE_VERSION {
+fn decode_state(bytes: &[u8]) -> Result<JoinWindowState> {
+    if bytes.len() < 13 || &bytes[..4] != STATE_MAGIC || bytes[4] != STATE_VERSION {
         return Err(DataFusionError::Execution(
-            "invalid native window rank state".to_string(),
+            "invalid native window join state".to_string(),
         ));
     }
     let mut offset = 5;
-    let next_sequence = read_u64(bytes, &mut offset)?;
-    let count = read_u32(bytes, &mut offset)? as usize;
-    let mut candidates = Vec::with_capacity(count);
-    for _ in 0..count {
-        let sequence = read_u64(bytes, &mut offset)?;
-        let row_length = read_u32(bytes, &mut offset)? as usize;
-        let sort_length = read_u32(bytes, &mut offset)? as usize;
-        let row_end = offset.checked_add(row_length).ok_or_else(|| {
-            DataFusionError::Execution("window rank state length overflow".to_string())
-        })?;
-        let sort_end = row_end.checked_add(sort_length).ok_or_else(|| {
-            DataFusionError::Execution("window rank state length overflow".to_string())
-        })?;
-        let row = bytes
-            .get(offset..row_end)
-            .ok_or_else(|| DataFusionError::Execution("truncated window rank row".to_string()))?;
-        let sort_key = bytes.get(row_end..sort_end).ok_or_else(|| {
-            DataFusionError::Execution("truncated window rank sort key".to_string())
-        })?;
-        candidates.push(Candidate {
-            sequence,
-            row: row.to_vec(),
-            sort_key: sort_key.to_vec(),
-        });
-        offset = sort_end;
-    }
+    let left = decode_rows(bytes, &mut offset)?;
+    let right = decode_rows(bytes, &mut offset)?;
     if offset != bytes.len() {
         return Err(DataFusionError::Execution(
-            "window rank state has trailing bytes".to_string(),
+            "window join state has trailing bytes".to_string(),
         ));
     }
-    Ok(WindowState {
-        next_sequence,
-        candidates,
-    })
+    Ok(JoinWindowState { left, right })
+}
+
+fn decode_rows(bytes: &[u8], offset: &mut usize) -> Result<Vec<Vec<u8>>> {
+    let count = read_u32(bytes, offset)? as usize;
+    let mut rows = Vec::with_capacity(count);
+    for _ in 0..count {
+        let length = read_u32(bytes, offset)? as usize;
+        let end = offset.checked_add(length).ok_or_else(truncated)?;
+        rows.push(bytes.get(*offset..end).ok_or_else(truncated)?.to_vec());
+        *offset = end;
+    }
+    Ok(rows)
 }
 
 fn read_u32(bytes: &[u8], offset: &mut usize) -> Result<u32> {
-    Ok(u32::from_le_bytes(read_exact::<4>(bytes, offset)?))
-}
-
-fn read_u64(bytes: &[u8], offset: &mut usize) -> Result<u64> {
-    Ok(u64::from_le_bytes(read_exact::<8>(bytes, offset)?))
-}
-
-fn read_exact<const N: usize>(bytes: &[u8], offset: &mut usize) -> Result<[u8; N]> {
-    let end = offset.checked_add(N).ok_or_else(|| {
-        DataFusionError::Execution("window rank state offset overflow".to_string())
-    })?;
-    let result = bytes
-        .get(*offset..end)
-        .ok_or_else(|| DataFusionError::Execution("truncated window rank state".to_string()))?
-        .try_into()
-        .unwrap();
+    let end = offset.checked_add(4).ok_or_else(truncated)?;
+    let value = bytes.get(*offset..end).ok_or_else(truncated)?;
     *offset = end;
-    Ok(result)
+    Ok(u32::from_le_bytes(value.try_into().unwrap()))
+}
+
+fn truncated() -> DataFusionError {
+    DataFusionError::Execution("truncated native window join state".to_string())
 }
 
 fn output_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
         Field::new("__streamfusion_stored_row", DataType::Binary, false),
-        Field::new("__streamfusion_sort_key", DataType::Binary, false),
+        Field::new("__streamfusion_join_side", DataType::Int8, false),
         Field::new("__streamfusion_window_group", DataType::Int32, false),
-        Field::new("__streamfusion_sequence", DataType::Int64, false),
-        Field::new("__streamfusion_row_kind", DataType::Int8, false),
     ]))
 }
 
-fn output_batch(rows: Vec<(i32, Candidate)>) -> Result<RecordBatch> {
+fn output_batch(rows: Vec<(i32, i8, Vec<u8>)>) -> Result<RecordBatch> {
     let mut stored = BinaryBuilder::new();
-    let mut sort = BinaryBuilder::new();
+    let mut sides = Vec::with_capacity(rows.len());
     let mut groups = Vec::with_capacity(rows.len());
-    let mut sequences = Vec::with_capacity(rows.len());
-    for (group, candidate) in rows {
-        stored.append_value(candidate.row);
-        sort.append_value(candidate.sort_key);
+    for (group, side, row) in rows {
+        stored.append_value(row);
+        sides.push(side);
         groups.push(group);
-        sequences.push(i64::try_from(candidate.sequence).map_err(|_| {
-            DataFusionError::Execution("window rank sequence exceeds Java long".to_string())
-        })?);
     }
-    let count = groups.len();
     let columns: Vec<ArrayRef> = vec![
         Arc::new(stored.finish()),
-        Arc::new(sort.finish()),
+        Arc::new(Int8Array::from(sides)),
         Arc::new(Int32Array::from(groups)),
-        Arc::new(Int64Array::from(sequences)),
-        Arc::new(Int8Array::from(vec![INSERT; count])),
     ];
     Ok(RecordBatch::try_new(output_schema(), columns)?)
 }
@@ -752,47 +692,36 @@ mod tests {
     use prost::Message;
 
     #[test]
-    fn state_round_trips_sort_keys_and_retractions() {
-        let state = WindowState {
-            next_sequence: 2,
-            candidates: vec![
-                Candidate {
-                    sequence: 0,
-                    row: b"row-a".to_vec(),
-                    sort_key: b"sort-a".to_vec(),
-                },
-                Candidate {
-                    sequence: 1,
-                    row: b"row-b".to_vec(),
-                    sort_key: b"sort-b".to_vec(),
-                },
-            ],
+    fn canonical_state_preserves_both_sides_and_duplicate_rows() {
+        let state = JoinWindowState {
+            left: vec![b"left".to_vec(), b"left".to_vec()],
+            right: vec![b"right".to_vec()],
         };
-        let decoded = decode_state(&encode_state(&state)).unwrap();
-        assert_eq!(decoded.next_sequence, 2);
-        assert_eq!(decoded.candidates, state.candidates);
+        assert_eq!(decode_state(&encode_state(&state)).unwrap(), state);
     }
 
     #[test]
-    fn accounts_rank_rows_sort_keys_timers_and_state_in_host_memory() {
+    fn accounts_join_rows_keys_timers_and_state_in_host_memory() {
         let broker = Arc::new(TestBroker::new(64 << 20));
-        let mut processor = WindowRankProcessor::new(
+        let mut processor = WindowJoinProcessor::new(
             &plan(),
             128,
             0,
             127,
-            HostMemoryReservation::new(broker.clone(), "window rank accounting"),
+            HostMemoryReservation::new(broker.clone(), "window join accounting"),
         )
         .unwrap();
         let empty_state = broker.reserved();
         let output = processor
-            .process_arrow(batch(
-                &[7, 8],
-                &[100, 100],
-                &[b"left", b"right"],
-                &[b"sort-a", b"sort-b"],
-                &[INSERT, INSERT],
-            ))
+            .process_arrow(
+                0,
+                batch(
+                    &[7, 8],
+                    &[100, 100],
+                    &[b"left", b"right"],
+                    &[INSERT, INSERT],
+                ),
+            )
             .unwrap();
 
         assert!(broker.reserved() > empty_state);
@@ -802,52 +731,47 @@ mod tests {
     }
 
     #[test]
-    fn retractions_restore_and_rescale_with_timer_and_sequence_state() {
+    fn retractions_restore_and_rescale_without_changing_window_contents() {
         let broker = Arc::new(TestBroker::new(1 << 30));
-        let mut source = WindowRankProcessor::new(
+        let mut source = WindowJoinProcessor::new(
             &plan(),
             128,
             0,
             127,
-            HostMemoryReservation::new(broker.clone(), "window rank source"),
+            HostMemoryReservation::new(broker.clone(), "window join source"),
         )
         .unwrap();
         source
-            .process_arrow(batch(
-                &[7, 7, 9],
-                &[100, 100, 200],
-                &[b"left", b"right", b"other"],
-                &[b"sort-a", b"sort-b", b"sort-c"],
-                &[INSERT, UPDATE_AFTER, INSERT],
-            ))
+            .process_arrow(
+                0,
+                batch(&[7, 7], &[100, 100], &[b"left", b"left"], &[INSERT, INSERT]),
+            )
             .unwrap();
         source
-            .process_arrow(batch(
-                &[7],
-                &[100],
-                &[b"left"],
-                &[b"sort-a"],
-                &[UPDATE_BEFORE],
-            ))
+            .process_arrow(0, batch(&[7], &[100], &[b"left"], &[DELETE]))
             .unwrap();
+        source
+            .process_arrow(1, batch(&[7], &[100], &[b"right"], &[INSERT]))
+            .unwrap();
+        assert_eq!(&source.statistics()[..2], &[3, 3]);
         let snapshots = (0..128)
             .map(|key_group| source.snapshot_key_group(key_group).unwrap())
             .collect::<Vec<_>>();
 
-        let mut lower = WindowRankProcessor::new(
+        let mut lower = WindowJoinProcessor::new(
             &plan(),
             128,
             0,
             63,
-            HostMemoryReservation::new(broker.clone(), "window rank lower"),
+            HostMemoryReservation::new(broker.clone(), "window join lower"),
         )
         .unwrap();
-        let mut upper = WindowRankProcessor::new(
+        let mut upper = WindowJoinProcessor::new(
             &plan(),
             128,
             64,
             127,
-            HostMemoryReservation::new(broker, "window rank upper"),
+            HostMemoryReservation::new(broker, "window join upper"),
         )
         .unwrap();
         for (key_group, snapshot) in snapshots.iter().enumerate() {
@@ -862,10 +786,10 @@ mod tests {
         }
 
         let outputs = [
-            lower.advance_event_time(199).unwrap(),
-            upper.advance_event_time(199).unwrap(),
+            lower.advance_event_time(99).unwrap(),
+            upper.advance_event_time(99).unwrap(),
         ];
-        let mut rows = outputs
+        let rows = outputs
             .iter()
             .flat_map(|output| {
                 output
@@ -877,8 +801,7 @@ mod tests {
                     .flatten()
             })
             .collect::<Vec<_>>();
-        rows.sort_unstable();
-        assert_eq!(rows, vec![b"other".as_slice(), b"right".as_slice()]);
+        assert_eq!(rows, vec![b"left".as_slice(), b"right".as_slice()]);
         assert_eq!(lower.statistics()[5] + upper.statistics()[5], 0);
     }
 
@@ -886,34 +809,21 @@ mod tests {
         proto::NativePlan {
             protocol_version: crate::PLAN_PROTOCOL_VERSION,
             root: Some(proto::Operator {
-                operator: Some(proto::operator::Operator::WindowRank(Box::new(
-                    proto::WindowRank {
-                        input: None,
-                        partition_key_indices: vec![0],
-                        sort_key_indices: vec![1],
-                        sort_ascending: vec![true],
-                        sort_nulls_last: vec![true],
-                        window_end_index: 1,
-                        rank_start: 1,
-                        rank_end: 2,
-                        output_rank_number: true,
-                        input_changelog: true,
-                        input_schema: Some(proto::Schema { fields: Vec::new() }),
-                        shift_time_zone: "UTC".to_string(),
-                    },
-                ))),
+                operator: Some(proto::operator::Operator::WindowJoin(proto::WindowJoin {
+                    left_key_indices: vec![0],
+                    right_key_indices: vec![0],
+                    left_window_end_index: 1,
+                    right_window_end_index: 1,
+                    left_schema: Some(proto::Schema { fields: Vec::new() }),
+                    right_schema: Some(proto::Schema { fields: Vec::new() }),
+                    shift_time_zone: "UTC".to_string(),
+                })),
             }),
         }
         .encode_to_vec()
     }
 
-    fn batch(
-        keys: &[i64],
-        window_end: &[i64],
-        rows: &[&[u8]],
-        sort_keys: &[&[u8]],
-        kinds: &[i8],
-    ) -> RecordBatch {
+    fn batch(keys: &[i64], window_end: &[i64], rows: &[&[u8]], kinds: &[i8]) -> RecordBatch {
         RecordBatch::try_from_iter(vec![
             ("key", Arc::new(Int64Array::from(keys.to_vec())) as ArrayRef),
             (
@@ -923,10 +833,6 @@ mod tests {
             (
                 "__streamfusion_stored_row",
                 Arc::new(BinaryArray::from_vec(rows.to_vec())) as ArrayRef,
-            ),
-            (
-                "__streamfusion_sort_key",
-                Arc::new(BinaryArray::from_vec(sort_keys.to_vec())) as ArrayRef,
             ),
             (
                 "__streamfusion_input_row_kind",

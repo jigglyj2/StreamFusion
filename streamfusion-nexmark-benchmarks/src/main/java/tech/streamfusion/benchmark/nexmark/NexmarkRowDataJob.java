@@ -134,6 +134,9 @@ public final class NexmarkRowDataJob {
             case "q12":
                 columns = "bidder BIGINT, bid_count BIGINT, starttime TIMESTAMP(3), endtime TIMESTAMP(3)";
                 break;
+            case "q8":
+                columns = "id BIGINT, name STRING, starttime TIMESTAMP(3)";
+                break;
             default:
                 throw new IOException("Nexmark query is not fully accelerable: " + query);
         }

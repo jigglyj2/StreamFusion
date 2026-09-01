@@ -23,7 +23,6 @@ import org.apache.flink.runtime.state.KeyedStateCheckpointOutputStream;
 import org.apache.flink.runtime.state.StateInitializationContext;
 import org.apache.flink.runtime.state.StateSnapshotContext;
 import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
-import org.apache.flink.streaming.api.operators.BoundedOneInput;
 import org.apache.flink.streaming.api.operators.OperatorSnapshotFutures;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.binary.BinaryRowData;
@@ -37,7 +36,7 @@ import tech.streamfusion.nativebridge.NativeMemoryManager;
 
 /** Shared Flink lifecycle for persistent native keyed operators. */
 public abstract class AbstractStreamFusionArrowKeyedStateOperator extends AbstractStreamOperator<ArrowRowDataBatch>
-        implements BoundedOneInput, NativeIncrementalStateParticipant {
+        implements NativeIncrementalStateParticipant {
     private final byte[] serializedPlan;
     private final String stateName;
 
@@ -224,7 +223,6 @@ public abstract class AbstractStreamFusionArrowKeyedStateOperator extends Abstra
         return false;
     }
 
-    @Override
     public final void endInput() {}
 
     @Override
@@ -345,6 +343,7 @@ public abstract class AbstractStreamFusionArrowKeyedStateOperator extends Abstra
         long handle = nativeHandle;
         nativeHandle = 0;
         try {
+            beforeNativeClose();
             if (handle != 0) {
                 destroyHandle(handle);
             }
@@ -394,6 +393,9 @@ public abstract class AbstractStreamFusionArrowKeyedStateOperator extends Abstra
 
     /** Operator-specific state captured alongside the native key-group payloads. */
     protected void beforeNativeStateSnapshot(StateSnapshotContext context) throws Exception {}
+
+    /** Operator-specific runtime resources closed before the native handle and allocator. */
+    protected void beforeNativeClose() throws Exception {}
 
     private static void deleteDirectory(Path directory) throws IOException {
         if (directory == null || !Files.exists(directory)) {

@@ -30,6 +30,11 @@ public final class NativeExchangeReaderOperator extends AbstractStreamOperator<A
         this.decoder = decoder;
     }
 
+    /** Returns the immutable exchange contract for consumers that fuse frame decoding downstream. */
+    public byte[] serializedPlan() {
+        return serializedPlan.clone();
+    }
+
     @Override
     public void open() throws Exception {
         super.open();

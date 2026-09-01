@@ -17,4 +17,5 @@ mod union;
 mod values;
 mod window_aggregate;
 mod window_deduplicate;
+mod window_join;
 mod window_rank;

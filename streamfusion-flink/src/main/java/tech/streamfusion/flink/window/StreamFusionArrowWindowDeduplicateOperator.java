@@ -16,6 +16,7 @@ import org.apache.flink.metrics.Meter;
 import org.apache.flink.metrics.MeterView;
 import org.apache.flink.runtime.state.StateInitializationContext;
 import org.apache.flink.runtime.state.StateSnapshotContext;
+import org.apache.flink.streaming.api.operators.BoundedOneInput;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
 import org.apache.flink.streaming.api.watermark.Watermark;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
@@ -33,7 +34,7 @@ import tech.streamfusion.nativebridge.NativeWindowDeduplicateBridge;
 
 /** Key-grouped native window first/last-row deduplication. */
 final class StreamFusionArrowWindowDeduplicateOperator extends AbstractStreamFusionArrowKeyedStateOperator
-        implements OneInputStreamOperator<ArrowRowDataBatch, ArrowRowDataBatch> {
+        implements OneInputStreamOperator<ArrowRowDataBatch, ArrowRowDataBatch>, BoundedOneInput {
     private final RowType rowType;
     private final int[] partitionKeys;
     private final RowDataKeySelector keySelector;

@@ -55,7 +55,20 @@ message Operator {
     WindowAggregate window_aggregate = 10;
     WindowDeduplicate window_deduplicate = 11;
     WindowRank window_rank = 12;
+    WindowJoin window_join = 13;
   }
+}
+
+// Two-input event-time Window Join state. Join result semantics remain on the Java edge so the
+// generated Flink condition and every FlinkJoinType can be applied exactly at timer firing.
+message WindowJoin {
+  repeated uint32 left_key_indices = 1;
+  repeated uint32 right_key_indices = 2;
+  uint32 left_window_end_index = 3;
+  uint32 right_window_end_index = 4;
+  Schema left_schema = 5;
+  Schema right_schema = 6;
+  string shift_time_zone = 7;
 }
 
 // Timer-free keyed deduplication. The initial runtime supports insert-only rowtime input,

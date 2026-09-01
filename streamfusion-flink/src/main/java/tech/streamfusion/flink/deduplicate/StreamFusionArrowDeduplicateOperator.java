@@ -6,6 +6,7 @@ package tech.streamfusion.flink.deduplicate;
 
 import java.nio.file.Path;
 import java.util.List;
+import org.apache.flink.streaming.api.operators.BoundedOneInput;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.table.runtime.keyselector.RowDataKeySelector;
@@ -24,7 +25,7 @@ import tech.streamfusion.proto.plan.v1.Operator;
 
 /** Stateful keep-last deduplicate whose input and output remain Arrow-backed. */
 final class StreamFusionArrowDeduplicateOperator extends AbstractStreamFusionArrowKeyedStateOperator
-        implements OneInputStreamOperator<ArrowRowDataBatch, ArrowRowDataBatch> {
+        implements OneInputStreamOperator<ArrowRowDataBatch, ArrowRowDataBatch>, BoundedOneInput {
     private final RowType rowType;
     private final boolean preencodeKeys;
     private final RowDataKeySelector keySelector;

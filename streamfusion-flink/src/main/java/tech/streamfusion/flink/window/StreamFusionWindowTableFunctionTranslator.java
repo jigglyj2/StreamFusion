@@ -122,8 +122,10 @@ public final class StreamFusionWindowTableFunctionTranslator {
         if (strategy.isProctime() && !session) {
             return "time attribute: processing-time Window TVFs require per-record Flink clock parity";
         }
-        if (!session && strategy.getTimeAttributeType().getTypeRoot() != LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE) {
-            return "time attribute: only TIMESTAMP rowtime is native; TIMESTAMP_LTZ requires Flink local-time-zone shifting";
+        if (!session
+                && strategy.getTimeAttributeType().getTypeRoot() != LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE
+                && strategy.getTimeAttributeType().getTypeRoot() != LogicalTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE) {
+            return "time attribute: aligned Window TVFs require TIMESTAMP or TIMESTAMP_LTZ";
         }
         int index = strategy.getTimeAttributeIndex();
         if (index < 0 || index >= inputType.getFieldCount()) {

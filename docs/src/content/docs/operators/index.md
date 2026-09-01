@@ -19,7 +19,7 @@ This matrix follows the query operations documented by Flink 2.3, including the 
 | [Window aggregation](window-aggregation/) | **Partial** (`TUMBLE`, `HOP`, `CUMULATE`, `SESSION`) | Yes | Native keyed window state, timers, and Arrow aggregate kernels |
 | [OVER aggregation](over-aggregation/) | **No** | Yes | Native ordered state and aggregate kernels |
 | [Joins](joins/) | **No** | By join type | DataFusion batch joins or custom streaming state |
-| [Window joins](window-join/) | **No** | Yes | Custom window-aware streaming join |
+| [Window joins](window-join/) | **Yes** (event-time attached windows) | Yes | Native two-sided window state plus Flink join conditions |
 | [Set operations](set-operations/) | **Partial** (`UNION ALL`) | By operation | Flink-compatible union wiring; DataFusion or native keyed state for future operations |
 | [Exchange](exchange/) | **Partial** (hash and singleton) | Yes | Native Flink-compatible key grouping with Flink-owned network transport |
 | [Table and collection expansion](table-expansion/) | **Partial** (scalar array `UNNEST`) | Yes | DataFusion `UnnestExec` with Flink-compatible correlate semantics |

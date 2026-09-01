@@ -11,6 +11,8 @@ use arrow::array::{
 use arrow::compute::take;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow::record_batch::RecordBatch;
+use chrono::Utc;
+use chrono_tz::Tz;
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::memory_pool::MemoryConsumer;
@@ -25,6 +27,8 @@ use datafusion::physical_plan::{
 use futures::StreamExt;
 
 use crate::proto;
+
+use super::window_aggregate::local_to_epoch;
 
 pub(crate) fn create(
     window: &proto::WindowTableFunction,
@@ -169,14 +173,25 @@ fn expand_batch(
     window: &proto::WindowTableFunction,
     schema: SchemaRef,
 ) -> Result<RecordBatch> {
+    let shift_time_zone = if window.shift_time_zone.is_empty() {
+        chrono_tz::UTC
+    } else {
+        window.shift_time_zone.parse::<Tz>().map_err(|error| {
+            DataFusionError::Plan(format!(
+                "invalid Window TVF shift time zone {}: {error}",
+                window.shift_time_zone
+            ))
+        })?
+    };
     let timestamps = batch.column(window.time_attribute_index as usize);
     let mut indices = Vec::new();
     let mut starts = Vec::new();
     let mut ends = Vec::new();
     for row in 0..batch.num_rows() {
-        let Some(timestamp) = timestamp_millis(timestamps, row)? else {
+        let Some(epoch_millis) = timestamp_millis(timestamps, row)? else {
             continue;
         };
+        let timestamp = to_window_time(epoch_millis, shift_time_zone)?;
         for (start, end) in assign_windows(window, timestamp) {
             indices.push(u32::try_from(row).map_err(|_| {
                 DataFusionError::Execution("Window TVF batch exceeds UInt32 indexing".to_string())
@@ -197,11 +212,43 @@ fn expand_batch(
     columns.push(Arc::new(TimestampMillisecondArray::from(ends.clone())));
     columns.push(Arc::new(TimestampMillisecondArray::from(
         ends.into_iter()
-            .map(|end| end.wrapping_sub(1))
-            .collect::<Vec<_>>(),
+            .map(|end| window_time(end, shift_time_zone))
+            .collect::<Result<Vec<_>>>()?,
     )));
     columns.push(take(batch.column(ordinal_index).as_ref(), &indices, None)?);
     Ok(RecordBatch::try_new(schema, columns)?)
+}
+
+fn to_window_time(epoch_millis: i64, shift_time_zone: Tz) -> Result<i64> {
+    if shift_time_zone == chrono_tz::UTC || epoch_millis == i64::MAX {
+        return Ok(epoch_millis);
+    }
+    let instant =
+        chrono::DateTime::<Utc>::from_timestamp_millis(epoch_millis).ok_or_else(|| {
+            DataFusionError::Execution(format!(
+                "Window TVF timestamp {epoch_millis} is outside chrono's range"
+            ))
+        })?;
+    Ok(instant
+        .with_timezone(&shift_time_zone)
+        .naive_local()
+        .and_utc()
+        .timestamp_millis())
+}
+
+fn window_time(window_end: i64, shift_time_zone: Tz) -> Result<i64> {
+    let local_millis = window_end.wrapping_sub(1);
+    if shift_time_zone == chrono_tz::UTC || local_millis == i64::MAX {
+        return Ok(local_millis);
+    }
+    let local = chrono::DateTime::<Utc>::from_timestamp_millis(local_millis)
+        .ok_or_else(|| {
+            DataFusionError::Execution(format!(
+                "Window TVF end {window_end} is outside chrono's range"
+            ))
+        })?
+        .naive_utc();
+    local_to_epoch(local, shift_time_zone)
 }
 
 pub(super) fn timestamp_millis(array: &ArrayRef, row: usize) -> Result<Option<i64>> {
@@ -260,6 +307,14 @@ fn validate(window: &proto::WindowTableFunction) -> Result<()> {
         return Err(DataFusionError::Plan(
             "Window TVF kind and positive size are required".to_string(),
         ));
+    }
+    if !window.shift_time_zone.is_empty() {
+        window.shift_time_zone.parse::<Tz>().map_err(|error| {
+            DataFusionError::Plan(format!(
+                "invalid Window TVF shift time zone {}: {error}",
+                window.shift_time_zone
+            ))
+        })?;
     }
     match kind {
         proto::WindowKind::Tumble if window.slide_or_step_millis != 0 => Err(
@@ -373,6 +428,30 @@ mod tests {
                 4_500
             ),
             vec![(0, 6_000), (0, 8_000), (0, 10_000)]
+        );
+    }
+
+    #[test]
+    fn local_zoned_timestamp_assignment_uses_flinks_local_window_clock() {
+        let new_york = "America/New_York".parse::<Tz>().unwrap();
+        // 2026-03-08T07:30Z is 03:30 after the spring-forward gap. Flink assigns the
+        // local 03:00-04:00 window rather than the epoch-aligned 07:00-08:00 window.
+        let epoch = chrono::DateTime::parse_from_rfc3339("2026-03-08T07:30:00Z")
+            .unwrap()
+            .timestamp_millis();
+        let local = to_window_time(epoch, new_york).unwrap();
+        assert_eq!(
+            assign_windows(&window(proto::WindowKind::Tumble, 3_600_000, 0, 0), local),
+            vec![(
+                chrono::NaiveDateTime::parse_from_str("2026-03-08 03:00:00", "%Y-%m-%d %H:%M:%S")
+                    .unwrap()
+                    .and_utc()
+                    .timestamp_millis(),
+                chrono::NaiveDateTime::parse_from_str("2026-03-08 04:00:00", "%Y-%m-%d %H:%M:%S")
+                    .unwrap()
+                    .and_utc()
+                    .timestamp_millis()
+            )]
         );
     }
 
