@@ -33,6 +33,8 @@ import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecExpand;
 import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecWindowTableFunction;
 import org.apache.flink.table.planner.plan.nodes.exec.processor.ExecNodeGraphProcessor;
 import org.apache.flink.table.planner.plan.nodes.exec.processor.ProcessorContext;
+import org.apache.flink.table.planner.plan.nodes.exec.spec.PartitionSpec;
+import org.apache.flink.table.planner.plan.nodes.exec.spec.SortSpec;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecCalc;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecCorrelate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecDeduplicate;
@@ -47,8 +49,13 @@ import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecUnion;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecValues;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWatermarkAssigner;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWindowAggregate;
+import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWindowDeduplicate;
+import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWindowRank;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWindowTableFunction;
 import org.apache.flink.table.runtime.groupwindow.NamedWindowProperty;
+import org.apache.flink.table.runtime.operators.rank.ConstantRankRange;
+import org.apache.flink.table.runtime.operators.rank.RankRange;
+import org.apache.flink.table.runtime.operators.rank.RankType;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.util.TimeUtils;
 
@@ -68,6 +75,10 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             "tech.streamfusion.flink.aggregate.StreamFusionGroupAggregateTranslator";
     private static final String WINDOW_AGGREGATE_TRANSLATOR_CLASS =
             "tech.streamfusion.flink.window.StreamFusionWindowAggregateTranslator";
+    private static final String WINDOW_DEDUPLICATE_TRANSLATOR_CLASS =
+            "tech.streamfusion.flink.window.StreamFusionWindowDeduplicateTranslator";
+    private static final String WINDOW_RANK_TRANSLATOR_CLASS =
+            "tech.streamfusion.flink.window.StreamFusionWindowRankTranslator";
 
     @Override
     public ExecNodeGraph process(ExecNodeGraph graph, ProcessorContext context) {
@@ -147,6 +158,16 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             if (folded != null) {
                 collectRejections(folded.inputEdge.getSource(), context, nodePath + "/native-input", rejections);
                 return;
+            }
+        } else if (node instanceof StreamExecWindowDeduplicate) {
+            String reason = unsupportedReason((StreamExecWindowDeduplicate) node, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
+        } else if (node instanceof StreamExecWindowRank) {
+            String reason = unsupportedReason((StreamExecWindowRank) node, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
             }
         } else if (node instanceof StreamExecDropUpdateBefore) {
             // RowKind is Flink changelog metadata, so this node is always eligible.
@@ -321,6 +342,41 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     .collect(Collectors.toList()));
             return replacement;
         }
+        if (node instanceof StreamExecWindowDeduplicate) {
+            StreamExecWindowDeduplicate deduplicate = (StreamExecWindowDeduplicate) node;
+            StreamFusionExecWindowDeduplicate replacement = new StreamFusionExecWindowDeduplicate(
+                    deduplicate.getPersistedConfig(),
+                    windowDeduplicatePartitionKeys(deduplicate),
+                    windowDeduplicateOrderKey(deduplicate),
+                    windowDeduplicateKeepLast(deduplicate),
+                    windowDeduplicateWindowing(deduplicate),
+                    deduplicate.getInputProperties().get(0),
+                    (RowType) deduplicate.getOutputType(),
+                    "StreamFusionWindowDeduplicate");
+            replacement.setInputEdges(deduplicate.getInputEdges().stream()
+                    .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                    .collect(Collectors.toList()));
+            return replacement;
+        }
+        if (node instanceof StreamExecWindowRank) {
+            StreamExecWindowRank rank = (StreamExecWindowRank) node;
+            ConstantRankRange range = (ConstantRankRange) windowRankRange(rank);
+            StreamFusionExecWindowRank replacement = new StreamFusionExecWindowRank(
+                    rank.getPersistedConfig(),
+                    windowRankPartitionKeys(rank),
+                    windowRankSortSpec(rank),
+                    range.getRankStart(),
+                    range.getRankEnd(),
+                    windowRankOutputNumber(rank),
+                    windowRankWindowing(rank),
+                    rank.getInputProperties().get(0),
+                    (RowType) rank.getOutputType(),
+                    "StreamFusionWindowRank");
+            replacement.setInputEdges(rank.getInputEdges().stream()
+                    .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                    .collect(Collectors.toList()));
+            return replacement;
+        }
         if (node instanceof StreamExecDropUpdateBefore) {
             StreamExecDropUpdateBefore drop = (StreamExecDropUpdateBefore) node;
             StreamFusionExecDropUpdateBefore replacement = new StreamFusionExecDropUpdateBefore(
@@ -487,6 +543,80 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             throw new IllegalStateException("Could not inspect StreamFusion Deduplicate support", e);
         } catch (InvocationTargetException e) {
             throw new IllegalStateException("StreamFusion Deduplicate support inspection failed", e.getCause());
+        }
+    }
+
+    private String unsupportedReason(StreamExecWindowDeduplicate deduplicate, ProcessorContext context) {
+        ExecEdge input = deduplicate.getInputEdges().get(0);
+        try {
+            Class<?> translator = Class.forName(
+                    WINDOW_DEDUPLICATE_TRANSLATOR_CLASS,
+                    true,
+                    context.getPlanner().getFlinkContext().getClassLoader());
+            Method method = translator.getMethod(
+                    "unsupportedReason",
+                    RowType.class,
+                    RowType.class,
+                    int[].class,
+                    int.class,
+                    WindowingStrategy.class,
+                    ReadableConfig.class);
+            return (String) method.invoke(
+                    null,
+                    (RowType) input.getOutputType(),
+                    (RowType) deduplicate.getOutputType(),
+                    windowDeduplicatePartitionKeys(deduplicate),
+                    windowDeduplicateOrderKey(deduplicate),
+                    windowDeduplicateWindowing(deduplicate),
+                    deduplicate.getPersistedConfig());
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
+            throw new IllegalStateException("Could not inspect StreamFusion WindowDeduplicate support", e);
+        } catch (InvocationTargetException e) {
+            throw new IllegalStateException("StreamFusion WindowDeduplicate support inspection failed", e.getCause());
+        }
+    }
+
+    private String unsupportedReason(StreamExecWindowRank rank, ProcessorContext context) {
+        if (windowRankType(rank) != RankType.ROW_NUMBER) {
+            return "rank type: Flink Window Top-N only implements ROW_NUMBER";
+        }
+        RankRange range = windowRankRange(rank);
+        if (!(range instanceof ConstantRankRange)) {
+            return "rank range: Window Top-N requires a constant range";
+        }
+        ConstantRankRange constant = (ConstantRankRange) range;
+        ExecEdge input = rank.getInputEdges().get(0);
+        try {
+            Class<?> translator = Class.forName(
+                    WINDOW_RANK_TRANSLATOR_CLASS,
+                    true,
+                    context.getPlanner().getFlinkContext().getClassLoader());
+            Method method = translator.getMethod(
+                    "unsupportedReason",
+                    RowType.class,
+                    RowType.class,
+                    int[].class,
+                    SortSpec.class,
+                    long.class,
+                    long.class,
+                    boolean.class,
+                    WindowingStrategy.class,
+                    ReadableConfig.class);
+            return (String) method.invoke(
+                    null,
+                    (RowType) input.getOutputType(),
+                    (RowType) rank.getOutputType(),
+                    windowRankPartitionKeys(rank),
+                    windowRankSortSpec(rank),
+                    constant.getRankStart(),
+                    constant.getRankEnd(),
+                    windowRankOutputNumber(rank),
+                    windowRankWindowing(rank),
+                    rank.getPersistedConfig());
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
+            throw new IllegalStateException("Could not inspect StreamFusion WindowRank support", e);
+        } catch (InvocationTargetException e) {
+            throw new IllegalStateException("StreamFusion WindowRank support inspection failed", e.getCause());
         }
     }
 
@@ -720,9 +850,17 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     true,
                     context.getPlanner().getFlinkContext().getClassLoader());
             Method method = translator.getMethod(
-                    "unsupportedReason", RowType.class, RowType.class, TimeAttributeWindowingStrategy.class);
+                    "unsupportedReason",
+                    RowType.class,
+                    RowType.class,
+                    TimeAttributeWindowingStrategy.class,
+                    ReadableConfig.class);
             return (String) method.invoke(
-                    null, (RowType) input.getOutputType(), (RowType) window.getOutputType(), windowStrategy(window));
+                    null,
+                    (RowType) input.getOutputType(),
+                    (RowType) window.getOutputType(),
+                    windowStrategy(window),
+                    window.getPersistedConfig());
         } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
             throw new IllegalStateException("Could not inspect StreamFusion Window TVF support", e);
         } catch (InvocationTargetException e) {
@@ -816,6 +954,46 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
 
     private static int[] windowGrouping(StreamExecWindowAggregate aggregate) {
         return ((int[]) field(aggregate, StreamExecWindowAggregate.class, "grouping")).clone();
+    }
+
+    private static int[] windowDeduplicatePartitionKeys(StreamExecWindowDeduplicate deduplicate) {
+        return ((int[]) field(deduplicate, StreamExecWindowDeduplicate.class, "partitionKeys")).clone();
+    }
+
+    private static int windowDeduplicateOrderKey(StreamExecWindowDeduplicate deduplicate) {
+        return (int) field(deduplicate, StreamExecWindowDeduplicate.class, "orderKey");
+    }
+
+    private static boolean windowDeduplicateKeepLast(StreamExecWindowDeduplicate deduplicate) {
+        return (boolean) field(deduplicate, StreamExecWindowDeduplicate.class, "keepLastRow");
+    }
+
+    private static WindowingStrategy windowDeduplicateWindowing(StreamExecWindowDeduplicate deduplicate) {
+        return (WindowingStrategy) field(deduplicate, StreamExecWindowDeduplicate.class, "windowing");
+    }
+
+    private static RankType windowRankType(StreamExecWindowRank rank) {
+        return (RankType) field(rank, StreamExecWindowRank.class, "rankType");
+    }
+
+    private static int[] windowRankPartitionKeys(StreamExecWindowRank rank) {
+        return ((PartitionSpec) field(rank, StreamExecWindowRank.class, "partitionSpec")).getFieldIndices();
+    }
+
+    private static SortSpec windowRankSortSpec(StreamExecWindowRank rank) {
+        return (SortSpec) field(rank, StreamExecWindowRank.class, "sortSpec");
+    }
+
+    private static RankRange windowRankRange(StreamExecWindowRank rank) {
+        return (RankRange) field(rank, StreamExecWindowRank.class, "rankRange");
+    }
+
+    private static boolean windowRankOutputNumber(StreamExecWindowRank rank) {
+        return (boolean) field(rank, StreamExecWindowRank.class, "outputRankNumber");
+    }
+
+    private static WindowingStrategy windowRankWindowing(StreamExecWindowRank rank) {
+        return (WindowingStrategy) field(rank, StreamExecWindowRank.class, "windowing");
     }
 
     private static org.apache.calcite.rel.core.AggregateCall[] windowAggregateCalls(

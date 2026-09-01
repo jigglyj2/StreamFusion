@@ -5,9 +5,7 @@ sidebar:
   order: 15
 ---
 
-**Current status:** Not accelerated; executed by Flink.
-
-**Future acceleration target:** Yes.
+**Current status:** Accelerated for Flink's event-time Window Top-N physical node.
 
 ## SQL example
 
@@ -17,10 +15,26 @@ SELECT * FROM (\n  SELECT *, ROW_NUMBER() OVER (PARTITION BY window_start, windo
 
 ## Acceleration and fallback
 
-Accelerate after a compatible window operation when rank bounds and ordering are supported. Unsupported window properties, rank functions, or changelog modes fall back.
+Constant-range `ROW_NUMBER` plans over attached `TUMBLE`, `HOP`, `CUMULATE`, and `SESSION` windows
+are accelerated, with or without the rank-number output column. All partition-key and payload types
+supported by the RowData/Arrow boundary are accepted. Sort fields retain Flink's generated
+comparator, including ascending/descending direction, null placement, UTF-16 string ordering,
+decimal/temporal semantics, composite values, and stable input-order ties.
+
+`RANK`, `DENSE_RANK`, variable rank ranges, processing-time Window Top-N (which Flink does not plan),
+async-state mode, and Flink's changelog-state wrapper fall back with an EXPLAIN reason.
 
 ## Implementation
 
-Use custom per-window ordered state, releasing it according to Flink watermarks. Batch rank updates to avoid emitting unchanged rows.
+Native memory or direct RocksDB stores full rows and sort keys as opaque BinaryRowData bytes. All
+four input RowKinds are applied, so a retraction can expose a previously displaced candidate. One
+native `multi_get` and one atomic mutation batch are used per Arrow input batch. At an event-time
+timer, Rust releases the window candidates as one Arrow batch; Java applies the already-generated
+Flink comparator once per window, selects the constant rank range, and transposes only the selected
+rows. This avoids per-record JNI while keeping comparison semantics byte-for-byte aligned with
+Flink.
+
+State and timers use the canonical backend-neutral savepoint representation and the same aligned,
+unaligned, incremental RocksDB, restore, and rescaling lifecycle as other native keyed operators.
 
 See the [Flink 2.3 Window Top-N documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/window-topn/).

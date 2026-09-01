@@ -13,7 +13,7 @@ This matrix follows the query operations documented by Flink 2.3, including the 
 | [SELECT DISTINCT](select-distinct/) | **Yes** (timer-free streaming) | Yes | Native counted keyed state |
 | [WITH](with/) | **No** | Not directly | Inlined by Flink; accelerate resulting operators |
 | [VALUES](values/) | **Partial** (scalar literals) | Yes | Source-free native Arrow batch |
-| [Windowing TVFs](window-tvf/) | **Partial** (`TUMBLE`, `HOP`, `CUMULATE`) | Yes | Native aligned-window assignment compatible with Flink |
+| [Windowing TVFs](window-tvf/) | **Yes** (`TUMBLE`, `HOP`, `CUMULATE`, `SESSION`) | Yes | Native aligned assignment and keyed session merging |
 | [Watermark assignment](watermark-assignment/) | **Plan-compatible** | Flink-owned | Distinct StreamFusion node delegating Flink's exact timer and idleness runtime |
 | [Group aggregation](group-aggregation/) | **Partial** (timer-free keyed) | Yes | Native keyed state and Arrow aggregate kernels |
 | [Window aggregation](window-aggregation/) | **Partial** (`TUMBLE`, `HOP`, `CUMULATE`, `SESSION`) | Yes | Native keyed window state, timers, and Arrow aggregate kernels |
@@ -26,9 +26,9 @@ This matrix follows the query operations documented by Flink 2.3, including the 
 | [ORDER BY](order-by/) | **No** | Bounded inputs | DataFusion sort |
 | [LIMIT](limit/) | **No** | Bounded inputs | DataFusion limit |
 | [Top-N](top-n/) | **No** | Yes | Custom keyed ranking state |
-| [Window Top-N](window-top-n/) | **No** | Yes | Custom per-window ranking state |
+| [Window Top-N](window-top-n/) | **Yes** (event-time constant `ROW_NUMBER` range) | Yes | Native per-window state plus Flink's exact generated comparator |
 | [Deduplication](deduplication/) | **Partial** (row-time keep-last, including Q18) | Yes | Native batched raw keyed state |
-| [Window deduplication](window-deduplication/) | **No** | Yes | Custom per-window keyed state |
+| [Window deduplication](window-deduplication/) | **Yes** (event-time first/last) | Yes | Native retractable per-window keyed state and timers |
 | [Pattern recognition](pattern-recognition/) | **No** | Potentially | Custom streaming NFA; no DataFusion equivalent |
 | [Changelog conversion](changelog-conversion/) | **Partial** (`DropUpdateBefore`) | Not generally a compute target | Preserve Flink row-kind conversion |
 | [Time travel](time-travel/) | **No** | No | Catalog snapshot resolution stays in Flink |

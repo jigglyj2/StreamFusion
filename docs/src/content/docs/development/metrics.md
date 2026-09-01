@@ -29,11 +29,14 @@ The current operator-specific audit is:
 | Union All | Flink `UnionStreamOperator` | No additional reference metrics; standard Flink metrics are retained. |
 | Values | Flink `ValuesInputFormat` source | No additional reference metrics; standard Flink source metrics are retained. |
 | Aligned Window TVF | Flink `AlignedWindowTableFunctionOperator` | Publishes `numNullRowTimeRecordsDropped` and increments it at the same per-record decision point. |
+| Session Window TVF | Flink `UnalignedWindowTableFunctionOperator` | Corrects IO counters to logical rows and publishes null/late-row, watermark-latency, state/timer, pending event/processing timer, changelog, checkpoint, restore, and failure diagnostics. |
 | Drop Update Before | Flink `StreamFilter` with `DropUpdateBeforeFunction` | No additional reference metrics; standard Flink metrics are retained. |
 | Watermark Assigner | Flink `WatermarkAssignerOperatorFactory` | Uses Flink's generated watermark expression and state machine over Arrow-backed row views, including backpressure-aware idleness and matching lifecycle metrics. |
 | Hash/Singleton Exchange | Flink `PartitionTransformation` | Network transport remains Flink-owned; operator/task record counters report logical rows rather than native IPC frames. |
 | Group Aggregate | Flink `GroupAggFunction` | Flink has no additional operator counter in this timer-free shape. Standard IO counters are corrected from Arrow batches to logical rows; native state/changelog/checkpoint diagnostics are additive. |
 | Window Aggregate | Flink window aggregate functions and trigger operators | Standard IO/watermark metrics remain Flink-owned. Native state, changelog, late-row, event/processing timer, pending-timer, and checkpoint diagnostics are additive and updated at the corresponding state or timer decision. |
+| Window Deduplicate | Flink `RowTimeWindowDeduplicateOperator` | Standard IO and watermark metrics remain Flink-owned. `numLateRecordsDropped`, its rate meter, native state/timer counters, pending event-time timers, and checkpoint diagnostics are updated at the equivalent decisions. |
+| Window Top-N | Flink `WindowRankOperator` | Standard IO and watermark metrics remain Flink-owned. Late-row, state/timer, pending event-time timer, changelog, comparator-output, and checkpoint diagnostics cover the native lifecycle. |
 | Row-time Keep-last Deduplicate | Flink `RowTimeDeduplicateFunction` | Flink has no additional operator counter in the supported insert-only/no-TTL shape. Standard IO counters are corrected to logical rows; native state/changelog/checkpoint diagnostics are additive. |
 
 StreamFusion-specific diagnostics are additive and use distinct names; they do not replace Flink

@@ -53,6 +53,8 @@ message Operator {
     Deduplicate deduplicate = 8;
     GroupAggregate group_aggregate = 9;
     WindowAggregate window_aggregate = 10;
+    WindowDeduplicate window_deduplicate = 11;
+    WindowRank window_rank = 12;
   }
 }
 
@@ -97,6 +99,36 @@ message WindowAggregate {
   string shift_time_zone = 14;
 }
 
+// Window-scoped first/last-row deduplication. Full rows are stored as opaque BinaryRowData
+// bytes; the native side only interprets the ordering timestamp and the attached window end.
+message WindowDeduplicate {
+  Operator input = 1;
+  repeated uint32 partition_key_indices = 2;
+  uint32 order_index = 3;
+  uint32 window_end_index = 4;
+  bool keep_last = 5;
+  bool input_changelog = 6;
+  Schema input_schema = 7;
+  string shift_time_zone = 8;
+}
+
+// Window Top-N/ROW_NUMBER state. Sort keys and full rows are opaque BinaryRowData bytes so the
+// generated Flink comparator remains the single source of truth for every comparable SQL type.
+message WindowRank {
+  Operator input = 1;
+  repeated uint32 partition_key_indices = 2;
+  repeated uint32 sort_key_indices = 3;
+  repeated bool sort_ascending = 4;
+  repeated bool sort_nulls_last = 5;
+  uint32 window_end_index = 6;
+  uint64 rank_start = 7;
+  uint64 rank_end = 8;
+  bool output_rank_number = 9;
+  bool input_changelog = 10;
+  Schema input_schema = 11;
+  string shift_time_zone = 12;
+}
+
 enum WindowProperty {
   WINDOW_PROPERTY_UNSPECIFIED = 0;
   WINDOW_PROPERTY_START = 1;
@@ -128,6 +160,11 @@ message WindowTableFunction {
   int64 size_millis = 4;
   int64 slide_or_step_millis = 5;
   int64 offset_millis = 6;
+  // SESSION TVFs use keyed native merging state; aligned windows leave these fields empty.
+  repeated uint32 partition_key_indices = 7;
+  bool processing_time = 8;
+  Schema input_schema = 9;
+  string shift_time_zone = 10;
 }
 
 enum WindowKind {

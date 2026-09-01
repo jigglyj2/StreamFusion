@@ -83,7 +83,11 @@ class StreamFusionWindowTableFunctionParityTest {
             timestamps[row] = hasTimestamps[row] ? TIMES[row] + 100 : 0;
         }
         byte[] plan = StreamFusionWindowTableFunctionPlan.create(
+                INPUT_TYPE,
                 1,
+                new int[0],
+                false,
+                "UTC",
                 new StreamFusionWindowTableFunctionTranslator.WindowParameters(
                         testCase.kind, testCase.size, testCase.slideOrStep, testCase.offset));
         try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);

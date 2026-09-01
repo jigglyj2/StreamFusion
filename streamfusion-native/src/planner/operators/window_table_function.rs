@@ -350,6 +350,10 @@ mod tests {
             size_millis: size,
             slide_or_step_millis: slide_or_step,
             offset_millis: offset,
+            partition_key_indices: Vec::new(),
+            processing_time: false,
+            input_schema: None,
+            shift_time_zone: String::new(),
         }
     }
 

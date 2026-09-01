@@ -7,6 +7,7 @@ package tech.streamfusion.flink.window;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.Duration;
+import org.apache.flink.configuration.Configuration;
 import org.apache.flink.table.planner.plan.logical.SessionWindowSpec;
 import org.apache.flink.table.planner.plan.logical.TimeAttributeWindowingStrategy;
 import org.apache.flink.table.planner.plan.logical.TumblingWindowSpec;
@@ -28,21 +29,23 @@ class StreamFusionWindowTableFunctionSupportTest {
                         input,
                         output,
                         new TimeAttributeWindowingStrategy(
-                                new TumblingWindowSpec(Duration.ofSeconds(5), null), rowtime, 1)))
+                                new TumblingWindowSpec(Duration.ofSeconds(5), null), rowtime, 1),
+                        new Configuration()))
                 .isNull();
         LocalZonedTimestampType ltz = new LocalZonedTimestampType(false, TimestampKind.ROWTIME, 3);
         assertThat(StreamFusionWindowTableFunctionTranslator.unsupportedReason(
                         RowType.of(new IntType(false), ltz),
                         outputType(ltz),
-                        new TimeAttributeWindowingStrategy(
-                                new TumblingWindowSpec(Duration.ofSeconds(5), null), ltz, 1)))
+                        new TimeAttributeWindowingStrategy(new TumblingWindowSpec(Duration.ofSeconds(5), null), ltz, 1),
+                        new Configuration()))
                 .contains("TIMESTAMP_LTZ");
         assertThat(StreamFusionWindowTableFunctionTranslator.unsupportedReason(
                         input,
                         output,
                         new TimeAttributeWindowingStrategy(
-                                new SessionWindowSpec(Duration.ofSeconds(5), new int[] {0}), rowtime, 1)))
-                .contains("standalone SESSION TVF requires the native merging-window operator");
+                                new SessionWindowSpec(Duration.ofSeconds(5), new int[] {0}), rowtime, 1),
+                        new Configuration()))
+                .isNull();
     }
 
     private static RowType outputType(org.apache.flink.table.types.logical.LogicalType timeType) {

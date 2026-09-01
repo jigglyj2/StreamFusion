@@ -121,6 +121,12 @@ fn create_operator(
         Some(proto::operator::Operator::WindowAggregate(_)) => Err(DataFusionError::Plan(
             "WindowAggregate requires a persistent stateful execution handle".to_string(),
         )),
+        Some(proto::operator::Operator::WindowDeduplicate(_)) => Err(DataFusionError::Plan(
+            "WindowDeduplicate requires a persistent stateful execution handle".to_string(),
+        )),
+        Some(proto::operator::Operator::WindowRank(_)) => Err(DataFusionError::Plan(
+            "WindowRank requires a persistent stateful execution handle".to_string(),
+        )),
         None => Err(DataFusionError::Plan(
             "StreamFusion operator is empty".to_string(),
         )),

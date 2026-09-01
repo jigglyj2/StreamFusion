@@ -187,6 +187,10 @@ impl WindowAggregateProcessor {
             size_millis: plan.size_millis,
             slide_or_step_millis: plan.slide_or_step_millis,
             offset_millis: plan.offset_millis,
+            partition_key_indices: Vec::new(),
+            processing_time: plan.processing_time,
+            input_schema: None,
+            shift_time_zone: plan.shift_time_zone.clone(),
         };
         let shift_time_zone = if plan.shift_time_zone.is_empty() {
             chrono_tz::UTC
@@ -1129,7 +1133,7 @@ fn local_to_epoch(local: NaiveDateTime, zone: Tz) -> Result<i64> {
     }
 }
 
-fn local_to_timer_epoch(local: NaiveDateTime, zone: Tz) -> Result<i64> {
+pub(super) fn local_to_timer_epoch(local: NaiveDateTime, zone: Tz) -> Result<i64> {
     match zone.from_local_datetime(&local) {
         LocalResult::Single(value) => Ok(value.timestamp_millis()),
         LocalResult::Ambiguous(left, right) => {

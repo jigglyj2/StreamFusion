@@ -11,35 +11,33 @@ import tech.streamfusion.proto.plan.v1.Input;
 import tech.streamfusion.proto.plan.v1.NativePlan;
 import tech.streamfusion.proto.plan.v1.Operator;
 import tech.streamfusion.proto.plan.v1.Schema;
-import tech.streamfusion.proto.plan.v1.WindowTableFunction;
+import tech.streamfusion.proto.plan.v1.WindowDeduplicate;
 
-/** Builds an Arrow-native aligned Window TVF protobuf plan. */
-final class StreamFusionWindowTableFunctionPlan {
-    private StreamFusionWindowTableFunctionPlan() {}
+/** Builds the versioned protobuf contract for native window deduplication. */
+final class StreamFusionWindowDeduplicatePlan {
+    private StreamFusionWindowDeduplicatePlan() {}
 
     static byte[] create(
             RowType inputType,
-            int timeAttributeIndex,
             int[] partitionKeys,
-            boolean processingTime,
-            String shiftTimeZone,
-            StreamFusionWindowTableFunctionTranslator.WindowParameters parameters) {
-        WindowTableFunction.Builder window = WindowTableFunction.newBuilder()
+            int orderIndex,
+            int windowEndIndex,
+            boolean keepLast,
+            String shiftTimeZone) {
+        WindowDeduplicate.Builder deduplicate = WindowDeduplicate.newBuilder()
                 .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
-                .setTimeAttributeIndex(timeAttributeIndex)
-                .setKind(parameters.kind)
-                .setSizeMillis(parameters.sizeMillis)
-                .setSlideOrStepMillis(parameters.slideOrStepMillis)
-                .setOffsetMillis(parameters.offsetMillis)
-                .setProcessingTime(processingTime)
+                .setOrderIndex(orderIndex)
+                .setWindowEndIndex(windowEndIndex)
+                .setKeepLast(keepLast)
+                .setInputChangelog(true)
                 .setInputSchema(schema(inputType))
                 .setShiftTimeZone(shiftTimeZone);
         for (int key : partitionKeys) {
-            window.addPartitionKeyIndices(key);
+            deduplicate.addPartitionKeyIndices(key);
         }
         return NativePlan.newBuilder()
                 .setProtocolVersion(1)
-                .setRoot(Operator.newBuilder().setWindowTableFunction(window))
+                .setRoot(Operator.newBuilder().setWindowDeduplicate(deduplicate))
                 .build()
                 .toByteArray();
     }
