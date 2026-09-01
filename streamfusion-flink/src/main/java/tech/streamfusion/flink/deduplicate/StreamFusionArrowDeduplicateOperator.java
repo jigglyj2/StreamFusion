@@ -40,21 +40,28 @@ final class StreamFusionArrowDeduplicateOperator extends AbstractStreamFusionArr
     @Override
     public void processElement(StreamRecord<ArrowRowDataBatch> element) throws Exception {
         ArrowRowDataBatch input = element.getValue();
-        for (int row = 0; row < input.size(); row++) {
-            if (input.rowKind(row) != org.apache.flink.types.RowKind.INSERT) {
-                throw new IllegalStateException(
-                        "Native rowtime keep-last deduplicate requires insert-only input, got " + input.rowKind(row));
+        try {
+            for (int row = 0; row < input.size(); row++) {
+                if (input.rowKind(row) != org.apache.flink.types.RowKind.INSERT) {
+                    throw new IllegalStateException(
+                            "Native rowtime keep-last deduplicate requires insert-only input, got "
+                                    + input.rowKind(row));
+                }
             }
-        }
-        List<byte[]> keys = preencodeKeys ? preencodeKeys(input, keySelector, "deduplicate") : null;
-        try (NativeArrowDeduplicateResult result =
-                ArrowDeduplicateCDataBridge.executeArrow(nativeHandle(), input, keys, rowType, allocator())) {
-            ArrowRowDataBatch outputBatch = result.selectEnvelopeFrom(input);
-            output.collect(new StreamRecord<>(outputBatch));
-            FlinkMetricParity.replacePhysicalRecords(
-                    getMetricGroup().getIOMetricGroup().getNumRecordsInCounter(), 1, input.size());
-            FlinkMetricParity.replacePhysicalRecords(
-                    getMetricGroup().getIOMetricGroup().getNumRecordsOutCounter(), 1, result.size());
+            List<byte[]> keys = preencodeKeys ? preencodeKeys(input, keySelector, "deduplicate") : null;
+            try (NativeArrowDeduplicateResult result =
+                    ArrowDeduplicateCDataBridge.executeArrow(nativeHandle(), input, keys, rowType, allocator())) {
+                ArrowRowDataBatch outputBatch = result.selectEnvelopeFrom(input);
+                output.collect(new StreamRecord<>(outputBatch));
+                FlinkMetricParity.replacePhysicalRecords(
+                        getMetricGroup().getIOMetricGroup().getNumRecordsInCounter(), 1, input.size());
+                FlinkMetricParity.replacePhysicalRecords(
+                        getMetricGroup().getIOMetricGroup().getNumRecordsOutCounter(), 1, result.size());
+                recordProcessed(input, outputBatch);
+            }
+        } catch (Throwable failure) {
+            recordProcessingFailure();
+            throw failure;
         }
     }
 

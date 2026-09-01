@@ -34,6 +34,21 @@ serializer, verify unchanged SST identity and reduced checkpointed bytes, restor
 handle, and rescale native RocksDB state 1-to-2-to-1. Canonical savepoints deliberately remain SFS1
 raw keyed state so they can move between the native memory and RocksDB implementations.
 
+The focused recovery matrix is shared by native group aggregation and deduplication:
+
+| Recovery path | Memory state | RocksDB state |
+| --- | --- | --- |
+| Aligned checkpoint, same backend | Tested | Tested, incremental |
+| Unaligned checkpoint, same backend | Tested | Tested, incremental |
+| Canonical savepoint to memory | Memory → memory | RocksDB → memory |
+| Canonical savepoint to RocksDB | Memory → RocksDB | RocksDB → RocksDB |
+| Rescaling | 1 → 2 → 1 | 1 → 2 → 1 |
+| Incremental metadata serialization and unchanged-SST reuse | Not applicable | Tested |
+
+The operator processes a batch synchronously before the mailbox can snapshot it. Flink therefore
+owns in-flight channel data for unaligned checkpoints, while the native keyed snapshot contains the
+same completed state boundary as an aligned checkpoint.
+
 ## Reference gut-check
 
 Flink's RocksDB incremental snapshot strategy is the lifecycle model: create a consistent native

@@ -1,10 +1,12 @@
 package tech.streamfusion.benchmark.nexmark;
 
 import java.io.IOException;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
-import java.util.Comparator;
-import java.util.stream.Stream;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
 import org.apache.flink.configuration.CheckpointingOptions;
 import org.apache.flink.configuration.CoreOptions;
 import org.apache.flink.configuration.MemorySize;
@@ -119,10 +121,33 @@ public final class NexmarkRowDataJob {
     }
 
     private static void deleteDirectory(Path directory) throws IOException {
-        try (Stream<Path> paths = Files.walk(directory)) {
-            for (Path path : paths.sorted(Comparator.reverseOrder()).toArray(Path[]::new)) {
-                Files.deleteIfExists(path);
-            }
+        try {
+            Files.walkFileTree(directory, new SimpleFileVisitor<>() {
+                @Override
+                public FileVisitResult visitFile(Path file, BasicFileAttributes attributes) throws IOException {
+                    Files.deleteIfExists(file);
+                    return FileVisitResult.CONTINUE;
+                }
+
+                @Override
+                public FileVisitResult visitFileFailed(Path file, IOException failure) throws IOException {
+                    if (failure instanceof NoSuchFileException) {
+                        return FileVisitResult.CONTINUE;
+                    }
+                    throw failure;
+                }
+
+                @Override
+                public FileVisitResult postVisitDirectory(Path directory, IOException failure) throws IOException {
+                    if (failure != null && !(failure instanceof NoSuchFileException)) {
+                        throw failure;
+                    }
+                    Files.deleteIfExists(directory);
+                    return FileVisitResult.CONTINUE;
+                }
+            });
+        } catch (NoSuchFileException ignored) {
+            // Flink may finish asynchronous checkpoint cleanup before this best-effort walk.
         }
     }
 }

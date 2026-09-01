@@ -42,27 +42,33 @@ final class StreamFusionArrowGroupAggregateOperator extends AbstractStreamFusion
     @Override
     public void processElement(StreamRecord<ArrowRowDataBatch> element) throws Exception {
         ArrowRowDataBatch input = element.getValue();
-        if (!inputChangelog) {
-            for (int row = 0; row < input.size(); row++) {
-                if (input.rowKind(row) != org.apache.flink.types.RowKind.INSERT) {
-                    throw new IllegalStateException("Native append-only group aggregate got " + input.rowKind(row));
+        try {
+            if (!inputChangelog) {
+                for (int row = 0; row < input.size(); row++) {
+                    if (input.rowKind(row) != org.apache.flink.types.RowKind.INSERT) {
+                        throw new IllegalStateException("Native append-only group aggregate got " + input.rowKind(row));
+                    }
                 }
             }
-        }
-        List<byte[]> keys = preencodeKeys ? preencodeKeys(input, keySelector, "group aggregate") : null;
-        try (ArrowRowDataBatch outputBatch = ArrowGroupAggregateCDataBridge.execute(
-                nativeHandle(), input, keys, inputChangelog, outputType, allocator(), memoryManager())) {
-            int physicalOutputRecords = 0;
-            if (outputBatch.size() > 0) {
-                output.collect(new StreamRecord<>(outputBatch));
-                physicalOutputRecords = 1;
+            List<byte[]> keys = preencodeKeys ? preencodeKeys(input, keySelector, "group aggregate") : null;
+            try (ArrowRowDataBatch outputBatch = ArrowGroupAggregateCDataBridge.execute(
+                    nativeHandle(), input, keys, inputChangelog, outputType, allocator(), memoryManager())) {
+                int physicalOutputRecords = 0;
+                if (outputBatch.size() > 0) {
+                    output.collect(new StreamRecord<>(outputBatch));
+                    physicalOutputRecords = 1;
+                }
+                FlinkMetricParity.replacePhysicalRecords(
+                        getMetricGroup().getIOMetricGroup().getNumRecordsInCounter(), 1, input.size());
+                FlinkMetricParity.replacePhysicalRecords(
+                        getMetricGroup().getIOMetricGroup().getNumRecordsOutCounter(),
+                        physicalOutputRecords,
+                        outputBatch.size());
+                recordProcessed(input, outputBatch);
             }
-            FlinkMetricParity.replacePhysicalRecords(
-                    getMetricGroup().getIOMetricGroup().getNumRecordsInCounter(), 1, input.size());
-            FlinkMetricParity.replacePhysicalRecords(
-                    getMetricGroup().getIOMetricGroup().getNumRecordsOutCounter(),
-                    physicalOutputRecords,
-                    outputBatch.size());
+        } catch (Throwable failure) {
+            recordProcessingFailure();
+            throw failure;
         }
     }
 

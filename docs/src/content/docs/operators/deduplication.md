@@ -64,8 +64,8 @@ standard `IncrementalRemoteKeyedStateHandle`: immutable SSTs are shared state, m
 and logs are private state, and only SST handles from completed checkpoints become reusable. The
 metadata survives Flink's durable checkpoint-metadata serializer, and restore intersects each
 physical checkpoint with the subtask's assigned key-group range. This supports 1-to-N and N-to-1
-rescaling as well as RocksDB-to-memory restore; canonical savepoints remain portable in both
-directions.
+rescaling. Canonical savepoints are tested for memory-to-memory, memory-to-RocksDB,
+RocksDB-to-memory, and RocksDB-to-RocksDB restoration.
 
 The operator has no event-time timers in this supported keep-last/no-TTL shape. Incoming Arrow
 batches are processed synchronously, so aligned and unaligned checkpoints snapshot the same
@@ -75,7 +75,9 @@ checkpoints. No native batch can remain in flight across the snapshot call.
 Arrow allocations, the in-memory table, RocksDB's configured cache/write buffers, and temporary
 RocksDB restore readers all reserve from the operator's existing Flink managed-memory allowance.
 The operator exposes used, peak, and limit gauges and adds no StreamFusion deployment memory
-setting.
+setting. Additive StreamFusion metrics also report logical processing/changelog counts, batched
+state operations, backend selection, checkpoint kind/bytes/duration/failures, incremental upload
+and SST-reuse bytes, and restore bytes/duration/failures.
 
 Flink's changelog-state wrapper is currently an explicit fallback because it would obscure the
 native keyed-backend adapter. This does not affect ordinary aligned or unaligned checkpoints.

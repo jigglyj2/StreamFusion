@@ -12,6 +12,8 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.flink.runtime.state.CheckpointStreamFactory;
 import org.apache.flink.runtime.state.CheckpointableKeyedStateBackend;
@@ -30,6 +32,7 @@ import org.apache.flink.table.runtime.keyselector.RowDataKeySelector;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.memory.FlinkManagedMemory;
+import tech.streamfusion.flink.metrics.StreamFusionStatefulOperatorMetrics;
 import tech.streamfusion.nativebridge.NativeMemoryManager;
 
 /** Shared Flink lifecycle for persistent native keyed operators. */
@@ -44,6 +47,9 @@ public abstract class AbstractStreamFusionArrowKeyedStateOperator extends Abstra
     private transient BufferAllocator allocator;
     private transient Path rocksDbDirectory;
     private transient boolean writeRawKeyedSnapshot = true;
+    private transient long rawSnapshotBytes;
+    private transient StreamFusionStatefulOperatorMetrics statefulMetrics;
+    private transient Map<Long, CheckpointObservation> incrementalCheckpoints;
 
     protected AbstractStreamFusionArrowKeyedStateOperator(byte[] serializedPlan, String stateName) {
         this.serializedPlan = serializedPlan.clone();
@@ -100,20 +106,35 @@ public abstract class AbstractStreamFusionArrowKeyedStateOperator extends Abstra
             throw new IllegalStateException(
                     "Native " + stateName + " supports Flink hashmap and RocksDB state backends, got " + backendType);
         }
+        statefulMetrics = new StreamFusionStatefulOperatorMetrics(getMetricGroup(), "rocksdb".equals(backendType));
+        incrementalCheckpoints = new ConcurrentHashMap<>();
         if (getKeyedStateBackend() instanceof StreamFusionKeyedStateBackend) {
             ((StreamFusionKeyedStateBackend<?>) getKeyedStateBackend())
                     .registerNativeStateParticipant(this, "rocksdb".equals(backendType));
         }
-        for (KeyGroupStatePartitionStreamProvider provider : context.getRawKeyedStateInputs()) {
-            DataInputStream input = new DataInputStream(provider.getStream());
-            int length = input.readInt();
-            if (length < 0) {
-                throw new IOException(
-                        "Negative native " + stateName + " state length for key group " + provider.getKeyGroupId());
+        long restoreStarted = System.nanoTime();
+        long restoredBytes = 0;
+        boolean restored = false;
+        try {
+            for (KeyGroupStatePartitionStreamProvider provider : context.getRawKeyedStateInputs()) {
+                restored = true;
+                DataInputStream input = new DataInputStream(provider.getStream());
+                int length = input.readInt();
+                if (length < 0) {
+                    throw new IOException(
+                            "Negative native " + stateName + " state length for key group " + provider.getKeyGroupId());
+                }
+                byte[] state = new byte[length];
+                input.readFully(state);
+                restoredBytes += Integer.BYTES + length;
+                restoreKeyGroup(nativeHandle, provider.getKeyGroupId(), state);
             }
-            byte[] state = new byte[length];
-            input.readFully(state);
-            restoreKeyGroup(nativeHandle, provider.getKeyGroupId(), state);
+            if (restored) {
+                statefulMetrics.restored(restoredBytes, System.nanoTime() - restoreStarted);
+            }
+        } catch (Throwable failure) {
+            statefulMetrics.restoreFailed();
+            throw failure;
         }
     }
 
@@ -132,6 +153,14 @@ public abstract class AbstractStreamFusionArrowKeyedStateOperator extends Abstra
 
     protected final NativeMemoryManager memoryManager() {
         return managedMemory;
+    }
+
+    protected final void recordProcessed(ArrowRowDataBatch input, ArrowRowDataBatch output) {
+        statefulMetrics.processed(input, output);
+    }
+
+    protected final void recordProcessingFailure() {
+        statefulMetrics.processingFailed();
     }
 
     protected final List<byte[]> preencodeKeys(
@@ -191,8 +220,22 @@ public abstract class AbstractStreamFusionArrowKeyedStateOperator extends Abstra
                 && ((StreamFusionKeyedStateBackend<?>) getKeyedStateBackend()).usesNativeIncrementalCheckpoints()
                 && !checkpointOptions.getCheckpointType().isSavepoint();
         writeRawKeyedSnapshot = !incremental;
+        rawSnapshotBytes = 0;
+        CheckpointObservation observation = new CheckpointObservation(checkpointOptions, System.nanoTime());
+        if (incremental) {
+            incrementalCheckpoints.put(checkpointId, observation);
+        }
         try {
-            return super.snapshotState(checkpointId, timestamp, checkpointOptions, factory);
+            OperatorSnapshotFutures futures = super.snapshotState(checkpointId, timestamp, checkpointOptions, factory);
+            if (!incremental) {
+                statefulMetrics.checkpointCompleted(
+                        checkpointOptions, rawSnapshotBytes, -1, 0, System.nanoTime() - observation.startedNanos);
+            }
+            return futures;
+        } catch (Throwable failure) {
+            incrementalCheckpoints.remove(checkpointId);
+            statefulMetrics.checkpointFailed();
+            throw failure;
         } finally {
             writeRawKeyedSnapshot = true;
         }
@@ -211,6 +254,7 @@ public abstract class AbstractStreamFusionArrowKeyedStateOperator extends Abstra
             byte[] state = snapshotKeyGroup(nativeHandle, keyGroup);
             framedOutput.writeInt(state.length);
             framedOutput.write(state);
+            rawSnapshotBytes += Integer.BYTES + state.length;
         }
     }
 
@@ -226,9 +270,38 @@ public abstract class AbstractStreamFusionArrowKeyedStateOperator extends Abstra
     }
 
     @Override
+    public final void completeIncrementalCheckpoint(long checkpointId, long uploadedBytes, long reusedBytes) {
+        CheckpointObservation observation = incrementalCheckpoints.remove(checkpointId);
+        if (observation != null) {
+            statefulMetrics.checkpointCompleted(
+                    observation.options,
+                    uploadedBytes + reusedBytes,
+                    uploadedBytes,
+                    reusedBytes,
+                    System.nanoTime() - observation.startedNanos);
+        }
+    }
+
+    @Override
+    public final void failIncrementalCheckpoint(long checkpointId) {
+        if (incrementalCheckpoints.remove(checkpointId) != null) {
+            statefulMetrics.checkpointFailed();
+        }
+    }
+
+    @Override
     public final void restoreIncrementalCheckpoint(Path checkpointDirectory, KeyGroupRange restoredRange) {
+        long restoreStarted = System.nanoTime();
+        long restoredBytes;
+        try {
+            restoredBytes = directorySize(checkpointDirectory);
+        } catch (IOException failure) {
+            statefulMetrics.restoreFailed();
+            throw new IllegalStateException("Could not measure native RocksDB restore", failure);
+        }
         long restoreReaderMemory = 256L * 1024;
         if (!managedMemory.tryReserve(restoreReaderMemory)) {
+            statefulMetrics.restoreFailed();
             throw new IllegalStateException(
                     "Flink denied " + restoreReaderMemory + " bytes for the native RocksDB restore reader");
         }
@@ -239,6 +312,10 @@ public abstract class AbstractStreamFusionArrowKeyedStateOperator extends Abstra
                     restoredRange.getStartKeyGroup(),
                     restoredRange.getEndKeyGroup(),
                     restoreReaderMemory);
+            statefulMetrics.restored(restoredBytes, System.nanoTime() - restoreStarted);
+        } catch (Throwable failure) {
+            statefulMetrics.restoreFailed();
+            throw failure;
         } finally {
             managedMemory.release(restoreReaderMemory);
         }
@@ -301,6 +378,42 @@ public abstract class AbstractStreamFusionArrowKeyedStateOperator extends Abstra
             for (Path path : paths.sorted(Comparator.reverseOrder()).toArray(Path[]::new)) {
                 Files.deleteIfExists(path);
             }
+        }
+    }
+
+    private static long directorySize(Path directory) throws IOException {
+        try (java.util.stream.Stream<Path> paths = Files.walk(directory)) {
+            return paths.filter(Files::isRegularFile)
+                    .mapToLong(path -> {
+                        try {
+                            return Files.size(path);
+                        } catch (IOException failure) {
+                            throw new DirectorySizeException(failure);
+                        }
+                    })
+                    .sum();
+        } catch (DirectorySizeException failure) {
+            throw failure.ioException;
+        }
+    }
+
+    private static final class CheckpointObservation {
+        private final org.apache.flink.runtime.checkpoint.CheckpointOptions options;
+        private final long startedNanos;
+
+        private CheckpointObservation(
+                org.apache.flink.runtime.checkpoint.CheckpointOptions options, long startedNanos) {
+            this.options = options;
+            this.startedNanos = startedNanos;
+        }
+    }
+
+    private static final class DirectorySizeException extends RuntimeException {
+        private final IOException ioException;
+
+        private DirectorySizeException(IOException ioException) {
+            super(ioException);
+            this.ioException = ioException;
         }
     }
 }

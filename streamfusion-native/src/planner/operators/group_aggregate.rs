@@ -1,14 +1,18 @@
 // Copyright 2026 StreamFusion Authors
 // Licensed under the Apache License, Version 2.0
 
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use ahash::RandomState;
 use arrow::array::{
-    Array, ArrayRef, Decimal128Array, Int16Array, Int32Array, Int64Array, Int8Array, UInt32Array,
+    Array, ArrayRef, BooleanArray, Date32Array, Decimal128Array, Float32Array, Float64Array,
+    Int16Array, Int32Array, Int64Array, Int8Array, StringArray, Time32MillisecondArray,
+    Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
+    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt32Array,
 };
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use datafusion::error::{DataFusionError, Result};
 use hashbrown::HashMap;
@@ -26,7 +30,7 @@ const UPDATE_BEFORE: i8 = 1;
 const UPDATE_AFTER: i8 = 2;
 const DELETE: i8 = 3;
 const STATE_MAGIC: &[u8; 4] = b"SFGA";
-const STATE_VERSION: u8 = 1;
+const STATE_VERSION: u8 = 3;
 
 /// Persistent timer-free keyed aggregation handle shared by memory and RocksDB state.
 pub(crate) struct GroupAggregateProcessor {
@@ -60,15 +64,46 @@ struct AccumulatorState {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Accumulator {
     Count(i64),
-    Sum { value: i128, count: i64 },
-    AppendExtremum(Option<i128>),
-    Extremum(BTreeMap<i128, i64>),
+    Sum {
+        value: Option<AggregateValue>,
+        count: i64,
+    },
+    AppendExtremum(Option<AggregateValue>),
+    Extremum(BTreeMap<AggregateValue, i64>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum AggregateValue {
+    Boolean(bool),
+    Int(i128),
+    Float32(u32),
+    Float64(u64),
+    Bytes(Vec<u8>),
+}
+
+impl PartialOrd for AggregateValue {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for AggregateValue {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (Self::Boolean(left), Self::Boolean(right)) => left.cmp(right),
+            (Self::Int(left), Self::Int(right)) => left.cmp(right),
+            (Self::Float32(left), Self::Float32(right)) => flink_f32_cmp(*left, *right),
+            (Self::Float64(left), Self::Float64(right)) => flink_f64_cmp(*left, *right),
+            (Self::Bytes(left), Self::Bytes(right)) => left.cmp(right),
+            _ => value_tag(self).cmp(&value_tag(other)),
+        }
+    }
 }
 
 struct OutputEvents {
     input_rows: Vec<u32>,
     row_kinds: Vec<i8>,
-    values: Vec<Vec<Option<i128>>>,
+    values: Vec<Vec<Option<AggregateValue>>>,
 }
 
 impl OutputEvents {
@@ -80,7 +115,7 @@ impl OutputEvents {
         }
     }
 
-    fn push(&mut self, input_row: u32, row_kind: i8, values: Vec<Option<i128>>) {
+    fn push(&mut self, input_row: u32, row_kind: i8, values: Vec<Option<AggregateValue>>) {
         debug_assert_eq!(values.len(), self.values.len());
         self.input_rows.push(input_row);
         self.row_kinds.push(row_kind);
@@ -340,7 +375,7 @@ impl GroupAggregateProcessor {
             fields.push(input.schema().field(index).clone());
         }
         for (call_index, call) in self.calls.iter().enumerate() {
-            columns.push(numeric_array(
+            columns.push(aggregate_array(
                 &events.values[call_index],
                 &call.output_type,
             )?);
@@ -484,7 +519,10 @@ impl AccumulatorState {
                     proto::AggregateFunction::CountStar | proto::AggregateFunction::Count => {
                         Accumulator::Count(0)
                     }
-                    proto::AggregateFunction::Sum => Accumulator::Sum { value: 0, count: 0 },
+                    proto::AggregateFunction::Sum => Accumulator::Sum {
+                        value: None,
+                        count: 0,
+                    },
                     proto::AggregateFunction::Min | proto::AggregateFunction::Max => {
                         if call.retractable {
                             Accumulator::Extremum(BTreeMap::new())
@@ -518,46 +556,60 @@ impl AccumulatorState {
                     }
                 }
                 Accumulator::Sum { value: sum, count } => {
-                    let value = numeric_value(
+                    let value = aggregate_value(
                         batch
                             .column(call.input_index.expect("SUM has an input"))
                             .as_ref(),
                         row,
                     )?;
                     if let Some(value) = value {
-                        *sum = if accumulate {
-                            wrapping_numeric_add(*sum, value, &call.output_type)
+                        *sum = if let Some(current) = sum.as_ref() {
+                            if accumulate {
+                                aggregate_add(current, &value, &call.output_type)?
+                            } else {
+                                aggregate_sub(current, &value, &call.output_type)?
+                            }
+                        } else if accumulate {
+                            Some(value)
                         } else {
-                            wrapping_numeric_sub(*sum, value, &call.output_type)
+                            aggregate_sub(
+                                &zero_value(&call.output_type),
+                                &value,
+                                &call.output_type,
+                            )?
                         };
                         *count = count.wrapping_add(delta);
                     }
                 }
                 Accumulator::AppendExtremum(extremum) => {
-                    let value = numeric_value(
+                    let value = aggregate_value(
                         batch
                             .column(call.input_index.expect("MIN/MAX has an input"))
                             .as_ref(),
                         row,
                     )?;
                     if let Some(value) = value {
-                        *extremum = Some(match (*extremum, call.function) {
-                            (Some(current), proto::AggregateFunction::Min) => current.min(value),
-                            (Some(current), proto::AggregateFunction::Max) => current.max(value),
+                        *extremum = Some(match (extremum.as_ref(), call.function) {
+                            (Some(current), proto::AggregateFunction::Min) => {
+                                flink_append_extremum(current, &value, true)
+                            }
+                            (Some(current), proto::AggregateFunction::Max) => {
+                                flink_append_extremum(current, &value, false)
+                            }
                             (None, _) => value,
                             _ => unreachable!("validated extremum function"),
                         });
                     }
                 }
                 Accumulator::Extremum(values) => {
-                    let value = numeric_value(
+                    let value = aggregate_value(
                         batch
                             .column(call.input_index.expect("MIN/MAX has an input"))
                             .as_ref(),
                         row,
                     )?;
                     if let Some(value) = value {
-                        let count = values.entry(value).or_default();
+                        let count = values.entry(value.clone()).or_default();
                         *count = count.wrapping_add(delta);
                         if *count == 0 {
                             values.remove(&value);
@@ -569,22 +621,28 @@ impl AccumulatorState {
         Ok(())
     }
 
-    fn values(&self, calls: &[Call]) -> Vec<Option<i128>> {
+    fn values(&self, calls: &[Call]) -> Vec<Option<AggregateValue>> {
         calls
             .iter()
             .zip(&self.accumulators)
             .map(|(call, accumulator)| match accumulator {
-                Accumulator::Count(value) => Some(*value as i128),
-                Accumulator::Sum { value, count } => (*count != 0).then_some(*value),
-                Accumulator::AppendExtremum(value) => *value,
+                Accumulator::Count(value) => Some(AggregateValue::Int(*value as i128)),
+                Accumulator::Sum { value, count } => {
+                    if *count == 0 {
+                        None
+                    } else {
+                        value.clone()
+                    }
+                }
+                Accumulator::AppendExtremum(value) => value.clone(),
                 Accumulator::Extremum(values) => match call.function {
                     proto::AggregateFunction::Min => values
                         .iter()
-                        .find_map(|(value, count)| (*count > 0).then_some(*value)),
+                        .find_map(|(value, count)| (*count > 0).then(|| value.clone())),
                     proto::AggregateFunction::Max => values
                         .iter()
                         .rev()
-                        .find_map(|(value, count)| (*count > 0).then_some(*value)),
+                        .find_map(|(value, count)| (*count > 0).then(|| value.clone())),
                     _ => unreachable!("validated extremum function"),
                 },
             })
@@ -640,11 +698,29 @@ fn lower_call(call: &proto::AggregateCall) -> Result<Call> {
         null_literal::data_type(call.output_type.as_ref().ok_or_else(|| {
             DataFusionError::Plan("aggregate output type is missing".to_string())
         })?)?;
-    ensure_numeric(&output_type)?;
-    if function != proto::AggregateFunction::Count {
-        if let Some(input_type) = &input_type {
-            ensure_numeric(input_type)?;
+    match function {
+        proto::AggregateFunction::CountStar | proto::AggregateFunction::Count => {
+            if output_type != DataType::Int64 {
+                return Err(DataFusionError::Plan(format!(
+                    "COUNT output must be BIGINT, got {output_type}"
+                )));
+            }
         }
+        proto::AggregateFunction::Sum => {
+            ensure_sum_type(&output_type)?;
+            ensure_sum_type(input_type.as_ref().expect("SUM input was validated"))?;
+        }
+        proto::AggregateFunction::Min | proto::AggregateFunction::Max => {
+            ensure_extremum_type(&output_type)?;
+            let input_type = input_type.as_ref().expect("extremum input was validated");
+            ensure_extremum_type(input_type)?;
+            if input_type != &output_type {
+                return Err(DataFusionError::Plan(format!(
+                    "MIN/MAX input {input_type} does not match output {output_type}"
+                )));
+            }
+        }
+        proto::AggregateFunction::Unspecified => unreachable!("validated aggregate function"),
     }
     Ok(Call {
         function,
@@ -655,24 +731,57 @@ fn lower_call(call: &proto::AggregateCall) -> Result<Call> {
     })
 }
 
-fn ensure_numeric(data_type: &DataType) -> Result<()> {
+fn ensure_sum_type(data_type: &DataType) -> Result<()> {
     if matches!(
         data_type,
         DataType::Int8
             | DataType::Int16
             | DataType::Int32
             | DataType::Int64
+            | DataType::Float32
+            | DataType::Float64
             | DataType::Decimal128(_, _)
     ) {
         Ok(())
     } else {
         Err(DataFusionError::Plan(format!(
-            "group aggregate numeric type {data_type} is not supported"
+            "group aggregate SUM type {data_type} is not supported"
         )))
     }
 }
 
-fn numeric_value(array: &dyn Array, row: usize) -> Result<Option<i128>> {
+fn ensure_extremum_type(data_type: &DataType) -> Result<()> {
+    if matches!(
+        data_type,
+        DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::Float32
+            | DataType::Float64
+            | DataType::Decimal128(_, _)
+            | DataType::Boolean
+            | DataType::Utf8
+            | DataType::Date32
+            | DataType::Time32(TimeUnit::Second | TimeUnit::Millisecond)
+            | DataType::Time64(TimeUnit::Microsecond | TimeUnit::Nanosecond)
+            | DataType::Timestamp(
+                TimeUnit::Second
+                    | TimeUnit::Millisecond
+                    | TimeUnit::Microsecond
+                    | TimeUnit::Nanosecond,
+                _
+            )
+    ) {
+        Ok(())
+    } else {
+        Err(DataFusionError::Plan(format!(
+            "group aggregate MIN/MAX type {data_type} is not supported"
+        )))
+    }
+}
+
+fn aggregate_value(array: &dyn Array, row: usize) -> Result<Option<AggregateValue>> {
     if array.is_null(row) {
         return Ok(None);
     }
@@ -702,61 +811,455 @@ fn numeric_value(array: &dyn Array, row: usize) -> Result<Option<i128>> {
             .downcast_ref::<Decimal128Array>()
             .unwrap()
             .value(row),
+        DataType::Float32 => {
+            return Ok(Some(float32_value(
+                array
+                    .as_any()
+                    .downcast_ref::<Float32Array>()
+                    .unwrap()
+                    .value(row),
+            )))
+        }
+        DataType::Float64 => {
+            return Ok(Some(float64_value(
+                array
+                    .as_any()
+                    .downcast_ref::<Float64Array>()
+                    .unwrap()
+                    .value(row),
+            )))
+        }
+        DataType::Boolean => {
+            return Ok(Some(AggregateValue::Boolean(
+                array
+                    .as_any()
+                    .downcast_ref::<BooleanArray>()
+                    .unwrap()
+                    .value(row),
+            )))
+        }
+        DataType::Utf8 => {
+            return Ok(Some(AggregateValue::Bytes(
+                array
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .unwrap()
+                    .value(row)
+                    .as_bytes()
+                    .to_vec(),
+            )))
+        }
+        DataType::Date32 => array
+            .as_any()
+            .downcast_ref::<Date32Array>()
+            .unwrap()
+            .value(row) as i128,
+        DataType::Time32(TimeUnit::Second) => array
+            .as_any()
+            .downcast_ref::<Time32SecondArray>()
+            .unwrap()
+            .value(row) as i128,
+        DataType::Time32(TimeUnit::Millisecond) => array
+            .as_any()
+            .downcast_ref::<Time32MillisecondArray>()
+            .unwrap()
+            .value(row) as i128,
+        DataType::Time64(TimeUnit::Microsecond) => array
+            .as_any()
+            .downcast_ref::<Time64MicrosecondArray>()
+            .unwrap()
+            .value(row) as i128,
+        DataType::Time64(TimeUnit::Nanosecond) => array
+            .as_any()
+            .downcast_ref::<Time64NanosecondArray>()
+            .unwrap()
+            .value(row) as i128,
+        DataType::Timestamp(TimeUnit::Second, _) => array
+            .as_any()
+            .downcast_ref::<TimestampSecondArray>()
+            .unwrap()
+            .value(row) as i128,
+        DataType::Timestamp(TimeUnit::Millisecond, _) => array
+            .as_any()
+            .downcast_ref::<TimestampMillisecondArray>()
+            .unwrap()
+            .value(row) as i128,
+        DataType::Timestamp(TimeUnit::Microsecond, _) => array
+            .as_any()
+            .downcast_ref::<TimestampMicrosecondArray>()
+            .unwrap()
+            .value(row) as i128,
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => array
+            .as_any()
+            .downcast_ref::<TimestampNanosecondArray>()
+            .unwrap()
+            .value(row) as i128,
         other => {
             return Err(DataFusionError::Execution(format!(
-                "group aggregate expected numeric input, got {other}"
+                "group aggregate cannot read input type {other}"
             )));
         }
     };
-    Ok(Some(value))
+    Ok(Some(AggregateValue::Int(value)))
 }
 
-fn numeric_array(values: &[Option<i128>], data_type: &DataType) -> Result<ArrayRef> {
+fn aggregate_array(values: &[Option<AggregateValue>], data_type: &DataType) -> Result<ArrayRef> {
     Ok(match data_type {
         DataType::Int8 => Arc::new(Int8Array::from_iter(
-            values.iter().map(|value| value.map(|value| value as i8)),
+            values
+                .iter()
+                .map(|value| value.as_ref().map(int_value).transpose())
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .map(|value| value.map(|value| value as i8)),
         )),
         DataType::Int16 => Arc::new(Int16Array::from_iter(
-            values.iter().map(|value| value.map(|value| value as i16)),
+            values
+                .iter()
+                .map(|value| value.as_ref().map(int_value).transpose())
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .map(|value| value.map(|value| value as i16)),
         )),
         DataType::Int32 => Arc::new(Int32Array::from_iter(
-            values.iter().map(|value| value.map(|value| value as i32)),
+            values
+                .iter()
+                .map(|value| value.as_ref().map(int_value).transpose())
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .map(|value| value.map(|value| value as i32)),
         )),
         DataType::Int64 => Arc::new(Int64Array::from_iter(
-            values.iter().map(|value| value.map(|value| value as i64)),
+            values
+                .iter()
+                .map(|value| value.as_ref().map(int_value).transpose())
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .map(|value| value.map(|value| value as i64)),
         )),
         DataType::Decimal128(precision, scale) => Arc::new(
-            Decimal128Array::from_iter(values.iter().copied())
-                .with_precision_and_scale(*precision, *scale)?,
+            Decimal128Array::from_iter(
+                values
+                    .iter()
+                    .map(|value| value.as_ref().map(int_value).transpose())
+                    .collect::<Result<Vec<_>>>()?,
+            )
+            .with_precision_and_scale(*precision, *scale)?,
         ),
+        DataType::Float32 => Arc::new(Float32Array::from_iter(float32_options(values)?)),
+        DataType::Float64 => Arc::new(Float64Array::from_iter(float64_options(values)?)),
+        DataType::Boolean => Arc::new(BooleanArray::from_iter(boolean_options(values)?)),
+        DataType::Utf8 => {
+            let strings = values
+                .iter()
+                .map(|value| match value {
+                    None => Ok(None),
+                    Some(AggregateValue::Bytes(value)) => std::str::from_utf8(value)
+                        .map(Some)
+                        .map_err(|error| DataFusionError::External(Box::new(error))),
+                    Some(other) => Err(value_type_error("Utf8", other)),
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Arc::new(StringArray::from(strings))
+        }
+        DataType::Date32 => Arc::new(Date32Array::from_iter(int32_options(values)?)),
+        DataType::Time32(TimeUnit::Second) => {
+            Arc::new(Time32SecondArray::from_iter(int32_options(values)?))
+        }
+        DataType::Time32(TimeUnit::Millisecond) => {
+            Arc::new(Time32MillisecondArray::from_iter(int32_options(values)?))
+        }
+        DataType::Time64(TimeUnit::Microsecond) => {
+            Arc::new(Time64MicrosecondArray::from_iter(int64_options(values)?))
+        }
+        DataType::Time64(TimeUnit::Nanosecond) => {
+            Arc::new(Time64NanosecondArray::from_iter(int64_options(values)?))
+        }
+        DataType::Timestamp(TimeUnit::Second, _) => {
+            Arc::new(TimestampSecondArray::from_iter(int64_options(values)?))
+        }
+        DataType::Timestamp(TimeUnit::Millisecond, _) => {
+            Arc::new(TimestampMillisecondArray::from_iter(int64_options(values)?))
+        }
+        DataType::Timestamp(TimeUnit::Microsecond, _) => {
+            Arc::new(TimestampMicrosecondArray::from_iter(int64_options(values)?))
+        }
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+            Arc::new(TimestampNanosecondArray::from_iter(int64_options(values)?))
+        }
         other => {
             return Err(DataFusionError::Execution(format!(
-                "group aggregate cannot emit numeric type {other}"
+                "group aggregate cannot emit type {other}"
             )));
         }
     })
 }
 
-fn wrapping_numeric_add(left: i128, right: i128, data_type: &DataType) -> i128 {
+fn zero_value(data_type: &DataType) -> AggregateValue {
     match data_type {
-        DataType::Int8 => (left as i8).wrapping_add(right as i8) as i128,
-        DataType::Int16 => (left as i16).wrapping_add(right as i16) as i128,
-        DataType::Int32 => (left as i32).wrapping_add(right as i32) as i128,
-        DataType::Int64 => (left as i64).wrapping_add(right as i64) as i128,
-        DataType::Decimal128(_, _) => left.wrapping_add(right),
-        _ => unreachable!("validated numeric output"),
+        DataType::Float32 => float32_value(0.0),
+        DataType::Float64 => float64_value(0.0),
+        _ => AggregateValue::Int(0),
     }
 }
 
-fn wrapping_numeric_sub(left: i128, right: i128, data_type: &DataType) -> i128 {
-    match data_type {
-        DataType::Int8 => (left as i8).wrapping_sub(right as i8) as i128,
-        DataType::Int16 => (left as i16).wrapping_sub(right as i16) as i128,
-        DataType::Int32 => (left as i32).wrapping_sub(right as i32) as i128,
-        DataType::Int64 => (left as i64).wrapping_sub(right as i64) as i128,
-        DataType::Decimal128(_, _) => left.wrapping_sub(right),
-        _ => unreachable!("validated numeric output"),
+fn aggregate_add(
+    left: &AggregateValue,
+    right: &AggregateValue,
+    data_type: &DataType,
+) -> Result<Option<AggregateValue>> {
+    Ok(Some(match (left, right, data_type) {
+        (AggregateValue::Int(left), AggregateValue::Int(right), DataType::Int8) => {
+            AggregateValue::Int((*left as i8).wrapping_add(*right as i8) as i128)
+        }
+        (AggregateValue::Int(left), AggregateValue::Int(right), DataType::Int16) => {
+            AggregateValue::Int((*left as i16).wrapping_add(*right as i16) as i128)
+        }
+        (AggregateValue::Int(left), AggregateValue::Int(right), DataType::Int32) => {
+            AggregateValue::Int((*left as i32).wrapping_add(*right as i32) as i128)
+        }
+        (AggregateValue::Int(left), AggregateValue::Int(right), DataType::Int64) => {
+            AggregateValue::Int((*left as i64).wrapping_add(*right as i64) as i128)
+        }
+        (AggregateValue::Int(left), AggregateValue::Int(right), DataType::Decimal128(_, _)) => {
+            return Ok(decimal_operation(
+                *left,
+                *right,
+                data_type,
+                i128::checked_add,
+            ));
+        }
+        (AggregateValue::Float32(left), AggregateValue::Float32(right), DataType::Float32) => {
+            float32_value(f32::from_bits(*left) + f32::from_bits(*right))
+        }
+        (AggregateValue::Float64(left), AggregateValue::Float64(right), DataType::Float64) => {
+            float64_value(f64::from_bits(*left) + f64::from_bits(*right))
+        }
+        _ => return Err(value_operation_error("add", left, right, data_type)),
+    }))
+}
+
+fn aggregate_sub(
+    left: &AggregateValue,
+    right: &AggregateValue,
+    data_type: &DataType,
+) -> Result<Option<AggregateValue>> {
+    Ok(Some(match (left, right, data_type) {
+        (AggregateValue::Int(left), AggregateValue::Int(right), DataType::Int8) => {
+            AggregateValue::Int((*left as i8).wrapping_sub(*right as i8) as i128)
+        }
+        (AggregateValue::Int(left), AggregateValue::Int(right), DataType::Int16) => {
+            AggregateValue::Int((*left as i16).wrapping_sub(*right as i16) as i128)
+        }
+        (AggregateValue::Int(left), AggregateValue::Int(right), DataType::Int32) => {
+            AggregateValue::Int((*left as i32).wrapping_sub(*right as i32) as i128)
+        }
+        (AggregateValue::Int(left), AggregateValue::Int(right), DataType::Int64) => {
+            AggregateValue::Int((*left as i64).wrapping_sub(*right as i64) as i128)
+        }
+        (AggregateValue::Int(left), AggregateValue::Int(right), DataType::Decimal128(_, _)) => {
+            return Ok(decimal_operation(
+                *left,
+                *right,
+                data_type,
+                i128::checked_sub,
+            ));
+        }
+        (AggregateValue::Float32(left), AggregateValue::Float32(right), DataType::Float32) => {
+            float32_value(f32::from_bits(*left) - f32::from_bits(*right))
+        }
+        (AggregateValue::Float64(left), AggregateValue::Float64(right), DataType::Float64) => {
+            float64_value(f64::from_bits(*left) - f64::from_bits(*right))
+        }
+        _ => return Err(value_operation_error("subtract", left, right, data_type)),
+    }))
+}
+
+fn decimal_operation(
+    left: i128,
+    right: i128,
+    data_type: &DataType,
+    operation: fn(i128, i128) -> Option<i128>,
+) -> Option<AggregateValue> {
+    let DataType::Decimal128(precision, _) = data_type else {
+        unreachable!("decimal operation has a decimal output type")
+    };
+    let maximum = 10_i128.pow(*precision as u32) - 1;
+    operation(left, right)
+        .filter(|value| *value >= -maximum && *value <= maximum)
+        .map(AggregateValue::Int)
+}
+
+fn flink_append_extremum(
+    current: &AggregateValue,
+    candidate: &AggregateValue,
+    minimum: bool,
+) -> AggregateValue {
+    let replace = match (current, candidate) {
+        (AggregateValue::Float32(current), AggregateValue::Float32(candidate)) => {
+            let current = f32::from_bits(*current);
+            let candidate = f32::from_bits(*candidate);
+            if minimum {
+                candidate < current
+            } else {
+                candidate > current
+            }
+        }
+        (AggregateValue::Float64(current), AggregateValue::Float64(candidate)) => {
+            let current = f64::from_bits(*current);
+            let candidate = f64::from_bits(*candidate);
+            if minimum {
+                candidate < current
+            } else {
+                candidate > current
+            }
+        }
+        _ => {
+            if minimum {
+                candidate < current
+            } else {
+                candidate > current
+            }
+        }
+    };
+    if replace {
+        candidate.clone()
+    } else {
+        current.clone()
     }
+}
+
+fn float32_value(value: f32) -> AggregateValue {
+    AggregateValue::Float32(if value.is_nan() {
+        f32::NAN.to_bits()
+    } else {
+        value.to_bits()
+    })
+}
+
+fn float64_value(value: f64) -> AggregateValue {
+    AggregateValue::Float64(if value.is_nan() {
+        f64::NAN.to_bits()
+    } else {
+        value.to_bits()
+    })
+}
+
+fn flink_f32_cmp(left: u32, right: u32) -> Ordering {
+    let left_value = f32::from_bits(left);
+    let right_value = f32::from_bits(right);
+    if left_value < right_value {
+        Ordering::Less
+    } else if left_value > right_value {
+        Ordering::Greater
+    } else {
+        (left as i32).cmp(&(right as i32))
+    }
+}
+
+fn flink_f64_cmp(left: u64, right: u64) -> Ordering {
+    let left_value = f64::from_bits(left);
+    let right_value = f64::from_bits(right);
+    if left_value < right_value {
+        Ordering::Less
+    } else if left_value > right_value {
+        Ordering::Greater
+    } else {
+        (left as i64).cmp(&(right as i64))
+    }
+}
+
+fn value_tag(value: &AggregateValue) -> u8 {
+    match value {
+        AggregateValue::Boolean(_) => 1,
+        AggregateValue::Int(_) => 2,
+        AggregateValue::Float32(_) => 3,
+        AggregateValue::Float64(_) => 4,
+        AggregateValue::Bytes(_) => 5,
+    }
+}
+
+fn int_value(value: &AggregateValue) -> Result<i128> {
+    match value {
+        AggregateValue::Int(value) => Ok(*value),
+        other => Err(value_type_error("integer", other)),
+    }
+}
+
+fn float32_options(values: &[Option<AggregateValue>]) -> Result<Vec<Option<f32>>> {
+    values
+        .iter()
+        .map(|value| match value {
+            Some(AggregateValue::Float32(value)) => Ok(Some(f32::from_bits(*value))),
+            None => Ok(None),
+            Some(other) => Err(value_type_error("Float32", other)),
+        })
+        .collect()
+}
+
+fn float64_options(values: &[Option<AggregateValue>]) -> Result<Vec<Option<f64>>> {
+    values
+        .iter()
+        .map(|value| match value {
+            Some(AggregateValue::Float64(value)) => Ok(Some(f64::from_bits(*value))),
+            None => Ok(None),
+            Some(other) => Err(value_type_error("Float64", other)),
+        })
+        .collect()
+}
+
+fn boolean_options(values: &[Option<AggregateValue>]) -> Result<Vec<Option<bool>>> {
+    values
+        .iter()
+        .map(|value| match value {
+            Some(AggregateValue::Boolean(value)) => Ok(Some(*value)),
+            None => Ok(None),
+            Some(other) => Err(value_type_error("Boolean", other)),
+        })
+        .collect()
+}
+
+fn int32_options(values: &[Option<AggregateValue>]) -> Result<Vec<Option<i32>>> {
+    values
+        .iter()
+        .map(|value| {
+            value
+                .as_ref()
+                .map(int_value)
+                .transpose()
+                .map(|value| value.map(|value| value as i32))
+        })
+        .collect()
+}
+
+fn int64_options(values: &[Option<AggregateValue>]) -> Result<Vec<Option<i64>>> {
+    values
+        .iter()
+        .map(|value| {
+            value
+                .as_ref()
+                .map(int_value)
+                .transpose()
+                .map(|value| value.map(|value| value as i64))
+        })
+        .collect()
+}
+
+fn value_type_error(expected: &str, actual: &AggregateValue) -> DataFusionError {
+    DataFusionError::Internal(format!(
+        "group aggregate expected {expected} accumulator value, got {actual:?}"
+    ))
+}
+
+fn value_operation_error(
+    operation: &str,
+    left: &AggregateValue,
+    right: &AggregateValue,
+    data_type: &DataType,
+) -> DataFusionError {
+    DataFusionError::Internal(format!(
+        "group aggregate cannot {operation} {left:?} and {right:?} as {data_type}"
+    ))
 }
 
 fn encode_state(state: &AccumulatorState) -> Vec<u8> {
@@ -773,21 +1276,24 @@ fn encode_state(state: &AccumulatorState) -> Vec<u8> {
             }
             Accumulator::Sum { value, count } => {
                 bytes.push(2);
-                bytes.extend_from_slice(&value.to_le_bytes());
+                bytes.push(value.is_some() as u8);
+                if let Some(value) = value {
+                    encode_value(value, &mut bytes);
+                }
                 bytes.extend_from_slice(&count.to_le_bytes());
             }
             Accumulator::AppendExtremum(value) => {
                 bytes.push(4);
                 bytes.push(value.is_some() as u8);
                 if let Some(value) = value {
-                    bytes.extend_from_slice(&value.to_le_bytes());
+                    encode_value(value, &mut bytes);
                 }
             }
             Accumulator::Extremum(values) => {
                 bytes.push(3);
                 bytes.extend_from_slice(&(values.len() as u32).to_le_bytes());
                 for (value, count) in values {
-                    bytes.extend_from_slice(&value.to_le_bytes());
+                    encode_value(value, &mut bytes);
                     bytes.extend_from_slice(&count.to_le_bytes());
                 }
             }
@@ -804,7 +1310,7 @@ fn decode_state(bytes: &[u8], calls: &[Call]) -> Result<AccumulatorState> {
         ));
     }
     let version = cursor.read_u8()?;
-    if version != STATE_VERSION {
+    if version != 1 && version != 2 && version != STATE_VERSION {
         return Err(DataFusionError::Execution(format!(
             "group aggregate state version {version} is unsupported"
         )));
@@ -823,21 +1329,44 @@ fn decode_state(bytes: &[u8], calls: &[Call]) -> Result<AccumulatorState> {
         let accumulator = match tag {
             1 => Accumulator::Count(cursor.read_i64()?),
             2 => Accumulator::Sum {
-                value: cursor.read_i128()?,
+                value: if version == 1 {
+                    Some(AggregateValue::Int(cursor.read_i128()?))
+                } else if version == 2 {
+                    Some(decode_value(&mut cursor)?)
+                } else {
+                    match cursor.read_u8()? {
+                        0 => None,
+                        1 => Some(decode_value(&mut cursor)?),
+                        other => {
+                            return Err(DataFusionError::Execution(format!(
+                                "group aggregate sum presence {other} is invalid"
+                            )))
+                        }
+                    }
+                },
                 count: cursor.read_i64()?,
             },
             3 => {
                 let entries = cursor.read_u32()? as usize;
                 let mut values = BTreeMap::new();
                 for _ in 0..entries {
-                    values.insert(cursor.read_i128()?, cursor.read_i64()?);
+                    let value = if version == 1 {
+                        AggregateValue::Int(cursor.read_i128()?)
+                    } else {
+                        decode_value(&mut cursor)?
+                    };
+                    values.insert(value, cursor.read_i64()?);
                 }
                 Accumulator::Extremum(values)
             }
             4 => {
                 let value = match cursor.read_u8()? {
                     0 => None,
-                    1 => Some(cursor.read_i128()?),
+                    1 => Some(if version == 1 {
+                        AggregateValue::Int(cursor.read_i128()?)
+                    } else {
+                        decode_value(&mut cursor)?
+                    }),
                     other => {
                         return Err(DataFusionError::Execution(format!(
                             "group aggregate append extremum presence {other} is invalid"
@@ -869,6 +1398,7 @@ fn decode_state(bytes: &[u8], calls: &[Call]) -> Result<AccumulatorState> {
                 "group aggregate state does not match its plan".to_string(),
             ));
         }
+        validate_accumulator_values(&accumulator, call)?;
         accumulators.push(accumulator);
     }
     if !cursor.is_empty() {
@@ -880,6 +1410,81 @@ fn decode_state(bytes: &[u8], calls: &[Call]) -> Result<AccumulatorState> {
         row_count,
         accumulators,
     })
+}
+
+fn validate_accumulator_values(accumulator: &Accumulator, call: &Call) -> Result<()> {
+    let values: Box<dyn Iterator<Item = &AggregateValue> + '_> = match accumulator {
+        Accumulator::Count(_) => return Ok(()),
+        Accumulator::Sum { value, .. } => Box::new(value.iter()),
+        Accumulator::AppendExtremum(value) => Box::new(value.iter()),
+        Accumulator::Extremum(values) => Box::new(values.keys()),
+    };
+    for value in values {
+        if !aggregate_value_matches_type(value, &call.output_type) {
+            return Err(DataFusionError::Execution(format!(
+                "group aggregate state value {value:?} does not match {}",
+                call.output_type
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn aggregate_value_matches_type(value: &AggregateValue, data_type: &DataType) -> bool {
+    match value {
+        AggregateValue::Boolean(_) => data_type == &DataType::Boolean,
+        AggregateValue::Float32(_) => data_type == &DataType::Float32,
+        AggregateValue::Float64(_) => data_type == &DataType::Float64,
+        AggregateValue::Bytes(_) => data_type == &DataType::Utf8,
+        AggregateValue::Int(_) => matches!(
+            data_type,
+            DataType::Int8
+                | DataType::Int16
+                | DataType::Int32
+                | DataType::Int64
+                | DataType::Decimal128(_, _)
+                | DataType::Date32
+                | DataType::Time32(_)
+                | DataType::Time64(_)
+                | DataType::Timestamp(_, _)
+        ),
+    }
+}
+
+fn encode_value(value: &AggregateValue, bytes: &mut Vec<u8>) {
+    bytes.push(value_tag(value));
+    match value {
+        AggregateValue::Boolean(value) => bytes.push(*value as u8),
+        AggregateValue::Int(value) => bytes.extend_from_slice(&value.to_le_bytes()),
+        AggregateValue::Float32(value) => bytes.extend_from_slice(&value.to_le_bytes()),
+        AggregateValue::Float64(value) => bytes.extend_from_slice(&value.to_le_bytes()),
+        AggregateValue::Bytes(value) => {
+            bytes.extend_from_slice(&(value.len() as u32).to_le_bytes());
+            bytes.extend_from_slice(value);
+        }
+    }
+}
+
+fn decode_value(cursor: &mut Cursor<'_>) -> Result<AggregateValue> {
+    match cursor.read_u8()? {
+        1 => match cursor.read_u8()? {
+            0 => Ok(AggregateValue::Boolean(false)),
+            1 => Ok(AggregateValue::Boolean(true)),
+            other => Err(DataFusionError::Execution(format!(
+                "group aggregate Boolean state byte {other} is invalid"
+            ))),
+        },
+        2 => Ok(AggregateValue::Int(cursor.read_i128()?)),
+        3 => Ok(AggregateValue::Float32(cursor.read_u32()?)),
+        4 => Ok(AggregateValue::Float64(cursor.read_u64()?)),
+        5 => {
+            let length = cursor.read_u32()? as usize;
+            Ok(AggregateValue::Bytes(cursor.read_exact(length)?.to_vec()))
+        }
+        other => Err(DataFusionError::Execution(format!(
+            "group aggregate value state tag {other} is invalid"
+        ))),
+    }
 }
 
 struct Cursor<'a> {
@@ -915,6 +1520,10 @@ impl<'a> Cursor<'a> {
         Ok(i64::from_le_bytes(self.read_exact(8)?.try_into().unwrap()))
     }
 
+    fn read_u64(&mut self) -> Result<u64> {
+        Ok(u64::from_le_bytes(self.read_exact(8)?.try_into().unwrap()))
+    }
+
     fn read_i128(&mut self) -> Result<i128> {
         Ok(i128::from_le_bytes(
             self.read_exact(16)?.try_into().unwrap(),
@@ -931,7 +1540,7 @@ mod tests {
     use super::*;
     use crate::memory_pool::{tests_support::TestBroker, HostMemoryReservation};
     use crate::state::KeyedState;
-    use arrow::array::{Decimal128Array, Int64Array, StringArray};
+    use arrow::array::{BooleanArray, Float32Array, Int64Array, StringArray};
     use prost::Message;
     use std::borrow::Cow;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1357,16 +1966,24 @@ mod tests {
     }
 
     #[test]
-    fn state_codec_round_trips_decimal_extrema_counts() {
+    fn state_codec_round_trips_every_accumulator_value_family() {
         let state = AccumulatorState {
             row_count: 3,
             accumulators: vec![
                 Accumulator::Count(3),
                 Accumulator::Sum {
-                    value: 12_345,
+                    value: Some(float32_value(12.5)),
                     count: 2,
                 },
-                Accumulator::Extremum(BTreeMap::from([(100, 2), (200, -1)])),
+                Accumulator::Extremum(BTreeMap::from([
+                    (AggregateValue::Boolean(false), 2),
+                    (AggregateValue::Boolean(true), 1),
+                ])),
+                Accumulator::AppendExtremum(Some(AggregateValue::Bytes(b"flink".to_vec()))),
+                Accumulator::Extremum(BTreeMap::from([
+                    (AggregateValue::Int(100), 2),
+                    (AggregateValue::Int(200), -1),
+                ])),
             ],
         };
         let calls = vec![
@@ -1380,23 +1997,157 @@ mod tests {
             Call {
                 function: proto::AggregateFunction::Sum,
                 input_index: Some(1),
-                input_type: Some(DataType::Decimal128(10, 2)),
-                output_type: DataType::Decimal128(20, 2),
+                input_type: Some(DataType::Float32),
+                output_type: DataType::Float32,
                 retractable: true,
             },
             Call {
                 function: proto::AggregateFunction::Min,
                 input_index: Some(1),
-                input_type: Some(DataType::Decimal128(10, 2)),
-                output_type: DataType::Decimal128(10, 2),
+                input_type: Some(DataType::Boolean),
+                output_type: DataType::Boolean,
+                retractable: true,
+            },
+            Call {
+                function: proto::AggregateFunction::Max,
+                input_index: Some(1),
+                input_type: Some(DataType::Utf8),
+                output_type: DataType::Utf8,
+                retractable: false,
+            },
+            Call {
+                function: proto::AggregateFunction::Min,
+                input_index: Some(1),
+                input_type: Some(DataType::Date32),
+                output_type: DataType::Date32,
                 retractable: true,
             },
         ];
         assert_eq!(decode_state(&encode_state(&state), &calls).unwrap(), state);
-        let decimal = Decimal128Array::from(vec![Some(12_345)])
-            .with_precision_and_scale(20, 2)
-            .unwrap();
-        assert_eq!(decimal.value(0), 12_345);
+    }
+
+    #[test]
+    fn state_codec_restores_version_one_integer_savepoints() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(STATE_MAGIC);
+        bytes.push(1);
+        bytes.extend_from_slice(&2_i64.to_le_bytes());
+        bytes.extend_from_slice(&1_u32.to_le_bytes());
+        bytes.push(2);
+        bytes.extend_from_slice(&123_i128.to_le_bytes());
+        bytes.extend_from_slice(&2_i64.to_le_bytes());
+        let calls = vec![Call {
+            function: proto::AggregateFunction::Sum,
+            input_index: Some(1),
+            input_type: Some(DataType::Int64),
+            output_type: DataType::Int64,
+            retractable: true,
+        }];
+        assert_eq!(
+            decode_state(&bytes, &calls).unwrap(),
+            AccumulatorState {
+                row_count: 2,
+                accumulators: vec![Accumulator::Sum {
+                    value: Some(AggregateValue::Int(123)),
+                    count: 2,
+                }],
+            }
+        );
+
+        let mut version_two = Vec::new();
+        version_two.extend_from_slice(STATE_MAGIC);
+        version_two.push(2);
+        version_two.extend_from_slice(&1_i64.to_le_bytes());
+        version_two.extend_from_slice(&1_u32.to_le_bytes());
+        version_two.push(2);
+        encode_value(&float32_value(1.5), &mut version_two);
+        version_two.extend_from_slice(&1_i64.to_le_bytes());
+        let float_calls = vec![Call {
+            function: proto::AggregateFunction::Sum,
+            input_index: Some(1),
+            input_type: Some(DataType::Float32),
+            output_type: DataType::Float32,
+            retractable: true,
+        }];
+        assert_eq!(
+            decode_state(&version_two, &float_calls).unwrap(),
+            AccumulatorState {
+                row_count: 1,
+                accumulators: vec![Accumulator::Sum {
+                    value: Some(float32_value(1.5)),
+                    count: 1,
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn float_extrema_use_flink_nan_and_signed_zero_ordering() {
+        let negative_zero = float32_value(-0.0);
+        let positive_zero = float32_value(0.0);
+        let nan = float32_value(f32::NAN);
+        assert!(negative_zero < positive_zero);
+        assert!(nan > positive_zero);
+
+        let output = aggregate_array(
+            &[Some(negative_zero), Some(positive_zero), Some(nan)],
+            &DataType::Float32,
+        )
+        .unwrap();
+        let values = output.as_any().downcast_ref::<Float32Array>().unwrap();
+        assert_eq!(values.value(0).to_bits(), (-0.0_f32).to_bits());
+        assert_eq!(values.value(1).to_bits(), 0.0_f32.to_bits());
+        assert!(values.value(2).is_nan());
+
+        let booleans = aggregate_array(
+            &[
+                Some(AggregateValue::Boolean(false)),
+                None,
+                Some(AggregateValue::Boolean(true)),
+            ],
+            &DataType::Boolean,
+        )
+        .unwrap();
+        assert_eq!(
+            booleans
+                .as_any()
+                .downcast_ref::<BooleanArray>()
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(false), None, Some(true)]
+        );
+    }
+
+    #[test]
+    fn sum_uses_flink_integer_wrap_and_decimal_null_on_overflow() {
+        assert_eq!(
+            aggregate_add(
+                &AggregateValue::Int(i64::MAX as i128),
+                &AggregateValue::Int(1),
+                &DataType::Int64,
+            )
+            .unwrap(),
+            Some(AggregateValue::Int(i64::MIN as i128))
+        );
+        assert_eq!(
+            aggregate_add(
+                &AggregateValue::Int(10_i128.pow(38) - 1),
+                &AggregateValue::Int(1),
+                &DataType::Decimal128(38, 0),
+            )
+            .unwrap(),
+            None
+        );
+        assert_eq!(
+            aggregate_sub(
+                &AggregateValue::Int(-(10_i128.pow(38) - 1)),
+                &AggregateValue::Int(1),
+                &DataType::Decimal128(38, 0),
+            )
+            .unwrap(),
+            None
+        );
     }
 
     fn output_rows(

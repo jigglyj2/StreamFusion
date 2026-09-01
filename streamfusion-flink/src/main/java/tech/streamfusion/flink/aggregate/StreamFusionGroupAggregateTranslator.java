@@ -178,28 +178,61 @@ public final class StreamFusionGroupAggregateTranslator {
             if (inputIndex < 0 || inputIndex >= inputType.getFieldCount()) {
                 return "input index " + inputIndex + " is outside the input row";
             }
-            if (kind != SqlKind.COUNT
-                    && !supportedNumeric(inputType.getTypeAt(inputIndex).getTypeRoot())) {
-                return inputType.getTypeAt(inputIndex) + " is not supported by the initial numeric accumulator";
+            LogicalTypeRoot inputRoot = inputType.getTypeAt(inputIndex).getTypeRoot();
+            if (kind == SqlKind.SUM && !supportedSum(inputRoot)) {
+                return inputType.getTypeAt(inputIndex) + " is not supported by native SUM";
+            }
+            if ((kind == SqlKind.MIN || kind == SqlKind.MAX) && !supportedExtremum(inputRoot)) {
+                return inputType.getTypeAt(inputIndex) + " is not supported by native " + kind;
             }
         }
         LogicalType plannedOutput = FlinkTypeFactory.toLogicalType(call.getType());
         if (!plannedOutput.equals(outputType)) {
             return "Flink call type " + plannedOutput + " does not match output " + outputType;
         }
-        if (!supportedNumeric(outputType.getTypeRoot())) {
-            return "output type " + outputType + " is not supported by the initial accumulator codec";
+        if (kind == SqlKind.COUNT && outputType.getTypeRoot() != LogicalTypeRoot.BIGINT) {
+            return "COUNT output must be BIGINT, got " + outputType;
+        }
+        if (kind == SqlKind.SUM && !supportedSum(outputType.getTypeRoot())) {
+            return "output type " + outputType + " is not supported by native SUM";
+        }
+        if ((kind == SqlKind.MIN || kind == SqlKind.MAX) && !supportedExtremum(outputType.getTypeRoot())) {
+            return "output type " + outputType + " is not supported by native " + kind;
         }
         return null;
     }
 
-    private static boolean supportedNumeric(LogicalTypeRoot root) {
+    private static boolean supportedSum(LogicalTypeRoot root) {
         switch (root) {
             case TINYINT:
             case SMALLINT:
             case INTEGER:
             case BIGINT:
+            case FLOAT:
+            case DOUBLE:
             case DECIMAL:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static boolean supportedExtremum(LogicalTypeRoot root) {
+        switch (root) {
+            case TINYINT:
+            case SMALLINT:
+            case INTEGER:
+            case BIGINT:
+            case FLOAT:
+            case DOUBLE:
+            case DECIMAL:
+            case BOOLEAN:
+            case CHAR:
+            case VARCHAR:
+            case DATE:
+            case TIME_WITHOUT_TIME_ZONE:
+            case TIMESTAMP_WITHOUT_TIME_ZONE:
+            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
                 return true;
             default:
                 return false;

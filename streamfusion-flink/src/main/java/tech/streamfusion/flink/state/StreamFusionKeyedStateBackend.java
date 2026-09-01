@@ -132,20 +132,26 @@ public final class StreamFusionKeyedStateBackend<K>
         Path localCheckpoint = current.prepareIncrementalCheckpoint(checkpointId);
         return new FutureTask<>(() -> {
             try {
-                return SnapshotResult.of(uploadIncrementalCheckpoint(checkpointId, localCheckpoint, streamFactory));
+                IncrementalUpload upload = uploadIncrementalCheckpoint(checkpointId, localCheckpoint, streamFactory);
+                current.completeIncrementalCheckpoint(checkpointId, upload.uploadedBytes, upload.reusedBytes);
+                return SnapshotResult.of(upload.handle);
+            } catch (Throwable failure) {
+                current.failIncrementalCheckpoint(checkpointId);
+                throw failure;
             } finally {
                 deleteDirectory(localCheckpoint);
             }
         });
     }
 
-    private KeyedStateHandle uploadIncrementalCheckpoint(
+    private IncrementalUpload uploadIncrementalCheckpoint(
             long checkpointId, Path directory, CheckpointStreamFactory streamFactory) throws Exception {
         List<HandleAndLocalPath> shared = new ArrayList<>();
         List<HandleAndLocalPath> exclusive = new ArrayList<>();
         Map<String, SharedFile> nextSharedFiles = new HashMap<>();
         List<String> emptyFiles = new ArrayList<>();
         long checkpointedSize = 0;
+        long reusedBytes = 0;
         List<Path> files;
         try (Stream<Path> paths = Files.walk(directory)) {
             files = paths.filter(Files::isRegularFile).sorted().collect(Collectors.toList());
@@ -163,6 +169,7 @@ public final class StreamFusionKeyedStateBackend<K>
                 if (previous != null && previous.size == size) {
                     handle = previous.handle;
                     streamFactory.reusePreviousStateHandle(List.of(handle));
+                    reusedBytes += size;
                 } else {
                     handle = upload(file, streamFactory, CheckpointedStateScope.SHARED);
                     checkpointedSize += size;
@@ -179,8 +186,17 @@ public final class StreamFusionKeyedStateBackend<K>
         StreamStateHandle metadata = uploadBytes(metadataBytes, streamFactory, CheckpointedStateScope.EXCLUSIVE);
         checkpointedSize += metadataBytes.length;
         pendingSharedFiles.put(checkpointId, nextSharedFiles);
-        return new IncrementalRemoteKeyedStateHandle(
-                backendIdentifier, getKeyGroupRange(), checkpointId, shared, exclusive, metadata, checkpointedSize);
+        return new IncrementalUpload(
+                new IncrementalRemoteKeyedStateHandle(
+                        backendIdentifier,
+                        getKeyGroupRange(),
+                        checkpointId,
+                        shared,
+                        exclusive,
+                        metadata,
+                        checkpointedSize),
+                checkpointedSize,
+                reusedBytes);
     }
 
     private static StreamStateHandle upload(
@@ -455,6 +471,18 @@ public final class StreamFusionKeyedStateBackend<K>
         private SharedFile(StreamStateHandle handle, long size) {
             this.handle = handle;
             this.size = size;
+        }
+    }
+
+    private static final class IncrementalUpload {
+        private final KeyedStateHandle handle;
+        private final long uploadedBytes;
+        private final long reusedBytes;
+
+        private IncrementalUpload(KeyedStateHandle handle, long uploadedBytes, long reusedBytes) {
+            this.handle = handle;
+            this.uploadedBytes = uploadedBytes;
+            this.reusedBytes = reusedBytes;
         }
     }
 }

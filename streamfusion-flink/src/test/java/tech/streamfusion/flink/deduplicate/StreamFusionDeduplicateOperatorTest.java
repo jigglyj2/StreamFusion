@@ -258,20 +258,25 @@ class StreamFusionDeduplicateOperatorTest {
     }
 
     @Test
-    void canonicalSavepointMovesFromNativeRocksToNativeMemory() throws Exception {
-        OperatorSubtaskState savepoint;
-        try (KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> rocks =
-                nativeHarness(1, 0, null, true)) {
-            rocks.processElement(new StreamRecord<>(bid(10, 7, 100, 100, "rocks")));
-            savepoint = rocks.snapshotWithLocalState(32L, 32L, SavepointType.savepoint(SavepointFormatType.CANONICAL))
-                    .getJobManagerOwnedState();
-            assertThat(savepoint.getRawKeyedState()).hasSize(1);
-        }
-        try (KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> memory =
-                nativeHarness(1, 0, savepoint, false)) {
-            memory.processElement(new StreamRecord<>(bid(10, 7, 90, 90, "older")));
-            memory.endInput();
-            assertThat(takeRowKinds(memory)).isEmpty();
+    void canonicalSavepointsRestoreAcrossEveryBackendPair() throws Exception {
+        for (boolean sourceRocks : new boolean[] {false, true}) {
+            for (boolean targetRocks : new boolean[] {false, true}) {
+                OperatorSubtaskState savepoint;
+                try (KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> source =
+                        nativeHarness(1, 0, null, sourceRocks)) {
+                    source.processElement(new StreamRecord<>(bid(10, 7, 100, 100, "source")));
+                    savepoint = source.snapshotWithLocalState(
+                                    32L, 32L, SavepointType.savepoint(SavepointFormatType.CANONICAL))
+                            .getJobManagerOwnedState();
+                    assertThat(savepoint.getRawKeyedState()).hasSize(1);
+                }
+                try (KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> target =
+                        nativeHarness(1, 0, savepoint, targetRocks)) {
+                    target.processElement(new StreamRecord<>(bid(10, 7, 90, 90, "older")));
+                    target.endInput();
+                    assertThat(takeRowKinds(target)).isEmpty();
+                }
+            }
         }
     }
 

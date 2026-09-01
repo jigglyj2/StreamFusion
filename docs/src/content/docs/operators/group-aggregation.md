@@ -19,10 +19,19 @@ GROUP BY bidder;
 ## Acceleration and fallback
 
 StreamFusion accelerates keyed `StreamExecGroupAggregate` plans containing `COUNT(*)`,
-single-input `COUNT`, and integer or decimal `SUM`, `MIN`, and `MAX`. Input may be insert-only or a
-Flink changelog. Changelog output preserves Flink's per-record `INSERT`, `UPDATE_BEFORE`,
-`UPDATE_AFTER`, and `DELETE` behavior byte-for-byte; unchanged aggregate values do not produce a
-spurious update.
+single-input `COUNT`, and the following aggregate/type combinations:
+
+| Aggregate | Supported Flink SQL types |
+| --- | --- |
+| `SUM` | `TINYINT`, `SMALLINT`, `INTEGER`, `BIGINT`, `FLOAT`, `DOUBLE`, `DECIMAL` |
+| `MIN`, `MAX` | All `SUM` types plus `BOOLEAN`, `CHAR`, `VARCHAR`, `DATE`, `TIME`, `TIMESTAMP`, and `TIMESTAMP_LTZ` |
+
+Input may be insert-only or a Flink changelog. Changelog output preserves Flink's per-record
+`INSERT`, `UPDATE_BEFORE`, `UPDATE_AFTER`, and `DELETE` behavior byte-for-byte; unchanged aggregate
+values do not produce a spurious update. Retraction parity covers null values, duplicate extrema,
+removing the current extremum, deletes against absent state, IEEE-754 NaN and signed zero, and
+deleting the final row of a group. Integer and decimal arithmetic uses the planned Flink result
+type, including its overflow behavior.
 
 The initial implementation requires at least one grouping field. Global aggregation, state TTL,
 mini-batching, async state, Flink's changelog-state wrapper, `DISTINCT`, `FILTER`, ordered or
@@ -44,10 +53,13 @@ The aggregate uses the shared backend-neutral native keyed-state interface:
   versioned native ABI. Each Arrow input batch performs one distinct-key multi-get and one
   `WriteBatch`, including deletes.
 
-Both backends use the same versioned canonical key-group snapshot format. Canonical savepoints can
-restore across memory and RocksDB and redistribute key groups during 1-to-N or N-to-1 rescaling.
-Regular RocksDB checkpoints use incremental Flink keyed-state handles and reuse completed immutable
-SST files.
+Both backends use the same versioned canonical key-group snapshot format. Accumulator payload
+version 3 adds typed boolean, floating-point, string, and temporal values plus Flink-compatible
+nullable decimal-overflow state while continuing to read version 1 and version 2 payloads.
+Canonical savepoints are tested across all four source/target
+backend pairs and redistribute key groups during both 1-to-N and N-to-1 rescaling. Regular RocksDB
+checkpoints use incremental Flink keyed-state handles, reuse completed immutable SST files, survive
+Flink checkpoint-metadata serialization, and restore into native RocksDB.
 
 The operator has no timers in this supported shape. A batch is applied synchronously before the
 mailbox processes a checkpoint barrier. Aligned and unaligned checkpoints therefore snapshot the
@@ -59,7 +71,10 @@ rescaling without splitting a frame.
 
 Arrow buffers, in-memory state, aggregate scratch/output storage, RocksDB cache and write buffers,
 and restore readers are admitted through the operator's existing Flink managed-memory allowance.
-Used, peak, and limit gauges are exposed under the operator's StreamFusion metric group.
+Used, peak, and limit gauges are exposed under the operator's StreamFusion metric group. The same
+group reports logical processing/changelog counts, one batched state read and write per input batch,
+checkpoint kind/bytes/duration/failures, incremental upload and SST-reuse bytes, and restore
+bytes/duration/failures.
 
 Retractable `MIN` and `MAX` keep counted ordered values so deleting the current extremum reveals the
 next one. Insert-only extrema use a single scalar instead. The batch path deduplicates keys with

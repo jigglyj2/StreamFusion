@@ -6,6 +6,10 @@ package tech.streamfusion.flink.aggregate;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -16,8 +20,12 @@ import org.apache.flink.runtime.checkpoint.CheckpointOptions;
 import org.apache.flink.runtime.checkpoint.CheckpointType;
 import org.apache.flink.runtime.checkpoint.OperatorSubtaskState;
 import org.apache.flink.runtime.checkpoint.SavepointType;
+import org.apache.flink.runtime.checkpoint.metadata.MetadataV3Serializer;
 import org.apache.flink.runtime.state.CheckpointStorageLocationReference;
+import org.apache.flink.runtime.state.IncrementalKeyedStateHandle.HandleAndLocalPath;
+import org.apache.flink.runtime.state.IncrementalRemoteKeyedStateHandle;
 import org.apache.flink.runtime.state.KeyGroupRangeAssignment;
+import org.apache.flink.runtime.state.KeyedStateHandle;
 import org.apache.flink.runtime.state.hashmap.HashMapStateBackend;
 import org.apache.flink.runtime.state.memory.MemCheckpointStreamFactory;
 import org.apache.flink.state.rocksdb.EmbeddedRocksDBStateBackend;
@@ -77,27 +85,32 @@ class StreamFusionArrowGroupAggregateOperatorTest {
     }
 
     @Test
-    void canonicalSavepointMovesFromRocksDbToMemory() throws Exception {
+    void canonicalSavepointsRestoreAcrossEveryBackendPair() throws Exception {
         try (RootAllocator inputs = new RootAllocator(64L << 20)) {
-            OperatorSubtaskState savepoint;
-            try (KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> rocks =
-                    harness(1, 0, null, true)) {
-                process(rocks, inputs, row(7, 10));
-                takeKinds(rocks);
-                savepoint = rocks.snapshotWithLocalState(3, 3, SavepointType.savepoint(SavepointFormatType.CANONICAL))
-                        .getJobManagerOwnedState();
-                assertThat(savepoint.getRawKeyedState()).hasSize(1);
-            }
-            try (KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> memory =
-                    harness(1, 0, savepoint, false)) {
-                process(memory, inputs, row(7, 20));
-                assertThat(takeKinds(memory)).containsExactly(RowKind.UPDATE_AFTER);
+            for (boolean sourceRocks : new boolean[] {false, true}) {
+                for (boolean targetRocks : new boolean[] {false, true}) {
+                    OperatorSubtaskState savepoint;
+                    try (KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> source =
+                            harness(1, 0, null, sourceRocks)) {
+                        process(source, inputs, row(7, 10));
+                        takeKinds(source);
+                        savepoint = source.snapshotWithLocalState(
+                                        3, 3, SavepointType.savepoint(SavepointFormatType.CANONICAL))
+                                .getJobManagerOwnedState();
+                        assertThat(savepoint.getRawKeyedState()).hasSize(1);
+                    }
+                    try (KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> target =
+                            harness(1, 0, savepoint, targetRocks)) {
+                        process(target, inputs, row(7, 20));
+                        assertThat(takeKinds(target)).containsExactly(RowKind.UPDATE_AFTER);
+                    }
+                }
             }
         }
     }
 
     @Test
-    void redistributesKeyGroupsFromOneSubtaskToTwoOnBothBackends() throws Exception {
+    void redistributesKeyGroupsFromOneToTwoAndBackToOneOnBothBackends() throws Exception {
         try (RootAllocator inputs = new RootAllocator(64L << 20)) {
             RowDataKeySelector selector = rowSelector();
             Map<Integer, GenericRowData> rows = rowsForEverySubtask(selector, 2);
@@ -113,6 +126,7 @@ class StreamFusionArrowGroupAggregateOperatorTest {
                 }
 
                 OperatorSubtaskState packaged = AbstractStreamOperatorTestHarness.repackageState(oneSubtask);
+                List<OperatorSubtaskState> twoSubtaskSnapshots = new ArrayList<>();
                 for (int subtask = 0; subtask < 2; subtask++) {
                     OperatorSubtaskState assigned = AbstractStreamOperatorTestHarness.repartitionOperatorState(
                             packaged, MAX_PARALLELISM, 1, 2, subtask);
@@ -120,9 +134,80 @@ class StreamFusionArrowGroupAggregateOperatorTest {
                             harness(2, subtask, assigned, rocksDb)) {
                         process(scaled, inputs, rows.get(subtask));
                         assertThat(takeKinds(scaled)).containsExactly(RowKind.UPDATE_AFTER);
+                        twoSubtaskSnapshots.add(scaled.snapshot(5, 5));
                     }
                 }
+
+                OperatorSubtaskState packagedTwo = AbstractStreamOperatorTestHarness.repackageState(
+                        twoSubtaskSnapshots.toArray(new OperatorSubtaskState[0]));
+                OperatorSubtaskState assignedBack = AbstractStreamOperatorTestHarness.repartitionOperatorState(
+                        packagedTwo, MAX_PARALLELISM, 2, 1, 0);
+                try (KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> scaledBack =
+                        harness(1, 0, assignedBack, rocksDb)) {
+                    for (GenericRowData row : rows.values()) {
+                        process(scaledBack, inputs, row);
+                    }
+                    assertThat(takeKinds(scaledBack)).containsExactly(RowKind.UPDATE_AFTER, RowKind.UPDATE_AFTER);
+                }
             }
+        }
+    }
+
+    @Test
+    void emitsIncrementalRocksHandlesReusesSstsAndRestoresMetadataRoundTrip() throws Exception {
+        try (RootAllocator inputs = new RootAllocator(64L << 20)) {
+            OperatorSubtaskState secondSnapshot;
+            try (KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> rocks =
+                    harness(1, 0, null, true)) {
+                process(rocks, inputs, row(7, 10));
+                takeKinds(rocks);
+                OperatorSubtaskState firstSnapshot = rocks.snapshot(6, 6);
+                IncrementalRemoteKeyedStateHandle first = incrementalHandle(firstSnapshot);
+                assertThat(firstSnapshot.getRawKeyedState()).isEmpty();
+                assertThat(first.getSharedState()).isNotEmpty();
+
+                rocks.notifyOfCompletedCheckpoint(6);
+                secondSnapshot = rocks.snapshot(7, 7);
+                IncrementalRemoteKeyedStateHandle second = incrementalHandle(secondSnapshot);
+                assertThat(sharedHandles(second)).isEqualTo(sharedHandles(first));
+                assertThat(second.getCheckpointedSize()).isLessThan(first.getCheckpointedSize());
+                IncrementalRemoteKeyedStateHandle roundTripped = metadataRoundTrip(second);
+                assertThat(sharedHandles(roundTripped)).isEqualTo(sharedHandles(second));
+                secondSnapshot = secondSnapshot.toBuilder()
+                        .setManagedKeyedState(roundTripped)
+                        .build();
+            }
+
+            try (KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> restored =
+                    harness(1, 0, secondSnapshot, true)) {
+                process(restored, inputs, row(7, 20));
+                assertThat(takeKinds(restored)).containsExactly(RowKind.UPDATE_AFTER);
+            }
+        }
+    }
+
+    private static IncrementalRemoteKeyedStateHandle incrementalHandle(OperatorSubtaskState snapshot) {
+        assertThat(snapshot.getManagedKeyedState()).hasSize(1);
+        return (IncrementalRemoteKeyedStateHandle)
+                snapshot.getManagedKeyedState().iterator().next();
+    }
+
+    private static Map<String, Object> sharedHandles(IncrementalRemoteKeyedStateHandle handle) {
+        Map<String, Object> handles = new HashMap<>();
+        for (HandleAndLocalPath file : handle.getSharedState()) {
+            handles.put(file.getLocalPath(), file.getHandle().getStreamStateHandleID());
+        }
+        return handles;
+    }
+
+    private static IncrementalRemoteKeyedStateHandle metadataRoundTrip(KeyedStateHandle handle) throws Exception {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try (DataOutputStream output = new DataOutputStream(bytes)) {
+            MetadataV3Serializer.INSTANCE.serializeKeyedStateHandleUtil(handle, output);
+        }
+        try (DataInputStream input = new DataInputStream(new ByteArrayInputStream(bytes.toByteArray()))) {
+            return (IncrementalRemoteKeyedStateHandle)
+                    MetadataV3Serializer.INSTANCE.deserializeKeyedStateHandleUtil(input);
         }
     }
 
