@@ -11,6 +11,7 @@ pub(super) mod calc;
 mod collection;
 pub(crate) mod deduplicate;
 pub(super) mod expand;
+pub(crate) mod group_aggregate;
 pub(super) mod input;
 pub(crate) mod reusable_input;
 pub(super) mod union;

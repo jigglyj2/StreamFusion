@@ -115,6 +115,9 @@ fn create_operator(
         Some(proto::operator::Operator::Deduplicate(_)) => Err(DataFusionError::Plan(
             "Deduplicate requires a persistent stateful execution handle".to_string(),
         )),
+        Some(proto::operator::Operator::GroupAggregate(_)) => Err(DataFusionError::Plan(
+            "GroupAggregate requires a persistent stateful execution handle".to_string(),
+        )),
         None => Err(DataFusionError::Plan(
             "StreamFusion operator is empty".to_string(),
         )),

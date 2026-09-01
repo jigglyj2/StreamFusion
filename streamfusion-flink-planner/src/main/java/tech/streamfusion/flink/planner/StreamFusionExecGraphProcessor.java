@@ -36,6 +36,7 @@ import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecDeduplica
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecDropUpdateBefore;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecExchange;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecExpand;
+import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecGroupAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecUnion;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecValues;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWatermarkAssigner;
@@ -55,6 +56,8 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             "tech.streamfusion.flink.window.StreamFusionWindowTableFunctionTranslator";
     private static final String DEDUPLICATE_TRANSLATOR_CLASS =
             "tech.streamfusion.flink.deduplicate.StreamFusionDeduplicateTranslator";
+    private static final String GROUP_AGGREGATE_TRANSLATOR_CLASS =
+            "tech.streamfusion.flink.aggregate.StreamFusionGroupAggregateTranslator";
 
     @Override
     public ExecNodeGraph process(ExecNodeGraph graph, ProcessorContext context) {
@@ -98,6 +101,11 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             }
         } else if (node instanceof StreamExecDeduplicate) {
             String reason = unsupportedReason((StreamExecDeduplicate) node, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
+        } else if (node instanceof StreamExecGroupAggregate) {
+            String reason = unsupportedReason((StreamExecGroupAggregate) node, context);
             if (reason != null) {
                 rejections.add(nodePath + "\n" + reason);
             }
@@ -195,6 +203,24 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     (RowType) deduplicate.getOutputType(),
                     "StreamFusionDeduplicate");
             replacement.setInputEdges(deduplicate.getInputEdges().stream()
+                    .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                    .collect(Collectors.toList()));
+            return replacement;
+        }
+        if (node instanceof StreamExecGroupAggregate) {
+            StreamExecGroupAggregate aggregate = (StreamExecGroupAggregate) node;
+            StreamFusionExecGroupAggregate replacement = new StreamFusionExecGroupAggregate(
+                    aggregate.getPersistedConfig(),
+                    grouping(aggregate),
+                    aggregateCalls(aggregate),
+                    aggregateCallNeedRetractions(aggregate),
+                    aggregateBooleanField(aggregate, "generateUpdateBefore"),
+                    aggregateBooleanField(aggregate, "needRetraction"),
+                    aggregateStateMetadata(aggregate),
+                    aggregate.getInputProperties().get(0),
+                    (RowType) aggregate.getOutputType(),
+                    "StreamFusionGroupAggregate");
+            replacement.setInputEdges(aggregate.getInputEdges().stream()
                     .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
                     .collect(Collectors.toList()));
             return replacement;
@@ -364,6 +390,50 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         }
     }
 
+    private String unsupportedReason(StreamExecGroupAggregate aggregate, ProcessorContext context) {
+        ExecEdge input = aggregate.getInputEdges().get(0);
+        ExecNode<?> inputSource = input.getSource();
+        if (inputSource instanceof StreamExecExchange
+                && inputSource.getInputEdges().size() == 1) {
+            inputSource = inputSource.getInputEdges().get(0).getSource();
+        }
+        if (inputSource instanceof StreamExecExpand) {
+            return "grouping sets: native group aggregate does not yet implement expanded grouping-set semantics";
+        }
+        try {
+            Class<?> translator = Class.forName(
+                    GROUP_AGGREGATE_TRANSLATOR_CLASS,
+                    true,
+                    context.getPlanner().getFlinkContext().getClassLoader());
+            Method method = translator.getMethod(
+                    "unsupportedReason",
+                    RowType.class,
+                    RowType.class,
+                    int[].class,
+                    org.apache.calcite.rel.core.AggregateCall[].class,
+                    boolean[].class,
+                    boolean.class,
+                    boolean.class,
+                    long.class,
+                    ReadableConfig.class);
+            return (String) method.invoke(
+                    null,
+                    (RowType) input.getOutputType(),
+                    (RowType) aggregate.getOutputType(),
+                    grouping(aggregate),
+                    aggregateCalls(aggregate),
+                    aggregateCallNeedRetractions(aggregate),
+                    aggregateBooleanField(aggregate, "generateUpdateBefore"),
+                    aggregateBooleanField(aggregate, "needRetraction"),
+                    aggregateStateTtl(aggregate),
+                    aggregate.getPersistedConfig());
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
+            throw new IllegalStateException("Could not inspect StreamFusion GroupAggregate support", e);
+        } catch (InvocationTargetException e) {
+            throw new IllegalStateException("StreamFusion GroupAggregate support inspection failed", e.getCause());
+        }
+    }
+
     private String unsupportedReason(StreamExecCorrelate correlate, ProcessorContext context) {
         ExecEdge input = correlate.getInputEdges().get(0);
         Object joinType = field(correlate, CommonExecCorrelate.class, "joinType");
@@ -501,6 +571,40 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         List<StateMetadata> metadata = stateMetadata(deduplicate);
         if (metadata == null || metadata.isEmpty()) {
             return deduplicate
+                    .getPersistedConfig()
+                    .get(ExecutionConfigOptions.IDLE_STATE_RETENTION)
+                    .toMillis();
+        }
+        return TimeUtils.parseDuration(metadata.get(0).getStateTtl()).toMillis();
+    }
+
+    private static int[] grouping(StreamExecGroupAggregate aggregate) {
+        return ((int[]) field(aggregate, StreamExecGroupAggregate.class, "grouping")).clone();
+    }
+
+    private static org.apache.calcite.rel.core.AggregateCall[] aggregateCalls(StreamExecGroupAggregate aggregate) {
+        return ((org.apache.calcite.rel.core.AggregateCall[])
+                        field(aggregate, StreamExecGroupAggregate.class, "aggCalls"))
+                .clone();
+    }
+
+    private static boolean[] aggregateCallNeedRetractions(StreamExecGroupAggregate aggregate) {
+        return ((boolean[]) field(aggregate, StreamExecGroupAggregate.class, "aggCallNeedRetractions")).clone();
+    }
+
+    private static boolean aggregateBooleanField(StreamExecGroupAggregate aggregate, String name) {
+        return (boolean) field(aggregate, StreamExecGroupAggregate.class, name);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<StateMetadata> aggregateStateMetadata(StreamExecGroupAggregate aggregate) {
+        return (List<StateMetadata>) field(aggregate, StreamExecGroupAggregate.class, "stateMetadataList");
+    }
+
+    private static long aggregateStateTtl(StreamExecGroupAggregate aggregate) {
+        List<StateMetadata> metadata = aggregateStateMetadata(aggregate);
+        if (metadata == null || metadata.isEmpty()) {
+            return aggregate
                     .getPersistedConfig()
                     .get(ExecutionConfigOptions.IDLE_STATE_RETENTION)
                     .toMillis();

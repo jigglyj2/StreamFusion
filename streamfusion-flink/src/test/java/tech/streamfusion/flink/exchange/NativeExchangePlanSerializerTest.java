@@ -26,10 +26,23 @@ class NativeExchangePlanSerializerTest {
         assertThat(plan.getDistribution()).isEqualTo(ExchangeDistribution.EXCHANGE_DISTRIBUTION_HASH);
         assertThat(plan.getKeyIndicesList()).containsExactly(0);
         assertThat(plan.getMaxParallelism()).isEqualTo(128);
+        assertThat(plan.getParallelism()).isEqualTo(128);
+        assertThat(plan.getPreserveKeyGroups()).isTrue();
         assertThat(plan.getSchema().getFieldsList())
                 .extracting(tech.streamfusion.proto.plan.v1.Field::getName)
                 .containsExactly("id", "name", ArrowExchangeBatch.ROW_KIND_COLUMN, ArrowExchangeBatch.TIMESTAMP_COLUMN);
         assertThat(plan.getMetadataColumns().getRowKindIndex()).isEqualTo(2);
         assertThat(plan.getMetadataColumns().getStreamRecordTimestampIndex()).isEqualTo(3);
+    }
+
+    @Test
+    void recordsAlignedDestinationGatheringContract() throws Exception {
+        RowType rowType = RowType.of(new IntType());
+
+        NativeExchangePlan plan =
+                NativeExchangePlan.parseFrom(NativeExchangePlanSerializer.hash(rowType, new int[] {0}, 128, 4, false));
+
+        assertThat(plan.getParallelism()).isEqualTo(4);
+        assertThat(plan.getPreserveKeyGroups()).isFalse();
     }
 }

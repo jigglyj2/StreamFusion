@@ -19,7 +19,7 @@ pub(crate) struct StateKeyRef<'a> {
     pub(crate) key: &'a [u8],
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct StateKey {
     pub(crate) key_group: u32,
     pub(crate) key: Vec<u8>,

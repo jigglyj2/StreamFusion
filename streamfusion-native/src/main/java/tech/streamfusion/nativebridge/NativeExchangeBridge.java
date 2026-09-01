@@ -27,6 +27,8 @@ public final class NativeExchangeBridge {
         return decodeArrowBatch(
                 serializedPlan,
                 payload,
+                0,
+                payload.length,
                 metadata.length,
                 outputArrayAddress,
                 outputSchemaAddress,
@@ -36,6 +38,8 @@ public final class NativeExchangeBridge {
     public static native long decodeArrowBatch(
             byte[] serializedPlan,
             byte[] payload,
+            int payloadOffset,
+            int payloadLength,
             int metadataLength,
             long outputArrayAddress,
             long outputSchemaAddress,

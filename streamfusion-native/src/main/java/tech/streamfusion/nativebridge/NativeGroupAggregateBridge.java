@@ -4,70 +4,50 @@
  */
 package tech.streamfusion.nativebridge;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.concurrent.atomic.AtomicLong;
 
-/** Lifecycle and Arrow C Data boundary for one persistent native deduplicate operator. */
-public final class NativeDeduplicateBridge {
-    private static final String ROCKSDB_RESOURCE = "/META-INF/native/linux-x86_64/libstreamfusion_state_rocksdb.so";
-    private static Path extractedRocksDbLibrary;
+/** Lifecycle, keyed-state, and Arrow C Data boundary for native group aggregation. */
+public final class NativeGroupAggregateBridge {
+    private static final AtomicLong EXECUTED_BATCHES = new AtomicLong();
 
     static {
         NativeLibraryLoader.load();
     }
 
-    private NativeDeduplicateBridge() {}
+    private NativeGroupAggregateBridge() {}
 
     public static long create(
             byte[] plan, int maxParallelism, int firstKeyGroup, int lastKeyGroup, NativeMemoryManager memoryManager) {
         long handle =
                 createHandle(plan, maxParallelism, firstKeyGroup, lastKeyGroup, memoryManager, memoryManager.limit());
         if (handle == 0) {
-            throw new IllegalStateException("Native deduplicate returned a null handle");
+            throw new IllegalStateException("Native group aggregate returned a null handle");
         }
         return handle;
     }
 
     public static long createRocksDb(
-            byte[] plan, int maxParallelism, int firstKeyGroup, int lastKeyGroup, Path databasePath, long memoryLimit) {
+            byte[] plan,
+            int maxParallelism,
+            int firstKeyGroup,
+            int lastKeyGroup,
+            Path databasePath,
+            long memoryLimit,
+            NativeMemoryManager memoryManager) {
         long handle = createRocksHandle(
                 plan,
                 maxParallelism,
                 firstKeyGroup,
                 lastKeyGroup,
-                rocksDbLibraryPath().toString(),
+                NativeDeduplicateBridge.rocksDbLibraryPath().toString(),
                 databasePath.toString(),
+                memoryManager,
                 memoryLimit);
         if (handle == 0) {
-            throw new IllegalStateException("Native RocksDB deduplicate returned a null handle");
+            throw new IllegalStateException("Native RocksDB group aggregate returned a null handle");
         }
         return handle;
-    }
-
-    /** Returns whether the independently packaged native RocksDB component is on the classpath. */
-    public static boolean isRocksDbAvailable() {
-        return NativeDeduplicateBridge.class.getResource(ROCKSDB_RESOURCE) != null;
-    }
-
-    static synchronized Path rocksDbLibraryPath() {
-        if (extractedRocksDbLibrary != null) {
-            return extractedRocksDbLibrary;
-        }
-        try (InputStream library = NativeDeduplicateBridge.class.getResourceAsStream(ROCKSDB_RESOURCE)) {
-            if (library == null) {
-                throw new IllegalStateException(
-                        "Flink selected RocksDB state, but streamfusion-state-rocksdb is not on the classpath");
-            }
-            Path extracted = Files.createTempFile("streamfusion-state-rocksdb-", ".so");
-            Files.copy(library, extracted, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-            extracted.toFile().deleteOnExit();
-            extractedRocksDbLibrary = extracted.toAbsolutePath();
-            return extractedRocksDbLibrary;
-        } catch (IOException error) {
-            throw new IllegalStateException("Could not extract the native RocksDB state component", error);
-        }
     }
 
     public static long process(
@@ -76,19 +56,18 @@ public final class NativeDeduplicateBridge {
             long inputSchemaAddress,
             long outputArrayAddress,
             long outputSchemaAddress) {
-        return processArrowBatch(
+        long rows = processArrowBatch(
                 handle, inputArrayAddress, inputSchemaAddress, outputArrayAddress, outputSchemaAddress);
+        EXECUTED_BATCHES.incrementAndGet();
+        return rows;
     }
 
-    /** Returns selected visible Arrow columns followed by RowKind and input-ordinal metadata. */
-    public static long processOutput(
-            long handle,
-            long inputArrayAddress,
-            long inputSchemaAddress,
-            long outputArrayAddress,
-            long outputSchemaAddress) {
-        return processOutputArrowBatch(
-                handle, inputArrayAddress, inputSchemaAddress, outputArrayAddress, outputSchemaAddress);
+    public static long executedBatchCount() {
+        return EXECUTED_BATCHES.get();
+    }
+
+    public static void resetMetrics() {
+        EXECUTED_BATCHES.set(0);
     }
 
     public static byte[] snapshot(long handle, int keyGroup) {
@@ -107,7 +86,7 @@ public final class NativeDeduplicateBridge {
             long targetHandle, Path checkpointPath, int firstKeyGroup, int lastKeyGroup, long memoryLimit) {
         importRocksCheckpointHandle(
                 targetHandle,
-                rocksDbLibraryPath().toString(),
+                NativeDeduplicateBridge.rocksDbLibraryPath().toString(),
                 checkpointPath.toString(),
                 firstKeyGroup,
                 lastKeyGroup,
@@ -133,16 +112,10 @@ public final class NativeDeduplicateBridge {
             int lastKeyGroup,
             String pluginPath,
             String databasePath,
+            NativeMemoryManager memoryManager,
             long memoryLimit);
 
     private static native long processArrowBatch(
-            long handle,
-            long inputArrayAddress,
-            long inputSchemaAddress,
-            long outputArrayAddress,
-            long outputSchemaAddress);
-
-    private static native long processOutputArrowBatch(
             long handle,
             long inputArrayAddress,
             long inputSchemaAddress,

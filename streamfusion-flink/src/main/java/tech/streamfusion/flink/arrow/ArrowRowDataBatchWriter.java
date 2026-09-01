@@ -18,11 +18,13 @@ import org.apache.flink.types.RowKind;
 /** Reusable, directly written RowData-to-Arrow boundary batch. */
 public final class ArrowRowDataBatchWriter implements AutoCloseable {
     private static final int DEFAULT_BATCH_CAPACITY = 1024;
+    private static final int MINIMUM_ADAPTIVE_CAPACITY = 64;
 
     private final RowType rowType;
     private final BufferAllocator allocator;
     private final VectorSchemaRoot root;
     private final ArrowWriter<RowData> writer;
+    private final int batchCapacity;
     private int rowCount;
     private boolean finished;
 
@@ -33,8 +35,35 @@ public final class ArrowRowDataBatchWriter implements AutoCloseable {
     public ArrowRowDataBatchWriter(RowType rowType, BufferAllocator allocator, int batchCapacity) {
         this.rowType = rowType;
         this.allocator = allocator;
-        this.root = VectorSchemaRoot.create(ArrowUtils.toArrowSchema(rowType), allocator);
-        this.writer = ArrowUtils.createRowDataArrowWriter(root, rowType, batchCapacity);
+        this.batchCapacity = batchCapacity;
+        VectorSchemaRoot createdRoot = VectorSchemaRoot.create(ArrowUtils.toArrowSchema(rowType), allocator);
+        try {
+            this.writer = ArrowUtils.createRowDataArrowWriter(createdRoot, rowType, batchCapacity);
+            this.root = createdRoot;
+        } catch (RuntimeException | Error failure) {
+            try {
+                createdRoot.close();
+            } catch (RuntimeException closeFailure) {
+                failure.addSuppressed(closeFailure);
+            }
+            throw failure;
+        }
+    }
+
+    /** Finds the largest power-of-two batch capacity that fits the assigned Arrow allowance. */
+    static ArrowRowDataBatchWriter createAdaptive(
+            RowType rowType, BufferAllocator allocator, int maximumBatchCapacity) {
+        int capacity = maximumBatchCapacity;
+        while (true) {
+            try {
+                return new ArrowRowDataBatchWriter(rowType, allocator, capacity);
+            } catch (org.apache.arrow.memory.OutOfMemoryException unavailable) {
+                if (capacity <= MINIMUM_ADAPTIVE_CAPACITY) {
+                    throw unavailable;
+                }
+                capacity = Math.max(MINIMUM_ADAPTIVE_CAPACITY, capacity / 2);
+            }
+        }
     }
 
     /** Copies one row's field values directly into their Arrow column buffers. */
@@ -79,6 +108,10 @@ public final class ArrowRowDataBatchWriter implements AutoCloseable {
 
     public int size() {
         return rowCount;
+    }
+
+    int batchCapacity() {
+        return batchCapacity;
     }
 
     @Override

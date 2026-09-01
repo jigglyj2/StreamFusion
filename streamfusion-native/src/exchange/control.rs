@@ -142,6 +142,12 @@ fn validate(plan: &proto::NativeExchangePlan) -> Result<()> {
                     plan.max_parallelism
                 )));
             }
+            if plan.parallelism == 0 || plan.parallelism > plan.max_parallelism {
+                return Err(DataFusionError::Plan(format!(
+                    "hash exchange parallelism {} is outside 1..={}",
+                    plan.parallelism, plan.max_parallelism
+                )));
+            }
             for index in &plan.key_indices {
                 if *index as usize >= schema.fields.len() {
                     return Err(DataFusionError::Plan(format!(
@@ -162,6 +168,12 @@ fn validate(plan: &proto::NativeExchangePlan) -> Result<()> {
             if !plan.key_indices.is_empty() {
                 return Err(DataFusionError::Plan(
                     "singleton exchange must not define hash keys".to_string(),
+                ));
+            }
+            if plan.max_parallelism != 1 || plan.parallelism != 1 {
+                return Err(DataFusionError::Plan(
+                    "singleton exchange parallelism and max parallelism must both be one"
+                        .to_string(),
                 ));
             }
         }
@@ -202,6 +214,8 @@ mod tests {
             distribution: proto::ExchangeDistribution::Hash.into(),
             key_indices: vec![0],
             max_parallelism: 128,
+            parallelism: 4,
+            preserve_key_groups: true,
             transport: proto::ExchangeTransport::ArrowIpcStream.into(),
             metadata_columns: Some(proto::ExchangeMetadataColumns {
                 row_kind_index: 1,

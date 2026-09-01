@@ -13,7 +13,6 @@ import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.flink.exchange.ArrowExchangeInputBatch;
 import tech.streamfusion.flink.exchange.NativeExchangeFrame;
-import tech.streamfusion.nativebridge.NativeExchangeBridge;
 import tech.streamfusion.nativebridge.NativeMemoryManager;
 
 /** Imports one schema-free native exchange frame through Arrow C Data. */
@@ -34,13 +33,8 @@ public final class ArrowExchangeInputCDataBridge {
         try (ArrowArray outputArray = ArrowArray.allocateNew(allocator);
                 ArrowSchema outputSchema = ArrowSchema.allocateNew(allocator);
                 CDataDictionaryProvider dictionaries = new CDataDictionaryProvider()) {
-            long rows = NativeExchangeBridge.decodeArrowBatch(
-                    serializedPlan,
-                    frame.ipcPayload(),
-                    frame.metadataLength(),
-                    outputArray.memoryAddress(),
-                    outputSchema.memoryAddress(),
-                    memoryManager);
+            long rows = frame.decodeNative(
+                    serializedPlan, outputArray.memoryAddress(), outputSchema.memoryAddress(), memoryManager);
             if (rows < 0 || rows > Integer.MAX_VALUE) {
                 throw new IllegalStateException("Native exchange returned invalid row count " + rows);
             }

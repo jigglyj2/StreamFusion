@@ -36,4 +36,21 @@ class FlinkManagedMemoryTest {
 
         assertThat(memoryManager.verifyEmpty()).isTrue();
     }
+
+    @Test
+    void transfersNativeReservationToArrowWithoutChargingItTwice() {
+        MemoryManager memoryManager = MemoryManager.create(1024 * 1024, 32 * 1024);
+        FlinkManagedMemory managedMemory = new FlinkManagedMemory(memoryManager, 4096, "transfer-test");
+
+        assertThat(managedMemory.tryReserve(4096)).isTrue();
+        managedMemory.transferToArrow(1024);
+        try (ArrowBuf ignored = managedMemory.allocator().buffer(1024)) {
+            managedMemory.finishArrowTransfer();
+            assertThat(managedMemory.reserved()).isEqualTo(4096);
+        }
+        managedMemory.release(3072);
+        managedMemory.close();
+
+        assertThat(memoryManager.verifyEmpty()).isTrue();
+    }
 }

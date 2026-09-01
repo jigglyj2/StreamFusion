@@ -29,6 +29,7 @@ final class RowDataToArrowBatchOperator extends AbstractStreamOperator<ArrowRowD
     private final boolean[] hasTimestamps = new boolean[DEFAULT_BATCH_SIZE];
     private final long[] timestamps = new long[DEFAULT_BATCH_SIZE];
     private int rowCount;
+    private int batchSize;
     private transient FlinkManagedMemory managedMemory;
     private transient ArrowRowDataBatchWriter writer;
 
@@ -49,7 +50,8 @@ final class RowDataToArrowBatchOperator extends AbstractStreamOperator<ArrowRowD
                 getOperatorConfig(),
                 getMetricGroup(),
                 "streamfusion-source-arrow-boundary");
-        writer = new ArrowRowDataBatchWriter(rowType, managedMemory.allocator(), DEFAULT_BATCH_SIZE);
+        writer = ArrowRowDataBatchWriter.createAdaptive(rowType, managedMemory.allocator(), DEFAULT_BATCH_SIZE);
+        batchSize = writer.batchCapacity();
     }
 
     @Override
@@ -64,7 +66,7 @@ final class RowDataToArrowBatchOperator extends AbstractStreamOperator<ArrowRowD
         hasTimestamps[rowCount] = element.hasTimestamp();
         timestamps[rowCount] = element.hasTimestamp() ? element.getTimestamp() : Long.MIN_VALUE;
         rowCount++;
-        if (rowCount == DEFAULT_BATCH_SIZE) {
+        if (rowCount == batchSize) {
             flush();
         }
     }

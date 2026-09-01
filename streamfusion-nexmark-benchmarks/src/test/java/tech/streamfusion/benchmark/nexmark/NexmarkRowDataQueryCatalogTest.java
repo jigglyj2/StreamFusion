@@ -8,7 +8,8 @@ import org.junit.jupiter.api.Test;
 class NexmarkRowDataQueryCatalogTest {
     @Test
     void containsOnlyQueriesWithCompleteNativeOperatorCoverage() throws Exception {
-        assertThat(NexmarkRowDataQueryCatalog.supportedQueries()).containsExactly("q0", "q1", "q2", "q22");
+        assertThat(NexmarkRowDataQueryCatalog.supportedQueries())
+                .containsExactly("q0", "q1", "q2", "q22", "group-aggregate");
         for (String query : NexmarkRowDataQueryCatalog.supportedQueries()) {
             assertThat(NexmarkRowDataQueryCatalog.load(query))
                     .contains("SELECT")

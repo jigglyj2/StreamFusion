@@ -9,6 +9,8 @@
  */
 package tech.streamfusion.flink.memory;
 
+import java.util.ArrayDeque;
+import java.util.Deque;
 import org.apache.arrow.memory.AllocationListener;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.OutOfMemoryException;
@@ -29,9 +31,11 @@ public final class FlinkManagedMemory implements AllocationListener, NativeMemor
     private final long limit;
     private final RootAllocator rootAllocator;
     private final BufferAllocator allocator;
+    private final ThreadLocal<Deque<AllocationCharge>> preAllocationCharges = ThreadLocal.withInitial(ArrayDeque::new);
 
     private long reserved;
     private long peakReserved;
+    private long pendingArrowTransfer;
     private boolean closed;
 
     public static FlinkManagedMemory create(
@@ -106,6 +110,30 @@ public final class FlinkManagedMemory implements AllocationListener, NativeMemor
     }
 
     @Override
+    public synchronized void transferToArrow(long bytes) {
+        checkNonNegative(bytes);
+        if (closed) {
+            throw new IllegalStateException("StreamFusion managed memory is closed");
+        }
+        if (pendingArrowTransfer != 0) {
+            throw new IllegalStateException(
+                    "A native-to-Arrow memory transfer is already pending: " + pendingArrowTransfer + " bytes");
+        }
+        if (bytes > reserved) {
+            throw new IllegalStateException(
+                    "StreamFusion attempted to transfer " + bytes + " bytes with only " + reserved + " reserved");
+        }
+        pendingArrowTransfer = bytes;
+    }
+
+    @Override
+    public synchronized void finishArrowTransfer() {
+        long unused = pendingArrowTransfer;
+        pendingArrowTransfer = 0;
+        release(unused);
+    }
+
+    @Override
     public long limit() {
         return limit;
     }
@@ -119,16 +147,45 @@ public final class FlinkManagedMemory implements AllocationListener, NativeMemor
     }
 
     @Override
-    public void onPreAllocation(long size) {
-        if (!tryReserve(size)) {
-            throw new OutOfMemoryException(
-                    "Flink denied " + size + " Arrow bytes; " + reserved() + " of " + limit + " bytes are reserved");
+    public synchronized void onPreAllocation(long size) {
+        checkNonNegative(size);
+        long transferred = Math.min(size, pendingArrowTransfer);
+        long additional = size - transferred;
+        if (!tryReserve(additional)) {
+            throw new OutOfMemoryException("Flink denied "
+                    + additional
+                    + " new Arrow bytes for a "
+                    + size
+                    + " byte allocation; "
+                    + reserved()
+                    + " of "
+                    + limit
+                    + " bytes are reserved");
+        }
+        pendingArrowTransfer -= transferred;
+        preAllocationCharges.get().push(new AllocationCharge(size, transferred, additional));
+    }
+
+    @Override
+    public void onAllocation(long size) {
+        AllocationCharge charge = preAllocationCharges.get().pop();
+        if (charge.size != size) {
+            throw new IllegalStateException(
+                    "Arrow allocation callback size changed from " + charge.size + " to " + size);
         }
     }
 
     @Override
     public boolean onFailedAllocation(long size, org.apache.arrow.memory.AllocationOutcome outcome) {
-        release(size);
+        AllocationCharge charge = preAllocationCharges.get().pop();
+        if (charge.size != size) {
+            throw new IllegalStateException(
+                    "Arrow failed-allocation callback size changed from " + charge.size + " to " + size);
+        }
+        synchronized (this) {
+            pendingArrowTransfer += charge.transferred;
+        }
+        release(charge.additional);
         return false;
     }
 
@@ -157,6 +214,7 @@ public final class FlinkManagedMemory implements AllocationListener, NativeMemor
             synchronized (this) {
                 memoryManager.releaseAllMemory(reservationOwner);
                 reserved = 0;
+                pendingArrowTransfer = 0;
                 closed = true;
             }
         }
@@ -168,6 +226,18 @@ public final class FlinkManagedMemory implements AllocationListener, NativeMemor
     private static void checkNonNegative(long bytes) {
         if (bytes < 0) {
             throw new IllegalArgumentException("Managed-memory byte count must be non-negative");
+        }
+    }
+
+    private static final class AllocationCharge {
+        private final long size;
+        private final long transferred;
+        private final long additional;
+
+        private AllocationCharge(long size, long transferred, long additional) {
+            this.size = size;
+            this.transferred = transferred;
+            this.additional = additional;
         }
     }
 }

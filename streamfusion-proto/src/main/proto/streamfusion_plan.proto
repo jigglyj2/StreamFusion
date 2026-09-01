@@ -18,6 +18,8 @@ message NativeExchangePlan {
   uint32 max_parallelism = 5;
   ExchangeTransport transport = 6;
   ExchangeMetadataColumns metadata_columns = 7;
+  uint32 parallelism = 8;
+  bool preserve_key_groups = 9;
 }
 
 message ExchangeMetadataColumns {
@@ -47,6 +49,7 @@ message Operator {
     Values values = 6;
     WindowTableFunction window_table_function = 7;
     Deduplicate deduplicate = 8;
+    GroupAggregate group_aggregate = 9;
   }
 }
 
@@ -60,6 +63,33 @@ message Deduplicate {
   bool generate_insert = 5;
   bool input_changelog = 6;
   bool generate_update_before = 7;
+}
+
+// Timer-free unbounded keyed aggregation. State values are opaque, versioned accumulator bytes;
+// grouping keys use Flink-compatible BinaryRow hashing and key-group assignment.
+message GroupAggregate {
+  Operator input = 1;
+  repeated uint32 grouping_indices = 2;
+  repeated AggregateCall aggregate_calls = 3;
+  bool generate_update_before = 4;
+  bool input_changelog = 5;
+}
+
+message AggregateCall {
+  AggregateFunction function = 1;
+  optional uint32 input_index = 2;
+  LogicalType input_type = 3;
+  LogicalType output_type = 4;
+  bool retractable = 5;
+}
+
+enum AggregateFunction {
+  AGGREGATE_FUNCTION_UNSPECIFIED = 0;
+  AGGREGATE_FUNCTION_COUNT_STAR = 1;
+  AGGREGATE_FUNCTION_COUNT = 2;
+  AGGREGATE_FUNCTION_SUM = 3;
+  AGGREGATE_FUNCTION_MIN = 4;
+  AGGREGATE_FUNCTION_MAX = 5;
 }
 
 message WindowTableFunction {

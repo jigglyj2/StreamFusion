@@ -38,6 +38,17 @@ class LocalRowDataNexmarkBenchmarkIT {
         assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"hashmap", "rocksdb"})
+    void runsNativeGroupAggregateOnBothStateBackends(String backend) throws Exception {
+        LocalRowDataNexmarkBenchmark.RunResult streamFusion =
+                LocalRowDataNexmarkBenchmark.run(1_000, "group-aggregate", true, backend);
+
+        assertThat(streamFusion.completed()).isTrue();
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        assertThat(streamFusion.nativeGroupAggregateBatches()).isGreaterThan(0);
+    }
+
     private static boolean isPresent(String className) {
         try {
             Class.forName(className);

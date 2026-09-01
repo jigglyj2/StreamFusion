@@ -18,6 +18,10 @@ pub(crate) trait MemoryReservationBroker: Debug + Send + Sync {
     fn try_reserve(&self, bytes: usize) -> Result<bool>;
 
     fn release(&self, bytes: usize) -> Result<()>;
+
+    fn transfer_to_arrow(&self, bytes: usize) -> Result<()> {
+        self.release(bytes)
+    }
 }
 
 /// RAII accounting for native allocations that are not owned by a DataFusion operator.
@@ -62,6 +66,10 @@ impl HostMemoryReservation {
         Ok(())
     }
 
+    pub(crate) fn sibling(&self, consumer: impl Into<String>) -> Self {
+        Self::new(Arc::clone(&self.broker), consumer)
+    }
+
     pub(crate) fn resize(&mut self, size: usize) -> Result<()> {
         if size > self.size {
             self.try_grow(size - self.size)
@@ -71,6 +79,18 @@ impl HostMemoryReservation {
             self.size = size;
             Ok(())
         }
+    }
+
+    pub(crate) fn transfer_to_arrow(&mut self, bytes: usize) -> Result<()> {
+        if bytes > self.size {
+            return Err(DataFusionError::Internal(format!(
+                "attempted to transfer {bytes} bytes from {} with only {} bytes reserved",
+                self.consumer, self.size
+            )));
+        }
+        self.broker.transfer_to_arrow(bytes)?;
+        self.size -= bytes;
+        Ok(())
     }
 
     #[cfg(test)]
@@ -138,6 +158,28 @@ impl MemoryReservationBroker for JvmMemoryReservationBroker {
                 env.call_method(
                     &self.memory_manager,
                     jni_str!("release"),
+                    jni_sig!("(J)V"),
+                    &[JValue::Long(bytes)],
+                )?;
+                Ok(())
+            })
+            .map_err(|error| DataFusionError::External(Box::new(error)))
+    }
+
+    fn transfer_to_arrow(&self, bytes: usize) -> Result<()> {
+        if bytes == 0 {
+            return Ok(());
+        }
+        let bytes = i64::try_from(bytes).map_err(|_| {
+            DataFusionError::Internal(format!(
+                "native Arrow transfer of {bytes} bytes exceeds the JVM reservation range"
+            ))
+        })?;
+        self.java_vm
+            .attach_current_thread(|env| -> jni::errors::Result<()> {
+                env.call_method(
+                    &self.memory_manager,
+                    jni_str!("transferToArrow"),
                     jni_sig!("(J)V"),
                     &[JValue::Long(bytes)],
                 )?;

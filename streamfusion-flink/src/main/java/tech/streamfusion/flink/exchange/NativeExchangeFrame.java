@@ -7,6 +7,8 @@ package tech.streamfusion.flink.exchange;
 import java.io.IOException;
 import java.util.Arrays;
 import org.apache.flink.core.memory.DataOutputView;
+import tech.streamfusion.nativebridge.NativeExchangeBridge;
+import tech.streamfusion.nativebridge.NativeMemoryManager;
 
 /** One schema-free Arrow IPC frame routed to a downstream Flink subtask. */
 public final class NativeExchangeFrame {
@@ -83,6 +85,23 @@ public final class NativeExchangeFrame {
         System.arraycopy(payload, metadataOffset, ipcPayload, 0, metadataLength);
         System.arraycopy(payload, bodyOffset, ipcPayload, metadataLength, bodyLength);
         return ipcPayload;
+    }
+
+    /** Decodes this frame without first copying its range out of a shared JNI envelope. */
+    public long decodeNative(
+            byte[] serializedPlan,
+            long outputArrayAddress,
+            long outputSchemaAddress,
+            NativeMemoryManager memoryManager) {
+        return NativeExchangeBridge.decodeArrowBatch(
+                serializedPlan,
+                payload,
+                metadataOffset,
+                Math.addExact(metadataLength, bodyLength),
+                metadataLength,
+                outputArrayAddress,
+                outputSchemaAddress,
+                memoryManager);
     }
 
     void writePayloadTo(DataOutputView target) throws IOException {

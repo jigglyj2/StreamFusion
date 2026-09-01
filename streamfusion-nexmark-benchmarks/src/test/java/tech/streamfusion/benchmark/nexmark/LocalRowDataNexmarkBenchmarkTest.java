@@ -19,4 +19,18 @@ class LocalRowDataNexmarkBenchmarkTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("flink, streamfusion, or both");
     }
+
+    @Test
+    void selectsMemoryRocksOrBothStateBackends() {
+        assertThat(LocalRowDataNexmarkBenchmark.backends("memory")).containsExactly("hashmap");
+        assertThat(LocalRowDataNexmarkBenchmark.backends("rocksdb")).containsExactly("rocksdb");
+        assertThat(LocalRowDataNexmarkBenchmark.backends("both")).containsExactly("hashmap", "rocksdb");
+    }
+
+    @Test
+    void rejectsUnknownStateBackend() {
+        assertThatThrownBy(() -> LocalRowDataNexmarkBenchmark.backends("other"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("memory, hashmap, rocksdb, or both");
+    }
 }

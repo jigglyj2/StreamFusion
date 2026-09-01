@@ -10,6 +10,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.Collections;
 import org.apache.flink.api.dag.Transformation;
+import org.apache.flink.configuration.CheckpointingOptions;
 import org.apache.flink.configuration.ReadableConfig;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.planner.delegation.PlannerBase;
@@ -49,14 +50,23 @@ public final class StreamFusionExecExchange extends CommonExecExchange implement
                     TRANSLATOR_CLASS, true, planner.getFlinkContext().getClassLoader());
             switch (distribution.getType()) {
                 case HASH:
-                    Method hash =
-                            translator.getMethod("hash", Transformation.class, RowType.class, int[].class, int.class);
+                    Method hash = translator.getMethod(
+                            "hash",
+                            Transformation.class,
+                            RowType.class,
+                            int[].class,
+                            int.class,
+                            int.class,
+                            boolean.class);
                     return (Transformation<RowData>) hash.invoke(
                             null,
                             input,
                             (RowType) getOutputType(),
                             ((HashDistribution) distribution).getKeys(),
-                            DEFAULT_LOWER_BOUND_MAX_PARALLELISM);
+                            DEFAULT_LOWER_BOUND_MAX_PARALLELISM,
+                            planner.getExecEnv().getParallelism(),
+                            config.get(CheckpointingOptions.ENABLE_UNALIGNED)
+                                    || config.get(CheckpointingOptions.FORCE_UNALIGNED));
                 case SINGLETON:
                     Method singleton = translator.getMethod("singleton", Transformation.class, RowType.class);
                     return (Transformation<RowData>) singleton.invoke(null, input, (RowType) getOutputType());

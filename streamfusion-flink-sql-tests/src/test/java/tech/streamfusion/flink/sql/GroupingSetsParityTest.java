@@ -40,7 +40,7 @@ class GroupingSetsParityTest extends SqlParityTestSupport {
                 .contains("== StreamFusion Acceleration ==")
                 .contains("Accelerated: no")
                 .contains("StreamExecGroupAggregate")
-                .contains("operator has no StreamFusion physical implementation")
+                .contains("does not yet implement expanded grouping-set semantics")
                 .doesNotContain("StreamExecExpand: operator has no StreamFusion physical implementation");
     }
 

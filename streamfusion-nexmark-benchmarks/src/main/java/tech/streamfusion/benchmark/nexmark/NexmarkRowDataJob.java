@@ -1,8 +1,15 @@
 package tech.streamfusion.benchmark.nexmark;
 
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Comparator;
+import java.util.stream.Stream;
+import org.apache.flink.configuration.CheckpointingOptions;
 import org.apache.flink.configuration.CoreOptions;
+import org.apache.flink.configuration.MemorySize;
 import org.apache.flink.configuration.StateBackendOptions;
+import org.apache.flink.configuration.TaskManagerOptions;
 import org.apache.flink.table.api.EnvironmentSettings;
 import org.apache.flink.table.api.TableEnvironment;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
@@ -12,30 +19,55 @@ import tech.streamfusion.flink.StreamFusionPlannerFactory;
 public final class NexmarkRowDataJob {
     public static final int PARALLELISM = 4;
     public static final long CHECKPOINT_INTERVAL_MILLIS = 1_000;
+    public static final long MANAGED_MEMORY_MEBIBYTES = 1024;
 
     private NexmarkRowDataJob() {}
 
     public static void run(long eventCount, String query, boolean streamFusion) throws Exception {
+        run(eventCount, query, streamFusion, "hashmap");
+    }
+
+    public static void run(long eventCount, String query, boolean streamFusion, String stateBackend) throws Exception {
         if (eventCount <= 0) {
             throw new IllegalArgumentException("eventCount must be positive");
         }
+        if (!stateBackend.equals("hashmap") && !stateBackend.equals("rocksdb")) {
+            throw new IllegalArgumentException("stateBackend must be hashmap or rocksdb: " + stateBackend);
+        }
         configurePlanner(streamFusion);
-        TableEnvironment tables = TableEnvironment.create(EnvironmentSettings.inStreamingMode());
-        tables.getConfig().getConfiguration().set(StateBackendOptions.STATE_BACKEND, "hashmap");
-        tables.getConfig()
-                .getConfiguration()
-                .setString("execution.checkpointing.interval", CHECKPOINT_INTERVAL_MILLIS + " ms");
-        tables.getConfig().getConfiguration().setString("execution.checkpointing.mode", "EXACTLY_ONCE");
-        tables.getConfig().getConfiguration().setString("execution.checkpointing.max-concurrent-checkpoints", "1");
-        tables.getConfig().getConfiguration().set(CoreOptions.DEFAULT_PARALLELISM, PARALLELISM);
-        tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ENABLED, false);
-        tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, PARALLELISM);
+        Path checkpointDirectory = Files.createTempDirectory("streamfusion-nexmark-checkpoints-");
+        try {
+            TableEnvironment tables = TableEnvironment.create(EnvironmentSettings.inStreamingMode());
+            // Keep the local comparison out of Flink's tiny embedded-cluster defaults. Both
+            // engines receive the same realistic state/Arrow allowance, including RocksDB cache
+            // memory.
+            tables.getConfig()
+                    .getConfiguration()
+                    .set(TaskManagerOptions.MANAGED_MEMORY_SIZE, MemorySize.ofMebiBytes(MANAGED_MEMORY_MEBIBYTES));
+            tables.getConfig().getConfiguration().set(StateBackendOptions.STATE_BACKEND, stateBackend);
+            tables.getConfig().getConfiguration().set(CheckpointingOptions.CHECKPOINT_STORAGE, "filesystem");
+            tables.getConfig()
+                    .getConfiguration()
+                    .set(
+                            CheckpointingOptions.CHECKPOINTS_DIRECTORY,
+                            checkpointDirectory.toUri().toString());
+            tables.getConfig()
+                    .getConfiguration()
+                    .setString("execution.checkpointing.interval", CHECKPOINT_INTERVAL_MILLIS + " ms");
+            tables.getConfig().getConfiguration().setString("execution.checkpointing.mode", "EXACTLY_ONCE");
+            tables.getConfig().getConfiguration().setString("execution.checkpointing.max-concurrent-checkpoints", "1");
+            tables.getConfig().getConfiguration().set(CoreOptions.DEFAULT_PARALLELISM, PARALLELISM);
+            tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ENABLED, false);
+            tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, PARALLELISM);
 
-        tables.executeSql(sourceDdl(eventCount));
-        NexmarkSqlJob.createViews(tables);
-        tables.executeSql(sinkDdl(query));
-        tables.executeSql("INSERT INTO nexmark_output\n" + NexmarkRowDataQueryCatalog.load(query))
-                .await();
+            tables.executeSql(sourceDdl(eventCount));
+            NexmarkSqlJob.createViews(tables);
+            tables.executeSql(sinkDdl(query));
+            tables.executeSql("INSERT INTO nexmark_output\n" + NexmarkRowDataQueryCatalog.load(query))
+                    .await();
+        } finally {
+            deleteDirectory(checkpointDirectory);
+        }
     }
 
     static String sourceDdl(long eventCount) {
@@ -67,6 +99,9 @@ public final class NexmarkRowDataJob {
                 columns =
                         "auction BIGINT, bidder BIGINT, price BIGINT, channel STRING, dir1 STRING, dir2 STRING, dir3 STRING";
                 break;
+            case "group-aggregate":
+                columns = "bidder BIGINT, bids BIGINT, spend BIGINT, minimum_price BIGINT, maximum_price BIGINT";
+                break;
             default:
                 throw new IOException("Nexmark query is not fully accelerable: " + query);
         }
@@ -80,6 +115,14 @@ public final class NexmarkRowDataJob {
         } else {
             System.clearProperty(StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY);
             System.clearProperty(StreamFusionPlannerFactory.EXEC_GRAPH_PROCESSOR_PROPERTY);
+        }
+    }
+
+    private static void deleteDirectory(Path directory) throws IOException {
+        try (Stream<Path> paths = Files.walk(directory)) {
+            for (Path path : paths.sorted(Comparator.reverseOrder()).toArray(Path[]::new)) {
+                Files.deleteIfExists(path);
+            }
         }
     }
 }

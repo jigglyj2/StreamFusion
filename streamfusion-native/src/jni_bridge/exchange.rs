@@ -73,6 +73,8 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeExchangeBridge_
     _class: JClass<'caller>,
     serialized_plan: JByteArray<'caller>,
     payload: JByteArray<'caller>,
+    payload_offset: jint,
+    payload_length: jint,
     metadata_length: jint,
     output_array_address: jlong,
     output_schema_address: jlong,
@@ -87,7 +89,28 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeExchangeBridge_
                 ));
             let mut reservation = HostMemoryReservation::new(broker, "native exchange decode");
             let plan_size = serialized_plan.len(env)?;
-            let payload_size = payload.len(env)?;
+            let array_length = payload.len(env)?;
+            let payload_offset = usize::try_from(payload_offset).map_err(|_| {
+                let _ = env.throw_new(
+                    jni_str!("java/lang/IllegalArgumentException"),
+                    JNIString::new("exchange IPC payload offset was negative"),
+                );
+                jni::errors::Error::JavaException
+            })?;
+            let payload_size = usize::try_from(payload_length).map_err(|_| {
+                let _ = env.throw_new(
+                    jni_str!("java/lang/IllegalArgumentException"),
+                    JNIString::new("exchange IPC payload length was negative"),
+                );
+                jni::errors::Error::JavaException
+            })?;
+            if payload_offset > array_length || payload_size > array_length - payload_offset {
+                let _ = env.throw_new(
+                    jni_str!("java/lang/IllegalArgumentException"),
+                    JNIString::new("exchange IPC payload range exceeded its Java array"),
+                );
+                return Err(jni::errors::Error::JavaException);
+            }
             let input_size = plan_size.checked_add(payload_size).ok_or_else(|| {
                 let _ = env.throw_new(
                     jni_str!("java/lang/IllegalStateException"),
@@ -103,11 +126,18 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeExchangeBridge_
                 jni::errors::Error::JavaException
             })?;
             let plan_bytes = env.convert_byte_array(serialized_plan)?;
-            let payload = env.convert_byte_array(payload)?;
+            let mut payload_bytes = vec![0u8; payload_size];
+            let signed_bytes = unsafe {
+                std::slice::from_raw_parts_mut(
+                    payload_bytes.as_mut_ptr().cast::<jni::sys::jbyte>(),
+                    payload_size,
+                )
+            };
+            payload.get_region(env, payload_offset as i32, signed_bytes)?;
             let rows = unsafe {
                 decode(
                     &plan_bytes,
-                    payload,
+                    payload_bytes,
                     usize::try_from(metadata_length).map_err(|_| {
                         let _ = env.throw_new(
                             jni_str!("java/lang/IllegalArgumentException"),
@@ -146,7 +176,13 @@ unsafe fn route(
     // batches. Reserve that working set before asking Arrow to allocate it.
     let mut reservation = HostMemoryReservation::new(broker, "native exchange buffers");
     reservation.try_grow(batch.get_array_memory_size())?;
-    let frames = frame_hash_exchange_batch(batch, &keys, plan.max_parallelism)?;
+    let frames = frame_hash_exchange_batch(
+        batch,
+        &keys,
+        plan.max_parallelism,
+        plan.parallelism,
+        plan.preserve_key_groups,
+    )?;
     let frame_bytes = frames.iter().try_fold(
         frames
             .capacity()
@@ -282,7 +318,8 @@ mod tests {
             Arc::new(Int32Array::from(vec![1, 42])) as ArrayRef,
         )])
         .unwrap();
-        let frames = frame_hash_exchange_batch(batch, &[(0, KeyField::Integer)], 128).unwrap();
+        let frames =
+            frame_hash_exchange_batch(batch, &[(0, KeyField::Integer)], 128, 4, true).unwrap();
 
         let encoded = encode_frames(&frames).unwrap();
 

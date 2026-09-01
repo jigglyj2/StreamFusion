@@ -24,7 +24,20 @@ public final class StreamFusionExchangeTranslator {
 
     public static Transformation<RowData> hash(
             Transformation<RowData> input, RowType rowType, int[] keys, int maxParallelism) {
-        byte[] plan = NativeExchangePlanSerializer.hash(rowType, keys, maxParallelism);
+        return hash(input, rowType, keys, maxParallelism, 1, true);
+    }
+
+    public static Transformation<RowData> hash(
+            Transformation<RowData> input,
+            RowType rowType,
+            int[] keys,
+            int maxParallelism,
+            int parallelism,
+            boolean preserveKeyGroups) {
+        if (parallelism <= 0) {
+            throw new IllegalArgumentException("Native hash exchange parallelism must be positive");
+        }
+        byte[] plan = NativeExchangePlanSerializer.hash(rowType, keys, maxParallelism, parallelism, preserveKeyGroups);
         return translate(input, rowType, plan, new NativeExchangePartitioner(maxParallelism), false);
     }
 
@@ -45,6 +58,12 @@ public final class StreamFusionExchangeTranslator {
                 SimpleOperatorFactory.of(new NativeExchangeWriterOperator(rowType, plan)),
                 NativeExchangeFrameTypeInfo.INSTANCE,
                 input.getParallelism());
+        int upstreamMaxParallelism = inheritedMaxParallelism(input);
+        if (upstreamMaxParallelism > 0) {
+            // The writer must remain chained to its raw Arrow producer. Only the framed output
+            // below is legal on a Flink network edge.
+            writer.setMaxParallelism(upstreamMaxParallelism);
+        }
         writer.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
         PartitionTransformation<NativeExchangeFrame> exchange = new PartitionTransformation<>(writer, partitioner);
         exchange.setOutputType(NativeExchangeFrameTypeInfo.INSTANCE);
@@ -58,5 +77,23 @@ public final class StreamFusionExchangeTranslator {
         reader.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
         reader.setOutputType(ArrowRowDataBatchTypeInfo.INSTANCE);
         return StreamFusionArrowBoundaries.asPlannerTransformation(reader);
+    }
+
+    private static int inheritedMaxParallelism(Transformation<?> transformation) {
+        if (transformation.getMaxParallelism() > 0) {
+            return transformation.getMaxParallelism();
+        }
+        int inherited = ExecutionConfig.PARALLELISM_DEFAULT;
+        for (Transformation<?> input : transformation.getInputs()) {
+            int candidate = inheritedMaxParallelism(input);
+            if (candidate <= 0) {
+                continue;
+            }
+            if (inherited > 0 && inherited != candidate) {
+                return ExecutionConfig.PARALLELISM_DEFAULT;
+            }
+            inherited = candidate;
+        }
+        return inherited;
     }
 }

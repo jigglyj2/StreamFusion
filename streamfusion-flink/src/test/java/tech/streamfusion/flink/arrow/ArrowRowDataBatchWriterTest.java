@@ -10,6 +10,7 @@
 package tech.streamfusion.flink.arrow;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.IntVector;
@@ -149,6 +150,23 @@ class ArrowRowDataBatchWriterTest {
                     assertThat(batch.rowView(0).getArray(0).getInt(index)).isEqualTo(index + 1);
                 }
             }
+        }
+    }
+
+    @Test
+    void releasesPartialVectorAllocationsWhenConstructionExceedsTheAllowance() {
+        try (RootAllocator allocator = new RootAllocator(64 * 1024)) {
+            assertThatThrownBy(() -> new ArrowRowDataBatchWriter(ROW_TYPE, allocator, 8192))
+                    .isInstanceOf(org.apache.arrow.memory.OutOfMemoryException.class);
+            assertThat(allocator.getAllocatedMemory()).isZero();
+        }
+    }
+
+    @Test
+    void sizesSourceBatchesDownToTheAvailableManagedMemory() {
+        try (RootAllocator allocator = new RootAllocator(256 * 1024);
+                ArrowRowDataBatchWriter writer = ArrowRowDataBatchWriter.createAdaptive(ROW_TYPE, allocator, 8192)) {
+            assertThat(writer.batchCapacity()).isLessThan(8192).isGreaterThanOrEqualTo(64);
         }
     }
 }

@@ -7,7 +7,7 @@ import java.util.List;
 
 /** Nexmark queries whose complete physical operator trees are currently accelerable. */
 final class NexmarkRowDataQueryCatalog {
-    private static final List<String> SUPPORTED = List.of("q0", "q1", "q2", "q22");
+    private static final List<String> SUPPORTED = List.of("q0", "q1", "q2", "q22", "group-aggregate");
 
     private NexmarkRowDataQueryCatalog() {}
 

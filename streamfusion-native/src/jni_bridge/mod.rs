@@ -11,5 +11,6 @@ mod common;
 mod deduplicate;
 mod exchange;
 mod execution_context;
+mod group_aggregate;
 mod union;
 mod values;

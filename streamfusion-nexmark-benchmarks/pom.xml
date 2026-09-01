@@ -12,12 +12,14 @@
     <dependencies>
         <dependency><groupId>tech.streamfusion</groupId><artifactId>streamfusion-flink</artifactId><version>${revision}</version></dependency>
         <dependency><groupId>tech.streamfusion</groupId><artifactId>streamfusion-flink-planner</artifactId><version>${revision}</version></dependency>
+        <dependency><groupId>tech.streamfusion</groupId><artifactId>streamfusion-state-rocksdb</artifactId><version>${revision}</version></dependency>
         <dependency><groupId>org.apache.flink</groupId><artifactId>flink-clients</artifactId></dependency>
         <dependency><groupId>org.apache.flink</groupId><artifactId>flink-table-api-java-bridge</artifactId></dependency>
         <dependency><groupId>org.apache.flink</groupId><artifactId>flink-table-planner_2.12</artifactId></dependency>
         <dependency><groupId>org.apache.flink</groupId><artifactId>flink-connector-kafka</artifactId></dependency>
         <dependency><groupId>org.apache.flink</groupId><artifactId>flink-json</artifactId></dependency>
         <dependency><groupId>org.apache.flink</groupId><artifactId>flink-connector-base</artifactId></dependency>
+        <dependency><groupId>org.apache.flink</groupId><artifactId>flink-statebackend-rocksdb</artifactId><version>${flink.version}</version></dependency>
         <dependency>
             <groupId>org.apache.beam</groupId><artifactId>beam-sdks-java-nexmark</artifactId>
             <exclusions>

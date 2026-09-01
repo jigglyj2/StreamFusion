@@ -47,6 +47,9 @@ after assigning its four checkpointed Source V2 splits. The upstream generator, 
 deserializer, reader, and split checkpoint state remain in use. The SQL plan runs at parallelism four
 and a black-hole table sink consumes `RowData`. Checkpointing uses exactly-once mode. It currently
 runs the fully accelerable q0, q1, q2, and q22 queries through both unmodified Flink and StreamFusion.
+The additional `group-aggregate` case uses the Nexmark bid stream to exercise keyed `COUNT(*)`,
+`SUM`, `MIN`, and `MAX`; it is a focused state-operator benchmark rather than an official numbered
+Nexmark query.
 Because the black-hole sink does not retain results, this variant measures execution throughput
 rather than output parity.
 
@@ -63,7 +66,15 @@ mvn -pl streamfusion-nexmark-benchmarks -am \
 ```
 
 For standalone measurements, invoke `LocalRowDataNexmarkBenchmark` with the event count,
-comma-separated query names, and `flink`, `streamfusion`, or `both`. Its stable output includes
-elapsed time, input-event throughput, and the number of native calc batches. Run performance
+comma-separated query names, `flink`, `streamfusion`, or `both`, and `hashmap`, `rocksdb`, or
+`both`. Its stable output includes elapsed time, input-event throughput, native calc batches, and
+native group-aggregate batches. Run performance
 measurements from a release/native-CPU build and use separate JVM invocations for each engine;
 the `both` mode is primarily a convenience smoke test.
+
+For example, after the integration-profile build:
+
+```sh
+java ... tech.streamfusion.benchmark.nexmark.LocalRowDataNexmarkBenchmark \
+  1000000 group-aggregate streamfusion rocksdb
+```

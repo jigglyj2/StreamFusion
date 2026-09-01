@@ -101,29 +101,39 @@ impl KeyedState for MemoryKeyedState {
     }
 
     fn write_batch(&mut self, mutations: Vec<StateMutation>) -> Result<()> {
-        // Admit a conservative upper bound before HashMap/Vec growth occurs. Shrink the
-        // reservation to the observed capacities after the atomic operator batch is applied.
-        let mutation_bytes = mutations.iter().fold(0usize, |total, mutation| {
-            total
-                .saturating_add(mutation.key.key.len())
-                .saturating_add(mutation.value.as_ref().map_or(0, Vec::len))
-                .saturating_add(bucket_bytes())
-        });
         let current = self.estimated_heap_size();
-        let capacities_before = self
-            .groups
-            .iter()
-            .map(HashMap::capacity)
-            .collect::<Vec<_>>();
-        let table_growth_bound = capacities_before
-            .iter()
-            .map(|capacity| capacity.saturating_mul(bucket_bytes()))
-            .sum::<usize>();
-        self.reservation.resize(
-            current
-                .saturating_add(mutation_bytes)
-                .saturating_add(table_growth_bound),
-        )?;
+        let grows = mutations.iter().try_fold(0usize, |growth, mutation| {
+            let old = self.group(mutation.key.key_group)?.get(&mutation.key.key);
+            Ok::<_, DataFusionError>(match (&mutation.value, old) {
+                (Some(value), Some(old)) => {
+                    growth.saturating_add(value.capacity().saturating_sub(old.capacity()))
+                }
+                (Some(value), None) => growth
+                    .saturating_add(mutation.key.key.capacity())
+                    .saturating_add(value.capacity())
+                    .saturating_add(bucket_bytes()),
+                (None, _) => growth,
+            })
+        })?;
+        let capacities_before = (grows != 0).then(|| {
+            self.groups
+                .iter()
+                .map(HashMap::capacity)
+                .collect::<Vec<_>>()
+        });
+        if let Some(capacities) = &capacities_before {
+            // A first insertion can also grow a hash table. Admit a conservative second-table
+            // bound before mutation; update-only batches stay on the callback-free fast path.
+            let table_growth_bound = capacities
+                .iter()
+                .map(|capacity| capacity.saturating_mul(bucket_bytes()))
+                .sum::<usize>();
+            self.reservation.resize(
+                current
+                    .saturating_add(grows)
+                    .saturating_add(table_growth_bound),
+            )?;
+        }
         for mutation in mutations {
             let (added, removed) = {
                 let group = self.group_mut(mutation.key.key_group)?;
@@ -152,11 +162,13 @@ impl KeyedState for MemoryKeyedState {
                 .saturating_sub(removed)
                 .saturating_add(added);
         }
-        debug_assert!(self
-            .groups
-            .iter()
-            .zip(capacities_before)
-            .all(|(group, before)| group.capacity() >= before));
+        if let Some(capacities) = capacities_before {
+            debug_assert!(self
+                .groups
+                .iter()
+                .zip(capacities)
+                .all(|(group, before)| group.capacity() >= before));
+        }
         self.reservation.resize(self.estimated_heap_size())?;
         Ok(())
     }

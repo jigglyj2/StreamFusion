@@ -18,9 +18,16 @@ public final class NativeExchangePlanSerializer {
     private NativeExchangePlanSerializer() {}
 
     public static byte[] hash(RowType rowType, int[] keys, int maxParallelism) {
+        return hash(rowType, keys, maxParallelism, maxParallelism, true);
+    }
+
+    public static byte[] hash(
+            RowType rowType, int[] keys, int maxParallelism, int parallelism, boolean preserveKeyGroups) {
         NativeExchangePlan.Builder plan = base(rowType)
                 .setDistribution(ExchangeDistribution.EXCHANGE_DISTRIBUTION_HASH)
-                .setMaxParallelism(maxParallelism);
+                .setMaxParallelism(maxParallelism)
+                .setParallelism(parallelism)
+                .setPreserveKeyGroups(preserveKeyGroups);
         for (int key : keys) {
             plan.addKeyIndices(key);
         }
@@ -31,6 +38,8 @@ public final class NativeExchangePlanSerializer {
         return base(rowType)
                 .setDistribution(ExchangeDistribution.EXCHANGE_DISTRIBUTION_SINGLETON)
                 .setMaxParallelism(1)
+                .setParallelism(1)
+                .setPreserveKeyGroups(false)
                 .build()
                 .toByteArray();
     }

@@ -17,6 +17,20 @@ public interface NativeMemoryManager {
     /** Releases bytes previously reserved by {@link #tryReserve(long)}. */
     void release(long bytes);
 
+    /**
+     * Transfers an existing native reservation to an Arrow Java foreign-buffer import.
+     *
+     * <p>The default implementation releases the native reservation. Flink's managed-memory
+     * implementation keeps the host reservation live and offers it as credit to the immediately
+     * following Arrow import, avoiding a double charge for the same zero-copy buffers.
+     */
+    default void transferToArrow(long bytes) {
+        release(bytes);
+    }
+
+    /** Finishes the current native-to-Arrow ownership transfer and releases unused credit. */
+    default void finishArrowTransfer() {}
+
     /** Returns the maximum number of bytes governed by this manager. */
     long limit();
 
