@@ -88,6 +88,22 @@ class LocalRowDataNexmarkBenchmarkIT {
         assertThat(streamFusion.nativeWindowJoinBatches()).isGreaterThan(0);
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"hashmap", "rocksdb"})
+    void topNMatchesFlinkOnBothStateBackends(String backend) throws Exception {
+        LocalRowDataNexmarkBenchmark.RunResult flink =
+                LocalRowDataNexmarkBenchmark.run(2_000, "top-n", false, backend, 1);
+        LocalRowDataNexmarkBenchmark.RunResult streamFusion =
+                LocalRowDataNexmarkBenchmark.run(2_000, "top-n", true, backend, 1);
+
+        assertThat(streamFusion.completed()).isTrue();
+        assertThat(streamFusion.debugRows()).containsExactlyElementsOf(flink.debugRows());
+        assertThat(streamFusion.outputRows()).isEqualTo(flink.outputRows());
+        assertThat(streamFusion.outputSha256()).isEqualTo(flink.outputSha256());
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        assertThat(streamFusion.nativeTopNBatches()).isGreaterThan(0);
+    }
+
     private static boolean isPresent(String className) {
         try {
             Class.forName(className);

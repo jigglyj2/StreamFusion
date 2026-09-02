@@ -127,6 +127,9 @@ fn create_operator(
         Some(proto::operator::Operator::WindowRank(_)) => Err(DataFusionError::Plan(
             "WindowRank requires a persistent stateful execution handle".to_string(),
         )),
+        Some(proto::operator::Operator::TopN(_)) => Err(DataFusionError::Plan(
+            "TopN requires a persistent stateful execution handle".to_string(),
+        )),
         Some(proto::operator::Operator::WindowJoin(_)) => Err(DataFusionError::Plan(
             "WindowJoin requires a persistent stateful execution handle".to_string(),
         )),

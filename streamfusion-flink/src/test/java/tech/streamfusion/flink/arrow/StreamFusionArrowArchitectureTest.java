@@ -45,4 +45,23 @@ class StreamFusionArrowArchitectureTest {
             }
         }
     }
+
+    @Test
+    void topNIsOneArrowBatchCallWithoutJavaStateOrRowAlgorithms() throws IOException {
+        String operator = Files.readString(
+                Path.of("src/main/java/tech/streamfusion/flink/topn/StreamFusionArrowTopNOperator.java"));
+        String bridge =
+                Files.readString(Path.of("src/main/java/tech/streamfusion/flink/arrow/ArrowTopNCDataBridge.java"));
+
+        assertThat(operator)
+                .contains("OneInputStreamOperator<ArrowRowDataBatch, ArrowRowDataBatch>")
+                .doesNotContain("GeneratedRecordComparator")
+                .doesNotContain("GeneratedRecordEqualiser")
+                .doesNotContain("ArrowRowDataBatch.transpose(");
+        assertThat(bridge)
+                .containsOnlyOnce("NativeTopNBridge.process(")
+                .doesNotContain("loadGroups")
+                .doesNotContain("commitGroups")
+                .doesNotContain("ArrowRowDataBatch.transpose(");
+    }
 }

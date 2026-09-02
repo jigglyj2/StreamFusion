@@ -16,6 +16,7 @@ pub(super) mod input;
 pub(crate) mod reusable_input;
 mod select_distinct;
 pub(crate) mod session_window_table_function;
+pub(crate) mod top_n;
 pub(super) mod union;
 pub(super) mod values;
 pub(crate) mod window_aggregate;

@@ -21,7 +21,7 @@ import tech.streamfusion.flink.metrics.FlinkMetricParity;
 /** The single RowData-to-Arrow conversion at a Flink source edge. */
 final class RowDataToArrowBatchOperator extends AbstractStreamOperator<ArrowRowDataBatch>
         implements OneInputStreamOperator<RowData, ArrowRowDataBatch>, BoundedOneInput {
-    static final int DEFAULT_BATCH_SIZE = 8192;
+    static final int DEFAULT_BATCH_SIZE = 16384;
 
     private final RowType rowType;
     private final int[] fieldOrdinals;

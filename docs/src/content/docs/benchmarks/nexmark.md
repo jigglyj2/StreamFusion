@@ -49,7 +49,7 @@ operator benchmark and does not replace the Kafka-in/Kafka-out north-star benchm
 Current all-or-nothing coverage can fully accelerate q0 (pass-through), q1 (decimal currency
 conversion), q2 (selection), q8 (tumbling aggregates plus Window Join), q11 (event-time session
 aggregation), and q22 (URL directory extraction). q3, q4, q5, q7, q9, q13, q15, q16, q17, q19,
-q20, and q23 still require an unsupported non-window join, interval join, rank, or surrounding
+q20, and q23 still require an unsupported non-window join, interval join, or surrounding
 operator. q10
 uses unsupported `DATE_FORMAT`; q14 uses a Java UDF, mixed decimal
 arithmetic beyond the q1 conversion shape, and timestamp calendar extraction; q21 uses Java-regex
@@ -77,8 +77,9 @@ mvn -pl streamfusion-nexmark-benchmarks -am \
 engine selector (`flink`, `streamfusion`, or `both`) for standalone measurements. It reports
 end-to-end elapsed time, input-event throughput, native calc batches, native group-aggregate
 batches, native window-aggregate batches, native Window Join batches, and a row count plus SHA-256
-for the full result changelog. The `group-aggregate` and `select-distinct` cases exercise both native state backends over
-the bounded bid stream; they are focused operator workloads rather than numbered Nexmark queries.
+for the full result changelog. The `group-aggregate`, `select-distinct`, and `top-n` cases exercise
+both native state backends over the bounded bid stream; they are focused operator workloads rather
+than numbered Nexmark queries.
 Performance reports
 must come from separate, unprofiled JVM forks built with release-mode native code; profiler runs
 are diagnostic artifacts rather than benchmark measurements.
@@ -90,6 +91,28 @@ events, the native in-memory path processed 365,779 events/s versus Flink's 377,
 RowData materialization, and exchange-boundary work; they did not expose an obvious
 SELECT-DISTINCT state-loop allocation or Java hot spot. These are local diagnostic results, not
 portable performance claims.
+
+On the September 2, 2026 local release/native-CPU `top-n` run over one million generated events at
+parallelism one, three alternating fresh-JVM forks produced in-memory medians of 107,862 events/s
+for Flink and 102,250 events/s for StreamFusion (94.8% parity). The observed elapsed-time ranges
+were 9.09–9.43s and 9.62–9.84s respectively. Fresh RocksDB forks produced medians of 76,981
+events/s for Flink and 89,876 events/s for StreamFusion, a 16.8% throughput gain; their wider
+elapsed-time ranges were 10.42–13.68s and 10.11–14.65s. Every run emitted 1,475,261 changelog
+rows. The byte-for-byte dual-engine integration test passed on both backends; standalone hashes can
+differ because the four deterministic source splits have nondeterministic network interleaving,
+which changes valid intermediate Top-N updates.
+
+Mixed JVM/native profiles used Java non-safepoint sampling, DWARF unwinding, allocation sampling,
+and differential flame graphs. Replacing one IPC stream and gather per touched partition with one
+vectorized reversible Arrow-row conversion removed the dominant state path: final in-memory samples
+attribute 0.28% to Arrow-row conversion, 0.16% to output-only interleave, and no samples to state IPC
+writers. RocksDB `multi_get` and direct batch writes remain small compared with the RowData/Arrow,
+exchange, and result-sink boundaries. Allocation samples are led by result serialization, Nexmark
+source string materialization, and Flink `RowData` copies; native state and scratch allocations are
+covered by managed-memory admission tests. Raising the adaptive Arrow target from 8,192 to 16,384
+halved native batch calls. A 32,768 target was rejected after fail-fast validation showed its
+24.9MB state/scratch peak exceeded the memory left after the RocksDB cache reservation. These are
+local diagnostic results rather than portable performance claims.
 
 On the September 1, 2026 local release/native-CPU Q11 run over five million deterministic events,
 StreamFusion's in-memory session aggregate processed 648,986 events/s versus Flink's 627,817

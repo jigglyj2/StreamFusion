@@ -45,13 +45,13 @@ address, input topic, output topic, query name, and `flink` or `streamfusion` en
 generator in `/root/data/nexmark` marks a finite `events.num` run as bounded and signals completion
 after assigning its four checkpointed Source V2 splits. The upstream generator, RowData
 deserializer, reader, and split checkpoint state remain in use. The SQL plan runs at parallelism four
-and a black-hole table sink consumes `RowData`. Checkpointing uses exactly-once mode. It currently
-runs the fully accelerable q0, q1, q2, and q22 queries through both unmodified Flink and StreamFusion.
-The additional `group-aggregate` and `select-distinct` cases use the Nexmark bid stream to exercise
-keyed `COUNT(*)`/`SUM`/`MIN`/`MAX` and counted DISTINCT respectively; they are focused
-state-operator benchmarks rather than official numbered Nexmark queries.
-Because the black-hole sink does not retain results, this variant measures execution throughput
-rather than output parity.
+by default and a benchmark result sink serializes and hashes the complete sorted `RowData`
+changelog. Checkpointing uses exactly-once mode and task restart is disabled so resource failures
+surface instead of contaminating a timing with retries. It currently runs the fully accelerable q0,
+q1, q2, q8, q11, q12, q22, group-aggregate, select-distinct, and top-n queries through both
+unmodified Flink and StreamFusion. The final three use the Nexmark bid stream to exercise keyed
+`COUNT(*)`/`SUM`/`MIN`/`MAX`, counted DISTINCT, and partitioned non-window Top-10 respectively; they
+are focused state-operator benchmarks rather than official numbered Nexmark queries.
 
 Build the generator against Flink 2.3 and run all four with:
 
@@ -66,9 +66,13 @@ mvn -pl streamfusion-nexmark-benchmarks -am \
 ```
 
 For standalone measurements, invoke `LocalRowDataNexmarkBenchmark` with the event count,
-comma-separated query names, `flink`, `streamfusion`, or `both`, and `hashmap`, `rocksdb`, or
-`both`. Its stable output includes elapsed time, input-event throughput, native calc batches, and
-native group-aggregate batches. Run performance
+comma-separated query names, `flink`, `streamfusion`, or `both`, `hashmap`, `rocksdb`, or
+`both`, and an optional parallelism. Use parallelism one when comparing the complete streaming
+Top-N changelog: independent multi-input network scheduling can produce different but equivalent
+intermediate Top-N updates. Its stable output includes elapsed time, input-event throughput, native calc batches, and
+native group-aggregate, Top-N, window-aggregate, and window-join batches. Set
+`-Dstreamfusion.nexmark.jfr=/absolute/path/top-n.jfr` to capture the JVM profile and allocation
+samples for a standalone run. Run performance
 measurements from a release/native-CPU build and use separate JVM invocations for each engine;
 the `both` mode is primarily a convenience smoke test.
 

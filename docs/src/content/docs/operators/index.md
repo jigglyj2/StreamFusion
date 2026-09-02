@@ -25,7 +25,7 @@ This matrix follows the query operations documented by Flink 2.3, including the 
 | [Table and collection expansion](table-expansion/) | **Partial** (scalar array `UNNEST`) | Yes | DataFusion `UnnestExec` with Flink-compatible correlate semantics |
 | [ORDER BY](order-by/) | **No** | Bounded inputs | DataFusion sort |
 | [LIMIT](limit/) | **No** | Bounded inputs | DataFusion limit |
-| [Top-N](top-n/) | **No** | Yes | Custom keyed ranking state |
+| [Top-N](top-n/) | **Yes** (streaming `ROW_NUMBER`) | Yes | Native Arrow ranking state with memory or RocksDB backing |
 | [Window Top-N](window-top-n/) | **Yes** (event-time constant `ROW_NUMBER` range) | Yes | Native per-window state plus Flink's exact generated comparator |
 | [Deduplication](deduplication/) | **Partial** (row-time keep-last, including Q18) | Yes | Native batched raw keyed state |
 | [Window deduplication](window-deduplication/) | **Yes** (event-time first/last) | Yes | Native retractable per-window keyed state and timers |

@@ -22,6 +22,7 @@ import org.apache.flink.table.delegation.Planner;
 import org.apache.flink.table.delegation.PlannerFactory;
 import tech.streamfusion.nativebridge.NativeCalcBridge;
 import tech.streamfusion.nativebridge.NativeGroupAggregateBridge;
+import tech.streamfusion.nativebridge.NativeTopNBridge;
 import tech.streamfusion.nativebridge.NativeUnionBridge;
 import tech.streamfusion.nativebridge.NativeValuesBridge;
 import tech.streamfusion.nativebridge.NativeWindowAggregateBridge;
@@ -95,6 +96,10 @@ public final class StreamFusionPlannerFactory implements PlannerFactory {
         return NativeWindowRankBridge.executedBatchCount();
     }
 
+    public static long nativeTopNBatchCount() {
+        return NativeTopNBridge.executedBatchCount();
+    }
+
     public static long nativeWindowJoinBatchCount() {
         return NativeWindowJoinBridge.executedBatchCount();
     }
@@ -111,6 +116,7 @@ public final class StreamFusionPlannerFactory implements PlannerFactory {
         NativeWindowAggregateBridge.resetMetrics();
         NativeWindowDeduplicateBridge.resetMetrics();
         NativeWindowRankBridge.resetMetrics();
+        NativeTopNBridge.resetMetrics();
         NativeWindowJoinBridge.resetMetrics();
         NativeUnionBridge.resetMetrics();
         NativeValuesBridge.resetMetrics();

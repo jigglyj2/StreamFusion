@@ -13,6 +13,7 @@ mod exchange;
 mod execution_context;
 mod group_aggregate;
 mod session_window_table_function;
+mod top_n;
 mod union;
 mod values;
 mod window_aggregate;

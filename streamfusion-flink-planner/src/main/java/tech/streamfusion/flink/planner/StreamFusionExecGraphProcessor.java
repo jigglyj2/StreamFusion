@@ -46,6 +46,7 @@ import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecGlobalWin
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecGroupAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecLocalWindowAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecMiniBatchAssigner;
+import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecRank;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecUnion;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecValues;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWatermarkAssigner;
@@ -54,10 +55,12 @@ import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWindowDed
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWindowJoin;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWindowRank;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWindowTableFunction;
+import org.apache.flink.table.planner.plan.utils.RankProcessStrategy;
 import org.apache.flink.table.runtime.groupwindow.NamedWindowProperty;
 import org.apache.flink.table.runtime.operators.rank.ConstantRankRange;
 import org.apache.flink.table.runtime.operators.rank.RankRange;
 import org.apache.flink.table.runtime.operators.rank.RankType;
+import org.apache.flink.table.runtime.operators.rank.VariableRankRange;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.util.TimeUtils;
 
@@ -81,6 +84,7 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             "tech.streamfusion.flink.window.StreamFusionWindowDeduplicateTranslator";
     private static final String WINDOW_RANK_TRANSLATOR_CLASS =
             "tech.streamfusion.flink.window.StreamFusionWindowRankTranslator";
+    private static final String TOP_N_TRANSLATOR_CLASS = "tech.streamfusion.flink.topn.StreamFusionTopNTranslator";
     private static final String WINDOW_JOIN_TRANSLATOR_CLASS =
             "tech.streamfusion.flink.window.StreamFusionWindowJoinTranslator";
 
@@ -165,6 +169,11 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             }
         } else if (node instanceof StreamExecWindowDeduplicate) {
             String reason = unsupportedReason((StreamExecWindowDeduplicate) node, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
+        } else if (node instanceof StreamExecRank) {
+            String reason = unsupportedReason((StreamExecRank) node, context);
             if (reason != null) {
                 rejections.add(nodePath + "\n" + reason);
             }
@@ -363,6 +372,33 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     (RowType) deduplicate.getOutputType(),
                     "StreamFusionWindowDeduplicate");
             replacement.setInputEdges(deduplicate.getInputEdges().stream()
+                    .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                    .collect(Collectors.toList()));
+            return replacement;
+        }
+        if (node instanceof StreamExecRank) {
+            StreamExecRank rank = (StreamExecRank) node;
+            RankRange range = rankRange(rank);
+            long start = range instanceof ConstantRankRange ? ((ConstantRankRange) range).getRankStart() : 1L;
+            Long end = range instanceof ConstantRankRange ? ((ConstantRankRange) range).getRankEnd() : null;
+            Integer variableEnd =
+                    range instanceof VariableRankRange ? ((VariableRankRange) range).getRankEndIndex() : null;
+            StreamFusionExecRank replacement = new StreamFusionExecRank(
+                    rank.getPersistedConfig(),
+                    rankPartitionKeys(rank),
+                    rankSortSpec(rank),
+                    rankPrimaryKeys(rank),
+                    start,
+                    end,
+                    variableEnd,
+                    rankOutputNumber(rank),
+                    rankGenerateUpdateBefore(rank),
+                    rankStrategyName(rank),
+                    rankStateTtl(rank),
+                    rank.getInputProperties().get(0),
+                    (RowType) rank.getOutputType(),
+                    "StreamFusionRank");
+            replacement.setInputEdges(rank.getInputEdges().stream()
                     .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
                     .collect(Collectors.toList()));
             return replacement;
@@ -598,6 +634,66 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             throw new IllegalStateException("Could not inspect StreamFusion WindowDeduplicate support", e);
         } catch (InvocationTargetException e) {
             throw new IllegalStateException("StreamFusion WindowDeduplicate support inspection failed", e.getCause());
+        }
+    }
+
+    private String unsupportedReason(StreamExecRank rank, ProcessorContext context) {
+        if (rankType(rank) != RankType.ROW_NUMBER) {
+            return "rank type: Flink streaming Top-N only implements ROW_NUMBER";
+        }
+        RankRange range = rankRange(rank);
+        long start;
+        Long end;
+        Integer variableEnd;
+        if (range instanceof ConstantRankRange) {
+            start = ((ConstantRankRange) range).getRankStart();
+            end = ((ConstantRankRange) range).getRankEnd();
+            variableEnd = null;
+        } else if (range instanceof VariableRankRange) {
+            start = 1L;
+            end = null;
+            variableEnd = ((VariableRankRange) range).getRankEndIndex();
+        } else {
+            return "rank range: Flink Top-N requires a constant or variable rank end";
+        }
+        ExecEdge input = rank.getInputEdges().get(0);
+        try {
+            Class<?> translator = Class.forName(
+                    TOP_N_TRANSLATOR_CLASS,
+                    true,
+                    context.getPlanner().getFlinkContext().getClassLoader());
+            Method method = translator.getMethod(
+                    "unsupportedReason",
+                    RowType.class,
+                    RowType.class,
+                    int[].class,
+                    SortSpec.class,
+                    int[].class,
+                    long.class,
+                    Long.class,
+                    Integer.class,
+                    boolean.class,
+                    String.class,
+                    long.class,
+                    ReadableConfig.class);
+            return (String) method.invoke(
+                    null,
+                    (RowType) input.getOutputType(),
+                    (RowType) rank.getOutputType(),
+                    rankPartitionKeys(rank),
+                    rankSortSpec(rank),
+                    rankPrimaryKeys(rank),
+                    start,
+                    end,
+                    variableEnd,
+                    rankOutputNumber(rank),
+                    rankStrategyName(rank),
+                    rankStateTtl(rank),
+                    rank.getPersistedConfig());
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
+            throw new IllegalStateException("Could not inspect StreamFusion Top-N support", e);
+        } catch (InvocationTargetException e) {
+            throw new IllegalStateException("StreamFusion Top-N support inspection failed", e.getCause());
         }
     }
 
@@ -1028,6 +1124,68 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
 
     private static WindowingStrategy windowDeduplicateWindowing(StreamExecWindowDeduplicate deduplicate) {
         return (WindowingStrategy) field(deduplicate, StreamExecWindowDeduplicate.class, "windowing");
+    }
+
+    private static RankType rankType(StreamExecRank rank) {
+        return (RankType) field(rank, StreamExecRank.class, "rankType");
+    }
+
+    private static int[] rankPartitionKeys(StreamExecRank rank) {
+        return ((PartitionSpec) field(rank, StreamExecRank.class, "partitionSpec")).getFieldIndices();
+    }
+
+    private static SortSpec rankSortSpec(StreamExecRank rank) {
+        return (SortSpec) field(rank, StreamExecRank.class, "sortSpec");
+    }
+
+    private static RankRange rankRange(StreamExecRank rank) {
+        return (RankRange) field(rank, StreamExecRank.class, "rankRange");
+    }
+
+    private static RankProcessStrategy rankStrategy(StreamExecRank rank) {
+        return (RankProcessStrategy) field(rank, StreamExecRank.class, "rankStrategy");
+    }
+
+    private static String rankStrategyName(StreamExecRank rank) {
+        RankProcessStrategy strategy = rankStrategy(rank);
+        if (strategy instanceof RankProcessStrategy.AppendFastStrategy) {
+            return "APPEND_FAST";
+        }
+        if (strategy instanceof RankProcessStrategy.UpdateFastStrategy) {
+            return "UPDATE_FAST";
+        }
+        if (strategy instanceof RankProcessStrategy.RetractStrategy) {
+            return "RETRACT";
+        }
+        return null;
+    }
+
+    private static int[] rankPrimaryKeys(StreamExecRank rank) {
+        RankProcessStrategy strategy = rankStrategy(rank);
+        return strategy instanceof RankProcessStrategy.UpdateFastStrategy
+                ? ((RankProcessStrategy.UpdateFastStrategy) strategy)
+                        .getPrimaryKeys()
+                        .clone()
+                : new int[0];
+    }
+
+    private static boolean rankOutputNumber(StreamExecRank rank) {
+        return (boolean) field(rank, StreamExecRank.class, "outputRankNumber");
+    }
+
+    private static boolean rankGenerateUpdateBefore(StreamExecRank rank) {
+        return (boolean) field(rank, StreamExecRank.class, "generateUpdateBefore");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static long rankStateTtl(StreamExecRank rank) {
+        List<StateMetadata> metadata = (List<StateMetadata>) field(rank, StreamExecRank.class, "stateMetadataList");
+        if (metadata == null || metadata.isEmpty()) {
+            return rank.getPersistedConfig()
+                    .get(ExecutionConfigOptions.IDLE_STATE_RETENTION)
+                    .toMillis();
+        }
+        return TimeUtils.parseDuration(metadata.get(0).getStateTtl()).toMillis();
     }
 
     private static RankType windowRankType(StreamExecWindowRank rank) {

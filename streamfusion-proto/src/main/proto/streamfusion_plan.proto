@@ -56,7 +56,36 @@ message Operator {
     WindowDeduplicate window_deduplicate = 11;
     WindowRank window_rank = 12;
     WindowJoin window_join = 13;
+    TopN top_n = 14;
   }
+}
+
+// Timer-free streaming Top-N/ROW_NUMBER state. The native operator consumes and emits Arrow,
+// applies Flink ordering/changelog semantics, and owns key grouping, backend I/O, snapshots,
+// and the canonical state encoding in one persistent execution handle.
+message TopN {
+  Operator input = 1;
+  repeated uint32 partition_key_indices = 2;
+  repeated uint32 sort_key_indices = 3;
+  repeated uint32 primary_key_indices = 4;
+  uint64 rank_start = 5;
+  optional uint64 rank_end = 6;
+  optional uint32 variable_rank_end_index = 7;
+  bool output_rank_number = 8;
+  bool generate_update_before = 9;
+  TopNStrategy strategy = 10;
+  Schema input_schema = 11;
+  uint64 state_ttl_millis = 12;
+  repeated bool sort_ascending = 13;
+  repeated bool sort_nulls_last = 14;
+  Schema output_schema = 15;
+}
+
+enum TopNStrategy {
+  TOP_N_STRATEGY_UNSPECIFIED = 0;
+  TOP_N_STRATEGY_APPEND_FAST = 1;
+  TOP_N_STRATEGY_UPDATE_FAST = 2;
+  TOP_N_STRATEGY_RETRACT = 3;
 }
 
 // Two-input event-time Window Join state. Join result semantics remain on the Java edge so the

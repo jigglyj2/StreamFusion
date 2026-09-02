@@ -72,6 +72,7 @@ public final class NexmarkRowDataJob {
                     .setString("execution.checkpointing.interval", CHECKPOINT_INTERVAL_MILLIS + " ms");
             tables.getConfig().getConfiguration().setString("execution.checkpointing.mode", "EXACTLY_ONCE");
             tables.getConfig().getConfiguration().setString("execution.checkpointing.max-concurrent-checkpoints", "1");
+            tables.getConfig().getConfiguration().setString("restart-strategy.type", "none");
             tables.getConfig().getConfiguration().set(CoreOptions.DEFAULT_PARALLELISM, parallelism);
             tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ENABLED, false);
             tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, parallelism);
@@ -129,6 +130,10 @@ public final class NexmarkRowDataJob {
                 break;
             case "select-distinct":
                 columns = "bidder BIGINT";
+                break;
+            case "top-n":
+                columns = "auction BIGINT, bidder BIGINT, price BIGINT, `dateTime` TIMESTAMP(3), "
+                        + "extra STRING, row_num BIGINT";
                 break;
             case "q11":
             case "q12":

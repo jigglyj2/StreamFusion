@@ -1,7 +1,10 @@
 package tech.streamfusion.benchmark.nexmark;
 
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
+import jdk.jfr.Configuration;
+import jdk.jfr.Recording;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
 
 /** Runs fully accelerable Nexmark queries with checkpointed RowData inputs and RowData outputs. */
@@ -14,25 +17,38 @@ public final class LocalRowDataNexmarkBenchmark {
                 args.length < 2 ? NexmarkRowDataQueryCatalog.supportedQueries() : Arrays.asList(args[1].split(","));
         List<Boolean> engines = args.length < 3 ? List.of(false, true) : engines(args[2]);
         List<String> backends = args.length < 4 ? List.of("hashmap") : backends(args[3]);
-        for (String query : queries) {
-            for (boolean streamFusion : engines) {
-                for (String backend : backends) {
-                    RunResult result = run(events, query, streamFusion, backend);
-                    System.out.printf(
-                            "%s engine=%s state_backend=%s input_events=%d elapsed_seconds=%.6f input_events_per_second=%.2f native_calc_batches=%d native_group_aggregate_batches=%d native_window_aggregate_batches=%d native_window_join_batches=%d output_rows=%d output_sha256=%s%n",
-                            query,
-                            streamFusion ? "streamfusion" : "flink",
-                            backend,
-                            events,
-                            result.elapsedSeconds(),
-                            result.recordsPerSecond(events),
-                            result.nativeCalcBatches(),
-                            result.nativeGroupAggregateBatches(),
-                            result.nativeWindowAggregateBatches(),
-                            result.nativeWindowJoinBatches(),
-                            result.outputRows(),
-                            result.outputSha256());
+        int parallelism = args.length < 5 ? NexmarkRowDataJob.PARALLELISM : Integer.parseInt(args[4]);
+        String recordingPath = System.getProperty("streamfusion.nexmark.jfr");
+        try (Recording recording =
+                recordingPath == null ? null : new Recording(Configuration.getConfiguration("profile"))) {
+            if (recording != null) {
+                recording.start();
+            }
+            for (String query : queries) {
+                for (boolean streamFusion : engines) {
+                    for (String backend : backends) {
+                        RunResult result = run(events, query, streamFusion, backend, parallelism);
+                        System.out.printf(
+                                "%s engine=%s state_backend=%s input_events=%d elapsed_seconds=%.6f input_events_per_second=%.2f native_calc_batches=%d native_group_aggregate_batches=%d native_top_n_batches=%d native_window_aggregate_batches=%d native_window_join_batches=%d output_rows=%d output_sha256=%s%n",
+                                query,
+                                streamFusion ? "streamfusion" : "flink",
+                                backend,
+                                events,
+                                result.elapsedSeconds(),
+                                result.recordsPerSecond(events),
+                                result.nativeCalcBatches(),
+                                result.nativeGroupAggregateBatches(),
+                                result.nativeTopNBatches(),
+                                result.nativeWindowAggregateBatches(),
+                                result.nativeWindowJoinBatches(),
+                                result.outputRows(),
+                                result.outputSha256());
+                    }
                 }
+            }
+            if (recording != null) {
+                recording.stop();
+                recording.dump(Path.of(recordingPath));
             }
         }
     }
@@ -54,6 +70,7 @@ public final class LocalRowDataNexmarkBenchmark {
                 System.nanoTime() - start,
                 StreamFusionPlannerFactory.nativeCalcBatchCount(),
                 StreamFusionPlannerFactory.nativeGroupAggregateBatchCount(),
+                StreamFusionPlannerFactory.nativeTopNBatchCount(),
                 StreamFusionPlannerFactory.nativeWindowAggregateBatchCount(),
                 StreamFusionPlannerFactory.nativeWindowJoinBatchCount(),
                 output.rowCount(),
@@ -92,6 +109,7 @@ public final class LocalRowDataNexmarkBenchmark {
         private final long elapsedNanos;
         private final long nativeCalcBatches;
         private final long nativeGroupAggregateBatches;
+        private final long nativeTopNBatches;
         private final long nativeWindowAggregateBatches;
         private final long nativeWindowJoinBatches;
         private final long outputRows;
@@ -102,6 +120,7 @@ public final class LocalRowDataNexmarkBenchmark {
                 long elapsedNanos,
                 long nativeCalcBatches,
                 long nativeGroupAggregateBatches,
+                long nativeTopNBatches,
                 long nativeWindowAggregateBatches,
                 long nativeWindowJoinBatches,
                 long outputRows,
@@ -110,6 +129,7 @@ public final class LocalRowDataNexmarkBenchmark {
             this.elapsedNanos = elapsedNanos;
             this.nativeCalcBatches = nativeCalcBatches;
             this.nativeGroupAggregateBatches = nativeGroupAggregateBatches;
+            this.nativeTopNBatches = nativeTopNBatches;
             this.nativeWindowAggregateBatches = nativeWindowAggregateBatches;
             this.nativeWindowJoinBatches = nativeWindowJoinBatches;
             this.outputRows = outputRows;
@@ -131,6 +151,10 @@ public final class LocalRowDataNexmarkBenchmark {
 
         long nativeGroupAggregateBatches() {
             return nativeGroupAggregateBatches;
+        }
+
+        long nativeTopNBatches() {
+            return nativeTopNBatches;
         }
 
         long nativeWindowAggregateBatches() {

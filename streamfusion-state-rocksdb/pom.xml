@@ -34,7 +34,7 @@
                             <environmentVariables>
                                 <CARGO_TARGET_DIR>${project.build.directory}/rust</CARGO_TARGET_DIR>
                                 <CARGO_BUILD_JOBS>4</CARGO_BUILD_JOBS>
-                                <RUSTFLAGS>-C target-cpu=native</RUSTFLAGS>
+                                <RUSTFLAGS>-C target-cpu=native -C force-frame-pointers=yes -C debuginfo=1</RUSTFLAGS>
                             </environmentVariables>
                         </configuration>
                     </execution>

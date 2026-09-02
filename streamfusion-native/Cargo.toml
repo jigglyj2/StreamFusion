@@ -12,6 +12,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 ahash = "0.8.12"
 arrow = { version = "59.2.0", features = ["ffi"] }
+arrow-row = "59.2.0"
 chrono = "0.4.42"
 chrono-tz = "0.10.4"
 datafusion = { version = "55.0.0", default-features = false }
