@@ -167,7 +167,11 @@ public final class StreamFusionGroupAggregateTranslator {
         if (kind == SqlKind.COUNT && arguments > 1) {
             return "COUNT accepts zero or one input in the initial native slice";
         }
-        if (kind != SqlKind.COUNT && kind != SqlKind.SUM && kind != SqlKind.MIN && kind != SqlKind.MAX) {
+        if (kind != SqlKind.COUNT
+                && kind != SqlKind.SUM
+                && kind != SqlKind.SUM0
+                && kind != SqlKind.MIN
+                && kind != SqlKind.MAX) {
             return call.getAggregation().getName() + " is not implemented";
         }
         if (kind != SqlKind.COUNT && arguments != 1) {
@@ -179,7 +183,7 @@ public final class StreamFusionGroupAggregateTranslator {
                 return "input index " + inputIndex + " is outside the input row";
             }
             LogicalTypeRoot inputRoot = inputType.getTypeAt(inputIndex).getTypeRoot();
-            if (kind == SqlKind.SUM && !supportedSum(inputRoot)) {
+            if ((kind == SqlKind.SUM || kind == SqlKind.SUM0) && !supportedSum(inputRoot)) {
                 return inputType.getTypeAt(inputIndex) + " is not supported by native SUM";
             }
             if ((kind == SqlKind.MIN || kind == SqlKind.MAX) && !supportedExtremum(inputRoot)) {
@@ -193,7 +197,7 @@ public final class StreamFusionGroupAggregateTranslator {
         if (kind == SqlKind.COUNT && outputType.getTypeRoot() != LogicalTypeRoot.BIGINT) {
             return "COUNT output must be BIGINT, got " + outputType;
         }
-        if (kind == SqlKind.SUM && !supportedSum(outputType.getTypeRoot())) {
+        if ((kind == SqlKind.SUM || kind == SqlKind.SUM0) && !supportedSum(outputType.getTypeRoot())) {
             return "output type " + outputType + " is not supported by native SUM";
         }
         if ((kind == SqlKind.MIN || kind == SqlKind.MAX) && !supportedExtremum(outputType.getTypeRoot())) {

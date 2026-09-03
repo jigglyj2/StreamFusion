@@ -14,6 +14,7 @@ mod exchange;
 mod execution_context;
 mod group_aggregate;
 mod interval_join;
+mod over_aggregate;
 mod regular_join;
 mod session_window_table_function;
 mod top_n;

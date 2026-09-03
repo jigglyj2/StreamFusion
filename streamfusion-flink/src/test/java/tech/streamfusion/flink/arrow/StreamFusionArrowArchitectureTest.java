@@ -64,4 +64,23 @@ class StreamFusionArrowArchitectureTest {
                 .doesNotContain("commitGroups")
                 .doesNotContain("ArrowRowDataBatch.transpose(");
     }
+
+    @Test
+    void overAggregationIsOneArrowBatchCallWithoutJavaStateOrRowAlgorithms() throws IOException {
+        String operator = Files.readString(
+                Path.of("src/main/java/tech/streamfusion/flink/over/StreamFusionArrowOverAggregateOperator.java"));
+        String bridge = Files.readString(
+                Path.of("src/main/java/tech/streamfusion/flink/arrow/ArrowOverAggregateCDataBridge.java"));
+
+        assertThat(operator)
+                .contains("OneInputStreamOperator<ArrowRowDataBatch, ArrowRowDataBatch>")
+                .doesNotContain("GeneratedRecordComparator")
+                .doesNotContain("GeneratedRecordEqualiser")
+                .doesNotContain("ArrowRowDataBatch.transpose(");
+        assertThat(bridge)
+                .containsOnlyOnce("NativeOverAggregateBridge.process(")
+                .doesNotContain("loadGroups")
+                .doesNotContain("commitGroups")
+                .doesNotContain("ArrowRowDataBatch.transpose(");
+    }
 }

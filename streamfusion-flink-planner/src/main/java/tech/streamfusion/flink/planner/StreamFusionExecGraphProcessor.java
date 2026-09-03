@@ -36,6 +36,7 @@ import org.apache.flink.table.planner.plan.nodes.exec.processor.ExecNodeGraphPro
 import org.apache.flink.table.planner.plan.nodes.exec.processor.ProcessorContext;
 import org.apache.flink.table.planner.plan.nodes.exec.spec.IntervalJoinSpec;
 import org.apache.flink.table.planner.plan.nodes.exec.spec.JoinSpec;
+import org.apache.flink.table.planner.plan.nodes.exec.spec.OverSpec;
 import org.apache.flink.table.planner.plan.nodes.exec.spec.PartitionSpec;
 import org.apache.flink.table.planner.plan.nodes.exec.spec.SortSpec;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecCalc;
@@ -51,6 +52,7 @@ import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecIntervalJ
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecJoin;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecLocalWindowAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecMiniBatchAssigner;
+import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecOverAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecRank;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecUnion;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecValues;
@@ -98,6 +100,8 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             "tech.streamfusion.flink.join.StreamFusionRegularJoinTranslator";
     private static final String INTERVAL_JOIN_TRANSLATOR_CLASS =
             "tech.streamfusion.flink.join.StreamFusionIntervalJoinTranslator";
+    private static final String OVER_AGGREGATE_TRANSLATOR_CLASS =
+            "tech.streamfusion.flink.over.StreamFusionOverAggregateTranslator";
 
     @Override
     public ExecNodeGraph process(ExecNodeGraph graph, ProcessorContext context) {
@@ -166,6 +170,11 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             }
         } else if (node instanceof StreamExecGroupAggregate) {
             String reason = unsupportedReason((StreamExecGroupAggregate) node, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
+        } else if (node instanceof StreamExecOverAggregate) {
+            String reason = unsupportedReason((StreamExecOverAggregate) node, context);
             if (reason != null) {
                 rejections.add(nodePath + "\n" + reason);
             }
@@ -358,6 +367,19 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     aggregate.getInputProperties().get(0),
                     (RowType) aggregate.getOutputType(),
                     "StreamFusionGroupAggregate");
+            replacement.setInputEdges(aggregate.getInputEdges().stream()
+                    .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                    .collect(Collectors.toList()));
+            return replacement;
+        }
+        if (node instanceof StreamExecOverAggregate) {
+            StreamExecOverAggregate aggregate = (StreamExecOverAggregate) node;
+            StreamFusionExecOverAggregate replacement = new StreamFusionExecOverAggregate(
+                    aggregate.getPersistedConfig(),
+                    overSpec(aggregate),
+                    aggregate.getInputProperties().get(0),
+                    (RowType) aggregate.getOutputType(),
+                    "StreamFusionOverAggregate");
             replacement.setInputEdges(aggregate.getInputEdges().stream()
                     .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
                     .collect(Collectors.toList()));
@@ -997,6 +1019,38 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         }
     }
 
+    private String unsupportedReason(StreamExecOverAggregate aggregate, ProcessorContext context) {
+        ExecEdge input = aggregate.getInputEdges().get(0);
+        long stateTtl = aggregate
+                .getPersistedConfig()
+                .get(ExecutionConfigOptions.IDLE_STATE_RETENTION)
+                .toMillis();
+        try {
+            Class<?> translator = Class.forName(
+                    OVER_AGGREGATE_TRANSLATOR_CLASS,
+                    true,
+                    context.getPlanner().getFlinkContext().getClassLoader());
+            Method method = translator.getMethod(
+                    "unsupportedReason",
+                    RowType.class,
+                    RowType.class,
+                    OverSpec.class,
+                    long.class,
+                    ReadableConfig.class);
+            return (String) method.invoke(
+                    null,
+                    (RowType) input.getOutputType(),
+                    (RowType) aggregate.getOutputType(),
+                    overSpec(aggregate),
+                    stateTtl,
+                    aggregate.getPersistedConfig());
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException failure) {
+            throw new IllegalStateException("Could not inspect StreamFusion OVER support", failure);
+        } catch (InvocationTargetException failure) {
+            throw new IllegalStateException("StreamFusion OVER support inspection failed", failure.getCause());
+        }
+    }
+
     private String unsupportedReason(StreamExecWindowAggregate aggregate, ProcessorContext context) {
         ExecEdge input = aggregate.getInputEdges().get(0);
         try {
@@ -1270,6 +1324,10 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
 
     private static int[] grouping(StreamExecGroupAggregate aggregate) {
         return ((int[]) field(aggregate, StreamExecGroupAggregate.class, "grouping")).clone();
+    }
+
+    private static OverSpec overSpec(StreamExecOverAggregate aggregate) {
+        return (OverSpec) field(aggregate, StreamExecOverAggregate.class, "overSpec");
     }
 
     private static org.apache.calcite.rel.core.AggregateCall[] aggregateCalls(StreamExecGroupAggregate aggregate) {

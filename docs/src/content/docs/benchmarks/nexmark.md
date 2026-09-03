@@ -80,14 +80,30 @@ mvn -pl streamfusion-nexmark-benchmarks -am \
 engine selector (`flink`, `streamfusion`, or `both`) for standalone measurements. It reports
 end-to-end elapsed time, input-event throughput, native calc batches, native group-aggregate
 batches, native window-aggregate batches, native Window Join batches, native regular-join batches,
-native interval-join batches,
+native interval-join batches, native OVER-aggregate batches,
 and a row count plus SHA-256 for the full result changelog. The `group-aggregate`,
-`interval-join`, `select-distinct`, `top-n`, and `limit` cases
+`interval-join`, `over-aggregate`, `select-distinct`, `top-n`, and `limit` cases
 exercise both native state backends over the bounded bid stream; they are focused operator workloads
 rather than numbered Nexmark queries.
 Performance reports
 must come from separate, unprofiled JVM forks built with release-mode native code; profiler runs
 are diagnostic artifacts rather than benchmark measurements.
+
+On the September 3, 2026 local release/native-CPU `over-aggregate` run over 100,000 deterministic
+events at parallelism one, three alternating fresh-JVM forks produced in-memory medians of 20,908
+events/s for Flink and 20,759 events/s for StreamFusion (99.3% parity). Elapsed-time ranges were
+4.677–4.930s and 4.791–4.875s. RocksDB medians were 16,887 and 19,843 events/s, a 17.5%
+StreamFusion gain, with elapsed ranges of 5.879–6.037s and 5.017–5.175s. Every run emitted 92,000
+rows with SHA-256 `9cdcca648552898214b792466466ca07ccf3af86de0663a881d9930e38036144`, and every
+StreamFusion run reported seven native OVER batches.
+
+Mixed JVM/native CPU profiles over a longer 600,000-event run used Java non-safepoint sampling,
+DWARF/frame-pointer unwinding, JFR, collapsed stacks, and differential flame graphs for both
+backends. Prefix seeding removed the append-heavy full-state scan: full recomputation was 0.11% of
+samples, suffix recomputation was 0.42–0.74%, and the complete OVER processor was 2.1–2.4%. The
+required RowData-to-Arrow source boundary remained larger at 4.5–5.5%. Java and native allocation
+profiles found no dominant OVER state-loop allocation. Profiler timings were excluded from the
+benchmark above; these are local diagnostic results rather than portable performance claims.
 
 On the September 1, 2026 local release/native-CPU `select-distinct` run over two million generated
 events, the native in-memory path processed 365,779 events/s versus Flink's 377,002 events/s

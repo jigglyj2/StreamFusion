@@ -34,6 +34,16 @@ import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 
 class StatefulOpaquePayloadTypeParityTest extends SqlParityTestSupport {
     @Test
+    void overStatePreservesEveryFlinkLogicalPartitionAndPayloadTypeByteForByte() throws Exception {
+        byte[] flink = executeOver(false);
+        byte[] streamFusion = executeOver(true);
+
+        assertThat(streamFusion).isEqualTo(flink);
+        assertThat(StreamFusionPlannerFactory.nativeOverAggregateBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
+    @Test
     void windowStatePreservesEveryFlinkLogicalPayloadTypeByteForByte() throws Exception {
         byte[] flink = execute(false, "order_value", false);
         byte[] streamFusion = execute(true, "order_value", false);
@@ -123,6 +133,29 @@ class StatefulOpaquePayloadTypeParityTest extends SqlParityTestSupport {
                 + orderField
                 + " DESC) AS row_num FROM TABLE(TUMBLE(TABLE "
                 + "window_all_type_payload, DESCRIPTOR(ts), INTERVAL '5' SECOND))) WHERE row_num = 1"));
+    }
+
+    private static byte[] executeOver(boolean streamFusionEnabled) throws Exception {
+        configure(streamFusionEnabled);
+        StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();
+        environment.setParallelism(1);
+        StreamTableEnvironment tables = StreamTableEnvironment.create(
+                environment, EnvironmentSettings.newInstance().inStreamingMode().build());
+        tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+        tables.createTemporaryView(
+                "over_all_type_payload",
+                tables.fromDataStream(
+                        environment.fromCollection(
+                                List.of(Row.of(2L, payload("alpha", 1)), Row.of(1L, payload("alpha", 1))),
+                                Types.ROW_NAMED(
+                                        new String[] {"order_value", "payload"}, Types.LONG, payloadTypeInformation())),
+                        Schema.newBuilder()
+                                .column("order_value", DataTypes.BIGINT().notNull())
+                                .column("payload", payloadDataType())
+                                .build()));
+        return collect(tables.executeSql("SELECT payload, order_value, "
+                + "SUM(order_value) OVER (PARTITION BY payload ORDER BY order_value ROWS "
+                + "BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM over_all_type_payload"));
     }
 
     private static byte[] executeJoin(boolean streamFusionEnabled) throws Exception {

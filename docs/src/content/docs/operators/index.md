@@ -17,7 +17,7 @@ This matrix follows the query operations documented by Flink 2.3, including the 
 | [Watermark assignment](watermark-assignment/) | **Plan-compatible** | Flink-owned | Distinct StreamFusion node delegating Flink's exact timer and idleness runtime |
 | [Group aggregation](group-aggregation/) | **Partial** (timer-free keyed) | Yes | Native keyed state and Arrow aggregate kernels |
 | [Window aggregation](window-aggregation/) | **Partial** (`TUMBLE`, `HOP`, `CUMULATE`, `SESSION`) | Yes | Native keyed window state, timers, and Arrow aggregate kernels |
-| [OVER aggregation](over-aggregation/) | **No** | Yes | Native ordered state and aggregate kernels |
+| [OVER aggregation](over-aggregation/) | **Partial** (non-time unbounded-preceding `ROWS`/`RANGE`) | Yes | Native ordered state and aggregate kernels |
 | [Joins](joins/) | **Partial** (regular and constant-bound interval streaming equi-joins) | By join type | Native two-sided keyed state and timers; future DataFusion batch joins |
 | [Window joins](window-join/) | **Yes** (event-time attached windows) | Yes | Native two-sided window state plus Flink join conditions |
 | [Set operations](set-operations/) | **Partial** (`UNION ALL`, `UNION DISTINCT`) | By operation | Arrow IPC at Flink multi-input gates; native distinct keyed state |

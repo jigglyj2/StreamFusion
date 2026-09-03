@@ -60,7 +60,35 @@ message Operator {
     ChangelogNormalize changelog_normalize = 15;
     RegularJoin regular_join = 16;
     IntervalJoin interval_join = 17;
+    OverAggregate over_aggregate = 18;
   }
+}
+
+// Streaming OVER aggregation. Each partition owns order-keyed Arrow rows and aggregate
+// contributions in backend-neutral state. The current runtime accepts non-time unbounded-
+// preceding frames; the time-attribute and preceding-offset fields reserve the versioned contract
+// for later timer-backed frame implementations and are rejected until those semantics are exact.
+message OverAggregate {
+  Operator input = 1;
+  repeated uint32 partition_key_indices = 2;
+  uint32 order_key_index = 3;
+  bool rows_frame = 4;
+  optional uint64 preceding_offset = 5;
+  OverTimeAttribute time_attribute = 6;
+  repeated AggregateCall aggregate_calls = 7;
+  Schema input_schema = 8;
+  Schema output_schema = 9;
+  bool input_changelog = 10;
+  uint64 state_ttl_millis = 11;
+  bool sort_ascending = 12;
+  bool sort_nulls_last = 13;
+}
+
+enum OverTimeAttribute {
+  OVER_TIME_ATTRIBUTE_UNSPECIFIED = 0;
+  OVER_TIME_ATTRIBUTE_NON_TIME = 1;
+  OVER_TIME_ATTRIBUTE_PROCESSING_TIME = 2;
+  OVER_TIME_ATTRIBUTE_EVENT_TIME = 3;
 }
 
 // Time-bounded two-input streaming join. Each key owns timestamp-ordered Arrow-row multisets and

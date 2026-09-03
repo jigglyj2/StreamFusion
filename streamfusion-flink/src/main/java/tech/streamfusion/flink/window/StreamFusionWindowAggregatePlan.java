@@ -112,7 +112,7 @@ final class StreamFusionWindowAggregatePlan {
                     ? AggregateFunction.AGGREGATE_FUNCTION_COUNT_STAR
                     : AggregateFunction.AGGREGATE_FUNCTION_COUNT;
         }
-        if (kind == SqlKind.SUM) {
+        if (kind == SqlKind.SUM || kind == SqlKind.SUM0) {
             return AggregateFunction.AGGREGATE_FUNCTION_SUM;
         }
         if (kind == SqlKind.MIN) {

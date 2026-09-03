@@ -568,6 +568,67 @@ impl AccumulatorState {
         }
     }
 
+    /// Creates an accumulator seed from the result at the end of an already processed prefix.
+    /// OVER aggregation uses this only to accumulate later rows; it never retracts from this
+    /// compact seed. Keeping just the current extremum is therefore sufficient and avoids storing
+    /// a complete accumulator alongside every ordered row.
+    pub(super) fn from_prefix_values(
+        calls: &[Call],
+        values: &[Option<AggregateValue>],
+    ) -> Result<Self> {
+        if calls.len() != values.len() {
+            return Err(DataFusionError::Internal(
+                "aggregate prefix value count does not match its calls".to_string(),
+            ));
+        }
+        let accumulators = calls
+            .iter()
+            .zip(values)
+            .map(|(call, value)| match call.function {
+                proto::AggregateFunction::CountStar | proto::AggregateFunction::Count => {
+                    let count = match value {
+                        Some(AggregateValue::Int(value)) => {
+                            i64::try_from(*value).map_err(|_| {
+                                DataFusionError::Execution(
+                                    "OVER COUNT prefix does not fit i64".to_string(),
+                                )
+                            })?
+                        }
+                        None => 0,
+                        Some(_) => {
+                            return Err(DataFusionError::Internal(
+                                "OVER COUNT prefix has a non-integer value".to_string(),
+                            ));
+                        }
+                    };
+                    Ok(Accumulator::Count(count))
+                }
+                proto::AggregateFunction::Sum => Ok(Accumulator::Sum {
+                    value: value.clone(),
+                    // Only zero versus non-zero affects accumulation output. This seed is never
+                    // retracted, so the exact historical non-null count is not needed.
+                    count: i64::from(value.is_some()),
+                }),
+                proto::AggregateFunction::Min | proto::AggregateFunction::Max => {
+                    if call.retractable {
+                        let mut extrema = BTreeMap::new();
+                        if let Some(value) = value.clone() {
+                            extrema.insert(value, 1);
+                        }
+                        Ok(Accumulator::Extremum(extrema))
+                    } else {
+                        Ok(Accumulator::AppendExtremum(value.clone()))
+                    }
+                }
+                _ => unreachable!("validated aggregate function"),
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self {
+            row_count: 1,
+            accumulators,
+        })
+    }
+
     pub(super) fn apply(
         &mut self,
         calls: &[Call],

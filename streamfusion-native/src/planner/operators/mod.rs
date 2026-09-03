@@ -15,6 +15,7 @@ pub(super) mod expand;
 pub(crate) mod group_aggregate;
 pub(super) mod input;
 pub(crate) mod interval_join;
+pub(crate) mod over_aggregate;
 pub(crate) mod regular_join;
 pub(crate) mod reusable_input;
 mod select_distinct;

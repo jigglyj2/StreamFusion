@@ -48,10 +48,12 @@ deserializer, reader, and split checkpoint state remain in use. The SQL plan run
 by default and a benchmark result sink serializes and hashes the complete sorted `RowData`
 changelog. Checkpointing uses exactly-once mode and task restart is disabled so resource failures
 surface instead of contaminating a timing with retries. It currently runs the fully accelerable q0,
-q1, q2, q8, q11, q12, q22, group-aggregate, select-distinct, top-n, and limit queries through both
-unmodified Flink and StreamFusion. The final four use the Nexmark bid stream to exercise keyed
+q1, q2, q8, q11, q12, q22, group-aggregate, select-distinct, top-n, limit, and over-aggregate
+queries through both unmodified Flink and StreamFusion. The final five use the Nexmark bid stream
+to exercise keyed
 `COUNT(*)`/`SUM`/`MIN`/`MAX`, counted DISTINCT, partitioned non-window Top-10, and global
-`LIMIT/OFFSET` respectively; they are focused state-operator benchmarks rather than official
+`LIMIT/OFFSET`, and ordered unbounded-preceding OVER aggregation respectively; they are focused
+state-operator benchmarks rather than official
 numbered Nexmark queries.
 
 Build the generator against Flink 2.3 and run all supported cases with:
@@ -72,7 +74,7 @@ comma-separated query names, `flink`, `streamfusion`, or `both`, `hashmap`, `roc
 Top-N changelog: independent multi-input network scheduling can produce different but equivalent
 intermediate Top-N updates. Its stable output includes elapsed time, input-event throughput, native calc batches, and
 native group-aggregate, Top-N, window-aggregate, window-join, regular-join, and interval-join
-batches. Set
+batches, plus native OVER-aggregate batches. Set
 `-Dstreamfusion.nexmark.jfr=/absolute/path/top-n.jfr` to capture the JVM profile and allocation
 samples for a standalone run. Run performance
 measurements from a release/native-CPU build and use separate JVM invocations for each engine;
