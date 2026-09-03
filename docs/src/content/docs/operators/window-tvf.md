@@ -45,11 +45,13 @@ columns and the bridge selection ordinal are gathered as Arrow arrays; rows are 
 The operator also publishes Flink's `numNullRowTimeRecordsDropped` counter and updates it
 when the same per-record null-time decision is made.
 
-SESSION stores complete input rows as opaque BinaryRowData in native keyed state. It performs one
-backend batch read and one atomic write per Arrow batch, merges sessions transitively using Flink's
-inclusive boundary rule, replaces native timers as a session grows, and emits original records in
-per-key input order with their original INSERT, UPDATE_BEFORE, UPDATE_AFTER, or DELETE kind. Memory
-and direct RocksDB share canonical key-group and timer snapshot bytes for aligned/unaligned
-checkpointing, cross-backend restore, and rescaling; RocksDB checkpoints reuse SST files.
+SESSION stores complete input rows in Arrow's schema-aware row format in native keyed state. It
+performs one backend batch read and one atomic write per Arrow batch, merges sessions transitively
+using Flink's inclusive boundary rule, and replaces native timers as a session grows. When a timer
+fires, Rust decodes the original columns, appends all three window properties, and exports one Arrow
+batch carrying the original INSERT, UPDATE_BEFORE, UPDATE_AFTER, or DELETE kinds in per-key input
+order; Java does not reconstruct or transpose rows. Memory and direct RocksDB share canonical
+key-group and timer snapshot bytes for aligned/unaligned checkpointing, cross-backend restore, and
+rescaling; RocksDB checkpoints reuse SST files.
 
 See the [Flink 2.3 Windowing TVFs documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/window-tvf/).

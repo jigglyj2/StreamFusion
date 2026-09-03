@@ -5,11 +5,13 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use ahash::RandomState;
-use arrow::array::{
-    Array, ArrayRef, BinaryArray, BinaryBuilder, Int8Array, TimestampMillisecondArray,
-};
+#[cfg(test)]
+use arrow::array::ArrayRef;
+use arrow::array::{Array, BinaryArray, Int8Array, TimestampMillisecondArray};
+use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use arrow_row::{RowConverter, Rows, SortField};
 use chrono::Utc;
 use chrono_tz::Tz;
 use datafusion::error::{DataFusionError, Result};
@@ -17,6 +19,7 @@ use hashbrown::HashMap;
 
 use crate::exchange::{assign_key_group, encode_binary_row, KeyField};
 use crate::memory_pool::HostMemoryReservation;
+use crate::planner::arrow_schema;
 use crate::state::{
     KeyedState, MemoryKeyedState, NativeTimerService, RocksPluginKeyedState, StateKey, StateKeyRef,
     StateMutation, TimerDomain, TimerKey,
@@ -27,21 +30,23 @@ use super::window_aggregate::local_to_timer_epoch;
 use super::window_table_function::timestamp_millis;
 
 const STATE_MAGIC: &[u8; 4] = b"SFSW";
-const STATE_VERSION: u8 = 1;
+const STATE_VERSION: u8 = 2;
 const GROUP_KEY_PREFIX: u8 = 1;
 const TIMER_STATE_KEY: &[u8] = b"\0streamfusion-session-window-tvf-timers";
 
-/// Stateful SESSION Window TVF. Rows stay opaque BinaryRowData bytes until a session fires.
+/// Stateful SESSION Window TVF with schema-aware Arrow-row state and native Arrow output.
 pub(crate) struct SessionWindowTableFunctionProcessor {
     plan: proto::WindowTableFunction,
     shift_time_zone: Tz,
     max_parallelism: u32,
     state: Box<dyn KeyedState>,
     timers: NativeTimerService,
+    visible_schema: SchemaRef,
+    output_schema: SchemaRef,
+    row_converter: RowConverter,
     input_schema: Option<SchemaRef>,
     key_fields: Vec<(usize, KeyField)>,
     preencoded_key_index: Option<usize>,
-    stored_row_index: Option<usize>,
     input_kind_index: Option<usize>,
     current_event_time: i64,
     current_processing_time: i64,
@@ -159,6 +164,23 @@ impl SessionWindowTableFunctionProcessor {
             }
         };
         validate_plan(&plan, max_parallelism)?;
+        let visible_schema =
+            arrow_schema(plan.input_schema.as_ref().expect("validated input schema"))?;
+        let row_converter = row_converter(&visible_schema)?;
+        let mut output_fields = visible_schema.fields().iter().cloned().collect::<Vec<_>>();
+        for name in ["window_start", "window_end", "window_time"] {
+            output_fields.push(Arc::new(Field::new(
+                name,
+                DataType::Timestamp(arrow::datatypes::TimeUnit::Millisecond, None),
+                false,
+            )));
+        }
+        output_fields.push(Arc::new(Field::new(
+            "__streamfusion_row_kind",
+            DataType::Int8,
+            false,
+        )));
+        let output_schema = Arc::new(Schema::new(output_fields));
         let shift_time_zone = if plan.shift_time_zone.is_empty() {
             chrono_tz::UTC
         } else {
@@ -175,10 +197,12 @@ impl SessionWindowTableFunctionProcessor {
             max_parallelism,
             state,
             timers: NativeTimerService::new(first_key_group, last_key_group, timer_reservation)?,
+            visible_schema,
+            output_schema,
+            row_converter,
             input_schema: None,
             key_fields: Vec::new(),
             preencoded_key_index: None,
-            stored_row_index: None,
             input_kind_index: None,
             current_event_time: i64::MIN,
             current_processing_time: i64::MIN,
@@ -202,14 +226,20 @@ impl SessionWindowTableFunctionProcessor {
         if self.plan.processing_time {
             self.current_processing_time = self.current_processing_time.max(processing_time);
         }
-        let copied_bytes = batch.num_rows().saturating_mul(160)
-            + self
-                .stored_rows(&batch)?
-                .iter()
-                .map(|row| row.map_or(0, |bytes| bytes.len()))
-                .sum::<usize>();
+        let visible_count = self.visible_schema.fields().len();
+        let copied_bytes = batch.columns()[..visible_count]
+            .iter()
+            .map(|column| column.get_array_memory_size())
+            .sum::<usize>()
+            .saturating_add(batch.num_rows().saturating_mul(160));
         self.scratch_reservation.resize(copied_bytes)?;
-        let result = self.process_arrow_accounted(&batch);
+        let encoded_rows = self
+            .row_converter
+            .convert_columns(&batch.columns()[..visible_count]);
+        let result = match encoded_rows {
+            Ok(encoded_rows) => self.process_arrow_accounted(&batch, &encoded_rows),
+            Err(error) => Err(error.into()),
+        };
         match result {
             Ok(output) => self.finish_output(output, copied_bytes),
             Err(error) => {
@@ -219,8 +249,11 @@ impl SessionWindowTableFunctionProcessor {
         }
     }
 
-    fn process_arrow_accounted(&mut self, batch: &RecordBatch) -> Result<RecordBatch> {
-        let stored_rows = self.stored_rows(batch)?;
+    fn process_arrow_accounted(
+        &mut self,
+        batch: &RecordBatch,
+        encoded_rows: &Rows,
+    ) -> Result<RecordBatch> {
         let kinds = batch
             .column(self.input_kind_index.expect("schema prepared"))
             .as_any()
@@ -258,7 +291,7 @@ impl SessionWindowTableFunctionProcessor {
                 index,
                 timestamp,
                 kinds.value(row),
-                stored_rows.value(row).to_vec(),
+                encoded_rows.row(row).data().to_vec(),
             ));
         }
         if unique.is_empty() {
@@ -442,7 +475,7 @@ impl SessionWindowTableFunctionProcessor {
             self.state.write_batch(mutations)?;
             self.state_write_batches = self.state_write_batches.saturating_add(1);
         }
-        let output = output_batch(output_rows)?;
+        let output = self.output_batch(output_rows)?;
         self.finish_output(output, 0)
     }
 
@@ -510,16 +543,6 @@ impl SessionWindowTableFunctionProcessor {
         Ok(())
     }
 
-    fn stored_rows<'a>(&self, batch: &'a RecordBatch) -> Result<&'a BinaryArray> {
-        batch
-            .column(self.stored_row_index.expect("schema prepared"))
-            .as_any()
-            .downcast_ref::<BinaryArray>()
-            .ok_or_else(|| {
-                DataFusionError::Execution("session Window TVF rows are not Binary".to_string())
-            })
-    }
-
     fn group_key(&self, batch: &RecordBatch, row: usize) -> Result<Vec<u8>> {
         match self.preencoded_key_index {
             Some(index) => Ok(batch
@@ -546,16 +569,14 @@ impl SessionWindowTableFunctionProcessor {
             return Ok(());
         }
         self.preencoded_key_index = metadata_index(&schema, "__streamfusion_key");
-        self.stored_row_index = metadata_index(&schema, "__streamfusion_stored_row");
         self.input_kind_index = metadata_index(&schema, "__streamfusion_input_row_kind");
-        if self.stored_row_index.is_none() || self.input_kind_index.is_none() {
+        if self.input_kind_index.is_none() {
             return Err(DataFusionError::Execution(
-                "session Window TVF requires stored-row and RowKind metadata".to_string(),
+                "session Window TVF requires RowKind metadata".to_string(),
             ));
         }
         let visible_count = [
             self.preencoded_key_index,
-            self.stored_row_index,
             self.input_kind_index,
             Some(schema.fields().len()),
         ]
@@ -563,6 +584,17 @@ impl SessionWindowTableFunctionProcessor {
         .flatten()
         .min()
         .unwrap();
+        if visible_count != self.visible_schema.fields().len()
+            || schema.fields()[..visible_count]
+                .iter()
+                .zip(self.visible_schema.fields())
+                .any(|(actual, planned)| actual.data_type() != planned.data_type())
+        {
+            return Err(DataFusionError::Execution(
+                "session Window TVF Arrow schema does not match its protobuf input schema"
+                    .to_string(),
+            ));
+        }
         if !self.plan.processing_time && self.plan.time_attribute_index as usize >= visible_count {
             return Err(DataFusionError::Plan(
                 "session Window TVF time attribute is outside the visible row".to_string(),
@@ -624,7 +656,29 @@ impl SessionWindowTableFunctionProcessor {
     }
 
     fn empty_output(&self) -> Result<RecordBatch> {
-        Ok(RecordBatch::new_empty(output_schema()))
+        Ok(RecordBatch::new_empty(self.output_schema.clone()))
+    }
+
+    fn output_batch(&self, rows: Vec<(Vec<u8>, i64, i64, i8)>) -> Result<RecordBatch> {
+        let parser = self.row_converter.parser();
+        let mut columns = self
+            .row_converter
+            .convert_rows(rows.iter().map(|(row, _, _, _)| parser.parse(row)))?;
+        let starts = rows
+            .iter()
+            .map(|(_, start, _, _)| *start)
+            .collect::<Vec<_>>();
+        let ends = rows.iter().map(|(_, _, end, _)| *end).collect::<Vec<_>>();
+        let times = ends
+            .iter()
+            .map(|end| end.saturating_sub(1))
+            .collect::<Vec<_>>();
+        let kinds = rows.iter().map(|(_, _, _, kind)| *kind).collect::<Vec<_>>();
+        columns.push(Arc::new(TimestampMillisecondArray::from(starts)));
+        columns.push(Arc::new(TimestampMillisecondArray::from(ends)));
+        columns.push(Arc::new(TimestampMillisecondArray::from(times)));
+        columns.push(Arc::new(Int8Array::from(kinds)));
+        Ok(RecordBatch::try_new(self.output_schema.clone(), columns)?)
     }
 
     fn finish_output(&mut self, output: RecordBatch, base: usize) -> Result<RecordBatch> {
@@ -799,46 +853,29 @@ fn truncated() -> DataFusionError {
     DataFusionError::Execution("truncated native session Window TVF state".to_string())
 }
 
-fn output_schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        Field::new("__streamfusion_stored_row", DataType::Binary, false),
-        Field::new(
-            "window_start",
-            DataType::Timestamp(arrow::datatypes::TimeUnit::Millisecond, None),
-            false,
-        ),
-        Field::new(
-            "window_end",
-            DataType::Timestamp(arrow::datatypes::TimeUnit::Millisecond, None),
-            false,
-        ),
-        Field::new("__streamfusion_row_kind", DataType::Int8, false),
-    ]))
-}
-
-fn output_batch(rows: Vec<(Vec<u8>, i64, i64, i8)>) -> Result<RecordBatch> {
-    let mut stored_rows = BinaryBuilder::new();
-    let mut starts = Vec::with_capacity(rows.len());
-    let mut ends = Vec::with_capacity(rows.len());
-    let mut kinds = Vec::with_capacity(rows.len());
-    for (row, start, end, kind) in rows {
-        stored_rows.append_value(row);
-        starts.push(start);
-        ends.push(end);
-        kinds.push(kind);
-    }
-    let columns: Vec<ArrayRef> = vec![
-        Arc::new(stored_rows.finish()),
-        Arc::new(TimestampMillisecondArray::from(starts)),
-        Arc::new(TimestampMillisecondArray::from(ends)),
-        Arc::new(Int8Array::from(kinds)),
-    ];
-    Ok(RecordBatch::try_new(output_schema(), columns)?)
+fn row_converter(schema: &SchemaRef) -> Result<RowConverter> {
+    let fields = schema
+        .fields()
+        .iter()
+        .map(|field| {
+            SortField::new_with_options(
+                field.data_type().clone(),
+                SortOptions {
+                    descending: false,
+                    nulls_first: true,
+                },
+            )
+        })
+        .collect();
+    Ok(RowConverter::new(fields)?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory_pool::{tests_support::TestBroker, HostMemoryReservation};
+    use arrow::array::{BinaryArray, Int64Array, TimestampMillisecondArray};
+    use prost::Message;
 
     #[test]
     fn canonical_state_preserves_sessions_rows_and_changelog() {
@@ -878,5 +915,122 @@ mod tests {
             .position(|session| start <= session.end && end >= session.start);
         assert_eq!(merged, Some(0));
         sessions.clear();
+    }
+
+    #[test]
+    fn emits_merged_sessions_directly_as_arrow_and_accounts_memory() {
+        let broker = Arc::new(TestBroker::new(64 << 20));
+        let mut processor = SessionWindowTableFunctionProcessor::new(
+            &plan(),
+            128,
+            0,
+            127,
+            HostMemoryReservation::new(broker.clone(), "session TVF test"),
+        )
+        .unwrap();
+        processor
+            .process_arrow(
+                batch(&[7, 7], &[10, 12], &[b"insert", b"delete"], &[0, 3]),
+                0,
+            )
+            .unwrap();
+        let output = processor.advance_event_time(16).unwrap();
+        assert_eq!(output.num_rows(), 2);
+        let payloads = output
+            .column(2)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .unwrap();
+        assert_eq!(payloads.value(0), b"insert");
+        assert_eq!(payloads.value(1), b"delete");
+        for (column, expected) in [(3, 10), (4, 17), (5, 16)] {
+            let values = output
+                .column(column)
+                .as_any()
+                .downcast_ref::<TimestampMillisecondArray>()
+                .unwrap();
+            assert_eq!(values.values(), &[expected, expected]);
+        }
+        assert_eq!(
+            output
+                .column(6)
+                .as_any()
+                .downcast_ref::<Int8Array>()
+                .unwrap()
+                .values(),
+            &[0, 3]
+        );
+        drop(output);
+        drop(processor);
+        assert_eq!(broker.reserved(), 0);
+    }
+
+    fn plan() -> Vec<u8> {
+        proto::NativePlan {
+            protocol_version: crate::PLAN_PROTOCOL_VERSION,
+            root: Some(proto::Operator {
+                operator: Some(proto::operator::Operator::WindowTableFunction(Box::new(
+                    proto::WindowTableFunction {
+                        input: None,
+                        time_attribute_index: 1,
+                        kind: proto::WindowKind::Session as i32,
+                        size_millis: 5,
+                        slide_or_step_millis: 0,
+                        offset_millis: 0,
+                        partition_key_indices: vec![0],
+                        processing_time: false,
+                        input_schema: Some(proto::Schema {
+                            fields: vec![
+                                proto_field(
+                                    "key",
+                                    proto::logical_type::Type::Bigint(proto::EmptyType::default()),
+                                ),
+                                proto_field(
+                                    "ts",
+                                    proto::logical_type::Type::Timestamp(proto::PrecisionType {
+                                        precision: 3,
+                                    }),
+                                ),
+                                proto_field(
+                                    "payload",
+                                    proto::logical_type::Type::Binary(proto::EmptyType::default()),
+                                ),
+                            ],
+                        }),
+                        shift_time_zone: "UTC".to_string(),
+                    },
+                ))),
+            }),
+        }
+        .encode_to_vec()
+    }
+
+    fn proto_field(name: &str, r#type: proto::logical_type::Type) -> proto::Field {
+        proto::Field {
+            name: name.to_string(),
+            r#type: Some(proto::LogicalType {
+                nullable: true,
+                r#type: Some(r#type),
+            }),
+        }
+    }
+
+    fn batch(keys: &[i64], timestamps: &[i64], payloads: &[&[u8]], kinds: &[i8]) -> RecordBatch {
+        RecordBatch::try_from_iter(vec![
+            ("key", Arc::new(Int64Array::from(keys.to_vec())) as ArrayRef),
+            (
+                "ts",
+                Arc::new(TimestampMillisecondArray::from(timestamps.to_vec())) as ArrayRef,
+            ),
+            (
+                "payload",
+                Arc::new(BinaryArray::from_vec(payloads.to_vec())) as ArrayRef,
+            ),
+            (
+                "__streamfusion_input_row_kind",
+                Arc::new(Int8Array::from(kinds.to_vec())) as ArrayRef,
+            ),
+        ])
+        .unwrap()
     }
 }

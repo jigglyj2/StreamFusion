@@ -204,7 +204,8 @@ message WindowTableFunction {
   int64 size_millis = 4;
   int64 slide_or_step_millis = 5;
   int64 offset_millis = 6;
-  // SESSION TVFs use keyed native merging state; aligned windows leave these fields empty.
+  // SESSION TVFs use schema-aware Arrow-row keyed state and native Arrow timer output; aligned
+  // windows leave these fields empty.
   repeated uint32 partition_key_indices = 7;
   bool processing_time = 8;
   Schema input_schema = 9;

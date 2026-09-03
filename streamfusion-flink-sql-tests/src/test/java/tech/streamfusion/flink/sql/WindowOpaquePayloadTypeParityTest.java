@@ -33,8 +33,8 @@ import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 class WindowOpaquePayloadTypeParityTest extends SqlParityTestSupport {
     @Test
     void windowStatePreservesEveryFlinkLogicalPayloadTypeByteForByte() throws Exception {
-        byte[] flink = execute(false, "order_value");
-        byte[] streamFusion = execute(true, "order_value");
+        byte[] flink = execute(false, "order_value", false);
+        byte[] streamFusion = execute(true, "order_value", false);
 
         assertThat(streamFusion).isEqualTo(flink);
         assertThat(StreamFusionPlannerFactory.nativeWindowRankBatchCount()).isGreaterThan(0);
@@ -43,8 +43,8 @@ class WindowOpaquePayloadTypeParityTest extends SqlParityTestSupport {
 
     @Test
     void windowDeduplicateTimerOutputPreservesEveryFlinkLogicalPayloadTypeByteForByte() throws Exception {
-        byte[] flink = execute(false, "ts");
-        byte[] streamFusion = execute(true, "ts");
+        byte[] flink = execute(false, "ts", false);
+        byte[] streamFusion = execute(true, "ts", false);
 
         assertThat(streamFusion).isEqualTo(flink);
         assertThat(StreamFusionPlannerFactory.nativeWindowDeduplicateBatchCount())
@@ -52,7 +52,16 @@ class WindowOpaquePayloadTypeParityTest extends SqlParityTestSupport {
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 
-    private static byte[] execute(boolean streamFusionEnabled, String orderField) throws Exception {
+    @Test
+    void sessionTimerOutputPreservesEveryFlinkLogicalPayloadTypeByteForByte() throws Exception {
+        byte[] flink = execute(false, null, true);
+        byte[] streamFusion = execute(true, null, true);
+
+        assertThat(streamFusion).isEqualTo(flink);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
+    private static byte[] execute(boolean streamFusionEnabled, String orderField, boolean session) throws Exception {
         configure(streamFusionEnabled);
         StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();
         environment.setParallelism(1);
@@ -80,6 +89,11 @@ class WindowOpaquePayloadTypeParityTest extends SqlParityTestSupport {
                                 .column("ts", DataTypes.TIMESTAMP(3))
                                 .watermark("ts", "ts - INTERVAL '1' SECOND")
                                 .build()));
+        if (session) {
+            return collect(
+                    tables.executeSql("SELECT payload, window_start, window_end, window_time FROM TABLE(SESSION(TABLE "
+                            + "window_all_type_payload PARTITION BY category, DESCRIPTOR(ts), INTERVAL '5' SECOND))"));
+        }
         return collect(tables.executeSql("SELECT payload, window_start, window_end, row_num FROM ("
                 + "SELECT *, ROW_NUMBER() OVER (PARTITION BY category, window_start, window_end "
                 + "ORDER BY "
