@@ -7,11 +7,9 @@ package tech.streamfusion.flink.planner;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.Collections;
-import java.util.stream.IntStream;
 import org.apache.flink.api.dag.Transformation;
 import org.apache.flink.configuration.ReadableConfig;
 import org.apache.flink.table.data.RowData;
-import org.apache.flink.table.planner.codegen.sort.ComparatorCodeGenerator;
 import org.apache.flink.table.planner.delegation.PlannerBase;
 import org.apache.flink.table.planner.plan.logical.WindowingStrategy;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecEdge;
@@ -22,7 +20,6 @@ import org.apache.flink.table.planner.plan.nodes.exec.InputProperty;
 import org.apache.flink.table.planner.plan.nodes.exec.spec.SortSpec;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecNode;
 import org.apache.flink.table.planner.plan.utils.KeySelectorUtil;
-import org.apache.flink.table.runtime.generated.GeneratedRecordComparator;
 import org.apache.flink.table.runtime.keyselector.RowDataKeySelector;
 import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
 import org.apache.flink.table.types.logical.RowType;
@@ -73,21 +70,6 @@ public final class StreamFusionExecWindowRank extends ExecNodeBase<RowData> impl
         InternalTypeInfo<RowData> inputInfo = InternalTypeInfo.of(inputType);
         RowDataKeySelector partitionSelector = KeySelectorUtil.getRowDataSelector(
                 planner.getFlinkContext().getClassLoader(), partitionKeys, inputInfo);
-        int[] sortFields = sortSpec.getFieldIndices();
-        RowDataKeySelector sortSelector =
-                KeySelectorUtil.getRowDataSelector(planner.getFlinkContext().getClassLoader(), sortFields, inputInfo);
-        SortSpec.SortSpecBuilder comparatorSpec = SortSpec.builder();
-        IntStream.range(0, sortFields.length)
-                .forEach(index -> comparatorSpec.addField(
-                        index,
-                        sortSpec.getFieldSpec(index).getIsAscendingOrder(),
-                        sortSpec.getFieldSpec(index).getNullIsLast()));
-        GeneratedRecordComparator comparator = ComparatorCodeGenerator.gen(
-                config,
-                planner.getFlinkContext().getClassLoader(),
-                "StreamFusionWindowRankComparator",
-                RowType.of(sortSpec.getFieldTypes(inputType)),
-                comparatorSpec.build());
         try {
             Class<?> translator = Class.forName(
                     TRANSLATOR_CLASS, true, planner.getFlinkContext().getClassLoader());
@@ -104,9 +86,7 @@ public final class StreamFusionExecWindowRank extends ExecNodeBase<RowData> impl
                     WindowingStrategy.class,
                     ReadableConfig.class,
                     org.apache.flink.streaming.api.environment.StreamExecutionEnvironment.class,
-                    RowDataKeySelector.class,
-                    RowDataKeySelector.class,
-                    GeneratedRecordComparator.class);
+                    RowDataKeySelector.class);
             Transformation<RowData> result = (Transformation<RowData>) method.invoke(
                     null,
                     input,
@@ -120,9 +100,7 @@ public final class StreamFusionExecWindowRank extends ExecNodeBase<RowData> impl
                     windowing,
                     getPersistedConfig(),
                     planner.getExecEnv(),
-                    partitionSelector,
-                    sortSelector,
-                    comparator);
+                    partitionSelector);
             if (result == null) {
                 throw new IllegalStateException("A selected StreamFusion WindowRank failed translation");
             }

@@ -16,7 +16,7 @@ use arrow::datatypes::{DataType, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use datafusion::error::{DataFusionError, Result};
 
-pub(super) fn compare_rows(
+pub(crate) fn compare_rows(
     left: &RecordBatch,
     left_row: usize,
     right: &RecordBatch,

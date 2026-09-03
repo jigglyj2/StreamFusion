@@ -1,15 +1,19 @@
 // Copyright 2026 StreamFusion Authors
 // Licensed under the Apache License, Version 2.0
 
+use std::cell::RefCell;
+use std::cmp::Ordering;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use ahash::RandomState;
-use arrow::array::{
-    Array, ArrayRef, BinaryArray, BinaryBuilder, Int32Array, Int64Array, Int8Array,
-};
+#[cfg(test)]
+use arrow::array::ArrayRef;
+use arrow::array::{Array, BinaryArray, Int64Array, Int8Array};
+use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use arrow_row::{RowConverter, Rows, SortField};
 use chrono::Utc;
 use chrono_tz::Tz;
 use datafusion::error::{DataFusionError, Result};
@@ -17,12 +21,14 @@ use hashbrown::HashMap;
 
 use crate::exchange::{assign_key_group, encode_binary_row, KeyField};
 use crate::memory_pool::HostMemoryReservation;
+use crate::planner::arrow_schema;
 use crate::state::{
     KeyedState, MemoryKeyedState, NativeTimerService, RocksPluginKeyedState, StateKey, StateKeyRef,
     StateMutation, TimerDomain, TimerKey,
 };
 use crate::{decode_plan, proto};
 
+use super::top_n::compare::compare_rows;
 use super::window_aggregate::local_to_timer_epoch;
 use super::window_table_function::timestamp_millis;
 
@@ -31,22 +37,23 @@ const UPDATE_BEFORE: i8 = 1;
 const UPDATE_AFTER: i8 = 2;
 const DELETE: i8 = 3;
 const STATE_MAGIC: &[u8; 4] = b"SFWR";
-const STATE_VERSION: u8 = 1;
+const STATE_VERSION: u8 = 2;
 const WINDOW_KEY_PREFIX: u8 = 1;
 const TIMER_STATE_KEY: &[u8] = b"\0streamfusion-window-rank-timers";
 
-/// Native window Top-N buffering. Java performs one generated-comparator sort per fired window.
+/// Native window Top-N buffering, Flink-compatible ordering, and Arrow output.
 pub(crate) struct WindowRankProcessor {
     plan: proto::WindowRank,
     shift_time_zone: Tz,
     max_parallelism: u32,
     state: Box<dyn KeyedState>,
     timers: NativeTimerService,
+    visible_schema: SchemaRef,
+    output_schema: SchemaRef,
+    row_converter: RowConverter,
     input_schema: Option<SchemaRef>,
     key_fields: Vec<(usize, KeyField)>,
     preencoded_key_index: Option<usize>,
-    stored_row_index: Option<usize>,
-    sort_row_index: Option<usize>,
     input_kind_index: Option<usize>,
     current_event_time: i64,
     scratch_reservation: HostMemoryReservation,
@@ -62,7 +69,6 @@ pub(crate) struct WindowRankProcessor {
 struct Candidate {
     sequence: u64,
     row: Vec<u8>,
-    sort_key: Vec<u8>,
 }
 
 #[derive(Default)]
@@ -154,6 +160,23 @@ impl WindowRankProcessor {
             }
         };
         validate_plan(&plan, max_parallelism)?;
+        let visible_schema =
+            arrow_schema(plan.input_schema.as_ref().expect("validated input schema"))?;
+        let row_converter = row_converter(&visible_schema)?;
+        let mut output_fields = visible_schema.fields().iter().cloned().collect::<Vec<_>>();
+        if plan.output_rank_number {
+            output_fields.push(Arc::new(Field::new(
+                "__streamfusion_rank_number",
+                DataType::Int64,
+                false,
+            )));
+        }
+        output_fields.push(Arc::new(Field::new(
+            "__streamfusion_row_kind",
+            DataType::Int8,
+            false,
+        )));
+        let output_schema = Arc::new(Schema::new(output_fields));
         let shift_time_zone = if plan.shift_time_zone.is_empty() {
             chrono_tz::UTC
         } else {
@@ -170,11 +193,12 @@ impl WindowRankProcessor {
             max_parallelism,
             state,
             timers: NativeTimerService::new(first_key_group, last_key_group, timer_reservation)?,
+            visible_schema,
+            output_schema,
+            row_converter,
             input_schema: None,
             key_fields: Vec::new(),
             preencoded_key_index: None,
-            stored_row_index: None,
-            sort_row_index: None,
             input_kind_index: None,
             current_event_time: i64::MIN,
             scratch_reservation,
@@ -190,22 +214,28 @@ impl WindowRankProcessor {
     pub(crate) fn process_arrow(&mut self, batch: RecordBatch) -> Result<RecordBatch> {
         self.prepare_schema(batch.schema())?;
         // Arrow input buffers have already consumed Flink managed memory. This reservation covers
-        // only the opaque row/sort-key/key copies and Rust collection nodes below.
-        let stored_rows = binary_column(&batch, self.stored_row_index, "stored row")?;
-        let sort_rows = binary_column(&batch, self.sort_row_index, "sort key")?;
-        let copied_rows = stored_rows.iter().flatten().map(<[u8]>::len).sum::<usize>();
-        let copied_sort = sort_rows.iter().flatten().map(<[u8]>::len).sum::<usize>();
+        // only the Arrow-row/key copies and Rust collection nodes below.
+        let visible_count = self.visible_schema.fields().len();
+        let row_bytes = batch.columns()[..visible_count]
+            .iter()
+            .map(|column| column.get_array_memory_size())
+            .sum::<usize>();
         let copied_keys = self
             .preencoded_key_index
             .and_then(|index| batch.column(index).as_any().downcast_ref::<BinaryArray>())
             .map(|keys| keys.iter().flatten().map(<[u8]>::len).sum::<usize>())
             .unwrap_or(0);
-        let base = copied_rows
-            .saturating_add(copied_sort)
+        let base = row_bytes
             .saturating_add(copied_keys)
             .saturating_add(batch.num_rows().saturating_mul(176));
         self.scratch_reservation.resize(base)?;
-        let result = self.process_arrow_accounted(&batch);
+        let encoded_rows = self
+            .row_converter
+            .convert_columns(&batch.columns()[..visible_count]);
+        let result = match encoded_rows {
+            Ok(encoded_rows) => self.process_arrow_accounted(&batch, &encoded_rows),
+            Err(error) => Err(error.into()),
+        };
         match result {
             Ok(output) => self.finish_output(output, base),
             Err(error) => {
@@ -215,9 +245,11 @@ impl WindowRankProcessor {
         }
     }
 
-    fn process_arrow_accounted(&mut self, batch: &RecordBatch) -> Result<RecordBatch> {
-        let stored_rows = binary_column(batch, self.stored_row_index, "stored row")?;
-        let sort_rows = binary_column(batch, self.sort_row_index, "sort key")?;
+    fn process_arrow_accounted(
+        &mut self,
+        batch: &RecordBatch,
+        encoded_rows: &Rows,
+    ) -> Result<RecordBatch> {
         let kinds = batch
             .column(self.input_kind_index.expect("schema prepared"))
             .as_any()
@@ -256,12 +288,7 @@ impl WindowRankProcessor {
                     )));
                 }
             };
-            changes.push((
-                index,
-                accumulate,
-                stored_rows.value(row).to_vec(),
-                sort_rows.value(row).to_vec(),
-            ));
+            changes.push((index, accumulate, encoded_rows.row(row).data().to_vec()));
         }
         if unique.is_empty() {
             return self.empty_output();
@@ -299,7 +326,7 @@ impl WindowRankProcessor {
             })
             .collect::<Result<Vec<_>>>()?;
         let mut dirty_timer_groups = BTreeSet::new();
-        for (index, accumulate, row, sort_key) in changes {
+        for (index, accumulate, row) in changes {
             let entry = &mut staged[index];
             let was_empty = entry.value.candidates.is_empty();
             if accumulate {
@@ -307,16 +334,13 @@ impl WindowRankProcessor {
                 entry.value.next_sequence = sequence.checked_add(1).ok_or_else(|| {
                     DataFusionError::Execution("window rank sequence number overflow".to_string())
                 })?;
-                entry.value.candidates.push(Candidate {
-                    sequence,
-                    row,
-                    sort_key,
-                });
+                entry.value.candidates.push(Candidate { sequence, row });
             } else {
-                let Some(index) =
-                    entry.value.candidates.iter().position(|candidate| {
-                        candidate.row == row && candidate.sort_key == sort_key
-                    })
+                let Some(index) = entry
+                    .value
+                    .candidates
+                    .iter()
+                    .position(|candidate| candidate.row == row)
                 else {
                     return Err(DataFusionError::Execution(
                         "window rank received a retraction without a matching row".to_string(),
@@ -383,16 +407,13 @@ impl WindowRankProcessor {
             .collect::<Vec<_>>();
         let states = self.state.get_batch(&refs)?;
         self.state_read_batches = self.state_read_batches.saturating_add(1);
-        let mut output = Vec::<(i32, Candidate)>::new();
+        let mut output = Vec::<(usize, Candidate)>::new();
         let mut mutations = Vec::with_capacity(fired.len() * 2);
         let mut dirty_groups = BTreeSet::new();
         for (group, (timer, state)) in fired.into_iter().zip(states).enumerate() {
             dirty_groups.insert(timer.key_group);
             if let Some(state) = state {
                 let state = decode_state(state.as_ref())?;
-                let group = i32::try_from(group).map_err(|_| {
-                    DataFusionError::Execution("window rank timer batch exceeds Int32".to_string())
-                })?;
                 output.extend(
                     state
                         .candidates
@@ -411,7 +432,7 @@ impl WindowRankProcessor {
         self.append_timer_mutations(&mut mutations, dirty_groups)?;
         self.state.write_batch(mutations)?;
         self.state_write_batches = self.state_write_batches.saturating_add(1);
-        let output = output_batch(output)?;
+        let output = self.output_batch(output)?;
         self.finish_output(output, 0)
     }
 
@@ -497,21 +518,14 @@ impl WindowRankProcessor {
             return Ok(());
         }
         self.preencoded_key_index = metadata_index(&schema, "__streamfusion_key");
-        self.stored_row_index = metadata_index(&schema, "__streamfusion_stored_row");
-        self.sort_row_index = metadata_index(&schema, "__streamfusion_sort_key");
         self.input_kind_index = metadata_index(&schema, "__streamfusion_input_row_kind");
-        if self.stored_row_index.is_none()
-            || self.sort_row_index.is_none()
-            || self.input_kind_index.is_none()
-        {
+        if self.input_kind_index.is_none() {
             return Err(DataFusionError::Execution(
-                "window rank requires stored-row, sort-key, and RowKind metadata".to_string(),
+                "window rank requires RowKind metadata".to_string(),
             ));
         }
         let visible_count = [
             self.preencoded_key_index,
-            self.stored_row_index,
-            self.sort_row_index,
             self.input_kind_index,
             Some(schema.fields().len()),
         ]
@@ -519,6 +533,16 @@ impl WindowRankProcessor {
         .flatten()
         .min()
         .unwrap();
+        if visible_count != self.visible_schema.fields().len()
+            || schema.fields()[..visible_count]
+                .iter()
+                .zip(self.visible_schema.fields())
+                .any(|(actual, planned)| actual.data_type() != planned.data_type())
+        {
+            return Err(DataFusionError::Execution(
+                "window rank Arrow schema does not match its protobuf input schema".to_string(),
+            ));
+        }
         if self.plan.window_end_index as usize >= visible_count {
             return Err(DataFusionError::Plan(
                 "window rank end index is outside the visible row".to_string(),
@@ -561,7 +585,74 @@ impl WindowRankProcessor {
     }
 
     fn empty_output(&self) -> Result<RecordBatch> {
-        Ok(RecordBatch::new_empty(output_schema()))
+        Ok(RecordBatch::new_empty(self.output_schema.clone()))
+    }
+
+    fn output_batch(&self, rows: Vec<(usize, Candidate)>) -> Result<RecordBatch> {
+        if rows.is_empty() {
+            return self.empty_output();
+        }
+        let parser = self.row_converter.parser();
+        let visible_columns = self.row_converter.convert_rows(
+            rows.iter()
+                .map(|(_, candidate)| parser.parse(&candidate.row)),
+        )?;
+        let visible = RecordBatch::try_new(self.visible_schema.clone(), visible_columns)?;
+        let mut selected = Vec::new();
+        let mut ranks = Vec::new();
+        let mut start = 0;
+        while start < rows.len() {
+            let group = rows[start].0;
+            let mut end = start + 1;
+            while end < rows.len() && rows[end].0 == group {
+                end += 1;
+            }
+            let mut indices = (start..end).collect::<Vec<_>>();
+            let failure = RefCell::new(None);
+            indices.sort_by(|&left, &right| {
+                if failure.borrow().is_some() {
+                    return Ordering::Equal;
+                }
+                match compare_rows(
+                    &visible,
+                    left,
+                    &visible,
+                    right,
+                    &self.plan.sort_key_indices,
+                    &self.plan.sort_ascending,
+                    &self.plan.sort_nulls_last,
+                ) {
+                    Ok(Ordering::Equal) => rows[left].1.sequence.cmp(&rows[right].1.sequence),
+                    Ok(ordering) => ordering,
+                    Err(error) => {
+                        *failure.borrow_mut() = Some(error);
+                        Ordering::Equal
+                    }
+                }
+            });
+            if let Some(error) = failure.into_inner() {
+                return Err(error);
+            }
+            let first = usize::try_from(self.plan.rank_start - 1).unwrap_or(usize::MAX);
+            let exclusive_end = usize::try_from(self.plan.rank_end)
+                .unwrap_or(usize::MAX)
+                .min(indices.len());
+            for rank in first..exclusive_end {
+                selected.push(rows[indices[rank]].1.row.as_slice());
+                ranks.push(i64::try_from(rank + 1).map_err(|_| {
+                    DataFusionError::Execution("window rank number exceeds i64".to_string())
+                })?);
+            }
+            start = end;
+        }
+        let mut columns = self
+            .row_converter
+            .convert_rows(selected.iter().map(|row| parser.parse(row)))?;
+        if self.plan.output_rank_number {
+            columns.push(Arc::new(Int64Array::from(ranks)));
+        }
+        columns.push(Arc::new(Int8Array::from(vec![INSERT; selected.len()])));
+        Ok(RecordBatch::try_new(self.output_schema.clone(), columns)?)
     }
 
     fn finish_output(&mut self, output: RecordBatch, base: usize) -> Result<RecordBatch> {
@@ -591,18 +682,21 @@ fn validate_plan(plan: &proto::WindowRank, max_parallelism: u32) -> Result<()> {
     Ok(())
 }
 
-fn binary_column<'a>(
-    batch: &'a RecordBatch,
-    index: Option<usize>,
-    description: &str,
-) -> Result<&'a BinaryArray> {
-    batch
-        .column(index.expect("schema prepared"))
-        .as_any()
-        .downcast_ref::<BinaryArray>()
-        .ok_or_else(|| {
-            DataFusionError::Execution(format!("window rank {description} is not Arrow Binary"))
+fn row_converter(schema: &SchemaRef) -> Result<RowConverter> {
+    let fields = schema
+        .fields()
+        .iter()
+        .map(|field| {
+            SortField::new_with_options(
+                field.data_type().clone(),
+                SortOptions {
+                    descending: false,
+                    nulls_first: true,
+                },
+            )
         })
+        .collect();
+    Ok(RowConverter::new(fields)?)
 }
 
 fn metadata_index(schema: &SchemaRef, name: &str) -> Option<usize> {
@@ -638,9 +732,7 @@ fn encode_state(state: &WindowState) -> Vec<u8> {
     for candidate in &state.candidates {
         bytes.extend_from_slice(&candidate.sequence.to_le_bytes());
         bytes.extend_from_slice(&(candidate.row.len() as u32).to_le_bytes());
-        bytes.extend_from_slice(&(candidate.sort_key.len() as u32).to_le_bytes());
         bytes.extend_from_slice(&candidate.row);
-        bytes.extend_from_slice(&candidate.sort_key);
     }
     bytes
 }
@@ -658,25 +750,17 @@ fn decode_state(bytes: &[u8]) -> Result<WindowState> {
     for _ in 0..count {
         let sequence = read_u64(bytes, &mut offset)?;
         let row_length = read_u32(bytes, &mut offset)? as usize;
-        let sort_length = read_u32(bytes, &mut offset)? as usize;
         let row_end = offset.checked_add(row_length).ok_or_else(|| {
-            DataFusionError::Execution("window rank state length overflow".to_string())
-        })?;
-        let sort_end = row_end.checked_add(sort_length).ok_or_else(|| {
             DataFusionError::Execution("window rank state length overflow".to_string())
         })?;
         let row = bytes
             .get(offset..row_end)
             .ok_or_else(|| DataFusionError::Execution("truncated window rank row".to_string()))?;
-        let sort_key = bytes.get(row_end..sort_end).ok_or_else(|| {
-            DataFusionError::Execution("truncated window rank sort key".to_string())
-        })?;
         candidates.push(Candidate {
             sequence,
             row: row.to_vec(),
-            sort_key: sort_key.to_vec(),
         });
-        offset = sort_end;
+        offset = row_end;
     }
     if offset != bytes.len() {
         return Err(DataFusionError::Execution(
@@ -710,40 +794,6 @@ fn read_exact<const N: usize>(bytes: &[u8], offset: &mut usize) -> Result<[u8; N
     Ok(result)
 }
 
-fn output_schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        Field::new("__streamfusion_stored_row", DataType::Binary, false),
-        Field::new("__streamfusion_sort_key", DataType::Binary, false),
-        Field::new("__streamfusion_window_group", DataType::Int32, false),
-        Field::new("__streamfusion_sequence", DataType::Int64, false),
-        Field::new("__streamfusion_row_kind", DataType::Int8, false),
-    ]))
-}
-
-fn output_batch(rows: Vec<(i32, Candidate)>) -> Result<RecordBatch> {
-    let mut stored = BinaryBuilder::new();
-    let mut sort = BinaryBuilder::new();
-    let mut groups = Vec::with_capacity(rows.len());
-    let mut sequences = Vec::with_capacity(rows.len());
-    for (group, candidate) in rows {
-        stored.append_value(candidate.row);
-        sort.append_value(candidate.sort_key);
-        groups.push(group);
-        sequences.push(i64::try_from(candidate.sequence).map_err(|_| {
-            DataFusionError::Execution("window rank sequence exceeds Java long".to_string())
-        })?);
-    }
-    let count = groups.len();
-    let columns: Vec<ArrayRef> = vec![
-        Arc::new(stored.finish()),
-        Arc::new(sort.finish()),
-        Arc::new(Int32Array::from(groups)),
-        Arc::new(Int64Array::from(sequences)),
-        Arc::new(Int8Array::from(vec![INSERT; count])),
-    ];
-    Ok(RecordBatch::try_new(output_schema(), columns)?)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -752,19 +802,17 @@ mod tests {
     use prost::Message;
 
     #[test]
-    fn state_round_trips_sort_keys_and_retractions() {
+    fn state_round_trips_arrow_rows_and_retractions() {
         let state = WindowState {
             next_sequence: 2,
             candidates: vec![
                 Candidate {
                     sequence: 0,
                     row: b"row-a".to_vec(),
-                    sort_key: b"sort-a".to_vec(),
                 },
                 Candidate {
                     sequence: 1,
                     row: b"row-b".to_vec(),
-                    sort_key: b"sort-b".to_vec(),
                 },
             ],
         };
@@ -790,7 +838,6 @@ mod tests {
                 &[7, 8],
                 &[100, 100],
                 &[b"left", b"right"],
-                &[b"sort-a", b"sort-b"],
                 &[INSERT, INSERT],
             ))
             .unwrap();
@@ -817,18 +864,11 @@ mod tests {
                 &[7, 7, 9],
                 &[100, 100, 200],
                 &[b"left", b"right", b"other"],
-                &[b"sort-a", b"sort-b", b"sort-c"],
                 &[INSERT, UPDATE_AFTER, INSERT],
             ))
             .unwrap();
         source
-            .process_arrow(batch(
-                &[7],
-                &[100],
-                &[b"left"],
-                &[b"sort-a"],
-                &[UPDATE_BEFORE],
-            ))
+            .process_arrow(batch(&[7], &[100], &[b"left"], &[UPDATE_BEFORE]))
             .unwrap();
         let snapshots = (0..128)
             .map(|key_group| source.snapshot_key_group(key_group).unwrap())
@@ -869,7 +909,7 @@ mod tests {
             .iter()
             .flat_map(|output| {
                 output
-                    .column(0)
+                    .column(2)
                     .as_any()
                     .downcast_ref::<BinaryArray>()
                     .unwrap()
@@ -890,7 +930,7 @@ mod tests {
                     proto::WindowRank {
                         input: None,
                         partition_key_indices: vec![0],
-                        sort_key_indices: vec![1],
+                        sort_key_indices: vec![2],
                         sort_ascending: vec![true],
                         sort_nulls_last: vec![true],
                         window_end_index: 1,
@@ -898,7 +938,24 @@ mod tests {
                         rank_end: 2,
                         output_rank_number: true,
                         input_changelog: true,
-                        input_schema: Some(proto::Schema { fields: Vec::new() }),
+                        input_schema: Some(proto::Schema {
+                            fields: vec![
+                                proto_field(
+                                    "key",
+                                    proto::logical_type::Type::Bigint(proto::EmptyType::default()),
+                                ),
+                                proto_field(
+                                    "window_end",
+                                    proto::logical_type::Type::Timestamp(proto::PrecisionType {
+                                        precision: 3,
+                                    }),
+                                ),
+                                proto_field(
+                                    "payload",
+                                    proto::logical_type::Type::Binary(proto::EmptyType::default()),
+                                ),
+                            ],
+                        }),
                         shift_time_zone: "UTC".to_string(),
                     },
                 ))),
@@ -907,13 +964,17 @@ mod tests {
         .encode_to_vec()
     }
 
-    fn batch(
-        keys: &[i64],
-        window_end: &[i64],
-        rows: &[&[u8]],
-        sort_keys: &[&[u8]],
-        kinds: &[i8],
-    ) -> RecordBatch {
+    fn proto_field(name: &str, r#type: proto::logical_type::Type) -> proto::Field {
+        proto::Field {
+            name: name.to_string(),
+            r#type: Some(proto::LogicalType {
+                nullable: true,
+                r#type: Some(r#type),
+            }),
+        }
+    }
+
+    fn batch(keys: &[i64], window_end: &[i64], rows: &[&[u8]], kinds: &[i8]) -> RecordBatch {
         RecordBatch::try_from_iter(vec![
             ("key", Arc::new(Int64Array::from(keys.to_vec())) as ArrayRef),
             (
@@ -921,12 +982,8 @@ mod tests {
                 Arc::new(TimestampMillisecondArray::from(window_end.to_vec())) as ArrayRef,
             ),
             (
-                "__streamfusion_stored_row",
+                "payload",
                 Arc::new(BinaryArray::from_vec(rows.to_vec())) as ArrayRef,
-            ),
-            (
-                "__streamfusion_sort_key",
-                Arc::new(BinaryArray::from_vec(sort_keys.to_vec())) as ArrayRef,
             ),
             (
                 "__streamfusion_input_row_kind",

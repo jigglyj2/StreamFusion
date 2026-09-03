@@ -1,7 +1,7 @@
 // Copyright 2026 StreamFusion Authors
 // Licensed under the Apache License, Version 2.0
 
-mod compare;
+pub(crate) mod compare;
 mod state;
 
 use std::cmp::Ordering;

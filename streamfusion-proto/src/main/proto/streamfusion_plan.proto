@@ -156,8 +156,8 @@ message WindowDeduplicate {
   string shift_time_zone = 8;
 }
 
-// Window Top-N/ROW_NUMBER state. Sort keys and full rows are opaque BinaryRowData bytes so the
-// generated Flink comparator remains the single source of truth for every comparable SQL type.
+// Window Top-N/ROW_NUMBER state. Rust stores schema-aware Arrow rows and applies this complete
+// Flink sort contract before exporting selected rows directly as Arrow timer output.
 message WindowRank {
   Operator input = 1;
   repeated uint32 partition_key_indices = 2;

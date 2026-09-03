@@ -19,7 +19,6 @@ import org.apache.flink.table.planner.plan.logical.WindowAttachedWindowingStrate
 import org.apache.flink.table.planner.plan.logical.WindowingStrategy;
 import org.apache.flink.table.planner.plan.nodes.exec.spec.SortSpec;
 import org.apache.flink.table.planner.utils.TableConfigUtils;
-import org.apache.flink.table.runtime.generated.GeneratedRecordComparator;
 import org.apache.flink.table.runtime.keyselector.RowDataKeySelector;
 import org.apache.flink.table.runtime.util.TimeWindowUtil;
 import org.apache.flink.table.types.logical.RowType;
@@ -46,9 +45,7 @@ public final class StreamFusionWindowRankTranslator {
             WindowingStrategy windowing,
             ReadableConfig config,
             StreamExecutionEnvironment environment,
-            RowDataKeySelector partitionSelector,
-            RowDataKeySelector sortSelector,
-            GeneratedRecordComparator comparator) {
+            RowDataKeySelector partitionSelector) {
         String reason = unsupportedReason(
                 inputType,
                 outputType,
@@ -95,18 +92,7 @@ public final class StreamFusionWindowRankTranslator {
         OneInputTransformation<ArrowRowDataBatch, ArrowRowDataBatch> transformation = new OneInputTransformation<>(
                 arrowInput,
                 "streamfusion-window-rank",
-                new StreamFusionArrowWindowRankOperator(
-                        inputType,
-                        outputType,
-                        partitionKeys,
-                        sortSpec.getFieldSize(),
-                        rankStart,
-                        rankEnd,
-                        outputRankNumber,
-                        plan,
-                        partitionSelector,
-                        sortSelector,
-                        comparator),
+                new StreamFusionArrowWindowRankOperator(inputType, outputType, partitionKeys, plan, partitionSelector),
                 ArrowRowDataBatchTypeInfo.INSTANCE,
                 partitionedInput.getParallelism(),
                 false);

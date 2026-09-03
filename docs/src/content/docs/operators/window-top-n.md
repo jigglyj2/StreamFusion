@@ -10,7 +10,14 @@ sidebar:
 ## SQL example
 
 ```sql
-SELECT * FROM (\n  SELECT *, ROW_NUMBER() OVER (PARTITION BY window_start, window_end ORDER BY total DESC) AS rank_num\n  FROM window_totals\n) WHERE rank_num <= 3;
+SELECT *
+FROM (
+  SELECT *, ROW_NUMBER() OVER (
+    PARTITION BY window_start, window_end ORDER BY total DESC
+  ) AS rank_num
+  FROM window_totals
+)
+WHERE rank_num <= 3;
 ```
 
 ## Acceleration and fallback
@@ -18,21 +25,20 @@ SELECT * FROM (\n  SELECT *, ROW_NUMBER() OVER (PARTITION BY window_start, windo
 Constant-range `ROW_NUMBER` plans over attached `TUMBLE`, `HOP`, `CUMULATE`, and `SESSION` windows
 are accelerated, with or without the rank-number output column. All partition-key and payload types
 supported by the RowData/Arrow boundary are accepted. Sort fields retain Flink's generated
-comparator, including ascending/descending direction, null placement, UTF-16 string ordering,
-decimal/temporal semantics, composite values, and stable input-order ties.
+comparison semantics in Rust, including ascending/descending direction, null placement, binary
+string ordering, decimal/temporal semantics, composite values, and stable input-order ties.
 
 `RANK`, `DENSE_RANK`, variable rank ranges, processing-time Window Top-N (which Flink does not plan),
 async-state mode, and Flink's changelog-state wrapper fall back with an EXPLAIN reason.
 
 ## Implementation
 
-Native memory or direct RocksDB stores full rows and sort keys as opaque BinaryRowData bytes. All
-four input RowKinds are applied, so a retraction can expose a previously displaced candidate. One
-native `multi_get` and one atomic mutation batch are used per Arrow input batch. At an event-time
-timer, Rust releases the window candidates as one Arrow batch; Java applies the already-generated
-Flink comparator once per window, selects the constant rank range, and transposes only the selected
-rows. This avoids per-record JNI while keeping comparison semantics byte-for-byte aligned with
-Flink.
+Native memory or direct RocksDB stores each full candidate once in Arrow's schema-aware row format.
+All four input RowKinds are applied, so a retraction can expose a previously displaced candidate.
+One native `multi_get` and one atomic mutation batch are used per Arrow input batch. At an
+event-time timer, Rust decodes the fired windows as one Arrow batch, applies the protobuf sort
+contract, selects the constant rank range, and exports the visible Arrow columns plus RowKind
+metadata directly. Java does not serialize sort keys or rows and does not reconstruct timer output.
 
 Flink 2.3 rejects updating input before constructing the Window Top-N physical node, so current SQL
 plans reach this path as append-only. Direct native changelog, restore, and rescaling tests cover

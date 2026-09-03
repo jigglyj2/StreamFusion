@@ -5,7 +5,6 @@
 package tech.streamfusion.flink.window;
 
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import org.apache.flink.api.common.state.ListState;
@@ -20,13 +19,7 @@ import org.apache.flink.streaming.api.operators.BoundedOneInput;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
 import org.apache.flink.streaming.api.watermark.Watermark;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
-import org.apache.flink.table.data.RowData;
-import org.apache.flink.table.data.binary.BinaryRowData;
-import org.apache.flink.table.data.binary.BinarySegmentUtils;
-import org.apache.flink.table.runtime.generated.GeneratedRecordComparator;
-import org.apache.flink.table.runtime.generated.RecordComparator;
 import org.apache.flink.table.runtime.keyselector.RowDataKeySelector;
-import org.apache.flink.table.runtime.typeutils.RowDataSerializer;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.ArrowWindowRankCDataBridge;
@@ -35,23 +28,13 @@ import tech.streamfusion.flink.state.AbstractStreamFusionArrowKeyedStateOperator
 import tech.streamfusion.nativebridge.NativeMemoryManager;
 import tech.streamfusion.nativebridge.NativeWindowRankBridge;
 
-/** Key-grouped native Window Top-N with exact generated Flink sort comparison at timer output. */
+/** Key-grouped native Window Top-N with native Flink-compatible ordering and Arrow output. */
 final class StreamFusionArrowWindowRankOperator extends AbstractStreamFusionArrowKeyedStateOperator
         implements OneInputStreamOperator<ArrowRowDataBatch, ArrowRowDataBatch>, BoundedOneInput {
-    private final RowType inputType;
     private final RowType outputType;
-    private final int[] partitionKeys;
-    private final int sortKeyArity;
-    private final long rankStart;
-    private final long rankEnd;
-    private final boolean outputRankNumber;
     private final RowDataKeySelector partitionSelector;
-    private final RowDataKeySelector sortSelector;
-    private final GeneratedRecordComparator generatedComparator;
     private final boolean preencodeKeys;
 
-    private transient RowDataSerializer rowSerializer;
-    private transient RecordComparator comparator;
     private transient ListState<Long> watermarkState;
     private transient long restoredWatermark = Long.MIN_VALUE;
     private transient long currentWatermark = Long.MIN_VALUE;
@@ -64,33 +47,17 @@ final class StreamFusionArrowWindowRankOperator extends AbstractStreamFusionArro
             RowType inputType,
             RowType outputType,
             int[] partitionKeys,
-            int sortKeyArity,
-            long rankStart,
-            long rankEnd,
-            boolean outputRankNumber,
             byte[] plan,
-            RowDataKeySelector partitionSelector,
-            RowDataKeySelector sortSelector,
-            GeneratedRecordComparator generatedComparator) {
+            RowDataKeySelector partitionSelector) {
         super(plan, "window rank");
-        this.inputType = inputType;
         this.outputType = outputType;
-        this.partitionKeys = partitionKeys.clone();
-        this.sortKeyArity = sortKeyArity;
-        this.rankStart = rankStart;
-        this.rankEnd = rankEnd;
-        this.outputRankNumber = outputRankNumber;
         this.partitionSelector = partitionSelector;
-        this.sortSelector = sortSelector;
-        this.generatedComparator = generatedComparator;
         this.preencodeKeys = requiresPreencodedKeys(inputType, partitionKeys);
     }
 
     @Override
     public void open() throws Exception {
         super.open();
-        rowSerializer = new RowDataSerializer(inputType);
-        comparator = generatedComparator.newInstance(getRuntimeContext().getUserCodeClassLoader());
         lateRecordsDropped = getMetricGroup().counter("numLateRecordsDropped");
         lateRecordsDroppedRate = getMetricGroup().meter("lateRecordsDroppedRate", new MeterView(lateRecordsDropped));
         observedNativeStatistics = NativeWindowRankBridge.statistics(nativeHandle());
@@ -113,19 +80,8 @@ final class StreamFusionArrowWindowRankOperator extends AbstractStreamFusionArro
         ArrowRowDataBatch input = element.getValue();
         try {
             List<byte[]> keys = preencodeKeys ? preencodeKeys(input, partitionSelector, "window rank") : null;
-            List<byte[]> rows = new ArrayList<>(input.size());
-            List<byte[]> sortKeys = new ArrayList<>(input.size());
-            for (int index = 0; index < input.size(); index++) {
-                RowData row = input.rowView(index);
-                rows.add(bytes(rowSerializer.toBinaryRow(row)));
-                RowData sort = sortSelector.getKey(row);
-                if (!(sort instanceof BinaryRowData)) {
-                    throw new IllegalStateException("Native window rank requires a BinaryRowData sort selector");
-                }
-                sortKeys.add(bytes((BinaryRowData) sort));
-            }
             try (ArrowRowDataBatch result = ArrowWindowRankCDataBridge.process(
-                    nativeHandle(), input, keys, rows, sortKeys, outputType, allocator(), memoryManager())) {
+                    nativeHandle(), input, keys, outputType, allocator(), memoryManager())) {
                 emitBatch(result, true, input.size());
                 recordProcessedWithoutStateCalls(input, result);
             }
@@ -149,26 +105,12 @@ final class StreamFusionArrowWindowRankOperator extends AbstractStreamFusionArro
 
     private void emitTimerOutput(long watermark) throws Exception {
         try (ArrowRowDataBatch result = ArrowWindowRankCDataBridge.advance(
-                nativeHandle(),
-                watermark,
-                inputType,
-                outputType,
-                sortKeyArity,
-                rankStart,
-                rankEnd,
-                outputRankNumber,
-                comparator,
-                allocator(),
-                memoryManager())) {
+                nativeHandle(), watermark, outputType, allocator(), memoryManager())) {
             emitBatch(result, false, 0);
             recordTimerOutput(result, false);
         }
         updateNativeStatistics();
         updateLateMetric();
-    }
-
-    private static byte[] bytes(BinaryRowData row) {
-        return BinarySegmentUtils.copyToBytes(row.getSegments(), row.getOffset(), row.getSizeInBytes());
     }
 
     private void emitBatch(ArrowRowDataBatch result, boolean hasInput, int inputRows) {
