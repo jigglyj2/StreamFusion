@@ -36,8 +36,11 @@ raw keyed state so they can move between the native memory and RocksDB implement
 
 The focused recovery matrix is shared by native group aggregation, deduplication, SELECT DISTINCT,
 non-window Top-N, window aggregation, Window Deduplicate, Window Top-N, Window Join, and regular
-streaming Join. Window cases include pending event-time and processing-time timers; two-input joins
-also preserve their independently advancing input-watermark frontiers:
+and interval streaming Join. Window and interval cases include pending event-time and
+processing-time timers; two-input joins also preserve their independently advancing input-watermark
+frontiers. Interval Join keeps its live timer index in native memory and materializes dirty timer
+groups into the backend at the checkpoint/savepoint boundary, so recovery remains canonical without
+rewriting its complete timer group on every input batch:
 
 | Recovery path | Memory state | RocksDB state |
 | --- | --- | --- |

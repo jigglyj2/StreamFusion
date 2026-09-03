@@ -16,11 +16,13 @@ adjacent StreamFusion Calc below it, preserves their input-to-output order, and 
 one Flink runtime operator for the connected chain. A non-StreamFusion node ends the
 chain and therefore defines a native-plan boundary.
 
-Streaming `UNION ALL` is a deliberate exception to native lowering, but not to physical
-coverage. Flink defines it as zero-work topology wiring, so `StreamFusionExecUnion`
-preserves the `UnionTransformation` instead of introducing a DataFusion merge operator.
-This keeps Flink in control of watermarks, barriers, scheduling, and input interleaving;
-accelerated native blocks remain on the union's individual branches.
+Streaming `UNION ALL` is a deliberate exception to native compute lowering, but not to
+physical coverage. Flink keeps control of watermarks, barriers, scheduling, and input
+interleaving in a `StreamFusionExecUnion` multiple-input operator. Because Flink
+multiple-input gates are network boundaries, each branch writes the existing versioned
+Arrow IPC exchange frame and the union decodes it through Flink-managed memory before
+forwarding the Arrow batch. Raw process-local Arrow owners never reach a network
+serializer, and the union performs no DataFusion merge or row materialization.
 
 ```text
 Flink source

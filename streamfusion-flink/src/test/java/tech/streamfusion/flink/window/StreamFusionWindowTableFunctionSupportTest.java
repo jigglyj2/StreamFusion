@@ -38,7 +38,15 @@ class StreamFusionWindowTableFunctionSupportTest {
                         outputType(ltz),
                         new TimeAttributeWindowingStrategy(new TumblingWindowSpec(Duration.ofSeconds(5), null), ltz, 1),
                         new Configuration()))
-                .contains("TIMESTAMP_LTZ");
+                .isNull();
+        LocalZonedTimestampType proctime = new LocalZonedTimestampType(false, TimestampKind.PROCTIME, 3);
+        assertThat(StreamFusionWindowTableFunctionTranslator.unsupportedReason(
+                        RowType.of(new IntType(false), proctime),
+                        outputType(proctime),
+                        new TimeAttributeWindowingStrategy(
+                                new TumblingWindowSpec(Duration.ofSeconds(5), null), proctime, 1),
+                        new Configuration()))
+                .contains("processing-time");
         assertThat(StreamFusionWindowTableFunctionTranslator.unsupportedReason(
                         input,
                         output,

@@ -26,6 +26,7 @@ import org.apache.flink.table.planner.plan.nodes.exec.ExecEdge;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNode;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeBase;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeGraph;
+import org.apache.flink.table.planner.plan.nodes.exec.InputProperty;
 import org.apache.flink.table.planner.plan.nodes.exec.StateMetadata;
 import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecCalc;
 import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecCorrelate;
@@ -33,6 +34,7 @@ import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecExpand;
 import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecWindowTableFunction;
 import org.apache.flink.table.planner.plan.nodes.exec.processor.ExecNodeGraphProcessor;
 import org.apache.flink.table.planner.plan.nodes.exec.processor.ProcessorContext;
+import org.apache.flink.table.planner.plan.nodes.exec.spec.IntervalJoinSpec;
 import org.apache.flink.table.planner.plan.nodes.exec.spec.JoinSpec;
 import org.apache.flink.table.planner.plan.nodes.exec.spec.PartitionSpec;
 import org.apache.flink.table.planner.plan.nodes.exec.spec.SortSpec;
@@ -45,6 +47,7 @@ import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecExchange;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecExpand;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecGlobalWindowAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecGroupAggregate;
+import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecIntervalJoin;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecJoin;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecLocalWindowAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecMiniBatchAssigner;
@@ -93,6 +96,8 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             "tech.streamfusion.flink.window.StreamFusionWindowJoinTranslator";
     private static final String REGULAR_JOIN_TRANSLATOR_CLASS =
             "tech.streamfusion.flink.join.StreamFusionRegularJoinTranslator";
+    private static final String INTERVAL_JOIN_TRANSLATOR_CLASS =
+            "tech.streamfusion.flink.join.StreamFusionIntervalJoinTranslator";
 
     @Override
     public ExecNodeGraph process(ExecNodeGraph graph, ProcessorContext context) {
@@ -111,8 +116,23 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         }
         StreamFusionPlanningDiagnostics.accelerate();
         List<ExecNode<?>> roots =
-                graph.getRootNodes().stream().map(this::convert).collect(Collectors.toList());
+                graph.getRootNodes().stream().map(this::convertRoot).collect(Collectors.toList());
         return new ExecNodeGraph(graph.getFlinkVersion(), roots);
+    }
+
+    private ExecNode<?> convertRoot(ExecNode<?> root) {
+        if (isSinkBoundary(root)) {
+            return convert(root);
+        }
+        ExecNode<?> converted = convert(root);
+        StreamFusionExecSinkBoundary boundary = new StreamFusionExecSinkBoundary(
+                ((ExecNodeBase<?>) root).getPersistedConfig(), InputProperty.DEFAULT, (RowType) root.getOutputType());
+        boundary.setInputEdges(List.of(ExecEdge.builder()
+                .source(converted)
+                .target(boundary)
+                .shuffle(ExecEdge.FORWARD_SHUFFLE)
+                .build()));
+        return boundary;
     }
 
     private void collectRejections(ExecNode<?> node, ProcessorContext context, String path, List<String> rejections) {
@@ -195,6 +215,11 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             }
         } else if (node instanceof StreamExecWindowJoin) {
             String reason = unsupportedReason((StreamExecWindowJoin) node, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
+        } else if (node instanceof StreamExecIntervalJoin) {
+            String reason = unsupportedReason((StreamExecIntervalJoin) node, context);
             if (reason != null) {
                 rejections.add(nodePath + "\n" + reason);
             }
@@ -465,6 +490,20 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     join.getInputProperties().get(1),
                     (RowType) join.getOutputType(),
                     "StreamFusionWindowJoin");
+            replacement.setInputEdges(join.getInputEdges().stream()
+                    .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                    .collect(Collectors.toList()));
+            return replacement;
+        }
+        if (node instanceof StreamExecIntervalJoin) {
+            StreamExecIntervalJoin join = (StreamExecIntervalJoin) node;
+            StreamFusionExecIntervalJoin replacement = new StreamFusionExecIntervalJoin(
+                    join.getPersistedConfig(),
+                    intervalJoinSpec(join),
+                    join.getInputProperties().get(0),
+                    join.getInputProperties().get(1),
+                    (RowType) join.getOutputType(),
+                    "StreamFusionIntervalJoin");
             replacement.setInputEdges(join.getInputEdges().stream()
                     .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
                     .collect(Collectors.toList()));
@@ -882,6 +921,35 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             throw new IllegalStateException("Could not inspect StreamFusion regular join support", e);
         } catch (InvocationTargetException e) {
             throw new IllegalStateException("StreamFusion regular join support inspection failed", e.getCause());
+        }
+    }
+
+    private String unsupportedReason(StreamExecIntervalJoin join, ProcessorContext context) {
+        ExecEdge left = join.getInputEdges().get(0);
+        ExecEdge right = join.getInputEdges().get(1);
+        try {
+            Class<?> translator = Class.forName(
+                    INTERVAL_JOIN_TRANSLATOR_CLASS,
+                    true,
+                    context.getPlanner().getFlinkContext().getClassLoader());
+            Method method = translator.getMethod(
+                    "unsupportedReason",
+                    RowType.class,
+                    RowType.class,
+                    RowType.class,
+                    IntervalJoinSpec.class,
+                    ReadableConfig.class);
+            return (String) method.invoke(
+                    null,
+                    (RowType) left.getOutputType(),
+                    (RowType) right.getOutputType(),
+                    (RowType) join.getOutputType(),
+                    intervalJoinSpec(join),
+                    join.getPersistedConfig());
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
+            throw new IllegalStateException("Could not inspect StreamFusion interval join support", e);
+        } catch (InvocationTargetException e) {
+            throw new IllegalStateException("StreamFusion interval join support inspection failed", e.getCause());
         }
     }
 
@@ -1346,6 +1414,10 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
 
     private static JoinSpec regularJoinSpec(StreamExecJoin join) {
         return (JoinSpec) field(join, StreamExecJoin.class, "joinSpec");
+    }
+
+    private static IntervalJoinSpec intervalJoinSpec(StreamExecIntervalJoin join) {
+        return (IntervalJoinSpec) field(join, StreamExecIntervalJoin.class, "intervalJoinSpec");
     }
 
     @SuppressWarnings("unchecked")

@@ -46,6 +46,23 @@ public final class StreamFusionExchangeTranslator {
         return translate(input, rowType, new int[0], plan, new GlobalPartitioner<>(), true);
     }
 
+    /** Frames one Arrow input before a Flink multi-input network gate such as UNION ALL. */
+    public static Transformation<NativeExchangeFrame> frameForMultiInput(
+            Transformation<RowData> input, RowType rowType, byte[] plan) {
+        OneInputTransformation<ArrowRowDataBatch, NativeExchangeFrame> writer = new OneInputTransformation<>(
+                StreamFusionArrowBoundaries.toArrow(input, rowType),
+                "StreamFusionExchangeWriter",
+                SimpleOperatorFactory.of(new NativeExchangeWriterOperator(rowType, plan)),
+                NativeExchangeFrameTypeInfo.INSTANCE,
+                input.getParallelism());
+        int upstreamMaxParallelism = inheritedMaxParallelism(input);
+        if (upstreamMaxParallelism > 0) {
+            writer.setMaxParallelism(upstreamMaxParallelism);
+        }
+        writer.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
+        return writer;
+    }
+
     private static Transformation<RowData> translate(
             Transformation<RowData> input,
             RowType rowType,

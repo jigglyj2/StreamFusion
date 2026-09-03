@@ -37,7 +37,9 @@ class StreamFusionExecDropUpdateBeforeTest {
 
         ExecNodeGraph result = new StreamFusionExecGraphProcessor().process(new ExecNodeGraph(List.of(drop)), null);
 
-        ExecNode<?> replacement = result.getRootNodes().get(0);
+        ExecNode<?> boundary = result.getRootNodes().get(0);
+        assertThat(boundary).isInstanceOf(StreamFusionExecSinkBoundary.class);
+        ExecNode<?> replacement = boundary.getInputEdges().get(0).getSource();
         assertThat(replacement).isInstanceOf(StreamFusionExecDropUpdateBefore.class);
         assertThat(replacement.getInputEdges())
                 .singleElement()

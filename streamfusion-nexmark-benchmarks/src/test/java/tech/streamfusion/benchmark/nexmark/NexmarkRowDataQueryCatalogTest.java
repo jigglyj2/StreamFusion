@@ -17,8 +17,12 @@ class NexmarkRowDataQueryCatalogTest {
                         "q8",
                         "q11",
                         "q12",
+                        "q19",
+                        "q20",
                         "q22",
+                        "q23",
                         "group-aggregate",
+                        "interval-join",
                         "select-distinct",
                         "top-n",
                         "limit");

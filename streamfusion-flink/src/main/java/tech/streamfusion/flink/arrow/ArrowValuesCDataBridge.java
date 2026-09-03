@@ -50,7 +50,7 @@ public final class ArrowValuesCDataBridge {
             }
             VectorSchemaRoot output = Data.importVectorSchemaRoot(allocator, outputArray, outputSchema, dictionaries);
             output.setRowCount((int) rowCount);
-            return ArrowRowDataBatch.wrap(output, outputType);
+            return ArrowRowDataBatch.wrap(output, outputType, allocator);
         }
     }
 

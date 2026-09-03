@@ -124,9 +124,29 @@ public final class NexmarkRowDataJob {
             case "q3":
                 columns = "name STRING, city STRING, state STRING, id BIGINT";
                 break;
+            case "interval-join":
+                columns = "auction BIGINT, bidder BIGINT, price BIGINT, bid_time TIMESTAMP(3)";
+                break;
+            case "q19":
+                columns = "auction BIGINT, bidder BIGINT, price BIGINT, channel STRING, url STRING, "
+                        + "`dateTime` TIMESTAMP(3), extra STRING, rank_number BIGINT";
+                break;
+            case "q20":
+                columns = "auction BIGINT, bidder BIGINT, price BIGINT, channel STRING, url STRING, "
+                        + "bid_dateTime TIMESTAMP(3), bid_extra STRING, itemName STRING, description STRING, "
+                        + "initialBid BIGINT, reserve BIGINT, auction_dateTime TIMESTAMP(3), expires TIMESTAMP(3), "
+                        + "seller BIGINT, category BIGINT, auction_extra STRING";
+                break;
             case "q22":
                 columns =
                         "auction BIGINT, bidder BIGINT, price BIGINT, channel STRING, dir1 STRING, dir2 STRING, dir3 STRING";
+                break;
+            case "q23":
+                columns = "bidder BIGINT, price BIGINT, channel STRING, url STRING, bid_extra STRING, "
+                        + "person_id BIGINT, name STRING, emailAddress STRING, creditCard STRING, city STRING, "
+                        + "state STRING, person_extra STRING, itemName STRING, description STRING, "
+                        + "initialBid BIGINT, reserve BIGINT, auction_dateTime TIMESTAMP(3), expires TIMESTAMP(3), "
+                        + "seller BIGINT, category BIGINT, auction_extra STRING";
                 break;
             case "group-aggregate":
                 columns = "bidder BIGINT, bids BIGINT, spend BIGINT, minimum_price BIGINT, maximum_price BIGINT";

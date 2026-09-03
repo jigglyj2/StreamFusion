@@ -59,7 +59,28 @@ message Operator {
     TopN top_n = 14;
     ChangelogNormalize changelog_normalize = 15;
     RegularJoin regular_join = 16;
+    IntervalJoin interval_join = 17;
   }
+}
+
+// Time-bounded two-input streaming join. Each key owns timestamp-ordered Arrow-row multisets and
+// one cleanup timer per input side. The timer/state encoding is backend-neutral so canonical
+// savepoints can move between native memory and native RocksDB and can be repartitioned by Flink
+// key group.
+message IntervalJoin {
+  repeated uint32 left_key_indices = 1;
+  repeated uint32 right_key_indices = 2;
+  repeated bool filter_nulls = 3;
+  Schema left_schema = 4;
+  Schema right_schema = 5;
+  RegularJoinType join_type = 6;
+  bool event_time = 7;
+  int64 left_lower_bound_millis = 8;
+  int64 left_upper_bound_millis = 9;
+  uint32 left_time_index = 10;
+  uint32 right_time_index = 11;
+  uint64 allowed_lateness_millis = 12;
+  uint64 min_cleanup_interval_millis = 13;
 }
 
 // Timer-free two-input regular streaming join. Both input sides are maintained as ordered

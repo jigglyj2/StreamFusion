@@ -136,6 +136,9 @@ fn create_operator(
         Some(proto::operator::Operator::RegularJoin(_)) => Err(DataFusionError::Plan(
             "RegularJoin requires a persistent stateful execution handle".to_string(),
         )),
+        Some(proto::operator::Operator::IntervalJoin(_)) => Err(DataFusionError::Plan(
+            "IntervalJoin requires a persistent stateful execution handle".to_string(),
+        )),
         Some(proto::operator::Operator::ChangelogNormalize(_)) => Err(DataFusionError::Plan(
             "ChangelogNormalize requires a persistent stateful execution handle".to_string(),
         )),

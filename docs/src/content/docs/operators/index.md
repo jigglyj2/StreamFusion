@@ -18,9 +18,9 @@ This matrix follows the query operations documented by Flink 2.3, including the 
 | [Group aggregation](group-aggregation/) | **Partial** (timer-free keyed) | Yes | Native keyed state and Arrow aggregate kernels |
 | [Window aggregation](window-aggregation/) | **Partial** (`TUMBLE`, `HOP`, `CUMULATE`, `SESSION`) | Yes | Native keyed window state, timers, and Arrow aggregate kernels |
 | [OVER aggregation](over-aggregation/) | **No** | Yes | Native ordered state and aggregate kernels |
-| [Joins](joins/) | **Partial** (regular streaming equi-joins) | By join type | Native two-sided keyed state; future DataFusion batch joins |
+| [Joins](joins/) | **Partial** (regular and constant-bound interval streaming equi-joins) | By join type | Native two-sided keyed state and timers; future DataFusion batch joins |
 | [Window joins](window-join/) | **Yes** (event-time attached windows) | Yes | Native two-sided window state plus Flink join conditions |
-| [Set operations](set-operations/) | **Partial** (`UNION ALL`) | By operation | Flink-compatible union wiring; DataFusion or native keyed state for future operations |
+| [Set operations](set-operations/) | **Partial** (`UNION ALL`, `UNION DISTINCT`) | By operation | Arrow IPC at Flink multi-input gates; native distinct keyed state |
 | [Exchange](exchange/) | **Partial** (hash and singleton) | Yes | Native Flink-compatible key grouping with Flink-owned network transport |
 | [Table and collection expansion](table-expansion/) | **Partial** (scalar array `UNNEST`) | Yes | DataFusion `UnnestExec` with Flink-compatible correlate semantics |
 | [ORDER BY](order-by/) | **Partial** (streaming finite Top-N) | Yes | Native Top-N state; DataFusion sort for future bounded full sorts |

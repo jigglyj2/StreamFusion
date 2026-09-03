@@ -48,9 +48,12 @@ operator benchmark and does not replace the Kafka-in/Kafka-out north-star benchm
 
 Current all-or-nothing coverage can fully accelerate q0 (pass-through), q1 (decimal currency
 conversion), q2 (selection), q3 (regular streaming join), q8 (tumbling aggregates plus Window
-Join), q11 (event-time session aggregation), and q22 (URL directory extraction). q4, q5, q7, q9,
-q13, q15, q16, q17, q19, q20, and q23 still require an unsupported interval join or surrounding
-operator. q10
+Join), q11 (event-time session aggregation), q19 (Top-N), q20 (regular join), q22 (URL directory
+extraction), and q23 (two regular joins). A deterministic `interval-join` workload exercises
+Flink's constant-bound event-time interval physical operator.
+Official q4 and q9 are still planned as regular joins with an expiry-column residual condition,
+not constant-bound interval joins. q4, q5, q7, q9, q13, q15, q16, and q17 still require an
+unsupported join shape or surrounding operator. q10
 uses unsupported `DATE_FORMAT`; q14 uses a Java UDF, mixed decimal
 arithmetic beyond the q1 conversion shape, and timestamp calendar extraction; q21 uses Java-regex
 semantics. Q12's processing-time SQL is catalogued, but a max-speed bounded source completes before
@@ -77,8 +80,9 @@ mvn -pl streamfusion-nexmark-benchmarks -am \
 engine selector (`flink`, `streamfusion`, or `both`) for standalone measurements. It reports
 end-to-end elapsed time, input-event throughput, native calc batches, native group-aggregate
 batches, native window-aggregate batches, native Window Join batches, native regular-join batches,
+native interval-join batches,
 and a row count plus SHA-256 for the full result changelog. The `group-aggregate`,
-`select-distinct`, `top-n`, and `limit` cases
+`interval-join`, `select-distinct`, `top-n`, and `limit` cases
 exercise both native state backends over the bounded bid stream; they are focused operator workloads
 rather than numbered Nexmark queries.
 Performance reports
@@ -191,6 +195,32 @@ in-memory state was 0.08% and RocksDB was 0.81%. The wider source boundary retai
 adaptive target and receives two shares of Flink's existing managed-memory budget so reusable and
 in-flight exported buffers are both admitted. An 8,192-row experiment was rejected because it
 doubled native invocations. These are local diagnostic results, not portable performance claims.
+
+On the September 3, 2026 local constant-bound `interval-join` run based on `c351db1` plus the
+interval-join working change, three alternating separate-JVM release/native-CPU forks processed two
+million deterministic events at parallelism four, with a 3GB heap and one-second exactly-once
+checkpoints. In-memory Flink and StreamFusion medians were 198,696 and 194,481 events/s respectively,
+or 97.9% parity; elapsed-time ranges were 9.46–11.36s and 8.59–14.39s. RocksDB medians were 60,592
+and 222,020 events/s, a 3.66x StreamFusion gain, with elapsed ranges of 32.12–68.11s and
+8.85–18.74s. The wide ranges, especially for RocksDB, are retained here because the local machine
+showed substantial storage and scheduling variance. Every run emitted 1,839,265 changelog rows with
+SHA-256 `3dc1434be6a76a8945a77e525f0536a8ba24cfdb8b70a63fae3ce956330cd1ba`, and every
+StreamFusion fork reported 996–1,012 native interval-join batches.
+
+Mixed JVM/native CPU profiles were captured separately for both engines and backends using Java
+non-safepoint sampling, DWARF/frame-pointer unwinding, JFR, collapsed stacks, and differential flame
+graphs; profiler timings were excluded from the results above. Moving timer-group serialization from
+every input batch to checkpoint/savepoint boundaries reduced inclusive native timer samples from
+roughly 4–5% to 1.0%; timer snapshotting itself is now 0.1% of the in-memory profile and 0.5% of the
+RocksDB profile. The final StreamFusion profiles attribute 5.7–5.8% to RowData-to-Arrow conversion,
+8.1%/12.8% to the inclusive interval bridge on memory/RocksDB, 6.0–6.1% to the processor within that
+bridge, and 2.1% to the native RocksDB wrapper. RocksDB symbols account for about 6.0% of the native
+RocksDB run, while Flink's RocksDB interval profile places roughly 45% inclusively under both the
+interval operator and RocksDB state path. Remaining visible StreamFusion costs are shared Arrow/JNI
+boundaries and result materialization rather than an obvious repeated state-loop allocation. Native
+rows, timers, state scratch, exported batches, RocksDB cache, and write buffers remain subject to
+Flink managed-memory admission and focused failure/release tests. These are local diagnostic results,
+not portable performance claims.
 
 ## Q18 RowData profiling target
 

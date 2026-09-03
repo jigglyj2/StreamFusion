@@ -105,6 +105,46 @@ class LocalRowDataNexmarkBenchmarkIT {
 
     @ParameterizedTest
     @ValueSource(strings = {"hashmap", "rocksdb"})
+    void intervalJoinQueriesMatchFlinkOnBothStateBackends(String backend) throws Exception {
+        String query = "interval-join";
+        LocalRowDataNexmarkBenchmark.RunResult flink =
+                LocalRowDataNexmarkBenchmark.run(2_000, query, false, backend, 1);
+        LocalRowDataNexmarkBenchmark.RunResult streamFusion =
+                LocalRowDataNexmarkBenchmark.run(2_000, query, true, backend, 1);
+
+        assertThat(streamFusion.completed()).as(query).isTrue();
+        assertThat(streamFusion.debugRows()).as(query).containsExactlyElementsOf(flink.debugRows());
+        assertThat(streamFusion.outputRows()).as(query).isEqualTo(flink.outputRows());
+        assertThat(streamFusion.outputSha256()).as(query).isEqualTo(flink.outputSha256());
+        assertThat(StreamFusionPlanningDiagnostics.explain()).as(query).contains("Accelerated: yes");
+        assertThat(streamFusion.nativeIntervalJoinBatches()).as(query).isGreaterThan(0);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"hashmap", "rocksdb"})
+    void composedRegularJoinsAndTopNMatchFlink(String backend) throws Exception {
+        for (String query : new String[] {"q19", "q20", "q23"}) {
+            int parallelism = query.equals("q19") ? 1 : 4;
+            LocalRowDataNexmarkBenchmark.RunResult flink =
+                    LocalRowDataNexmarkBenchmark.run(2_000, query, false, backend, parallelism);
+            LocalRowDataNexmarkBenchmark.RunResult streamFusion =
+                    LocalRowDataNexmarkBenchmark.run(2_000, query, true, backend, parallelism);
+
+            assertThat(streamFusion.completed()).as(query).isTrue();
+            assertThat(streamFusion.debugRows()).as(query).containsExactlyElementsOf(flink.debugRows());
+            assertThat(streamFusion.outputRows()).as(query).isEqualTo(flink.outputRows());
+            assertThat(streamFusion.outputSha256()).as(query).isEqualTo(flink.outputSha256());
+            assertThat(StreamFusionPlanningDiagnostics.explain()).as(query).contains("Accelerated: yes");
+            if (query.equals("q19")) {
+                assertThat(streamFusion.nativeTopNBatches()).as(query).isGreaterThan(0);
+            } else {
+                assertThat(streamFusion.nativeRegularJoinBatches()).as(query).isGreaterThan(0);
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"hashmap", "rocksdb"})
     void topNMatchesFlinkOnBothStateBackends(String backend) throws Exception {
         LocalRowDataNexmarkBenchmark.RunResult flink =
                 LocalRowDataNexmarkBenchmark.run(2_000, "top-n", false, backend, 1);

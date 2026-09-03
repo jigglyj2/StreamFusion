@@ -56,6 +56,11 @@ public final class NativeUnionBridge {
         return EXECUTED_BATCHES.get();
     }
 
+    /** Records a zero-copy UNION forwarding batch that needed no native compute kernel. */
+    public static void recordForwardedBatch() {
+        EXECUTED_BATCHES.incrementAndGet();
+    }
+
     public static void resetMetrics() {
         EXECUTED_BATCHES.set(0);
     }

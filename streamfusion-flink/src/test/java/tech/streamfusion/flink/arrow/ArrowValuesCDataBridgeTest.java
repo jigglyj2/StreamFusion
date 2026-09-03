@@ -55,6 +55,26 @@ class ArrowValuesCDataBridgeTest {
         }
     }
 
+    @Test
+    void retainsAllocatorForZeroColumnValuesBatch() {
+        RowType outputType = RowType.of();
+        Values values = Values.newBuilder()
+                .setSchema(Schema.getDefaultInstance())
+                .addRows(ValuesRow.getDefaultInstance())
+                .build();
+        byte[] plan = NativePlan.newBuilder()
+                .setProtocolVersion(1)
+                .setRoot(Operator.newBuilder().setValues(values))
+                .build()
+                .toByteArray();
+
+        try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+                ArrowRowDataBatch batch = ArrowValuesCDataBridge.execute(plan, outputType, allocator)) {
+            assertThat(batch.size()).isEqualTo(1);
+            assertThat(batch.allocator()).isSameAs(allocator);
+        }
+    }
+
     private static byte[] plan(boolean empty) {
         LogicalType integer = LogicalType.newBuilder()
                 .setNullable(true)

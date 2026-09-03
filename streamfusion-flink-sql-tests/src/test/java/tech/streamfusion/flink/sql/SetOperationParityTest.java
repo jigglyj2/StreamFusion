@@ -63,14 +63,15 @@ class SetOperationParityTest extends SqlParityTestSupport {
     }
 
     @Test
-    void unionDistinctFallsBackBecauseDeduplicationIsNotAccelerated() throws Exception {
+    void unionDistinctUsesNativeUnionAndDistinctAggregation() throws Exception {
         assertParity(LEFT + " UNION " + RIGHT, true);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
+        assertThat(StreamFusionPlannerFactory.nativeUnionBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativeGroupAggregateBatchCount()).isGreaterThan(0);
     }
 
     @Test
-    void explainReportsUnionDistinctDeduplicationFallback() {
+    void explainReportsUnionDistinctAcceleration() {
         System.setProperty(
                 StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY, StreamFusionPlannerFactory.class.getName());
         StreamTableEnvironment tableEnvironment =
@@ -78,8 +79,8 @@ class SetOperationParityTest extends SqlParityTestSupport {
 
         assertThat(tableEnvironment.explainSql(LEFT + " UNION " + RIGHT))
                 .contains("== StreamFusion Acceleration ==")
-                .contains("Accelerated: no")
-                .contains("operator has no StreamFusion physical implementation")
-                .contains("the entire plan will use Flink");
+                .contains("Accelerated: yes")
+                .contains("StreamFusionGroupAggregate")
+                .contains("StreamFusionUnionAll");
     }
 }

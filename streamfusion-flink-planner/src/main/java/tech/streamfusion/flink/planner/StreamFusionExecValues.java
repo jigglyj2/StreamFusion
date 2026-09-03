@@ -39,6 +39,7 @@ public final class StreamFusionExecValues extends CommonExecValues implements St
                 outputType,
                 description);
         this.streamFusionTuples = tuples;
+        setInputEdges(List.of());
     }
 
     @SuppressWarnings("unchecked")

@@ -71,7 +71,8 @@ comma-separated query names, `flink`, `streamfusion`, or `both`, `hashmap`, `roc
 `both`, and an optional parallelism. Use parallelism one when comparing the complete streaming
 Top-N changelog: independent multi-input network scheduling can produce different but equivalent
 intermediate Top-N updates. Its stable output includes elapsed time, input-event throughput, native calc batches, and
-native group-aggregate, Top-N, window-aggregate, and window-join batches. Set
+native group-aggregate, Top-N, window-aggregate, window-join, regular-join, and interval-join
+batches. Set
 `-Dstreamfusion.nexmark.jfr=/absolute/path/top-n.jfr` to capture the JVM profile and allocation
 samples for a standalone run. Run performance
 measurements from a release/native-CPU build and use separate JVM invocations for each engine;

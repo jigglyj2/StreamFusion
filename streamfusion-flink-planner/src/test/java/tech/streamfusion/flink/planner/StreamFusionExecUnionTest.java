@@ -38,10 +38,11 @@ class StreamFusionExecUnionTest {
 
         ExecNodeGraph result = new StreamFusionExecGraphProcessor().process(new ExecNodeGraph(List.of(union)), null);
 
-        assertThat(result.getRootNodes()).singleElement().isInstanceOf(StreamFusionExecUnion.class);
-        assertThat(result.getRootNodes().get(0).getInputEdges())
-                .extracting(ExecEdge::getSource)
-                .containsExactly(left, right);
+        ExecNode<?> boundary = result.getRootNodes().get(0);
+        assertThat(boundary).isInstanceOf(StreamFusionExecSinkBoundary.class);
+        ExecNode<?> replacement = boundary.getInputEdges().get(0).getSource();
+        assertThat(replacement).isInstanceOf(StreamFusionExecUnion.class);
+        assertThat(replacement.getInputEdges()).extracting(ExecEdge::getSource).containsExactly(left, right);
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 

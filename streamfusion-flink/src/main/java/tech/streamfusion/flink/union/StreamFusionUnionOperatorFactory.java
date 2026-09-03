@@ -18,21 +18,30 @@ package tech.streamfusion.flink.union;
 import org.apache.flink.streaming.api.operators.AbstractStreamOperatorFactory;
 import org.apache.flink.streaming.api.operators.StreamOperator;
 import org.apache.flink.streaming.api.operators.StreamOperatorParameters;
+import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 
 /** Creates one StreamFusion multi-input operator for a UNION ALL physical node. */
 final class StreamFusionUnionOperatorFactory extends AbstractStreamOperatorFactory<ArrowRowDataBatch> {
     private final int inputCount;
+    private final RowType rowType;
+    private final byte[] exchangePlan;
 
     StreamFusionUnionOperatorFactory(int inputCount) {
+        this(inputCount, null, null);
+    }
+
+    StreamFusionUnionOperatorFactory(int inputCount, RowType rowType, byte[] exchangePlan) {
         this.inputCount = inputCount;
+        this.rowType = rowType;
+        this.exchangePlan = exchangePlan == null ? null : exchangePlan.clone();
     }
 
     @Override
     @SuppressWarnings("unchecked")
     public <T extends StreamOperator<ArrowRowDataBatch>> T createStreamOperator(
             StreamOperatorParameters<ArrowRowDataBatch> parameters) {
-        return (T) new StreamFusionArrowUnionOperator(parameters, inputCount);
+        return (T) new StreamFusionArrowUnionOperator(parameters, inputCount, rowType, exchangePlan);
     }
 
     @Override

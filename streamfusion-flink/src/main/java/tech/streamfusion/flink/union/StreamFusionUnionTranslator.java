@@ -17,6 +17,7 @@ package tech.streamfusion.flink.union;
 
 import java.util.List;
 import org.apache.flink.api.dag.Transformation;
+import org.apache.flink.core.memory.ManagedMemoryUseCase;
 import org.apache.flink.streaming.api.transformations.MultipleInputTransformation;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.types.logical.RowType;
@@ -24,6 +25,8 @@ import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatchTypeInfo;
 import tech.streamfusion.flink.arrow.StreamFusionArrowBoundaries;
 import tech.streamfusion.flink.calc.StreamFusionTimestampRangeSupport;
+import tech.streamfusion.flink.exchange.NativeExchangePlanSerializer;
+import tech.streamfusion.flink.exchange.StreamFusionExchangeTranslator;
 
 /** Reflection entry point used by the planner extension for native UNION ALL. */
 public final class StreamFusionUnionTranslator {
@@ -46,14 +49,16 @@ public final class StreamFusionUnionTranslator {
         }
         int parallelism =
                 inputs.stream().mapToInt(Transformation::getParallelism).max().orElse(1);
+        byte[] exchangePlan = NativeExchangePlanSerializer.singleton(rowType);
         MultipleInputTransformation<ArrowRowDataBatch> transformation = new MultipleInputTransformation<>(
                 "streamfusion-union-all[" + inputs.size() + "]",
-                new StreamFusionUnionOperatorFactory(inputs.size()),
+                new StreamFusionUnionOperatorFactory(inputs.size(), rowType, exchangePlan),
                 ArrowRowDataBatchTypeInfo.INSTANCE,
                 parallelism,
                 false);
+        transformation.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
         inputs.stream()
-                .map(input -> StreamFusionArrowBoundaries.toArrow(input, rowType))
+                .map(input -> StreamFusionExchangeTranslator.frameForMultiInput(input, rowType, exchangePlan))
                 .forEach(transformation::addInput);
         return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
     }

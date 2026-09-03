@@ -23,6 +23,7 @@ import org.apache.flink.table.delegation.PlannerFactory;
 import tech.streamfusion.nativebridge.NativeCalcBridge;
 import tech.streamfusion.nativebridge.NativeChangelogNormalizeBridge;
 import tech.streamfusion.nativebridge.NativeGroupAggregateBridge;
+import tech.streamfusion.nativebridge.NativeIntervalJoinBridge;
 import tech.streamfusion.nativebridge.NativeRegularJoinBridge;
 import tech.streamfusion.nativebridge.NativeTopNBridge;
 import tech.streamfusion.nativebridge.NativeUnionBridge;
@@ -114,6 +115,10 @@ public final class StreamFusionPlannerFactory implements PlannerFactory {
         return NativeRegularJoinBridge.executedBatchCount();
     }
 
+    public static long nativeIntervalJoinBatchCount() {
+        return NativeIntervalJoinBridge.executedBatchCount();
+    }
+
     public static long nativeValuesBatchCount() {
         return NativeValuesBridge.executedBatchCount();
     }
@@ -130,6 +135,7 @@ public final class StreamFusionPlannerFactory implements PlannerFactory {
         NativeTopNBridge.resetMetrics();
         NativeWindowJoinBridge.resetMetrics();
         NativeRegularJoinBridge.resetMetrics();
+        NativeIntervalJoinBridge.resetMetrics();
         NativeUnionBridge.resetMetrics();
         NativeValuesBridge.resetMetrics();
         System.clearProperty(EXEC_GRAPH_PROCESSOR_PROPERTY);
