@@ -33,15 +33,26 @@ import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 class WindowOpaquePayloadTypeParityTest extends SqlParityTestSupport {
     @Test
     void windowStatePreservesEveryFlinkLogicalPayloadTypeByteForByte() throws Exception {
-        byte[] flink = execute(false);
-        byte[] streamFusion = execute(true);
+        byte[] flink = execute(false, "order_value");
+        byte[] streamFusion = execute(true, "order_value");
 
         assertThat(streamFusion).isEqualTo(flink);
         assertThat(StreamFusionPlannerFactory.nativeWindowRankBatchCount()).isGreaterThan(0);
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 
-    private static byte[] execute(boolean streamFusionEnabled) throws Exception {
+    @Test
+    void windowDeduplicateTimerOutputPreservesEveryFlinkLogicalPayloadTypeByteForByte() throws Exception {
+        byte[] flink = execute(false, "ts");
+        byte[] streamFusion = execute(true, "ts");
+
+        assertThat(streamFusion).isEqualTo(flink);
+        assertThat(StreamFusionPlannerFactory.nativeWindowDeduplicateBatchCount())
+                .isGreaterThan(0);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
+    private static byte[] execute(boolean streamFusionEnabled, String orderField) throws Exception {
         configure(streamFusionEnabled);
         StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();
         environment.setParallelism(1);
@@ -71,7 +82,9 @@ class WindowOpaquePayloadTypeParityTest extends SqlParityTestSupport {
                                 .build()));
         return collect(tables.executeSql("SELECT payload, window_start, window_end, row_num FROM ("
                 + "SELECT *, ROW_NUMBER() OVER (PARTITION BY category, window_start, window_end "
-                + "ORDER BY order_value DESC) AS row_num FROM TABLE(TUMBLE(TABLE "
+                + "ORDER BY "
+                + orderField
+                + " DESC) AS row_num FROM TABLE(TUMBLE(TABLE "
                 + "window_all_type_payload, DESCRIPTOR(ts), INTERVAL '5' SECOND))) WHERE row_num = 1"));
     }
 

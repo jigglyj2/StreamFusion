@@ -5,9 +5,13 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use ahash::RandomState;
-use arrow::array::{Array, ArrayRef, BinaryArray, BinaryBuilder, Int8Array};
+#[cfg(test)]
+use arrow::array::ArrayRef;
+use arrow::array::{Array, BinaryArray, Int8Array};
+use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use arrow_row::{RowConverter, Rows, SortField};
 use chrono::Utc;
 use chrono_tz::Tz;
 use datafusion::error::{DataFusionError, Result};
@@ -15,6 +19,7 @@ use hashbrown::HashMap;
 
 use crate::exchange::{assign_key_group, encode_binary_row, KeyField};
 use crate::memory_pool::HostMemoryReservation;
+use crate::planner::arrow_schema;
 use crate::state::{
     KeyedState, MemoryKeyedState, NativeTimerService, RocksPluginKeyedState, StateKey, StateKeyRef,
     StateMutation, TimerDomain, TimerKey,
@@ -29,21 +34,23 @@ const UPDATE_BEFORE: i8 = 1;
 const UPDATE_AFTER: i8 = 2;
 const DELETE: i8 = 3;
 const STATE_MAGIC: &[u8; 4] = b"SFWD";
-const STATE_VERSION: u8 = 1;
+const STATE_VERSION: u8 = 2;
 const WINDOW_KEY_PREFIX: u8 = 1;
 const TIMER_STATE_KEY: &[u8] = b"\0streamfusion-window-dedup-timers";
 
-/// Window-scoped first/last row selection with opaque BinaryRowData payload state.
+/// Window-scoped first/last row selection with opaque Arrow-row payload state.
 pub(crate) struct WindowDeduplicateProcessor {
     plan: proto::WindowDeduplicate,
     shift_time_zone: Tz,
     max_parallelism: u32,
     state: Box<dyn KeyedState>,
     timers: NativeTimerService,
+    visible_schema: SchemaRef,
+    output_schema: SchemaRef,
+    row_converter: RowConverter,
     input_schema: Option<SchemaRef>,
     key_fields: Vec<(usize, KeyField)>,
     preencoded_key_index: Option<usize>,
-    stored_row_index: Option<usize>,
     input_kind_index: Option<usize>,
     current_event_time: i64,
     scratch_reservation: HostMemoryReservation,
@@ -153,6 +160,16 @@ impl WindowDeduplicateProcessor {
             }
         };
         validate_plan(&plan, max_parallelism)?;
+        let visible_schema =
+            arrow_schema(plan.input_schema.as_ref().expect("validated input schema"))?;
+        let row_converter = row_converter(&visible_schema)?;
+        let mut output_fields = visible_schema.fields().iter().cloned().collect::<Vec<_>>();
+        output_fields.push(Arc::new(Field::new(
+            "__streamfusion_row_kind",
+            DataType::Int8,
+            false,
+        )));
+        let output_schema = Arc::new(Schema::new(output_fields));
         let shift_time_zone = if plan.shift_time_zone.is_empty() {
             chrono_tz::UTC
         } else {
@@ -169,10 +186,12 @@ impl WindowDeduplicateProcessor {
             max_parallelism,
             state,
             timers: NativeTimerService::new(first_key_group, last_key_group, timer_reservation)?,
+            visible_schema,
+            output_schema,
+            row_converter,
             input_schema: None,
             key_fields: Vec::new(),
             preencoded_key_index: None,
-            stored_row_index: None,
             input_kind_index: None,
             current_event_time: i64::MIN,
             scratch_reservation,
@@ -188,23 +207,28 @@ impl WindowDeduplicateProcessor {
     pub(crate) fn process_arrow(&mut self, batch: RecordBatch) -> Result<RecordBatch> {
         self.prepare_schema(batch.schema())?;
         // Input Arrow buffers are already charged by the Flink-backed Arrow allocator. Reserve
-        // only Rust-owned copies and collection nodes created while staging this batch.
-        let stored_rows = batch
-            .column(self.stored_row_index.expect("schema prepared"))
-            .as_any()
-            .downcast_ref::<BinaryArray>()
-            .expect("stored-row type checked while processing");
-        let copied_rows = stored_rows.iter().flatten().map(<[u8]>::len).sum::<usize>();
+        // only Rust-owned Arrow-row copies and collection nodes created while staging this batch.
+        let visible_count = self.visible_schema.fields().len();
+        let row_bytes = batch.columns()[..visible_count]
+            .iter()
+            .map(|column| column.get_array_memory_size())
+            .sum::<usize>();
         let copied_keys = self
             .preencoded_key_index
             .and_then(|index| batch.column(index).as_any().downcast_ref::<BinaryArray>())
             .map(|keys| keys.iter().flatten().map(<[u8]>::len).sum::<usize>())
             .unwrap_or(0);
-        let base_reservation = copied_rows
+        let base_reservation = row_bytes
             .saturating_add(copied_keys)
             .saturating_add(batch.num_rows().saturating_mul(160));
         self.scratch_reservation.resize(base_reservation)?;
-        let result = self.process_arrow_accounted(&batch);
+        let encoded_rows = self
+            .row_converter
+            .convert_columns(&batch.columns()[..visible_count]);
+        let result = match encoded_rows {
+            Ok(encoded_rows) => self.process_arrow_accounted(&batch, &encoded_rows),
+            Err(error) => Err(error.into()),
+        };
         match result {
             Ok(output) => self.finish_output(output, base_reservation),
             Err(error) => {
@@ -214,16 +238,11 @@ impl WindowDeduplicateProcessor {
         }
     }
 
-    fn process_arrow_accounted(&mut self, batch: &RecordBatch) -> Result<RecordBatch> {
-        let stored_rows = batch
-            .column(self.stored_row_index.expect("schema prepared"))
-            .as_any()
-            .downcast_ref::<BinaryArray>()
-            .ok_or_else(|| {
-                DataFusionError::Execution(
-                    "window deduplicate stored rows are not Arrow Binary".to_string(),
-                )
-            })?;
+    fn process_arrow_accounted(
+        &mut self,
+        batch: &RecordBatch,
+        encoded_rows: &Rows,
+    ) -> Result<RecordBatch> {
         let kinds = batch
             .column(self.input_kind_index.expect("schema prepared"))
             .as_any()
@@ -266,7 +285,12 @@ impl WindowDeduplicateProcessor {
                     )));
                 }
             };
-            changes.push((index, accumulate, order, stored_rows.value(row).to_vec()));
+            changes.push((
+                index,
+                accumulate,
+                order,
+                encoded_rows.row(row).data().to_vec(),
+            ));
         }
         if unique.is_empty() {
             return self.empty_output();
@@ -416,7 +440,7 @@ impl WindowDeduplicateProcessor {
         self.append_timer_mutations(&mut mutations, dirty_groups)?;
         self.state.write_batch(mutations)?;
         self.state_write_batches = self.state_write_batches.saturating_add(1);
-        let output = output_batch(rows)?;
+        let output = self.output_batch(rows)?;
         self.finish_output(output, 0)
     }
 
@@ -502,16 +526,14 @@ impl WindowDeduplicateProcessor {
             return Ok(());
         }
         self.preencoded_key_index = metadata_index(&schema, "__streamfusion_key");
-        self.stored_row_index = metadata_index(&schema, "__streamfusion_stored_row");
         self.input_kind_index = metadata_index(&schema, "__streamfusion_input_row_kind");
-        if self.stored_row_index.is_none() || self.input_kind_index.is_none() {
+        if self.input_kind_index.is_none() {
             return Err(DataFusionError::Execution(
-                "window deduplicate requires stored-row and RowKind metadata".to_string(),
+                "window deduplicate requires RowKind metadata".to_string(),
             ));
         }
         let visible_count = [
             self.preencoded_key_index,
-            self.stored_row_index,
             self.input_kind_index,
             Some(schema.fields().len()),
         ]
@@ -519,6 +541,25 @@ impl WindowDeduplicateProcessor {
         .flatten()
         .min()
         .unwrap();
+        if visible_count != self.visible_schema.fields().len()
+            || schema.fields()[..visible_count]
+                .iter()
+                .zip(self.visible_schema.fields())
+                .any(|(actual, planned)| actual.data_type() != planned.data_type())
+        {
+            return Err(DataFusionError::Execution(format!(
+                "window deduplicate Arrow schema does not match its protobuf input schema: actual {:?}, planned {:?}",
+                schema.fields()[..visible_count]
+                    .iter()
+                    .map(|field| field.data_type())
+                    .collect::<Vec<_>>(),
+                self.visible_schema
+                    .fields()
+                    .iter()
+                    .map(|field| field.data_type())
+                    .collect::<Vec<_>>()
+            )));
+        }
         for &index in self
             .plan
             .partition_key_indices
@@ -564,7 +605,16 @@ impl WindowDeduplicateProcessor {
     }
 
     fn empty_output(&self) -> Result<RecordBatch> {
-        Ok(RecordBatch::new_empty(output_schema()))
+        Ok(RecordBatch::new_empty(self.output_schema.clone()))
+    }
+
+    fn output_batch(&self, rows: Vec<Vec<u8>>) -> Result<RecordBatch> {
+        let parser = self.row_converter.parser();
+        let mut columns = self
+            .row_converter
+            .convert_rows(rows.iter().map(|row| parser.parse(row)))?;
+        columns.push(Arc::new(Int8Array::from(vec![INSERT; rows.len()])));
+        Ok(RecordBatch::try_new(self.output_schema.clone(), columns)?)
     }
 
     fn finish_output(&mut self, output: RecordBatch, base: usize) -> Result<RecordBatch> {
@@ -713,24 +763,21 @@ fn read_exact<const N: usize>(bytes: &[u8], offset: &mut usize) -> Result<[u8; N
     Ok(result)
 }
 
-fn output_schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        Field::new("__streamfusion_stored_row", DataType::Binary, false),
-        Field::new("__streamfusion_row_kind", DataType::Int8, false),
-    ]))
-}
-
-fn output_batch(rows: Vec<Vec<u8>>) -> Result<RecordBatch> {
-    let mut builder = BinaryBuilder::new();
-    for row in rows.iter() {
-        builder.append_value(row);
-    }
-    let row_count = rows.len();
-    let columns: Vec<ArrayRef> = vec![
-        Arc::new(builder.finish()),
-        Arc::new(Int8Array::from(vec![INSERT; row_count])),
-    ];
-    Ok(RecordBatch::try_new(output_schema(), columns)?)
+fn row_converter(schema: &SchemaRef) -> Result<RowConverter> {
+    let fields = schema
+        .fields()
+        .iter()
+        .map(|field| {
+            SortField::new_with_options(
+                field.data_type().clone(),
+                SortOptions {
+                    descending: false,
+                    nulls_first: true,
+                },
+            )
+        })
+        .collect();
+    Ok(RowConverter::new(fields)?)
 }
 
 #[cfg(test)]
@@ -837,7 +884,7 @@ mod tests {
             .unwrap();
         let output = restored.advance_event_time(99).unwrap();
         let rows = output
-            .column(0)
+            .column(3)
             .as_any()
             .downcast_ref::<BinaryArray>()
             .unwrap();
@@ -868,7 +915,7 @@ mod tests {
             .unwrap();
         let output = processor.advance_event_time(49).unwrap();
         let rows = output
-            .column(0)
+            .column(3)
             .as_any()
             .downcast_ref::<BinaryArray>()
             .unwrap();
@@ -887,13 +934,46 @@ mod tests {
                         window_end_index: 2,
                         keep_last,
                         input_changelog: true,
-                        input_schema: Some(proto::Schema { fields: Vec::new() }),
+                        input_schema: Some(proto::Schema {
+                            fields: vec![
+                                proto_field(
+                                    "key",
+                                    proto::logical_type::Type::Bigint(proto::EmptyType::default()),
+                                ),
+                                proto_field(
+                                    "order",
+                                    proto::logical_type::Type::Timestamp(proto::PrecisionType {
+                                        precision: 3,
+                                    }),
+                                ),
+                                proto_field(
+                                    "window_end",
+                                    proto::logical_type::Type::Timestamp(proto::PrecisionType {
+                                        precision: 3,
+                                    }),
+                                ),
+                                proto_field(
+                                    "payload",
+                                    proto::logical_type::Type::Binary(proto::EmptyType::default()),
+                                ),
+                            ],
+                        }),
                         shift_time_zone: "UTC".to_string(),
                     },
                 ))),
             }),
         }
         .encode_to_vec()
+    }
+
+    fn proto_field(name: &str, r#type: proto::logical_type::Type) -> proto::Field {
+        proto::Field {
+            name: name.to_string(),
+            r#type: Some(proto::LogicalType {
+                nullable: true,
+                r#type: Some(r#type),
+            }),
+        }
     }
 
     fn batch(
@@ -914,7 +994,7 @@ mod tests {
                 Arc::new(TimestampMillisecondArray::from(window_end.to_vec())) as ArrayRef,
             ),
             (
-                "__streamfusion_stored_row",
+                "payload",
                 Arc::new(BinaryArray::from_vec(rows.to_vec())) as ArrayRef,
             ),
             (

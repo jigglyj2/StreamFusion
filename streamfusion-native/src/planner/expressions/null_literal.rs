@@ -58,7 +58,7 @@ pub(crate) fn data_type(logical_type: &proto::LogicalType) -> Result<DataType> {
         Some(proto::logical_type::Type::Array(array)) => {
             let element_type = required_type("ARRAY element", array.element_type.as_deref())?;
             Ok(DataType::List(Arc::new(Field::new(
-                "element",
+                "$data$",
                 data_type(element_type)?,
                 element_type.nullable,
             ))))
@@ -71,7 +71,7 @@ pub(crate) fn data_type(logical_type: &proto::LogicalType) -> Result<DataType> {
                 Field::new("value", data_type(value_type)?, value_type.nullable),
             ]));
             Ok(DataType::Map(
-                Arc::new(Field::new("items", entries, false)),
+                Arc::new(Field::new("entries", entries, false)),
                 false,
             ))
         }

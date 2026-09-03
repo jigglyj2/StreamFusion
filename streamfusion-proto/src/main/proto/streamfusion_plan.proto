@@ -143,8 +143,8 @@ message WindowAggregate {
   string shift_time_zone = 14;
 }
 
-// Window-scoped first/last-row deduplication. Full rows are stored as opaque BinaryRowData
-// bytes; the native side only interprets the ordering timestamp and the attached window end.
+// Window-scoped first/last-row deduplication. Full rows use Arrow's schema-aware row encoding in
+// canonical native state, so timer output is decoded directly to Arrow without a Java transpose.
 message WindowDeduplicate {
   Operator input = 1;
   repeated uint32 partition_key_indices = 2;

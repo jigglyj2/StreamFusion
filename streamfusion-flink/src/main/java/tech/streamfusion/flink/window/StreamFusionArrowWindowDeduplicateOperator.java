@@ -5,7 +5,6 @@
 package tech.streamfusion.flink.window;
 
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import org.apache.flink.api.common.state.ListState;
@@ -20,10 +19,7 @@ import org.apache.flink.streaming.api.operators.BoundedOneInput;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
 import org.apache.flink.streaming.api.watermark.Watermark;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
-import org.apache.flink.table.data.binary.BinaryRowData;
-import org.apache.flink.table.data.binary.BinarySegmentUtils;
 import org.apache.flink.table.runtime.keyselector.RowDataKeySelector;
-import org.apache.flink.table.runtime.typeutils.RowDataSerializer;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.ArrowWindowDeduplicateCDataBridge;
@@ -40,7 +36,6 @@ final class StreamFusionArrowWindowDeduplicateOperator extends AbstractStreamFus
     private final RowDataKeySelector keySelector;
     private final boolean preencodeKeys;
 
-    private transient RowDataSerializer serializer;
     private transient ListState<Long> watermarkState;
     private transient long restoredWatermark = Long.MIN_VALUE;
     private transient long currentWatermark = Long.MIN_VALUE;
@@ -61,7 +56,6 @@ final class StreamFusionArrowWindowDeduplicateOperator extends AbstractStreamFus
     @Override
     public void open() throws Exception {
         super.open();
-        serializer = new RowDataSerializer(rowType);
         lateRecordsDropped = getMetricGroup().counter("numLateRecordsDropped");
         lateRecordsDroppedRate = getMetricGroup().meter("lateRecordsDroppedRate", new MeterView(lateRecordsDropped));
         observedNativeStatistics = NativeWindowDeduplicateBridge.statistics(nativeHandle());
@@ -85,14 +79,8 @@ final class StreamFusionArrowWindowDeduplicateOperator extends AbstractStreamFus
         ArrowRowDataBatch input = element.getValue();
         try {
             List<byte[]> keys = preencodeKeys ? preencodeKeys(input, keySelector, "window deduplicate") : null;
-            List<byte[]> rows = new ArrayList<>(input.size());
-            for (int index = 0; index < input.size(); index++) {
-                BinaryRowData binary = serializer.toBinaryRow(input.rowView(index));
-                rows.add(BinarySegmentUtils.copyToBytes(
-                        binary.getSegments(), binary.getOffset(), binary.getSizeInBytes()));
-            }
             try (ArrowRowDataBatch result = ArrowWindowDeduplicateCDataBridge.process(
-                    nativeHandle(), input, keys, rows, rowType, allocator(), memoryManager())) {
+                    nativeHandle(), input, keys, rowType, allocator(), memoryManager())) {
                 emitBatch(result, true, input.size());
                 recordProcessedWithoutStateCalls(input, result);
             }

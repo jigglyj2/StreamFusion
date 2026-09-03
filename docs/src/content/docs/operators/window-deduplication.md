@@ -10,7 +10,14 @@ sidebar:
 ## SQL example
 
 ```sql
-SELECT * FROM (\n  SELECT *, ROW_NUMBER() OVER (PARTITION BY window_start, window_end, id ORDER BY time_attr ASC) AS row_num\n  FROM windowed_events\n) WHERE row_num = 1;
+SELECT *
+FROM (
+  SELECT *, ROW_NUMBER() OVER (
+    PARTITION BY window_start, window_end, id ORDER BY time_attr ASC
+  ) AS row_num
+  FROM windowed_events
+)
+WHERE row_num = 1;
 ```
 
 ## Acceleration and fallback
@@ -27,10 +34,12 @@ mode, and Flink's changelog-state wrapper are explicit whole-plan fallback condi
 
 ## Implementation
 
-Rust keeps opaque BinaryRowData candidates per Flink key group and window. INSERT and UPDATE_AFTER
-add candidates; UPDATE_BEFORE and DELETE remove an exact candidate, so retracting the winner reveals
-the next eligible row. The operator performs one backend batch read and one atomic write per Arrow
-batch, registers native event-time timers, and emits the final INSERT when the window closes.
+Rust encodes complete candidates with Arrow's schema-aware row format per Flink key group and
+window. INSERT and UPDATE_AFTER add candidates; UPDATE_BEFORE and DELETE remove an exact candidate,
+so retracting the winner reveals the next eligible row. The operator performs one backend batch read
+and one atomic write per Arrow batch, registers native event-time timers, and decodes the final
+INSERT directly into Arrow when the window closes. The Java bridge only attaches Flink's RowKind
+envelope; it never reconstructs or transposes timer output through RowData.
 
 Flink 2.3 rejects updating input before constructing the Window Deduplicate physical node, so
 current SQL plans reach this path as append-only. Direct native changelog, restore, and rescaling
