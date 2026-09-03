@@ -5,9 +5,11 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use ahash::RandomState;
-use arrow::array::{Array, ArrayRef, BinaryArray, BinaryBuilder, Int32Array, Int8Array};
+use arrow::array::{Array, BinaryArray, Int32Array, Int8Array, UInt32Array};
+use arrow::compute::{take, SortOptions};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use arrow_row::{RowConverter, Rows, SortField};
 use chrono::Utc;
 use chrono_tz::Tz;
 use datafusion::error::{DataFusionError, Result};
@@ -15,6 +17,7 @@ use hashbrown::HashMap;
 
 use crate::exchange::{assign_key_group, encode_binary_row, KeyField};
 use crate::memory_pool::HostMemoryReservation;
+use crate::planner::arrow_schema;
 use crate::state::{
     KeyedState, MemoryKeyedState, NativeTimerService, RocksPluginKeyedState, StateKey, StateKeyRef,
     StateMutation, TimerDomain, TimerKey,
@@ -29,21 +32,23 @@ const UPDATE_BEFORE: i8 = 1;
 const UPDATE_AFTER: i8 = 2;
 const DELETE: i8 = 3;
 const STATE_MAGIC: &[u8; 4] = b"SFWJ";
-const STATE_VERSION: u8 = 1;
+const STATE_VERSION: u8 = 2;
 const WINDOW_KEY_PREFIX: u8 = 1;
 const TIMER_STATE_KEY: &[u8] = b"\0streamfusion-window-join-timers";
 
-/// Two-input Window Join storage. Complete rows are opaque until Java applies Flink's condition.
+/// Two-input Window Join storage with Arrow-row state and Arrow condition-input output.
 pub(crate) struct WindowJoinProcessor {
     plan: proto::WindowJoin,
     shift_time_zone: Tz,
     max_parallelism: u32,
     state: Box<dyn KeyedState>,
     timers: NativeTimerService,
+    visible_schemas: [SchemaRef; 2],
+    output_schema: SchemaRef,
+    row_converters: [RowConverter; 2],
     schemas: [Option<SchemaRef>; 2],
     key_fields: [Vec<(usize, KeyField)>; 2],
     preencoded_key_indices: [Option<usize>; 2],
-    stored_row_indices: [Option<usize>; 2],
     input_kind_indices: [Option<usize>; 2],
     current_event_time: i64,
     scratch_reservation: HostMemoryReservation,
@@ -145,6 +150,35 @@ impl WindowJoinProcessor {
             }
         };
         validate_plan(&plan, max_parallelism)?;
+        let visible_schemas = [
+            arrow_schema(plan.left_schema.as_ref().expect("validated left schema"))?,
+            arrow_schema(plan.right_schema.as_ref().expect("validated right schema"))?,
+        ];
+        let row_converters = [
+            row_converter(&visible_schemas[0])?,
+            row_converter(&visible_schemas[1])?,
+        ];
+        let mut output_fields = Vec::new();
+        for (side, schema) in visible_schemas.iter().enumerate() {
+            output_fields.extend(schema.fields().iter().enumerate().map(|(index, field)| {
+                Arc::new(Field::new(
+                    format!("__streamfusion_join_{side}_{index}"),
+                    field.data_type().clone(),
+                    true,
+                ))
+            }));
+        }
+        output_fields.push(Arc::new(Field::new(
+            "__streamfusion_join_side",
+            DataType::Int8,
+            false,
+        )));
+        output_fields.push(Arc::new(Field::new(
+            "__streamfusion_window_group",
+            DataType::Int32,
+            false,
+        )));
+        let output_schema = Arc::new(Schema::new(output_fields));
         let shift_time_zone = if plan.shift_time_zone.is_empty() {
             chrono_tz::UTC
         } else {
@@ -161,10 +195,12 @@ impl WindowJoinProcessor {
             max_parallelism,
             state,
             timers: NativeTimerService::new(first_key_group, last_key_group, timer_reservation)?,
+            visible_schemas,
+            output_schema,
+            row_converters,
             schemas: [None, None],
             key_fields: [Vec::new(), Vec::new()],
             preencoded_key_indices: [None, None],
-            stored_row_indices: [None, None],
             input_kind_indices: [None, None],
             current_event_time: i64::MIN,
             scratch_reservation,
@@ -184,8 +220,11 @@ impl WindowJoinProcessor {
             ));
         }
         self.prepare_schema(side, batch.schema())?;
-        let stored_rows = binary_column(&batch, self.stored_row_indices[side], "stored row")?;
-        let copied_rows = stored_rows.iter().flatten().map(<[u8]>::len).sum::<usize>();
+        let visible_count = self.visible_schemas[side].fields().len();
+        let copied_rows = batch.columns()[..visible_count]
+            .iter()
+            .map(|column| column.get_array_memory_size())
+            .sum::<usize>();
         let copied_keys = self.preencoded_key_indices[side]
             .and_then(|index| batch.column(index).as_any().downcast_ref::<BinaryArray>())
             .map(|keys| keys.iter().flatten().map(<[u8]>::len).sum::<usize>())
@@ -194,7 +233,12 @@ impl WindowJoinProcessor {
             .saturating_add(copied_keys)
             .saturating_add(batch.num_rows().saturating_mul(144));
         self.scratch_reservation.resize(base)?;
-        let result = self.process_arrow_accounted(side, &batch);
+        let encoded_rows =
+            self.row_converters[side].convert_columns(&batch.columns()[..visible_count]);
+        let result = match encoded_rows {
+            Ok(encoded_rows) => self.process_arrow_accounted(side, &batch, &encoded_rows),
+            Err(error) => Err(error.into()),
+        };
         match result {
             Ok(output) => self.finish_output(output, base),
             Err(error) => {
@@ -204,8 +248,12 @@ impl WindowJoinProcessor {
         }
     }
 
-    fn process_arrow_accounted(&mut self, side: usize, batch: &RecordBatch) -> Result<RecordBatch> {
-        let stored_rows = binary_column(batch, self.stored_row_indices[side], "stored row")?;
+    fn process_arrow_accounted(
+        &mut self,
+        side: usize,
+        batch: &RecordBatch,
+        encoded_rows: &Rows,
+    ) -> Result<RecordBatch> {
         let kinds = batch
             .column(self.input_kind_indices[side].expect("schema prepared"))
             .as_any()
@@ -242,7 +290,7 @@ impl WindowJoinProcessor {
                     )));
                 }
             };
-            changes.push((index, accumulate, stored_rows.value(row).to_vec()));
+            changes.push((index, accumulate, encoded_rows.row(row).data().to_vec()));
         }
         if unique.is_empty() {
             return self.empty_output();
@@ -388,7 +436,7 @@ impl WindowJoinProcessor {
         self.append_timer_mutations(&mut mutations, dirty_groups)?;
         self.state.write_batch(mutations)?;
         self.state_write_batches = self.state_write_batches.saturating_add(1);
-        let output = output_batch(rows)?;
+        let output = self.output_batch(rows)?;
         self.finish_output(output, 0)
     }
 
@@ -466,16 +514,14 @@ impl WindowJoinProcessor {
             return Ok(());
         }
         self.preencoded_key_indices[side] = metadata_index(&schema, "__streamfusion_key");
-        self.stored_row_indices[side] = metadata_index(&schema, "__streamfusion_stored_row");
         self.input_kind_indices[side] = metadata_index(&schema, "__streamfusion_input_row_kind");
-        if self.stored_row_indices[side].is_none() || self.input_kind_indices[side].is_none() {
+        if self.input_kind_indices[side].is_none() {
             return Err(DataFusionError::Execution(
-                "window join requires stored-row and RowKind metadata".to_string(),
+                "window join requires RowKind metadata".to_string(),
             ));
         }
         let visible_count = [
             self.preencoded_key_indices[side],
-            self.stored_row_indices[side],
             self.input_kind_indices[side],
             Some(schema.fields().len()),
         ]
@@ -483,6 +529,16 @@ impl WindowJoinProcessor {
         .flatten()
         .min()
         .unwrap();
+        if visible_count != self.visible_schemas[side].fields().len()
+            || schema.fields()[..visible_count]
+                .iter()
+                .zip(self.visible_schemas[side].fields())
+                .any(|(actual, planned)| actual.data_type() != planned.data_type())
+        {
+            return Err(DataFusionError::Execution(format!(
+                "window join input {side} Arrow schema does not match its protobuf schema"
+            )));
+        }
         if self.window_end_index(side) >= visible_count {
             return Err(DataFusionError::Plan(format!(
                 "window join input {side} window end is outside the visible row"
@@ -540,7 +596,48 @@ impl WindowJoinProcessor {
     }
 
     fn empty_output(&self) -> Result<RecordBatch> {
-        Ok(RecordBatch::new_empty(output_schema()))
+        Ok(RecordBatch::new_empty(self.output_schema.clone()))
+    }
+
+    fn output_batch(&self, rows: Vec<(i32, i8, Vec<u8>)>) -> Result<RecordBatch> {
+        let mut encoded = [Vec::new(), Vec::new()];
+        let mut selections = [
+            Vec::with_capacity(rows.len()),
+            Vec::with_capacity(rows.len()),
+        ];
+        let mut sides = Vec::with_capacity(rows.len());
+        let mut groups = Vec::with_capacity(rows.len());
+        for (group, side, row) in rows {
+            let side_index = usize::try_from(side).map_err(|_| {
+                DataFusionError::Execution("window join produced a negative side".to_string())
+            })?;
+            if side_index > 1 {
+                return Err(DataFusionError::Execution(
+                    "window join produced an invalid side".to_string(),
+                ));
+            }
+            let row_index = u32::try_from(encoded[side_index].len()).map_err(|_| {
+                DataFusionError::Execution("window join side exceeds u32 rows".to_string())
+            })?;
+            encoded[side_index].push(row);
+            selections[side_index].push(Some(row_index));
+            selections[1 - side_index].push(None);
+            sides.push(side);
+            groups.push(group);
+        }
+        let mut columns = Vec::new();
+        for side in 0..2 {
+            let parser = self.row_converters[side].parser();
+            let decoded = self.row_converters[side]
+                .convert_rows(encoded[side].iter().map(|row| parser.parse(row)))?;
+            let selection = UInt32Array::from(selections[side].clone());
+            for column in decoded {
+                columns.push(take(column.as_ref(), &selection, None)?);
+            }
+        }
+        columns.push(Arc::new(Int8Array::from(sides)));
+        columns.push(Arc::new(Int32Array::from(groups)));
+        Ok(RecordBatch::try_new(self.output_schema.clone(), columns)?)
     }
 
     fn finish_output(&mut self, output: RecordBatch, base: usize) -> Result<RecordBatch> {
@@ -659,36 +756,28 @@ fn truncated() -> DataFusionError {
     DataFusionError::Execution("truncated native window join state".to_string())
 }
 
-fn output_schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        Field::new("__streamfusion_stored_row", DataType::Binary, false),
-        Field::new("__streamfusion_join_side", DataType::Int8, false),
-        Field::new("__streamfusion_window_group", DataType::Int32, false),
-    ]))
-}
-
-fn output_batch(rows: Vec<(i32, i8, Vec<u8>)>) -> Result<RecordBatch> {
-    let mut stored = BinaryBuilder::new();
-    let mut sides = Vec::with_capacity(rows.len());
-    let mut groups = Vec::with_capacity(rows.len());
-    for (group, side, row) in rows {
-        stored.append_value(row);
-        sides.push(side);
-        groups.push(group);
-    }
-    let columns: Vec<ArrayRef> = vec![
-        Arc::new(stored.finish()),
-        Arc::new(Int8Array::from(sides)),
-        Arc::new(Int32Array::from(groups)),
-    ];
-    Ok(RecordBatch::try_new(output_schema(), columns)?)
+fn row_converter(schema: &SchemaRef) -> Result<RowConverter> {
+    let fields = schema
+        .fields()
+        .iter()
+        .map(|field| {
+            SortField::new_with_options(
+                field.data_type().clone(),
+                SortOptions {
+                    descending: false,
+                    nulls_first: true,
+                },
+            )
+        })
+        .collect();
+    Ok(RowConverter::new(fields)?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::memory_pool::{tests_support::TestBroker, HostMemoryReservation};
-    use arrow::array::{BinaryArray, Int64Array, TimestampMillisecondArray};
+    use arrow::array::{ArrayRef, BinaryArray, Int64Array, TimestampMillisecondArray};
     use prost::Message;
 
     #[test]
@@ -792,17 +881,67 @@ mod tests {
         let rows = outputs
             .iter()
             .flat_map(|output| {
-                output
-                    .column(0)
-                    .as_any()
-                    .downcast_ref::<BinaryArray>()
-                    .unwrap()
-                    .iter()
-                    .flatten()
+                [2, 5].into_iter().flat_map(|column| {
+                    output
+                        .column(column)
+                        .as_any()
+                        .downcast_ref::<BinaryArray>()
+                        .unwrap()
+                        .iter()
+                        .flatten()
+                })
             })
             .collect::<Vec<_>>();
         assert_eq!(rows, vec![b"left".as_slice(), b"right".as_slice()]);
         assert_eq!(lower.statistics()[5] + upper.statistics()[5], 0);
+    }
+
+    #[test]
+    fn canonical_join_state_moves_from_memory_to_rocksdb() {
+        let Ok(plugin_path) = std::env::var("STREAMFUSION_TEST_ROCKSDB_PLUGIN") else {
+            return;
+        };
+        let broker = Arc::new(TestBroker::new(1 << 30));
+        let mut memory = WindowJoinProcessor::new(
+            &plan(),
+            128,
+            0,
+            127,
+            HostMemoryReservation::new(broker.clone(), "window join memory source"),
+        )
+        .unwrap();
+        memory
+            .process_arrow(0, batch(&[7], &[100], &[b"left"], &[INSERT]))
+            .unwrap();
+        memory
+            .process_arrow(1, batch(&[7], &[100], &[b"right"], &[INSERT]))
+            .unwrap();
+        let snapshots = (0..128)
+            .map(|key_group| memory.snapshot_key_group(key_group).unwrap())
+            .collect::<Vec<_>>();
+
+        let directory = tempfile::tempdir().unwrap();
+        let mut rocks = WindowJoinProcessor::new_rocksdb(
+            &plan(),
+            128,
+            0,
+            127,
+            std::path::Path::new(&plugin_path),
+            directory.path(),
+            64 << 20,
+            HostMemoryReservation::new(broker, "window join RocksDB scratch"),
+        )
+        .unwrap();
+        for (key_group, snapshot) in snapshots.iter().enumerate() {
+            rocks.restore_key_group(key_group as u32, snapshot).unwrap();
+            assert_eq!(
+                rocks.snapshot_key_group(key_group as u32).unwrap(),
+                *snapshot
+            );
+        }
+        let output = rocks.advance_event_time(99).unwrap();
+        assert_eq!(output.num_rows(), 2);
+        assert_eq!(rocks.statistics()[5], 0);
     }
 
     fn plan() -> Vec<u8> {
@@ -814,13 +953,42 @@ mod tests {
                     right_key_indices: vec![0],
                     left_window_end_index: 1,
                     right_window_end_index: 1,
-                    left_schema: Some(proto::Schema { fields: Vec::new() }),
-                    right_schema: Some(proto::Schema { fields: Vec::new() }),
+                    left_schema: Some(test_schema()),
+                    right_schema: Some(test_schema()),
                     shift_time_zone: "UTC".to_string(),
                 })),
             }),
         }
         .encode_to_vec()
+    }
+
+    fn test_schema() -> proto::Schema {
+        proto::Schema {
+            fields: vec![
+                proto_field(
+                    "key",
+                    proto::logical_type::Type::Bigint(proto::EmptyType::default()),
+                ),
+                proto_field(
+                    "window_end",
+                    proto::logical_type::Type::Timestamp(proto::PrecisionType { precision: 3 }),
+                ),
+                proto_field(
+                    "payload",
+                    proto::logical_type::Type::Binary(proto::EmptyType::default()),
+                ),
+            ],
+        }
+    }
+
+    fn proto_field(name: &str, r#type: proto::logical_type::Type) -> proto::Field {
+        proto::Field {
+            name: name.to_string(),
+            r#type: Some(proto::LogicalType {
+                nullable: true,
+                r#type: Some(r#type),
+            }),
+        }
     }
 
     fn batch(keys: &[i64], window_end: &[i64], rows: &[&[u8]], kinds: &[i8]) -> RecordBatch {
@@ -831,7 +999,7 @@ mod tests {
                 Arc::new(TimestampMillisecondArray::from(window_end.to_vec())) as ArrayRef,
             ),
             (
-                "__streamfusion_stored_row",
+                "payload",
                 Arc::new(BinaryArray::from_vec(rows.to_vec())) as ArrayRef,
             ),
             (

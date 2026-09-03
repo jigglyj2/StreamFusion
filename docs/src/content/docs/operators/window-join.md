@@ -24,8 +24,8 @@ StreamFusion accelerates attached `TUMBLE`, `HOP`, `CUMULATE`, and `SESSION` inp
 recognizes the equality predicates on the join keys, `window_start`, and `window_end` as a Window
 Join. Inner, left, right, full, semi, and anti join modes use Flink's generated remaining-condition
 code, null-key filtering, and output row layout. Arbitrary nullable scalar and nested join keys and
-payloads are retained as canonical opaque Flink `BinaryRowData`; Rust does not reinterpret complex
-values.
+payloads use schema-aware Arrow-row state and are covered byte-for-byte across the complete Flink
+logical-type surface.
 
 `INSERT`, `UPDATE_AFTER`, `UPDATE_BEFORE`, and `DELETE` inputs use exact multiset semantics,
 including duplicate rows. Results are emitted once when the coalesced two-input watermark closes a
@@ -40,14 +40,16 @@ unsupported surrounding physical node produces an explicit whole-plan fallback r
 
 Both network inputs remain Arrow IPC frames until they enter the two-input operator, so raw Arrow
 batches never cross a Flink network edge. Rust computes the Flink key group and performs one
-backend multi-get and one atomic write per incoming side batch. It keeps ordered duplicate rows for
-both sides and returns one batched window payload when a timer fires; Java applies the generated
-Flink join condition and materializes the final Arrow output once per fired batch.
+backend multi-get and one atomic write per incoming side batch. It keeps ordered duplicate Arrow
+rows for both sides and returns one nullable Arrow candidate batch when a timer fires. Java applies
+the generated Flink join condition through zero-copy Arrow-backed `RowData` views, then gathers the
+final Arrow result directly from the candidate vectors. It does not serialize state as
+`BinaryRowData`, transpose timer output, or reconstruct payload rows on the JVM.
 
 The managed in-memory and direct RocksDB backends share canonical per-key-group row and timer
 bytes. Aligned and unaligned checkpoints, cross-backend savepoints, and key-group redistribution
 therefore preserve both sides and pending timers; direct RocksDB checkpoints retain incremental SST
-reuse. State, timers, copied opaque rows, hash collections, temporary join materialization, and
+reuse. State, timers, encoded Arrow rows, hash collections, temporary join materialization, and
 exported Arrow buffers are charged through Flink managed memory.
 
 See the [Flink 2.3 Window join documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/window-join/).

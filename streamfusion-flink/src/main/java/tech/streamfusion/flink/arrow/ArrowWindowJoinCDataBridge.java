@@ -13,15 +13,12 @@ import org.apache.arrow.c.ArrowSchema;
 import org.apache.arrow.c.CDataDictionaryProvider;
 import org.apache.arrow.c.Data;
 import org.apache.arrow.memory.BufferAllocator;
+import org.apache.arrow.vector.FieldVector;
 import org.apache.arrow.vector.IntVector;
 import org.apache.arrow.vector.TinyIntVector;
 import org.apache.arrow.vector.VarBinaryVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
-import org.apache.flink.core.memory.MemorySegmentFactory;
-import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
-import org.apache.flink.table.data.binary.BinaryRowData;
-import org.apache.flink.table.data.utils.JoinedRowData;
 import org.apache.flink.table.runtime.generated.JoinCondition;
 import org.apache.flink.table.runtime.operators.join.FlinkJoinType;
 import org.apache.flink.table.types.logical.RowType;
@@ -29,7 +26,7 @@ import org.apache.flink.types.RowKind;
 import tech.streamfusion.nativebridge.NativeMemoryManager;
 import tech.streamfusion.nativebridge.NativeWindowJoinBridge;
 
-/** Batched Arrow boundary and exact Flink result materialization for native Window Join. */
+/** Batched Arrow boundary and Arrow-native Flink result materialization for Window Join. */
 public final class ArrowWindowJoinCDataBridge {
     private ArrowWindowJoinCDataBridge() {}
 
@@ -38,7 +35,6 @@ public final class ArrowWindowJoinCDataBridge {
             int side,
             ArrowRowDataBatch input,
             List<byte[]> preencodedKeys,
-            List<byte[]> storedRows,
             RowType leftType,
             RowType rightType,
             RowType outputType,
@@ -52,15 +48,12 @@ public final class ArrowWindowJoinCDataBridge {
                 ArrowArray outputArray = ArrowArray.allocateNew(allocator);
                 ArrowSchema outputSchema = ArrowSchema.allocateNew(allocator);
                 CDataDictionaryProvider dictionaries = new CDataDictionaryProvider()) {
-            VarBinaryVector rows =
-                    binaryMetadata("__streamfusion_stored_row", storedRows, input.size(), input.allocator());
             TinyIntVector kinds = inputKinds(input, input.allocator());
             VarBinaryVector keys = preencodedKeys == null
                     ? null
                     : binaryMetadata("__streamfusion_key", preencodedKeys, input.size(), input.allocator());
             try {
                 VectorSchemaRoot exported = input.root();
-                exported = exported.addVector(exported.getFieldVectors().size(), rows);
                 exported = exported.addVector(exported.getFieldVectors().size(), kinds);
                 if (keys != null) {
                     exported = exported.addVector(exported.getFieldVectors().size(), keys);
@@ -92,7 +85,6 @@ public final class ArrowWindowJoinCDataBridge {
                     keys.close();
                 }
                 kinds.close();
-                rows.close();
             }
         }
     }
@@ -150,61 +142,71 @@ public final class ArrowWindowJoinCDataBridge {
         try (VectorSchemaRoot output =
                 Data.importVectorSchemaRoot(allocator, outputArray, outputSchema, dictionaries)) {
             output.setRowCount((int) count);
-            if (output.getFieldVectors().size() != 3
-                    || !(output.getVector(0) instanceof VarBinaryVector)
-                    || !(output.getVector(1) instanceof TinyIntVector)
-                    || !(output.getVector(2) instanceof IntVector)) {
-                throw new IllegalStateException("Native window join returned invalid row metadata");
+            int leftArity = leftType.getFieldCount();
+            int rightArity = rightType.getFieldCount();
+            int sideIndex = leftArity + rightArity;
+            int groupIndex = sideIndex + 1;
+            if (output.getFieldVectors().size() != groupIndex + 1
+                    || !(output.getVector(sideIndex) instanceof TinyIntVector)
+                    || !(output.getVector(groupIndex) instanceof IntVector)) {
+                throw new IllegalStateException("Native window join returned invalid Arrow row metadata");
             }
-            VarBinaryVector rows = (VarBinaryVector) output.getVector(0);
-            TinyIntVector sides = (TinyIntVector) output.getVector(1);
-            IntVector groups = (IntVector) output.getVector(2);
+            TinyIntVector sides = (TinyIntVector) output.getVector(sideIndex);
+            IntVector groups = (IntVector) output.getVector(groupIndex);
+            VectorSchemaRoot leftRoot = new VectorSchemaRoot(
+                    output.getSchema().getFields().subList(0, leftArity),
+                    output.getFieldVectors().subList(0, leftArity),
+                    (int) count);
+            VectorSchemaRoot rightRoot = new VectorSchemaRoot(
+                    output.getSchema().getFields().subList(leftArity, sideIndex),
+                    output.getFieldVectors().subList(leftArity, sideIndex),
+                    (int) count);
+            ArrowReader leftReader = ArrowUtils.createArrowReader(leftRoot, leftType);
+            ArrowReader rightReader = ArrowUtils.createArrowReader(rightRoot, rightType);
             Map<Integer, WindowGroup> windows = new LinkedHashMap<>();
             for (int index = 0; index < count; index++) {
                 int side = sides.get(index);
-                RowType type = side == 0 ? leftType : rightType;
-                byte[] bytes = rows.get(index);
-                BinaryRowData row = new BinaryRowData(type.getFieldCount());
-                row.pointTo(MemorySegmentFactory.wrap(bytes), 0, bytes.length);
                 windows.computeIfAbsent(groups.get(index), ignored -> new WindowGroup())
                         .rows(side)
-                        .add(row);
+                        .add(index);
             }
-            List<RowData> joined = new ArrayList<>();
+            List<JoinedIndex> joined = new ArrayList<>();
             long evaluations = 0;
             for (WindowGroup window : windows.values()) {
                 JoinOutput result = join(
-                        window.left, window.right, leftType, rightType, joinType, condition, nullFilterKeys, joined);
+                        window.left,
+                        window.right,
+                        leftReader,
+                        rightReader,
+                        joinType,
+                        condition,
+                        nullFilterKeys,
+                        joined);
                 evaluations += result.evaluations;
             }
-            RowKind[] kinds = new RowKind[joined.size()];
-            java.util.Arrays.fill(kinds, RowKind.INSERT);
             return new Result(
-                    ArrowRowDataBatch.transpose(joined, outputType, allocator)
-                            .withRowKinds(kinds)
-                            .withoutTimestamps(),
-                    evaluations);
+                    materialize(output, leftArity, rightArity, outputType, joinType, joined, allocator), evaluations);
         }
     }
 
     private static JoinOutput join(
-            List<RowData> leftRows,
-            List<RowData> rightRows,
-            RowType leftType,
-            RowType rightType,
+            List<Integer> leftRows,
+            List<Integer> rightRows,
+            ArrowReader leftReader,
+            ArrowReader rightReader,
             FlinkJoinType joinType,
             JoinCondition condition,
             int[] nullFilterKeys,
-            List<RowData> output) {
+            List<JoinedIndex> output) {
         long evaluations = 0;
         boolean[] matchedRight = new boolean[rightRows.size()];
-        GenericRowData leftNull = new GenericRowData(leftType.getFieldCount());
-        GenericRowData rightNull = new GenericRowData(rightType.getFieldCount());
-        for (RowData left : leftRows) {
+        for (int leftIndex : leftRows) {
+            RowData left = leftReader.read(leftIndex);
             boolean matched = false;
             if (!hasFilteredNull(left, nullFilterKeys)) {
                 for (int rightIndex = 0; rightIndex < rightRows.size(); rightIndex++) {
-                    RowData right = rightRows.get(rightIndex);
+                    int rightRow = rightRows.get(rightIndex);
+                    RowData right = rightReader.read(rightRow);
                     evaluations++;
                     if (condition.apply(left, right)) {
                         matched = true;
@@ -213,7 +215,7 @@ public final class ArrowWindowJoinCDataBridge {
                                 || joinType == FlinkJoinType.LEFT
                                 || joinType == FlinkJoinType.RIGHT
                                 || joinType == FlinkJoinType.FULL) {
-                            output.add(insert(new JoinedRowData(left, right)));
+                            output.add(new JoinedIndex(leftIndex, rightRow));
                         }
                         if (joinType == FlinkJoinType.SEMI) {
                             break;
@@ -222,21 +224,66 @@ public final class ArrowWindowJoinCDataBridge {
                 }
             }
             if (joinType == FlinkJoinType.SEMI && matched) {
-                output.add(insert(left));
+                output.add(new JoinedIndex(leftIndex, -1));
             } else if (joinType == FlinkJoinType.ANTI && !matched) {
-                output.add(insert(left));
+                output.add(new JoinedIndex(leftIndex, -1));
             } else if ((joinType == FlinkJoinType.LEFT || joinType == FlinkJoinType.FULL) && !matched) {
-                output.add(insert(new JoinedRowData(left, rightNull)));
+                output.add(new JoinedIndex(leftIndex, -1));
             }
         }
         if (joinType == FlinkJoinType.RIGHT || joinType == FlinkJoinType.FULL) {
             for (int index = 0; index < rightRows.size(); index++) {
                 if (!matchedRight[index]) {
-                    output.add(insert(new JoinedRowData(leftNull, rightRows.get(index))));
+                    output.add(new JoinedIndex(-1, rightRows.get(index)));
                 }
             }
         }
         return new JoinOutput(evaluations);
+    }
+
+    private static ArrowRowDataBatch materialize(
+            VectorSchemaRoot candidates,
+            int leftArity,
+            int rightArity,
+            RowType outputType,
+            FlinkJoinType joinType,
+            List<JoinedIndex> joined,
+            BufferAllocator allocator) {
+        boolean leftOnly = joinType == FlinkJoinType.SEMI || joinType == FlinkJoinType.ANTI;
+        int expectedArity = leftOnly ? leftArity : leftArity + rightArity;
+        if (outputType.getFieldCount() != expectedArity) {
+            throw new IllegalStateException("Window join output arity does not match its join type");
+        }
+        VectorSchemaRoot result = VectorSchemaRoot.create(ArrowUtils.toArrowSchema(outputType), allocator);
+        try {
+            for (FieldVector target : result.getFieldVectors()) {
+                target.setInitialCapacity(joined.size());
+                target.allocateNew();
+            }
+            for (int outputRow = 0; outputRow < joined.size(); outputRow++) {
+                JoinedIndex pair = joined.get(outputRow);
+                for (int field = 0; field < expectedArity; field++) {
+                    boolean left = field < leftArity;
+                    int sourceRow = left ? pair.left : pair.right;
+                    FieldVector target = result.getVector(field);
+                    if (sourceRow < 0) {
+                        target.setNull(outputRow);
+                    } else {
+                        int sourceField = field;
+                        target.copyFromSafe(sourceRow, outputRow, candidates.getVector(sourceField));
+                    }
+                }
+            }
+            result.setRowCount(joined.size());
+            RowKind[] kinds = new RowKind[joined.size()];
+            java.util.Arrays.fill(kinds, RowKind.INSERT);
+            return ArrowRowDataBatch.wrap(result, outputType, allocator)
+                    .withRowKinds(kinds)
+                    .withoutTimestamps();
+        } catch (RuntimeException | Error failure) {
+            result.close();
+            throw failure;
+        }
     }
 
     private static boolean hasFilteredNull(RowData row, int[] nullFilterKeys) {
@@ -246,11 +293,6 @@ public final class ArrowWindowJoinCDataBridge {
             }
         }
         return false;
-    }
-
-    private static RowData insert(RowData row) {
-        row.setRowKind(RowKind.INSERT);
-        return row;
     }
 
     private static VarBinaryVector binaryMetadata(
@@ -301,10 +343,10 @@ public final class ArrowWindowJoinCDataBridge {
     }
 
     private static final class WindowGroup {
-        private final List<RowData> left = new ArrayList<>();
-        private final List<RowData> right = new ArrayList<>();
+        private final List<Integer> left = new ArrayList<>();
+        private final List<Integer> right = new ArrayList<>();
 
-        private List<RowData> rows(int side) {
+        private List<Integer> rows(int side) {
             if (side == 0) {
                 return left;
             }
@@ -312,6 +354,16 @@ public final class ArrowWindowJoinCDataBridge {
                 return right;
             }
             throw new IllegalStateException("Native window join returned invalid side " + side);
+        }
+    }
+
+    private static final class JoinedIndex {
+        private final int left;
+        private final int right;
+
+        private JoinedIndex(int left, int right) {
+            this.left = left;
+            this.right = right;
         }
     }
 

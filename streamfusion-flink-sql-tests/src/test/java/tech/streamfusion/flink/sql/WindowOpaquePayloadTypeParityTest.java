@@ -61,6 +61,16 @@ class WindowOpaquePayloadTypeParityTest extends SqlParityTestSupport {
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 
+    @Test
+    void windowJoinStateAndArrowGatherPreserveEveryFlinkLogicalPayloadTypeByteForByte() throws Exception {
+        byte[] flink = executeJoin(false);
+        byte[] streamFusion = executeJoin(true);
+
+        assertThat(streamFusion).isEqualTo(flink);
+        assertThat(StreamFusionPlannerFactory.nativeWindowJoinBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
     private static byte[] execute(boolean streamFusionEnabled, String orderField, boolean session) throws Exception {
         configure(streamFusionEnabled);
         StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();
@@ -100,6 +110,54 @@ class WindowOpaquePayloadTypeParityTest extends SqlParityTestSupport {
                 + orderField
                 + " DESC) AS row_num FROM TABLE(TUMBLE(TABLE "
                 + "window_all_type_payload, DESCRIPTOR(ts), INTERVAL '5' SECOND))) WHERE row_num = 1"));
+    }
+
+    private static byte[] executeJoin(boolean streamFusionEnabled) throws Exception {
+        configure(streamFusionEnabled);
+        StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();
+        environment.setParallelism(1);
+        StreamTableEnvironment tables = StreamTableEnvironment.create(
+                environment, EnvironmentSettings.newInstance().inStreamingMode().build());
+        tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+        createPayloadInput(
+                tables,
+                environment,
+                "window_all_type_left",
+                List.of(
+                        Row.of("a", payload("alpha", 1), LocalDateTime.of(2026, 9, 1, 12, 0, 1)),
+                        Row.of("b", payload("beta", 2), LocalDateTime.of(2026, 9, 1, 12, 0, 7))));
+        createPayloadInput(
+                tables,
+                environment,
+                "window_all_type_right",
+                List.of(
+                        Row.of("a", payload("gamma", 3), LocalDateTime.of(2026, 9, 1, 12, 0, 2)),
+                        Row.of("c", payload("delta", 4), LocalDateTime.of(2026, 9, 1, 12, 0, 7))));
+        return collect(tables.executeSql("SELECT l.payload, r.payload, l.window_start, l.window_end "
+                + "FROM TABLE(TUMBLE(TABLE window_all_type_left, DESCRIPTOR(ts), INTERVAL '5' SECOND)) l "
+                + "FULL OUTER JOIN TABLE(TUMBLE(TABLE window_all_type_right, DESCRIPTOR(ts), "
+                + "INTERVAL '5' SECOND)) r ON l.category = r.category "
+                + "AND l.window_start = r.window_start AND l.window_end = r.window_end"));
+    }
+
+    private static void createPayloadInput(
+            StreamTableEnvironment tables, StreamExecutionEnvironment environment, String name, List<Row> rows) {
+        tables.createTemporaryView(
+                name,
+                tables.fromDataStream(
+                        environment.fromCollection(
+                                rows,
+                                Types.ROW_NAMED(
+                                        new String[] {"category", "payload", "ts"},
+                                        Types.STRING,
+                                        payloadTypeInformation(),
+                                        Types.LOCAL_DATE_TIME)),
+                        Schema.newBuilder()
+                                .column("category", DataTypes.STRING().notNull())
+                                .column("payload", payloadDataType())
+                                .column("ts", DataTypes.TIMESTAMP(3))
+                                .watermark("ts", "ts - INTERVAL '1' SECOND")
+                                .build()));
     }
 
     private static TypeInformation<Row> payloadTypeInformation() {

@@ -5,7 +5,6 @@
 package tech.streamfusion.flink.window;
 
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import org.apache.flink.api.common.functions.DefaultOpenContext;
@@ -22,13 +21,10 @@ import org.apache.flink.streaming.api.operators.BoundedMultiInput;
 import org.apache.flink.streaming.api.operators.TwoInputStreamOperator;
 import org.apache.flink.streaming.api.watermark.Watermark;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
-import org.apache.flink.table.data.binary.BinaryRowData;
-import org.apache.flink.table.data.binary.BinarySegmentUtils;
 import org.apache.flink.table.runtime.generated.GeneratedJoinCondition;
 import org.apache.flink.table.runtime.generated.JoinCondition;
 import org.apache.flink.table.runtime.keyselector.RowDataKeySelector;
 import org.apache.flink.table.runtime.operators.join.FlinkJoinType;
-import org.apache.flink.table.runtime.typeutils.RowDataSerializer;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.ArrowWindowJoinCDataBridge;
@@ -39,14 +35,13 @@ import tech.streamfusion.flink.state.AbstractStreamFusionArrowKeyedStateOperator
 import tech.streamfusion.nativebridge.NativeMemoryManager;
 import tech.streamfusion.nativebridge.NativeWindowJoinBridge;
 
-/** Native two-input Window Join state with batched Flink-condition result materialization. */
+/** Native two-input Window Join state with Arrow-native Flink-condition result materialization. */
 final class StreamFusionArrowWindowJoinOperator extends AbstractStreamFusionArrowKeyedStateOperator
         implements TwoInputStreamOperator<NativeExchangeFrame, NativeExchangeFrame, ArrowRowDataBatch>,
                 BoundedMultiInput {
     private final RowType leftType;
     private final RowType rightType;
     private final RowType outputType;
-    private final int[][] keyIndices;
     private final RowDataKeySelector[] keySelectors;
     private final boolean[] preencodeKeys;
     private final FlinkJoinType joinType;
@@ -54,7 +49,6 @@ final class StreamFusionArrowWindowJoinOperator extends AbstractStreamFusionArro
     private final int[] nullFilterKeys;
     private final byte[][] exchangePlans;
 
-    private transient RowDataSerializer[] serializers;
     private transient JoinCondition condition;
     private transient ListState<Long> leftWatermarkState;
     private transient ListState<Long> rightWatermarkState;
@@ -84,7 +78,6 @@ final class StreamFusionArrowWindowJoinOperator extends AbstractStreamFusionArro
         this.leftType = leftType;
         this.rightType = rightType;
         this.outputType = outputType;
-        this.keyIndices = new int[][] {leftKeys.clone(), rightKeys.clone()};
         this.keySelectors = new RowDataKeySelector[] {leftSelector, rightSelector};
         this.preencodeKeys =
                 new boolean[] {requiresPreencodedKeys(leftType, leftKeys), requiresPreencodedKeys(rightType, rightKeys)
@@ -98,7 +91,6 @@ final class StreamFusionArrowWindowJoinOperator extends AbstractStreamFusionArro
     @Override
     public void open() throws Exception {
         super.open();
-        serializers = new RowDataSerializer[] {new RowDataSerializer(leftType), new RowDataSerializer(rightType)};
         condition = generatedCondition.newInstance(getRuntimeContext().getUserCodeClassLoader());
         FunctionUtils.setFunctionRuntimeContext(condition, getRuntimeContext());
         FunctionUtils.openFunction(condition, DefaultOpenContext.INSTANCE);
@@ -143,18 +135,11 @@ final class StreamFusionArrowWindowJoinOperator extends AbstractStreamFusionArro
     private void processSide(int side, ArrowRowDataBatch input) throws Exception {
         try {
             List<byte[]> keys = preencodeKeys[side] ? preencodeKeys(input, keySelectors[side], "window join") : null;
-            List<byte[]> rows = new ArrayList<>(input.size());
-            for (int index = 0; index < input.size(); index++) {
-                BinaryRowData binary = serializers[side].toBinaryRow(input.rowView(index));
-                rows.add(BinarySegmentUtils.copyToBytes(
-                        binary.getSegments(), binary.getOffset(), binary.getSizeInBytes()));
-            }
             try (ArrowWindowJoinCDataBridge.Result result = ArrowWindowJoinCDataBridge.process(
                     nativeHandle(),
                     side,
                     input,
                     keys,
-                    rows,
                     leftType,
                     rightType,
                     outputType,

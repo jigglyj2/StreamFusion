@@ -90,8 +90,9 @@ enum TopNStrategy {
   TOP_N_STRATEGY_RETRACT = 3;
 }
 
-// Two-input event-time Window Join state. Join result semantics remain on the Java edge so the
-// generated Flink condition and every FlinkJoinType can be applied exactly at timer firing.
+// Two-input event-time Window Join state. Rust stores schema-aware Arrow rows and emits a nullable
+// Arrow candidate batch at timer firing. The Java control edge evaluates Flink's generated
+// condition through zero-copy Arrow RowData views and gathers the final Arrow result once.
 message WindowJoin {
   repeated uint32 left_key_indices = 1;
   repeated uint32 right_key_indices = 2;
