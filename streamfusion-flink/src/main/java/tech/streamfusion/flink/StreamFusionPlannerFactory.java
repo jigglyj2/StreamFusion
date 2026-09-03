@@ -21,6 +21,7 @@ import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.table.delegation.Planner;
 import org.apache.flink.table.delegation.PlannerFactory;
 import tech.streamfusion.nativebridge.NativeCalcBridge;
+import tech.streamfusion.nativebridge.NativeChangelogNormalizeBridge;
 import tech.streamfusion.nativebridge.NativeGroupAggregateBridge;
 import tech.streamfusion.nativebridge.NativeTopNBridge;
 import tech.streamfusion.nativebridge.NativeUnionBridge;
@@ -76,6 +77,10 @@ public final class StreamFusionPlannerFactory implements PlannerFactory {
         return NativeCalcBridge.executedBatchCount();
     }
 
+    public static long nativeChangelogNormalizeBatchCount() {
+        return NativeChangelogNormalizeBridge.executedBatchCount();
+    }
+
     public static long nativeUnionBatchCount() {
         return NativeUnionBridge.executedBatchCount();
     }
@@ -112,6 +117,7 @@ public final class StreamFusionPlannerFactory implements PlannerFactory {
         CREATED_PLANNERS.set(0);
         StreamFusionPlanner.resetMetrics();
         NativeCalcBridge.resetMetrics();
+        NativeChangelogNormalizeBridge.resetMetrics();
         NativeGroupAggregateBridge.resetMetrics();
         NativeWindowAggregateBridge.resetMetrics();
         NativeWindowDeduplicateBridge.resetMetrics();

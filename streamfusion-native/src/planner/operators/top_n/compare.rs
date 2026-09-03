@@ -45,12 +45,47 @@ pub(crate) fn compare_rows(
     Ok(Ordering::Equal)
 }
 
-pub(super) fn equal_rows(
+pub(crate) fn equal_rows(
     left: &RecordBatch,
     left_row: usize,
     right: &RecordBatch,
     right_row: usize,
     indices: impl IntoIterator<Item = usize>,
+) -> Result<bool> {
+    equal_rows_with_float_mode(
+        left,
+        left_row,
+        right,
+        right_row,
+        indices,
+        FloatEquality::Ieee,
+    )
+}
+
+pub(crate) fn record_equaliser_rows(
+    left: &RecordBatch,
+    left_row: usize,
+    right: &RecordBatch,
+    right_row: usize,
+    indices: impl IntoIterator<Item = usize>,
+) -> Result<bool> {
+    equal_rows_with_float_mode(
+        left,
+        left_row,
+        right,
+        right_row,
+        indices,
+        FloatEquality::CanonicalBits,
+    )
+}
+
+fn equal_rows_with_float_mode(
+    left: &RecordBatch,
+    left_row: usize,
+    right: &RecordBatch,
+    right_row: usize,
+    indices: impl IntoIterator<Item = usize>,
+    float_equality: FloatEquality,
 ) -> Result<bool> {
     for index in indices {
         if !equal_values(
@@ -58,11 +93,18 @@ pub(super) fn equal_rows(
             left_row,
             right.column(index).as_ref(),
             right_row,
+            float_equality,
         )? {
             return Ok(false);
         }
     }
     Ok(true)
+}
+
+#[derive(Clone, Copy)]
+enum FloatEquality {
+    Ieee,
+    CanonicalBits,
 }
 
 pub(super) fn row_has_nan(batch: &RecordBatch, row: usize, indices: &[u32]) -> Result<bool> {
@@ -274,6 +316,7 @@ fn equal_values(
     left_row: usize,
     right: &dyn Array,
     right_row: usize,
+    float_equality: FloatEquality,
 ) -> Result<bool> {
     let left_null = left.is_null(left_row);
     let right_null = right.is_null(right_row);
@@ -284,17 +327,16 @@ fn equal_values(
         return Ok(false);
     }
     let equal = match left.data_type() {
-        DataType::Float32 | DataType::Float64 => match left.data_type() {
-            DataType::Float32 => {
-                downcast::<Float32Array>(left)?.value(left_row)
-                    == downcast::<Float32Array>(right)?.value(right_row)
-            }
-            DataType::Float64 => {
-                downcast::<Float64Array>(left)?.value(left_row)
-                    == downcast::<Float64Array>(right)?.value(right_row)
-            }
-            _ => unreachable!(),
-        },
+        DataType::Float32 => float32_equal(
+            downcast::<Float32Array>(left)?.value(left_row),
+            downcast::<Float32Array>(right)?.value(right_row),
+            float_equality,
+        ),
+        DataType::Float64 => float64_equal(
+            downcast::<Float64Array>(left)?.value(left_row),
+            downcast::<Float64Array>(right)?.value(right_row),
+            float_equality,
+        ),
         DataType::List(_) => {
             let left = downcast::<ListArray>(left)?;
             let right = downcast::<ListArray>(right)?;
@@ -305,6 +347,7 @@ fn equal_values(
                 right.values().as_ref(),
                 right.value_offsets()[right_row] as usize,
                 right.value_length(right_row) as usize,
+                float_equality,
             )?
         }
         DataType::LargeList(_) => {
@@ -317,6 +360,7 @@ fn equal_values(
                 right.values().as_ref(),
                 right.value_offsets()[right_row] as usize,
                 right.value_length(right_row) as usize,
+                float_equality,
             )?
         }
         DataType::FixedSizeList(_, _) => {
@@ -329,6 +373,7 @@ fn equal_values(
                 right.values().as_ref(),
                 right.value_offset(right_row) as usize,
                 right.value_length() as usize,
+                float_equality,
             )?
         }
         DataType::Struct(_) => {
@@ -336,7 +381,13 @@ fn equal_values(
             let right = downcast::<StructArray>(right)?;
             let mut equal = left.num_columns() == right.num_columns();
             for (left, right) in left.columns().iter().zip(right.columns()) {
-                equal &= equal_values(left.as_ref(), left_row, right.as_ref(), right_row)?;
+                equal &= equal_values(
+                    left.as_ref(),
+                    left_row,
+                    right.as_ref(),
+                    right_row,
+                    float_equality,
+                )?;
                 if !equal {
                     break;
                 }
@@ -348,6 +399,7 @@ fn equal_values(
             left_row,
             downcast::<MapArray>(right)?,
             right_row,
+            float_equality,
         )?,
         _ => compare_values(left, left_row, right, right_row, false)? == Ordering::Equal,
     };
@@ -361,12 +413,19 @@ fn equal_ranges(
     right: &dyn Array,
     right_start: usize,
     right_len: usize,
+    float_equality: FloatEquality,
 ) -> Result<bool> {
     if left_len != right_len {
         return Ok(false);
     }
     for offset in 0..left_len {
-        if !equal_values(left, left_start + offset, right, right_start + offset)? {
+        if !equal_values(
+            left,
+            left_start + offset,
+            right,
+            right_start + offset,
+            float_equality,
+        )? {
             return Ok(false);
         }
     }
@@ -378,6 +437,7 @@ fn equal_maps(
     left_row: usize,
     right: &MapArray,
     right_row: usize,
+    float_equality: FloatEquality,
 ) -> Result<bool> {
     let left_start = left.value_offsets()[left_row] as usize;
     let left_len = left.value_length(left_row) as usize;
@@ -397,8 +457,20 @@ fn equal_maps(
         let mut found = false;
         for right_offset in 0..right_len {
             let right_index = right_start + right_offset;
-            if equal_values(left_keys, left_index, right_keys, right_index)? {
-                if !equal_values(left_values, left_index, right_values, right_index)? {
+            if equal_values(
+                left_keys,
+                left_index,
+                right_keys,
+                right_index,
+                float_equality,
+            )? {
+                if !equal_values(
+                    left_values,
+                    left_index,
+                    right_values,
+                    right_index,
+                    float_equality,
+                )? {
                     return Ok(false);
                 }
                 found = true;
@@ -410,6 +482,24 @@ fn equal_maps(
         }
     }
     Ok(true)
+}
+
+fn float32_equal(left: f32, right: f32, mode: FloatEquality) -> bool {
+    match mode {
+        FloatEquality::Ieee => left == right,
+        FloatEquality::CanonicalBits => {
+            (left.is_nan() && right.is_nan()) || left.to_bits() == right.to_bits()
+        }
+    }
+}
+
+fn float64_equal(left: f64, right: f64, mode: FloatEquality) -> bool {
+    match mode {
+        FloatEquality::Ieee => left == right,
+        FloatEquality::CanonicalBits => {
+            (left.is_nan() && right.is_nan()) || left.to_bits() == right.to_bits()
+        }
+    }
 }
 
 fn compare_list(

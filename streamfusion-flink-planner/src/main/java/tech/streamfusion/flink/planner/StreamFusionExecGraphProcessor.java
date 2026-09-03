@@ -37,6 +37,7 @@ import org.apache.flink.table.planner.plan.nodes.exec.spec.JoinSpec;
 import org.apache.flink.table.planner.plan.nodes.exec.spec.PartitionSpec;
 import org.apache.flink.table.planner.plan.nodes.exec.spec.SortSpec;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecCalc;
+import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecChangelogNormalize;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecCorrelate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecDeduplicate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecDropUpdateBefore;
@@ -76,6 +77,8 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             "tech.streamfusion.flink.window.StreamFusionWindowTableFunctionTranslator";
     private static final String DEDUPLICATE_TRANSLATOR_CLASS =
             "tech.streamfusion.flink.deduplicate.StreamFusionDeduplicateTranslator";
+    private static final String CHANGELOG_NORMALIZE_TRANSLATOR_CLASS =
+            "tech.streamfusion.flink.changelog.StreamFusionChangelogNormalizeTranslator";
     private static final String GROUP_AGGREGATE_TRANSLATOR_CLASS =
             "tech.streamfusion.flink.aggregate.StreamFusionGroupAggregateTranslator";
     private static final String WINDOW_AGGREGATE_TRANSLATOR_CLASS =
@@ -125,6 +128,11 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             }
         } else if (node instanceof StreamExecCorrelate) {
             String reason = unsupportedReason((StreamExecCorrelate) node, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
+        } else if (node instanceof StreamExecChangelogNormalize) {
+            String reason = unsupportedReason((StreamExecChangelogNormalize) node, context);
             if (reason != null) {
                 rejections.add(nodePath + "\n" + reason);
             }
@@ -284,6 +292,22 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     (RowType) deduplicate.getOutputType(),
                     "StreamFusionDeduplicate");
             replacement.setInputEdges(deduplicate.getInputEdges().stream()
+                    .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                    .collect(Collectors.toList()));
+            return replacement;
+        }
+        if (node instanceof StreamExecChangelogNormalize) {
+            StreamExecChangelogNormalize normalize = (StreamExecChangelogNormalize) node;
+            StreamFusionExecChangelogNormalize replacement = new StreamFusionExecChangelogNormalize(
+                    normalize.getPersistedConfig(),
+                    changelogNormalizeUniqueKeys(normalize),
+                    changelogNormalizeGenerateUpdateBefore(normalize),
+                    changelogNormalizeFilter(normalize),
+                    changelogNormalizeStateMetadata(normalize),
+                    normalize.getInputProperties().get(0),
+                    (RowType) normalize.getOutputType(),
+                    "StreamFusionChangelogNormalize");
+            replacement.setInputEdges(normalize.getInputEdges().stream()
                     .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
                     .collect(Collectors.toList()));
             return replacement;
@@ -604,6 +628,28 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             throw new IllegalStateException("Could not inspect StreamFusion Deduplicate support", e);
         } catch (InvocationTargetException e) {
             throw new IllegalStateException("StreamFusion Deduplicate support inspection failed", e.getCause());
+        }
+    }
+
+    private String unsupportedReason(StreamExecChangelogNormalize normalize, ProcessorContext context) {
+        ExecEdge input = normalize.getInputEdges().get(0);
+        try {
+            Class<?> translator = Class.forName(
+                    CHANGELOG_NORMALIZE_TRANSLATOR_CLASS,
+                    true,
+                    context.getPlanner().getFlinkContext().getClassLoader());
+            Method method = translator.getMethod(
+                    "unsupportedReason", RowType.class, RowType.class, int[].class, ReadableConfig.class);
+            return (String) method.invoke(
+                    null,
+                    (RowType) input.getOutputType(),
+                    (RowType) normalize.getOutputType(),
+                    changelogNormalizeUniqueKeys(normalize),
+                    normalize.getPersistedConfig());
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
+            throw new IllegalStateException("Could not inspect StreamFusion ChangelogNormalize support", e);
+        } catch (InvocationTargetException e) {
+            throw new IllegalStateException("StreamFusion ChangelogNormalize support inspection failed", e.getCause());
         }
     }
 
@@ -1070,6 +1116,23 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     .toMillis();
         }
         return TimeUtils.parseDuration(metadata.get(0).getStateTtl()).toMillis();
+    }
+
+    private static int[] changelogNormalizeUniqueKeys(StreamExecChangelogNormalize normalize) {
+        return ((int[]) field(normalize, StreamExecChangelogNormalize.class, "uniqueKeys")).clone();
+    }
+
+    private static boolean changelogNormalizeGenerateUpdateBefore(StreamExecChangelogNormalize normalize) {
+        return (boolean) field(normalize, StreamExecChangelogNormalize.class, "generateUpdateBefore");
+    }
+
+    private static RexNode changelogNormalizeFilter(StreamExecChangelogNormalize normalize) {
+        return (RexNode) field(normalize, StreamExecChangelogNormalize.class, "filterCondition");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<StateMetadata> changelogNormalizeStateMetadata(StreamExecChangelogNormalize normalize) {
+        return (List<StateMetadata>) field(normalize, StreamExecChangelogNormalize.class, "stateMetadataList");
     }
 
     private static int[] grouping(StreamExecGroupAggregate aggregate) {

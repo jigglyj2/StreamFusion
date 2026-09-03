@@ -57,6 +57,7 @@ message Operator {
     WindowRank window_rank = 12;
     WindowJoin window_join = 13;
     TopN top_n = 14;
+    ChangelogNormalize changelog_normalize = 15;
   }
 }
 
@@ -113,6 +114,17 @@ message Deduplicate {
   bool generate_insert = 5;
   bool input_changelog = 6;
   bool generate_update_before = 7;
+}
+
+// Normalizes keyed upsert/changelog input to Flink's regular changelog contract. Values are
+// schema-aware Arrow rows; RowKind, filter decisions, and triggering input ordinals are metadata.
+message ChangelogNormalize {
+  Operator input = 1;
+  repeated uint32 key_indices = 2;
+  bool generate_update_before = 3;
+  Schema input_schema = 4;
+  uint64 state_ttl_millis = 5;
+  bool has_filter = 6;
 }
 
 // Timer-free unbounded keyed aggregation. State values are opaque, versioned accumulator bytes;

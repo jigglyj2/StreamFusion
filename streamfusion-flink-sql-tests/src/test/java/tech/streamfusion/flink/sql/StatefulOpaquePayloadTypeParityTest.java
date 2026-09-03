@@ -24,13 +24,15 @@ import org.apache.flink.table.api.EnvironmentSettings;
 import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
+import org.apache.flink.table.connector.ChangelogMode;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.types.Row;
+import org.apache.flink.types.RowKind;
 import org.junit.jupiter.api.Test;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
 import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 
-class WindowOpaquePayloadTypeParityTest extends SqlParityTestSupport {
+class StatefulOpaquePayloadTypeParityTest extends SqlParityTestSupport {
     @Test
     void windowStatePreservesEveryFlinkLogicalPayloadTypeByteForByte() throws Exception {
         byte[] flink = execute(false, "order_value", false);
@@ -68,6 +70,17 @@ class WindowOpaquePayloadTypeParityTest extends SqlParityTestSupport {
 
         assertThat(streamFusion).isEqualTo(flink);
         assertThat(StreamFusionPlannerFactory.nativeWindowJoinBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
+    @Test
+    void changelogNormalizeStatePreservesEveryFlinkLogicalPayloadTypeByteForByte() throws Exception {
+        byte[] flink = executeChangelogNormalize(false);
+        byte[] streamFusion = executeChangelogNormalize(true);
+
+        assertThat(streamFusion).isEqualTo(flink);
+        assertThat(StreamFusionPlannerFactory.nativeChangelogNormalizeBatchCount())
+                .isGreaterThan(0);
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 
@@ -138,6 +151,32 @@ class WindowOpaquePayloadTypeParityTest extends SqlParityTestSupport {
                 + "FULL OUTER JOIN TABLE(TUMBLE(TABLE window_all_type_right, DESCRIPTOR(ts), "
                 + "INTERVAL '5' SECOND)) r ON l.category = r.category "
                 + "AND l.window_start = r.window_start AND l.window_end = r.window_end"));
+    }
+
+    private static byte[] executeChangelogNormalize(boolean streamFusionEnabled) throws Exception {
+        configure(streamFusionEnabled);
+        StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();
+        environment.setParallelism(1);
+        StreamTableEnvironment tables = StreamTableEnvironment.create(
+                environment, EnvironmentSettings.newInstance().inStreamingMode().build());
+        tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+        tables.createTemporaryView(
+                "all_type_upsert_input",
+                tables.fromChangelogStream(
+                        environment.fromCollection(
+                                List.of(
+                                        Row.ofKind(RowKind.INSERT, 1L, payload("alpha", 1)),
+                                        Row.ofKind(RowKind.UPDATE_AFTER, 1L, payload("beta", 2)),
+                                        Row.ofKind(RowKind.INSERT, 2L, payload("gamma", 3)),
+                                        Row.ofKind(RowKind.DELETE, 1L, null)),
+                                Types.ROW_NAMED(new String[] {"id", "payload"}, Types.LONG, payloadTypeInformation())),
+                        Schema.newBuilder()
+                                .column("id", DataTypes.BIGINT().notNull())
+                                .column("payload", payloadDataType())
+                                .primaryKey("id")
+                                .build(),
+                        ChangelogMode.upsert()));
+        return collect(tables.executeSql("SELECT * FROM all_type_upsert_input"));
     }
 
     private static void createPayloadInput(

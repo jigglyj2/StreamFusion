@@ -30,6 +30,7 @@ The current operator-specific audit is:
 | Values | Flink `ValuesInputFormat` source | No additional reference metrics; standard Flink source metrics are retained. |
 | Aligned Window TVF | Flink `AlignedWindowTableFunctionOperator` | Publishes `numNullRowTimeRecordsDropped` and increments it at the same per-record decision point. |
 | Session Window TVF | Flink `UnalignedWindowTableFunctionOperator` | Corrects IO counters to logical rows and publishes null/late-row, watermark-latency, state/timer, pending event/processing timer, changelog, checkpoint, restore, and failure diagnostics. |
+| Changelog Normalize | Flink `KeyedProcessOperator` / `ProcTimeMiniBatchDeduplicateKeepLastRowFunction` surface for the selected synchronous path | Corrects IO counters to logical rows and publishes state batches, TTL expirations, backend/memory, checkpoint, restore, watermark, changelog, and failure diagnostics. |
 | Drop Update Before | Flink `StreamFilter` with `DropUpdateBeforeFunction` | No additional reference metrics; standard Flink metrics are retained. |
 | Watermark Assigner | Flink `WatermarkAssignerOperatorFactory` | Uses Flink's generated watermark expression and state machine over Arrow-backed row views, including backpressure-aware idleness and matching lifecycle metrics. |
 | Hash/Singleton Exchange | Flink `PartitionTransformation` | Network transport remains Flink-owned; operator/task record counters report logical rows rather than native IPC frames. |

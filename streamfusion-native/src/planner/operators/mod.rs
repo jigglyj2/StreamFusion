@@ -8,6 +8,7 @@
 
 pub(super) mod array_unnest;
 pub(super) mod calc;
+pub(crate) mod changelog_normalize;
 mod collection;
 pub(crate) mod deduplicate;
 pub(super) mod expand;

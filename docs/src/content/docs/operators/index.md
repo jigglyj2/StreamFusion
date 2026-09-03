@@ -30,7 +30,7 @@ This matrix follows the query operations documented by Flink 2.3, including the 
 | [Deduplication](deduplication/) | **Partial** (row-time keep-last, including Q18) | Yes | Native batched raw keyed state |
 | [Window deduplication](window-deduplication/) | **Yes** (event-time first/last) | Yes | Native retractable per-window keyed state and timers |
 | [Pattern recognition](pattern-recognition/) | **No** | Potentially | Custom streaming NFA; no DataFusion equivalent |
-| [Changelog conversion](changelog-conversion/) | **Partial** (`DropUpdateBefore`) | Not generally a compute target | Preserve Flink row-kind conversion |
+| [Changelog conversion](changelog-conversion/) | **Partial** (`ChangelogNormalize`, `DropUpdateBefore`) | By conversion | Native keyed upsert normalization and Flink-compatible row-kind handling |
 | [Time travel](time-travel/) | **No** | No | Catalog snapshot resolution stays in Flink |
 | [Model inference](model-inference/) | **No** | Provider-dependent | Native provider integration only when parity is proven |
 | [Vector search](vector-search/) | **No** | Potentially | DataFusion/custom vector kernels when connector semantics permit |

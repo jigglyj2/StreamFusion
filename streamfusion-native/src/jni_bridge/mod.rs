@@ -7,6 +7,7 @@
 //     http://www.apache.org/licenses/LICENSE-2.0
 
 mod calc;
+mod changelog_normalize;
 mod common;
 mod deduplicate;
 mod exchange;
