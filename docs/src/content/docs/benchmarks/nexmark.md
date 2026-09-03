@@ -47,9 +47,9 @@ generator position, so Flink and StreamFusion receive identical events. This rem
 operator benchmark and does not replace the Kafka-in/Kafka-out north-star benchmark.
 
 Current all-or-nothing coverage can fully accelerate q0 (pass-through), q1 (decimal currency
-conversion), q2 (selection), q8 (tumbling aggregates plus Window Join), q11 (event-time session
-aggregation), and q22 (URL directory extraction). q3, q4, q5, q7, q9, q13, q15, q16, q17, q19,
-q20, and q23 still require an unsupported non-window join, interval join, or surrounding
+conversion), q2 (selection), q3 (regular streaming join), q8 (tumbling aggregates plus Window
+Join), q11 (event-time session aggregation), and q22 (URL directory extraction). q4, q5, q7, q9,
+q13, q15, q16, q17, q19, q20, and q23 still require an unsupported interval join or surrounding
 operator. q10
 uses unsupported `DATE_FORMAT`; q14 uses a Java UDF, mixed decimal
 arithmetic beyond the q1 conversion shape, and timestamp calendar extraction; q21 uses Java-regex
@@ -76,8 +76,9 @@ mvn -pl streamfusion-nexmark-benchmarks -am \
 `LocalRowDataNexmarkBenchmark` also accepts an event count, comma-separated query list, and an
 engine selector (`flink`, `streamfusion`, or `both`) for standalone measurements. It reports
 end-to-end elapsed time, input-event throughput, native calc batches, native group-aggregate
-batches, native window-aggregate batches, native Window Join batches, and a row count plus SHA-256
-for the full result changelog. The `group-aggregate`, `select-distinct`, `top-n`, and `limit` cases
+batches, native window-aggregate batches, native Window Join batches, native regular-join batches,
+and a row count plus SHA-256 for the full result changelog. The `group-aggregate`,
+`select-distinct`, `top-n`, and `limit` cases
 exercise both native state backends over the bounded bid stream; they are focused operator workloads
 rather than numbered Nexmark queries.
 Performance reports
@@ -159,6 +160,37 @@ copies, memory-segment wrappers, generated strings/rows, Arrow foreign-buffer wr
 deserialization. Native state, timer, scratch, output, RocksDB cache, and write-buffer allocations
 are covered by host-memory reservation tests and remain charged to Flink managed memory. These are
 local diagnostic results, not portable performance claims.
+
+On the September 3, 2026 local Q3 run for implementation commit `f6acfb2`, three alternating,
+separate-JVM release/native-CPU forks processed twenty million deterministic events at parallelism
+four with a 3GB heap and one-second exactly-once checkpoints. In-memory Flink and StreamFusion
+medians were 1,336,413 and 1,401,743 events/s respectively, a 4.9% StreamFusion throughput gain;
+elapsed-time ranges were 14.40–17.90s and 14.03–16.70s. RocksDB medians were 1,225,336 and
+1,358,909 events/s, a 10.9% gain, with elapsed ranges of 14.70–16.63s and 14.39–15.56s. Every run
+emitted 118,854 changelog rows with SHA-256
+`3cafabe988b835ccba74da12819f443503bbb08b33f101072d73b5169aa92060`; native regular-join batch
+counters were non-zero in every StreamFusion fork. The machine used a 12th Gen Intel Core
+i7-12650H under x86-64 WSL2, OpenJDK 24.0.2, and Rust 1.94.0. Profiler-instrumented timings were
+excluded from these benchmark results.
+
+Mixed JVM/native CPU profiles used Java non-safepoint sampling, DWARF/frame-pointer unwinding, JFR,
+collapsed stacks, flame graphs, and differential flame graphs for both state backends. Reusing the
+exchange envelope directly removed the join's second RowKind-vector construction and Arrow gather;
+masking children of null nested rows removed repeated validity writes without corrupting variable-
+width offsets. After those changes, in-memory samples attributed 25.7% to the shared source
+RowData-to-Arrow boundary, 6.1% to JNI/Arrow transport, 1.6% to Arrow selection, 1.2% to the join
+processor, and 0.6% to memory state. The RocksDB profile attributed 24.0%, 7.0%, 1.4%, 1.7%, and
+4.0% to the corresponding paths. Native RocksDB performs one distinct `multi_get` and one write
+batch per incoming Arrow batch.
+
+Separate Java and native allocation profiles found no dominant regular-join allocation path. Java
+samples were led by Flink's required `RowDataSerializer.copy` work (about 72% on both backends);
+the join bridge was about 2%, while RocksDB itself was 0.16% in the Rocks run. In native samples,
+the source conversion, Arrow selection, and JNI transport remained larger than join state;
+in-memory state was 0.08% and RocksDB was 0.81%. The wider source boundary retains a 16,384-row
+adaptive target and receives two shares of Flink's existing managed-memory budget so reusable and
+in-flight exported buffers are both admitted. An 8,192-row experiment was rejected because it
+doubled native invocations. These are local diagnostic results, not portable performance claims.
 
 ## Q18 RowData profiling target
 
