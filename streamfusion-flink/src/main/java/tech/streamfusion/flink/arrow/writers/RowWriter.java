@@ -61,7 +61,18 @@ public abstract class RowWriter<T> extends ArrowFieldWriter<T> {
             row = readRow(in, ordinal);
         }
         for (int i = 0; i < fieldsWriters.length; i++) {
-            fieldsWriters[i].write(row, i);
+            if (row == nullRow) {
+                fieldsWriters[i].writeMasked();
+            } else {
+                fieldsWriters[i].write(row, i);
+            }
+        }
+    }
+
+    @Override
+    protected void doWriteMasked() {
+        for (ArrowFieldWriter<?> fieldsWriter : fieldsWriters) {
+            fieldsWriter.writeMasked();
         }
     }
 

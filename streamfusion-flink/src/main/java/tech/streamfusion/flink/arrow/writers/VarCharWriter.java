@@ -61,6 +61,11 @@ public abstract class VarCharWriter<T> extends ArrowFieldWriter<T> {
     }
 
     @Override
+    protected void doWriteMasked() {
+        variableWidthWriter.writeNullOffsets(getCount(), dataOffset);
+    }
+
+    @Override
     protected void onVectorReallocated() {
         variableWidthWriter.refreshDataBuffer();
     }

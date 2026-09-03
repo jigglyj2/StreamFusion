@@ -121,6 +121,9 @@ public final class NexmarkRowDataJob {
             case "q2":
                 columns = "auction BIGINT, price BIGINT";
                 break;
+            case "q3":
+                columns = "name STRING, city STRING, state STRING, id BIGINT";
+                break;
             case "q22":
                 columns =
                         "auction BIGINT, bidder BIGINT, price BIGINT, channel STRING, dir1 STRING, dir2 STRING, dir3 STRING";

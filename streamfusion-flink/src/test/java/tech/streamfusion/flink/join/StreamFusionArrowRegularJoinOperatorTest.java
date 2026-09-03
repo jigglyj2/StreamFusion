@@ -1,0 +1,380 @@
+/*
+ * Copyright 2026 StreamFusion Authors
+ * Licensed under the Apache License, Version 2.0
+ */
+package tech.streamfusion.flink.join;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.util.List;
+import java.util.Map;
+import org.apache.arrow.memory.RootAllocator;
+import org.apache.flink.api.common.typeinfo.Types;
+import org.apache.flink.core.execution.SavepointFormatType;
+import org.apache.flink.metrics.Counter;
+import org.apache.flink.metrics.Gauge;
+import org.apache.flink.metrics.MetricGroup;
+import org.apache.flink.runtime.checkpoint.CheckpointOptions;
+import org.apache.flink.runtime.checkpoint.CheckpointType;
+import org.apache.flink.runtime.checkpoint.OperatorSubtaskState;
+import org.apache.flink.runtime.checkpoint.SavepointType;
+import org.apache.flink.runtime.jobgraph.OperatorID;
+import org.apache.flink.runtime.metrics.groups.InternalOperatorMetricGroup;
+import org.apache.flink.runtime.metrics.util.InterceptingOperatorMetricGroup;
+import org.apache.flink.runtime.metrics.util.InterceptingTaskMetricGroup;
+import org.apache.flink.runtime.operators.testutils.MockEnvironment;
+import org.apache.flink.runtime.operators.testutils.MockEnvironmentBuilder;
+import org.apache.flink.runtime.operators.testutils.MockInputSplitProvider;
+import org.apache.flink.runtime.state.CheckpointStorageLocationReference;
+import org.apache.flink.runtime.state.IncrementalRemoteKeyedStateHandle;
+import org.apache.flink.runtime.state.hashmap.HashMapStateBackend;
+import org.apache.flink.runtime.state.memory.MemCheckpointStreamFactory;
+import org.apache.flink.state.rocksdb.EmbeddedRocksDBStateBackend;
+import org.apache.flink.streaming.api.operators.OperatorSnapshotFinalizer;
+import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
+import org.apache.flink.streaming.util.AbstractStreamOperatorTestHarness;
+import org.apache.flink.streaming.util.KeyedTwoInputStreamOperatorTestHarness;
+import org.apache.flink.table.data.GenericRowData;
+import org.apache.flink.table.data.StringData;
+import org.apache.flink.table.planner.plan.utils.KeySelectorUtil;
+import org.apache.flink.table.runtime.keyselector.RowDataKeySelector;
+import org.apache.flink.table.runtime.operators.join.FlinkJoinType;
+import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
+import org.apache.flink.table.types.logical.BigIntType;
+import org.apache.flink.table.types.logical.LogicalType;
+import org.apache.flink.table.types.logical.RowType;
+import org.apache.flink.table.types.logical.VarCharType;
+import org.apache.flink.types.RowKind;
+import org.junit.jupiter.api.Test;
+import tech.streamfusion.flink.arrow.ArrowExchangeCDataBridge;
+import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
+import tech.streamfusion.flink.arrow.ArrowRowDataBatchSerializer;
+import tech.streamfusion.flink.exchange.ArrowExchangeBatch;
+import tech.streamfusion.flink.exchange.NativeExchangeFrame;
+import tech.streamfusion.flink.exchange.NativeExchangeFrameKeySelector;
+import tech.streamfusion.flink.exchange.NativeExchangePlanSerializer;
+import tech.streamfusion.flink.state.StreamFusionStateBackend;
+
+class StreamFusionArrowRegularJoinOperatorTest {
+    private static final int MAX_PARALLELISM = 128;
+    private static final RowType INPUT_TYPE = RowType.of(
+            new LogicalType[] {new BigIntType(false), new VarCharType(true, VarCharType.MAX_LENGTH)},
+            new String[] {"id", "payload"});
+    private static final RowType OUTPUT_TYPE = RowType.of(
+            new LogicalType[] {
+                new BigIntType(false),
+                new VarCharType(true, VarCharType.MAX_LENGTH),
+                new BigIntType(false),
+                new VarCharType(true, VarCharType.MAX_LENGTH)
+            },
+            new String[] {"left_id", "left_payload", "right_id", "right_payload"});
+    private static final byte[] EXCHANGE_PLAN =
+            NativeExchangePlanSerializer.hash(INPUT_TYPE, new int[] {0}, MAX_PARALLELISM);
+
+    @Test
+    void exposesLogicalFlinkIoAndCompleteTimerFreeStateMetrics() throws Exception {
+        InterceptingOperatorMetricGroup metrics = new InterceptingOperatorMetricGroup() {
+            @Override
+            public MetricGroup addGroup(String name) {
+                return this;
+            }
+
+            @Override
+            public MetricGroup addGroup(String key, String value) {
+                return this;
+            }
+        };
+        InterceptingTaskMetricGroup taskMetrics = new InterceptingTaskMetricGroup() {
+            @Override
+            public InternalOperatorMetricGroup getOrAddOperator(
+                    OperatorID id, String name, Map<String, String> additionalVariables) {
+                return metrics;
+            }
+        };
+        try (RootAllocator inputs = new RootAllocator(64L << 20);
+                MockEnvironment environment = new MockEnvironmentBuilder()
+                        .setTaskName("Regular join metric parity")
+                        .setManagedMemorySize(64L << 20)
+                        .setInputSplitProvider(new MockInputSplitProvider())
+                        .setBufferSize(32 * 1024)
+                        .setMaxParallelism(MAX_PARALLELISM)
+                        .setParallelism(1)
+                        .setSubtaskIndex(0)
+                        .setMetricGroup(taskMetrics)
+                        .build()) {
+            NativeExchangeFrameKeySelector frameSelector = new NativeExchangeFrameKeySelector(MAX_PARALLELISM);
+            try (MetricTwoInputHarness harness = new MetricTwoInputHarness(operator(), frameSelector, environment)) {
+                harness.setStateBackend(new StreamFusionStateBackend(new HashMapStateBackend()));
+                harness.setup(ArrowRowDataBatchSerializer.INSTANCE);
+                harness.open();
+
+                ((Counter) metrics.get("numRecordsIn")).inc();
+                process(harness, inputs, 0, row(7, "left-1", RowKind.INSERT));
+                ((Counter) metrics.get("numRecordsIn")).inc();
+                process(harness, inputs, 0, row(7, "left-2", RowKind.INSERT));
+                ((Counter) metrics.get("numRecordsIn")).inc();
+                ((Counter) metrics.get("numRecordsOut")).inc();
+                process(harness, inputs, 1, row(7, "right", RowKind.INSERT));
+
+                assertThat(takeOutputBatches(harness)).isOne();
+                assertThat(((Counter) metrics.get("numRecordsIn")).getCount()).isEqualTo(3L);
+                assertThat(((Counter) metrics.get("numRecordsOut")).getCount()).isEqualTo(2L);
+                assertThat(((Counter) metrics.get("processedBatches")).getCount())
+                        .isEqualTo(3L);
+                assertThat(((Counter) metrics.get("processedRows")).getCount()).isEqualTo(3L);
+                assertThat(((Counter) metrics.get("emittedRows")).getCount()).isEqualTo(2L);
+                assertThat(((Counter) metrics.get("emittedInserts")).getCount()).isEqualTo(2L);
+                assertThat(((Counter) metrics.get("stateReadBatches")).getCount())
+                        .isEqualTo(3L);
+                assertThat(((Counter) metrics.get("stateWriteBatches")).getCount())
+                        .isEqualTo(3L);
+                assertThat(((Gauge<?>) metrics.get("pendingEventTimeTimers")).getValue())
+                        .isEqualTo(0L);
+                assertThat(((Gauge<?>) metrics.get("pendingProcessingTimeTimers")).getValue())
+                        .isEqualTo(0L);
+                assertThat(((Gauge<?>) metrics.get("rocksDbBackend")).getValue())
+                        .isEqualTo(0);
+            }
+        }
+    }
+
+    @Test
+    void restoresJoinStateAcrossBothBackendsAndEveryCheckpointFormat() throws Exception {
+        try (RootAllocator inputs = new RootAllocator(64L << 20)) {
+            for (boolean sourceRocks : new boolean[] {false, true}) {
+                for (boolean targetRocks : new boolean[] {false, true}) {
+                    for (SnapshotKind kind : SnapshotKind.values()) {
+                        if (kind != SnapshotKind.CANONICAL && sourceRocks != targetRocks) {
+                            continue;
+                        }
+                        OperatorSubtaskState snapshot;
+                        try (Harness source = harness(null, sourceRocks)) {
+                            process(source.operator, inputs, 0, row(7, "left", RowKind.INSERT));
+                            assertThat(takeOutputBatches(source.operator)).isZero();
+                            snapshot = snapshot(source.operator, kind, 12);
+                        }
+                        try (Harness target = harness(snapshot, targetRocks)) {
+                            process(target.operator, inputs, 1, row(7, "right", RowKind.INSERT));
+                            assertThat(takeOutputBatches(target.operator)).isOne();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    void rocksCheckpointsReuseSstsAndRestoreBothSides() throws Exception {
+        try (RootAllocator inputs = new RootAllocator(64L << 20)) {
+            OperatorSubtaskState second;
+            try (Harness source = harness(null, true)) {
+                process(source.operator, inputs, 0, row(7, "left", RowKind.INSERT));
+                OperatorSubtaskState first = source.operator.snapshot(20, 20);
+                IncrementalRemoteKeyedStateHandle firstHandle = incremental(first);
+                source.operator.notifyOfCompletedCheckpoint(20);
+                second = source.operator.snapshot(21, 21);
+                IncrementalRemoteKeyedStateHandle secondHandle = incremental(second);
+                assertThat(secondHandle.getSharedState()).hasSameSizeAs(firstHandle.getSharedState());
+                assertThat(secondHandle.getCheckpointedSize()).isLessThan(firstHandle.getCheckpointedSize());
+            }
+            try (Harness restored = harness(second, true)) {
+                process(restored.operator, inputs, 1, row(7, "right", RowKind.INSERT));
+                assertThat(takeOutputBatches(restored.operator)).isOne();
+            }
+        }
+    }
+
+    private static IncrementalRemoteKeyedStateHandle incremental(OperatorSubtaskState state) {
+        assertThat(state.getRawKeyedState()).isEmpty();
+        assertThat(state.getManagedKeyedState()).hasSize(1);
+        return (IncrementalRemoteKeyedStateHandle)
+                state.getManagedKeyedState().iterator().next();
+    }
+
+    private static OperatorSubtaskState snapshot(
+            KeyedTwoInputStreamOperatorTestHarness<Integer, NativeExchangeFrame, NativeExchangeFrame, ArrowRowDataBatch>
+                    harness,
+            SnapshotKind kind,
+            long checkpointId)
+            throws Exception {
+        if (kind == SnapshotKind.CANONICAL) {
+            return harness.snapshotWithLocalState(
+                            checkpointId, checkpointId, SavepointType.savepoint(SavepointFormatType.CANONICAL))
+                    .getJobManagerOwnedState();
+        }
+        CheckpointStorageLocationReference location = CheckpointStorageLocationReference.getDefault();
+        CheckpointOptions options = kind == SnapshotKind.UNALIGNED
+                ? CheckpointOptions.unaligned(CheckpointType.CHECKPOINT, location)
+                : CheckpointOptions.alignedNoTimeout(CheckpointType.CHECKPOINT, location);
+        return OperatorSnapshotFinalizer.create(harness.getOperator()
+                        .snapshotState(checkpointId, checkpointId, options, new MemCheckpointStreamFactory(64 << 20)))
+                .getJobManagerOwnedState();
+    }
+
+    private static Harness harness(OperatorSubtaskState state, boolean rocks) throws Exception {
+        NativeExchangeFrameKeySelector frameSelector = new NativeExchangeFrameKeySelector(MAX_PARALLELISM);
+        KeyedTwoInputStreamOperatorTestHarness<Integer, NativeExchangeFrame, NativeExchangeFrame, ArrowRowDataBatch>
+                harness = new KeyedTwoInputStreamOperatorTestHarness<>(
+                        operator(), frameSelector, frameSelector, Types.INT, MAX_PARALLELISM, 1, 0);
+        harness.setStateBackend(new StreamFusionStateBackend(
+                rocks ? new EmbeddedRocksDBStateBackend(true) : new HashMapStateBackend()));
+        harness.setup(ArrowRowDataBatchSerializer.INSTANCE);
+        if (state != null) {
+            harness.initializeState(state);
+        }
+        harness.open();
+        return new Harness(harness);
+    }
+
+    private static StreamFusionArrowRegularJoinOperator operator() {
+        RowDataKeySelector selector = KeySelectorUtil.getRowDataSelector(
+                StreamFusionArrowRegularJoinOperatorTest.class.getClassLoader(),
+                new int[] {0},
+                InternalTypeInfo.of(INPUT_TYPE));
+        return new StreamFusionArrowRegularJoinOperator(
+                INPUT_TYPE,
+                INPUT_TYPE,
+                OUTPUT_TYPE,
+                new int[] {0},
+                new int[] {0},
+                StreamFusionRegularJoinPlan.create(
+                        INPUT_TYPE,
+                        INPUT_TYPE,
+                        new int[] {0},
+                        new int[] {0},
+                        new boolean[] {true},
+                        FlinkJoinType.INNER),
+                selector,
+                selector,
+                EXCHANGE_PLAN,
+                EXCHANGE_PLAN);
+    }
+
+    private static GenericRowData row(long key, String payload, RowKind kind) {
+        GenericRowData row = GenericRowData.of(key, StringData.fromString(payload));
+        row.setRowKind(kind);
+        return row;
+    }
+
+    private static void process(
+            KeyedTwoInputStreamOperatorTestHarness<Integer, NativeExchangeFrame, NativeExchangeFrame, ArrowRowDataBatch>
+                    harness,
+            RootAllocator allocator,
+            int side,
+            GenericRowData row)
+            throws Exception {
+        try (ArrowRowDataBatch input = ArrowRowDataBatch.transpose(List.of(row), INPUT_TYPE, allocator)
+                        .withEnvelope(new RowKind[] {row.getRowKind()}, new boolean[] {false}, new long[] {0});
+                ArrowExchangeBatch.EnvelopeBatch envelope = ArrowExchangeBatch.withEnvelope(input, INPUT_TYPE)) {
+            List<NativeExchangeFrame> frames =
+                    ArrowExchangeCDataBridge.route(EXCHANGE_PLAN, envelope.batch(), allocator);
+            assertThat(frames).hasSize(1);
+            StreamRecord<NativeExchangeFrame> record = new StreamRecord<>(frames.get(0));
+            if (side == 0) {
+                harness.processElement1(record);
+            } else {
+                harness.processElement2(record);
+            }
+        }
+    }
+
+    private static void process(MetricTwoInputHarness harness, RootAllocator allocator, int side, GenericRowData row)
+            throws Exception {
+        try (ArrowRowDataBatch input = ArrowRowDataBatch.transpose(List.of(row), INPUT_TYPE, allocator)
+                        .withEnvelope(new RowKind[] {row.getRowKind()}, new boolean[] {false}, new long[] {0});
+                ArrowExchangeBatch.EnvelopeBatch envelope = ArrowExchangeBatch.withEnvelope(input, INPUT_TYPE)) {
+            List<NativeExchangeFrame> frames =
+                    ArrowExchangeCDataBridge.route(EXCHANGE_PLAN, envelope.batch(), allocator);
+            assertThat(frames).hasSize(1);
+            StreamRecord<NativeExchangeFrame> record = new StreamRecord<>(frames.get(0));
+            if (side == 0) {
+                harness.processElement1(record);
+            } else {
+                harness.processElement2(record);
+            }
+        }
+    }
+
+    private static int takeOutputBatches(
+            KeyedTwoInputStreamOperatorTestHarness<Integer, NativeExchangeFrame, NativeExchangeFrame, ArrowRowDataBatch>
+                    harness) {
+        int batches = 0;
+        Object value;
+        while ((value = harness.getOutput().poll()) != null) {
+            if (value instanceof StreamRecord) {
+                Object batch = ((StreamRecord<?>) value).getValue();
+                if (batch instanceof ArrowRowDataBatch) {
+                    ((ArrowRowDataBatch) batch).close();
+                }
+                batches++;
+            }
+        }
+        return batches;
+    }
+
+    private static int takeOutputBatches(MetricTwoInputHarness harness) {
+        int batches = 0;
+        Object value;
+        while ((value = harness.getOutput().poll()) != null) {
+            if (value instanceof StreamRecord) {
+                Object batch = ((StreamRecord<?>) value).getValue();
+                if (batch instanceof ArrowRowDataBatch) {
+                    ((ArrowRowDataBatch) batch).close();
+                }
+                batches++;
+            }
+        }
+        return batches;
+    }
+
+    private enum SnapshotKind {
+        ALIGNED,
+        UNALIGNED,
+        CANONICAL
+    }
+
+    private static final class MetricTwoInputHarness extends AbstractStreamOperatorTestHarness<ArrowRowDataBatch> {
+        private final StreamFusionArrowRegularJoinOperator twoInputOperator;
+
+        private MetricTwoInputHarness(
+                StreamFusionArrowRegularJoinOperator operator,
+                NativeExchangeFrameKeySelector selector,
+                MockEnvironment environment)
+                throws Exception {
+            super(operator, environment);
+            this.twoInputOperator = operator;
+            config.setStatePartitioner(0, selector);
+            config.setStatePartitioner(1, selector);
+            config.setStateKeySerializer(Types.INT.createSerializer(executionConfig.getSerializerConfig()));
+            config.serializeAllConfigs();
+        }
+
+        private void processElement1(StreamRecord<NativeExchangeFrame> element) throws Exception {
+            twoInputOperator.setKeyContextElement1(element);
+            twoInputOperator.processElement1(element);
+        }
+
+        private void processElement2(StreamRecord<NativeExchangeFrame> element) throws Exception {
+            twoInputOperator.setKeyContextElement2(element);
+            twoInputOperator.processElement2(element);
+        }
+    }
+
+    private static final class Harness implements AutoCloseable {
+        private final KeyedTwoInputStreamOperatorTestHarness<
+                        Integer, NativeExchangeFrame, NativeExchangeFrame, ArrowRowDataBatch>
+                operator;
+
+        private Harness(
+                KeyedTwoInputStreamOperatorTestHarness<
+                                Integer, NativeExchangeFrame, NativeExchangeFrame, ArrowRowDataBatch>
+                        operator) {
+            this.operator = operator;
+        }
+
+        @Override
+        public void close() throws Exception {
+            operator.close();
+        }
+    }
+}

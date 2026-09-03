@@ -24,7 +24,8 @@ final class RowDataToArrowBatchOperator extends AbstractStreamOperator<ArrowRowD
     static final int DEFAULT_BATCH_SIZE = 16384;
 
     private final RowType rowType;
-    private final int[] fieldOrdinals;
+    private final int[][] fieldPaths;
+    private final int[][] rowArities;
     private final RowKind[] rowKinds = new RowKind[DEFAULT_BATCH_SIZE];
     private final boolean[] hasTimestamps = new boolean[DEFAULT_BATCH_SIZE];
     private final long[] timestamps = new long[DEFAULT_BATCH_SIZE];
@@ -34,12 +35,13 @@ final class RowDataToArrowBatchOperator extends AbstractStreamOperator<ArrowRowD
     private transient ArrowRowDataBatchWriter writer;
 
     RowDataToArrowBatchOperator(RowType rowType) {
-        this(rowType, null);
+        this(rowType, null, null);
     }
 
-    RowDataToArrowBatchOperator(RowType rowType, int[] fieldOrdinals) {
+    RowDataToArrowBatchOperator(RowType rowType, int[][] fieldPaths, int[][] rowArities) {
         this.rowType = rowType;
-        this.fieldOrdinals = fieldOrdinals == null ? null : fieldOrdinals.clone();
+        this.fieldPaths = copy(fieldPaths);
+        this.rowArities = copy(rowArities);
     }
 
     @Override
@@ -57,10 +59,10 @@ final class RowDataToArrowBatchOperator extends AbstractStreamOperator<ArrowRowD
     @Override
     public void processElement(StreamRecord<RowData> element) {
         RowData row = element.getValue();
-        if (fieldOrdinals == null) {
+        if (fieldPaths == null) {
             writer.write(row);
         } else {
-            writer.write(row, fieldOrdinals);
+            writer.write(row, fieldPaths, rowArities);
         }
         rowKinds[rowCount] = row.getRowKind();
         hasTimestamps[rowCount] = element.hasTimestamp();
@@ -69,6 +71,17 @@ final class RowDataToArrowBatchOperator extends AbstractStreamOperator<ArrowRowD
         if (rowCount == batchSize) {
             flush();
         }
+    }
+
+    private static int[][] copy(int[][] values) {
+        if (values == null) {
+            return null;
+        }
+        int[][] copied = new int[values.length][];
+        for (int index = 0; index < values.length; index++) {
+            copied[index] = values[index].clone();
+        }
+        return copied;
     }
 
     @Override

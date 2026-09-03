@@ -27,24 +27,27 @@ public final class StreamFusionArrowBoundaries {
                 ArrowRowDataBatchTypeInfo.INSTANCE,
                 input.getParallelism(),
                 false);
-        boundary.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
+        // The source edge owns both the reusable transposition vectors and in-flight exported
+        // buffers. Give that conversion two shares so wide variable-width batches can grow while
+        // remaining inside Flink's existing managed-memory budget.
+        boundary.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 2);
         return boundary;
     }
 
     /** Inserts a source boundary that writes only fields consumed by the first native operator. */
     public static Transformation<ArrowRowDataBatch> toArrow(
-            Transformation<RowData> input, RowType projectedType, int[] inputFieldOrdinals) {
+            Transformation<RowData> input, RowType projectedType, int[][] inputFieldPaths, int[][] inputRowArities) {
         if (((Object) input.getOutputType()) instanceof ArrowRowDataBatchTypeInfo) {
             throw new IllegalArgumentException("Cannot project an Arrow input at an internal operator boundary");
         }
         OneInputTransformation<RowData, ArrowRowDataBatch> boundary = new OneInputTransformation<>(
                 input,
                 "streamfusion-rowdata-to-arrow",
-                new RowDataToArrowBatchOperator(projectedType, inputFieldOrdinals),
+                new RowDataToArrowBatchOperator(projectedType, inputFieldPaths, inputRowArities),
                 ArrowRowDataBatchTypeInfo.INSTANCE,
                 input.getParallelism(),
                 false);
-        boundary.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
+        boundary.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 2);
         return boundary;
     }
 

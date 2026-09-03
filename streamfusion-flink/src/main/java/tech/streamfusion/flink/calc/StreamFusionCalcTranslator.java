@@ -98,7 +98,8 @@ public final class StreamFusionCalcTranslator extends StreamFusionExpressionTran
             planInputType = inputProjection.inputType();
             nativeProjectionStages.set(0, inputProjection.projections());
             nativeConditions.set(0, inputProjection.condition());
-            arrowInput = StreamFusionArrowBoundaries.toArrow(input, planInputType, inputProjection.fieldOrdinals());
+            arrowInput = StreamFusionArrowBoundaries.toArrow(
+                    input, planInputType, inputProjection.fieldPaths(), inputProjection.rowArities());
         }
         byte[] plan = StreamFusionCalcPlan.create(planInputType, nativeProjectionStages, nativeConditions);
         OneInputTransformation<ArrowRowDataBatch, ArrowRowDataBatch> transformation = new OneInputTransformation<>(

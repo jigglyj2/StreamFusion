@@ -29,7 +29,7 @@ public final class LocalRowDataNexmarkBenchmark {
                     for (String backend : backends) {
                         RunResult result = run(events, query, streamFusion, backend, parallelism);
                         System.out.printf(
-                                "%s engine=%s state_backend=%s input_events=%d elapsed_seconds=%.6f input_events_per_second=%.2f native_calc_batches=%d native_group_aggregate_batches=%d native_top_n_batches=%d native_window_aggregate_batches=%d native_window_join_batches=%d output_rows=%d output_sha256=%s%n",
+                                "%s engine=%s state_backend=%s input_events=%d elapsed_seconds=%.6f input_events_per_second=%.2f native_calc_batches=%d native_group_aggregate_batches=%d native_top_n_batches=%d native_window_aggregate_batches=%d native_window_join_batches=%d native_regular_join_batches=%d output_rows=%d output_sha256=%s%n",
                                 query,
                                 streamFusion ? "streamfusion" : "flink",
                                 backend,
@@ -41,6 +41,7 @@ public final class LocalRowDataNexmarkBenchmark {
                                 result.nativeTopNBatches(),
                                 result.nativeWindowAggregateBatches(),
                                 result.nativeWindowJoinBatches(),
+                                result.nativeRegularJoinBatches(),
                                 result.outputRows(),
                                 result.outputSha256());
                     }
@@ -73,6 +74,7 @@ public final class LocalRowDataNexmarkBenchmark {
                 StreamFusionPlannerFactory.nativeTopNBatchCount(),
                 StreamFusionPlannerFactory.nativeWindowAggregateBatchCount(),
                 StreamFusionPlannerFactory.nativeWindowJoinBatchCount(),
+                StreamFusionPlannerFactory.nativeRegularJoinBatchCount(),
                 output.rowCount(),
                 output.sha256(),
                 output.debugRows());
@@ -112,6 +114,7 @@ public final class LocalRowDataNexmarkBenchmark {
         private final long nativeTopNBatches;
         private final long nativeWindowAggregateBatches;
         private final long nativeWindowJoinBatches;
+        private final long nativeRegularJoinBatches;
         private final long outputRows;
         private final String outputSha256;
         private final List<String> debugRows;
@@ -123,6 +126,7 @@ public final class LocalRowDataNexmarkBenchmark {
                 long nativeTopNBatches,
                 long nativeWindowAggregateBatches,
                 long nativeWindowJoinBatches,
+                long nativeRegularJoinBatches,
                 long outputRows,
                 String outputSha256,
                 List<String> debugRows) {
@@ -132,6 +136,7 @@ public final class LocalRowDataNexmarkBenchmark {
             this.nativeTopNBatches = nativeTopNBatches;
             this.nativeWindowAggregateBatches = nativeWindowAggregateBatches;
             this.nativeWindowJoinBatches = nativeWindowJoinBatches;
+            this.nativeRegularJoinBatches = nativeRegularJoinBatches;
             this.outputRows = outputRows;
             this.outputSha256 = outputSha256;
             this.debugRows = List.copyOf(debugRows);
@@ -163,6 +168,10 @@ public final class LocalRowDataNexmarkBenchmark {
 
         long nativeWindowJoinBatches() {
             return nativeWindowJoinBatches;
+        }
+
+        long nativeRegularJoinBatches() {
+            return nativeRegularJoinBatches;
         }
 
         long outputRows() {

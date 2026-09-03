@@ -81,6 +81,11 @@ public abstract class MapWriter<T> extends ArrowFieldWriter<T> {
     }
 
     @Override
+    protected void doWriteMasked() {
+        offsetBuffer().setInt((getCount() + 1L) * Integer.BYTES, keyWriter.getCount());
+    }
+
+    @Override
     public void finish() {
         super.finish();
         keyWriter.finish();

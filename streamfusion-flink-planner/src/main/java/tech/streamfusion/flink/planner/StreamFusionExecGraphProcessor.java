@@ -45,6 +45,7 @@ import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecExchange;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecExpand;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecGlobalWindowAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecGroupAggregate;
+import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecJoin;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecLocalWindowAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecMiniBatchAssigner;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecRank;
@@ -90,6 +91,8 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
     private static final String TOP_N_TRANSLATOR_CLASS = "tech.streamfusion.flink.topn.StreamFusionTopNTranslator";
     private static final String WINDOW_JOIN_TRANSLATOR_CLASS =
             "tech.streamfusion.flink.window.StreamFusionWindowJoinTranslator";
+    private static final String REGULAR_JOIN_TRANSLATOR_CLASS =
+            "tech.streamfusion.flink.join.StreamFusionRegularJoinTranslator";
 
     @Override
     public ExecNodeGraph process(ExecNodeGraph graph, ProcessorContext context) {
@@ -192,6 +195,11 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             }
         } else if (node instanceof StreamExecWindowJoin) {
             String reason = unsupportedReason((StreamExecWindowJoin) node, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
+        } else if (node instanceof StreamExecJoin) {
+            String reason = unsupportedReason((StreamExecJoin) node, context);
             if (reason != null) {
                 rejections.add(nodePath + "\n" + reason);
             }
@@ -457,6 +465,25 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     join.getInputProperties().get(1),
                     (RowType) join.getOutputType(),
                     "StreamFusionWindowJoin");
+            replacement.setInputEdges(join.getInputEdges().stream()
+                    .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                    .collect(Collectors.toList()));
+            return replacement;
+        }
+        if (node instanceof StreamExecJoin) {
+            StreamExecJoin join = (StreamExecJoin) node;
+            List<Long> ttl = regularJoinStateTtl(join);
+            StreamFusionExecRegularJoin replacement = new StreamFusionExecRegularJoin(
+                    join.getPersistedConfig(),
+                    regularJoinSpec(join),
+                    regularJoinLeftUpsertKeys(join),
+                    regularJoinRightUpsertKeys(join),
+                    ttl.get(0),
+                    ttl.get(1),
+                    join.getInputProperties().get(0),
+                    join.getInputProperties().get(1),
+                    (RowType) join.getOutputType(),
+                    "StreamFusionRegularJoin");
             replacement.setInputEdges(join.getInputEdges().stream()
                     .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
                     .collect(Collectors.toList()));
@@ -817,6 +844,44 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             throw new IllegalStateException("Could not inspect StreamFusion WindowJoin support", e);
         } catch (InvocationTargetException e) {
             throw new IllegalStateException("StreamFusion WindowJoin support inspection failed", e.getCause());
+        }
+    }
+
+    private String unsupportedReason(StreamExecJoin join, ProcessorContext context) {
+        ExecEdge left = join.getInputEdges().get(0);
+        ExecEdge right = join.getInputEdges().get(1);
+        List<Long> ttl = regularJoinStateTtl(join);
+        try {
+            Class<?> translator = Class.forName(
+                    REGULAR_JOIN_TRANSLATOR_CLASS,
+                    true,
+                    context.getPlanner().getFlinkContext().getClassLoader());
+            Method method = translator.getMethod(
+                    "unsupportedReason",
+                    RowType.class,
+                    RowType.class,
+                    RowType.class,
+                    JoinSpec.class,
+                    List.class,
+                    List.class,
+                    long.class,
+                    long.class,
+                    ReadableConfig.class);
+            return (String) method.invoke(
+                    null,
+                    (RowType) left.getOutputType(),
+                    (RowType) right.getOutputType(),
+                    (RowType) join.getOutputType(),
+                    regularJoinSpec(join),
+                    regularJoinLeftUpsertKeys(join),
+                    regularJoinRightUpsertKeys(join),
+                    ttl.get(0),
+                    ttl.get(1),
+                    join.getPersistedConfig());
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
+            throw new IllegalStateException("Could not inspect StreamFusion regular join support", e);
+        } catch (InvocationTargetException e) {
+            throw new IllegalStateException("StreamFusion regular join support inspection failed", e.getCause());
         }
     }
 
@@ -1277,6 +1342,48 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
 
     private static JoinSpec windowJoinSpec(StreamExecWindowJoin join) {
         return (JoinSpec) field(join, StreamExecWindowJoin.class, "joinSpec");
+    }
+
+    private static JoinSpec regularJoinSpec(StreamExecJoin join) {
+        return (JoinSpec) field(join, StreamExecJoin.class, "joinSpec");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<int[]> regularJoinLeftUpsertKeys(StreamExecJoin join) {
+        return (List<int[]>) field(join, StreamExecJoin.class, "leftUpsertKeys");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<int[]> regularJoinRightUpsertKeys(StreamExecJoin join) {
+        return (List<int[]>) field(join, StreamExecJoin.class, "rightUpsertKeys");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<Long> regularJoinStateTtl(StreamExecJoin join) {
+        List<StateMetadata> metadata = (List<StateMetadata>) field(join, StreamExecJoin.class, "stateMetadataList");
+        if (metadata == null || metadata.isEmpty()) {
+            long fallback = join.getPersistedConfig()
+                    .get(ExecutionConfigOptions.IDLE_STATE_RETENTION)
+                    .toMillis();
+            return List.of(fallback, fallback);
+        }
+        if (metadata.size() != 2) {
+            throw new IllegalStateException("Regular join must define exactly two state TTL entries");
+        }
+        long[] ttl = new long[2];
+        boolean[] seen = new boolean[2];
+        for (StateMetadata state : metadata) {
+            int index = state.getStateIndex();
+            if (index < 0 || index >= 2 || seen[index]) {
+                throw new IllegalStateException("Regular join state TTL indices must be unique 0 and 1");
+            }
+            ttl[index] = TimeUtils.parseDuration(state.getStateTtl()).toMillis();
+            seen[index] = true;
+        }
+        if (!seen[0] || !seen[1]) {
+            throw new IllegalStateException("Regular join state TTL indices must contain 0 and 1");
+        }
+        return List.of(ttl[0], ttl[1]);
     }
 
     private static WindowingStrategy windowJoinLeftWindowing(StreamExecWindowJoin join) {

@@ -66,6 +66,11 @@ public abstract class ArrayWriter<T> extends ArrowFieldWriter<T> {
     }
 
     @Override
+    protected void doWriteMasked() {
+        offsetBuffer().setInt((getCount() + 1L) * Integer.BYTES, elementWriter.getCount());
+    }
+
+    @Override
     public void finish() {
         super.finish();
         elementWriter.finish();

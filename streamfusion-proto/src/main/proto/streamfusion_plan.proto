@@ -58,7 +58,33 @@ message Operator {
     WindowJoin window_join = 13;
     TopN top_n = 14;
     ChangelogNormalize changelog_normalize = 15;
+    RegularJoin regular_join = 16;
   }
+}
+
+// Timer-free two-input regular streaming join. Both input sides are maintained as ordered
+// schema-aware Arrow row multisets under the Flink join key. Association counts are part of the
+// canonical state so outer, semi, and anti changelog transitions survive backend changes and
+// rescaling exactly.
+message RegularJoin {
+  repeated uint32 left_key_indices = 1;
+  repeated uint32 right_key_indices = 2;
+  repeated bool filter_nulls = 3;
+  Schema left_schema = 4;
+  Schema right_schema = 5;
+  RegularJoinType join_type = 6;
+  uint64 left_state_ttl_millis = 7;
+  uint64 right_state_ttl_millis = 8;
+}
+
+enum RegularJoinType {
+  REGULAR_JOIN_TYPE_UNSPECIFIED = 0;
+  REGULAR_JOIN_TYPE_INNER = 1;
+  REGULAR_JOIN_TYPE_LEFT = 2;
+  REGULAR_JOIN_TYPE_RIGHT = 3;
+  REGULAR_JOIN_TYPE_FULL = 4;
+  REGULAR_JOIN_TYPE_SEMI = 5;
+  REGULAR_JOIN_TYPE_ANTI = 6;
 }
 
 // Timer-free streaming Top-N/ROW_NUMBER state. An empty ordering encodes only Flink's global

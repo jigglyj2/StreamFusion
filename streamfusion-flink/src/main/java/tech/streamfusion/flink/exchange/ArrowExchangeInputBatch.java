@@ -20,10 +20,12 @@ import tech.streamfusion.flink.arrow.ArrowUtils;
 /** Owns one received Arrow frame and exposes user rows plus Flink's record envelope. */
 public final class ArrowExchangeInputBatch implements AutoCloseable {
     private final VectorSchemaRoot root;
+    private final VectorSchemaRoot visible;
     private final ArrowReader rows;
     private final TinyIntVector rowKinds;
     private final BigIntVector timestamps;
-    private final ArrowRowDataBatch batch;
+    private final RowType rowType;
+    private ArrowRowDataBatch batch;
 
     public ArrowExchangeInputBatch(VectorSchemaRoot root, RowType rowType) {
         int fieldCount = rowType.getFieldCount();
@@ -34,11 +36,15 @@ public final class ArrowExchangeInputBatch implements AutoCloseable {
         this.root = root;
         List<FieldVector> visibleVectors =
                 new ArrayList<>(root.getFieldVectors().subList(0, fieldCount));
-        VectorSchemaRoot visible = new VectorSchemaRoot(visibleVectors);
+        this.visible = new VectorSchemaRoot(visibleVectors);
         visible.setRowCount(root.getRowCount());
         this.rows = ArrowUtils.createArrowReader(visible, rowType);
         this.rowKinds = (TinyIntVector) root.getVector(fieldCount);
         this.timestamps = (BigIntVector) root.getVector(fieldCount + 1);
+        this.rowType = rowType;
+    }
+
+    private ArrowRowDataBatch materializeBatch() {
         RowKind[] kinds = new RowKind[root.getRowCount()];
         boolean[] timestampPresence = new boolean[root.getRowCount()];
         long[] timestampValues = new long[root.getRowCount()];
@@ -47,8 +53,7 @@ public final class ArrowExchangeInputBatch implements AutoCloseable {
             timestampPresence[row] = !timestamps.isNull(row);
             timestampValues[row] = timestampPresence[row] ? timestamps.get(row) : Long.MIN_VALUE;
         }
-        this.batch =
-                ArrowRowDataBatch.borrowed(visible, rowType).withEnvelope(kinds, timestampPresence, timestampValues);
+        return ArrowRowDataBatch.borrowed(visible, rowType).withEnvelope(kinds, timestampPresence, timestampValues);
     }
 
     public int size() {
@@ -62,7 +67,20 @@ public final class ArrowExchangeInputBatch implements AutoCloseable {
     }
 
     public ArrowRowDataBatch arrowBatch() {
+        if (batch == null) {
+            batch = materializeBatch();
+        }
         return batch;
+    }
+
+    /**
+     * Returns the borrowed transport root, including RowKind and timestamp metadata vectors.
+     *
+     * <p>The root remains owned by this input batch and is valid only until {@link #close()}.
+     * Native operators use this view to avoid transposing the Flink envelope through Java arrays.
+     */
+    public VectorSchemaRoot transportRoot() {
+        return root;
     }
 
     public boolean hasTimestamp(int row) {

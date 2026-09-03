@@ -133,6 +133,9 @@ fn create_operator(
         Some(proto::operator::Operator::WindowJoin(_)) => Err(DataFusionError::Plan(
             "WindowJoin requires a persistent stateful execution handle".to_string(),
         )),
+        Some(proto::operator::Operator::RegularJoin(_)) => Err(DataFusionError::Plan(
+            "RegularJoin requires a persistent stateful execution handle".to_string(),
+        )),
         Some(proto::operator::Operator::ChangelogNormalize(_)) => Err(DataFusionError::Plan(
             "ChangelogNormalize requires a persistent stateful execution handle".to_string(),
         )),

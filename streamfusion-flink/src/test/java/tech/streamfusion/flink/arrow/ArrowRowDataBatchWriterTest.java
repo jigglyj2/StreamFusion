@@ -66,6 +66,54 @@ class ArrowRowDataBatchWriterTest {
     }
 
     @Test
+    void writesNestedLeafProjectionAndNullParentsWithoutARowWrapper() {
+        RowType projectedType = RowType.of(new VarCharType(), new IntType());
+        int[][] paths = {new int[] {1, 1}, new int[] {1, 2}};
+        int[][] arities = {new int[] {3}, new int[] {3}};
+        try (RootAllocator allocator = new RootAllocator();
+                ArrowRowDataBatchWriter writer = new ArrowRowDataBatchWriter(projectedType, allocator)) {
+            writer.write(
+                    GenericRowData.of(7, GenericRowData.of(99L, StringData.fromString("Ada"), 42)), paths, arities);
+            writer.write(GenericRowData.of(8, null), paths, arities);
+
+            try (ArrowRowDataBatch batch = writer.finishBatch()) {
+                assertThat(batch.rowView(0).getString(0).toString()).isEqualTo("Ada");
+                assertThat(batch.rowView(0).getInt(1)).isEqualTo(42);
+                assertThat(batch.rowView(1).isNullAt(0)).isTrue();
+                assertThat(batch.rowView(1).isNullAt(1)).isTrue();
+            }
+        }
+    }
+
+    @Test
+    void advancesMaskedNestedChildrenWithoutCorruptingFollowingOffsets() {
+        RowType childType = RowType.of(
+                new org.apache.flink.table.types.logical.LogicalType[] {
+                    new VarCharType(), new ArrayType(new IntType()), RowType.of(new IntType())
+                },
+                new String[] {"text", "numbers", "nested"});
+        RowType outerType = RowType.of(childType);
+        try (RootAllocator allocator = new RootAllocator();
+                ArrowRowDataBatchWriter writer = new ArrowRowDataBatchWriter(outerType, allocator)) {
+            writer.write(GenericRowData.of((Object) null));
+            writer.write(GenericRowData.of(GenericRowData.of(
+                    StringData.fromString("visible"),
+                    new GenericArrayData(new Integer[] {1, 2}),
+                    GenericRowData.of(9))));
+
+            try (ArrowRowDataBatch batch = writer.finishBatch()) {
+                assertThat(batch.rowView(0).isNullAt(0)).isTrue();
+                org.apache.flink.table.data.RowData visible = batch.rowView(1).getRow(0, 3);
+                assertThat(visible.getString(0).toString()).isEqualTo("visible");
+                assertThat(visible.getArray(1).size()).isEqualTo(2);
+                assertThat(visible.getArray(1).getInt(0)).isEqualTo(1);
+                assertThat(visible.getArray(1).getInt(1)).isEqualTo(2);
+                assertThat(visible.getRow(2, 1).getInt(0)).isEqualTo(9);
+            }
+        }
+    }
+
+    @Test
     void reusesTheSameManagedArrowVectorsAcrossBatches() {
         try (RootAllocator allocator = new RootAllocator();
                 ArrowRowDataBatchWriter writer = new ArrowRowDataBatchWriter(ROW_TYPE, allocator)) {

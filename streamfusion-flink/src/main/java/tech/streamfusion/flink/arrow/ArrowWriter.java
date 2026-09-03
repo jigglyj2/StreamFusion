@@ -20,6 +20,8 @@ package tech.streamfusion.flink.arrow;
 
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.flink.annotation.Internal;
+import org.apache.flink.table.data.GenericRowData;
+import org.apache.flink.table.data.RowData;
 import org.apache.flink.util.Preconditions;
 import tech.streamfusion.flink.arrow.writers.ArrowFieldWriter;
 
@@ -42,6 +44,7 @@ public final class ArrowWriter<IN> {
     private final int batchCapacity;
 
     private int rowCount;
+    private GenericRowData nullRow;
 
     public ArrowWriter(VectorSchemaRoot root, ArrowFieldWriter<IN>[] fieldWriters, int batchCapacity) {
         this.root = Preconditions.checkNotNull(root);
@@ -71,6 +74,46 @@ public final class ArrowWriter<IN> {
         }
         for (int i = 0; i < fieldWriters.length; i++) {
             fieldWriters[i].write(row, fieldOrdinals[i]);
+        }
+        rowCount++;
+    }
+
+    /** Writes flattened nested fields without allocating an intermediate projected RowData. */
+    @SuppressWarnings("unchecked")
+    public void write(IN row, int[][] fieldPaths, int[][] rowArities) {
+        if (!(row instanceof RowData)
+                || fieldPaths.length != fieldWriters.length
+                || rowArities.length != fieldWriters.length) {
+            throw new IllegalArgumentException("Nested Arrow field projection does not match its schema");
+        }
+        if (nullRow == null) {
+            int maximumOrdinal = 0;
+            for (int[] path : fieldPaths) {
+                if (path.length == 0) {
+                    throw new IllegalArgumentException("Nested Arrow field path must not be empty");
+                }
+                maximumOrdinal = Math.max(maximumOrdinal, path[path.length - 1]);
+            }
+            nullRow = new GenericRowData(maximumOrdinal + 1);
+        }
+        RowData input = (RowData) row;
+        for (int output = 0; output < fieldWriters.length; output++) {
+            int[] path = fieldPaths[output];
+            int[] arities = rowArities[output];
+            if (path.length == 0 || arities.length != path.length - 1) {
+                throw new IllegalArgumentException("Nested Arrow field path has an incompatible arity contract");
+            }
+            RowData parent = input;
+            boolean nullAncestor = false;
+            for (int depth = 0; depth < path.length - 1; depth++) {
+                if (parent.isNullAt(path[depth])) {
+                    nullAncestor = true;
+                    break;
+                }
+                parent = parent.getRow(path[depth], arities[depth]);
+            }
+            int ordinal = path[path.length - 1];
+            fieldWriters[output].write((IN) (nullAncestor ? nullRow : parent), ordinal);
         }
         rowCount++;
     }

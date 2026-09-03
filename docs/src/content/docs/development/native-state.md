@@ -35,8 +35,9 @@ handle, and rescale native RocksDB state 1-to-2-to-1. Canonical savepoints delib
 raw keyed state so they can move between the native memory and RocksDB implementations.
 
 The focused recovery matrix is shared by native group aggregation, deduplication, SELECT DISTINCT,
-non-window Top-N, window aggregation, Window Deduplicate, Window Top-N, and Window Join. Window cases include pending event-time
-and processing-time timers:
+non-window Top-N, window aggregation, Window Deduplicate, Window Top-N, Window Join, and regular
+streaming Join. Window cases include pending event-time and processing-time timers; two-input joins
+also preserve their independently advancing input-watermark frontiers:
 
 | Recovery path | Memory state | RocksDB state |
 | --- | --- | --- |

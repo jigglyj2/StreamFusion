@@ -92,6 +92,20 @@ public abstract class ArrowFieldWriter<IN> {
         count += 1;
     }
 
+    /**
+     * Advances a value hidden by a null ancestor without redundantly clearing its validity bit.
+     * Container writers override the hook to retain valid offset/count invariants.
+     */
+    public final void writeMasked() {
+        if (count >= valueCapacity && !(valueVector instanceof NullVector)) {
+            growValueCapacity();
+        }
+        doWriteMasked();
+        count += 1;
+    }
+
+    protected void doWriteMasked() {}
+
     /** Finishes the writing of the current row batch. */
     public void finish() {
         valueVector.setValueCount(count);
