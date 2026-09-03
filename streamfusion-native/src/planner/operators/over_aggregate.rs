@@ -1,6 +1,7 @@
 // Copyright 2026 StreamFusion Authors
 // Licensed under the Apache License, Version 2.0
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use ahash::RandomState;
@@ -18,8 +19,10 @@ use crate::planner::arrow_schema;
 use crate::planner::operators::group_aggregate::{
     aggregate_array, lower_call, row_aggregate_values, AccumulatorState, AggregateValue, Call,
 };
+use crate::planner::operators::window_table_function::timestamp_millis;
 use crate::state::{
-    KeyedState, MemoryKeyedState, RocksPluginKeyedState, StateKey, StateKeyRef, StateMutation,
+    KeyedState, MemoryKeyedState, NativeTimerService, RocksPluginKeyedState, StateKey, StateKeyRef,
+    StateMutation, TimerDomain, TimerKey,
 };
 use crate::{decode_plan, proto};
 
@@ -34,6 +37,7 @@ const UPDATE_BEFORE: i8 = 1;
 const UPDATE_AFTER: i8 = 2;
 const DELETE: i8 = 3;
 const OVER_STATE_PREFIX: u8 = 1;
+const TIMER_STATE_KEY: &[u8] = b"\0streamfusion-over-timers";
 
 #[derive(Clone)]
 struct OutputEvent {
@@ -49,6 +53,7 @@ pub(crate) struct OverAggregateProcessor {
     calls: Vec<Call>,
     max_parallelism: u32,
     state: Box<dyn KeyedState>,
+    timers: NativeTimerService,
     input_schema: Option<SchemaRef>,
     visible_schema: SchemaRef,
     output_schema: SchemaRef,
@@ -62,6 +67,11 @@ pub(crate) struct OverAggregateProcessor {
     state_write_batches: u64,
     missing_ids: u64,
     missing_sort_keys: u64,
+    current_event_time: i64,
+    late_records_dropped: u64,
+    timer_registrations: u64,
+    timer_deletions: u64,
+    timers_fired: u64,
 }
 
 impl OverAggregateProcessor {
@@ -73,12 +83,21 @@ impl OverAggregateProcessor {
         state_reservation: HostMemoryReservation,
     ) -> Result<Self> {
         let scratch = state_reservation.sibling("native over aggregate batch scratch and output");
+        let timers = state_reservation.sibling("native over aggregate timers");
         let state = Box::new(MemoryKeyedState::new(
             first_key_group,
             last_key_group,
             state_reservation,
         )?);
-        Self::with_state(serialized_plan, max_parallelism, state, scratch)
+        Self::with_state(
+            serialized_plan,
+            max_parallelism,
+            first_key_group,
+            last_key_group,
+            state,
+            timers,
+            scratch,
+        )
     }
 
     pub(crate) fn new_rocksdb(
@@ -91,6 +110,7 @@ impl OverAggregateProcessor {
         memory_limit: usize,
         scratch_reservation: HostMemoryReservation,
     ) -> Result<Self> {
+        let timer_reservation = scratch_reservation.sibling("native RocksDB OVER aggregate timers");
         let state = Box::new(RocksPluginKeyedState::open(
             plugin_path,
             database_path,
@@ -98,13 +118,24 @@ impl OverAggregateProcessor {
             last_key_group,
             memory_limit,
         )?);
-        Self::with_state(serialized_plan, max_parallelism, state, scratch_reservation)
+        Self::with_state(
+            serialized_plan,
+            max_parallelism,
+            first_key_group,
+            last_key_group,
+            state,
+            timer_reservation,
+            scratch_reservation,
+        )
     }
 
     fn with_state(
         serialized_plan: &[u8],
         max_parallelism: u32,
+        first_key_group: u32,
+        last_key_group: u32,
         state: Box<dyn KeyedState>,
+        timer_reservation: HostMemoryReservation,
         scratch_reservation: HostMemoryReservation,
     ) -> Result<Self> {
         let root = decode_plan(serialized_plan)?
@@ -148,6 +179,7 @@ impl OverAggregateProcessor {
             calls,
             max_parallelism,
             state,
+            timers: NativeTimerService::new(first_key_group, last_key_group, timer_reservation)?,
             input_schema: None,
             visible_schema,
             output_schema: Arc::new(Schema::new(output_fields)),
@@ -161,6 +193,11 @@ impl OverAggregateProcessor {
             state_write_batches: 0,
             missing_ids: 0,
             missing_sort_keys: 0,
+            current_event_time: i64::MIN,
+            late_records_dropped: 0,
+            timer_registrations: 0,
+            timer_deletions: 0,
+            timers_fired: 0,
         })
     }
 
@@ -189,11 +226,16 @@ impl OverAggregateProcessor {
         let visible_count = self.visible_schema.fields().len();
         let visible_columns = batch.columns()[..visible_count].to_vec();
         let payload_rows = self.payload_converter.convert_columns(&visible_columns)?;
+        let time_attribute = proto::OverTimeAttribute::try_from(self.plan.time_attribute)
+            .expect("OVER time attribute was validated");
         let order_rows = self
             .order_converter
             .as_mut()
-            .expect("schema prepared")
-            .convert_columns(&[batch.column(self.plan.order_key_index as usize).clone()])?;
+            .map(|converter| {
+                converter
+                    .convert_columns(&[batch.column(self.plan.order_key_index as usize).clone()])
+            })
+            .transpose()?;
 
         let mut unique = HashMap::<StateKey, usize, RandomState>::with_capacity_and_hasher(
             batch.num_rows(),
@@ -234,11 +276,34 @@ impl OverAggregateProcessor {
             .collect::<Result<Vec<_>>>()?;
         let mut touched = vec![false; states.len()];
         let mut events = Vec::new();
+        let mut dirty_timer_groups = BTreeSet::new();
 
         for row in 0..batch.num_rows() {
-            let state = &mut states[row_state_indices[row]];
+            let state_index = row_state_indices[row];
+            let state_key = &state_keys[state_index];
+            let state = &mut states[state_index];
             let payload = payload_rows.row(row).as_ref().to_vec();
-            let order = order_rows.row(row).as_ref().to_vec();
+            // Flink's processing-time unbounded function is one incremental accumulator for
+            // both ROWS and RANGE. Rows are therefore ordered strictly by arrival, even when a
+            // whole Arrow batch observes the same processing-time millisecond.
+            let order = match &order_rows {
+                Some(rows) => rows.row(row).as_ref().to_vec(),
+                None => vec![0],
+            };
+            let rows_frame =
+                self.plan.rows_frame || time_attribute == proto::OverTimeAttribute::ProcessingTime;
+            let event_timestamp = if time_attribute == proto::OverTimeAttribute::EventTime {
+                timestamp_millis(batch.column(self.plan.order_key_index as usize), row)?
+                    .unwrap_or(i64::MIN)
+            } else {
+                i64::MIN
+            };
+            if time_attribute == proto::OverTimeAttribute::EventTime
+                && event_timestamp <= self.current_event_time
+            {
+                self.late_records_dropped = self.late_records_dropped.saturating_add(1);
+                continue;
+            }
             let contributions = row_aggregate_values(&self.calls, &batch, row)?;
             let kind = self.input_kind(&batch, row)?;
             let ordinal = i32::try_from(row).map_err(|_| {
@@ -252,40 +317,75 @@ impl OverAggregateProcessor {
                     let start_index = rows.len();
                     rows.push(StoredRow {
                         id,
+                        event_timestamp,
                         payload,
                         contributions,
                         output: Vec::new(),
                     });
-                    let changes = recompute_from(
-                        state,
-                        &self.calls,
-                        self.plan.rows_frame,
-                        &order,
-                        start_index,
-                    )?;
-                    emit_insert_and_changes(&mut events, changes, id, kind, ordinal);
+                    if time_attribute == proto::OverTimeAttribute::EventTime {
+                        let timer = TimerKey {
+                            timestamp: event_timestamp,
+                            key: state_key.key.clone(),
+                            namespace: Vec::new(),
+                        };
+                        if self.timers.register(
+                            state_key.key_group,
+                            TimerDomain::EventTime,
+                            timer,
+                        )? {
+                            self.timer_registrations = self.timer_registrations.saturating_add(1);
+                            dirty_timer_groups.insert(state_key.key_group);
+                        }
+                    } else {
+                        let changes =
+                            recompute_from(state, &self.calls, rows_frame, &order, start_index)?;
+                        emit_insert_and_changes(&mut events, changes, id, kind, ordinal);
+                    }
                 }
                 UPDATE_BEFORE | DELETE => {
                     let order_exists = state.rows.contains_key(order.as_slice());
                     let removed = remove_row(state, &order, &payload);
                     if let Some((removed, start_index)) = removed {
-                        events.push(OutputEvent {
-                            payload: removed.payload,
-                            values: removed.output,
-                            // Flink's non-time OVER functions canonicalize both DELETE and
-                            // UPDATE_BEFORE inputs to a DELETE for the row being removed. The
-                            // affected suffix is still emitted as UPDATE_BEFORE/UPDATE_AFTER.
-                            kind: DELETE,
-                            input_ordinal: ordinal,
-                        });
-                        let changes = recompute_from(
-                            state,
-                            &self.calls,
-                            self.plan.rows_frame,
-                            &order,
-                            start_index,
-                        )?;
-                        emit_existing_changes(&mut events, changes, None, ordinal);
+                        if time_attribute == proto::OverTimeAttribute::EventTime {
+                            let still_registered = state
+                                .rows
+                                .values()
+                                .flatten()
+                                .any(|row| row.event_timestamp == removed.event_timestamp);
+                            if !still_registered {
+                                let timer = TimerKey {
+                                    timestamp: removed.event_timestamp,
+                                    key: state_key.key.clone(),
+                                    namespace: Vec::new(),
+                                };
+                                if self.timers.delete(
+                                    state_key.key_group,
+                                    TimerDomain::EventTime,
+                                    &timer,
+                                )? {
+                                    self.timer_deletions = self.timer_deletions.saturating_add(1);
+                                    dirty_timer_groups.insert(state_key.key_group);
+                                }
+                            }
+                        } else {
+                            events.push(OutputEvent {
+                                payload: removed.payload,
+                                values: removed.output,
+                                // Flink's non-time OVER functions canonicalize both DELETE and
+                                // UPDATE_BEFORE inputs to a DELETE for the row being removed. The
+                                // affected suffix is still emitted as UPDATE_BEFORE/UPDATE_AFTER.
+                                kind: DELETE,
+                                input_ordinal: ordinal,
+                            });
+                            let changes = recompute_from(
+                                state,
+                                &self.calls,
+                                rows_frame,
+                                &order,
+                                start_index,
+                            )?;
+                            emit_existing_changes(&mut events, changes, None, ordinal);
+                        }
                     } else {
                         if order_exists {
                             self.missing_ids = self.missing_ids.saturating_add(1);
@@ -300,10 +400,10 @@ impl OverAggregateProcessor {
                     )));
                 }
             }
-            touched[row_state_indices[row]] = true;
+            touched[state_index] = true;
         }
 
-        let mutations = state_keys
+        let mut mutations = state_keys
             .into_iter()
             .zip(states.into_iter().zip(touched))
             .filter_map(|(key, (state, touched))| {
@@ -313,6 +413,7 @@ impl OverAggregateProcessor {
                 })
             })
             .collect::<Vec<_>>();
+        self.append_timer_mutations(&mut mutations, dirty_timer_groups)?;
         if !mutations.is_empty() {
             self.state.write_batch(mutations)?;
             self.state_write_batches = self.state_write_batches.saturating_add(1);
@@ -363,20 +464,24 @@ impl OverAggregateProcessor {
                 })
                 .collect::<std::result::Result<Vec<_>, arrow::error::ArrowError>>()?;
         }
-        let order_field = self
-            .visible_schema
-            .fields()
-            .get(self.plan.order_key_index as usize)
-            .ok_or_else(|| {
-                DataFusionError::Plan("OVER order index is outside input".to_string())
-            })?;
-        self.order_converter = Some(row_converter(
-            &Arc::new(Schema::new(vec![order_field.clone()])),
-            Some(SortOptions {
-                descending: !self.plan.sort_ascending,
-                nulls_first: !self.plan.sort_nulls_last,
-            }),
-        )?);
+        let time_attribute = proto::OverTimeAttribute::try_from(self.plan.time_attribute)
+            .expect("OVER time attribute was validated");
+        if time_attribute != proto::OverTimeAttribute::ProcessingTime {
+            let order_field = self
+                .visible_schema
+                .fields()
+                .get(self.plan.order_key_index as usize)
+                .ok_or_else(|| {
+                    DataFusionError::Plan("OVER order index is outside input".to_string())
+                })?;
+            self.order_converter = Some(row_converter(
+                &Arc::new(Schema::new(vec![order_field.clone()])),
+                Some(SortOptions {
+                    descending: !self.plan.sort_ascending,
+                    nulls_first: !self.plan.sort_nulls_last,
+                }),
+            )?);
+        }
         self.input_schema = Some(schema);
         Ok(())
     }
@@ -448,12 +553,82 @@ impl OverAggregateProcessor {
         Ok(RecordBatch::try_new(self.output_schema.clone(), columns)?)
     }
 
-    pub(crate) fn statistics(&self) -> [u64; 4] {
+    pub(crate) fn advance_event_time(&mut self, watermark: i64) -> Result<RecordBatch> {
+        if watermark <= self.current_event_time {
+            return self.output_batch(Vec::new());
+        }
+        self.current_event_time = watermark;
+        let fired = self.timers.advance(TimerDomain::EventTime, watermark)?;
+        self.timers_fired = self.timers_fired.saturating_add(fired.len() as u64);
+        if fired.is_empty() {
+            return self.output_batch(Vec::new());
+        }
+
+        let mut unique = HashMap::<StateKey, i64, RandomState>::with_hasher(RandomState::new());
+        let mut dirty_timer_groups = BTreeSet::new();
+        for fired in fired {
+            dirty_timer_groups.insert(fired.key_group);
+            let key = StateKey {
+                key_group: fired.key_group,
+                key: fired.timer.key,
+            };
+            unique
+                .entry(key)
+                .and_modify(|timestamp| *timestamp = (*timestamp).max(fired.timer.timestamp))
+                .or_insert(fired.timer.timestamp);
+        }
+        let ready = unique.into_iter().collect::<Vec<_>>();
+        let refs = ready
+            .iter()
+            .map(|(key, _)| StateKeyRef {
+                key_group: key.key_group,
+                key: &key.key,
+            })
+            .collect::<Vec<_>>();
+        let values = self.state.get_batch(&refs)?;
+        self.state_read_batches = self.state_read_batches.saturating_add(1);
+        let mut events = Vec::new();
+        let mut mutations = Vec::with_capacity(ready.len() + dirty_timer_groups.len());
+        for ((key, ready_through), value) in ready.into_iter().zip(values) {
+            let Some(value) = value else {
+                continue;
+            };
+            let mut state = decode_state(value.as_ref(), self.calls.len())?;
+            emit_ready_event_time(
+                &mut state,
+                &self.calls,
+                self.plan.rows_frame,
+                ready_through,
+                &mut events,
+            )?;
+            mutations.push(StateMutation {
+                key,
+                value: Some(encode_state(&state)),
+            });
+        }
+        self.append_timer_mutations(&mut mutations, dirty_timer_groups)?;
+        if !mutations.is_empty() {
+            self.state.write_batch(mutations)?;
+            self.state_write_batches = self.state_write_batches.saturating_add(1);
+        }
+        self.output_batch(events)
+    }
+
+    pub(crate) fn late_records_dropped(&self) -> u64 {
+        self.late_records_dropped
+    }
+
+    pub(crate) fn statistics(&self) -> [u64; 9] {
         [
             self.state_read_batches,
             self.state_write_batches,
             self.missing_ids,
             self.missing_sort_keys,
+            self.timer_registrations,
+            self.timer_deletions,
+            self.timers_fired,
+            self.timers.timer_count(TimerDomain::EventTime) as u64,
+            self.late_records_dropped,
         ]
     }
 
@@ -462,11 +637,38 @@ impl OverAggregateProcessor {
     }
 
     pub(crate) fn restore_key_group(&mut self, key_group: u32, bytes: &[u8]) -> Result<()> {
-        self.state.restore_key_group(key_group, bytes)
+        self.state.restore_key_group(key_group, bytes)?;
+        let timer_key = StateKeyRef {
+            key_group,
+            key: TIMER_STATE_KEY,
+        };
+        if let Some(timer_state) = self.state.get_batch(&[timer_key])?.pop().flatten() {
+            self.timers
+                .restore_key_group(key_group, timer_state.as_ref())?;
+        }
+        self.state_read_batches = self.state_read_batches.saturating_add(1);
+        Ok(())
     }
 
     pub(crate) fn checkpoint(&self, directory: &std::path::Path) -> Result<()> {
         self.state.checkpoint(directory)
+    }
+
+    fn append_timer_mutations(
+        &self,
+        mutations: &mut Vec<StateMutation>,
+        key_groups: BTreeSet<u32>,
+    ) -> Result<()> {
+        for key_group in key_groups {
+            mutations.push(StateMutation {
+                key: StateKey {
+                    key_group,
+                    key: TIMER_STATE_KEY.to_vec(),
+                },
+                value: Some(self.timers.snapshot_key_group(key_group)?),
+            });
+        }
+        Ok(())
     }
 }
 
@@ -476,6 +678,61 @@ struct ChangedRow {
     payload: Vec<u8>,
     old: Vec<Option<AggregateValue>>,
     new: Vec<Option<AggregateValue>>,
+}
+
+fn emit_ready_event_time(
+    state: &mut OverState,
+    calls: &[Call],
+    rows_frame: bool,
+    ready_through: i64,
+    events: &mut Vec<OutputEvent>,
+) -> Result<()> {
+    let mut accumulator = AccumulatorState::new(calls);
+    for rows in state.rows.values_mut() {
+        if rows.is_empty() {
+            continue;
+        }
+        if rows[0].event_timestamp > ready_through {
+            break;
+        }
+        if rows_frame {
+            for row in rows {
+                accumulator.apply_values(calls, &row.contributions, true)?;
+                if row.output.is_empty() {
+                    row.output = accumulator.values(calls);
+                    let ordinal = i32::try_from(events.len()).map_err(|_| {
+                        DataFusionError::Execution("OVER timer output exceeds i32 rows".to_string())
+                    })?;
+                    events.push(OutputEvent {
+                        payload: row.payload.clone(),
+                        values: row.output.clone(),
+                        kind: INSERT,
+                        input_ordinal: ordinal,
+                    });
+                }
+            }
+        } else {
+            for row in rows.iter() {
+                accumulator.apply_values(calls, &row.contributions, true)?;
+            }
+            let output = accumulator.values(calls);
+            for row in rows {
+                if row.output.is_empty() {
+                    row.output = output.clone();
+                    let ordinal = i32::try_from(events.len()).map_err(|_| {
+                        DataFusionError::Execution("OVER timer output exceeds i32 rows".to_string())
+                    })?;
+                    events.push(OutputEvent {
+                        payload: row.payload.clone(),
+                        values: output.clone(),
+                        kind: INSERT,
+                        input_ordinal: ordinal,
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn recompute(state: &mut OverState, calls: &[Call], rows_frame: bool) -> Result<Vec<ChangedRow>> {
@@ -662,12 +919,19 @@ fn validate_plan(plan: &proto::OverAggregate, max_parallelism: u32) -> Result<()
         ));
     }
     if !plan.sort_ascending
-        || time != Some(proto::OverTimeAttribute::NonTime)
+        || !matches!(
+            time,
+            Some(
+                proto::OverTimeAttribute::NonTime
+                    | proto::OverTimeAttribute::ProcessingTime
+                    | proto::OverTimeAttribute::EventTime
+            )
+        )
         || plan.preceding_offset.is_some()
         || plan.state_ttl_millis != 0
     {
         return Err(DataFusionError::Plan(
-            "initial native OVER aggregate requires an ascending non-time unbounded-preceding frame"
+            "native OVER aggregate requires an ascending non-time, processing-time, or event-time unbounded-preceding frame"
                 .to_string(),
         ));
     }

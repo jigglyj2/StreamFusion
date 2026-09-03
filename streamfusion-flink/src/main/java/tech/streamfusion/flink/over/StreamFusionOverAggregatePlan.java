@@ -9,6 +9,7 @@ import org.apache.calcite.rel.core.AggregateCall;
 import org.apache.calcite.sql.SqlKind;
 import org.apache.flink.table.planner.calcite.FlinkTypeFactory;
 import org.apache.flink.table.planner.plan.nodes.exec.spec.OverSpec;
+import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.flink.calc.StreamFusionCalcTranslator;
 import tech.streamfusion.flink.proto.FlinkLogicalTypeProto;
@@ -27,11 +28,12 @@ final class StreamFusionOverAggregatePlan {
 
     static byte[] create(RowType inputType, RowType outputType, OverSpec spec, long stateTtl) {
         OverSpec.GroupSpec group = spec.getGroups().get(0);
+        LogicalType orderType = inputType.getTypeAt(group.getSort().getFieldIndices()[0]);
         OverAggregate.Builder aggregate = OverAggregate.newBuilder()
                 .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
                 .setOrderKeyIndex(group.getSort().getFieldIndices()[0])
                 .setRowsFrame(group.isRows())
-                .setTimeAttribute(OverTimeAttribute.OVER_TIME_ATTRIBUTE_NON_TIME)
+                .setTimeAttribute(timeAttribute(orderType))
                 .setInputSchema(schema(inputType))
                 .setOutputSchema(schema(outputType))
                 .setInputChangelog(true)
@@ -49,6 +51,16 @@ final class StreamFusionOverAggregatePlan {
                 .setRoot(Operator.newBuilder().setOverAggregate(aggregate))
                 .build()
                 .toByteArray();
+    }
+
+    private static OverTimeAttribute timeAttribute(LogicalType orderType) {
+        if (org.apache.flink.table.types.logical.utils.LogicalTypeChecks.isRowtimeAttribute(orderType)) {
+            return OverTimeAttribute.OVER_TIME_ATTRIBUTE_EVENT_TIME;
+        }
+        if (org.apache.flink.table.types.logical.utils.LogicalTypeChecks.isProctimeAttribute(orderType)) {
+            return OverTimeAttribute.OVER_TIME_ATTRIBUTE_PROCESSING_TIME;
+        }
+        return OverTimeAttribute.OVER_TIME_ATTRIBUTE_NON_TIME;
     }
 
     private static tech.streamfusion.proto.plan.v1.AggregateCall call(AggregateCall call, RowType inputType) {

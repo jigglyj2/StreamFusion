@@ -5,10 +5,18 @@
 package tech.streamfusion.flink.over;
 
 import java.nio.file.Path;
+import java.util.Collections;
 import java.util.List;
+import org.apache.flink.api.common.state.ListState;
+import org.apache.flink.api.common.state.ListStateDescriptor;
+import org.apache.flink.api.common.typeutils.base.LongSerializer;
 import org.apache.flink.metrics.Counter;
+import org.apache.flink.metrics.MetricGroup;
+import org.apache.flink.runtime.state.StateInitializationContext;
+import org.apache.flink.runtime.state.StateSnapshotContext;
 import org.apache.flink.streaming.api.operators.BoundedOneInput;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
+import org.apache.flink.streaming.api.watermark.Watermark;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.table.runtime.keyselector.RowDataKeySelector;
 import org.apache.flink.table.types.logical.RowType;
@@ -24,12 +32,18 @@ final class StreamFusionArrowOverAggregateOperator extends AbstractStreamFusionA
         implements OneInputStreamOperator<ArrowRowDataBatch, ArrowRowDataBatch>, BoundedOneInput {
     private final RowType outputType;
     private final boolean inputChangelog;
+    private final boolean missingRowMetrics;
+    private final boolean eventTime;
     private final boolean preencodeKeys;
     private final RowDataKeySelector keySelector;
 
     private transient Counter idsNotFound;
     private transient Counter sortKeysNotFound;
     private transient long[] observedStatistics;
+    private transient Counter lateRecordsDropped;
+    private transient ListState<Long> watermarkState;
+    private transient long restoredWatermark = Long.MIN_VALUE;
+    private transient long currentWatermark = Long.MIN_VALUE;
 
     StreamFusionArrowOverAggregateOperator(
             RowType inputType,
@@ -37,10 +51,14 @@ final class StreamFusionArrowOverAggregateOperator extends AbstractStreamFusionA
             int[] partitionKeys,
             byte[] plan,
             boolean inputChangelog,
+            boolean missingRowMetrics,
+            boolean eventTime,
             RowDataKeySelector keySelector) {
         super(plan, "over aggregate");
         this.outputType = outputType;
         this.inputChangelog = inputChangelog;
+        this.missingRowMetrics = missingRowMetrics;
+        this.eventTime = eventTime;
         this.preencodeKeys = requiresPreencodedKeys(inputType, partitionKeys);
         this.keySelector = keySelector;
     }
@@ -48,9 +66,45 @@ final class StreamFusionArrowOverAggregateOperator extends AbstractStreamFusionA
     @Override
     public void open() throws Exception {
         super.open();
-        idsNotFound = getMetricGroup().counter("numOfIdsNotFound");
-        sortKeysNotFound = getMetricGroup().counter("numOfSortKeysNotFound");
+        if (missingRowMetrics) {
+            idsNotFound = getMetricGroup().counter("numOfIdsNotFound");
+            sortKeysNotFound = getMetricGroup().counter("numOfSortKeysNotFound");
+        }
         observedStatistics = NativeOverAggregateBridge.statistics(nativeHandle());
+        if (eventTime) {
+            lateRecordsDropped = getMetricGroup().counter("numLateRecordsDropped");
+            MetricGroup diagnostics = getMetricGroup().addGroup("StreamFusion");
+            diagnostics.gauge("pendingEventTimeTimers", () -> NativeOverAggregateBridge.statistics(nativeHandle())[7]);
+            if (restoredWatermark != Long.MIN_VALUE) {
+                currentWatermark = restoredWatermark;
+                emitTimerOutput(restoredWatermark);
+            }
+        }
+    }
+
+    @Override
+    public void processWatermark(Watermark watermark) throws Exception {
+        if (eventTime && watermark.getTimestamp() > currentWatermark) {
+            emitTimerOutput(watermark.getTimestamp());
+            currentWatermark = watermark.getTimestamp();
+            recordWatermark();
+        }
+        super.processWatermark(watermark);
+    }
+
+    private void emitTimerOutput(long watermark) throws Exception {
+        try (ArrowRowDataBatch result = ArrowOverAggregateCDataBridge.advanceEventTime(
+                nativeHandle(), watermark, outputType, allocator(), memoryManager())) {
+            int physicalOutputs = 0;
+            if (result.size() > 0) {
+                output.collect(new StreamRecord<>(result));
+                physicalOutputs = 1;
+            }
+            FlinkMetricParity.replacePhysicalRecords(
+                    getMetricGroup().getIOMetricGroup().getNumRecordsOutCounter(), physicalOutputs, result.size());
+            recordTimerOutput(result, false);
+        }
+        updateStatistics();
     }
 
     @Override
@@ -80,13 +134,40 @@ final class StreamFusionArrowOverAggregateOperator extends AbstractStreamFusionA
 
     private void updateStatistics() {
         long[] current = NativeOverAggregateBridge.statistics(nativeHandle());
-        if (current.length != 4 || observedStatistics.length != 4) {
+        if (current.length != 9 || observedStatistics.length != 9) {
             throw new IllegalStateException("Native OVER statistics have an incompatible shape");
         }
-        recordNativeWindowStatistics(current[0] - observedStatistics[0], current[1] - observedStatistics[1], 0, 0, 0);
-        idsNotFound.inc(current[2] - observedStatistics[2]);
-        sortKeysNotFound.inc(current[3] - observedStatistics[3]);
+        recordNativeWindowStatistics(
+                current[0] - observedStatistics[0],
+                current[1] - observedStatistics[1],
+                current[4] - observedStatistics[4],
+                current[5] - observedStatistics[5],
+                current[6] - observedStatistics[6]);
+        if (missingRowMetrics) {
+            idsNotFound.inc(current[2] - observedStatistics[2]);
+            sortKeysNotFound.inc(current[3] - observedStatistics[3]);
+        }
+        if (eventTime) {
+            lateRecordsDropped.inc(current[8] - observedStatistics[8]);
+        }
         observedStatistics = current;
+    }
+
+    @Override
+    protected void afterNativeStateInitialized(StateInitializationContext context) throws Exception {
+        watermarkState = context.getOperatorStateStore()
+                .getUnionListState(new ListStateDescriptor<>("watermark", LongSerializer.INSTANCE));
+        if (context.isRestored()) {
+            for (Long watermark : watermarkState.get()) {
+                restoredWatermark =
+                        restoredWatermark == Long.MIN_VALUE ? watermark : Math.min(restoredWatermark, watermark);
+            }
+        }
+    }
+
+    @Override
+    protected void beforeNativeStateSnapshot(StateSnapshotContext context) throws Exception {
+        watermarkState.update(Collections.singletonList(currentWatermark));
     }
 
     @Override

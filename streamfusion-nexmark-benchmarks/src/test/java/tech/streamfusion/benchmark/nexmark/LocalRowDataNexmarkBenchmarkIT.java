@@ -123,18 +123,19 @@ class LocalRowDataNexmarkBenchmarkIT {
     @ParameterizedTest
     @ValueSource(strings = {"hashmap", "rocksdb"})
     void overAggregateMatchesFlinkOnBothStateBackends(String backend) throws Exception {
-        String query = "over-aggregate";
-        LocalRowDataNexmarkBenchmark.RunResult flink =
-                LocalRowDataNexmarkBenchmark.run(2_000, query, false, backend, 1);
-        LocalRowDataNexmarkBenchmark.RunResult streamFusion =
-                LocalRowDataNexmarkBenchmark.run(2_000, query, true, backend, 1);
+        for (String query : new String[] {"over-aggregate", "over-aggregate-event-time"}) {
+            LocalRowDataNexmarkBenchmark.RunResult flink =
+                    LocalRowDataNexmarkBenchmark.run(2_000, query, false, backend, 1);
+            LocalRowDataNexmarkBenchmark.RunResult streamFusion =
+                    LocalRowDataNexmarkBenchmark.run(2_000, query, true, backend, 1);
 
-        assertThat(streamFusion.completed()).isTrue();
-        assertThat(streamFusion.debugRows()).containsExactlyElementsOf(flink.debugRows());
-        assertThat(streamFusion.outputRows()).isEqualTo(flink.outputRows());
-        assertThat(streamFusion.outputSha256()).isEqualTo(flink.outputSha256());
-        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
-        assertThat(streamFusion.nativeOverAggregateBatches()).isGreaterThan(0);
+            assertThat(streamFusion.completed()).as(query).isTrue();
+            assertThat(streamFusion.debugRows()).as(query).containsExactlyElementsOf(flink.debugRows());
+            assertThat(streamFusion.outputRows()).as(query).isEqualTo(flink.outputRows());
+            assertThat(streamFusion.outputSha256()).as(query).isEqualTo(flink.outputSha256());
+            assertThat(StreamFusionPlanningDiagnostics.explain()).as(query).contains("Accelerated: yes");
+            assertThat(streamFusion.nativeOverAggregateBatches()).as(query).isGreaterThan(0);
+        }
     }
 
     @ParameterizedTest

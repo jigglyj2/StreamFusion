@@ -5,9 +5,9 @@ sidebar:
   order: 8
 ---
 
-**Current status:** Partially accelerated. Streaming non-time `ROWS` and `RANGE` frames from
-`UNBOUNDED PRECEDING` through `CURRENT ROW` run natively when the query uses one ascending order
-key and supported aggregates.
+**Current status:** Partially accelerated. Streaming non-time and event-time `ROWS` and `RANGE`
+frames from `UNBOUNDED PRECEDING` through `CURRENT ROW` run natively when the query uses one
+ascending order key and supported aggregates.
 
 **Future acceleration target:** Yes.
 
@@ -28,20 +28,29 @@ The current native path supports `COUNT`, `SUM`, `MIN`, and `MAX`, including Fli
 same aggregate value, while `ROWS` peers retain deterministic input order. All partition-key and
 row payload types representable by the Arrow row codec are retained as opaque Arrow rows; complex
 partition keys are pre-encoded with Flink's binary-row hash contract before the native boundary.
+For an event-time order key, rows are buffered in timestamp and input order until the watermark
+fires the corresponding native timer. `ROWS` advances one row at a time and `RANGE` emits all peers
+with the same aggregate value. Rows arriving at or behind the current watermark are dropped with
+Flink-compatible late-record accounting.
 
 State is available through both StreamFusion's managed in-memory backend and direct native
 RocksDB backend. Both use Flink key groups, batched multi-get/write calls, canonical cross-backend
 key-group snapshots, rescaling, aligned and unaligned recovery, and incremental RocksDB native
 checkpoints. Native allocations are charged to the operator's Flink managed-memory reservation.
+Event timers and the current watermark are included in canonical snapshots, including pending
+timer redistribution during scale-out and scale-in recovery.
 
-The operator publishes Flink's `numOfIdsNotFound` and `numOfSortKeysNotFound` counters plus the
-standard logical-record I/O metrics. StreamFusion state, checkpoint, recovery, allocation, and
-native batch diagnostics remain in the explicitly named StreamFusion metric subgroup.
+The non-time operator publishes Flink's `numOfIdsNotFound` and `numOfSortKeysNotFound` counters;
+the event-time operator publishes `numLateRecordsDropped`. Both publish the standard logical-record
+I/O metrics. StreamFusion state, checkpoint, recovery, allocation, pending-timer, and native batch
+diagnostics remain in the explicitly named StreamFusion metric subgroup.
 
-Time-attribute frames, bounded preceding frames, descending or multiple order keys, aggregate
-functions beyond the set above, mini-batch mode, async state, changelog-state wrapping, and state
-TTL still cause an explicit whole-plan fallback. These are not documented as accelerated until
-their parity and recovery suites pass.
+Processing-time queries currently cause an explicit whole-plan fallback because the preceding
+`PROCTIME()` Calc materialization is not yet representable by StreamFusion, even though the native
+OVER kernel has processing-time support. Bounded preceding frames, descending or multiple order
+keys, aggregate functions beyond the set above, mini-batch mode, async state, changelog-state
+wrapping, and state TTL also fall back. These are not documented as accelerated until their
+end-to-end parity and recovery suites pass.
 
 ## Implementation
 
@@ -69,5 +78,21 @@ processor was 2.1–2.4%. The required source RowData-to-Arrow boundary remained
 4.5–5.5%. Separate Java and native allocation profiles found no dominant OVER state-loop
 allocation; all retained state and scratch buffers are also covered by the managed-memory denial
 and release tests. These are local diagnostic results, not portable performance claims.
+
+The true event-time `over-aggregate-event-time` workload uses the bid rowtime attribute rather than
+casting it to a regular timestamp. On the same release/native-CPU machine, three alternating fresh
+JVM forks over 100,000 events produced in-memory medians of 20,934 events/s for Flink and 20,642
+events/s for StreamFusion (98.6% parity). RocksDB medians were 16,778 and 19,813 events/s, an 18.1%
+StreamFusion gain. Every run emitted the same 92,000-row changelog with the SHA-256 above, and each
+StreamFusion run reported seven native OVER batches.
+
+Mixed JVM/native CPU profiles covered longer event-time runs on both backends. The complete native
+OVER input and watermark paths accounted for 3.5% or less of samples; timer registration was about
+1%, and state encoding, decoding, key encoding, timer snapshots, and individual RocksDB operations
+were each below 0.4%. Java allocation profiles were led by result RowData materialization and the
+benchmark sink. Native samples showed expected row retention and timer registration, but no
+corresponding CPU hot path. The implementation therefore retains the shared timer service and
+canonical state format instead of introducing an OVER-specific benchmark shortcut. Profiler-
+instrumented timings were excluded from the throughput results.
 
 See the [Flink 2.3 OVER aggregation documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/over-agg/).

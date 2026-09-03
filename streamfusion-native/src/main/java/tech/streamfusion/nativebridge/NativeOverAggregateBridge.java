@@ -66,6 +66,15 @@ public final class NativeOverAggregateBridge {
         return statistics0(handle);
     }
 
+    public static long advanceEventTime(
+            long handle, long watermark, long outputArrayAddress, long outputSchemaAddress) {
+        return advanceEventTime0(handle, watermark, outputArrayAddress, outputSchemaAddress);
+    }
+
+    public static long lateRecordsDropped(long handle) {
+        return lateRecordsDropped0(handle);
+    }
+
     public static long executedBatchCount() {
         return EXECUTED_BATCHES.get();
     }
@@ -127,6 +136,11 @@ public final class NativeOverAggregateBridge {
             long outputSchemaAddress);
 
     private static native long[] statistics0(long handle);
+
+    private static native long advanceEventTime0(
+            long handle, long watermark, long outputArrayAddress, long outputSchemaAddress);
+
+    private static native long lateRecordsDropped0(long handle);
 
     private static native byte[] snapshotKeyGroup(long handle, int keyGroup);
 

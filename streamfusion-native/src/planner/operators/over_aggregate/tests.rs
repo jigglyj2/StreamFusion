@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::memory_pool::{tests_support::TestBroker, HostMemoryReservation};
-use arrow::array::{ArrayRef, Int64Array, StringArray};
+use arrow::array::{ArrayRef, Int64Array, StringArray, TimestampMillisecondArray};
 use prost::Message;
 
 #[test]
@@ -31,7 +31,7 @@ fn rows_frame_recomputes_ordered_suffix_for_insert_and_retraction() {
         .unwrap();
     assert_eq!(kinds(&removed), vec![DELETE, UPDATE_BEFORE, UPDATE_AFTER]);
     assert_eq!(sums(&removed), vec![10, 30, 20]);
-    assert_eq!(processor.statistics(), [3, 3, 0, 0]);
+    assert_eq!(processor.statistics(), [3, 3, 0, 0, 0, 0, 0, 0, 0]);
     drop(processor);
     assert_eq!(broker.reserved(), 0);
 }
@@ -78,9 +78,98 @@ fn range_peers_share_one_aggregate_and_restore_canonical_state() {
     assert_eq!(sums(&output), vec![35]);
 }
 
+#[test]
+fn processing_time_rows_and_range_are_incremental_in_arrival_order() {
+    for rows_frame in [true, false] {
+        let broker = Arc::new(TestBroker::new(64 << 20));
+        let mut processor = processor_with_time(
+            broker.clone(),
+            rows_frame,
+            proto::OverTimeAttribute::ProcessingTime,
+        );
+        let output = processor
+            .process_arrow(batch(&["a", "a"], &[7, 7], &[10, 20], &[INSERT; 2]))
+            .unwrap();
+        assert_eq!(kinds(&output), vec![INSERT, INSERT]);
+        assert_eq!(sums(&output), vec![10, 30]);
+
+        let removed = processor
+            .process_arrow(batch(&["a"], &[7], &[10], &[DELETE]))
+            .unwrap();
+        assert_eq!(kinds(&removed), vec![DELETE, UPDATE_BEFORE, UPDATE_AFTER]);
+        assert_eq!(sums(&removed), vec![10, 30, 20]);
+        drop(processor);
+        assert_eq!(broker.reserved(), 0);
+    }
+}
+
+#[test]
+fn event_time_waits_for_watermarks_orders_rows_and_drops_late_input() {
+    let broker = Arc::new(TestBroker::new(64 << 20));
+    let mut processor =
+        processor_with_time(broker.clone(), true, proto::OverTimeAttribute::EventTime);
+    let buffered = processor
+        .process_arrow(event_batch(
+            &["a", "a"],
+            &[2_000, 1_000],
+            &[20, 10],
+            &[INSERT; 2],
+        ))
+        .unwrap();
+    assert_eq!(buffered.num_rows(), 0);
+    assert_eq!(processor.statistics()[7], 2);
+
+    let first = processor.advance_event_time(1_500).unwrap();
+    assert_eq!(kinds(&first), vec![INSERT]);
+    assert_eq!(sums(&first), vec![10]);
+    let second = processor.advance_event_time(2_000).unwrap();
+    assert_eq!(kinds(&second), vec![INSERT]);
+    assert_eq!(sums(&second), vec![30]);
+
+    processor
+        .process_arrow(event_batch(&["a"], &[1_500], &[5], &[INSERT]))
+        .unwrap();
+    assert_eq!(processor.late_records_dropped(), 1);
+    drop(processor);
+    assert_eq!(broker.reserved(), 0);
+}
+
+#[test]
+fn event_time_range_peers_share_the_same_watermark_result() {
+    let broker = Arc::new(TestBroker::new(64 << 20));
+    let mut processor =
+        processor_with_time(broker.clone(), false, proto::OverTimeAttribute::EventTime);
+    assert_eq!(
+        processor
+            .process_arrow(event_batch(
+                &["a", "a"],
+                &[1_000, 1_000],
+                &[10, 20],
+                &[INSERT; 2],
+            ))
+            .unwrap()
+            .num_rows(),
+        0
+    );
+
+    let output = processor.advance_event_time(1_000).unwrap();
+    assert_eq!(kinds(&output), vec![INSERT, INSERT]);
+    assert_eq!(sums(&output), vec![30, 30]);
+    drop(processor);
+    assert_eq!(broker.reserved(), 0);
+}
+
 fn processor(broker: Arc<TestBroker>, rows_frame: bool) -> OverAggregateProcessor {
+    processor_with_time(broker, rows_frame, proto::OverTimeAttribute::NonTime)
+}
+
+fn processor_with_time(
+    broker: Arc<TestBroker>,
+    rows_frame: bool,
+    time_attribute: proto::OverTimeAttribute,
+) -> OverAggregateProcessor {
     OverAggregateProcessor::new(
-        &plan(rows_frame),
+        &plan(rows_frame, time_attribute),
         128,
         0,
         127,
@@ -89,11 +178,20 @@ fn processor(broker: Arc<TestBroker>, rows_frame: bool) -> OverAggregateProcesso
     .unwrap()
 }
 
-fn plan(rows_frame: bool) -> Vec<u8> {
-    let input = schema(&[("key", string()), ("order", bigint()), ("value", bigint())]);
+fn plan(rows_frame: bool, time_attribute: proto::OverTimeAttribute) -> Vec<u8> {
+    let order_type = if time_attribute == proto::OverTimeAttribute::EventTime {
+        timestamp()
+    } else {
+        bigint()
+    };
+    let input = schema(&[
+        ("key", string()),
+        ("order", order_type.clone()),
+        ("value", bigint()),
+    ]);
     let output = schema(&[
         ("key", string()),
-        ("order", bigint()),
+        ("order", order_type),
         ("value", bigint()),
         ("running_sum", bigint()),
         ("running_count", bigint()),
@@ -113,7 +211,7 @@ fn plan(rows_frame: bool) -> Vec<u8> {
                     order_key_index: 1,
                     rows_frame,
                     preceding_offset: None,
-                    time_attribute: proto::OverTimeAttribute::NonTime as i32,
+                    time_attribute: time_attribute as i32,
                     aggregate_calls: vec![
                         call(proto::AggregateFunction::Sum, Some(2)),
                         call(proto::AggregateFunction::CountStar, None),
@@ -171,6 +269,15 @@ fn bigint() -> proto::LogicalType {
     }
 }
 
+fn timestamp() -> proto::LogicalType {
+    proto::LogicalType {
+        nullable: true,
+        r#type: Some(proto::logical_type::Type::Timestamp(proto::PrecisionType {
+            precision: 3,
+        })),
+    }
+}
+
 fn batch(keys: &[&str], order: &[i64], values: &[i64], row_kinds: &[i8]) -> RecordBatch {
     RecordBatch::try_from_iter(vec![
         (
@@ -180,6 +287,28 @@ fn batch(keys: &[&str], order: &[i64], values: &[i64], row_kinds: &[i8]) -> Reco
         (
             "order",
             Arc::new(Int64Array::from(order.to_vec())) as ArrayRef,
+        ),
+        (
+            "value",
+            Arc::new(Int64Array::from(values.to_vec())) as ArrayRef,
+        ),
+        (
+            "__streamfusion_input_row_kind",
+            Arc::new(Int8Array::from(row_kinds.to_vec())) as ArrayRef,
+        ),
+    ])
+    .unwrap()
+}
+
+fn event_batch(keys: &[&str], order: &[i64], values: &[i64], row_kinds: &[i8]) -> RecordBatch {
+    RecordBatch::try_from_iter(vec![
+        (
+            "key",
+            Arc::new(StringArray::from(keys.to_vec())) as ArrayRef,
+        ),
+        (
+            "order",
+            Arc::new(TimestampMillisecondArray::from(order.to_vec())) as ArrayRef,
         ),
         (
             "value",

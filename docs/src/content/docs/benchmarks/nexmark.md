@@ -82,9 +82,11 @@ end-to-end elapsed time, input-event throughput, native calc batches, native gro
 batches, native window-aggregate batches, native Window Join batches, native regular-join batches,
 native interval-join batches, native OVER-aggregate batches,
 and a row count plus SHA-256 for the full result changelog. The `group-aggregate`,
-`interval-join`, `over-aggregate`, `select-distinct`, `top-n`, and `limit` cases
+`interval-join`, `over-aggregate`, `over-aggregate-event-time`, `select-distinct`, `top-n`, and `limit` cases
 exercise both native state backends over the bounded bid stream; they are focused operator workloads
-rather than numbered Nexmark queries.
+rather than numbered Nexmark queries. `over-aggregate` deliberately casts the timestamp to a
+regular value to exercise ordered non-time state, while `over-aggregate-event-time` retains the
+rowtime attribute and exercises watermark-driven native timers and late-record handling.
 Performance reports
 must come from separate, unprofiled JVM forks built with release-mode native code; profiler runs
 are diagnostic artifacts rather than benchmark measurements.
@@ -96,6 +98,15 @@ events/s for Flink and 20,759 events/s for StreamFusion (99.3% parity). Elapsed-
 StreamFusion gain, with elapsed ranges of 5.879–6.037s and 5.017–5.175s. Every run emitted 92,000
 rows with SHA-256 `9cdcca648552898214b792466466ca07ccf3af86de0663a881d9930e38036144`, and every
 StreamFusion run reported seven native OVER batches.
+
+The corresponding true event-time workload produced in-memory medians of 20,934 events/s for Flink
+and 20,642 events/s for StreamFusion (98.6% parity), and RocksDB medians of 16,778 and 19,813
+events/s respectively (an 18.1% StreamFusion gain). All forks again emitted the same 92,000 rows and
+hash and reported seven native OVER batches. Its mixed CPU profiles put the combined native input
+and watermark paths below 3.5%; timer registration was about 1%, and state encoding/decoding,
+timer snapshots, and individual RocksDB calls were each below 0.4%. Allocation profiles were led by
+required output materialization and sink serialization rather than a CPU-significant state-loop
+allocation. Profiler timings were excluded from the measurements.
 
 Mixed JVM/native CPU profiles over a longer 600,000-event run used Java non-safepoint sampling,
 DWARF/frame-pointer unwinding, JFR, collapsed stacks, and differential flame graphs for both

@@ -8,11 +8,13 @@ use datafusion::error::{DataFusionError, Result};
 use super::AggregateValue;
 
 const MAGIC: &[u8; 4] = b"SFOA";
-const VERSION: u8 = 1;
+const VERSION: u8 = 2;
+const FIRST_VERSION: u8 = 1;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct StoredRow {
     pub(super) id: i64,
+    pub(super) event_timestamp: i64,
     pub(super) payload: Vec<u8>,
     pub(super) contributions: Vec<Option<AggregateValue>>,
     pub(super) output: Vec<Option<AggregateValue>>,
@@ -44,6 +46,7 @@ pub(super) fn encode_state(state: &OverState) -> Vec<u8> {
         put_u32(&mut bytes, rows.len());
         for row in rows {
             bytes.extend_from_slice(&row.id.to_le_bytes());
+            bytes.extend_from_slice(&row.event_timestamp.to_le_bytes());
             put_bytes(&mut bytes, &row.payload);
             put_values(&mut bytes, &row.contributions);
             put_values(&mut bytes, &row.output);
@@ -53,9 +56,13 @@ pub(super) fn encode_state(state: &OverState) -> Vec<u8> {
 }
 
 pub(super) fn decode_state(bytes: &[u8], call_count: usize) -> Result<OverState> {
-    if bytes.len() < 17 || &bytes[..4] != MAGIC || bytes[4] != VERSION {
+    if bytes.len() < 17
+        || &bytes[..4] != MAGIC
+        || (bytes[4] != FIRST_VERSION && bytes[4] != VERSION)
+    {
         return Err(invalid("invalid native OVER aggregate state"));
     }
+    let version = bytes[4];
     let mut cursor = Cursor { bytes, offset: 5 };
     let next_id = cursor.i64()?;
     let order_count = cursor.u32()? as usize;
@@ -66,14 +73,22 @@ pub(super) fn decode_state(bytes: &[u8], call_count: usize) -> Result<OverState>
         let mut rows = Vec::with_capacity(row_count);
         for _ in 0..row_count {
             let id = cursor.i64()?;
+            let event_timestamp = if version >= VERSION {
+                cursor.i64()?
+            } else {
+                i64::MIN
+            };
             let payload = cursor.bytes()?.to_vec();
             let contributions = cursor.values()?;
             let output = cursor.values()?;
-            if contributions.len() != call_count || output.len() != call_count {
+            if contributions.len() != call_count
+                || (!output.is_empty() && output.len() != call_count)
+            {
                 return Err(invalid("OVER aggregate state call count changed"));
             }
             rows.push(StoredRow {
                 id,
+                event_timestamp,
                 payload,
                 contributions,
                 output,
@@ -194,6 +209,25 @@ fn truncated() -> DataFusionError {
 mod tests {
     use super::*;
 
+    fn encode_first_version(state: &OverState) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(MAGIC);
+        bytes.push(FIRST_VERSION);
+        bytes.extend_from_slice(&state.next_id.to_le_bytes());
+        put_u32(&mut bytes, state.rows.len());
+        for (order, rows) in &state.rows {
+            put_bytes(&mut bytes, order);
+            put_u32(&mut bytes, rows.len());
+            for row in rows {
+                bytes.extend_from_slice(&row.id.to_le_bytes());
+                put_bytes(&mut bytes, &row.payload);
+                put_values(&mut bytes, &row.contributions);
+                put_values(&mut bytes, &row.output);
+            }
+        }
+        bytes
+    }
+
     #[test]
     fn canonical_state_round_trips_values_and_rejects_trailing_bytes() {
         let state = OverState {
@@ -202,6 +236,7 @@ mod tests {
                 vec![1, 2],
                 vec![StoredRow {
                     id: 7,
+                    event_timestamp: 11,
                     payload: vec![3, 4],
                     contributions: vec![Some(AggregateValue::Int(5)), None],
                     output: vec![Some(AggregateValue::Float64(1.5f64.to_bits())), None],
@@ -213,5 +248,31 @@ mod tests {
         let mut malformed = encoded;
         malformed.push(0);
         assert!(decode_state(&malformed, 2).is_err());
+    }
+
+    #[test]
+    fn restores_first_version_non_time_state_without_an_event_timestamp() {
+        let state = OverState {
+            next_id: 9,
+            rows: BTreeMap::from([(
+                vec![1, 2],
+                vec![StoredRow {
+                    id: 7,
+                    event_timestamp: 11,
+                    payload: vec![3, 4],
+                    contributions: vec![Some(AggregateValue::Int(5))],
+                    output: vec![Some(AggregateValue::Int(5))],
+                }],
+            )]),
+        };
+
+        let restored = decode_state(&encode_first_version(&state), 1).unwrap();
+        assert_eq!(restored.next_id, state.next_id);
+        assert_eq!(restored.rows[&vec![1, 2]][0].event_timestamp, i64::MIN);
+        assert_eq!(restored.rows[&vec![1, 2]][0].payload, vec![3, 4]);
+        assert_eq!(
+            restored.rows[&vec![1, 2]][0].contributions,
+            vec![Some(AggregateValue::Int(5))]
+        );
     }
 }

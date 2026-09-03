@@ -161,6 +161,58 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeOverAggregateBr
 }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeOverAggregateBridge_advanceEventTime0<
+    'caller,
+>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    handle: jlong,
+    watermark: jlong,
+    output_array_address: jlong,
+    output_schema_address: jlong,
+) -> jlong {
+    unowned_env
+        .with_env(|env| -> jni::errors::Result<_> {
+            let rows = (|| -> datafusion::error::Result<_> {
+                let output = unsafe { processor(handle) }?.advance_event_time(watermark)?;
+                unsafe {
+                    export_record_batch(
+                        output,
+                        output_array_address as *mut FFI_ArrowArray,
+                        output_schema_address as *mut FFI_ArrowSchema,
+                    )
+                }
+            })()
+            .map_err(|error| throw(env, error))?;
+            Ok(rows as jlong)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeOverAggregateBridge_lateRecordsDropped0<
+    'caller,
+>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    handle: jlong,
+) -> jlong {
+    unowned_env
+        .with_env(|env| -> jni::errors::Result<_> {
+            unsafe { processor(handle) }
+                .and_then(|processor| {
+                    i64::try_from(processor.late_records_dropped()).map_err(|_| {
+                        DataFusionError::Execution(
+                            "OVER late record count exceeds Java long".to_string(),
+                        )
+                    })
+                })
+                .map_err(|error| throw(env, error))
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeOverAggregateBridge_snapshotKeyGroup<
     'caller,
 >(

@@ -22,6 +22,7 @@ final class NexmarkRowDataQueryCatalog {
             "group-aggregate",
             "interval-join",
             "over-aggregate",
+            "over-aggregate-event-time",
             "select-distinct",
             "top-n",
             "limit");

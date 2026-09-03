@@ -48,13 +48,13 @@ deserializer, reader, and split checkpoint state remain in use. The SQL plan run
 by default and a benchmark result sink serializes and hashes the complete sorted `RowData`
 changelog. Checkpointing uses exactly-once mode and task restart is disabled so resource failures
 surface instead of contaminating a timing with retries. It currently runs the fully accelerable q0,
-q1, q2, q8, q11, q12, q22, group-aggregate, select-distinct, top-n, limit, and over-aggregate
-queries through both unmodified Flink and StreamFusion. The final five use the Nexmark bid stream
-to exercise keyed
-`COUNT(*)`/`SUM`/`MIN`/`MAX`, counted DISTINCT, partitioned non-window Top-10, and global
-`LIMIT/OFFSET`, and ordered unbounded-preceding OVER aggregation respectively; they are focused
-state-operator benchmarks rather than official
-numbered Nexmark queries.
+q1, q2, q8, q11, q12, q22, group-aggregate, select-distinct, top-n, limit, over-aggregate, and
+over-aggregate-event-time queries through both unmodified Flink and StreamFusion. The focused
+workloads use the Nexmark bid stream to exercise keyed `COUNT(*)`/`SUM`/`MIN`/`MAX`, counted
+DISTINCT, partitioned non-window Top-10, global `LIMIT/OFFSET`, and ordered unbounded-preceding
+OVER aggregation; they are not official numbered Nexmark queries. `over-aggregate-event-time`
+retains the bid rowtime attribute so watermarks drive native event timers, while `over-aggregate`
+casts the same value to a regular timestamp for the non-time path.
 
 Build the generator against Flink 2.3 and run all supported cases with:
 

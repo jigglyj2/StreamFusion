@@ -62,12 +62,21 @@ public final class StreamFusionOverAggregateTranslator {
                                     || config.get(CheckpointingOptions.FORCE_UNALIGNED));
         }
         byte[] plan = StreamFusionOverAggregatePlan.create(inputType, outputType, overSpec, stateTtl);
+        LogicalType orderType =
+                inputType.getTypeAt(overSpec.getGroups().get(0).getSort().getFieldIndices()[0]);
         Transformation<ArrowRowDataBatch> arrowInput = StreamFusionArrowBoundaries.toArrow(partitioned, inputType);
         OneInputTransformation<ArrowRowDataBatch, ArrowRowDataBatch> result = new OneInputTransformation<>(
                 arrowInput,
                 "streamfusion-over-aggregate",
                 new StreamFusionArrowOverAggregateOperator(
-                        inputType, outputType, partitionKeys, plan, true, keySelector),
+                        inputType,
+                        outputType,
+                        partitionKeys,
+                        plan,
+                        true,
+                        !isProctimeAttribute(orderType) && !isRowtimeAttribute(orderType),
+                        isRowtimeAttribute(orderType),
+                        keySelector),
                 ArrowRowDataBatchTypeInfo.INSTANCE,
                 partitioned.getParallelism(),
                 false);
@@ -91,9 +100,6 @@ public final class StreamFusionOverAggregateTranslator {
             return "ordering: native OVER currently requires one ascending order key";
         }
         LogicalType orderType = inputType.getTypeAt(orderKeys[0]);
-        if (isRowtimeAttribute(orderType) || isProctimeAttribute(orderType)) {
-            return "time frame: native row-time and processing-time OVER support is being implemented";
-        }
         if (!group.getLowerBound().isPreceding()
                 || !group.getLowerBound().isUnbounded()
                 || !group.getUpperBound().isCurrentRow()) {

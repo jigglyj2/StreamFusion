@@ -75,6 +75,31 @@ public final class ArrowOverAggregateCDataBridge {
         }
     }
 
+    public static ArrowRowDataBatch advanceEventTime(
+            long handle,
+            long watermark,
+            RowType outputType,
+            BufferAllocator allocator,
+            NativeMemoryManager memoryManager) {
+        try (ArrowArray outputArray = ArrowArray.allocateNew(allocator);
+                ArrowSchema outputSchema = ArrowSchema.allocateNew(allocator);
+                CDataDictionaryProvider dictionaries = new CDataDictionaryProvider()) {
+            try {
+                long rows = NativeOverAggregateBridge.advanceEventTime(
+                        handle, watermark, outputArray.memoryAddress(), outputSchema.memoryAddress());
+                if (rows < 0 || rows > Integer.MAX_VALUE) {
+                    throw new IllegalStateException("Native OVER aggregate returned invalid row count " + rows);
+                }
+                VectorSchemaRoot output =
+                        Data.importVectorSchemaRoot(allocator, outputArray, outputSchema, dictionaries);
+                output.setRowCount((int) rows);
+                return removeTimerEnvelope(output, outputType, allocator);
+            } finally {
+                memoryManager.finishArrowTransfer();
+            }
+        }
+    }
+
     private static ArrowRowDataBatch removeEnvelope(
             VectorSchemaRoot output, ArrowRowDataBatch input, RowType outputType, BufferAllocator allocator) {
         int ordinalIndex = output.getFieldVectors().size() - 1;
@@ -100,6 +125,30 @@ public final class ArrowOverAggregateCDataBridge {
         return ArrowRowDataBatch.wrap(visible, outputType, allocator)
                 .selectEnvelopeFrom(input, ordinals)
                 .withRowKinds(rowKinds);
+    }
+
+    private static ArrowRowDataBatch removeTimerEnvelope(
+            VectorSchemaRoot output, RowType outputType, BufferAllocator allocator) {
+        int ordinalIndex = output.getFieldVectors().size() - 1;
+        int kindIndex = ordinalIndex - 1;
+        FieldVector ordinalField = ordinalIndex < 0 ? null : output.getVector(ordinalIndex);
+        FieldVector kindField = kindIndex < 0 ? null : output.getVector(kindIndex);
+        if (!(ordinalField instanceof IntVector) || !(kindField instanceof TinyIntVector)) {
+            output.close();
+            throw new IllegalStateException("Native OVER aggregate did not return timer envelope metadata");
+        }
+        RowKind[] rowKinds = new RowKind[output.getRowCount()];
+        TinyIntVector kindVector = (TinyIntVector) kindField;
+        for (int row = 0; row < output.getRowCount(); row++) {
+            rowKinds[row] = RowKind.fromByteValue(kindVector.get(row));
+        }
+        VectorSchemaRoot withoutOrdinal = output.removeVector(ordinalIndex);
+        ordinalField.close();
+        VectorSchemaRoot visible = withoutOrdinal.removeVector(kindIndex);
+        kindField.close();
+        return ArrowRowDataBatch.wrap(visible, outputType, allocator)
+                .withRowKinds(rowKinds)
+                .withoutTimestamps();
     }
 
     private static VarBinaryVector preencodedKeys(List<byte[]> keys, int rows, BufferAllocator allocator) {
