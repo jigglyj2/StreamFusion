@@ -135,6 +135,9 @@ public final class NexmarkRowDataJob {
                 columns = "auction BIGINT, bidder BIGINT, price BIGINT, `dateTime` TIMESTAMP(3), "
                         + "extra STRING, row_num BIGINT";
                 break;
+            case "limit":
+                columns = "auction BIGINT, bidder BIGINT, price BIGINT, `dateTime` TIMESTAMP(3), extra STRING";
+                break;
             case "q11":
             case "q12":
                 columns = "bidder BIGINT, bid_count BIGINT, starttime TIMESTAMP(3), endtime TIMESTAMP(3)";

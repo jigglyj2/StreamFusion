@@ -60,6 +60,10 @@ public final class NativeTopNBridge {
         return nativeStatistics(handle);
     }
 
+    public static boolean appendLimitSaturated(long handle) {
+        return isAppendLimitSaturated(handle);
+    }
+
     public static long executedBatchCount() {
         return EXECUTED_BATCHES.get();
     }
@@ -117,6 +121,8 @@ public final class NativeTopNBridge {
             long handle, long nowMillis, long inputArray, long inputSchema, long outputArray, long outputSchema);
 
     private static native long[] nativeStatistics(long handle);
+
+    private static native boolean isAppendLimitSaturated(long handle);
 
     private static native byte[] snapshotKeyGroup(long handle, int keyGroup);
 

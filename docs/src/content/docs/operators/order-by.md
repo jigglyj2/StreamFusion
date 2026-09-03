@@ -5,22 +5,30 @@ sidebar:
   order: 12
 ---
 
-**Current status:** Not accelerated; executed by Flink.
-
-**Future acceleration target:** For bounded inputs.
+**Current status:** Partially accelerated. Streaming `ORDER BY ... LIMIT/OFFSET` plans that Flink
+lowers to `StreamExecSortLimit` use native Top-N state. A complete sort with no finite upper bound
+remains on Flink.
 
 ## SQL example
 
 ```sql
-SELECT auction, price\nFROM bid\nORDER BY price DESC;
+SELECT auction, price
+FROM bid
+ORDER BY price DESC
+LIMIT 100 OFFSET 10;
 ```
 
 ## Acceleration and fallback
 
-Accelerate global or partitioned sorting only when the input is bounded and sort keys, null ordering, collation, and spill behavior are compatible. Unbounded global ordering and unsupported types fall back.
+Finite streaming sort-limit accepts the same Flink-valid order-key types, null placement,
+ascending/descending directions, changelog strategies, state backends, and recovery contract as
+[Top-N](../top-n/). The planner retains a full, unbounded global `ORDER BY` on Flink because it has
+no finite streaming result and cannot be represented by the bounded candidate state.
 
 ## Implementation
 
-Use DataFusion's parallel sort and spill-capable execution. Flink retains distribution and boundedness decisions.
+The implemented finite path reuses the native Top-N protobuf node and Rust comparator rather than
+creating a second sort-limit runtime. A future bounded full-sort path can use DataFusion's parallel,
+spill-capable sort while Flink retains distribution and boundedness decisions.
 
 See the [Flink 2.3 ORDER BY documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/orderby/).

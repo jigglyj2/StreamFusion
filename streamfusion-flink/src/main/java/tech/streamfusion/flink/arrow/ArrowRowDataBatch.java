@@ -201,6 +201,10 @@ public final class ArrowRowDataBatch implements AutoCloseable {
         return rowKinds == null && hasTimestamps == null;
     }
 
+    public boolean hasOnlyInserts() {
+        return rowKinds == null;
+    }
+
     /** Clears StreamRecord timestamps for Flink operators whose outputs never carry them. */
     public ArrowRowDataBatch withoutTimestamps() {
         this.hasTimestamps = null;

@@ -12,6 +12,7 @@ import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.table.runtime.keyselector.RowDataKeySelector;
 import org.apache.flink.table.types.logical.RowType;
+import org.apache.flink.types.RowKind;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.ArrowTopNCDataBridge;
 import tech.streamfusion.flink.metrics.FlinkMetricParity;
@@ -35,6 +36,7 @@ final class StreamFusionArrowTopNOperator extends AbstractStreamFusionArrowKeyed
     private transient Counter invalidRetractions;
     private transient Counter expiredStateGroups;
     private transient long[] observedStatistics;
+    private transient boolean appendLimitSaturated;
 
     StreamFusionArrowTopNOperator(
             RowType inputType,
@@ -74,6 +76,13 @@ final class StreamFusionArrowTopNOperator extends AbstractStreamFusionArrowKeyed
     @Override
     public void processElement(StreamRecord<ArrowRowDataBatch> element) throws Exception {
         ArrowRowDataBatch input = element.getValue();
+        if (appendLimitSaturated) {
+            requireInsertOnly(input);
+            FlinkMetricParity.replacePhysicalRecords(
+                    getMetricGroup().getIOMetricGroup().getNumRecordsInCounter(), 1, input.size());
+            recordProcessedWithoutStateCalls(input);
+            return;
+        }
         long now = getProcessingTimeService().getCurrentProcessingTime();
         try {
             List<byte[]> keys = preencodeKeys ? preencodeKeys(input, partitionSelector, "Top-N") : null;
@@ -91,9 +100,22 @@ final class StreamFusionArrowTopNOperator extends AbstractStreamFusionArrowKeyed
                 recordProcessedWithoutStateCalls(input, result);
             }
             updateNativeStatistics();
+            appendLimitSaturated = NativeTopNBridge.appendLimitSaturated(nativeHandle());
         } catch (Throwable failure) {
             recordProcessingFailure();
             throw failure;
+        }
+    }
+
+    private static void requireInsertOnly(ArrowRowDataBatch input) {
+        if (input.hasOnlyInserts()) {
+            return;
+        }
+        for (int row = 0; row < input.size(); row++) {
+            if (input.rowKind(row) != RowKind.INSERT) {
+                throw new IllegalStateException(
+                        "Append-only LIMIT received " + input.rowKind(row) + " after reaching its limit");
+            }
         }
     }
 

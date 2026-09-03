@@ -147,8 +147,9 @@ public final class StreamFusionTopNTranslator {
                 return "rank range: variable rank end must be BIGINT, INTEGER, or SMALLINT";
             }
         }
-        if (sortSpec.getFieldSize() == 0) {
-            return "sort: Top-N requires at least one ordering field";
+        if (sortSpec.getFieldSize() == 0
+                && (partitionKeys.length != 0 || outputRankNumber || variableRankEndIndex != null || rankEnd == null)) {
+            return "sort: unordered rank is supported only for Flink's global constant LIMIT/OFFSET shape";
         }
         int expectedFields = inputType.getFieldCount() + (outputRankNumber ? 1 : 0);
         if (outputType.getFieldCount() != expectedFields) {

@@ -60,7 +60,9 @@ message Operator {
   }
 }
 
-// Timer-free streaming Top-N/ROW_NUMBER state. The native operator consumes and emits Arrow,
+// Timer-free streaming Top-N/ROW_NUMBER state. An empty ordering encodes only Flink's global
+// constant LIMIT/OFFSET specialization; ordinary Top-N always has at least one sort key.
+// The native operator consumes and emits Arrow,
 // applies Flink ordering/changelog semantics, and owns key grouping, backend I/O, snapshots,
 // and the canonical state encoding in one persistent execution handle.
 message TopN {

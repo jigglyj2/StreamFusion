@@ -34,15 +34,37 @@ import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 class TopNOpaquePayloadTypeParityTest extends SqlParityTestSupport {
     @Test
     void topNStatePreservesEveryFlinkLogicalPayloadTypeByteForByte() throws Exception {
-        byte[] flink = execute(false);
-        byte[] streamFusion = execute(true);
+        byte[] flink = executeTopN(false);
+        byte[] streamFusion = executeTopN(true);
 
         assertThat(streamFusion).isEqualTo(flink);
         assertThat(StreamFusionPlannerFactory.nativeTopNBatchCount()).isGreaterThan(0);
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 
-    private static byte[] execute(boolean streamFusion) throws Exception {
+    @Test
+    void limitOffsetPreservesEveryFlinkLogicalPayloadTypeAndRetractionByteForByte() throws Exception {
+        byte[] flink = executeLimit(false);
+        byte[] streamFusion = executeLimit(true);
+
+        assertThat(streamFusion).isEqualTo(flink);
+        assertThat(StreamFusionPlannerFactory.nativeTopNBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
+    private static byte[] executeTopN(boolean streamFusion) throws Exception {
+        StreamTableEnvironment tables = environment(streamFusion);
+        return collect(tables.executeSql("SELECT payload, row_num FROM ("
+                + "SELECT *, ROW_NUMBER() OVER (PARTITION BY payload ORDER BY order_value DESC) AS row_num "
+                + "FROM topn_all_type_payload) WHERE row_num <= 2"));
+    }
+
+    private static byte[] executeLimit(boolean streamFusion) throws Exception {
+        StreamTableEnvironment tables = environment(streamFusion);
+        return collect(tables.executeSql("SELECT payload FROM topn_all_type_payload LIMIT 2 OFFSET 1"));
+    }
+
+    private static StreamTableEnvironment environment(boolean streamFusion) {
         if (streamFusion) {
             System.setProperty(
                     StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY, StreamFusionPlannerFactory.class.getName());
@@ -74,9 +96,7 @@ class TopNOpaquePayloadTypeParityTest extends SqlParityTestSupport {
                                 .column("order_value", DataTypes.BIGINT().notNull())
                                 .column("payload", payloadDataType())
                                 .build()));
-        return collect(tables.executeSql("SELECT payload, row_num FROM ("
-                + "SELECT *, ROW_NUMBER() OVER (PARTITION BY payload ORDER BY order_value DESC) AS row_num "
-                + "FROM topn_all_type_payload) WHERE row_num <= 2"));
+        return tables;
     }
 
     private static Row changed(RowKind kind, long orderValue) {

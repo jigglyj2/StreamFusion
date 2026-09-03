@@ -163,6 +163,10 @@ public abstract class AbstractStreamFusionArrowKeyedStateOperator extends Abstra
         statefulMetrics.processedWithoutStateCalls(input, output);
     }
 
+    protected final void recordProcessedWithoutStateCalls(ArrowRowDataBatch input) {
+        statefulMetrics.processedWithoutStateCalls(input);
+    }
+
     protected final void recordNativeWindowStatistics(
             long stateReads, long stateWrites, long registered, long deleted, long fired) {
         statefulMetrics.nativeWindowStatistics(stateReads, stateWrites, registered, deleted, fired);

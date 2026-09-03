@@ -9,6 +9,9 @@ sidebar:
 global Top-N, constant ranges (including `OFFSET`), variable per-partition upper bounds, rank-number
 output, and Flink's append-fast, update-fast, and retract strategies.
 
+Flink's unordered global `StreamExecLimit` specialization uses the same physical node and native
+runtime. See [LIMIT](../limit/) for its counter-state and saturation behavior.
+
 ## SQL example
 
 ```sql

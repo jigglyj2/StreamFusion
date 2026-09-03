@@ -77,9 +77,9 @@ mvn -pl streamfusion-nexmark-benchmarks -am \
 engine selector (`flink`, `streamfusion`, or `both`) for standalone measurements. It reports
 end-to-end elapsed time, input-event throughput, native calc batches, native group-aggregate
 batches, native window-aggregate batches, native Window Join batches, and a row count plus SHA-256
-for the full result changelog. The `group-aggregate`, `select-distinct`, and `top-n` cases exercise
-both native state backends over the bounded bid stream; they are focused operator workloads rather
-than numbered Nexmark queries.
+for the full result changelog. The `group-aggregate`, `select-distinct`, `top-n`, and `limit` cases
+exercise both native state backends over the bounded bid stream; they are focused operator workloads
+rather than numbered Nexmark queries.
 Performance reports
 must come from separate, unprofiled JVM forks built with release-mode native code; profiler runs
 are diagnostic artifacts rather than benchmark measurements.
@@ -113,6 +113,25 @@ covered by managed-memory admission tests. Raising the adaptive Arrow target fro
 halved native batch calls. A 32,768 target was rejected after fail-fast validation showed its
 24.9MB state/scratch peak exceeded the memory left after the RocksDB cache reservation. These are
 local diagnostic results rather than portable performance claims.
+
+On the September 2, 2026 local release/native-CPU `limit` run over five million generated events at
+parallelism one, three alternating separate-JVM forks produced in-memory medians of 242,268
+events/s for Flink and 252,779 events/s for StreamFusion, a 4.3% throughput gain. Elapsed-time
+ranges were 20.51–20.71s and 19.74–20.11s. RocksDB medians were 238,805 events/s for Flink and
+245,162 events/s for StreamFusion, a 2.7% gain, with elapsed ranges of 20.84–21.39s and
+19.71–20.55s. Every StreamFusion fork executed the native LIMIT batch once; the remaining roughly
+620 native batches belong to the projected Calc before Flink's required singleton exchange.
+Byte-for-byte same-run parity passed on memory and RocksDB.
+
+Mixed JVM/native async-profiler runs used Java non-safepoint samples, DWARF native unwinding, JFR,
+and separate Java/native allocation events. Profiling first found the generic Top-N loop consuming
+14.2% of CPU and 7.6% of native allocation samples after the limit was already full. The final path
+uses count-only state, avoids per-row selected-range copies, and bypasses Arrow C Data after
+saturation. Current profiles attribute at most 0.1% of CPU and 0.2% of allocation samples to LIMIT
+on memory. RocksDB attributes about 0.1% CPU, 0.2% Java allocation samples, and 0.4% native
+allocation samples to LIMIT, while RocksDB itself remains below 0.7%. RowData-to-Arrow conversion,
+exchange, source materialization, and GC are now the visible costs. These are local diagnostic
+results, not portable performance claims; profiler timings were excluded from the benchmark.
 
 On the September 1, 2026 local release/native-CPU Q11 run over five million deterministic events,
 StreamFusion's in-memory session aggregate processed 648,986 events/s versus Flink's 627,817

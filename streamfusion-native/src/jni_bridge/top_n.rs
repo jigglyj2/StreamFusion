@@ -8,7 +8,7 @@ use jni::errors::ThrowRuntimeExAndDefault;
 use jni::jni_str;
 use jni::objects::{JByteArray, JClass, JLongArray, JObject, JString};
 use jni::strings::JNIString;
-use jni::sys::{jbyteArray, jint, jlong, jlongArray};
+use jni::sys::{jboolean, jbyteArray, jint, jlong, jlongArray};
 use jni::EnvUnowned;
 
 use super::common::{export_record_batch, import_record_batch};
@@ -147,6 +147,23 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeTopNBridge_nati
             let output: JLongArray<'_> = env.new_long_array(values.len())?;
             output.set_region(env, 0, &values)?;
             Ok(output.into_raw())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeTopNBridge_isAppendLimitSaturated<
+    'caller,
+>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    handle: jlong,
+) -> jboolean {
+    unowned_env
+        .with_env(|env| -> jni::errors::Result<_> {
+            unsafe { processor(handle) }
+                .map(|processor| jboolean::from(processor.is_append_limit_saturated()))
+                .map_err(|error| throw(env, error))
         })
         .resolve::<ThrowRuntimeExAndDefault>()
 }

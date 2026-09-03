@@ -58,6 +58,7 @@ pub(crate) struct TopNProcessor {
     comparator_calls: u64,
     invalid_retractions: u64,
     invalid_top_sizes: u64,
+    saturated_append_limit: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -166,6 +167,7 @@ impl TopNProcessor {
             comparator_calls: 0,
             invalid_retractions: 0,
             invalid_top_sizes: 0,
+            saturated_append_limit: false,
         })
     }
 
@@ -175,6 +177,24 @@ impl TopNProcessor {
         now_millis: i64,
     ) -> Result<RecordBatch> {
         self.prepare_schema(batch.schema())?;
+        if self.saturated_append_limit {
+            let kinds = batch
+                .column(self.input_kind_index.expect("input schema prepared"))
+                .as_any()
+                .downcast_ref::<Int8Array>()
+                .ok_or_else(|| {
+                    DataFusionError::Execution(
+                        "top-n RowKind metadata is not Arrow Int8".to_string(),
+                    )
+                })?;
+            for row in 0..batch.num_rows() {
+                require_insert(kinds.value(row), "append-fast")?;
+            }
+            return self.finish_output(
+                output_batch(&self.plan, &self.output_schema, &[], Vec::new())?,
+                0,
+            );
+        }
         // The input buffers are owned and accounted by the upstream Arrow operator. Top-N can
         // simultaneously allocate a group-key copy, gathered canonical state, Arrow IPC bytes,
         // and an output gather of the same payload. Admit that peak before creating any of them;
@@ -314,9 +334,41 @@ impl TopNProcessor {
                     .collect(),
             })
             .collect::<Vec<_>>();
+        if is_append_limit(&self.plan) {
+            for group in &mut groups {
+                group.candidates.clear();
+                group.rank_end = Some(0);
+            }
+        }
         let mut output = Vec::new();
+        let append_limit_end = is_append_limit(&self.plan)
+            .then(|| usize::try_from(self.plan.rank_end.unwrap()).unwrap_or(usize::MAX));
         for row in 0..batch.num_rows() {
             let group = &mut groups[row_groups[row]];
+            if let Some(limit_end) = append_limit_end {
+                require_insert(kinds.value(row), "append-fast")?;
+                // Flink's append-only Limit stores only the number already observed. Payload
+                // rows can never re-enter the output, so retaining them would turn a constant
+                // counter into O(limit) state and make OFFSET-only queries unbounded.
+                group.rank_end = Some(0);
+                if group.next_sequence < limit_end as u64 {
+                    let candidate = CandidateRef {
+                        source: 0,
+                        row,
+                        sequence: group.next_sequence,
+                    };
+                    group.next_sequence = next_sequence(group.next_sequence)?;
+                    let rank = group.next_sequence;
+                    if rank >= self.plan.rank_start {
+                        output.push(OutputEvent {
+                            candidate,
+                            rank: rank as i64,
+                            kind: INSERT,
+                        });
+                    }
+                }
+                continue;
+            }
             let rank_end = rank_end(
                 &self.plan,
                 visible_source(&sources),
@@ -414,6 +466,11 @@ impl TopNProcessor {
             emit_difference(&self.plan, &sources, &before, after, &mut output)?;
         }
 
+        let saturates_append_limit = is_non_expiring_append_limit(&self.plan)
+            && groups
+                .first()
+                .is_some_and(|group| group.next_sequence >= self.plan.rank_end.unwrap());
+
         let converter = self.row_converter.as_ref().expect("input schema prepared");
         let encoded_sources = sources
             .iter()
@@ -449,6 +506,7 @@ impl TopNProcessor {
             self.state.write_batch(mutations)?;
             self.state_write_batches = self.state_write_batches.saturating_add(1);
         }
+        self.saturated_append_limit = saturates_append_limit;
         output_batch(&self.plan, &self.output_schema, &sources, output)
     }
 
@@ -465,11 +523,16 @@ impl TopNProcessor {
         ]
     }
 
+    pub(crate) fn is_append_limit_saturated(&self) -> bool {
+        self.saturated_append_limit
+    }
+
     pub(crate) fn snapshot_key_group(&self, key_group: u32) -> Result<Vec<u8>> {
         self.state.snapshot_key_group(key_group)
     }
 
     pub(crate) fn restore_key_group(&mut self, key_group: u32, bytes: &[u8]) -> Result<()> {
+        self.saturated_append_limit = false;
         self.state.restore_key_group(key_group, bytes)
     }
 
@@ -590,6 +653,17 @@ impl TopNProcessor {
     }
 }
 
+fn is_non_expiring_append_limit(plan: &proto::TopN) -> bool {
+    is_append_limit(plan) && plan.state_ttl_millis == 0
+}
+
+fn is_append_limit(plan: &proto::TopN) -> bool {
+    plan.sort_key_indices.is_empty()
+        && plan.partition_key_indices.is_empty()
+        && plan.rank_end.is_some()
+        && plan.strategy == proto::TopNStrategy::AppendFast as i32
+}
+
 fn visible_source(sources: &[Arc<RecordBatch>]) -> &RecordBatch {
     sources[0].as_ref()
 }
@@ -665,6 +739,13 @@ fn insert_sorted(
     candidate: CandidateRef,
     comparator_calls: &mut u64,
 ) -> Result<()> {
+    // Flink's LIMIT specialization has no ordering: arrival sequence is its stable order.
+    // Avoid a logarithmic binary search whose comparisons can only ever fall through to that
+    // same sequence ordering.
+    if plan.sort_key_indices.is_empty() {
+        candidates.push(candidate);
+        return Ok(());
+    }
     // Flink's generated floating comparator uses `>`/`<`, so NaN compares equal to every
     // value. Its TopNBuffer (a TreeMap of sort-key buckets) therefore preserves the insertion
     // order of that comparator-equivalent bucket. Keep the same stable bucket behavior without
@@ -956,7 +1037,6 @@ fn validate_plan(plan: &proto::TopN, max_parallelism: u32) -> Result<()> {
                 | Ok(proto::TopNStrategy::UpdateFast)
                 | Ok(proto::TopNStrategy::Retract)
         )
-        || plan.sort_key_indices.is_empty()
         || plan.sort_key_indices.len() != plan.sort_ascending.len()
         || plan.sort_key_indices.len() != plan.sort_nulls_last.len()
     {
@@ -971,6 +1051,15 @@ fn validate_plan(plan: &proto::TopN, max_parallelism: u32) -> Result<()> {
                 "top-n rank end is outside its valid one-based range".to_string(),
             ));
         }
+    }
+    if plan.sort_key_indices.is_empty()
+        && (!plan.partition_key_indices.is_empty()
+            || plan.output_rank_number
+            || plan.variable_rank_end_index.is_some())
+    {
+        return Err(DataFusionError::Plan(
+            "unordered top-n is valid only for a global constant LIMIT/OFFSET".to_string(),
+        ));
     }
     Ok(())
 }
@@ -1141,6 +1230,13 @@ mod tests {
 
     fn batch(keys: Vec<i32>, values: Vec<&str>) -> RecordBatch {
         let rows = keys.len();
+        batch_with_kinds(keys, values, vec![INSERT; rows])
+    }
+
+    fn batch_with_kinds(keys: Vec<i32>, values: Vec<&str>, kinds: Vec<i8>) -> RecordBatch {
+        let rows = keys.len();
+        assert_eq!(values.len(), rows);
+        assert_eq!(kinds.len(), rows);
         RecordBatch::try_new(
             Arc::new(Schema::new(vec![
                 Field::new("key", DataType::Int32, false),
@@ -1150,10 +1246,143 @@ mod tests {
             vec![
                 Arc::new(Int32Array::from(keys)),
                 Arc::new(StringArray::from(values)),
-                Arc::new(Int8Array::from(vec![INSERT; rows])),
+                Arc::new(Int8Array::from(kinds)),
             ],
         )
         .unwrap()
+    }
+
+    fn limit_plan(strategy: proto::TopNStrategy) -> Vec<u8> {
+        let schema = proto::Schema {
+            fields: vec![
+                proto::Field {
+                    name: "key".to_string(),
+                    r#type: Some(proto::LogicalType {
+                        nullable: false,
+                        r#type: Some(proto::logical_type::Type::Integer(
+                            proto::EmptyType::default(),
+                        )),
+                    }),
+                },
+                proto::Field {
+                    name: "value".to_string(),
+                    r#type: Some(proto::LogicalType {
+                        nullable: true,
+                        r#type: Some(proto::logical_type::Type::Varchar(
+                            proto::EmptyType::default(),
+                        )),
+                    }),
+                },
+            ],
+        };
+        proto::NativePlan {
+            protocol_version: 1,
+            root: Some(proto::Operator {
+                operator: Some(proto::operator::Operator::TopN(Box::new(proto::TopN {
+                    input: Some(Box::new(proto::Operator {
+                        operator: Some(proto::operator::Operator::Input(proto::Input::default())),
+                    })),
+                    partition_key_indices: vec![],
+                    sort_key_indices: vec![],
+                    primary_key_indices: vec![],
+                    rank_start: 2,
+                    rank_end: Some(3),
+                    variable_rank_end_index: None,
+                    output_rank_number: false,
+                    generate_update_before: true,
+                    strategy: strategy as i32,
+                    input_schema: Some(schema.clone()),
+                    state_ttl_millis: 0,
+                    sort_ascending: vec![],
+                    sort_nulls_last: vec![],
+                    output_schema: Some(schema),
+                }))),
+            }),
+        }
+        .encode_to_vec()
+    }
+
+    fn output_values(batch: &RecordBatch) -> Vec<&str> {
+        batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
+            .iter()
+            .map(|value| value.unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn unordered_global_limit_preserves_input_order_and_offset_across_batches() {
+        let broker = Arc::new(TestBroker::new(64 << 20));
+        let mut processor = TopNProcessor::new(
+            &limit_plan(proto::TopNStrategy::AppendFast),
+            128,
+            0,
+            127,
+            HostMemoryReservation::new(broker.clone(), "native limit"),
+        )
+        .unwrap();
+
+        let first = processor
+            .process_arrow(batch(vec![1, 2], vec!["skip", "first"]), 1)
+            .unwrap();
+        assert_eq!(output_values(&first), vec!["first"]);
+        let second = processor
+            .process_arrow(batch(vec![3, 4], vec!["second", "ignored"]), 2)
+            .unwrap();
+        assert_eq!(output_values(&second), vec!["second"]);
+        let state_io_after_saturation = processor.statistics()[..4].to_vec();
+        let ignored = processor
+            .process_arrow(batch(vec![5, 6], vec!["ignored", "ignored"]), 3)
+            .unwrap();
+        assert_eq!(ignored.num_rows(), 0);
+        assert_eq!(processor.statistics()[..4], state_io_after_saturation);
+        assert_eq!(processor.statistics()[5], 0);
+
+        let key_group = assign_key_group(&[], 128);
+        let snapshot = processor.snapshot_key_group(key_group).unwrap();
+        let mut restored = TopNProcessor::new(
+            &limit_plan(proto::TopNStrategy::AppendFast),
+            128,
+            0,
+            127,
+            HostMemoryReservation::new(broker.clone(), "restored native limit"),
+        )
+        .unwrap();
+        restored.restore_key_group(key_group, &snapshot).unwrap();
+        assert!(!restored.is_append_limit_saturated());
+        let after_restore = restored
+            .process_arrow(batch(vec![7], vec!["ignored"]), 4)
+            .unwrap();
+        assert_eq!(after_restore.num_rows(), 0);
+        assert!(restored.is_append_limit_saturated());
+        assert_eq!(restored.statistics()[0], 1);
+        assert_eq!(restored.statistics()[1], 1);
+    }
+
+    #[test]
+    fn unordered_global_limit_accepts_retractions() {
+        let broker = Arc::new(TestBroker::new(64 << 20));
+        let mut processor = TopNProcessor::new(
+            &limit_plan(proto::TopNStrategy::Retract),
+            128,
+            0,
+            127,
+            HostMemoryReservation::new(broker, "retractable native limit"),
+        )
+        .unwrap();
+        let initial = processor
+            .process_arrow(batch(vec![1, 2, 3], vec!["skip", "first", "second"]), 1)
+            .unwrap();
+        assert_eq!(output_values(&initial), vec!["first", "second"]);
+
+        let retracted = processor
+            .process_arrow(batch_with_kinds(vec![2], vec!["first"], vec![DELETE]), 2)
+            .unwrap();
+        assert_eq!(retracted.num_rows(), 3);
+        assert_eq!(processor.statistics()[6], 0);
     }
 
     #[test]

@@ -56,6 +56,7 @@ import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatchSerializer;
 import tech.streamfusion.flink.deduplicate.ArrowBatchKeySelector;
 import tech.streamfusion.flink.state.StreamFusionStateBackend;
+import tech.streamfusion.nativebridge.NativeTopNBridge;
 import tech.streamfusion.proto.plan.v1.EmptyType;
 import tech.streamfusion.proto.plan.v1.Input;
 import tech.streamfusion.proto.plan.v1.NativePlan;
@@ -137,6 +138,63 @@ class StreamFusionArrowTopNOperatorTest {
                             harness(1, 0, snapshot, rocksDb)) {
                         process(after, inputs, row(7, 30));
                         assertThat(takeKinds(after)).containsExactly(RowKind.UPDATE_AFTER, RowKind.UPDATE_AFTER);
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    void saturatedGlobalLimitSkipsNativeTransferAndRevalidatesAfterRestore() throws Exception {
+        try (RootAllocator inputs = new RootAllocator(64L << 20)) {
+            for (boolean rocksDb : new boolean[] {false, true}) {
+                for (boolean unaligned : new boolean[] {false, true}) {
+                    NativeTopNBridge.resetMetrics();
+                    OperatorSubtaskState snapshot;
+                    try (KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> before =
+                            limitHarness(null, rocksDb)) {
+                        processBatch(before, inputs, List.of(row(1, 10), row(2, 20), row(3, 30), row(4, 40)));
+                        assertThat(takeKinds(before)).containsExactly(RowKind.INSERT, RowKind.INSERT);
+                        assertThat(NativeTopNBridge.executedBatchCount()).isEqualTo(1);
+
+                        process(before, inputs, row(5, 50));
+                        assertThat(takeKinds(before)).isEmpty();
+                        assertThat(NativeTopNBridge.executedBatchCount()).isEqualTo(1);
+                        snapshot = snapshot(before, unaligned ? 21 : 20, unaligned);
+                    }
+                    try (KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> after =
+                            limitHarness(snapshot, rocksDb)) {
+                        process(after, inputs, row(6, 60));
+                        assertThat(takeKinds(after)).isEmpty();
+                        assertThat(NativeTopNBridge.executedBatchCount()).isEqualTo(2);
+                        process(after, inputs, row(7, 70));
+                        assertThat(takeKinds(after)).isEmpty();
+                        assertThat(NativeTopNBridge.executedBatchCount()).isEqualTo(2);
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    void globalLimitCanonicalSavepointsRestoreAcrossEveryBackendPair() throws Exception {
+        try (RootAllocator inputs = new RootAllocator(64L << 20)) {
+            for (boolean sourceRocks : new boolean[] {false, true}) {
+                for (boolean targetRocks : new boolean[] {false, true}) {
+                    OperatorSubtaskState savepoint;
+                    try (KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> source =
+                            limitHarness(null, sourceRocks)) {
+                        processBatch(source, inputs, List.of(row(1, 10), row(2, 20), row(3, 30), row(4, 40)));
+                        takeKinds(source);
+                        savepoint = source.snapshotWithLocalState(
+                                        22, 22, SavepointType.savepoint(SavepointFormatType.CANONICAL))
+                                .getJobManagerOwnedState();
+                        assertThat(savepoint.getRawKeyedState()).hasSize(1);
+                    }
+                    try (KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> target =
+                            limitHarness(savepoint, targetRocks)) {
+                        process(target, inputs, row(5, 50));
+                        assertThat(takeKinds(target)).isEmpty();
                     }
                 }
             }
@@ -277,6 +335,29 @@ class StreamFusionArrowTopNOperatorTest {
         return harness;
     }
 
+    private static KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> limitHarness(
+            OperatorSubtaskState state, boolean rocksDb) throws Exception {
+        RowDataKeySelector partition = partitionSelector();
+        StreamFusionArrowTopNOperator operator = new StreamFusionArrowTopNOperator(
+                INPUT_TYPE, INPUT_TYPE, new int[0], limitPlan(), partition, StreamFusionTopNStrategy.APPEND_FAST, 0L);
+        KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> harness =
+                new KeyedOneInputStreamOperatorTestHarness<>(
+                        operator,
+                        new ArrowBatchKeySelector(partition),
+                        partition.getProducedType(),
+                        MAX_PARALLELISM,
+                        1,
+                        0);
+        harness.setStateBackend(new StreamFusionStateBackend(
+                rocksDb ? new EmbeddedRocksDBStateBackend(true) : new HashMapStateBackend()));
+        harness.setup(ArrowRowDataBatchSerializer.INSTANCE);
+        if (state != null) {
+            harness.initializeState(state);
+        }
+        harness.open();
+        return harness;
+    }
+
     private static void process(
             KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> harness,
             RootAllocator allocator,
@@ -284,6 +365,16 @@ class StreamFusionArrowTopNOperatorTest {
             throws Exception {
         try (ArrowRowDataBatch batch = ArrowRowDataBatch.transpose(List.of(row), INPUT_TYPE, allocator)
                 .withEnvelope(new RowKind[] {row.getRowKind()}, new boolean[] {false}, new long[] {0})) {
+            harness.processElement(new StreamRecord<>(batch));
+        }
+    }
+
+    private static void processBatch(
+            KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> harness,
+            RootAllocator allocator,
+            List<GenericRowData> rows)
+            throws Exception {
+        try (ArrowRowDataBatch batch = ArrowRowDataBatch.transpose(rows, INPUT_TYPE, allocator)) {
             harness.processElement(new StreamRecord<>(batch));
         }
     }
@@ -402,6 +493,33 @@ class StreamFusionArrowTopNOperatorTest {
         return NativePlan.newBuilder()
                 .setProtocolVersion(1)
                 .setRoot(Operator.newBuilder().setTopN(topN))
+                .build()
+                .toByteArray();
+    }
+
+    private static byte[] limitPlan() {
+        tech.streamfusion.proto.plan.v1.LogicalType bigint = tech.streamfusion.proto.plan.v1.LogicalType.newBuilder()
+                .setBigint(EmptyType.getDefaultInstance())
+                .build();
+        Schema schema = Schema.newBuilder()
+                .addFields(tech.streamfusion.proto.plan.v1.Field.newBuilder()
+                        .setName("partition_key")
+                        .setType(bigint))
+                .addFields(tech.streamfusion.proto.plan.v1.Field.newBuilder()
+                        .setName("score")
+                        .setType(bigint))
+                .build();
+        TopN limit = TopN.newBuilder()
+                .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
+                .setRankStart(2)
+                .setRankEnd(3)
+                .setStrategy(TopNStrategy.TOP_N_STRATEGY_APPEND_FAST)
+                .setInputSchema(schema)
+                .setOutputSchema(schema)
+                .build();
+        return NativePlan.newBuilder()
+                .setProtocolVersion(1)
+                .setRoot(Operator.newBuilder().setTopN(limit))
                 .build()
                 .toByteArray();
     }
