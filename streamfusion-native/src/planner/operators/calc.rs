@@ -778,6 +778,9 @@ pub(super) fn create_expression(
                 }
                 let left = flink_decimal_operand(left, schema)?;
                 let right = flink_decimal_operand(right, schema)?;
+                if operator == Operator::Divide {
+                    return expressions::decimal::divide(left, right, target_type, schema);
+                }
                 let decimal = Arc::new(BinaryExpr::new(left, operator, right));
                 if decimal.data_type(schema)? == target_type {
                     return Ok(decimal);

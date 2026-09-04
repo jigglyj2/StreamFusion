@@ -69,8 +69,9 @@ metric subgroup.
 
 If a query selects, filters on, or otherwise observes the synthetic processing-time field, the plan
 still falls back explicitly because removing that value would change semantics. Following frames,
-non-constant frame boundaries, descending or multiple order keys, aggregate functions beyond the
-set above, mini-batch mode, async state, changelog-state wrapping, and state TTL also fall back.
+non-constant frame boundaries, descending or multiple order keys, `AVG` (whose sum/count state
+cannot yet be reconstructed from the compact OVER prefix), aggregate functions beyond the set
+above, mini-batch mode, async state, changelog-state wrapping, and state TTL also fall back.
 These are not documented as accelerated until their end-to-end parity and recovery suites pass.
 
 ## Implementation

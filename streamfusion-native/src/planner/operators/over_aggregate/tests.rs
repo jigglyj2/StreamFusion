@@ -498,6 +498,7 @@ fn call(function: proto::AggregateFunction, input_index: Option<u32>) -> proto::
         retractable: true,
         filter_index: None,
         distinct: false,
+        accumulator_type: None,
     }
 }
 

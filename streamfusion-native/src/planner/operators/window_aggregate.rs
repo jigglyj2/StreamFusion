@@ -1676,6 +1676,7 @@ mod tests {
                             retractable: true,
                             filter_index: None,
                             distinct: false,
+                            accumulator_type: None,
                         }],
                         input_changelog,
                         time_attribute_index: 1,

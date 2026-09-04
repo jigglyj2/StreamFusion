@@ -278,6 +278,9 @@ message AggregateCall {
   // predicate is false, matching Flink's generated aggregate handler.
   optional uint32 filter_index = 6;
   bool distinct = 7;
+  // Physical buffer type selected by Flink when it differs from the visible result.
+  // AVG uses BIGINT, DOUBLE, or DECIMAL(38, input_scale) for its running sum.
+  optional LogicalType accumulator_type = 8;
 }
 
 enum AggregateFunction {
@@ -287,6 +290,7 @@ enum AggregateFunction {
   AGGREGATE_FUNCTION_SUM = 3;
   AGGREGATE_FUNCTION_MIN = 4;
   AGGREGATE_FUNCTION_MAX = 5;
+  AGGREGATE_FUNCTION_AVG = 6;
 }
 
 message WindowTableFunction {
@@ -1039,6 +1043,11 @@ enum CastKind {
   CAST_KIND_BIGINT_TO_FLOAT = 20;
   CAST_KIND_BIGINT_TO_DOUBLE = 21;
   CAST_KIND_DOUBLE_TO_FLOAT = 22;
+  CAST_KIND_DECIMAL_TO_DECIMAL = 23;
+  CAST_KIND_TINYINT_TO_DECIMAL = 24;
+  CAST_KIND_SMALLINT_TO_DECIMAL = 25;
+  CAST_KIND_INTEGER_TO_DECIMAL = 26;
+  CAST_KIND_BIGINT_TO_DECIMAL = 27;
 }
 
 enum TruthTestOperator {

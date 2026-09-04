@@ -11,6 +11,7 @@ package tech.streamfusion.flink.calc;
 
 import com.google.protobuf.ByteString;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.List;
 import java.util.Locale;
 import org.apache.flink.table.data.TimestampData;
@@ -576,8 +577,15 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
             if (operands.size() != 2) {
                 return null;
             }
-            if ("DIVIDE".equals(arithmeticKind) && expectedType == LogicalTypeRoot.DOUBLE) {
-                // IEEE-754 division is defined for zero divisors and remains vectorized.
+            if ("DIVIDE".equals(arithmeticKind)
+                    && (expectedType == LogicalTypeRoot.TINYINT
+                            || expectedType == LogicalTypeRoot.SMALLINT
+                            || expectedType == LogicalTypeRoot.INTEGER
+                            || expectedType == LogicalTypeRoot.BIGINT
+                            || expectedType == LogicalTypeRoot.FLOAT
+                            || expectedType == LogicalTypeRoot.DOUBLE)) {
+                // Arrow's checked integer division and IEEE-754 floating division have
+                // the same value/error boundary as Flink for dynamic divisors.
             } else {
                 Integer integerDivisor = integerLiteral(operands.get(1));
                 Long longDivisor = longLiteral(operands.get(1));
@@ -720,7 +728,8 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
 
         BigDecimal literal = literal(expression, BigDecimal.class);
         if (literal != null) {
-            if (literal.scale() != scale || literal.precision() > precision) {
+            literal = literal.setScale(scale, RoundingMode.HALF_UP);
+            if (literal.precision() > precision) {
                 return null;
             }
             return Expression.newBuilder()
@@ -734,17 +743,26 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
         String kind = invoke(expression, "getKind").toString();
         List<?> operands = (List<?>) invoke(expression, "getOperands");
         if (isCastKind(expression)) {
-            if (operands.size() != 1 || !hasNoArgMethod(operands.get(0), "getOperands")) {
+            if (operands.size() != 1) {
                 return null;
             }
-            String operandKind = invoke(operands.get(0), "getKind").toString();
-            if (arithmeticOperator(operandKind) == null) {
+            org.apache.flink.table.types.logical.LogicalType operandType =
+                    StreamFusionExpressionTranslator.expressionLogicalType(operands.get(0));
+            CastKind castKind = StreamFusionCastSupport.kind(operandType.getTypeRoot(), LogicalTypeRoot.DECIMAL);
+            if (castKind == CastKind.CAST_KIND_UNSPECIFIED) {
                 return null;
             }
-            return decimalProjectionExpression(
-                    operands.get(0),
-                    inputType,
-                    new DecimalType((boolean) invoke(expressionType, "isNullable"), precision, scale));
+            DecimalType targetType = new DecimalType((boolean) invoke(expressionType, "isNullable"), precision, scale);
+            Expression operand = projectionExpression(operands.get(0), inputType, operandType);
+            if (operand == null) {
+                return null;
+            }
+            return Expression.newBuilder()
+                    .setCast(Cast.newBuilder()
+                            .setOperand(operand)
+                            .setTargetType(FlinkLogicalTypeProto.serialize(targetType))
+                            .setKind(castKind))
+                    .build();
         }
         if ("PLUS_PREFIX".equals(kind)) {
             return operands.size() == 1
@@ -762,7 +780,7 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
                             .setUnaryMinus(UnaryMinus.newBuilder().setOperand(operand))
                             .build();
         }
-        if ("DIVIDE".equals(kind) || "MOD".equals(kind)) {
+        if ("MOD".equals(kind)) {
             return null;
         }
         ArithmeticOperator operator = arithmeticOperator(kind);

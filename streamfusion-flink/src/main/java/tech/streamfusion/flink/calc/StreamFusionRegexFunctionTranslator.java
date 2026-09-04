@@ -15,7 +15,7 @@ final class StreamFusionRegexFunctionTranslator extends StreamFusionComplexTypeS
 
     static String failureReason(Object expression) {
         String function = functionName(expression);
-        if (function.startsWith("REGEXP") || function.contains("SIMILAR")) {
+        if (function != null && (function.startsWith("REGEXP") || function.contains("SIMILAR"))) {
             return function
                     + " stays on Flink because Flink uses Java Pattern syntax, matching, capture, and replacement semantics; Rust/DataFusion regex deliberately excludes constructs such as look-around and backreferences and is not byte-parity compatible";
         }

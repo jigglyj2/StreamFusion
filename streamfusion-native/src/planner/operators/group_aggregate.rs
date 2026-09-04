@@ -31,7 +31,7 @@ const UPDATE_BEFORE: i8 = 1;
 const UPDATE_AFTER: i8 = 2;
 const DELETE: i8 = 3;
 const STATE_MAGIC: &[u8; 4] = b"SFGA";
-const STATE_VERSION: u8 = 4;
+const STATE_VERSION: u8 = 5;
 
 /// Persistent timer-free keyed aggregation handle shared by memory and RocksDB state.
 pub(crate) struct GroupAggregateProcessor {
@@ -58,6 +58,21 @@ pub(super) struct Call {
     pub(super) retractable: bool,
 }
 
+impl Call {
+    fn average_accumulator_type(&self) -> DataType {
+        match self
+            .input_type
+            .as_ref()
+            .expect("AVG has a validated input type")
+        {
+            DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => DataType::Int64,
+            DataType::Float32 | DataType::Float64 => DataType::Float64,
+            DataType::Decimal128(_, scale) => DataType::Decimal128(38, *scale),
+            other => unreachable!("validated AVG input type {other}"),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct AccumulatorState {
     pub(super) row_count: i64,
@@ -76,6 +91,15 @@ enum Accumulator {
         count: i64,
     },
     DistinctSum {
+        value: Option<AggregateValue>,
+        count: i64,
+        values: BTreeMap<AggregateValue, i64>,
+    },
+    Average {
+        value: Option<AggregateValue>,
+        count: i64,
+    },
+    DistinctAverage {
         value: Option<AggregateValue>,
         count: i64,
         values: BTreeMap<AggregateValue, i64>,
@@ -593,6 +617,20 @@ impl AccumulatorState {
                             }
                         }
                     }
+                    proto::AggregateFunction::Avg => {
+                        if call.distinct {
+                            Accumulator::DistinctAverage {
+                                value: Some(zero_value(&call.average_accumulator_type())),
+                                count: 0,
+                                values: BTreeMap::new(),
+                            }
+                        } else {
+                            Accumulator::Average {
+                                value: Some(zero_value(&call.average_accumulator_type())),
+                                count: 0,
+                            }
+                        }
+                    }
                     proto::AggregateFunction::Min | proto::AggregateFunction::Max => {
                         if call.retractable {
                             Accumulator::Extremum(BTreeMap::new())
@@ -647,6 +685,10 @@ impl AccumulatorState {
                     // retracted, so the exact historical non-null count is not needed.
                     count: i64::from(value.is_some()),
                 }),
+                proto::AggregateFunction::Avg => Err(DataFusionError::Internal(
+                    "OVER AVG cannot reconstruct its sum and count from a compact prefix"
+                        .to_string(),
+                )),
                 proto::AggregateFunction::Min | proto::AggregateFunction::Max => {
                     if call.retractable {
                         let mut extrema = BTreeMap::new();
@@ -787,6 +829,65 @@ impl AccumulatorState {
                         }
                     }
                 }
+                Accumulator::Average { value: sum, count } => {
+                    if let Some(value) = value.as_ref() {
+                        let contribution = average_contribution(value, call)?;
+                        *sum = if let Some(current) = sum.as_ref() {
+                            if accumulate {
+                                aggregate_add(
+                                    current,
+                                    &contribution,
+                                    &call.average_accumulator_type(),
+                                )?
+                            } else {
+                                aggregate_sub(
+                                    current,
+                                    &contribution,
+                                    &call.average_accumulator_type(),
+                                )?
+                            }
+                        } else {
+                            None
+                        };
+                        *count = count.wrapping_add(delta);
+                    }
+                }
+                Accumulator::DistinctAverage {
+                    value: sum,
+                    count,
+                    values,
+                } => {
+                    if let Some(value) = value.as_ref() {
+                        let previous = values.get(value).copied().unwrap_or_default();
+                        let current = previous.wrapping_add(delta);
+                        if current == 0 {
+                            values.remove(value);
+                        } else {
+                            values.insert(value.clone(), current);
+                        }
+                        if (accumulate && previous == 0) || (!accumulate && current == 0) {
+                            let contribution = average_contribution(value, call)?;
+                            *sum = if let Some(current_sum) = sum.as_ref() {
+                                if accumulate {
+                                    aggregate_add(
+                                        current_sum,
+                                        &contribution,
+                                        &call.average_accumulator_type(),
+                                    )?
+                                } else {
+                                    aggregate_sub(
+                                        current_sum,
+                                        &contribution,
+                                        &call.average_accumulator_type(),
+                                    )?
+                                }
+                            } else {
+                                None
+                            };
+                            *count = count.wrapping_add(delta);
+                        }
+                    }
+                }
                 Accumulator::AppendExtremum(extremum) => {
                     if let Some(value) = value.as_ref() {
                         *extremum = Some(match (extremum.as_ref(), call.function) {
@@ -836,7 +937,8 @@ impl AccumulatorState {
                     *value = value.wrapping_add(*other);
                 }
                 (Accumulator::DistinctCount { .. }, Accumulator::DistinctCount { .. })
-                | (Accumulator::DistinctSum { .. }, Accumulator::DistinctSum { .. }) => {
+                | (Accumulator::DistinctSum { .. }, Accumulator::DistinctSum { .. })
+                | (Accumulator::DistinctAverage { .. }, Accumulator::DistinctAverage { .. }) => {
                     return Err(DataFusionError::Execution(
                         "merging DISTINCT aggregate namespaces is not supported".to_string(),
                     ));
@@ -856,6 +958,23 @@ impl AccumulatorState {
                             (None, Some(right)) if *count == 0 => Some(right.clone()),
                             // A populated SUM with no value represents an overflowed decimal.
                             // Preserve that state rather than incorrectly resurrecting a value.
+                            _ => None,
+                        };
+                        *count = count.wrapping_add(*other_count);
+                    }
+                }
+                (
+                    Accumulator::Average { value, count },
+                    Accumulator::Average {
+                        value: other_value,
+                        count: other_count,
+                    },
+                ) => {
+                    if *other_count != 0 {
+                        *value = match (value.as_ref(), other_value.as_ref()) {
+                            (Some(left), Some(right)) => {
+                                aggregate_add(left, right, &call.average_accumulator_type())?
+                            }
                             _ => None,
                         };
                         *count = count.wrapping_add(*other_count);
@@ -916,6 +1035,10 @@ impl AccumulatorState {
                     } else {
                         value.clone()
                     }
+                }
+                Accumulator::Average { value, count }
+                | Accumulator::DistinctAverage { value, count, .. } => {
+                    average_value(value.as_ref(), *count, call)
                 }
                 Accumulator::AppendExtremum(value) => value.clone(),
                 Accumulator::Extremum(values) => match call.function {
@@ -1010,6 +1133,10 @@ pub(super) fn lower_call(call: &proto::AggregateCall) -> Result<Call> {
         null_literal::data_type(call.output_type.as_ref().ok_or_else(|| {
             DataFusionError::Plan("aggregate output type is missing".to_string())
         })?)?;
+    let accumulator_type = match call.accumulator_type.as_ref() {
+        Some(data_type) => null_literal::data_type(data_type)?,
+        None => output_type.clone(),
+    };
     match function {
         proto::AggregateFunction::CountStar | proto::AggregateFunction::Count => {
             if output_type != DataType::Int64 {
@@ -1021,6 +1148,10 @@ pub(super) fn lower_call(call: &proto::AggregateCall) -> Result<Call> {
         proto::AggregateFunction::Sum => {
             ensure_sum_type(&output_type)?;
             ensure_sum_type(input_type.as_ref().expect("SUM input was validated"))?;
+        }
+        proto::AggregateFunction::Avg => {
+            let input_type = input_type.as_ref().expect("AVG input was validated");
+            ensure_average_types(input_type, &accumulator_type, &output_type)?;
         }
         proto::AggregateFunction::Min | proto::AggregateFunction::Max => {
             ensure_extremum_type(&output_type)?;
@@ -1043,6 +1174,29 @@ pub(super) fn lower_call(call: &proto::AggregateCall) -> Result<Call> {
         output_type,
         retractable: call.retractable,
     })
+}
+
+fn ensure_average_types(input: &DataType, accumulator: &DataType, output: &DataType) -> Result<()> {
+    let valid = match input {
+        DataType::Int8 => accumulator == &DataType::Int64 && output == &DataType::Int8,
+        DataType::Int16 => accumulator == &DataType::Int64 && output == &DataType::Int16,
+        DataType::Int32 => accumulator == &DataType::Int64 && output == &DataType::Int32,
+        DataType::Int64 => accumulator == &DataType::Int64 && output == &DataType::Int64,
+        DataType::Float32 => accumulator == &DataType::Float64 && output == &DataType::Float32,
+        DataType::Float64 => accumulator == &DataType::Float64 && output == &DataType::Float64,
+        DataType::Decimal128(_, input_scale) => {
+            matches!(accumulator, DataType::Decimal128(38, sum_scale) if sum_scale == input_scale)
+                && matches!(output, DataType::Decimal128(38, output_scale) if output_scale >= input_scale)
+        }
+        _ => false,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(DataFusionError::Plan(format!(
+            "group aggregate AVG requires a Flink-compatible input/buffer/output triple, got {input}/{accumulator}/{output}"
+        )))
+    }
 }
 
 fn ensure_sum_type(data_type: &DataType) -> Result<()> {
@@ -1317,6 +1471,80 @@ fn zero_value(data_type: &DataType) -> AggregateValue {
         DataType::Float32 => float32_value(0.0),
         DataType::Float64 => float64_value(0.0),
         _ => AggregateValue::Int(0),
+    }
+}
+
+fn average_contribution(value: &AggregateValue, call: &Call) -> Result<AggregateValue> {
+    let accumulator_type = call.average_accumulator_type();
+    match (value, &call.input_type, &accumulator_type) {
+        (AggregateValue::Int(value), Some(input), DataType::Int64)
+            if matches!(
+                input,
+                DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64
+            ) =>
+        {
+            Ok(AggregateValue::Int(*value))
+        }
+        (AggregateValue::Float32(value), Some(DataType::Float32), DataType::Float64) => {
+            Ok(float64_value(f32::from_bits(*value) as f64))
+        }
+        (AggregateValue::Float64(value), Some(DataType::Float64), DataType::Float64) => {
+            Ok(AggregateValue::Float64(*value))
+        }
+        (
+            AggregateValue::Int(value),
+            Some(DataType::Decimal128(_, input_scale)),
+            DataType::Decimal128(38, sum_scale),
+        ) if input_scale == sum_scale => Ok(AggregateValue::Int(*value)),
+        _ => Err(DataFusionError::Internal(format!(
+            "AVG cannot convert {value:?} from {:?} into {}",
+            call.input_type, accumulator_type
+        ))),
+    }
+}
+
+fn average_value(
+    value: Option<&AggregateValue>,
+    count: i64,
+    call: &Call,
+) -> Option<AggregateValue> {
+    if count == 0 {
+        return None;
+    }
+    let accumulator_type = call.average_accumulator_type();
+    match (value?, &accumulator_type, &call.output_type) {
+        (AggregateValue::Int(sum), DataType::Int64, DataType::Int8) => Some(AggregateValue::Int(
+            (*sum as i64).wrapping_div(count) as i8 as i128,
+        )),
+        (AggregateValue::Int(sum), DataType::Int64, DataType::Int16) => Some(AggregateValue::Int(
+            (*sum as i64).wrapping_div(count) as i16 as i128,
+        )),
+        (AggregateValue::Int(sum), DataType::Int64, DataType::Int32) => Some(AggregateValue::Int(
+            (*sum as i64).wrapping_div(count) as i32 as i128,
+        )),
+        (AggregateValue::Int(sum), DataType::Int64, DataType::Int64) => Some(AggregateValue::Int(
+            (*sum as i64).wrapping_div(count) as i128,
+        )),
+        (AggregateValue::Float64(sum), DataType::Float64, DataType::Float32) => {
+            Some(float32_value((f64::from_bits(*sum) / count as f64) as f32))
+        }
+        (AggregateValue::Float64(sum), DataType::Float64, DataType::Float64) => {
+            Some(float64_value(f64::from_bits(*sum) / count as f64))
+        }
+        (
+            AggregateValue::Int(sum),
+            DataType::Decimal128(_, sum_scale),
+            DataType::Decimal128(precision, output_scale),
+        ) => crate::planner::expressions::decimal::flink_divide_nonzero(
+            *sum,
+            *sum_scale,
+            count as i128,
+            0,
+            *precision,
+            *output_scale,
+        )
+        .map(AggregateValue::Int),
+        _ => None,
     }
 }
 
@@ -1617,6 +1845,27 @@ pub(super) fn encode_state(state: &AccumulatorState) -> Vec<u8> {
                 bytes.extend_from_slice(&count.to_le_bytes());
                 encode_counted_values(values, &mut bytes);
             }
+            Accumulator::Average { value, count } => {
+                bytes.push(7);
+                bytes.push(value.is_some() as u8);
+                if let Some(value) = value {
+                    encode_value(value, &mut bytes);
+                }
+                bytes.extend_from_slice(&count.to_le_bytes());
+            }
+            Accumulator::DistinctAverage {
+                value,
+                count,
+                values,
+            } => {
+                bytes.push(8);
+                bytes.push(value.is_some() as u8);
+                if let Some(value) = value {
+                    encode_value(value, &mut bytes);
+                }
+                bytes.extend_from_slice(&count.to_le_bytes());
+                encode_counted_values(values, &mut bytes);
+            }
             Accumulator::AppendExtremum(value) => {
                 bytes.push(4);
                 bytes.push(value.is_some() as u8);
@@ -1653,7 +1902,7 @@ pub(super) fn decode_state(bytes: &[u8], calls: &[Call]) -> Result<AccumulatorSt
         ));
     }
     let version = cursor.read_u8()?;
-    if version != 1 && version != 2 && version != 3 && version != STATE_VERSION {
+    if version < 1 || version > STATE_VERSION {
         return Err(DataFusionError::Execution(format!(
             "group aggregate state version {version} is unsupported"
         )));
@@ -1738,6 +1987,15 @@ pub(super) fn decode_state(bytes: &[u8], calls: &[Call]) -> Result<AccumulatorSt
                     values: decode_counted_values(&mut cursor)?,
                 }
             }
+            7 if version >= 5 => Accumulator::Average {
+                value: decode_optional_value(&mut cursor, "average")?,
+                count: cursor.read_i64()?,
+            },
+            8 if version >= 5 => Accumulator::DistinctAverage {
+                value: decode_optional_value(&mut cursor, "distinct average")?,
+                count: cursor.read_i64()?,
+                values: decode_counted_values(&mut cursor)?,
+            },
             other => {
                 return Err(DataFusionError::Execution(format!(
                     "group aggregate state accumulator tag {other} is invalid"
@@ -1757,6 +2015,13 @@ pub(super) fn decode_state(bytes: &[u8], calls: &[Call]) -> Result<AccumulatorSt
                     6
                 } else {
                     2
+                }
+            }
+            proto::AggregateFunction::Avg => {
+                if call.distinct {
+                    8
+                } else {
+                    7
                 }
             }
             proto::AggregateFunction::Min | proto::AggregateFunction::Max => {
@@ -1785,6 +2050,19 @@ pub(super) fn decode_state(bytes: &[u8], calls: &[Call]) -> Result<AccumulatorSt
         row_count,
         accumulators,
     })
+}
+
+fn decode_optional_value(
+    cursor: &mut Cursor<'_>,
+    description: &str,
+) -> Result<Option<AggregateValue>> {
+    match cursor.read_u8()? {
+        0 => Ok(None),
+        1 => decode_value(cursor).map(Some),
+        other => Err(DataFusionError::Execution(format!(
+            "group aggregate {description} presence {other} is invalid"
+        ))),
+    }
 }
 
 fn decode_counted_values(cursor: &mut Cursor<'_>) -> Result<BTreeMap<AggregateValue, i64>> {
@@ -1831,14 +2109,34 @@ fn validate_accumulator_values(accumulator: &Accumulator, call: &Call) -> Result
             }
             Box::new(value.iter())
         }
+        Accumulator::Average { value, .. } => Box::new(value.iter()),
+        Accumulator::DistinctAverage { value, values, .. } => {
+            for distinct in values.keys() {
+                if !aggregate_value_matches_type(
+                    distinct,
+                    call.input_type
+                        .as_ref()
+                        .expect("DISTINCT AVG has input type"),
+                ) {
+                    return Err(DataFusionError::Execution(format!(
+                        "group aggregate distinct value {distinct:?} does not match its input type"
+                    )));
+                }
+            }
+            Box::new(value.iter())
+        }
         Accumulator::AppendExtremum(value) => Box::new(value.iter()),
         Accumulator::Extremum(values) => Box::new(values.keys()),
     };
     for value in values {
-        if !aggregate_value_matches_type(value, &call.output_type) {
+        let state_type = if call.function == proto::AggregateFunction::Avg {
+            call.average_accumulator_type()
+        } else {
+            call.output_type.clone()
+        };
+        if !aggregate_value_matches_type(value, &state_type) {
             return Err(DataFusionError::Execution(format!(
-                "group aggregate state value {value:?} does not match {}",
-                call.output_type
+                "group aggregate state value {value:?} does not match {state_type}",
             )));
         }
     }
@@ -1994,6 +2292,7 @@ mod tests {
                 retractable: input_changelog,
                 filter_index: None,
                 distinct: false,
+                accumulator_type: None,
             };
         proto::NativePlan {
             protocol_version: crate::PLAN_PROTOCOL_VERSION,
@@ -2054,6 +2353,7 @@ mod tests {
             retractable: true,
             filter_index: None,
             distinct: true,
+            accumulator_type: None,
         };
         proto::NativePlan {
             protocol_version: crate::PLAN_PROTOCOL_VERSION,
@@ -2393,6 +2693,7 @@ mod tests {
                 retractable: false,
                 filter_index: None,
                 distinct: false,
+                accumulator_type: None,
             }],
             generate_update_before: false,
             input_changelog: false,
@@ -2692,6 +2993,18 @@ mod tests {
                         (AggregateValue::Int(20), 1),
                     ]),
                 },
+                Accumulator::Average {
+                    value: Some(float64_value(17.5)),
+                    count: 3,
+                },
+                Accumulator::DistinctAverage {
+                    value: Some(AggregateValue::Int(3000)),
+                    count: 2,
+                    values: BTreeMap::from([
+                        (AggregateValue::Int(1000), 2),
+                        (AggregateValue::Int(2000), 1),
+                    ]),
+                },
             ],
         };
         let calls = vec![
@@ -2758,8 +3071,116 @@ mod tests {
                 output_type: DataType::Int64,
                 retractable: true,
             },
+            Call {
+                function: proto::AggregateFunction::Avg,
+                input_index: Some(1),
+                filter_index: None,
+                distinct: false,
+                input_type: Some(DataType::Float32),
+                output_type: DataType::Float32,
+                retractable: true,
+            },
+            Call {
+                function: proto::AggregateFunction::Avg,
+                input_index: Some(1),
+                filter_index: None,
+                distinct: true,
+                input_type: Some(DataType::Decimal128(10, 2)),
+                output_type: DataType::Decimal128(38, 6),
+                retractable: true,
+            },
         ];
         assert_eq!(decode_state(&encode_state(&state), &calls).unwrap(), state);
+    }
+
+    #[test]
+    fn average_accumulates_all_numeric_families_and_distinct_retractions() {
+        let calls = vec![
+            Call {
+                function: proto::AggregateFunction::Avg,
+                input_index: Some(0),
+                filter_index: None,
+                distinct: false,
+                input_type: Some(DataType::Int8),
+                output_type: DataType::Int8,
+                retractable: true,
+            },
+            Call {
+                function: proto::AggregateFunction::Avg,
+                input_index: Some(1),
+                filter_index: None,
+                distinct: false,
+                input_type: Some(DataType::Float32),
+                output_type: DataType::Float32,
+                retractable: true,
+            },
+            Call {
+                function: proto::AggregateFunction::Avg,
+                input_index: Some(2),
+                filter_index: None,
+                distinct: false,
+                input_type: Some(DataType::Float64),
+                output_type: DataType::Float64,
+                retractable: true,
+            },
+            Call {
+                function: proto::AggregateFunction::Avg,
+                input_index: Some(3),
+                filter_index: None,
+                distinct: false,
+                input_type: Some(DataType::Decimal128(10, 2)),
+                output_type: DataType::Decimal128(38, 6),
+                retractable: true,
+            },
+            Call {
+                function: proto::AggregateFunction::Avg,
+                input_index: Some(4),
+                filter_index: None,
+                distinct: true,
+                input_type: Some(DataType::Int64),
+                output_type: DataType::Int64,
+                retractable: true,
+            },
+        ];
+        let first = vec![
+            Some(AggregateValue::Int(1)),
+            Some(float32_value(1.5)),
+            Some(float64_value(2.0)),
+            Some(AggregateValue::Int(100)),
+            Some(AggregateValue::Int(10)),
+        ];
+        let second = vec![
+            Some(AggregateValue::Int(2)),
+            Some(float32_value(2.5)),
+            Some(float64_value(4.0)),
+            Some(AggregateValue::Int(200)),
+            Some(AggregateValue::Int(10)),
+        ];
+        let mut state = AccumulatorState::new(&calls);
+        state.apply_values(&calls, &first, true).unwrap();
+        state.apply_values(&calls, &second, true).unwrap();
+        assert_eq!(
+            state.values(&calls),
+            vec![
+                Some(AggregateValue::Int(1)),
+                Some(float32_value(2.0)),
+                Some(float64_value(3.0)),
+                Some(AggregateValue::Int(1_500_000)),
+                Some(AggregateValue::Int(10)),
+            ]
+        );
+
+        state.apply_values(&calls, &second, false).unwrap();
+        assert_eq!(
+            state.values(&calls),
+            vec![
+                Some(AggregateValue::Int(1)),
+                Some(float32_value(1.5)),
+                Some(float64_value(2.0)),
+                Some(AggregateValue::Int(1_000_000)),
+                Some(AggregateValue::Int(10)),
+            ]
+        );
     }
 
     #[test]

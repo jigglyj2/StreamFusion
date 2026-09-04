@@ -21,8 +21,9 @@ GROUP BY window_start, window_end, bidder;
 StreamFusion accelerates direct time-attribute window aggregation for event time and processing
 time. It recognizes both Flink's one-phase node and its default local-aggregate, exchange,
 global-aggregate shape; the latter is collapsed so original Arrow rows reach one native operator.
-The native calls are `COUNT(*)`, `COUNT(value)`, `SUM`, `MIN`, and `MAX`, including SQL
-`FILTER (WHERE ...)` with nullable Boolean predicates. Keys use Arrow's canonical row encoding and
+The native calls are `COUNT(*)`, `COUNT(value)`, `SUM`, `AVG`, `MIN`, and `MAX`, including SQL
+`FILTER (WHERE ...)` with nullable Boolean predicates. `AVG` accepts every Flink numeric input,
+supports retractions, and merges its sum/count buffers across session namespaces. Keys use Arrow's canonical row encoding and
 include nullable scalar, decimal, temporal, binary, array, map, multiset, row, and nested SQL
 values. Input `INSERT`, `UPDATE_BEFORE`, `UPDATE_AFTER`, and `DELETE` kinds are supported when Flink
 selects retractable accumulators.

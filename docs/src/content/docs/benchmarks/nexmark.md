@@ -93,6 +93,9 @@ rowtime attribute and exercises watermark-driven native timers and late-record h
 processing-time case retains Nexmark's bid filter and nested-row projection below its synthetic
 `PROCTIME()` field. The bounded cases exercise a 100-row processing-time suffix and an inclusive
 ten-second event-time range respectively.
+`aggregate-modifiers` includes ordinary and counted-distinct AVG plus an explicit
+`BIGINT`-to-`DECIMAL` AVG, so release profiles cover both fixed-width integer and exact decimal
+sum/count state rather than only the aggregate modifier dispatch.
 Performance reports
 must come from separate, unprofiled JVM forks built with release-mode native code; profiler runs
 are diagnostic artifacts rather than benchmark measurements.

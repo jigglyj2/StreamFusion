@@ -13,7 +13,12 @@ import org.apache.flink.table.runtime.groupwindow.ProctimeAttribute;
 import org.apache.flink.table.runtime.groupwindow.RowtimeAttribute;
 import org.apache.flink.table.runtime.groupwindow.WindowEnd;
 import org.apache.flink.table.runtime.groupwindow.WindowStart;
+import org.apache.flink.table.types.logical.BigIntType;
+import org.apache.flink.table.types.logical.DoubleType;
+import org.apache.flink.table.types.logical.LogicalType;
+import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
+import org.apache.flink.table.types.logical.utils.LogicalTypeMerging;
 import tech.streamfusion.flink.calc.StreamFusionCalcTranslator;
 import tech.streamfusion.flink.proto.FlinkLogicalTypeProto;
 import tech.streamfusion.proto.plan.v1.AggregateFunction;
@@ -74,6 +79,10 @@ final class StreamFusionWindowAggregatePlan {
             if (call.filterArg >= 0) {
                 nativeCall.setFilterIndex(call.filterArg);
             }
+            if (call.getAggregation().getKind() == SqlKind.AVG) {
+                nativeCall.setAccumulatorType(StreamFusionCalcTranslator.operatorLogicalType(
+                        averageAccumulatorType(inputType.getTypeAt(arguments.get(0)))));
+            }
             aggregate.addAggregateCalls(nativeCall);
         }
         for (NamedWindowProperty property : properties) {
@@ -125,6 +134,20 @@ final class StreamFusionWindowAggregatePlan {
         if (kind == SqlKind.MAX) {
             return AggregateFunction.AGGREGATE_FUNCTION_MAX;
         }
+        if (kind == SqlKind.AVG) {
+            return AggregateFunction.AGGREGATE_FUNCTION_AVG;
+        }
         throw new IllegalArgumentException("Unsupported native window aggregate " + call);
+    }
+
+    private static LogicalType averageAccumulatorType(LogicalType inputType) {
+        LogicalTypeRoot root = inputType.getTypeRoot();
+        if (root == LogicalTypeRoot.DECIMAL) {
+            return LogicalTypeMerging.findSumAggType(inputType);
+        }
+        if (root == LogicalTypeRoot.FLOAT || root == LogicalTypeRoot.DOUBLE) {
+            return new DoubleType(inputType.isNullable());
+        }
+        return new BigIntType(inputType.isNullable());
     }
 }

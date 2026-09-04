@@ -173,6 +173,7 @@ class GroupAggregateParityTest extends SqlParityTestSupport {
                                 .column("selected", "BOOLEAN")
                                 .build()));
         return collect(tables.executeSql("SELECT category, COUNT(DISTINCT amount), SUM(DISTINCT amount), "
+                + "AVG(amount), AVG(DISTINCT amount), "
                 + "MIN(DISTINCT amount), MAX(DISTINCT amount), "
                 + "COUNT(DISTINCT label) FILTER (WHERE selected) "
                 + "FROM distinct_aggregate_input GROUP BY category"));
@@ -212,7 +213,8 @@ class GroupAggregateParityTest extends SqlParityTestSupport {
                                 .build()));
         return collect(tables.executeSql("SELECT category, "
                 + "COUNT(*) FILTER (WHERE selected), COUNT(amount) FILTER (WHERE selected), "
-                + "SUM(amount) FILTER (WHERE selected), MIN(amount) FILTER (WHERE selected), "
+                + "SUM(amount) FILTER (WHERE selected), AVG(amount) FILTER (WHERE selected), "
+                + "MIN(amount) FILTER (WHERE selected), "
                 + "MAX(amount) FILTER (WHERE selected) "
                 + "FROM filtered_aggregate_input GROUP BY category"));
     }
@@ -250,6 +252,7 @@ class GroupAggregateParityTest extends SqlParityTestSupport {
                         .build());
         tables.createTemporaryView("group_aggregate_overflow", input);
         return collect(tables.executeSql("SELECT category, COUNT(*), SUM(integer_value), SUM(decimal_value) "
+                + ", AVG(integer_value), AVG(decimal_value) "
                 + "FROM group_aggregate_overflow GROUP BY category"));
     }
 
@@ -285,6 +288,7 @@ class GroupAggregateParityTest extends SqlParityTestSupport {
                         .build());
         tables.createTemporaryView("group_aggregate_float_edges", input);
         return collect(tables.executeSql("SELECT category, COUNT(*), "
+                + "AVG(float_value), AVG(double_value), "
                 + "MIN(float_value), MAX(float_value), MIN(double_value), MAX(double_value) "
                 + "FROM group_aggregate_float_edges GROUP BY category"));
     }
@@ -334,6 +338,7 @@ class GroupAggregateParityTest extends SqlParityTestSupport {
                         .build());
         tables.createTemporaryView("group_aggregate_expanded_retractions", input);
         return collect(tables.executeSql("SELECT category, COUNT(*), SUM(float_value), SUM(double_value), "
+                + "AVG(float_value), AVG(double_value), "
                 + "MIN(float_value), MAX(float_value), MIN(double_value), MAX(double_value), "
                 + "MIN(flag), MAX(flag), MIN(label), MAX(label), MIN(date_value), MAX(date_value) "
                 + "FROM group_aggregate_expanded_retractions GROUP BY category"));
@@ -417,7 +422,8 @@ class GroupAggregateParityTest extends SqlParityTestSupport {
                 + "MIN(timestamp_value), MAX(timestamp_value), "
                 + "MIN(timestamp_ltz_value), MAX(timestamp_ltz_value), "
                 + "COUNT(DISTINCT float_value), SUM(DISTINCT float_value), "
-                + "COUNT(DISTINCT double_value), SUM(DISTINCT double_value), "
+                + "AVG(DISTINCT float_value), COUNT(DISTINCT double_value), SUM(DISTINCT double_value), "
+                + "AVG(DISTINCT double_value), "
                 + "COUNT(DISTINCT flag), COUNT(DISTINCT label), COUNT(DISTINCT date_value), "
                 + "COUNT(DISTINCT time_value), COUNT(DISTINCT timestamp_value), "
                 + "COUNT(DISTINCT timestamp_ltz_value) "
@@ -450,6 +456,7 @@ class GroupAggregateParityTest extends SqlParityTestSupport {
         tables.createTemporaryView("group_aggregate_changes", input);
         return collect(
                 tables.executeSql("SELECT category, COUNT(*), COUNT(label), SUM(amount), MIN(amount), MAX(amount) "
+                        + ", AVG(amount) "
                         + "FROM group_aggregate_changes GROUP BY category"));
     }
 
@@ -479,6 +486,7 @@ class GroupAggregateParityTest extends SqlParityTestSupport {
         tables.createTemporaryView("global_aggregate_changes", input);
         return collect(tables.executeSql(
                 "SELECT COUNT(*), COUNT(label), SUM(amount), MIN(amount), MAX(amount), MIN(label), MAX(label) "
+                        + ", AVG(amount) "
                         + "FROM global_aggregate_changes"));
     }
 
@@ -513,8 +521,12 @@ class GroupAggregateParityTest extends SqlParityTestSupport {
         return collect(
                 tables.executeSql("SELECT category, COUNT(*), COUNT(label), SUM(amount), MIN(amount), MAX(amount), "
                         + "SUM(decimal_amount), MIN(decimal_amount), MAX(decimal_amount), "
-                        + "COUNT(DISTINCT amount), SUM(DISTINCT amount), "
-                        + "COUNT(DISTINCT decimal_amount), SUM(DISTINCT decimal_amount) "
+                        + "AVG(amount), AVG(decimal_amount), "
+                        + "AVG(CAST(amount AS TINYINT)), AVG(CAST(amount AS SMALLINT)), "
+                        + "COUNT(DISTINCT amount), SUM(DISTINCT amount), AVG(DISTINCT amount), "
+                        + "AVG(DISTINCT CAST(amount AS TINYINT)), AVG(DISTINCT CAST(amount AS SMALLINT)), "
+                        + "COUNT(DISTINCT decimal_amount), SUM(DISTINCT decimal_amount), "
+                        + "AVG(DISTINCT decimal_amount) "
                         + "FROM group_aggregate_inserts GROUP BY category"));
     }
 

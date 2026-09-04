@@ -109,10 +109,10 @@ Null-safe `IS TRUE`, `IS FALSE`, `IS NOT TRUE`, and `IS NOT FALSE` expressions a
 accelerated and always produce a non-null boolean result.
 Null-safe `IS DISTINCT FROM` and `IS NOT DISTINCT FROM` comparison results are also
 accelerated for the types supported by filters.
-`INT` and `BIGINT` division is accelerated when the divisor is a direct nonzero literal;
-signed results truncate exactly as Flink does. `MOD` remainder supports the same types
-and divisor restriction. A planner representation that wraps a negative `BIGINT` divisor
-in a cast or unary expression falls back because it is no longer a direct literal.
+Signed-integer division is accelerated for literal and dynamic expression divisors. Arrow's
+checked division has Flink's truncate-toward-zero result, divide-by-zero failure, and overflow
+boundary. `FLOAT` and `DOUBLE` division preserve IEEE-754 zero, infinity, NaN, and signed-zero
+rules. `MOD` remainder remains restricted to direct nonzero `INT` and `BIGINT` literals.
 Lossless signed-integer widening projections are accelerated: `TINYINT` to `SMALLINT`,
 `INT`, or `BIGINT`; `SMALLINT` to `INT` or `BIGINT`; and `INT` to `BIGINT`.
 The operand may be any recursively supported native expression, not only an input column;
@@ -165,8 +165,11 @@ parity-approved native cast expressions. Parsing, narrowing, floating, temporal,
 conversions stay on Flink because their exact null-on-failure boundary is not yet proven; the
 restriction appears in `EXPLAIN`.
 
-Integer division or remainder by zero or a non-literal divisor, decimal division and
-remainder, floating-point remainder, non-decimal mixed-width arithmetic, non-finite
+Signed-integer-to-decimal and decimal-to-decimal casts, plus decimal division, are accelerated with
+Flink's overflow-to-null, precision-38 `HALF_UP` division, and final-scale `HALF_UP` rounding rules.
+The native decimal path uses fixed-width Arrow `i256` arithmetic for the common case and an exact
+arbitrary-precision fallback only when an intermediate cannot fit. Decimal remainder,
+integer remainder by zero or a non-literal divisor, floating-point remainder, non-decimal mixed-width arithmetic, non-finite
 floating-point literals, arithmetic on other types, converting casts, and unlisted functions currently
 fall back to Flink, except for the lossless casts and functions listed above. The Calc also falls back if its
 filter is unsupported.

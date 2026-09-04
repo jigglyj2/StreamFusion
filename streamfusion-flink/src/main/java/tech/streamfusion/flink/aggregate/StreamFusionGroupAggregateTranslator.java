@@ -169,6 +169,7 @@ public final class StreamFusionGroupAggregateTranslator {
         if (kind != SqlKind.COUNT
                 && kind != SqlKind.SUM
                 && kind != SqlKind.SUM0
+                && kind != SqlKind.AVG
                 && kind != SqlKind.MIN
                 && kind != SqlKind.MAX) {
             return call.getAggregation().getName() + " is not implemented";
@@ -185,8 +186,8 @@ public final class StreamFusionGroupAggregateTranslator {
             if (call.isDistinct() && !supportedDistinct(inputRoot)) {
                 return inputType.getTypeAt(inputIndex) + " is not supported by native DISTINCT aggregation";
             }
-            if ((kind == SqlKind.SUM || kind == SqlKind.SUM0) && !supportedSum(inputRoot)) {
-                return inputType.getTypeAt(inputIndex) + " is not supported by native SUM";
+            if ((kind == SqlKind.SUM || kind == SqlKind.SUM0 || kind == SqlKind.AVG) && !supportedSum(inputRoot)) {
+                return inputType.getTypeAt(inputIndex) + " is not supported by native " + kind;
             }
             if ((kind == SqlKind.MIN || kind == SqlKind.MAX) && !supportedExtremum(inputRoot)) {
                 return inputType.getTypeAt(inputIndex) + " is not supported by native " + kind;
@@ -199,8 +200,9 @@ public final class StreamFusionGroupAggregateTranslator {
         if (kind == SqlKind.COUNT && outputType.getTypeRoot() != LogicalTypeRoot.BIGINT) {
             return "COUNT output must be BIGINT, got " + outputType;
         }
-        if ((kind == SqlKind.SUM || kind == SqlKind.SUM0) && !supportedSum(outputType.getTypeRoot())) {
-            return "output type " + outputType + " is not supported by native SUM";
+        if ((kind == SqlKind.SUM || kind == SqlKind.SUM0 || kind == SqlKind.AVG)
+                && !supportedSum(outputType.getTypeRoot())) {
+            return "output type " + outputType + " is not supported by native " + kind;
         }
         if ((kind == SqlKind.MIN || kind == SqlKind.MAX) && !supportedExtremum(outputType.getTypeRoot())) {
             return "output type " + outputType + " is not supported by native " + kind;

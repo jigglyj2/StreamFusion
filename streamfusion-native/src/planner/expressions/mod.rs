@@ -43,6 +43,7 @@ pub(crate) mod concat;
 pub(crate) mod conditional;
 pub(crate) mod cosine;
 pub(crate) mod cotangent;
+pub(crate) mod decimal;
 pub(crate) mod degrees;
 pub(crate) mod element;
 pub(crate) mod exponential;

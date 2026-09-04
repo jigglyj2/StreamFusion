@@ -70,10 +70,12 @@ class StreamFusionArrowGroupAggregateOperatorTest {
     private static final RowType INPUT_TYPE = RowType.of(
             new LogicalType[] {new BigIntType(false), new BigIntType(true)}, new String[] {"bidder", "price"});
     private static final RowType OUTPUT_TYPE = RowType.of(
-            new LogicalType[] {new BigIntType(false), new BigIntType(false)}, new String[] {"bidder", "bids"});
-    private static final RowType DISTINCT_AGGREGATE_OUTPUT_TYPE = RowType.of(
             new LogicalType[] {new BigIntType(false), new BigIntType(false), new BigIntType(true)},
-            new String[] {"bidder", "distinct_prices", "distinct_sum"});
+            new String[] {"bidder", "bids", "average_price"});
+    private static final RowType DISTINCT_AGGREGATE_OUTPUT_TYPE = RowType.of(
+            new LogicalType[] {new BigIntType(false), new BigIntType(false), new BigIntType(true), new BigIntType(true)
+            },
+            new String[] {"bidder", "distinct_prices", "distinct_sum", "distinct_average"});
     private static final RowType DISTINCT_OUTPUT_TYPE =
             RowType.of(new LogicalType[] {new BigIntType(false)}, new String[] {"bidder"});
     private static final RowType GLOBAL_OUTPUT_TYPE =
@@ -698,6 +700,13 @@ class StreamFusionArrowGroupAggregateOperatorTest {
                 .addAggregateCalls(AggregateCall.newBuilder()
                         .setFunction(AggregateFunction.AGGREGATE_FUNCTION_COUNT_STAR)
                         .setOutputType(bigint))
+                .addAggregateCalls(AggregateCall.newBuilder()
+                        .setFunction(AggregateFunction.AGGREGATE_FUNCTION_AVG)
+                        .setInputIndex(1)
+                        .setInputType(bigint)
+                        .setOutputType(bigint)
+                        .setAccumulatorType(bigint)
+                        .setRetractable(true))
                 .build();
         return NativePlan.newBuilder()
                 .setProtocolVersion(1)
@@ -726,6 +735,14 @@ class StreamFusionArrowGroupAggregateOperatorTest {
                         .setInputIndex(1)
                         .setInputType(bigint)
                         .setOutputType(bigint)
+                        .setRetractable(true)
+                        .setDistinct(true))
+                .addAggregateCalls(AggregateCall.newBuilder()
+                        .setFunction(AggregateFunction.AGGREGATE_FUNCTION_AVG)
+                        .setInputIndex(1)
+                        .setInputType(bigint)
+                        .setOutputType(bigint)
+                        .setAccumulatorType(bigint)
                         .setRetractable(true)
                         .setDistinct(true))
                 .build();

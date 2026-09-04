@@ -113,6 +113,7 @@ class WindowAggregateParityTest extends SqlParityTestSupport {
                                 .build()));
         return collect(tables.executeSql("SELECT category, "
                 + "COUNT(*) FILTER (WHERE selected), SUM(amount) FILTER (WHERE selected), "
+                + "AVG(amount) FILTER (WHERE selected), "
                 + "MIN(amount) FILTER (WHERE selected), MAX(amount) FILTER (WHERE selected), "
                 + "window_start, window_end "
                 + "FROM TABLE(TUMBLE(TABLE filtered_window_input, DESCRIPTOR(ts), INTERVAL '5' SECOND)) "
@@ -185,7 +186,7 @@ class WindowAggregateParityTest extends SqlParityTestSupport {
                                 .column("ts", DataTypes.TIMESTAMP(3))
                                 .watermark("ts", "ts - INTERVAL '2' SECOND")
                                 .build()));
-        String sql = "SELECT category, COUNT(*), SUM(amount), window_start, window_end, window_time "
+        String sql = "SELECT category, COUNT(*), SUM(amount), AVG(amount), window_start, window_end, window_time "
                 + "FROM TABLE("
                 + windowCall
                 + ") GROUP BY category, window_start, window_end, window_time";

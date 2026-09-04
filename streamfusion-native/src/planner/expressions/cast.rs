@@ -21,6 +21,32 @@ pub(crate) fn create(
     operand: Arc<dyn PhysicalExpr>,
     schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
+    if matches!(
+        cast.kind(),
+        proto::CastKind::DecimalToDecimal
+            | proto::CastKind::TinyintToDecimal
+            | proto::CastKind::SmallintToDecimal
+            | proto::CastKind::IntegerToDecimal
+            | proto::CastKind::BigintToDecimal
+    ) {
+        let target = declared_decimal_target(cast)?;
+        let expected_source = match cast.kind() {
+            proto::CastKind::DecimalToDecimal => None,
+            proto::CastKind::TinyintToDecimal => Some(DataType::Int8),
+            proto::CastKind::SmallintToDecimal => Some(DataType::Int16),
+            proto::CastKind::IntegerToDecimal => Some(DataType::Int32),
+            proto::CastKind::BigintToDecimal => Some(DataType::Int64),
+            _ => unreachable!(),
+        };
+        let actual_source = operand.data_type(schema)?;
+        if expected_source.is_some_and(|expected| expected != actual_source) {
+            return Err(DataFusionError::Plan(format!(
+                "cast kind {:?} does not match source type {actual_source}",
+                cast.kind()
+            )));
+        }
+        return crate::planner::expressions::decimal::cast(operand, target, schema);
+    }
     let (approved_source, approved_target) = approved_types(cast.kind())?;
     let actual_source = operand.data_type(schema)?;
     let declared_target = declared_target(cast)?;
@@ -66,6 +92,15 @@ fn approved_types(kind: proto::CastKind) -> Result<(DataType, DataType)> {
         proto::CastKind::BigintToDouble => Ok((DataType::Int64, DataType::Float64)),
         proto::CastKind::FloatToDouble => Ok((DataType::Float32, DataType::Float64)),
         proto::CastKind::DoubleToFloat => Ok((DataType::Float64, DataType::Float32)),
+        proto::CastKind::DecimalToDecimal => Err(DataFusionError::Plan(
+            "decimal casts require their complete declared type".to_string(),
+        )),
+        proto::CastKind::TinyintToDecimal
+        | proto::CastKind::SmallintToDecimal
+        | proto::CastKind::IntegerToDecimal
+        | proto::CastKind::BigintToDecimal => Err(DataFusionError::Plan(
+            "decimal casts require their complete declared type".to_string(),
+        )),
         proto::CastKind::IntegerToSmallint => Ok((DataType::Int32, DataType::Int16)),
         proto::CastKind::IntegerToTinyint => Ok((DataType::Int32, DataType::Int8)),
         proto::CastKind::SmallintToTinyint => Ok((DataType::Int16, DataType::Int8)),
@@ -74,6 +109,26 @@ fn approved_types(kind: proto::CastKind) -> Result<(DataType, DataType)> {
         proto::CastKind::BigintToInteger => Ok((DataType::Int64, DataType::Int32)),
         proto::CastKind::Unspecified => Err(DataFusionError::Plan(
             "cast kind is unspecified or unknown".to_string(),
+        )),
+    }
+}
+
+fn declared_decimal_target(cast: &proto::Cast) -> Result<DataType> {
+    let target = cast
+        .target_type
+        .as_ref()
+        .ok_or_else(|| DataFusionError::Plan("cast target type is empty".to_string()))?;
+    match target.r#type.as_ref() {
+        Some(proto::logical_type::Type::Decimal(decimal)) => Ok(DataType::Decimal128(
+            u8::try_from(decimal.precision).map_err(|_| {
+                DataFusionError::Plan(format!("invalid decimal precision {}", decimal.precision))
+            })?,
+            i8::try_from(decimal.scale).map_err(|_| {
+                DataFusionError::Plan(format!("invalid decimal scale {}", decimal.scale))
+            })?,
+        )),
+        _ => Err(DataFusionError::Plan(
+            "decimal cast target is not DECIMAL".to_string(),
         )),
     }
 }

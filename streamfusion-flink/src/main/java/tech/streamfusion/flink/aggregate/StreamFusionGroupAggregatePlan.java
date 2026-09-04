@@ -8,7 +8,12 @@ import java.util.List;
 import org.apache.calcite.rel.core.AggregateCall;
 import org.apache.calcite.sql.SqlKind;
 import org.apache.flink.table.planner.calcite.FlinkTypeFactory;
+import org.apache.flink.table.types.logical.BigIntType;
+import org.apache.flink.table.types.logical.DoubleType;
+import org.apache.flink.table.types.logical.LogicalType;
+import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
+import org.apache.flink.table.types.logical.utils.LogicalTypeMerging;
 import tech.streamfusion.flink.calc.StreamFusionCalcTranslator;
 import tech.streamfusion.proto.plan.v1.AggregateFunction;
 import tech.streamfusion.proto.plan.v1.GroupAggregate;
@@ -53,6 +58,10 @@ final class StreamFusionGroupAggregatePlan {
             if (call.filterArg >= 0) {
                 nativeCall.setFilterIndex(call.filterArg);
             }
+            if (call.getAggregation().getKind() == SqlKind.AVG) {
+                nativeCall.setAccumulatorType(StreamFusionCalcTranslator.operatorLogicalType(
+                        averageAccumulatorType(inputType.getTypeAt(arguments.get(0)))));
+            }
             aggregate.addAggregateCalls(nativeCall);
         }
         return NativePlan.newBuilder()
@@ -78,6 +87,20 @@ final class StreamFusionGroupAggregatePlan {
         if (kind == SqlKind.MAX) {
             return AggregateFunction.AGGREGATE_FUNCTION_MAX;
         }
+        if (kind == SqlKind.AVG) {
+            return AggregateFunction.AGGREGATE_FUNCTION_AVG;
+        }
         throw new IllegalArgumentException("Unsupported native aggregate " + call);
+    }
+
+    private static LogicalType averageAccumulatorType(LogicalType inputType) {
+        LogicalTypeRoot root = inputType.getTypeRoot();
+        if (root == LogicalTypeRoot.DECIMAL) {
+            return LogicalTypeMerging.findSumAggType(inputType);
+        }
+        if (root == LogicalTypeRoot.FLOAT || root == LogicalTypeRoot.DOUBLE) {
+            return new DoubleType(inputType.isNullable());
+        }
+        return new BigIntType(inputType.isNullable());
     }
 }

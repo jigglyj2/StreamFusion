@@ -62,9 +62,13 @@ class StreamFusionArrowWindowAggregateOperatorTest {
             new LogicalType[] {new BigIntType(false), new TimestampType(false, 3)}, new String[] {"key", "ts"});
     private static final RowType OUTPUT_TYPE = RowType.of(
             new LogicalType[] {
-                new BigIntType(false), new BigIntType(false), new TimestampType(false, 3), new TimestampType(false, 3)
+                new BigIntType(false),
+                new BigIntType(false),
+                new BigIntType(true),
+                new TimestampType(false, 3),
+                new TimestampType(false, 3)
             },
-            new String[] {"key", "count", "window_start", "window_end"});
+            new String[] {"key", "count", "average_key", "window_start", "window_end"});
 
     @Test
     void pendingTimersAndStateRestoreAcrossEveryBackendAndCheckpointFormat() throws Exception {
@@ -290,6 +294,7 @@ class StreamFusionArrowWindowAggregateOperatorTest {
         Schema outputSchema = Schema.newBuilder()
                 .addFields(Field.newBuilder().setName("key").setType(bigint))
                 .addFields(Field.newBuilder().setName("count").setType(bigint))
+                .addFields(Field.newBuilder().setName("average_key").setType(bigint))
                 .addFields(Field.newBuilder().setName("window_start").setType(timestamp))
                 .addFields(Field.newBuilder().setName("window_end").setType(timestamp))
                 .build();
@@ -299,6 +304,13 @@ class StreamFusionArrowWindowAggregateOperatorTest {
                 .addAggregateCalls(AggregateCall.newBuilder()
                         .setFunction(AggregateFunction.AGGREGATE_FUNCTION_COUNT_STAR)
                         .setOutputType(bigint))
+                .addAggregateCalls(AggregateCall.newBuilder()
+                        .setFunction(AggregateFunction.AGGREGATE_FUNCTION_AVG)
+                        .setInputIndex(0)
+                        .setInputType(bigint)
+                        .setOutputType(bigint)
+                        .setAccumulatorType(bigint)
+                        .setRetractable(true))
                 .setTimeAttributeIndex(1)
                 .setKind(WindowKind.WINDOW_KIND_TUMBLE)
                 .setSizeMillis(10_000)

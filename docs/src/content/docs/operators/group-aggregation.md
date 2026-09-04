@@ -26,10 +26,12 @@ supports SQL `FILTER (WHERE ...)`; null filter predicates are false.
 | Aggregate | Supported Flink SQL types |
 | --- | --- |
 | `SUM` | `TINYINT`, `SMALLINT`, `INTEGER`, `BIGINT`, `FLOAT`, `DOUBLE`, `DECIMAL` |
+| `AVG` | `TINYINT`, `SMALLINT`, `INTEGER`, `BIGINT`, `FLOAT`, `DOUBLE`, `DECIMAL` |
 | `MIN`, `MAX` | All `SUM` types plus `BOOLEAN`, `CHAR`, `VARCHAR`, `DATE`, `TIME`, `TIMESTAMP`, and `TIMESTAMP_LTZ` |
 
-`COUNT(DISTINCT value)` supports the same scalar types as `MIN`/`MAX`, and `SUM(DISTINCT value)`
-supports the numeric `SUM` types. Distinct values are counted in native state, so duplicate
+`COUNT(DISTINCT value)` supports the same scalar types as `MIN`/`MAX`, and
+`SUM(DISTINCT value)` and `AVG(DISTINCT value)` support the numeric types above. Distinct values
+are counted in native state, so duplicate
 inserts and retractions change the result only at first/last membership boundaries. `DISTINCT`
 and `FILTER` may be combined.
 
@@ -52,6 +54,10 @@ ordered or approximate aggregates, `IGNORE NULLS`, unsupported aggregate functio
 unsupported aggregate value types fall back with a specific EXPLAIN reason. Flink's internal
 `SUM0` call uses the same accumulator as `SUM` here: a group has no output after its last row is
 retracted, so an empty accumulator value is not observable in this physical operator.
+Flink may instead retain `AVG` as a physical aggregate call. That path uses Flink's two-buffer
+contract: a wrapping `BIGINT`, `DOUBLE`, or `DECIMAL(38, input_scale)` sum and a `BIGINT` non-null
+count. Decimal results apply Flink's precision-38 `HALF_UP` division and final-scale rounding.
+Both ordinary and counted-distinct AVG state support filters and retractions.
 
 Grouping keys use the same Flink `BinaryRowData` bytes and key-group assignment as native
 deduplication. Scalar keys are encoded directly in Rust; keys that need Flink's complex internal
@@ -68,8 +74,9 @@ The aggregate uses the shared backend-neutral native keyed-state interface:
   `WriteBatch`, including deletes.
 
 Both backends use the same versioned canonical key-group snapshot format. Accumulator payload
-version 4 adds counted `DISTINCT` sets while continuing to read versions 1–3; version 3 introduced
-typed boolean, floating-point, string, temporal, and nullable decimal-overflow state.
+version 5 adds ordinary and counted-distinct AVG sum/count state while continuing to read versions
+1–4; version 4 added counted `DISTINCT` sets, and version 3 introduced typed boolean,
+floating-point, string, temporal, and nullable decimal-overflow state.
 Canonical savepoints are tested across all four source/target
 backend pairs and redistribute key groups during both 1-to-N and N-to-1 rescaling. Regular RocksDB
 checkpoints use incremental Flink keyed-state handles, reuse completed immutable SST files, survive

@@ -2414,6 +2414,8 @@ dependencies = [
  "hashbrown 0.17.1",
  "jni",
  "libloading",
+ "num-bigint",
+ "num-traits",
  "prost",
  "prost-build",
  "protoc-bin-vendored",

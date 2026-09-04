@@ -23,6 +23,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
+import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 
 class ProjectionArithmeticParityTest extends SqlParityTestSupport {
     @Test
@@ -34,7 +35,9 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
     void boundedIdentityCalcRunsNativelyAndMatchesFlinkByteForByte() throws Exception {
         assertParity(IDENTITY_CALC_SQL, true);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isGreaterThan(0);
     }
 
     @ParameterizedTest(name = "{0}")
@@ -251,11 +254,19 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
     }
 
     private static Stream<Arguments> nativeFloatingDivisionCases() {
-        return Stream.of(Arguments.of(
-                "double",
-                "SELECT numerator / denominator FROM (VALUES "
-                        + "(7.0E0, 2.0E0), (1.0E0, 0.0E0), (-1.0E0, -0.0E0), (0.0E0, 0.0E0)) "
-                        + "AS input(numerator, denominator)"));
+        return Stream.of(
+                Arguments.of(
+                        "float",
+                        "SELECT numerator / denominator FROM (VALUES "
+                                + "(CAST(7.0 AS FLOAT), CAST(2.0 AS FLOAT)), "
+                                + "(CAST(1.0 AS FLOAT), CAST(0.0 AS FLOAT)), "
+                                + "(CAST(-1.0 AS FLOAT), CAST(-0.0 AS FLOAT))) "
+                                + "AS input(numerator, denominator)"),
+                Arguments.of(
+                        "double",
+                        "SELECT numerator / denominator FROM (VALUES "
+                                + "(7.0E0, 2.0E0), (1.0E0, 0.0E0), (-1.0E0, -0.0E0), (0.0E0, 0.0E0)) "
+                                + "AS input(numerator, denominator)"));
     }
 
     @Test
@@ -280,7 +291,9 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
     void nativeDecimalArithmeticMatchesFlinkByteForByte(String ignoredName, String sql) throws Exception {
         assertParity(sql, true);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isGreaterThan(0);
     }
 
     @ParameterizedTest(name = "{0} column comparison")
@@ -365,7 +378,27 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
                         "wide",
                         "SELECT amount + 1.25, amount - 1.25, amount * 1.25 "
                                 + "FROM (VALUES (-1234567890123456.78), (0.00), (1234567890123456.78)) "
-                                + "AS input(amount)"));
+                                + "AS input(amount)"),
+                Arguments.of(
+                        "division",
+                        "SELECT numerator / denominator FROM (VALUES "
+                                + "(CAST(1 AS DECIMAL(38, 18)), CAST(3 AS DECIMAL(20, 4))), "
+                                + "(CAST(-2 AS DECIMAL(38, 18)), CAST(3 AS DECIMAL(20, 4))), "
+                                + "(1234567890123456.78, CAST(7 AS DECIMAL(20, 2)))) "
+                                + "AS input(numerator, denominator)"),
+                Arguments.of(
+                        "rescale and half-up rounding",
+                        "SELECT CAST(amount AS DECIMAL(12, 6)), CAST(amount AS DECIMAL(3, 1)) "
+                                + "FROM (VALUES (-12.345), (0.005), (9.999)) AS input(amount)"),
+                Arguments.of(
+                        "signed integer casts",
+                        "SELECT CAST(tiny_value AS DECIMAL(5, 2)), "
+                                + "CAST(small_value AS DECIMAL(8, 3)), "
+                                + "CAST(integer_value AS DECIMAL(12, 2)), "
+                                + "CAST(bigint_value AS DECIMAL(20, 2)) FROM (VALUES "
+                                + "(CAST(-12 AS TINYINT), CAST(1234 AS SMALLINT), 123456, 123456789012), "
+                                + "(CAST(7 AS TINYINT), CAST(-321 AS SMALLINT), -456789, -987654321098)) "
+                                + "AS input(tiny_value, small_value, integer_value, bigint_value)"));
     }
 
     @ParameterizedTest(name = "{0} arithmetic")
@@ -443,12 +476,24 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
     }
 
     @Test
-    void divisionByColumnFallsBackAndMatchesFlinkByteForByte() throws Exception {
+    void nativeIntegerDivisionByColumnMatchesFlinkByteForByte() throws Exception {
         assertParity(
                 "SELECT numerator / denominator FROM (VALUES (4, 2), (9, 3)) " + "AS input(numerator, denominator)",
                 true);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+    }
+
+    @Test
+    void nativeNarrowIntegerDivisionByColumnMatchesFlinkByteForByte() throws Exception {
+        assertParity(
+                "SELECT tiny_n / tiny_d, small_n / small_d FROM (VALUES "
+                        + "(CAST(-7 AS TINYINT), CAST(2 AS TINYINT), CAST(-32767 AS SMALLINT), CAST(3 AS SMALLINT)), "
+                        + "(CAST(7 AS TINYINT), CAST(-2 AS TINYINT), CAST(32767 AS SMALLINT), CAST(-3 AS SMALLINT))) "
+                        + "AS input(tiny_n, tiny_d, small_n, small_d)",
+                true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
     }
 
     @Test

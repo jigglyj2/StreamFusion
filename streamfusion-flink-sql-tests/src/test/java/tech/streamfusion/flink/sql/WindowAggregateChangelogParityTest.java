@@ -78,7 +78,7 @@ class WindowAggregateChangelogParityTest extends SqlParityTestSupport {
                         .watermark("ts", "ts - INTERVAL '1' SECOND")
                         .build());
         tables.createTemporaryView("window_changes", input);
-        String sql = "SELECT category, COUNT(*), COUNT(label), SUM(amount), MIN(amount), MAX(amount), "
+        String sql = "SELECT category, COUNT(*), COUNT(label), SUM(amount), AVG(amount), MIN(amount), MAX(amount), "
                 + "window_start, window_end FROM TABLE("
                 + windowCall
                 + ") GROUP BY category, window_start, window_end";

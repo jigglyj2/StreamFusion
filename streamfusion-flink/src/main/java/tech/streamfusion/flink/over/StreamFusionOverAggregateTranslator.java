@@ -156,6 +156,9 @@ public final class StreamFusionOverAggregateTranslator {
         }
         for (int index = 0; index < group.getAggCalls().size(); index++) {
             AggregateCall call = group.getAggCalls().get(index);
+            if (call.getAggregation().getKind() == org.apache.calcite.sql.SqlKind.AVG) {
+                return "aggregate[" + index + "]: AVG prefix compaction is not implemented by native OVER aggregation";
+            }
             if (call.isDistinct()) {
                 return "aggregate[" + index + "]: DISTINCT is not implemented by native OVER aggregation";
             }
