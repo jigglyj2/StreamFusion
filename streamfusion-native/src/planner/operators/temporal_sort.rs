@@ -755,7 +755,16 @@ fn encode_rows(rows: &[BufferedRow]) -> Result<Vec<u8>> {
     let count = u32::try_from(rows.len()).map_err(|_| {
         DataFusionError::Execution("temporal sort timestamp group is too large".to_string())
     })?;
-    let mut output = Vec::new();
+    let capacity = rows.iter().try_fold(9usize, |capacity, row| {
+        capacity
+            .checked_add(1 + 4 + row.sort_key.len() + 4 + row.row.len())
+            .ok_or_else(|| {
+                DataFusionError::Execution(
+                    "temporal sort encoded timestamp group is too large".to_string(),
+                )
+            })
+    })?;
+    let mut output = Vec::with_capacity(capacity);
     output.extend_from_slice(STATE_MAGIC);
     output.push(STATE_VERSION);
     output.extend_from_slice(&count.to_le_bytes());
