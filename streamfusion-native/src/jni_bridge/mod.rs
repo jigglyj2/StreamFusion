@@ -15,6 +15,7 @@ mod execution_context;
 mod group_aggregate;
 mod interval_join;
 mod local_group_aggregate;
+mod match_recognize;
 mod multi_join;
 mod over_aggregate;
 mod regular_join;

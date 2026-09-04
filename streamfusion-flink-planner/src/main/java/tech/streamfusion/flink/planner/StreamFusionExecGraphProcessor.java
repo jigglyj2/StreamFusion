@@ -63,6 +63,7 @@ import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecIntervalJ
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecJoin;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecLocalGroupAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecLocalWindowAggregate;
+import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecMatch;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecMiniBatchAssigner;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecMultiJoin;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecOverAggregate;
@@ -88,6 +89,8 @@ import org.apache.flink.table.runtime.operators.rank.VariableRankRange;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.VarBinaryType;
 import org.apache.flink.util.TimeUtils;
+import tech.streamfusion.flink.planner.StreamFusionMatchRecognizePlanner.FixedMatchRecognize;
+import tech.streamfusion.flink.planner.StreamFusionMatchRecognizePlanner.ProcessingTimeMatchRecognize;
 
 /** All-or-nothing physical rule modelled after Comet's distinct accelerator exec nodes. */
 public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProcessor {
@@ -332,6 +335,33 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             String reason = unsupportedReason((StreamExecJoin) node, context);
             if (reason != null) {
                 rejections.add(nodePath + "\n" + reason);
+            }
+        } else if (node instanceof StreamExecMatch) {
+            ProcessingTimeMatchRecognize folded =
+                    StreamFusionMatchRecognizePlanner.processingTimeMatchRecognize((StreamExecMatch) node);
+            FixedMatchRecognize match = folded == null
+                    ? FixedMatchRecognize.rejected(
+                            (StreamExecMatch) node,
+                            "processing time: expected Calc(PROCTIME) -> Exchange -> Match physical shape")
+                    : folded.match;
+            String reason = match.rejectionReason != null
+                    ? match.rejectionReason
+                    : StreamFusionMatchRecognizePlanner.unsupportedReason(match, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
+            if (folded != null && reason == null) {
+                String calcReason = unsupportedCalcReason(
+                        (RowType) folded.inputEdge.getOutputType(),
+                        folded.inputType,
+                        folded.inputProjection,
+                        folded.inputCondition,
+                        context);
+                if (calcReason != null) {
+                    rejections.add(nodePath + "/native-input-calc\n" + calcReason);
+                }
+                collectRejections(folded.inputEdge.getSource(), context, nodePath + "/native-input", rejections);
+                return;
             }
         } else if (node instanceof StreamExecDropUpdateBefore) {
             // RowKind is Flink changelog metadata, so this node is always eligible.
@@ -892,6 +922,43 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             replacement.setInputEdges(join.getInputEdges().stream()
                     .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
                     .collect(Collectors.toList()));
+            return replacement;
+        }
+        if (node instanceof StreamExecMatch) {
+            StreamExecMatch match = (StreamExecMatch) node;
+            ProcessingTimeMatchRecognize folded = StreamFusionMatchRecognizePlanner.processingTimeMatchRecognize(match);
+            if (folded == null || folded.match.rejectionReason != null) {
+                throw new IllegalStateException("Selected unsupported MATCH_RECOGNIZE physical shape");
+            }
+            StreamFusionExecCalc inputProjection = new StreamFusionExecCalc(
+                    folded.inputCalc.getPersistedConfig(),
+                    folded.inputProjection,
+                    folded.inputCondition,
+                    folded.inputCalc.getInputProperties().get(0),
+                    folded.inputType,
+                    "StreamFusionCalc");
+            inputProjection.setInputEdges(
+                    List.of(copyEdge(folded.inputEdge, convert(folded.inputEdge.getSource()), inputProjection)));
+            StreamFusionExecExchange exchange = new StreamFusionExecExchange(
+                    folded.exchange.getPersistedConfig(),
+                    folded.exchange.getInputProperties().get(0),
+                    folded.inputType,
+                    "StreamFusionExchange");
+            exchange.setInputEdges(
+                    List.of(copyEdge(folded.exchange.getInputEdges().get(0), inputProjection, exchange)));
+            FixedMatchRecognize fixed = folded.match;
+            StreamFusionExecMatchRecognize replacement = new StreamFusionExecMatchRecognize(
+                    match.getPersistedConfig(),
+                    fixed.partitionKeys,
+                    fixed.variableNames,
+                    fixed.conditions,
+                    fixed.measureVariables,
+                    fixed.measureFields,
+                    fixed.skipPastLastRow,
+                    match.getInputProperties().get(0),
+                    (RowType) match.getOutputType(),
+                    "StreamFusionMatchRecognize");
+            replacement.setInputEdges(List.of(copyEdge(match.getInputEdges().get(0), exchange, replacement)));
             return replacement;
         }
         if (node instanceof StreamExecDropUpdateBefore) {

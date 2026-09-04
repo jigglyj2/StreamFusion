@@ -29,7 +29,7 @@ This matrix follows the query operations documented by Flink 2.3, including the 
 | [Window Top-N](window-top-n/) | **Yes** (event-time constant `ROW_NUMBER` range) | Yes | Native per-window state plus Flink's exact generated comparator |
 | [Deduplication](deduplication/) | **Partial** (all synchronous timer-free row/proc-time modes, including Q18) | Yes | Native batched raw keyed state |
 | [Window deduplication](window-deduplication/) | **Yes** (event-time first/last) | Yes | Native retractable per-window keyed state and timers |
-| [Pattern recognition](pattern-recognition/) | **No** | Potentially | Custom streaming NFA; no DataFusion equivalent |
+| [Pattern recognition](pattern-recognition/) | **Partial** (fixed processing-time sequences) | Yes | Native fixed-sequence state machine; Flink CEP fallback for general NFA/timer shapes |
 | [Changelog conversion](changelog-conversion/) | **Partial** (`ChangelogNormalize`, `DropUpdateBefore`) | By conversion | Native keyed upsert normalization and Flink-compatible row-kind handling |
 | [Time travel](time-travel/) | **No** | No | Catalog snapshot resolution stays in Flink |
 | [Model inference](model-inference/) | **No** | Provider-dependent | Native provider integration only when parity is proven |

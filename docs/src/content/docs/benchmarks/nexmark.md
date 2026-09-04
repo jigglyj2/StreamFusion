@@ -495,6 +495,42 @@ rows, timers, state scratch, exported batches, RocksDB cache, and write buffers 
 Flink managed-memory admission and focused failure/release tests. These are local diagnostic results,
 not portable performance claims.
 
+## Fixed-sequence MATCH_RECOGNIZE RowData target
+
+The Kafka-free production harness includes `match-recognize`, a processing-time `A B C` sequence
+partitioned by bidder with current-row definitions, three direct measures, and `AFTER MATCH SKIP
+PAST LAST ROW`. The integration test runs Flink and StreamFusion with both hashmap and RocksDB state,
+compares the complete changelog and materialized result, requires an accelerated EXPLAIN, and
+requires non-zero native MATCH batch counts.
+
+On the September 4, 2026 local run based on `3735b61` plus the MATCH_RECOGNIZE working change, each
+engine/backend received an excluded 100,000-event warmup followed by three alternating fresh-JVM
+release/native-CPU forks over one million deterministic events at parallelism one, with a 3GB heap
+and one-second exactly-once checkpoints. In memory, Flink and StreamFusion medians were 92,574 and
+115,942 events/s respectively, a 25.2% StreamFusion gain. Median absolute deviations were 0.279s
+and 0.203s, with elapsed ranges of 10.523–11.231s and 8.357–8.827s. With RocksDB, the medians were
+5,745 and 114,689 events/s, a 19.96x StreamFusion speedup. Median absolute deviations were 0.472s
+and 0.003s, with elapsed ranges of 172.940–174.533s and 8.505–8.722s. Every measured fork emitted
+299,959 rows with SHA-256
+`3234a71e259bd405c027157d5fd036939f7df3fef6fae43880617a393a66aa86`; StreamFusion reported
+62–64 native MATCH batches per fork. The machine was a 12th Gen Intel Core i7-12650H under x86-64
+WSL2 with OpenJDK 24.0.2 and Rust 1.94.0. Profiler-instrumented timings were excluded.
+
+Mixed JVM/native CPU captures retained JFRs, collapsed stacks, per-engine flame graphs, and
+differential flame graphs for both backends, using Java non-safepoint samples and DWARF/frame-pointer
+native unwinding. The full native MATCH bridge accounted for 1.50% of in-memory samples and 1.68%
+of RocksDB samples; the Rust processor was 0.87%/0.80%, Arrow row encoding 0.36%/0.34%, and direct
+native RocksDB 0.09% in the Rocks run. Flink's CEP operator accounted for 8.47% in memory and 71.89%
+with RocksDB. Separate Java and native allocation JFRs and collapsed stacks found no dominant
+StreamFusion allocation loop. Java allocation samples under the MATCH bridge were 11.82%/10.96%,
+mostly required opaque key/output byte arrays, while Flink CEP was 43.51%/51.69%. Native MATCH
+accounted for 6.07%/7.75% of native allocation samples, Arrow row conversion for 1.63% on both
+backends, and direct RocksDB for 1.79%. Focused admission/release tests verify that partial-match
+state, scratch, output, and RocksDB memory remain charged to Flink managed memory. The native
+RocksDB path performs one `multi_get` and one atomic `WriteBatch` per incoming Arrow batch. No
+profile-backed architectural shortcut was warranted; these are local diagnostics, not portable
+performance guarantees.
+
 ## Q18 and synchronous deduplicate RowData targets
 
 The Kafka-free production harness now includes `q18`,

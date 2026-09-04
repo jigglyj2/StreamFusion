@@ -67,7 +67,31 @@ message Operator {
     TemporalSort temporal_sort = 22;
     TemporalJoin temporal_join = 23;
     MultiJoin multi_join = 24;
+    MatchRecognize match_recognize = 25;
   }
+}
+
+// A strict fixed-length MATCH_RECOGNIZE sequence. Each input row can start a candidate and can
+// advance existing candidates by exactly one variable. Conditions are evaluated columnarly over
+// the input batch; completed matches retain opaque Arrow-row encodings in keyed state until their
+// selected measures have been materialized.
+message MatchRecognize {
+  repeated uint32 partition_key_indices = 1;
+  repeated MatchPatternVariable variables = 2;
+  repeated MatchMeasure measures = 3;
+  Schema input_schema = 4;
+  Schema output_schema = 5;
+  bool skip_past_last_row = 6;
+}
+
+message MatchPatternVariable {
+  string name = 1;
+  optional Expression condition = 2;
+}
+
+message MatchMeasure {
+  uint32 variable_index = 1;
+  uint32 field_index = 2;
 }
 
 // N-input streaming join. Inputs share a Flink partition key, while each depth can use additional

@@ -230,6 +230,9 @@ public final class NexmarkRowDataJob {
                 columns = "bidder BIGINT, bid_count BIGINT, spend BIGINT, average_price BIGINT, "
                         + "minimum_price BIGINT, maximum_price BIGINT, starttime TIMESTAMP(3), endtime TIMESTAMP(3)";
                 break;
+            case "match-recognize":
+                columns = "bidder BIGINT, first_auction BIGINT, second_auction BIGINT, third_auction BIGINT";
+                break;
             case "over-aggregate":
             case "over-aggregate-event-time":
             case "over-aggregate-processing-time":

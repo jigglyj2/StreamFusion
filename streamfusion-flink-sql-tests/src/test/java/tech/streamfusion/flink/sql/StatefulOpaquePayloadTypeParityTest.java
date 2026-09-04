@@ -94,6 +94,16 @@ class StatefulOpaquePayloadTypeParityTest extends SqlParityTestSupport {
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 
+    @Test
+    void matchRecognizeStatePreservesEveryFlinkLogicalPartitionAndPayloadTypeByteForByte() throws Exception {
+        byte[] flink = executeMatchRecognize(false);
+        byte[] streamFusion = executeMatchRecognize(true);
+
+        assertThat(streamFusion).isEqualTo(flink);
+        assertThat(StreamFusionPlannerFactory.nativeMatchRecognizeBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
     private static byte[] execute(boolean streamFusionEnabled, String orderField, boolean session) throws Exception {
         configure(streamFusionEnabled);
         StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();
@@ -210,6 +220,33 @@ class StatefulOpaquePayloadTypeParityTest extends SqlParityTestSupport {
                                 .build(),
                         ChangelogMode.upsert()));
         return collect(tables.executeSql("SELECT * FROM all_type_upsert_input"));
+    }
+
+    private static byte[] executeMatchRecognize(boolean streamFusionEnabled) throws Exception {
+        configure(streamFusionEnabled);
+        StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();
+        environment.setParallelism(1);
+        StreamTableEnvironment tables = StreamTableEnvironment.create(
+                environment, EnvironmentSettings.newInstance().inStreamingMode().build());
+        tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+        Row allTypes = payload("alpha", 1);
+        tables.createTemporaryView(
+                "match_all_type_payload",
+                tables.fromDataStream(
+                        environment.fromCollection(
+                                List.of(Row.of("a", allTypes), Row.of("b", allTypes), Row.of("c", allTypes)),
+                                Types.ROW_NAMED(
+                                        new String[] {"label", "payload"}, Types.STRING, payloadTypeInformation())),
+                        Schema.newBuilder()
+                                .column("label", DataTypes.STRING().notNull())
+                                .column("payload", payloadDataType())
+                                .columnByExpression("pt", "PROCTIME()")
+                                .build()));
+        return collect(tables.executeSql("SELECT payload, matched_payload FROM match_all_type_payload "
+                + "MATCH_RECOGNIZE (PARTITION BY payload ORDER BY pt "
+                + "MEASURES C.payload AS matched_payload ONE ROW PER MATCH "
+                + "AFTER MATCH SKIP PAST LAST ROW PATTERN (A B C) "
+                + "DEFINE A AS label = 'a', B AS label = 'b', C AS label = 'c')"));
     }
 
     private static void createPayloadInput(

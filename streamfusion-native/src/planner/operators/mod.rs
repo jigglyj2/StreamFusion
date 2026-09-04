@@ -18,6 +18,7 @@ pub(crate) mod incremental_group_aggregate;
 pub(super) mod input;
 pub(crate) mod interval_join;
 pub(crate) mod local_group_aggregate;
+pub(crate) mod match_recognize;
 pub(crate) mod multi_join;
 pub(crate) mod over_aggregate;
 pub(crate) mod regular_join;
