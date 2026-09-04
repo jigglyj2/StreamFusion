@@ -203,6 +203,20 @@ final class StreamFusionStringFunctionTranslator extends StreamFusionComplexType
                         .build();
     }
 
+    private static boolean supportsHashCode(LogicalTypeRoot root) {
+        switch (root) {
+            case CHAR:
+            case VARCHAR:
+            case TINYINT:
+            case SMALLINT:
+            case INTEGER:
+            case BIGINT:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     static Expression initCap(Object expression, RowType inputType, LogicalType expectedType) {
         if (!"INITCAP".equals(functionName(expression)) || expectedType.getTypeRoot() != LogicalTypeRoot.VARCHAR) {
             return null;
@@ -503,7 +517,7 @@ final class StreamFusionStringFunctionTranslator extends StreamFusionComplexType
             return null;
         }
         LogicalType operandType = logicalType(operands.get(0), inputType);
-        if (operandType == null || operandType.getTypeRoot() != LogicalTypeRoot.VARCHAR) {
+        if (operandType == null || !supportsHashCode(operandType.getTypeRoot())) {
             return null;
         }
         Expression operand =

@@ -62,7 +62,10 @@ public final class NexmarkRowDataJob {
             // memory.
             tables.getConfig()
                     .getConfiguration()
-                    .set(TaskManagerOptions.MANAGED_MEMORY_SIZE, MemorySize.ofMebiBytes(MANAGED_MEMORY_MEBIBYTES));
+                    .set(
+                            TaskManagerOptions.MANAGED_MEMORY_SIZE,
+                            MemorySize.ofMebiBytes(
+                                    Long.getLong("streamfusion.nexmark.managed-memory-mb", MANAGED_MEMORY_MEBIBYTES)));
             tables.getConfig().getConfiguration().set(StateBackendOptions.STATE_BACKEND, stateBackend);
             tables.getConfig().getConfiguration().set(CheckpointingOptions.CHECKPOINT_STORAGE, "filesystem");
             tables.getConfig()
@@ -72,7 +75,10 @@ public final class NexmarkRowDataJob {
                             checkpointDirectory.toUri().toString());
             tables.getConfig()
                     .getConfiguration()
-                    .setString("execution.checkpointing.interval", CHECKPOINT_INTERVAL_MILLIS + " ms");
+                    .setString(
+                            "execution.checkpointing.interval",
+                            Long.getLong("streamfusion.nexmark.checkpoint-interval-ms", CHECKPOINT_INTERVAL_MILLIS)
+                                    + " ms");
             tables.getConfig().getConfiguration().setString("execution.checkpointing.mode", "EXACTLY_ONCE");
             tables.getConfig().getConfiguration().setString("execution.checkpointing.max-concurrent-checkpoints", "1");
             tables.getConfig().getConfiguration().setString("restart-strategy.type", "none");
@@ -91,13 +97,19 @@ public final class NexmarkRowDataJob {
                     .set(
                             OptimizerConfigOptions.TABLE_OPTIMIZER_AGG_PHASE_STRATEGY,
                             AggregatePhaseStrategy.valueOf(aggregatePhase.toUpperCase(java.util.Locale.ROOT)));
+            if (query.equals("incremental-group-aggregate")) {
+                tables.getConfig().set(OptimizerConfigOptions.TABLE_OPTIMIZER_DISTINCT_AGG_SPLIT_ENABLED, true);
+            }
             tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, parallelism);
 
             tables.executeSql(sourceDdl(eventCount));
             NexmarkSqlJob.createViews(tables);
             tables.executeSql(sinkDdl(query, resultRunId));
-            tables.executeSql("INSERT INTO nexmark_output\n" + NexmarkRowDataQueryCatalog.load(query))
-                    .await();
+            String statement = "INSERT INTO nexmark_output\n" + NexmarkRowDataQueryCatalog.load(query);
+            if (Boolean.getBoolean("streamfusion.nexmark.debug-plan")) {
+                System.out.println(tables.explainSql(statement));
+            }
+            tables.executeSql(statement).await();
             completed = true;
             return BenchmarkResultStore.finish(resultRunId);
         } finally {
@@ -168,6 +180,7 @@ public final class NexmarkRowDataJob {
                 columns = "bidder BIGINT, bids BIGINT, spend BIGINT, minimum_price BIGINT, maximum_price BIGINT";
                 break;
             case "aggregate-modifiers":
+            case "incremental-group-aggregate":
                 columns = "bidder BIGINT, distinct_auctions BIGINT, expensive_bids BIGINT, "
                         + "distinct_expensive_spend BIGINT, average_price BIGINT, "
                         + "average_decimal_price DECIMAL(38, 6), "

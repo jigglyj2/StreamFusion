@@ -52,6 +52,7 @@ import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecExpand;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecGlobalGroupAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecGlobalWindowAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecGroupAggregate;
+import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecIncrementalGroupAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecIntervalJoin;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecJoin;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecLocalGroupAggregate;
@@ -108,6 +109,7 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             "tech.streamfusion.flink.join.StreamFusionIntervalJoinTranslator";
     private static final String OVER_AGGREGATE_TRANSLATOR_CLASS =
             "tech.streamfusion.flink.over.StreamFusionOverAggregateTranslator";
+    private transient ReadableConfig activeTableConfig;
 
     @Override
     public ExecNodeGraph process(ExecNodeGraph graph, ProcessorContext context) {
@@ -125,9 +127,14 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             return graph;
         }
         StreamFusionPlanningDiagnostics.accelerate();
-        List<ExecNode<?>> roots =
-                graph.getRootNodes().stream().map(this::convertRoot).collect(Collectors.toList());
-        return new ExecNodeGraph(graph.getFlinkVersion(), roots);
+        activeTableConfig = context.getPlanner().getTableConfig();
+        try {
+            List<ExecNode<?>> roots =
+                    graph.getRootNodes().stream().map(this::convertRoot).collect(Collectors.toList());
+            return new ExecNodeGraph(graph.getFlinkVersion(), roots);
+        } finally {
+            activeTableConfig = null;
+        }
     }
 
     private ExecNode<?> convertRoot(ExecNode<?> root) {
@@ -182,6 +189,21 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                 rejections.add(nodePath + "\n" + reason);
             }
         } else if (node instanceof StreamExecGlobalGroupAggregate) {
+            IncrementalGroupAggregate incremental = incrementalGroupAggregate((StreamExecGlobalGroupAggregate) node);
+            if (incremental != null) {
+                String reason = unsupportedReason(incremental, context);
+                if (reason != null) {
+                    rejections.add(nodePath + "\n" + reason);
+                }
+                collectRejections(incremental.inputEdge.getSource(), context, nodePath + "/native-input", rejections);
+                return;
+            }
+            if (hasIncrementalGroupAggregateChain((StreamExecGlobalGroupAggregate) node)) {
+                rejections.add(nodePath
+                        + "\nincremental group aggregate: expanded or computed DISTINCT split input "
+                        + "requires dedicated native incremental stages");
+                return;
+            }
             TwoPhaseGroupAggregate twoPhase = twoPhaseGroupAggregate((StreamExecGlobalGroupAggregate) node);
             if (twoPhase == null) {
                 rejections.add(nodePath
@@ -422,6 +444,70 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             return replacement;
         }
         if (node instanceof StreamExecGlobalGroupAggregate) {
+            IncrementalGroupAggregate incremental = incrementalGroupAggregate((StreamExecGlobalGroupAggregate) node);
+            if (incremental != null) {
+                RowType localInternalType = nativeGroupAccumulatorType(
+                        (RowType) incremental.inputEdge.getOutputType(), localGroupGrouping(incremental.local));
+                StreamFusionExecLocalGroupAggregate local = new StreamFusionExecLocalGroupAggregate(
+                        incremental.local.getPersistedConfig(),
+                        localGroupGrouping(incremental.local),
+                        localGroupAggregateCalls(incremental.local),
+                        localGroupCallNeedRetractions(incremental.local),
+                        localGroupNeedRetraction(incremental.local),
+                        miniBatchSize(incremental.local),
+                        incremental.local.getInputProperties().get(0),
+                        localInternalType);
+                local.setInputEdges(
+                        List.of(copyEdge(incremental.inputEdge, convert(incremental.inputEdge.getSource()), local)));
+
+                StreamFusionExecExchange partialExchange = new StreamFusionExecExchange(
+                        incremental.partialExchange.getPersistedConfig(),
+                        incremental.partialExchange.getInputProperties().get(0),
+                        localInternalType,
+                        "StreamFusionExchange");
+                partialExchange.setInputEdges(List.of(
+                        copyEdge(incremental.partialExchange.getInputEdges().get(0), local, partialExchange)));
+
+                int[] finalGrouping = incrementalFinalGrouping(incremental.incremental);
+                RowType incrementalInternalType = nativeGroupingAccumulatorType(localInternalType, finalGrouping);
+                StreamFusionExecIncrementalGroupAggregate nativeIncremental =
+                        new StreamFusionExecIncrementalGroupAggregate(
+                                incremental.incremental.getPersistedConfig(),
+                                incrementalPartialOriginalInputType(incremental.incremental),
+                                localGroupGrouping(incremental.local).length,
+                                finalGrouping,
+                                incrementalOriginalCalls(incremental.incremental),
+                                incrementalCallNeedRetractions(incremental.incremental),
+                                globalGroupOriginalInputType(incremental.global),
+                                globalGroupAggregateCalls(incremental.global),
+                                globalGroupCallNeedRetractions(incremental.global),
+                                miniBatchSize(incremental.incremental),
+                                incremental.incremental.getInputProperties().get(0),
+                                incrementalInternalType);
+                nativeIncremental.setInputEdges(List.of(
+                        copyEdge(incremental.incremental.getInputEdges().get(0), partialExchange, nativeIncremental)));
+
+                StreamFusionExecExchange finalExchange = new StreamFusionExecExchange(
+                        incremental.finalExchange.getPersistedConfig(),
+                        incremental.finalExchange.getInputProperties().get(0),
+                        incrementalInternalType,
+                        "StreamFusionExchange");
+                finalExchange.setInputEdges(List.of(
+                        copyEdge(incremental.finalExchange.getInputEdges().get(0), nativeIncremental, finalExchange)));
+
+                StreamFusionExecGlobalGroupAggregate replacement = new StreamFusionExecGlobalGroupAggregate(
+                        incremental.global.getPersistedConfig(),
+                        globalGroupOriginalInputType(incremental.global),
+                        finalGrouping.length,
+                        globalGroupAggregateCalls(incremental.global),
+                        globalGroupCallNeedRetractions(incremental.global),
+                        globalGroupGenerateUpdateBefore(incremental.global),
+                        incremental.global.getInputProperties().get(0),
+                        (RowType) incremental.global.getOutputType());
+                replacement.setInputEdges(
+                        List.of(copyEdge(incremental.global.getInputEdges().get(0), finalExchange, replacement)));
+                return replacement;
+            }
             TwoPhaseGroupAggregate twoPhase = twoPhaseGroupAggregate((StreamExecGlobalGroupAggregate) node);
             if (twoPhase == null) {
                 throw new IllegalStateException("Selected malformed two-phase group aggregate");
@@ -434,7 +520,7 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     localGroupAggregateCalls(twoPhase.local),
                     localGroupCallNeedRetractions(twoPhase.local),
                     localGroupNeedRetraction(twoPhase.local),
-                    twoPhase.local.getPersistedConfig().get(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_SIZE),
+                    miniBatchSize(twoPhase.local),
                     twoPhase.local.getInputProperties().get(0),
                     internalType);
             local.setInputEdges(List.of(copyEdge(twoPhase.inputEdge, convert(twoPhase.inputEdge.getSource()), local)));
@@ -766,6 +852,14 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             node.replaceInputEdge(index, copyEdge(edge, convert(edge.getSource()), node));
         }
         return node;
+    }
+
+    private long miniBatchSize(ExecNodeBase<?> node) {
+        return node.getPersistedConfig()
+                .getOptional(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_SIZE)
+                .orElseGet(() -> activeTableConfig == null
+                        ? ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_SIZE.defaultValue()
+                        : activeTableConfig.get(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_SIZE));
     }
 
     private static ExecEdge copyEdge(ExecEdge edge, ExecNode<?> source, ExecNode<?> target) {
@@ -1178,6 +1272,82 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             throw new IllegalStateException("Could not inspect two-phase GroupAggregate support", e);
         } catch (InvocationTargetException e) {
             throw new IllegalStateException("Two-phase GroupAggregate support inspection failed", e.getCause());
+        }
+    }
+
+    private String unsupportedReason(IncrementalGroupAggregate aggregate, ProcessorContext context) {
+        RowType partialInput = incrementalPartialOriginalInputType(aggregate.incremental);
+        org.apache.calcite.rel.core.AggregateCall[] partialCalls = incrementalOriginalCalls(aggregate.incremental);
+        String partialReason = groupAggregateUnsupported(
+                context,
+                partialInput,
+                aggregateOutputType(partialInput, localGroupGrouping(aggregate.local), partialCalls),
+                localGroupGrouping(aggregate.local),
+                partialCalls,
+                incrementalCallNeedRetractions(aggregate.incremental),
+                false,
+                incrementalNeedRetraction(aggregate.incremental),
+                incrementalStateTtl(aggregate.incremental),
+                aggregate.incremental.getPersistedConfig());
+        if (partialReason != null) {
+            return "incremental partial " + partialReason;
+        }
+        String finalReason = groupAggregateUnsupported(
+                context,
+                globalGroupOriginalInputType(aggregate.global),
+                (RowType) aggregate.global.getOutputType(),
+                globalGroupGrouping(aggregate.global),
+                globalGroupAggregateCalls(aggregate.global),
+                globalGroupCallNeedRetractions(aggregate.global),
+                globalGroupGenerateUpdateBefore(aggregate.global),
+                globalGroupNeedRetraction(aggregate.global),
+                globalGroupStateTtl(aggregate.global),
+                aggregate.global.getPersistedConfig());
+        return finalReason == null ? null : "incremental final " + finalReason;
+    }
+
+    private String groupAggregateUnsupported(
+            ProcessorContext context,
+            RowType inputType,
+            RowType outputType,
+            int[] grouping,
+            org.apache.calcite.rel.core.AggregateCall[] calls,
+            boolean[] retractable,
+            boolean generateUpdateBefore,
+            boolean needRetraction,
+            long stateTtl,
+            ReadableConfig config) {
+        try {
+            Class<?> translator = Class.forName(
+                    GROUP_AGGREGATE_TRANSLATOR_CLASS,
+                    true,
+                    context.getPlanner().getFlinkContext().getClassLoader());
+            Method method = translator.getMethod(
+                    "unsupportedReason",
+                    RowType.class,
+                    RowType.class,
+                    int[].class,
+                    org.apache.calcite.rel.core.AggregateCall[].class,
+                    boolean[].class,
+                    boolean.class,
+                    boolean.class,
+                    long.class,
+                    ReadableConfig.class);
+            return (String) method.invoke(
+                    null,
+                    inputType,
+                    outputType,
+                    grouping,
+                    calls,
+                    retractable,
+                    generateUpdateBefore,
+                    needRetraction,
+                    stateTtl,
+                    config);
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
+            throw new IllegalStateException("Could not inspect incremental GroupAggregate support", e);
+        } catch (InvocationTargetException e) {
+            throw new IllegalStateException("Incremental GroupAggregate support inspection failed", e.getCause());
         }
     }
 
@@ -1609,8 +1779,17 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         return ((boolean[]) field(aggregate, StreamExecGlobalGroupAggregate.class, "aggCallNeedRetractions")).clone();
     }
 
+    private static boolean globalGroupNeedRetraction(StreamExecGlobalGroupAggregate aggregate) {
+        return (boolean) field(aggregate, StreamExecGlobalGroupAggregate.class, "needRetraction");
+    }
+
     private static boolean globalGroupGenerateUpdateBefore(StreamExecGlobalGroupAggregate aggregate) {
         return (boolean) field(aggregate, StreamExecGlobalGroupAggregate.class, "generateUpdateBefore");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<StateMetadata> globalGroupStateMetadata(StreamExecGlobalGroupAggregate aggregate) {
+        return (List<StateMetadata>) field(aggregate, StreamExecGlobalGroupAggregate.class, "stateMetadataList");
     }
 
     private static RowType globalGroupOriginalInputType(StreamExecGlobalGroupAggregate aggregate) {
@@ -1619,8 +1798,45 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
 
     @SuppressWarnings("unchecked")
     private static long globalGroupStateTtl(StreamExecGlobalGroupAggregate aggregate) {
+        List<StateMetadata> metadata = globalGroupStateMetadata(aggregate);
+        if (metadata == null || metadata.isEmpty()) {
+            return aggregate
+                    .getPersistedConfig()
+                    .get(ExecutionConfigOptions.IDLE_STATE_RETENTION)
+                    .toMillis();
+        }
+        return TimeUtils.parseDuration(metadata.get(0).getStateTtl()).toMillis();
+    }
+
+    private static org.apache.calcite.rel.core.AggregateCall[] incrementalOriginalCalls(
+            StreamExecIncrementalGroupAggregate aggregate) {
+        return ((org.apache.calcite.rel.core.AggregateCall[])
+                        field(aggregate, StreamExecIncrementalGroupAggregate.class, "partialOriginalAggCalls"))
+                .clone();
+    }
+
+    private static int[] incrementalFinalGrouping(StreamExecIncrementalGroupAggregate aggregate) {
+        return ((int[]) field(aggregate, StreamExecIncrementalGroupAggregate.class, "finalAggGrouping")).clone();
+    }
+
+    private static RowType incrementalPartialOriginalInputType(StreamExecIncrementalGroupAggregate aggregate) {
+        return (RowType) field(aggregate, StreamExecIncrementalGroupAggregate.class, "partialLocalAggInputType");
+    }
+
+    private static boolean[] incrementalCallNeedRetractions(StreamExecIncrementalGroupAggregate aggregate) {
+        return ((boolean[])
+                        field(aggregate, StreamExecIncrementalGroupAggregate.class, "partialAggCallNeedRetractions"))
+                .clone();
+    }
+
+    private static boolean incrementalNeedRetraction(StreamExecIncrementalGroupAggregate aggregate) {
+        return (boolean) field(aggregate, StreamExecIncrementalGroupAggregate.class, "partialAggNeedRetraction");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static long incrementalStateTtl(StreamExecIncrementalGroupAggregate aggregate) {
         List<StateMetadata> metadata =
-                (List<StateMetadata>) field(aggregate, StreamExecGlobalGroupAggregate.class, "stateMetadataList");
+                (List<StateMetadata>) field(aggregate, StreamExecIncrementalGroupAggregate.class, "stateMetadataList");
         if (metadata == null || metadata.isEmpty()) {
             return aggregate
                     .getPersistedConfig()
@@ -1638,6 +1854,32 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         }
         fields.add(
                 new RowType.RowField("__streamfusion_accumulator", new VarBinaryType(false, VarBinaryType.MAX_LENGTH)));
+        return new RowType(false, fields);
+    }
+
+    private static RowType nativeGroupingAccumulatorType(RowType inputType, int[] grouping) {
+        List<RowType.RowField> fields = new ArrayList<>(grouping.length + 1);
+        for (int index : grouping) {
+            RowType.RowField field = inputType.getFields().get(index);
+            fields.add(new RowType.RowField(field.getName(), field.getType()));
+        }
+        fields.add(
+                new RowType.RowField("__streamfusion_accumulator", new VarBinaryType(false, VarBinaryType.MAX_LENGTH)));
+        return new RowType(false, fields);
+    }
+
+    private static RowType aggregateOutputType(
+            RowType inputType, int[] grouping, org.apache.calcite.rel.core.AggregateCall[] calls) {
+        List<RowType.RowField> fields = new ArrayList<>(grouping.length + calls.length);
+        for (int index : grouping) {
+            RowType.RowField field = inputType.getFields().get(index);
+            fields.add(new RowType.RowField(field.getName(), field.getType()));
+        }
+        for (int index = 0; index < calls.length; index++) {
+            fields.add(new RowType.RowField(
+                    "aggregate_" + index,
+                    org.apache.flink.table.planner.calcite.FlinkTypeFactory.toLogicalType(calls[index].getType())));
+        }
         return new RowType(false, fields);
     }
 
@@ -1864,6 +2106,50 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                 (StreamExecExchange) exchange,
                 (StreamExecLocalGroupAggregate) local,
                 local.getInputEdges().get(0));
+    }
+
+    private static IncrementalGroupAggregate incrementalGroupAggregate(StreamExecGlobalGroupAggregate global) {
+        if (global.getInputEdges().size() != 1) {
+            return null;
+        }
+        ExecNode<?> finalExchange = global.getInputEdges().get(0).getSource();
+        if (!(finalExchange instanceof StreamExecExchange)
+                || finalExchange.getInputEdges().size() != 1) {
+            return null;
+        }
+        ExecNode<?> incremental = finalExchange.getInputEdges().get(0).getSource();
+        if (!(incremental instanceof StreamExecIncrementalGroupAggregate)
+                || incremental.getInputEdges().size() != 1) {
+            return null;
+        }
+        ExecNode<?> partialExchange = incremental.getInputEdges().get(0).getSource();
+        if (!(partialExchange instanceof StreamExecExchange)
+                || partialExchange.getInputEdges().size() != 1) {
+            return null;
+        }
+        ExecNode<?> local = partialExchange.getInputEdges().get(0).getSource();
+        if (!(local instanceof StreamExecLocalGroupAggregate)
+                || local.getInputEdges().size() != 1) {
+            return null;
+        }
+        ExecEdge originalInput = local.getInputEdges().get(0);
+        return new IncrementalGroupAggregate(
+                global,
+                (StreamExecExchange) finalExchange,
+                (StreamExecIncrementalGroupAggregate) incremental,
+                (StreamExecExchange) partialExchange,
+                (StreamExecLocalGroupAggregate) local,
+                originalInput);
+    }
+
+    private static boolean hasIncrementalGroupAggregateChain(StreamExecGlobalGroupAggregate global) {
+        if (global.getInputEdges().size() != 1) {
+            return false;
+        }
+        ExecNode<?> finalExchange = global.getInputEdges().get(0).getSource();
+        return finalExchange instanceof StreamExecExchange
+                && finalExchange.getInputEdges().size() == 1
+                && finalExchange.getInputEdges().get(0).getSource() instanceof StreamExecIncrementalGroupAggregate;
     }
 
     private static org.apache.flink.table.planner.plan.trait.MiniBatchInterval miniBatchInterval(
@@ -2158,6 +2444,30 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                 ExecEdge inputEdge) {
             this.global = global;
             this.exchange = exchange;
+            this.local = local;
+            this.inputEdge = inputEdge;
+        }
+    }
+
+    private static final class IncrementalGroupAggregate {
+        private final StreamExecGlobalGroupAggregate global;
+        private final StreamExecExchange finalExchange;
+        private final StreamExecIncrementalGroupAggregate incremental;
+        private final StreamExecExchange partialExchange;
+        private final StreamExecLocalGroupAggregate local;
+        private final ExecEdge inputEdge;
+
+        private IncrementalGroupAggregate(
+                StreamExecGlobalGroupAggregate global,
+                StreamExecExchange finalExchange,
+                StreamExecIncrementalGroupAggregate incremental,
+                StreamExecExchange partialExchange,
+                StreamExecLocalGroupAggregate local,
+                ExecEdge inputEdge) {
+            this.global = global;
+            this.finalExchange = finalExchange;
+            this.incremental = incremental;
+            this.partialExchange = partialExchange;
             this.local = local;
             this.inputEdge = inputEdge;
         }

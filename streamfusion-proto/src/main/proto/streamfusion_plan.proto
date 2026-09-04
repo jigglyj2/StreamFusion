@@ -63,6 +63,7 @@ message Operator {
     OverAggregate over_aggregate = 18;
     LocalGroupAggregate local_group_aggregate = 19;
     GlobalGroupAggregate global_group_aggregate = 20;
+    IncrementalGroupAggregate incremental_group_aggregate = 21;
   }
 }
 
@@ -241,6 +242,21 @@ message GlobalGroupAggregate {
   uint64 mini_batch_size = 5;
   Schema input_schema = 6;
   Schema output_schema = 7;
+}
+
+// Middle stage of Flink's local/incremental/global mini-batch aggregate. It merges opaque local
+// accumulator deltas by the split partial key, then emits one opaque accumulator delta per final
+// key for the persistent global stage. No Java code interprets either accumulator payload.
+message IncrementalGroupAggregate {
+  Operator input = 1;
+  uint32 partial_grouping_count = 2;
+  repeated uint32 final_grouping_indices = 3;
+  repeated AggregateCall partial_aggregate_calls = 4;
+  repeated AggregateCall final_aggregate_calls = 5;
+  repeated uint32 final_call_value_indices = 6;
+  uint64 mini_batch_size = 7;
+  Schema input_schema = 8;
+  Schema output_schema = 9;
 }
 
 // Stateful SQL window aggregation. Grouping rows and accumulators are opaque native state;

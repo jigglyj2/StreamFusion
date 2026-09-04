@@ -25,9 +25,9 @@ final class StreamFusionArrowGroupAggregateOperator extends AbstractStreamFusion
     private final RowType outputType;
     private final boolean inputChangelog;
     private final boolean preencodeKeys;
-    private final boolean selectDistinct;
     private final RowDataKeySelector keySelector;
     private final long miniBatchSize;
+    private final String operatorName;
     private transient long[] observedNativeStatistics;
 
     StreamFusionArrowGroupAggregateOperator(
@@ -48,13 +48,33 @@ final class StreamFusionArrowGroupAggregateOperator extends AbstractStreamFusion
             boolean inputChangelog,
             RowDataKeySelector keySelector,
             long miniBatchSize) {
-        super(serializedPlan, grouping.length == outputType.getFieldCount() ? "select distinct" : "group aggregate");
+        this(
+                inputType,
+                outputType,
+                grouping,
+                serializedPlan,
+                inputChangelog,
+                keySelector,
+                miniBatchSize,
+                grouping.length == outputType.getFieldCount() ? "select distinct" : "group aggregate");
+    }
+
+    StreamFusionArrowGroupAggregateOperator(
+            RowType inputType,
+            RowType outputType,
+            int[] grouping,
+            byte[] serializedPlan,
+            boolean inputChangelog,
+            RowDataKeySelector keySelector,
+            long miniBatchSize,
+            String operatorName) {
+        super(serializedPlan, operatorName);
         this.outputType = outputType;
         this.inputChangelog = inputChangelog;
         this.preencodeKeys = requiresPreencodedKeys(inputType, grouping);
-        this.selectDistinct = grouping.length == outputType.getFieldCount();
         this.keySelector = keySelector;
         this.miniBatchSize = miniBatchSize;
+        this.operatorName = operatorName;
     }
 
     @Override
@@ -85,9 +105,7 @@ final class StreamFusionArrowGroupAggregateOperator extends AbstractStreamFusion
                     }
                 }
             }
-            List<byte[]> keys = preencodeKeys
-                    ? preencodeKeys(input, keySelector, selectDistinct ? "select distinct" : "group aggregate")
-                    : null;
+            List<byte[]> keys = preencodeKeys ? preencodeKeys(input, keySelector, operatorName) : null;
             try (ArrowRowDataBatch outputBatch = ArrowGroupAggregateCDataBridge.execute(
                     nativeHandle(), input, keys, inputChangelog, outputType, allocator(), memoryManager())) {
                 int physicalOutputRecords = 0;

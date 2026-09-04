@@ -45,11 +45,11 @@ address, input topic, output topic, query name, and `flink` or `streamfusion` en
 generator in `/root/data/nexmark` marks a finite `events.num` run as bounded and signals completion
 after assigning its four checkpointed Source V2 splits. The upstream generator, RowData
 deserializer, reader, and split checkpoint state remain in use. The SQL plan runs at parallelism four
-by default and a benchmark result sink serializes and hashes the complete sorted `RowData`
-changelog. Checkpointing uses exactly-once mode and task restart is disabled so resource failures
+by default and a benchmark result sink serializes and hashes both the complete sorted `RowData`
+changelog and its final materialized multiset. Checkpointing uses exactly-once mode and task restart is disabled so resource failures
 surface instead of contaminating a timing with retries. It currently runs the fully accelerable q0,
 q1, q2, q8, q11, q12, q22, group-aggregate, select-distinct, top-n, limit, over-aggregate,
-over-aggregate-event-time, and over-aggregate-processing-time queries through both unmodified Flink
+over-aggregate-event-time, over-aggregate-processing-time, and incremental-group-aggregate queries through both unmodified Flink
 and StreamFusion. The focused
 workloads use the Nexmark bid stream to exercise keyed `COUNT(*)`/`SUM`/`AVG`/`MIN`/`MAX`, filtered
 and counted `DISTINCT` calls, integral and decimal AVG paths, partitioned non-window Top-10, global
@@ -58,6 +58,11 @@ OVER aggregation; they are not official numbered Nexmark queries. `over-aggregat
 retains the bid rowtime attribute so watermarks drive native event timers, while `over-aggregate`
 casts the same value to a regular timestamp for the non-time path. The processing-time case retains
 the bid filter and nested-row projection below its synthetic `PROCTIME()` order field.
+`incremental-group-aggregate` enables Flink's split-DISTINCT optimization and covers the complete
+local aggregate, expand, incremental aggregate, and final aggregate pipeline. Wall-clock checkpoint
+flushes can change valid intermediate update boundaries from run to run, so standalone output
+reports both `output_sha256` for the raw changelog and `materialized_sha256` for the final multiset.
+Use controlled SQL parity tests to validate byte-for-byte intermediate changelog semantics.
 
 Build the generator against Flink 2.3 and run all supported cases with:
 
@@ -92,6 +97,15 @@ Set `-Dstreamfusion.nexmark.mini-batch=true` to enable count-triggered mini-batc
 run. `-Dstreamfusion.nexmark.aggregate-phase=ONE_PHASE` or `TWO_PHASE` fixes Flink's aggregate phase
 strategy; the default is `AUTO`. These are benchmark controls applied identically to Flink and
 StreamFusion, not deployment settings.
+
+`-Dstreamfusion.nexmark.mini-batch-size=<records>` controls the count trigger and
+`-Dstreamfusion.nexmark.checkpoint-interval-ms=<milliseconds>` controls the exactly-once checkpoint
+interval; their defaults are 5,000 and 1,000 milliseconds. The optional
+`-Dstreamfusion.nexmark.managed-memory-mb=<MiB>` sets Flink's ordinary TaskManager managed-memory
+size for both engines and defaults to 1,024 MiB. Increase it for high-cardinality DISTINCT profiles
+instead of allowing either implementation to allocate state outside Flink's budget. The optional
+`-Dstreamfusion.nexmark.debug-rows=true` and `-Dstreamfusion.nexmark.debug-plan=true` switches print
+the collected rows and optimized SQL plan for diagnosis and should remain off for measurements.
 
 For example, after the integration-profile build:
 

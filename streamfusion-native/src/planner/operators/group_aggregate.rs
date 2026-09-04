@@ -34,7 +34,7 @@ const UPDATE_BEFORE: i8 = 1;
 const UPDATE_AFTER: i8 = 2;
 const DELETE: i8 = 3;
 const STATE_MAGIC: &[u8; 4] = b"SFGA";
-const STATE_VERSION: u8 = 5;
+const STATE_VERSION: u8 = 6;
 
 /// Persistent timer-free keyed aggregation handle shared by memory and RocksDB state.
 pub(crate) struct GroupAggregateProcessor {
@@ -1247,6 +1247,34 @@ impl AccumulatorState {
             }))
     }
 
+    pub(super) fn incremental_persistent_only(&self, calls: &[Call]) -> Self {
+        let neutral = Self::new(calls);
+        Self {
+            row_count: 0,
+            accumulators: calls
+                .iter()
+                .zip(&self.accumulators)
+                .zip(neutral.accumulators)
+                .map(|((call, current), empty)| {
+                    if incremental_call_requires_persistence(call) {
+                        current.clone()
+                    } else {
+                        empty
+                    }
+                })
+                .collect(),
+        }
+    }
+
+    pub(super) fn has_incremental_persistent_state(&self, calls: &[Call]) -> bool {
+        calls
+            .iter()
+            .zip(&self.accumulators)
+            .any(|(call, accumulator)| {
+                incremental_call_requires_persistence(call) && !accumulator_is_neutral(accumulator)
+            })
+    }
+
     /// Creates an accumulator seed from the result at the end of an already processed prefix.
     /// OVER aggregation uses this only to accumulate later rows; it never retracts from this
     /// compact seed. Keeping just the current extremum is therefore sufficient and avoids storing
@@ -1310,6 +1338,100 @@ impl AccumulatorState {
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
             row_count: 1,
+            accumulators,
+        })
+    }
+
+    /// Builds the accumulator delta produced when an incremental aggregate replaces one partial
+    /// accumulator value. Unlike ordinary row accumulation, COUNT consumes the numeric partial
+    /// count rather than counting the partial row itself.
+    #[cfg(test)]
+    pub(super) fn from_partial_values(
+        calls: &[Call],
+        values: &[Option<AggregateValue>],
+        row_count: i64,
+        accumulate: bool,
+    ) -> Result<Self> {
+        if calls.iter().any(|call| call.distinct) {
+            return Err(DataFusionError::Internal(
+                "incremental final aggregate cannot merge a DISTINCT call".to_string(),
+            ));
+        }
+        if calls.len() != values.len() {
+            return Err(DataFusionError::Internal(
+                "incremental partial value count does not match its calls".to_string(),
+            ));
+        }
+        let accumulators = calls
+            .iter()
+            .zip(values)
+            .map(|(call, value)| partial_value_accumulator(call, value.as_ref(), accumulate))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self {
+            row_count: if accumulate {
+                row_count
+            } else {
+                row_count.wrapping_neg()
+            },
+            accumulators,
+        })
+    }
+
+    /// Builds a final-stage delta directly from partial accumulators. This avoids allocating the
+    /// three temporary value vectors that a split-DISTINCT bundle would otherwise create for
+    /// every partial key.
+    pub(super) fn from_mapped_partial(
+        calls: &[Call],
+        partial_calls: &[Call],
+        persistent: &Self,
+        bundle: &Self,
+        value_indices: &[u32],
+        persistent_only: bool,
+        row_count: i64,
+        accumulate: bool,
+    ) -> Result<Self> {
+        if calls.len() != value_indices.len()
+            || partial_calls.len() != persistent.accumulators.len()
+            || partial_calls.len() != bundle.accumulators.len()
+        {
+            return Err(DataFusionError::Internal(
+                "incremental partial mapping does not match its accumulator plan".to_string(),
+            ));
+        }
+        let accumulators = calls
+            .iter()
+            .zip(value_indices)
+            .map(|(call, &index)| {
+                let value = if index == u32::MAX {
+                    None
+                } else {
+                    let index = index as usize;
+                    let partial_call = partial_calls.get(index).ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "incremental partial mapping index is out of bounds".to_string(),
+                        )
+                    })?;
+                    if persistent_only && !incremental_call_requires_persistence(partial_call) {
+                        None
+                    } else {
+                        let source = if incremental_call_requires_persistence(partial_call) {
+                            persistent
+                        } else {
+                            bundle
+                        };
+                        Some(accumulator_value(partial_call, &source.accumulators[index]))
+                    }
+                    .flatten()
+                };
+                partial_value_accumulator(call, value.as_ref(), accumulate)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self {
+            row_count: if accumulate {
+                row_count
+            } else {
+                row_count.wrapping_neg()
+            },
             accumulators,
         })
     }
@@ -1659,7 +1781,9 @@ impl AccumulatorState {
                         count: other_count,
                     },
                 ) => {
-                    if *other_count != 0 {
+                    // Incremental aggregation can replace one partial value with another. The
+                    // cardinality delta is then zero while the SUM delta is non-zero.
+                    if other_value.is_some() || *other_count != 0 {
                         *value = match (value.as_ref(), other_value.as_ref()) {
                             (Some(left), Some(right)) => {
                                 aggregate_add(left, right, &call.output_type)?
@@ -1679,7 +1803,9 @@ impl AccumulatorState {
                         count: other_count,
                     },
                 ) => {
-                    if *other_count != 0 {
+                    // As with SUM, a partial replacement can change the AVG numerator without
+                    // changing its contribution count.
+                    if other_value.is_some() || *other_count != 0 {
                         *value = match (value.as_ref(), other_value.as_ref()) {
                             (Some(left), Some(right)) => {
                                 aggregate_add(left, right, &call.average_accumulator_type())?
@@ -1726,43 +1852,119 @@ impl AccumulatorState {
         calls
             .iter()
             .zip(&self.accumulators)
-            .map(|(call, accumulator)| match accumulator {
-                Accumulator::Count(value) => Some(AggregateValue::Int(*value as i128)),
-                Accumulator::DistinctCount { count, .. } => {
-                    Some(AggregateValue::Int(*count as i128))
-                }
-                Accumulator::Sum { value, count } => {
-                    if *count == 0 {
-                        (call.function == proto::AggregateFunction::Sum0)
-                            .then(|| zero_value(&call.output_type))
-                    } else {
-                        value.clone()
-                    }
-                }
-                Accumulator::DistinctSum { value, count, .. } => {
-                    if *count == 0 {
-                        None
-                    } else {
-                        value.clone()
-                    }
-                }
-                Accumulator::Average { value, count }
-                | Accumulator::DistinctAverage { value, count, .. } => {
-                    average_value(value.as_ref(), *count, call)
-                }
-                Accumulator::AppendExtremum(value) => value.clone(),
-                Accumulator::Extremum(values) => match call.function {
-                    proto::AggregateFunction::Min => values
-                        .iter()
-                        .find_map(|(value, count)| (*count > 0).then(|| value.clone())),
-                    proto::AggregateFunction::Max => values
-                        .iter()
-                        .rev()
-                        .find_map(|(value, count)| (*count > 0).then(|| value.clone())),
-                    _ => unreachable!("validated extremum function"),
-                },
-            })
+            .map(|(call, accumulator)| accumulator_value(call, accumulator))
             .collect()
+    }
+}
+
+fn incremental_call_requires_persistence(call: &Call) -> bool {
+    call.distinct
+        || (call.retractable
+            && matches!(
+                call.function,
+                proto::AggregateFunction::Min | proto::AggregateFunction::Max
+            ))
+}
+
+fn partial_value_accumulator(
+    call: &Call,
+    value: Option<&AggregateValue>,
+    accumulate: bool,
+) -> Result<Accumulator> {
+    let direction = if accumulate { 1 } else { -1 };
+    match call.function {
+        proto::AggregateFunction::CountStar | proto::AggregateFunction::Count => {
+            let value = match value {
+                Some(AggregateValue::Int(value)) => i64::try_from(*value).map_err(|_| {
+                    DataFusionError::Execution(
+                        "incremental COUNT partial does not fit i64".to_string(),
+                    )
+                })?,
+                None => 0,
+                Some(_) => {
+                    return Err(DataFusionError::Internal(
+                        "incremental COUNT partial has a non-integer value".to_string(),
+                    ));
+                }
+            };
+            Ok(Accumulator::Count(value.wrapping_mul(direction)))
+        }
+        proto::AggregateFunction::Sum | proto::AggregateFunction::Sum0 => {
+            let value = match (value, accumulate) {
+                (Some(value), true) => Some(value.clone()),
+                (Some(value), false) => {
+                    aggregate_sub(&zero_value(&call.output_type), value, &call.output_type)?
+                }
+                (None, _) => None,
+            };
+            let count = i64::from(value.is_some()).wrapping_mul(direction);
+            Ok(Accumulator::Sum { value, count })
+        }
+        proto::AggregateFunction::Avg if accumulate => Ok(Accumulator::Average {
+            value: value.cloned(),
+            count: i64::from(value.is_some()),
+        }),
+        proto::AggregateFunction::Avg => Err(DataFusionError::Internal(
+            "incremental final AVG accumulator cannot be subtracted".to_string(),
+        )),
+        proto::AggregateFunction::Min | proto::AggregateFunction::Max if call.retractable => {
+            let mut values = BTreeMap::new();
+            if let Some(value) = value.cloned() {
+                values.insert(value, direction);
+            }
+            Ok(Accumulator::Extremum(values))
+        }
+        proto::AggregateFunction::Min | proto::AggregateFunction::Max if accumulate => {
+            Ok(Accumulator::AppendExtremum(value.cloned()))
+        }
+        proto::AggregateFunction::Min | proto::AggregateFunction::Max => {
+            if value.is_none() {
+                Ok(Accumulator::AppendExtremum(None))
+            } else {
+                Err(DataFusionError::Internal(
+                    "incremental final extremum replacement requires a retractable accumulator"
+                        .to_string(),
+                ))
+            }
+        }
+        proto::AggregateFunction::Unspecified => unreachable!("validated aggregate function"),
+    }
+}
+
+fn accumulator_value(call: &Call, accumulator: &Accumulator) -> Option<AggregateValue> {
+    match accumulator {
+        Accumulator::Count(value) => Some(AggregateValue::Int(*value as i128)),
+        Accumulator::DistinctCount { count, .. } => Some(AggregateValue::Int(*count as i128)),
+        Accumulator::Sum { value, count } => {
+            if *count == 0 {
+                (call.function == proto::AggregateFunction::Sum0)
+                    .then(|| zero_value(&call.output_type))
+            } else {
+                value.clone()
+            }
+        }
+        Accumulator::DistinctSum { value, count, .. } => {
+            if *count == 0 {
+                None
+            } else {
+                value.clone()
+            }
+        }
+        Accumulator::Average { value, count }
+        | Accumulator::DistinctAverage { value, count, .. } => {
+            average_value(value.as_ref(), *count, call)
+        }
+        Accumulator::AppendExtremum(value) => value.clone(),
+        Accumulator::Extremum(values) => match call.function {
+            proto::AggregateFunction::Min => values
+                .iter()
+                .find_map(|(value, count)| (*count > 0).then(|| value.clone())),
+            proto::AggregateFunction::Max => values
+                .iter()
+                .rev()
+                .find_map(|(value, count)| (*count > 0).then(|| value.clone())),
+            _ => unreachable!("validated extremum function"),
+        },
     }
 }
 
@@ -2591,12 +2793,19 @@ fn value_operation_error(
 }
 
 pub(super) fn encode_state(state: &AccumulatorState) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(32 + state.accumulators.len() * 24);
+    // Split-DISTINCT incremental state commonly has only one active accumulator family for a
+    // grouping key. Start with the exact sparse header instead of retaining worst-case capacity
+    // in every long-lived in-memory value; populated accumulators grow geometrically as needed.
+    let mut bytes = Vec::with_capacity(4 + 1 + 8 + 4 + state.accumulators.len());
     bytes.extend_from_slice(STATE_MAGIC);
     bytes.push(STATE_VERSION);
     bytes.extend_from_slice(&state.row_count.to_le_bytes());
     bytes.extend_from_slice(&(state.accumulators.len() as u32).to_le_bytes());
     for accumulator in &state.accumulators {
+        if accumulator_is_neutral(accumulator) {
+            bytes.push(0);
+            continue;
+        }
         match accumulator {
             Accumulator::Count(value) => {
                 bytes.push(1);
@@ -2669,6 +2878,39 @@ pub(super) fn encode_state(state: &AccumulatorState) -> Vec<u8> {
     bytes
 }
 
+fn accumulator_is_neutral(accumulator: &Accumulator) -> bool {
+    match accumulator {
+        Accumulator::Count(value) => *value == 0,
+        Accumulator::DistinctCount { count, values } => *count == 0 && values.is_empty(),
+        Accumulator::Sum { value, count } | Accumulator::Average { value, count } => {
+            *count == 0 && optional_value_is_zero(value.as_ref())
+        }
+        Accumulator::DistinctSum {
+            value,
+            count,
+            values,
+        }
+        | Accumulator::DistinctAverage {
+            value,
+            count,
+            values,
+        } => *count == 0 && values.is_empty() && optional_value_is_zero(value.as_ref()),
+        Accumulator::AppendExtremum(value) => value.is_none(),
+        Accumulator::Extremum(values) => values.is_empty(),
+    }
+}
+
+fn optional_value_is_zero(value: Option<&AggregateValue>) -> bool {
+    match value {
+        None | Some(AggregateValue::Int(0)) => true,
+        Some(AggregateValue::Float32(bits)) => f32::from_bits(*bits) == 0.0,
+        Some(AggregateValue::Float64(bits)) => f64::from_bits(*bits) == 0.0,
+        Some(AggregateValue::Boolean(_))
+        | Some(AggregateValue::Int(_))
+        | Some(AggregateValue::Bytes(_)) => false,
+    }
+}
+
 fn encode_counted_values(values: &BTreeMap<AggregateValue, i64>, bytes: &mut Vec<u8>) {
     bytes.extend_from_slice(&(values.len() as u32).to_le_bytes());
     for (value, count) in values {
@@ -2702,6 +2944,11 @@ pub(super) fn decode_state(bytes: &[u8], calls: &[Call]) -> Result<AccumulatorSt
     for call in calls {
         let tag = cursor.read_u8()?;
         let accumulator = match tag {
+            0 if version >= 6 => AccumulatorState::new(std::slice::from_ref(call))
+                .accumulators
+                .into_iter()
+                .next()
+                .expect("one call creates one accumulator"),
             1 => Accumulator::Count(cursor.read_i64()?),
             2 => Accumulator::Sum {
                 value: if version == 1 {
@@ -2816,7 +3063,7 @@ pub(super) fn decode_state(bytes: &[u8], calls: &[Call]) -> Result<AccumulatorSt
             }
             _ => unreachable!("validated aggregate function"),
         };
-        if tag != expected {
+        if tag != 0 && tag != expected {
             return Err(DataFusionError::Execution(
                 "group aggregate state does not match its plan".to_string(),
             ));
@@ -4010,6 +4257,11 @@ mod tests {
             },
         ];
         assert_eq!(decode_state(&encode_state(&state), &calls).unwrap(), state);
+
+        let neutral = AccumulatorState::new(&calls);
+        let encoded_neutral = encode_state(&neutral);
+        assert_eq!(encoded_neutral.len(), 4 + 1 + 8 + 4 + calls.len());
+        assert_eq!(decode_state(&encoded_neutral, &calls).unwrap(), neutral);
     }
 
     #[test]
@@ -4254,6 +4506,51 @@ mod tests {
             .apply_values(&calls, &[Some(AggregateValue::Int(5))], false)
             .unwrap();
         assert_eq!(state.values(&calls), vec![Some(AggregateValue::Int(0))]);
+    }
+
+    #[test]
+    fn merged_partial_replacement_preserves_value_delta_with_unchanged_count() {
+        let calls = vec![
+            Call {
+                function: proto::AggregateFunction::Sum,
+                input_index: Some(0),
+                filter_index: None,
+                distinct: false,
+                input_type: Some(DataType::Int64),
+                output_type: DataType::Int64,
+                retractable: true,
+            },
+            Call {
+                function: proto::AggregateFunction::Avg,
+                input_index: Some(0),
+                filter_index: None,
+                distinct: false,
+                input_type: Some(DataType::Int64),
+                output_type: DataType::Int64,
+                retractable: true,
+            },
+        ];
+        let five = Some(AggregateValue::Int(5));
+        let ten = Some(AggregateValue::Int(10));
+        let mut current = AccumulatorState::new(&calls);
+        current
+            .apply_values(&calls, &[five.clone(), five.clone()], true)
+            .unwrap();
+
+        let mut replacement = AccumulatorState::new(&calls);
+        replacement
+            .apply_values(&calls, &[five.clone(), five], false)
+            .unwrap();
+        replacement
+            .apply_values(&calls, &[ten.clone(), ten], true)
+            .unwrap();
+        assert_eq!(replacement.row_count, 0);
+
+        current.merge(&calls, &replacement).unwrap();
+        assert_eq!(
+            current.values(&calls),
+            vec![Some(AggregateValue::Int(10)), Some(AggregateValue::Int(10))]
+        );
     }
 
     fn output_rows(

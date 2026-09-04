@@ -2,6 +2,7 @@ package tech.streamfusion.benchmark.nexmark;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.time.Duration;
 import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assumptions;
@@ -67,6 +68,33 @@ class LocalRowDataNexmarkBenchmarkIT {
             assertThat(streamFusion.outputSha256()).isEqualTo(flink.outputSha256());
             assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
             assertThat(streamFusion.nativeGroupAggregateBatches()).isGreaterThan(0);
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"hashmap", "rocksdb"})
+    void incrementalGroupAggregateMatchesFlinkOnBothStateBackends(String backend) throws Exception {
+        System.setProperty("streamfusion.nexmark.mini-batch", "true");
+        System.setProperty("streamfusion.nexmark.mini-batch-size", "32");
+        System.setProperty(
+                "streamfusion.nexmark.checkpoint-interval-ms",
+                Long.toString(Duration.ofDays(1).toMillis()));
+        try {
+            LocalRowDataNexmarkBenchmark.RunResult flink =
+                    LocalRowDataNexmarkBenchmark.run(2_000, "incremental-group-aggregate", false, backend, 1);
+            LocalRowDataNexmarkBenchmark.RunResult streamFusion =
+                    LocalRowDataNexmarkBenchmark.run(2_000, "incremental-group-aggregate", true, backend, 1);
+
+            assertThat(streamFusion.completed()).isTrue();
+            assertThat(streamFusion.materializedDebugRows()).containsExactlyElementsOf(flink.materializedDebugRows());
+            assertThat(streamFusion.materializedRows()).isEqualTo(flink.materializedRows());
+            assertThat(streamFusion.materializedSha256()).isEqualTo(flink.materializedSha256());
+            assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+            assertThat(streamFusion.nativeGroupAggregateBatches()).isGreaterThan(0);
+        } finally {
+            System.clearProperty("streamfusion.nexmark.mini-batch");
+            System.clearProperty("streamfusion.nexmark.mini-batch-size");
+            System.clearProperty("streamfusion.nexmark.checkpoint-interval-ms");
         }
     }
 

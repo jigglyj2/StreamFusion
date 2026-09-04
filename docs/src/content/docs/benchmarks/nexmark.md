@@ -41,7 +41,12 @@ Source V2 splits; it does not replace the upstream generator or reader checkpoin
 splits emit Flink internal `RowData`, and a black-hole table sink consumes `RowData` after the SQL
 plan. Both source and query run at parallelism four, and checkpointing uses `EXACTLY_ONCE`. This
 variant isolates planner and native-operator throughput from broker and JSON costs. The benchmark
-result sink serializes and hashes the complete sorted changelog rather than discarding it. The
+result sink serializes and hashes both the complete sorted changelog and its final materialized
+multiset rather than discarding it. The raw hash detects changes to every emitted update. The
+materialized hash is also reported because processing-time checkpoint triggers may flush a
+mini-batch at different input boundaries in otherwise equivalent runs, producing different valid
+intermediate updates but the same final table. Controlled SQL parity tests remain the authority for
+byte-for-byte changelog parity. The
 bounded adapter seeds each source split deterministically and restores the upstream
 generator position, so Flink and StreamFusion receive identical events. This remains a Kafka-free
 operator benchmark and does not replace the Kafka-in/Kafka-out north-star benchmark.
@@ -81,7 +86,8 @@ engine selector (`flink`, `streamfusion`, or `both`) for standalone measurements
 end-to-end elapsed time, input-event throughput, native calc batches, native group-aggregate
 batches, native window-aggregate batches, native Window Join batches, native regular-join batches,
 native interval-join batches, native OVER-aggregate batches,
-and a row count plus SHA-256 for the full result changelog. The `aggregate-modifiers`,
+and row counts plus SHA-256 hashes for the full result changelog and final materialized multiset.
+The `aggregate-modifiers`, `incremental-group-aggregate`,
 `group-aggregate`, `global-aggregate`, `grouping-sets`, `interval-join`, `over-aggregate`,
 `over-aggregate-event-time`, `over-aggregate-processing-time`,
 `over-aggregate-bounded-rows`, `over-aggregate-bounded-range`, `select-distinct`, `top-n`, and
@@ -96,6 +102,10 @@ ten-second event-time range respectively.
 `aggregate-modifiers` includes ordinary and counted-distinct AVG plus an explicit
 `BIGINT`-to-`DECIMAL` AVG, so release profiles cover both fixed-width integer and exact decimal
 sum/count state rather than only the aggregate modifier dispatch.
+`incremental-group-aggregate` enables Flink's split-DISTINCT optimization and exercises the native
+local aggregate, row expansion, incremental aggregate, and final aggregate pipeline. Its
+integration test suppresses wall-clock checkpoint flushes so only deterministic count-triggered
+bundle boundaries affect the comparison.
 Performance reports
 must come from separate, unprofiled JVM forks built with release-mode native code; profiler runs
 are diagnostic artifacts rather than benchmark measurements.

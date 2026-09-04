@@ -183,7 +183,13 @@ public final class StreamFusionGroupAggregateTranslator {
                 return "key: index " + inputIndex + " is outside the input row";
             }
             if (!inputType.getTypeAt(inputIndex).equals(outputType.getTypeAt(outputIndex))) {
-                return "key[" + outputIndex + "]: input and output types must match exactly";
+                return "key["
+                        + outputIndex
+                        + "]: input type "
+                        + inputType.getTypeAt(inputIndex)
+                        + " and output type "
+                        + outputType.getTypeAt(outputIndex)
+                        + " must match exactly";
             }
         }
         for (int index = 0; index < calls.length; index++) {

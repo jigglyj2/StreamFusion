@@ -14,6 +14,7 @@ pub(crate) mod deduplicate;
 pub(super) mod expand;
 pub(crate) mod global_group_aggregate;
 pub(crate) mod group_aggregate;
+pub(crate) mod incremental_group_aggregate;
 pub(super) mod input;
 pub(crate) mod interval_join;
 pub(crate) mod local_group_aggregate;

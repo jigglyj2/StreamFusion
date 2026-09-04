@@ -31,7 +31,7 @@ public final class LocalRowDataNexmarkBenchmark {
                         RunResult result = run(events, query, streamFusion, backend, parallelism);
                         String explain = streamFusion ? StreamFusionPlanningDiagnostics.explain() : "";
                         System.out.printf(
-                                "%s engine=%s state_backend=%s accelerated=%s input_events=%d elapsed_seconds=%.6f input_events_per_second=%.2f native_calc_batches=%d native_group_aggregate_batches=%d native_top_n_batches=%d native_window_aggregate_batches=%d native_window_join_batches=%d native_regular_join_batches=%d native_interval_join_batches=%d native_over_aggregate_batches=%d output_rows=%d output_sha256=%s%n",
+                                "%s engine=%s state_backend=%s accelerated=%s input_events=%d elapsed_seconds=%.6f input_events_per_second=%.2f native_calc_batches=%d native_group_aggregate_batches=%d native_top_n_batches=%d native_window_aggregate_batches=%d native_window_join_batches=%d native_regular_join_batches=%d native_interval_join_batches=%d native_over_aggregate_batches=%d output_rows=%d output_sha256=%s materialized_rows=%d materialized_sha256=%s%n",
                                 query,
                                 streamFusion ? "streamfusion" : "flink",
                                 backend,
@@ -48,9 +48,16 @@ public final class LocalRowDataNexmarkBenchmark {
                                 result.nativeIntervalJoinBatches(),
                                 result.nativeOverAggregateBatches(),
                                 result.outputRows(),
-                                result.outputSha256());
+                                result.outputSha256(),
+                                result.materializedRows(),
+                                result.materializedSha256());
                         if (streamFusion && !explain.contains("Accelerated: yes")) {
                             System.out.println("NEXMARK_EXPLAIN " + explain.replace('\n', ' '));
+                        }
+                        if (Boolean.getBoolean("streamfusion.nexmark.debug-rows")) {
+                            result.debugRows().forEach(row -> System.out.println("NEXMARK_ROW " + row));
+                            result.materializedDebugRows()
+                                    .forEach(row -> System.out.println("NEXMARK_MATERIALIZED_ROW " + row));
                         }
                     }
                 }
@@ -87,7 +94,10 @@ public final class LocalRowDataNexmarkBenchmark {
                 StreamFusionPlannerFactory.nativeOverAggregateBatchCount(),
                 output.rowCount(),
                 output.sha256(),
-                output.debugRows());
+                output.debugRows(),
+                output.materializedRowCount(),
+                output.materializedSha256(),
+                output.materializedDebugRows());
     }
 
     static List<Boolean> engines(String engine) {
@@ -130,6 +140,9 @@ public final class LocalRowDataNexmarkBenchmark {
         private final long outputRows;
         private final String outputSha256;
         private final List<String> debugRows;
+        private final long materializedRows;
+        private final String materializedSha256;
+        private final List<String> materializedDebugRows;
 
         private RunResult(
                 long elapsedNanos,
@@ -143,7 +156,10 @@ public final class LocalRowDataNexmarkBenchmark {
                 long nativeOverAggregateBatches,
                 long outputRows,
                 String outputSha256,
-                List<String> debugRows) {
+                List<String> debugRows,
+                long materializedRows,
+                String materializedSha256,
+                List<String> materializedDebugRows) {
             this.elapsedNanos = elapsedNanos;
             this.nativeCalcBatches = nativeCalcBatches;
             this.nativeGroupAggregateBatches = nativeGroupAggregateBatches;
@@ -156,6 +172,9 @@ public final class LocalRowDataNexmarkBenchmark {
             this.outputRows = outputRows;
             this.outputSha256 = outputSha256;
             this.debugRows = List.copyOf(debugRows);
+            this.materializedRows = materializedRows;
+            this.materializedSha256 = materializedSha256;
+            this.materializedDebugRows = List.copyOf(materializedDebugRows);
         }
 
         private double recordsPerSecond(long inputRows) {
@@ -208,6 +227,18 @@ public final class LocalRowDataNexmarkBenchmark {
 
         List<String> debugRows() {
             return debugRows;
+        }
+
+        long materializedRows() {
+            return materializedRows;
+        }
+
+        String materializedSha256() {
+            return materializedSha256;
+        }
+
+        List<String> materializedDebugRows() {
+            return materializedDebugRows;
         }
 
         boolean completed() {

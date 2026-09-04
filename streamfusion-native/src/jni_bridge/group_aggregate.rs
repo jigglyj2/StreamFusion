@@ -16,11 +16,13 @@ use super::common::{export_record_batch, import_record_batch};
 use crate::memory_pool::{HostMemoryReservation, JvmMemoryReservationBroker};
 use crate::planner::operators::global_group_aggregate::GlobalGroupAggregateProcessor;
 use crate::planner::operators::group_aggregate::GroupAggregateProcessor;
+use crate::planner::operators::incremental_group_aggregate::IncrementalGroupAggregateProcessor;
 use crate::proto;
 
 enum AggregateProcessor {
     Group(GroupAggregateProcessor),
     Global(GlobalGroupAggregateProcessor),
+    Incremental(IncrementalGroupAggregateProcessor),
 }
 
 impl AggregateProcessor {
@@ -31,22 +33,30 @@ impl AggregateProcessor {
         last_key_group: u32,
         reservation: HostMemoryReservation,
     ) -> datafusion::error::Result<Self> {
-        if is_global(plan)? {
-            Ok(Self::Global(GlobalGroupAggregateProcessor::new(
+        match aggregate_kind(plan)? {
+            AggregateKind::Global => Ok(Self::Global(GlobalGroupAggregateProcessor::new(
                 plan,
                 max_parallelism,
                 first_key_group,
                 last_key_group,
                 reservation,
-            )?))
-        } else {
-            Ok(Self::Group(GroupAggregateProcessor::new(
+            )?)),
+            AggregateKind::Incremental => {
+                Ok(Self::Incremental(IncrementalGroupAggregateProcessor::new(
+                    plan,
+                    max_parallelism,
+                    first_key_group,
+                    last_key_group,
+                    reservation,
+                )?))
+            }
+            AggregateKind::Group => Ok(Self::Group(GroupAggregateProcessor::new(
                 plan,
                 max_parallelism,
                 first_key_group,
                 last_key_group,
                 reservation,
-            )?))
+            )?)),
         }
     }
 
@@ -61,8 +71,8 @@ impl AggregateProcessor {
         memory_limit: usize,
         reservation: HostMemoryReservation,
     ) -> datafusion::error::Result<Self> {
-        if is_global(plan)? {
-            Ok(Self::Global(GlobalGroupAggregateProcessor::new_rocksdb(
+        match aggregate_kind(plan)? {
+            AggregateKind::Global => Ok(Self::Global(GlobalGroupAggregateProcessor::new_rocksdb(
                 plan,
                 max_parallelism,
                 first_key_group,
@@ -71,9 +81,20 @@ impl AggregateProcessor {
                 database_path,
                 memory_limit,
                 reservation,
-            )?))
-        } else {
-            Ok(Self::Group(GroupAggregateProcessor::new_rocksdb(
+            )?)),
+            AggregateKind::Incremental => Ok(Self::Incremental(
+                IncrementalGroupAggregateProcessor::new_rocksdb(
+                    plan,
+                    max_parallelism,
+                    first_key_group,
+                    last_key_group,
+                    plugin_path,
+                    database_path,
+                    memory_limit,
+                    reservation,
+                )?,
+            )),
+            AggregateKind::Group => Ok(Self::Group(GroupAggregateProcessor::new_rocksdb(
                 plan,
                 max_parallelism,
                 first_key_group,
@@ -82,7 +103,7 @@ impl AggregateProcessor {
                 database_path,
                 memory_limit,
                 reservation,
-            )?))
+            )?)),
         }
     }
 
@@ -93,6 +114,7 @@ impl AggregateProcessor {
         match self {
             Self::Group(processor) => processor.process_arrow(batch),
             Self::Global(processor) => processor.process_arrow(batch),
+            Self::Incremental(processor) => processor.process_arrow(batch),
         }
     }
 
@@ -100,6 +122,7 @@ impl AggregateProcessor {
         match self {
             Self::Group(processor) => processor.finish_bundle(),
             Self::Global(processor) => processor.finish_bundle(),
+            Self::Incremental(processor) => processor.finish_bundle(),
         }
     }
 
@@ -107,6 +130,7 @@ impl AggregateProcessor {
         match self {
             Self::Group(processor) => processor.pending_element_count(),
             Self::Global(processor) => processor.pending_element_count(),
+            Self::Incremental(processor) => processor.pending_element_count(),
         }
     }
 
@@ -114,6 +138,7 @@ impl AggregateProcessor {
         match self {
             Self::Group(processor) => processor.pending_key_count(),
             Self::Global(processor) => processor.pending_key_count(),
+            Self::Incremental(processor) => processor.pending_key_count(),
         }
     }
 
@@ -121,6 +146,7 @@ impl AggregateProcessor {
         match self {
             Self::Group(processor) => processor.statistics(),
             Self::Global(processor) => processor.statistics(),
+            Self::Incremental(processor) => processor.statistics(),
         }
     }
 
@@ -128,6 +154,7 @@ impl AggregateProcessor {
         match self {
             Self::Group(processor) => processor.snapshot_key_group(key_group),
             Self::Global(processor) => processor.snapshot_key_group(key_group),
+            Self::Incremental(processor) => processor.snapshot_key_group(key_group),
         }
     }
 
@@ -135,6 +162,7 @@ impl AggregateProcessor {
         match self {
             Self::Group(processor) => processor.restore_key_group(key_group, bytes),
             Self::Global(processor) => processor.restore_key_group(key_group, bytes),
+            Self::Incremental(processor) => processor.restore_key_group(key_group, bytes),
         }
     }
 
@@ -142,18 +170,32 @@ impl AggregateProcessor {
         match self {
             Self::Group(processor) => processor.checkpoint(directory),
             Self::Global(processor) => processor.checkpoint(directory),
+            Self::Incremental(processor) => processor.checkpoint(directory),
         }
     }
 }
 
-fn is_global(plan: &[u8]) -> datafusion::error::Result<bool> {
+enum AggregateKind {
+    Group,
+    Global,
+    Incremental,
+}
+
+fn aggregate_kind(plan: &[u8]) -> datafusion::error::Result<AggregateKind> {
     let native = proto::NativePlan::decode(plan).map_err(|error| {
         datafusion::error::DataFusionError::Plan(format!("invalid native plan: {error}"))
     })?;
-    Ok(matches!(
-        native.root.and_then(|operator| operator.operator),
-        Some(proto::operator::Operator::GlobalGroupAggregate(_))
-    ))
+    match native.root.and_then(|operator| operator.operator) {
+        Some(proto::operator::Operator::GroupAggregate(_)) => Ok(AggregateKind::Group),
+        Some(proto::operator::Operator::GlobalGroupAggregate(_)) => Ok(AggregateKind::Global),
+        Some(proto::operator::Operator::IncrementalGroupAggregate(_)) => {
+            Ok(AggregateKind::Incremental)
+        }
+        _ => Err(datafusion::error::DataFusionError::Plan(
+            "native aggregate handle requires a group, global, or incremental aggregate root"
+                .to_string(),
+        )),
+    }
 }
 
 #[unsafe(no_mangle)]

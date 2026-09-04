@@ -14,6 +14,7 @@ import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.RowType;
+import org.apache.flink.types.RowKind;
 
 /** Result sink that serializes the complete Flink changelog for deterministic comparison. */
 final class BenchmarkResultDynamicTableSink implements DynamicTableSink {
@@ -71,12 +72,22 @@ final class BenchmarkResultDynamicTableSink implements DynamicTableSink {
         public void invoke(RowData value, Context context) throws IOException {
             DataOutputSerializer output = new DataOutputSerializer(256);
             serializer.serialize(value, output);
+            RowData materialized = serializer.copy(value);
+            boolean accumulate = value.getRowKind() == RowKind.INSERT || value.getRowKind() == RowKind.UPDATE_AFTER;
+            materialized.setRowKind(RowKind.INSERT);
+            DataOutputSerializer materializedOutput = new DataOutputSerializer(256);
+            serializer.serialize(materialized, materializedOutput);
             Object[] fields = new Object[fieldGetters.length];
             for (int index = 0; index < fieldGetters.length; index++) {
                 fields[index] = fieldGetters[index].getFieldOrNull(value);
             }
             BenchmarkResultStore.add(
-                    runId, output.getCopyOfBuffer(), value.getRowKind().shortString() + Arrays.toString(fields));
+                    runId,
+                    output.getCopyOfBuffer(),
+                    materializedOutput.getCopyOfBuffer(),
+                    accumulate,
+                    value.getRowKind().shortString() + Arrays.toString(fields),
+                    RowKind.INSERT.shortString() + Arrays.toString(fields));
         }
     }
 }

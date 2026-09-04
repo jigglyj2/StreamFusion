@@ -12,6 +12,7 @@ package tech.streamfusion.flink.sql;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.stream.Stream;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
@@ -37,5 +38,22 @@ class StringHashCodeParityTest extends SqlParityTestSupport {
                 "SELECT HASH_CODE(text_value) FROM " + INPUT,
                 "SELECT text_value FROM " + INPUT + " WHERE HASH_CODE(text_value) = 96354",
                 "SELECT HASH_CODE(UPPER(text_value)) FROM " + INPUT);
+    }
+
+    @Test
+    void signedIntegralHashCodesMatchJavaAndFlinkByteForByte() throws Exception {
+        assertParity(
+                "SELECT HASH_CODE(tiny_value), HASH_CODE(small_value), HASH_CODE(int_value), "
+                        + "HASH_CODE(big_value) FROM (VALUES "
+                        + "(CAST(1 AS TINYINT), CAST(-2 AS SMALLINT), 3, CAST(4 AS BIGINT)), "
+                        + "(CAST(-128 AS TINYINT), CAST(-32768 AS SMALLINT), -2147483648, "
+                        + "CAST(-9223372036854775808 AS BIGINT)), "
+                        + "(CAST(NULL AS TINYINT), CAST(NULL AS SMALLINT), CAST(NULL AS INT), "
+                        + "CAST(NULL AS BIGINT))) input(tiny_value, small_value, int_value, big_value)",
+                true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isGreaterThan(0);
     }
 }

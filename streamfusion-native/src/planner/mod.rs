@@ -124,6 +124,12 @@ fn create_operator(
         Some(proto::operator::Operator::GlobalGroupAggregate(_)) => Err(DataFusionError::Plan(
             "GlobalGroupAggregate requires a persistent stateful execution handle".to_string(),
         )),
+        Some(proto::operator::Operator::IncrementalGroupAggregate(_)) => {
+            Err(DataFusionError::Plan(
+                "IncrementalGroupAggregate requires a persistent bundle execution handle"
+                    .to_string(),
+            ))
+        }
         Some(proto::operator::Operator::WindowAggregate(_)) => Err(DataFusionError::Plan(
             "WindowAggregate requires a persistent stateful execution handle".to_string(),
         )),

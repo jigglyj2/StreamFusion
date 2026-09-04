@@ -49,7 +49,17 @@ identical allocation per input row. Flink's `StreamExecExpand` is accelerated fo
 changing their logical type. Generated parity cases cover scalar binary, decimal, date, and
 timestamp keys as well as opaque array and row keys through that nullable boundary.
 
-One- and two-phase count-triggered mini-batch aggregation are accelerated. The two-phase shape is
+One- and two-phase count-triggered mini-batch aggregation are accelerated. Flink's split-DISTINCT
+three-stage shape is also accelerated for the aggregate/type combinations above. It remains three
+observable physical stages—native local aggregate, native stateful incremental aggregate, and
+native global aggregate—with the two planned exchanges retained between them. The incremental
+stage keeps counted DISTINCT membership and retractable extrema by partial key, merges local opaque
+deltas, and emits one opaque net accumulator delta per final key. Ordinary COUNT/SUM/AVG and
+append-only extrema remain bundle-local, so they do not create keyed-state reads or tombstones.
+Duplicate values and extrema replacements therefore remain correct across bundle boundaries,
+including after retractions and recovery.
+
+The two-phase shape is
 lowered as distinct native local aggregate, native exchange, and native global aggregate plan
 nodes. The local stage is state-free and emits grouping columns plus one opaque, versioned native
 accumulator; neither the exchange nor Java interprets that accumulator. The global stage merges
@@ -61,7 +71,9 @@ configured count, before a watermark or checkpoint, and at bounded input complet
 Processing-time and row-time mini-batch assigners remain Arrow control operators and never
 transpose the payload back to rows. Local bundle output follows Flink's Java `HashMap` bucket
 iteration order because that order can affect the receiving global bundle boundary and therefore
-the observable changelog.
+the observable changelog. Native `Expand` emits projection results in Flink's input-row-major
+order; projection-major union batches are not used because they would alter local and incremental
+bundle boundaries.
 
 State TTL, async state, Flink's changelog-state wrapper, multi-column `DISTINCT`,
 ordered or approximate aggregates, `IGNORE NULLS`, unsupported aggregate functions, and
@@ -89,8 +101,9 @@ The aggregate uses the shared backend-neutral native keyed-state interface:
   missing-key reads and mutations at exact Flink bundle boundaries.
 
 Both backends use the same versioned canonical key-group snapshot format. Accumulator payload
-version 5 adds ordinary and counted-distinct AVG sum/count state while continuing to read versions
-1–4; version 4 added counted `DISTINCT` sets, and version 3 introduced typed boolean,
+version 6 adds sparse neutral-accumulator tags while continuing to read versions 1–5; version 5
+added ordinary and counted-distinct AVG sum/count state, version 4 added counted `DISTINCT` sets,
+and version 3 introduced typed boolean,
 floating-point, string, temporal, and nullable decimal-overflow state.
 Canonical savepoints are tested across all four source/target
 backend pairs and redistribute key groups during both 1-to-N and N-to-1 rescaling. Regular RocksDB
@@ -102,9 +115,15 @@ backend pairs with canonical savepoints and with both aligned and unaligned chec
 state remains singleton state; keyed and grouping-set aggregates retain the normal Flink key-group
 rescaling contract. The two-phase global operator uses that identical snapshot/checkpoint path;
 canonical native global state is also round-tripped between the memory and RocksDB processors. The
-local stage flushes before the checkpoint pre-barrier and has no persistent state of its own.
+local stage flushes before the checkpoint pre-barrier and has no persistent state of its own. The
+stateful incremental stage uses the same canonical raw-keyed snapshot and direct RocksDB ABI as
+the global stage. Native tests cover duplicate/retraction restoration after key-group rescaling,
+memory-to-RocksDB restoration, batched state reads and writes, state-free ordinary split branches,
+and managed memory admission. Its pending bundle is flushed before checkpoint snapshotting by the
+shared group-aggregate operator lifecycle.
 
-The aggregate operator has no timers in either the immediate or count-triggered mini-batch shape.
+The aggregate operator has no timers in the immediate, two-phase, or split-DISTINCT
+count-triggered mini-batch shapes.
 A pending mini-batch is finished before the checkpoint pre-barrier hook, so aligned and unaligned
 checkpoints snapshot the same canonical aggregate state; Flink's channel-state machinery owns
 messages still in flight and the native state does not need a second message sequence log. The
@@ -129,11 +148,15 @@ completed bundle, while preserving Flink `HashMap` iteration order inside the bu
 aggregate-group/cache shape used by RisingWave and Arroyo's Arrow incremental aggregates while
 retaining Flink's immediate or mini-batch changelog contract as planned.
 
-The RowData Nexmark `group-aggregate`, `global-aggregate`, and `grouping-sets` harnesses compare
-Flink and StreamFusion in separate JVMs for both state backends. Benchmark builds use the Rust
-release profile and the build machine's native CPU feature set. The harness records elapsed time,
-input throughput, native calculation batches, and native aggregate batches so exchange
-fragmentation and JNI call amplification remain visible.
+The RowData Nexmark `group-aggregate`, `global-aggregate`, `grouping-sets`, and
+`incremental-group-aggregate` harnesses compare Flink and StreamFusion in separate JVMs for both
+state backends. Benchmark builds use the Rust release profile and the build machine's native CPU
+feature set. The harness records elapsed time, input throughput, native calculation batches, and
+native aggregate batches so exchange fragmentation and JNI call amplification remain visible.
+
+The published measurements below predate the split-DISTINCT incremental executor and therefore do
+not claim performance results for that three-stage shape. Its dedicated alternating-fork memory
+and RocksDB measurement and mixed-stack profiles have not yet been published.
 
 On the September 4, 2026 local one-million-event two-phase run at parallelism four and bundle size
 5,000, three alternating fresh-JVM forks produced in-memory medians of 184,336 events/s for Flink

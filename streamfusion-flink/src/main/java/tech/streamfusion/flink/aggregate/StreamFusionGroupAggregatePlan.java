@@ -20,6 +20,7 @@ import tech.streamfusion.proto.plan.v1.AggregateFunction;
 import tech.streamfusion.proto.plan.v1.Field;
 import tech.streamfusion.proto.plan.v1.GlobalGroupAggregate;
 import tech.streamfusion.proto.plan.v1.GroupAggregate;
+import tech.streamfusion.proto.plan.v1.IncrementalGroupAggregate;
 import tech.streamfusion.proto.plan.v1.Input;
 import tech.streamfusion.proto.plan.v1.LocalGroupAggregate;
 import tech.streamfusion.proto.plan.v1.NativePlan;
@@ -104,6 +105,48 @@ final class StreamFusionGroupAggregatePlan {
         return NativePlan.newBuilder()
                 .setProtocolVersion(1)
                 .setRoot(Operator.newBuilder().setGlobalGroupAggregate(aggregate))
+                .build()
+                .toByteArray();
+    }
+
+    static byte[] createIncremental(
+            RowType partialOriginalInputType,
+            RowType internalInputType,
+            RowType internalOutputType,
+            int partialGroupingCount,
+            int[] finalGrouping,
+            AggregateCall[] partialCalls,
+            boolean[] partialRetractable,
+            RowType finalOriginalInputType,
+            AggregateCall[] finalCalls,
+            boolean[] finalRetractable,
+            long miniBatchSize) {
+        IncrementalGroupAggregate.Builder aggregate = IncrementalGroupAggregate.newBuilder()
+                .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
+                .setPartialGroupingCount(partialGroupingCount)
+                .setMiniBatchSize(miniBatchSize)
+                .setInputSchema(schema(internalInputType))
+                .setOutputSchema(schema(internalOutputType))
+                .addAllPartialAggregateCalls(aggregateCalls(partialOriginalInputType, partialCalls, partialRetractable))
+                .addAllFinalAggregateCalls(aggregateCalls(finalOriginalInputType, finalCalls, finalRetractable));
+        for (int index : finalGrouping) {
+            aggregate.addFinalGroupingIndices(index);
+        }
+        for (AggregateCall call : finalCalls) {
+            if (call.getArgList().isEmpty()) {
+                aggregate.addFinalCallValueIndices(-1);
+            } else {
+                int valueIndex = call.getArgList().get(0) - partialGroupingCount;
+                if (valueIndex < 0 || valueIndex >= partialCalls.length) {
+                    throw new IllegalArgumentException(
+                            "Incremental final aggregate input does not refer to a partial result");
+                }
+                aggregate.addFinalCallValueIndices(valueIndex);
+            }
+        }
+        return NativePlan.newBuilder()
+                .setProtocolVersion(1)
+                .setRoot(Operator.newBuilder().setIncrementalGroupAggregate(aggregate))
                 .build()
                 .toByteArray();
     }

@@ -9,7 +9,7 @@
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use arrow::array::{Int32Array, StringArray};
+use arrow::array::{Int16Array, Int32Array, Int64Array, Int8Array, StringArray};
 use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion::error::{DataFusionError, Result};
@@ -52,20 +52,68 @@ impl PhysicalExpr for FlinkStringHashCodeExpr {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         match self.value.evaluate(batch)? {
             ColumnarValue::Array(array) => {
-                let strings = array
-                    .as_any()
-                    .downcast_ref::<StringArray>()
-                    .ok_or_else(|| {
-                        DataFusionError::Execution("HASH_CODE expected Utf8 input".to_string())
-                    })?;
-                Ok(ColumnarValue::Array(Arc::new(Int32Array::from_iter(
-                    strings
-                        .iter()
-                        .map(|value| value.map(flink_string_hash_code)),
-                ))))
+                let hashes = match array.data_type() {
+                    DataType::Utf8 => Int32Array::from_iter(
+                        array
+                            .as_any()
+                            .downcast_ref::<StringArray>()
+                            .expect("Utf8 array")
+                            .iter()
+                            .map(|value| value.map(flink_string_hash_code)),
+                    ),
+                    DataType::Int8 => Int32Array::from_iter(
+                        array
+                            .as_any()
+                            .downcast_ref::<Int8Array>()
+                            .expect("Int8 array")
+                            .iter()
+                            .map(|value| value.map(i32::from)),
+                    ),
+                    DataType::Int16 => Int32Array::from_iter(
+                        array
+                            .as_any()
+                            .downcast_ref::<Int16Array>()
+                            .expect("Int16 array")
+                            .iter()
+                            .map(|value| value.map(i32::from)),
+                    ),
+                    DataType::Int32 => Int32Array::from_iter(
+                        array
+                            .as_any()
+                            .downcast_ref::<Int32Array>()
+                            .expect("Int32 array")
+                            .iter(),
+                    ),
+                    DataType::Int64 => Int32Array::from_iter(
+                        array
+                            .as_any()
+                            .downcast_ref::<Int64Array>()
+                            .expect("Int64 array")
+                            .iter()
+                            .map(|value| value.map(flink_long_hash_code)),
+                    ),
+                    other => {
+                        return Err(DataFusionError::Execution(format!(
+                            "HASH_CODE does not support {other} input"
+                        )))
+                    }
+                };
+                Ok(ColumnarValue::Array(Arc::new(hashes)))
             }
             ColumnarValue::Scalar(ScalarValue::Utf8(value)) => Ok(ColumnarValue::Scalar(
                 ScalarValue::Int32(value.as_deref().map(flink_string_hash_code)),
+            )),
+            ColumnarValue::Scalar(ScalarValue::Int8(value)) => Ok(ColumnarValue::Scalar(
+                ScalarValue::Int32(value.map(i32::from)),
+            )),
+            ColumnarValue::Scalar(ScalarValue::Int16(value)) => Ok(ColumnarValue::Scalar(
+                ScalarValue::Int32(value.map(i32::from)),
+            )),
+            ColumnarValue::Scalar(ScalarValue::Int32(value)) => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Int32(value)))
+            }
+            ColumnarValue::Scalar(ScalarValue::Int64(value)) => Ok(ColumnarValue::Scalar(
+                ScalarValue::Int32(value.map(flink_long_hash_code)),
             )),
             ColumnarValue::Scalar(value) => Err(DataFusionError::Execution(format!(
                 "HASH_CODE expected Utf8 scalar, got {}",
@@ -112,13 +160,20 @@ fn flink_string_hash_code(value: &str) -> i32 {
         .wrapping_abs()
 }
 
+fn flink_long_hash_code(value: i64) -> i32 {
+    (value ^ ((value as u64 >> 32) as i64)) as i32
+}
+
 pub(crate) fn create(
     value: Arc<dyn PhysicalExpr>,
     schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    if value.data_type(schema)? != DataType::Utf8 {
+    if !matches!(
+        value.data_type(schema)?,
+        DataType::Utf8 | DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64
+    ) {
         return Err(DataFusionError::Plan(
-            "HASH_CODE requires Arrow Utf8 input".to_string(),
+            "HASH_CODE requires Arrow Utf8 or signed integral input".to_string(),
         ));
     }
     Ok(Arc::new(FlinkStringHashCodeExpr { value }))
@@ -126,7 +181,7 @@ pub(crate) fn create(
 
 #[cfg(test)]
 mod tests {
-    use super::flink_string_hash_code;
+    use super::{flink_long_hash_code, flink_string_hash_code};
 
     #[test]
     fn matches_java_utf16_hash_and_absolute_value() {
@@ -134,5 +189,13 @@ mod tests {
         assert_eq!(flink_string_hash_code("abc"), 96_354);
         assert_eq!(flink_string_hash_code("😀"), 1_772_899);
         assert_eq!(flink_string_hash_code("polygenelubricants"), i32::MIN);
+    }
+
+    #[test]
+    fn matches_java_long_hash_code() {
+        assert_eq!(flink_long_hash_code(0), 0);
+        assert_eq!(flink_long_hash_code(1), 1);
+        assert_eq!(flink_long_hash_code(i64::MAX), -2_147_483_648);
+        assert_eq!(flink_long_hash_code(i64::MIN), -2_147_483_648);
     }
 }

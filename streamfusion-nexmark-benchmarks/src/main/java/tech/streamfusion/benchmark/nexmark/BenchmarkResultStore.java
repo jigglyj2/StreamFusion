@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
@@ -21,12 +22,18 @@ final class BenchmarkResultStore {
         }
     }
 
-    static void add(String runId, byte[] row, String debug) {
+    static void add(
+            String runId,
+            byte[] changelogRow,
+            byte[] materializedRow,
+            boolean accumulate,
+            String debug,
+            String materializedDebug) {
         ConcurrentLinkedQueue<RecordedRow> rows = RUNS.get(runId);
         if (rows == null) {
             throw new IllegalStateException("Unknown benchmark result run: " + runId);
         }
-        rows.add(new RecordedRow(row, debug));
+        rows.add(new RecordedRow(changelogRow, materializedRow, accumulate, debug, materializedDebug));
     }
 
     static Result finish(String runId) {
@@ -50,7 +57,40 @@ final class BenchmarkResultStore {
                 debugRows.add(row.debug);
             }
             debugRows.sort(String::compareTo);
-            return new Result(rows.size(), hex(digest.digest()), debugRows);
+            TreeMap<byte[], MaterializedRow> materialized = new TreeMap<>(Arrays::compareUnsigned);
+            for (RecordedRow row : rows) {
+                MaterializedRow value = materialized.computeIfAbsent(
+                        row.materializedBytes, ignored -> new MaterializedRow(row.materializedDebug));
+                value.count += row.accumulate ? 1 : -1;
+                if (value.count == 0) {
+                    materialized.remove(row.materializedBytes);
+                }
+            }
+            MessageDigest materializedDigest = MessageDigest.getInstance("SHA-256");
+            List<String> materializedDebugRows = new ArrayList<>();
+            long materializedCount = 0;
+            for (Map.Entry<byte[], MaterializedRow> entry : materialized.entrySet()) {
+                if (entry.getValue().count < 0) {
+                    throw new IllegalStateException("Benchmark changelog retracts a row that is not present");
+                }
+                for (int occurrence = 0; occurrence < entry.getValue().count; occurrence++) {
+                    byte[] bytes = entry.getKey();
+                    materializedDigest.update((byte) (bytes.length >>> 24));
+                    materializedDigest.update((byte) (bytes.length >>> 16));
+                    materializedDigest.update((byte) (bytes.length >>> 8));
+                    materializedDigest.update((byte) bytes.length);
+                    materializedDigest.update(bytes);
+                    materializedDebugRows.add(entry.getValue().debug);
+                    materializedCount++;
+                }
+            }
+            return new Result(
+                    rows.size(),
+                    hex(digest.digest()),
+                    debugRows,
+                    materializedCount,
+                    hex(materializedDigest.digest()),
+                    materializedDebugRows);
         } catch (NoSuchAlgorithmException impossible) {
             throw new IllegalStateException("SHA-256 is unavailable", impossible);
         }
@@ -71,11 +111,23 @@ final class BenchmarkResultStore {
         private final long rowCount;
         private final String sha256;
         private final List<String> debugRows;
+        private final long materializedRowCount;
+        private final String materializedSha256;
+        private final List<String> materializedDebugRows;
 
-        Result(long rowCount, String sha256, List<String> debugRows) {
+        Result(
+                long rowCount,
+                String sha256,
+                List<String> debugRows,
+                long materializedRowCount,
+                String materializedSha256,
+                List<String> materializedDebugRows) {
             this.rowCount = rowCount;
             this.sha256 = sha256;
             this.debugRows = List.copyOf(debugRows);
+            this.materializedRowCount = materializedRowCount;
+            this.materializedSha256 = materializedSha256;
+            this.materializedDebugRows = List.copyOf(materializedDebugRows);
         }
 
         long rowCount() {
@@ -89,14 +141,42 @@ final class BenchmarkResultStore {
         List<String> debugRows() {
             return debugRows;
         }
+
+        long materializedRowCount() {
+            return materializedRowCount;
+        }
+
+        String materializedSha256() {
+            return materializedSha256;
+        }
+
+        List<String> materializedDebugRows() {
+            return materializedDebugRows;
+        }
     }
 
     private static final class RecordedRow {
         private final byte[] bytes;
+        private final byte[] materializedBytes;
+        private final boolean accumulate;
         private final String debug;
+        private final String materializedDebug;
 
-        private RecordedRow(byte[] bytes, String debug) {
+        private RecordedRow(
+                byte[] bytes, byte[] materializedBytes, boolean accumulate, String debug, String materializedDebug) {
             this.bytes = bytes;
+            this.materializedBytes = materializedBytes;
+            this.accumulate = accumulate;
+            this.debug = debug;
+            this.materializedDebug = materializedDebug;
+        }
+    }
+
+    private static final class MaterializedRow {
+        private final String debug;
+        private int count;
+
+        private MaterializedRow(String debug) {
             this.debug = debug;
         }
     }

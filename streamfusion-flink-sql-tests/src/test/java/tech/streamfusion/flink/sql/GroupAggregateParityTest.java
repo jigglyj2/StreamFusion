@@ -37,7 +37,9 @@ class GroupAggregateParityTest extends SqlParityTestSupport {
         byte[] streamFusion = executeMiniBatch(true, AggregatePhaseStrategy.ONE_PHASE);
 
         assertThat(streamFusion).isEqualTo(flink);
-        assertThat(StreamFusionPlannerFactory.nativeGroupAggregateBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativeGroupAggregateBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isGreaterThan(0);
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 
@@ -255,23 +257,127 @@ class GroupAggregateParityTest extends SqlParityTestSupport {
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 
-    private static byte[] executeDistinctRetractions(boolean streamFusion) throws Exception {
-        return executeDistinctRetractions(streamFusion, false);
+    @Test
+    void splitDistinctIncrementalAggregateMatchesFlinkByteForByte() throws Exception {
+        byte[] flink = executeIncrementalDistinct(false);
+        byte[] streamFusion = executeIncrementalDistinct(true);
+
+        assertThat(streamFusion).isEqualTo(flink);
+        assertThat(StreamFusionPlannerFactory.nativeGroupAggregateBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isGreaterThan(0);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 
-    private static byte[] executeDistinctRetractions(boolean streamFusion, boolean twoPhase) throws Exception {
+    @Test
+    void splitDistinctIncrementalAggregateRetractsLikeFlink() throws Exception {
+        byte[] flink = executeIncrementalDistinctRetractions(false);
+        byte[] streamFusion = executeIncrementalDistinctRetractions(true);
+
+        assertThat(streamFusion).isEqualTo(flink);
+        assertThat(StreamFusionPlannerFactory.nativeGroupAggregateBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isGreaterThan(0);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
+    @Test
+    void splitDistinctIncrementalAggregateSupportsAllNativeCallsFiltersAndRetractions() throws Exception {
+        byte[] flink = executeDistinctRetractions(false, false, true);
+        byte[] streamFusion = executeDistinctRetractions(true, false, true);
+
+        assertThat(streamFusion).isEqualTo(flink);
+        assertThat(StreamFusionPlannerFactory.nativeGroupAggregateBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isGreaterThan(0);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
+    private static byte[] executeIncrementalDistinctRetractions(boolean streamFusion) throws Exception {
         configurePlanner(streamFusion);
         StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();
         environment.setParallelism(1);
         StreamTableEnvironment tables = StreamTableEnvironment.create(
                 environment, EnvironmentSettings.newInstance().inStreamingMode().build());
         tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
-        if (twoPhase) {
+        tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ENABLED, true);
+        tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_SIZE, 1L);
+        tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ALLOW_LATENCY, Duration.ofDays(1));
+        tables.getConfig().set(OptimizerConfigOptions.TABLE_OPTIMIZER_DISTINCT_AGG_SPLIT_ENABLED, true);
+        tables.createTemporaryView(
+                "incremental_retractions",
+                tables.fromChangelogStream(
+                        environment.fromCollection(
+                                List.of(
+                                        Row.ofKind(RowKind.INSERT, 1, 2L),
+                                        Row.ofKind(RowKind.INSERT, 1, 2L),
+                                        Row.ofKind(RowKind.INSERT, 3, 2L),
+                                        Row.ofKind(RowKind.DELETE, 1, 2L),
+                                        Row.ofKind(RowKind.DELETE, 1, 2L),
+                                        Row.ofKind(RowKind.DELETE, 3, 2L)),
+                                Types.ROW_NAMED(new String[] {"a", "b"}, Types.INT, Types.LONG)),
+                        Schema.newBuilder()
+                                .column("a", DataTypes.INT())
+                                .column("b", DataTypes.BIGINT())
+                                .build()));
+        return collect(tables.executeSql("SELECT b, COUNT(DISTINCT a) FROM incremental_retractions GROUP BY b"));
+    }
+
+    private static byte[] executeIncrementalDistinct(boolean streamFusion) throws Exception {
+        configurePlanner(streamFusion);
+        StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();
+        environment.setParallelism(1);
+        StreamTableEnvironment tables = StreamTableEnvironment.create(
+                environment, EnvironmentSettings.newInstance().inStreamingMode().build());
+        tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+        tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ENABLED, true);
+        tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_SIZE, 1L);
+        tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ALLOW_LATENCY, Duration.ofDays(1));
+        tables.getConfig().set(OptimizerConfigOptions.TABLE_OPTIMIZER_DISTINCT_AGG_SPLIT_ENABLED, true);
+        tables.createTemporaryView(
+                "incremental_group_input",
+                tables.fromDataStream(environment.fromCollection(
+                        List.of(
+                                Row.of(1, 1L, "hi"),
+                                Row.of(2, 2L, "hello"),
+                                Row.of(3, 2L, "hello world"),
+                                Row.of(3, 2L, "foo"),
+                                Row.of(4, 4L, "bar"),
+                                Row.of(5, 2L, "foo bar")),
+                        Types.ROW_NAMED(new String[] {"a", "b", "c"}, Types.INT, Types.LONG, Types.STRING))));
+        String sql = "SELECT b, COUNT(DISTINCT a) FROM incremental_group_input GROUP BY b";
+        return collect(tables.executeSql(sql));
+    }
+
+    private static byte[] executeDistinctRetractions(boolean streamFusion) throws Exception {
+        return executeDistinctRetractions(streamFusion, false, false);
+    }
+
+    private static byte[] executeDistinctRetractions(boolean streamFusion, boolean twoPhase) throws Exception {
+        return executeDistinctRetractions(streamFusion, twoPhase, false);
+    }
+
+    private static byte[] executeDistinctRetractions(boolean streamFusion, boolean twoPhase, boolean incremental)
+            throws Exception {
+        configurePlanner(streamFusion);
+        StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();
+        environment.setParallelism(1);
+        StreamTableEnvironment tables = StreamTableEnvironment.create(
+                environment, EnvironmentSettings.newInstance().inStreamingMode().build());
+        tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+        if (twoPhase || incremental) {
             tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ENABLED, true);
             tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_SIZE, 3L);
             tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ALLOW_LATENCY, Duration.ofDays(1));
-            tables.getConfig()
-                    .set(OptimizerConfigOptions.TABLE_OPTIMIZER_AGG_PHASE_STRATEGY, AggregatePhaseStrategy.TWO_PHASE);
+            if (twoPhase) {
+                tables.getConfig()
+                        .set(
+                                OptimizerConfigOptions.TABLE_OPTIMIZER_AGG_PHASE_STRATEGY,
+                                AggregatePhaseStrategy.TWO_PHASE);
+            }
+            if (incremental) {
+                tables.getConfig().set(OptimizerConfigOptions.TABLE_OPTIMIZER_DISTINCT_AGG_SPLIT_ENABLED, true);
+            }
         }
         Row five = Row.of("a", 5L, "x", true);
         Row seven = Row.of("a", 7L, "y", false);
