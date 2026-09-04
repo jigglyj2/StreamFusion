@@ -77,7 +77,10 @@ public abstract class AbstractStreamFusionArrowKeyedStateOperator extends Abstra
             long stateBackendMemory = getKeyedStateBackend() instanceof StreamFusionKeyedStateBackend
                     ? ((StreamFusionKeyedStateBackend<?>) getKeyedStateBackend()).nativeRocksDbMemoryLimit()
                     : 0;
-            long rocksDbMemory = stateBackendMemory > 0 ? stateBackendMemory : managedMemory.limit() * 3 / 4;
+            // When Flink cannot provide the STATE_BACKEND lease (notably its embedded local
+            // runner), keep enough of the operator allowance for Arrow input/output and native
+            // scratch. Production RocksDB normally uses the separately weighted backend lease.
+            long rocksDbMemory = stateBackendMemory > 0 ? stateBackendMemory : managedMemory.limit() / 4;
             boolean operatorMemoryFallback = stateBackendMemory == 0;
             if (operatorMemoryFallback && !managedMemory.tryReserve(rocksDbMemory)) {
                 throw new IllegalStateException("Flink denied " + rocksDbMemory + " bytes for native RocksDB state");

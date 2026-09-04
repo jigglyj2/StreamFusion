@@ -1,8 +1,6 @@
 // Copyright 2026 StreamFusion Authors
 // Licensed under the Apache License, Version 2.0
 
-use std::cell::RefCell;
-use std::cmp::Ordering;
 use std::collections::BTreeSet;
 use std::mem::size_of;
 use std::sync::Arc;
@@ -16,7 +14,6 @@ use arrow_row::{RowConverter, SortField};
 use datafusion::error::{DataFusionError, Result};
 use hashbrown::HashMap;
 
-use super::top_n::compare::compare_rows;
 use super::window_table_function::timestamp_millis;
 use crate::memory_pool::HostMemoryReservation;
 use crate::planner::arrow_schema;
@@ -31,17 +28,19 @@ const UPDATE_BEFORE: i8 = 1;
 const UPDATE_AFTER: i8 = 2;
 const DELETE: i8 = 3;
 const STATE_MAGIC: &[u8; 4] = b"SFTS";
-const STATE_VERSION: u8 = 1;
+const STATE_VERSION: u8 = 2;
 const ROWS_KEY_PREFIX: u8 = 7;
 const PROCESSING_TIME_ROWS_KEY: &[u8] = b"\x07processing-time-rows";
 const TIMER_STATE_KEY: &[u8] = b"\0streamfusion-temporal-sort-timers";
 const LAST_TRIGGER_STATE_KEY: &[u8] = b"\0streamfusion-temporal-sort-last-trigger";
 const INPUT_KIND_COLUMN: &str = "__streamfusion_input_row_kind";
 const PROCESSING_TIME_COLUMN: &str = "__streamfusion_processing_time";
+const MAX_EVENT_TIME_TIMERS_PER_OUTPUT: usize = 4_096;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct BufferedRow {
     kind: i8,
+    sort_key: Vec<u8>,
     row: Vec<u8>,
 }
 
@@ -54,6 +53,7 @@ pub(crate) struct TemporalSortProcessor {
     visible_schema: SchemaRef,
     output_schema: SchemaRef,
     row_converter: RowConverter,
+    secondary_converter: Option<RowConverter>,
     input_schema: Option<SchemaRef>,
     input_kind_index: Option<usize>,
     processing_time_index: Option<usize>,
@@ -149,6 +149,7 @@ impl TemporalSortProcessor {
         validate_plan(&plan)?;
         let visible_schema = arrow_schema(plan.input_schema.as_ref().expect("validated"))?;
         let row_converter = row_converter(&visible_schema)?;
+        let secondary_converter = secondary_converter(&visible_schema, &plan)?;
         let mut output_fields = visible_schema.fields().iter().cloned().collect::<Vec<_>>();
         output_fields.push(Arc::new(Field::new(
             "__streamfusion_row_kind",
@@ -163,6 +164,7 @@ impl TemporalSortProcessor {
             output_schema: Arc::new(Schema::new(output_fields)),
             visible_schema,
             row_converter,
+            secondary_converter,
             input_schema: None,
             input_kind_index: None,
             processing_time_index: None,
@@ -188,9 +190,20 @@ impl TemporalSortProcessor {
         let rows = self
             .row_converter
             .convert_columns(&batch.columns()[..visible_count]);
-        let result = match rows {
-            Ok(rows) => self.process_arrow_accounted(&batch, &rows),
-            Err(error) => Err(error.into()),
+        let sort_rows = self.secondary_converter.as_ref().map(|converter| {
+            let columns = self
+                .plan
+                .secondary_key_indices
+                .iter()
+                .map(|&index| Arc::clone(batch.column(index as usize)))
+                .collect::<Vec<_>>();
+            converter.convert_columns(&columns)
+        });
+        let result = match (rows, sort_rows.transpose()) {
+            (Ok(rows), Ok(sort_rows)) => {
+                self.process_arrow_accounted(&batch, &rows, sort_rows.as_ref())
+            }
+            (Err(error), _) | (_, Err(error)) => Err(error.into()),
         };
         self.scratch_reservation.resize(0)?;
         result
@@ -200,6 +213,7 @@ impl TemporalSortProcessor {
         &mut self,
         batch: &RecordBatch,
         encoded_rows: &arrow_row::Rows,
+        sort_rows: Option<&arrow_row::Rows>,
     ) -> Result<()> {
         let kinds = batch
             .column(self.input_kind_index.expect("schema prepared"))
@@ -254,6 +268,9 @@ impl TemporalSortProcessor {
             }
             let buffered = BufferedRow {
                 kind,
+                sort_key: sort_rows
+                    .map(|rows| rows.row(row).data().to_vec())
+                    .unwrap_or_default(),
                 row: encoded_rows.row(row).data().to_vec(),
             };
             if self.plan.processing_time {
@@ -394,11 +411,17 @@ impl TemporalSortProcessor {
     }
 
     fn advance(&mut self, domain: TimerDomain, progress: i64) -> Result<RecordBatch> {
-        // A watermark can make many timestamp groups ready at once. Drain them with one backend
-        // multi-get/write batch and one Arrow C Data export, preserving timestamp-group order.
-        // Limiting this to one timer made a vectorized input degenerate into one JNI/Arrow import
-        // per distinct millisecond in NEXMark.
-        let fired = self.timers.advance(domain, progress)?;
+        // A watermark can make many timestamp groups ready at once. Drain a bounded group of them
+        // with one backend multi-get/write and one Arrow C Data export, preserving timer order.
+        // One timer per callback degenerates into thousands of JNI calls, while an unbounded drain
+        // can exceed the task's output-memory slice. Processing time deliberately retains Flink's
+        // one shared ListState callback semantics.
+        let fired = if domain == TimerDomain::EventTime {
+            self.timers
+                .advance_limited(domain, progress, MAX_EVENT_TIME_TIMERS_PER_OUTPUT)?
+        } else {
+            self.timers.advance(domain, progress)?
+        };
         self.timers_fired = self.timers_fired.saturating_add(fired.len() as u64);
         if fired.is_empty() {
             return Ok(RecordBatch::new_empty(self.output_schema.clone()));
@@ -458,91 +481,47 @@ impl TemporalSortProcessor {
         self.output_row_groups(row_groups)
     }
 
-    fn output_row_groups(&mut self, row_groups: Vec<Vec<BufferedRow>>) -> Result<RecordBatch> {
+    fn output_row_groups(&mut self, mut row_groups: Vec<Vec<BufferedRow>>) -> Result<RecordBatch> {
         let row_count = row_groups.iter().map(Vec::len).sum::<usize>();
         if row_count == 0 {
             return Ok(RecordBatch::new_empty(self.output_schema.clone()));
         }
-        let group_lengths = row_groups.iter().map(Vec::len).collect::<Vec<_>>();
-        let encoded_bytes = row_groups
+        if self.secondary_converter.is_some() {
+            for rows in &mut row_groups {
+                // Arrow row keys encode the planned ascending/descending and null placement.
+                // Rust's stable sort retains input sequence for equal secondary keys.
+                rows.sort_by(|left, right| left.sort_key.cmp(&right.sort_key));
+            }
+        }
+        let row_bytes = row_groups
             .iter()
             .flatten()
             .map(|row| row.row.capacity().saturating_add(size_of::<BufferedRow>()))
             .sum::<usize>();
-        // Row decoding, stable-sort indices, Arrow take indices, and the emitted arrays coexist
-        // until the C Data owner takes over. Admit a conservative working-set bound before any of
-        // those allocations so output construction cannot temporarily escape Flink accounting.
-        let working_bytes = encoded_bytes
-            .saturating_mul(4)
-            .saturating_add(row_count.saturating_mul(256))
-            .saturating_add(group_lengths.capacity().saturating_mul(size_of::<usize>()));
+        let sort_key_bytes = row_groups
+            .iter()
+            .flatten()
+            .map(|row| row.sort_key.capacity())
+            .sum::<usize>();
+        // Encoded rows and the emitted arrays coexist until the C Data owner takes over. Admit the
+        // complete sort keys plus both the encoded rows and their decoded-array equivalent before
+        // allocation. Sort keys are not decoded into the result and therefore are not doubled.
+        let working_bytes = row_bytes.saturating_mul(2).saturating_add(sort_key_bytes);
         self.scratch_reservation.resize(working_bytes)?;
 
         let result = (|| {
-            let rows = row_groups.into_iter().flatten().collect::<Vec<_>>();
             let parser = self.row_converter.parser();
-            let columns = self
-                .row_converter
-                .convert_rows(rows.iter().map(|row| parser.parse(&row.row)))?;
-            let visible = RecordBatch::try_new(self.visible_schema.clone(), columns)?;
-            let mut indices = Vec::with_capacity(row_count);
-            let mut group_start = 0;
-            for group_length in group_lengths {
-                // Due event-time groups are already in timer order. Processing time uses one
-                // shared Flink ListState group. Preserve those exact boundaries and sort only by
-                // the secondary keys inside each group.
-                let group_end = group_start + group_length;
-                let mut group_indices = (group_start..group_end).collect::<Vec<_>>();
-                if !self.plan.secondary_key_indices.is_empty() {
-                    let failure = RefCell::new(None);
-                    group_indices.sort_by(|&left, &right| {
-                        if failure.borrow().is_some() {
-                            return Ordering::Equal;
-                        }
-                        match compare_rows(
-                            &visible,
-                            left,
-                            &visible,
-                            right,
-                            &self.plan.secondary_key_indices,
-                            &self.plan.secondary_ascending,
-                            &self.plan.secondary_nulls_last,
-                        ) {
-                            Ok(ordering) => ordering,
-                            Err(error) => {
-                                *failure.borrow_mut() = Some(error);
-                                Ordering::Equal
-                            }
-                        }
-                    });
-                    if let Some(error) = failure.into_inner() {
-                        return Err(error);
-                    }
-                }
-                indices.extend(group_indices);
-                group_start = group_end;
-            }
-            debug_assert_eq!(group_start, rows.len());
-            let take = arrow::array::UInt32Array::from(
-                indices
+            let mut output_columns = self.row_converter.convert_rows(
+                row_groups
                     .iter()
-                    .map(|&index| u32::try_from(index))
-                    .collect::<std::result::Result<Vec<_>, _>>()
-                    .map_err(|_| {
-                        DataFusionError::Execution(
-                            "temporal sort output exceeds UInt32 indexing".to_string(),
-                        )
-                    })?,
-            );
-            let mut output_columns = visible
-                .columns()
-                .iter()
-                .map(|column| arrow::compute::take(column.as_ref(), &take, None))
-                .collect::<arrow::error::Result<Vec<_>>>()?;
+                    .flatten()
+                    .map(|row| parser.parse(&row.row)),
+            )?;
             output_columns.push(Arc::new(Int8Array::from(
-                indices
+                row_groups
                     .iter()
-                    .map(|&index| rows[index].kind)
+                    .flatten()
+                    .map(|row| row.kind)
                     .collect::<Vec<_>>(),
             )));
             RecordBatch::try_new(self.output_schema.clone(), output_columns).map_err(Into::into)
@@ -733,6 +712,31 @@ fn row_converter(schema: &SchemaRef) -> Result<RowConverter> {
     )?)
 }
 
+fn secondary_converter(
+    schema: &SchemaRef,
+    plan: &proto::TemporalSort,
+) -> Result<Option<RowConverter>> {
+    if plan.secondary_key_indices.is_empty() {
+        return Ok(None);
+    }
+    let fields = plan
+        .secondary_key_indices
+        .iter()
+        .zip(&plan.secondary_ascending)
+        .zip(&plan.secondary_nulls_last)
+        .map(|((&index, &ascending), &nulls_last)| {
+            SortField::new_with_options(
+                schema.field(index as usize).data_type().clone(),
+                SortOptions {
+                    descending: !ascending,
+                    nulls_first: !nulls_last,
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    Ok(Some(RowConverter::new(fields)?))
+}
+
 fn rows_state_key(key_group: u32, timestamp: i64) -> StateKey {
     let mut key = Vec::with_capacity(9);
     key.push(ROWS_KEY_PREFIX);
@@ -757,6 +761,11 @@ fn encode_rows(rows: &[BufferedRow]) -> Result<Vec<u8>> {
     output.extend_from_slice(&count.to_le_bytes());
     for row in rows {
         output.push(row.kind as u8);
+        let sort_key_length = u32::try_from(row.sort_key.len()).map_err(|_| {
+            DataFusionError::Execution("temporal sort key is too large".to_string())
+        })?;
+        output.extend_from_slice(&sort_key_length.to_le_bytes());
+        output.extend_from_slice(&row.sort_key);
         let length = u32::try_from(row.row.len()).map_err(|_| {
             DataFusionError::Execution("temporal sort row is too large".to_string())
         })?;
@@ -780,6 +789,14 @@ fn decode_rows(bytes: &[u8]) -> Result<Vec<BufferedRow>> {
             DataFusionError::Execution("truncated temporal sort RowKind".to_string())
         })? as i8;
         offset += 1;
+        let sort_key_length = read_u32(bytes, &mut offset)? as usize;
+        let sort_key_end = offset.checked_add(sort_key_length).ok_or_else(|| {
+            DataFusionError::Execution("temporal sort key length overflow".to_string())
+        })?;
+        let sort_key = bytes
+            .get(offset..sort_key_end)
+            .ok_or_else(|| DataFusionError::Execution("truncated temporal sort key".to_string()))?;
+        offset = sort_key_end;
         let length = read_u32(bytes, &mut offset)? as usize;
         let end = offset.checked_add(length).ok_or_else(|| {
             DataFusionError::Execution("temporal sort row length overflow".to_string())
@@ -789,6 +806,7 @@ fn decode_rows(bytes: &[u8]) -> Result<Vec<BufferedRow>> {
             .ok_or_else(|| DataFusionError::Execution("truncated temporal sort row".to_string()))?;
         rows.push(BufferedRow {
             kind,
+            sort_key: sort_key.to_vec(),
             row: row.to_vec(),
         });
         offset = end;
@@ -831,18 +849,22 @@ mod tests {
         let rows = vec![
             BufferedRow {
                 kind: INSERT,
+                sort_key: b"sort-insert".to_vec(),
                 row: b"insert".to_vec(),
             },
             BufferedRow {
                 kind: UPDATE_BEFORE,
+                sort_key: b"sort-before".to_vec(),
                 row: b"before".to_vec(),
             },
             BufferedRow {
                 kind: UPDATE_AFTER,
+                sort_key: b"sort-after".to_vec(),
                 row: b"after".to_vec(),
             },
             BufferedRow {
                 kind: DELETE,
+                sort_key: b"sort-delete".to_vec(),
                 row: b"delete".to_vec(),
             },
         ];

@@ -36,6 +36,13 @@ closed before the Arrow allocator so outstanding DataFusion reservations return 
 Flink before imported Arrow buffers are checked and released. The operator exposes its
 current, peak, and assigned managed-memory bytes as Flink metrics.
 
+Native RocksDB normally receives its cache and write-buffer lease from Flink's
+`STATE_BACKEND` managed-memory share, leaving the operator share for Arrow and execution scratch.
+When an embedded runner cannot expose that lease, the compatibility fallback gives RocksDB one
+quarter of the operator allowance and keeps the remainder available for batch input, output, and
+accounted native working memory. This is an internal division of Flink's existing allowance, not a
+second memory budget or deployment setting.
+
 This is modeled on Apache DataFusion Comet's unified off-heap path. Comet implements a
 DataFusion `MemoryPool` that calls a JVM `CometTaskMemoryManager` over JNI. That adapter
 registers an off-heap Spark `MemoryConsumer` and delegates acquisition and release to

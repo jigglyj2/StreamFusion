@@ -45,11 +45,13 @@ The planner retains any other full, unbounded global `ORDER BY` on Flink.
 ## Implementation
 
 The finite path reuses the native Top-N protobuf node. Temporal sort has its own versioned protobuf
-node, persistent native processor, raw keyed state, and timer service, while reusing the shared
-Flink-compatible Arrow comparator and state/checkpoint interfaces. Java constructs the physical
-plan and owns watermarks, barriers, distribution, recovery, and metric publication; Arrow C Data
-crosses only at the fused-plan edge. This follows Comet's distinct replacement-node and protobuf
-control-plane model. A future bounded full-sort path can use DataFusion's parallel, spill-capable
-sort while Flink retains distribution and boundedness decisions.
+node, persistent native processor, raw keyed state, and timer service. It stores the secondary keys
+in Arrow's order-preserving row encoding with the planned direction and null placement, so firing a
+timer uses one stable byte-key sort and one final Arrow decode rather than materializing and taking a
+second batch. Java constructs the physical plan and owns watermarks, barriers, distribution,
+recovery, and metric publication; Arrow C Data crosses only at the fused-plan edge. This follows
+Comet's distinct replacement-node and protobuf control-plane model. A future bounded full-sort path
+can use DataFusion's parallel, spill-capable sort while Flink retains distribution and boundedness
+decisions.
 
 See the [Flink 2.3 ORDER BY documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/orderby/).
