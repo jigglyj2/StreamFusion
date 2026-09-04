@@ -18,19 +18,21 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
+import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 
 class GroupingSetsParityTest extends SqlParityTestSupport {
     @ParameterizedTest(name = "{0}")
     @MethodSource("queries")
-    void expandFormsFallBackAsAWholeAndMatchFlinkByteForByte(String ignoredName, String sql) throws Exception {
+    void expandFormsRunNativelyAndMatchFlinkByteForByte(String ignoredName, String sql) throws Exception {
         assertParity(sql, true);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
+        assertThat(StreamFusionPlannerFactory.nativeGroupAggregateBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("queries")
-    void explainAttributesFallbackToTheUnsupportedAggregate(String ignoredName, String sql) {
+    void explainContainsNativeExpandAndAggregate(String ignoredName, String sql) {
         System.setProperty(
                 StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY, StreamFusionPlannerFactory.class.getName());
         StreamTableEnvironment tableEnvironment =
@@ -38,10 +40,9 @@ class GroupingSetsParityTest extends SqlParityTestSupport {
 
         assertThat(tableEnvironment.explainSql(sql))
                 .contains("== StreamFusion Acceleration ==")
-                .contains("Accelerated: no")
-                .contains("StreamExecGroupAggregate")
-                .contains("does not yet implement expanded grouping-set semantics")
-                .doesNotContain("StreamExecExpand: operator has no StreamFusion physical implementation");
+                .contains("Accelerated: yes")
+                .contains("StreamFusionExpand")
+                .contains("StreamFusionGroupAggregate");
     }
 
     private static Stream<Arguments> queries() {
@@ -57,6 +58,23 @@ class GroupingSetsParityTest extends SqlParityTestSupport {
                         "SELECT category, region, SUM(amount) FROM " + input + "GROUP BY ROLLUP (category, region)"),
                 Arguments.of(
                         "cube",
-                        "SELECT category, region, SUM(amount) FROM " + input + "GROUP BY CUBE (category, region)"));
+                        "SELECT category, region, SUM(amount) FROM " + input + "GROUP BY CUBE (category, region)"),
+                Arguments.of(
+                        "nullable scalar key widening",
+                        "SELECT binary_value, decimal_value, date_value, timestamp_value, COUNT(*) FROM "
+                                + "(VALUES "
+                                + "(CAST(X'0102' AS BINARY(2)), CAST(12.34 AS DECIMAL(10, 2)), "
+                                + "DATE '2026-09-03', TIMESTAMP '2026-09-03 12:00:00'), "
+                                + "(CAST(X'0102' AS BINARY(2)), CAST(12.34 AS DECIMAL(10, 2)), "
+                                + "DATE '2026-09-03', TIMESTAMP '2026-09-03 12:00:00')) "
+                                + "AS input(binary_value, decimal_value, date_value, timestamp_value) "
+                                + "GROUP BY GROUPING SETS "
+                                + "((binary_value, decimal_value, date_value, timestamp_value), ())"),
+                Arguments.of(
+                        "nullable nested key widening",
+                        "SELECT array_value, row_value, COUNT(*) FROM "
+                                + "(VALUES (ARRAY[1, 2], ROW('alpha', 7)), "
+                                + "(ARRAY[1, 2], ROW('alpha', 7))) AS input(array_value, row_value) "
+                                + "GROUP BY GROUPING SETS ((array_value, row_value), ())"));
     }
 }

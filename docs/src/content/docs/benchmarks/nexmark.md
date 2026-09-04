@@ -82,7 +82,8 @@ end-to-end elapsed time, input-event throughput, native calc batches, native gro
 batches, native window-aggregate batches, native Window Join batches, native regular-join batches,
 native interval-join batches, native OVER-aggregate batches,
 and a row count plus SHA-256 for the full result changelog. The `group-aggregate`,
-`interval-join`, `over-aggregate`, `over-aggregate-event-time`, `over-aggregate-processing-time`,
+`global-aggregate`, `grouping-sets`, `interval-join`, `over-aggregate`,
+`over-aggregate-event-time`, `over-aggregate-processing-time`,
 `over-aggregate-bounded-rows`, `over-aggregate-bounded-range`, `select-distinct`, `top-n`, and
 `limit` cases
 exercise both native state backends over the bounded bid stream; they are focused operator workloads
@@ -95,6 +96,21 @@ ten-second event-time range respectively.
 Performance reports
 must come from separate, unprofiled JVM forks built with release-mode native code; profiler runs
 are diagnostic artifacts rather than benchmark measurements.
+
+On the September 3, 2026 local release/native-CPU run over one million deterministic events,
+`global-aggregate` produced in-memory medians of 107,827 events/s for Flink and 103,550 events/s
+for StreamFusion (96.0% parity), and RocksDB medians of 99,061 and 106,810 events/s (a 7.8%
+StreamFusion gain). All forks emitted 1,839,999 rows with SHA-256
+`def58ec236efbd1b8d4230f25681e86ef79a487155cd47791631558c0d9d299a`.
+
+The `grouping-sets` workload produced in-memory medians of 75,963 events/s for Flink and 78,222
+events/s for StreamFusion (a 3.0% gain), and RocksDB medians of 57,959 and 71,869 events/s (a 24.0%
+gain). All forks emitted 3,650,083 rows with SHA-256
+`25375393fce85edf36dd09d91a045ff75af3a0470896ff1d242ec447058a86ea`. Mixed JVM/native CPU,
+Java-allocation, and native-allocation profiles cover both engines and backends. They led to a
+global-key fast path that materializes the canonical empty key once per batch; the final native
+aggregate path accounts for only 1.2–1.3% of global CPU samples. Profiler timings were excluded
+from these measurements.
 
 On the September 3, 2026 local release/native-CPU `over-aggregate` run over 100,000 deterministic
 events at parallelism one, three alternating fresh-JVM forks produced in-memory medians of 20,908

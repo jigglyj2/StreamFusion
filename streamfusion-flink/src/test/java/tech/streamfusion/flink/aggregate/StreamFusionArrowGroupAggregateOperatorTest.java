@@ -16,11 +16,21 @@ import java.util.List;
 import java.util.Map;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.flink.core.execution.SavepointFormatType;
+import org.apache.flink.metrics.Counter;
+import org.apache.flink.metrics.Gauge;
+import org.apache.flink.metrics.MetricGroup;
 import org.apache.flink.runtime.checkpoint.CheckpointOptions;
 import org.apache.flink.runtime.checkpoint.CheckpointType;
 import org.apache.flink.runtime.checkpoint.OperatorSubtaskState;
 import org.apache.flink.runtime.checkpoint.SavepointType;
 import org.apache.flink.runtime.checkpoint.metadata.MetadataV3Serializer;
+import org.apache.flink.runtime.jobgraph.OperatorID;
+import org.apache.flink.runtime.metrics.groups.InternalOperatorMetricGroup;
+import org.apache.flink.runtime.metrics.util.InterceptingOperatorMetricGroup;
+import org.apache.flink.runtime.metrics.util.InterceptingTaskMetricGroup;
+import org.apache.flink.runtime.operators.testutils.MockEnvironment;
+import org.apache.flink.runtime.operators.testutils.MockEnvironmentBuilder;
+import org.apache.flink.runtime.operators.testutils.MockInputSplitProvider;
 import org.apache.flink.runtime.state.CheckpointStorageLocationReference;
 import org.apache.flink.runtime.state.IncrementalKeyedStateHandle.HandleAndLocalPath;
 import org.apache.flink.runtime.state.IncrementalRemoteKeyedStateHandle;
@@ -63,6 +73,120 @@ class StreamFusionArrowGroupAggregateOperatorTest {
             new LogicalType[] {new BigIntType(false), new BigIntType(false)}, new String[] {"bidder", "bids"});
     private static final RowType DISTINCT_OUTPUT_TYPE =
             RowType.of(new LogicalType[] {new BigIntType(false)}, new String[] {"bidder"});
+    private static final RowType GLOBAL_OUTPUT_TYPE =
+            RowType.of(new LogicalType[] {new BigIntType(false)}, new String[] {"bids"});
+
+    @Test
+    void exposesLogicalFlinkIoAndCompleteTimerFreeStateMetricsForGlobalAggregation() throws Exception {
+        InterceptingOperatorMetricGroup metrics = new InterceptingOperatorMetricGroup() {
+            @Override
+            public MetricGroup addGroup(String name) {
+                return this;
+            }
+
+            @Override
+            public MetricGroup addGroup(String key, String value) {
+                return this;
+            }
+        };
+        InterceptingTaskMetricGroup taskMetrics = new InterceptingTaskMetricGroup() {
+            @Override
+            public InternalOperatorMetricGroup getOrAddOperator(
+                    OperatorID id, String name, Map<String, String> additionalVariables) {
+                return metrics;
+            }
+        };
+        RowDataKeySelector selector = emptySelector();
+        StreamFusionArrowGroupAggregateOperator operator = new StreamFusionArrowGroupAggregateOperator(
+                INPUT_TYPE, GLOBAL_OUTPUT_TYPE, new int[0], globalPlan(), false, selector);
+        try (RootAllocator inputs = new RootAllocator(64L << 20);
+                MockEnvironment environment = new MockEnvironmentBuilder()
+                        .setTaskName("Global aggregate metric parity")
+                        .setManagedMemorySize(64L << 20)
+                        .setInputSplitProvider(new MockInputSplitProvider())
+                        .setBufferSize(32 * 1024)
+                        .setMaxParallelism(MAX_PARALLELISM)
+                        .setParallelism(1)
+                        .setSubtaskIndex(0)
+                        .setMetricGroup(taskMetrics)
+                        .build();
+                KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> harness =
+                        new KeyedOneInputStreamOperatorTestHarness<>(
+                                operator,
+                                new ArrowBatchKeySelector(selector),
+                                selector.getProducedType(),
+                                environment)) {
+            harness.setStateBackend(new StreamFusionStateBackend(new HashMapStateBackend()));
+            harness.setup(ArrowRowDataBatchSerializer.INSTANCE);
+            harness.open();
+
+            assertThat(metrics.get("rocksDbBackend")).isInstanceOf(Gauge.class);
+            ((Counter) metrics.get("numRecordsIn")).inc();
+            ((Counter) metrics.get("numRecordsOut")).inc();
+            process(harness, inputs, row(7, 10));
+            assertThat(takeKinds(harness)).containsExactly(RowKind.INSERT);
+
+            assertThat(((Counter) metrics.get("numRecordsIn")).getCount()).isEqualTo(1L);
+            assertThat(((Counter) metrics.get("numRecordsOut")).getCount()).isEqualTo(1L);
+            assertThat(((Counter) metrics.get("processedBatches")).getCount()).isEqualTo(1L);
+            assertThat(((Counter) metrics.get("processedRows")).getCount()).isEqualTo(1L);
+            assertThat(((Counter) metrics.get("emittedRows")).getCount()).isEqualTo(1L);
+            assertThat(((Counter) metrics.get("emittedInserts")).getCount()).isEqualTo(1L);
+            assertThat(((Counter) metrics.get("stateReadBatches")).getCount()).isEqualTo(1L);
+            assertThat(((Counter) metrics.get("stateWriteBatches")).getCount()).isEqualTo(1L);
+            assertThat(((Counter) metrics.get("processingFailures")).getCount()).isZero();
+            assertThat(((Gauge<?>) metrics.get("rocksDbBackend")).getValue()).isEqualTo(0);
+        }
+    }
+
+    @Test
+    void globalAggregateRestoresAcrossBackendPairsAndCheckpointModes() throws Exception {
+        try (RootAllocator inputs = new RootAllocator(64L << 20)) {
+            for (boolean sourceRocks : new boolean[] {false, true}) {
+                for (boolean targetRocks : new boolean[] {false, true}) {
+                    for (boolean unaligned : new boolean[] {false, true}) {
+                        OperatorSubtaskState snapshot;
+                        try (KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch>
+                                source = globalHarness(null, sourceRocks)) {
+                            process(source, inputs, row(7, 10));
+                            assertThat(takeKinds(source)).containsExactly(RowKind.INSERT);
+                            snapshot = snapshot(source, unaligned ? 202 : 201, unaligned);
+                        }
+                        try (KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch>
+                                target = globalHarness(snapshot, targetRocks)) {
+                            process(target, inputs, row(8, 20));
+                            assertThat(takeKinds(target)).containsExactly(RowKind.UPDATE_AFTER);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    void globalAggregateCanonicalSavepointRestoresAcrossEveryBackendPair() throws Exception {
+        try (RootAllocator inputs = new RootAllocator(64L << 20)) {
+            for (boolean sourceRocks : new boolean[] {false, true}) {
+                for (boolean targetRocks : new boolean[] {false, true}) {
+                    OperatorSubtaskState savepoint;
+                    try (KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> source =
+                            globalHarness(null, sourceRocks)) {
+                        process(source, inputs, row(7, 10));
+                        takeKinds(source);
+                        savepoint = source.snapshotWithLocalState(
+                                        203, 203, SavepointType.savepoint(SavepointFormatType.CANONICAL))
+                                .getJobManagerOwnedState();
+                        assertThat(savepoint.getRawKeyedState()).hasSize(1);
+                    }
+                    try (KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> target =
+                            globalHarness(savepoint, targetRocks)) {
+                        process(target, inputs, row(8, 20));
+                        assertThat(takeKinds(target)).containsExactly(RowKind.UPDATE_AFTER);
+                    }
+                }
+            }
+        }
+    }
 
     @Test
     void selectDistinctRetractionsRestoreAcrossBackendPairsAndCheckpointModes() throws Exception {
@@ -411,10 +535,40 @@ class StreamFusionArrowGroupAggregateOperatorTest {
         return harness;
     }
 
+    private static KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> globalHarness(
+            OperatorSubtaskState state, boolean rocksDb) throws Exception {
+        RowDataKeySelector selector = emptySelector();
+        StreamFusionArrowGroupAggregateOperator operator = new StreamFusionArrowGroupAggregateOperator(
+                INPUT_TYPE, GLOBAL_OUTPUT_TYPE, new int[0], globalPlan(), false, selector);
+        KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> harness =
+                new KeyedOneInputStreamOperatorTestHarness<>(
+                        operator,
+                        new ArrowBatchKeySelector(selector),
+                        selector.getProducedType(),
+                        MAX_PARALLELISM,
+                        1,
+                        0);
+        harness.setStateBackend(new StreamFusionStateBackend(
+                rocksDb ? new EmbeddedRocksDBStateBackend(true) : new HashMapStateBackend()));
+        harness.setup(ArrowRowDataBatchSerializer.INSTANCE);
+        if (state != null) {
+            harness.initializeState(state);
+        }
+        harness.open();
+        return harness;
+    }
+
     private static RowDataKeySelector rowSelector() {
         return KeySelectorUtil.getRowDataSelector(
                 StreamFusionArrowGroupAggregateOperatorTest.class.getClassLoader(),
                 new int[] {0},
+                InternalTypeInfo.of(INPUT_TYPE));
+    }
+
+    private static RowDataKeySelector emptySelector() {
+        return KeySelectorUtil.getRowDataSelector(
+                StreamFusionArrowGroupAggregateOperatorTest.class.getClassLoader(),
+                new int[0],
                 InternalTypeInfo.of(INPUT_TYPE));
     }
 
@@ -460,6 +614,23 @@ class StreamFusionArrowGroupAggregateOperatorTest {
         GroupAggregate aggregate = GroupAggregate.newBuilder()
                 .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
                 .addGroupingIndices(0)
+                .addAggregateCalls(AggregateCall.newBuilder()
+                        .setFunction(AggregateFunction.AGGREGATE_FUNCTION_COUNT_STAR)
+                        .setOutputType(bigint))
+                .build();
+        return NativePlan.newBuilder()
+                .setProtocolVersion(1)
+                .setRoot(Operator.newBuilder().setGroupAggregate(aggregate))
+                .build()
+                .toByteArray();
+    }
+
+    private static byte[] globalPlan() {
+        tech.streamfusion.proto.plan.v1.LogicalType bigint = tech.streamfusion.proto.plan.v1.LogicalType.newBuilder()
+                .setBigint(EmptyType.getDefaultInstance())
+                .build();
+        GroupAggregate aggregate = GroupAggregate.newBuilder()
+                .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
                 .addAggregateCalls(AggregateCall.newBuilder()
                         .setFunction(AggregateFunction.AGGREGATE_FUNCTION_COUNT_STAR)
                         .setOutputType(bigint))

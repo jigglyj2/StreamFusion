@@ -2,6 +2,7 @@ package tech.streamfusion.benchmark.nexmark;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
@@ -55,6 +56,18 @@ class LocalRowDataNexmarkBenchmarkIT {
         assertThat(streamFusion.completed()).isTrue();
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
         assertThat(streamFusion.nativeGroupAggregateBatches()).isGreaterThan(0);
+
+        for (String query : List.of("global-aggregate", "grouping-sets")) {
+            LocalRowDataNexmarkBenchmark.RunResult flink =
+                    LocalRowDataNexmarkBenchmark.run(1_000, query, false, backend, 1);
+            streamFusion = LocalRowDataNexmarkBenchmark.run(1_000, query, true, backend, 1);
+            assertThat(streamFusion.completed()).isTrue();
+            assertThat(streamFusion.debugRows()).containsExactlyElementsOf(flink.debugRows());
+            assertThat(streamFusion.outputRows()).isEqualTo(flink.outputRows());
+            assertThat(streamFusion.outputSha256()).isEqualTo(flink.outputSha256());
+            assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+            assertThat(streamFusion.nativeGroupAggregateBatches()).isGreaterThan(0);
+        }
     }
 
     @ParameterizedTest

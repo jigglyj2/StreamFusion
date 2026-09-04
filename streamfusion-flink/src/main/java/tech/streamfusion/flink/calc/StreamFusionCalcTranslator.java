@@ -258,12 +258,12 @@ public final class StreamFusionCalcTranslator extends StreamFusionExpressionTran
                     && (directInput >= inputType.getFieldCount()
                             || !isSupportedProjectionType(
                                     inputType.getTypeAt(directInput).getTypeRoot())
-                            || !inputType.getTypeAt(directInput).equals(expectedType))) {
+                            || !sameTypeIgnoringNullability(inputType.getTypeAt(directInput), expectedType))) {
                 return "projection["
                         + outputIndex
                         + "]/input["
                         + directInput
-                        + "]: input and output types must match exactly";
+                        + "]: input and output types must match except for nullability";
             }
             if (projectionExpression(projection, inputType, expectedType) == null) {
                 return expressionFailure(projection, inputType, expectedType, false, "projection[" + outputIndex + "]");
@@ -278,5 +278,11 @@ public final class StreamFusionCalcTranslator extends StreamFusionExpressionTran
                     "condition");
         }
         return null;
+    }
+
+    private static boolean sameTypeIgnoringNullability(
+            org.apache.flink.table.types.logical.LogicalType input,
+            org.apache.flink.table.types.logical.LogicalType output) {
+        return input.copy(true).equals(output.copy(true));
     }
 }

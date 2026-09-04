@@ -22,6 +22,8 @@ class NexmarkRowDataQueryCatalogTest {
                         "q22",
                         "q23",
                         "group-aggregate",
+                        "global-aggregate",
+                        "grouping-sets",
                         "interval-join",
                         "over-aggregate",
                         "over-aggregate-event-time",

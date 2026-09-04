@@ -28,6 +28,31 @@ import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 
 class GroupAggregateParityTest extends SqlParityTestSupport {
     @Test
+    void globalAggregateUsesSingletonNativeStateAndMatchesFlinkByteForByte() throws Exception {
+        byte[] flink = executeGlobalAggregate(false);
+        byte[] streamFusion = executeGlobalAggregate(true);
+
+        assertThat(streamFusion).isEqualTo(flink);
+        assertThat(StreamFusionPlannerFactory.nativeGroupAggregateBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
+    private static byte[] executeGlobalAggregate(boolean streamFusion) throws Exception {
+        configurePlanner(streamFusion);
+        StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();
+        environment.setParallelism(1);
+        StreamTableEnvironment tables = StreamTableEnvironment.create(
+                environment, EnvironmentSettings.newInstance().inStreamingMode().build());
+        tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+        DataStream<Row> rows = environment.fromCollection(
+                List.of(Row.of(1, "beta"), Row.of(null, "alpha"), Row.of(3, "zeta")),
+                Types.ROW_NAMED(new String[] {"amount", "label"}, Types.INT, Types.STRING));
+        tables.createTemporaryView("global_aggregate_input", tables.fromDataStream(rows));
+        return collect(tables.executeSql("SELECT COUNT(*), COUNT(amount), SUM(amount), MIN(label), MAX(label) "
+                + "FROM global_aggregate_input"));
+    }
+
+    @Test
     void integerAndDecimalAccumulatorsMatchFlinkByteForByte() throws Exception {
         byte[] flink = executeInsertRows(false);
         byte[] streamFusion = executeInsertRows(true);
@@ -42,6 +67,16 @@ class GroupAggregateParityTest extends SqlParityTestSupport {
         byte[] streamFusion = executeRetractions(true);
 
         assertThat(streamFusion).isEqualTo(flink);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
+    @Test
+    void globalRetractionsMatchFlinkByteForByte() throws Exception {
+        byte[] flink = executeGlobalRetractions(false);
+        byte[] streamFusion = executeGlobalRetractions(true);
+
+        assertThat(streamFusion).isEqualTo(flink);
+        assertThat(StreamFusionPlannerFactory.nativeGroupAggregateBatchCount()).isGreaterThan(0);
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 
@@ -310,6 +345,35 @@ class GroupAggregateParityTest extends SqlParityTestSupport {
         return collect(
                 tables.executeSql("SELECT category, COUNT(*), COUNT(label), SUM(amount), MIN(amount), MAX(amount) "
                         + "FROM group_aggregate_changes GROUP BY category"));
+    }
+
+    private static byte[] executeGlobalRetractions(boolean streamFusion) throws Exception {
+        configurePlanner(streamFusion);
+        StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();
+        environment.setParallelism(1);
+        StreamTableEnvironment tables = StreamTableEnvironment.create(
+                environment, EnvironmentSettings.newInstance().inStreamingMode().build());
+        tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+        DataStream<Row> changes = environment.fromCollection(
+                List.of(
+                        row(RowKind.INSERT, "ignored", "beta", 10L),
+                        row(RowKind.INSERT, "ignored", "alpha", 20L),
+                        row(RowKind.UPDATE_BEFORE, "ignored", "alpha", 20L),
+                        row(RowKind.UPDATE_AFTER, "ignored", "zeta", 5L),
+                        row(RowKind.DELETE, "ignored", "beta", 10L),
+                        row(RowKind.DELETE, "ignored", "zeta", 5L)),
+                Types.ROW_NAMED(new String[] {"unused", "label", "amount"}, Types.STRING, Types.STRING, Types.LONG));
+        Table input = tables.fromChangelogStream(
+                changes,
+                Schema.newBuilder()
+                        .column("unused", "STRING NOT NULL")
+                        .column("label", "STRING")
+                        .column("amount", "BIGINT")
+                        .build());
+        tables.createTemporaryView("global_aggregate_changes", input);
+        return collect(tables.executeSql(
+                "SELECT COUNT(*), COUNT(label), SUM(amount), MIN(amount), MAX(amount), MIN(label), MAX(label) "
+                        + "FROM global_aggregate_changes"));
     }
 
     private static byte[] executeInsertRows(boolean streamFusion) throws Exception {

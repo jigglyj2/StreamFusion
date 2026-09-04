@@ -67,14 +67,16 @@ public final class StreamFusionGroupAggregateTranslator {
             // A keyed transformation may become a separate task even when the planner elides an
             // Exchange (for example VALUES has max parallelism one). Frame that edge explicitly
             // and use the same Flink-compatible hash/key-group partitioning as a planned exchange.
-            partitionedInput = StreamFusionExchangeTranslator.hash(
-                    input,
-                    inputType,
-                    grouping,
-                    DEFAULT_LOWER_BOUND_MAX_PARALLELISM,
-                    environment.getParallelism(),
-                    config.get(CheckpointingOptions.ENABLE_UNALIGNED)
-                            || config.get(CheckpointingOptions.FORCE_UNALIGNED));
+            partitionedInput = grouping.length == 0
+                    ? StreamFusionExchangeTranslator.singleton(input, inputType)
+                    : StreamFusionExchangeTranslator.hash(
+                            input,
+                            inputType,
+                            grouping,
+                            DEFAULT_LOWER_BOUND_MAX_PARALLELISM,
+                            environment.getParallelism(),
+                            config.get(CheckpointingOptions.ENABLE_UNALIGNED)
+                                    || config.get(CheckpointingOptions.FORCE_UNALIGNED));
         }
         Transformation<ArrowRowDataBatch> arrowInput = StreamFusionArrowBoundaries.toArrow(partitionedInput, inputType);
         OneInputTransformation<ArrowRowDataBatch, ArrowRowDataBatch> transformation = new OneInputTransformation<>(
@@ -104,9 +106,6 @@ public final class StreamFusionGroupAggregateTranslator {
             boolean needRetraction,
             long stateRetentionTime,
             ReadableConfig config) {
-        if (grouping.length == 0) {
-            return "key: the initial native group aggregate requires at least one grouping field";
-        }
         if (calls.length != retractable.length) {
             return "aggregate: calls and retraction requirements must be equally sized";
         }

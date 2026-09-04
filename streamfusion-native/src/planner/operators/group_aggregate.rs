@@ -238,25 +238,35 @@ impl GroupAggregateProcessor {
         base_reservation: usize,
     ) -> Result<RecordBatch> {
         self.prepare_schema(batch.schema(), batch.num_columns())?;
-        let mut unique_indices = HashMap::<StateKey, usize, RandomState>::with_capacity_and_hasher(
-            batch.num_rows(),
-            RandomState::new(),
-        );
-        let mut row_key_indices = Vec::with_capacity(batch.num_rows());
-        for row in 0..batch.num_rows() {
-            let state_key = self.state_key(&batch, row)?;
-            let next_index = unique_indices.len();
-            let index = *unique_indices.entry(state_key).or_insert(next_index);
-            row_key_indices.push(index);
-        }
-        let mut ordered_keys = (0..unique_indices.len()).map(|_| None).collect::<Vec<_>>();
-        for (key, index) in unique_indices.drain() {
-            ordered_keys[index] = Some(key);
-        }
-        let unique_keys = ordered_keys
-            .into_iter()
-            .map(|key| key.expect("every group aggregate key index is populated"))
-            .collect::<Vec<_>>();
+        let (unique_keys, row_key_indices) =
+            if self.plan.grouping_indices.is_empty() && batch.num_rows() != 0 {
+                // Flink forces a global aggregate through a singleton exchange. Its sole key is the
+                // zero-field BinaryRow, so hashing and allocating the same key once per input row is
+                // pure overhead. Retain the normal keyed-state path while materializing that key once.
+                (vec![self.state_key(&batch, 0)?], vec![0; batch.num_rows()])
+            } else {
+                let mut unique_indices =
+                    HashMap::<StateKey, usize, RandomState>::with_capacity_and_hasher(
+                        batch.num_rows(),
+                        RandomState::new(),
+                    );
+                let mut row_key_indices = Vec::with_capacity(batch.num_rows());
+                for row in 0..batch.num_rows() {
+                    let state_key = self.state_key(&batch, row)?;
+                    let next_index = unique_indices.len();
+                    let index = *unique_indices.entry(state_key).or_insert(next_index);
+                    row_key_indices.push(index);
+                }
+                let mut ordered_keys = (0..unique_indices.len()).map(|_| None).collect::<Vec<_>>();
+                for (key, index) in unique_indices.drain() {
+                    ordered_keys[index] = Some(key);
+                }
+                let unique_keys = ordered_keys
+                    .into_iter()
+                    .map(|key| key.expect("every group aggregate key index is populated"))
+                    .collect::<Vec<_>>();
+                (unique_keys, row_key_indices)
+            };
         let unique_key_refs = unique_keys
             .iter()
             .map(|key| StateKeyRef {
@@ -823,15 +833,10 @@ pub(super) fn row_aggregate_values(
         .collect()
 }
 
-fn validate_plan(plan: &proto::GroupAggregate, max_parallelism: u32) -> Result<()> {
+fn validate_plan(_plan: &proto::GroupAggregate, max_parallelism: u32) -> Result<()> {
     if max_parallelism == 0 {
         return Err(DataFusionError::Plan(
             "group aggregate max parallelism must be positive".to_string(),
-        ));
-    }
-    if plan.grouping_indices.is_empty() {
-        return Err(DataFusionError::Plan(
-            "group aggregate requires at least one grouping field".to_string(),
         ));
     }
     Ok(())
@@ -1731,6 +1736,14 @@ mod tests {
     }
 
     fn plan(input_changelog: bool, update_before: bool) -> Vec<u8> {
+        plan_with_grouping(input_changelog, update_before, vec![0])
+    }
+
+    fn plan_with_grouping(
+        input_changelog: bool,
+        update_before: bool,
+        grouping_indices: Vec<u32>,
+    ) -> Vec<u8> {
         let call =
             |function: proto::AggregateFunction, input_index: Option<u32>| proto::AggregateCall {
                 function: function as i32,
@@ -1752,7 +1765,7 @@ mod tests {
                                 input_index: 0,
                             })),
                         })),
-                        grouping_indices: vec![0],
+                        grouping_indices,
                         aggregate_calls: vec![
                             call(proto::AggregateFunction::CountStar, None),
                             call(proto::AggregateFunction::Sum, Some(1)),
@@ -1881,6 +1894,50 @@ mod tests {
                 UPDATE_BEFORE,
                 UPDATE_AFTER,
                 INSERT
+            ]
+        );
+    }
+
+    #[test]
+    fn global_aggregate_uses_one_empty_binary_row_key() {
+        let mut processor = GroupAggregateProcessor::new(
+            &plan_with_grouping(false, true, Vec::new()),
+            128,
+            0,
+            127,
+            HostMemoryReservation::new(
+                Arc::new(TestBroker::new(1 << 30)),
+                "test global aggregate state",
+            ),
+        )
+        .unwrap();
+        let output = processor
+            .process_arrow(batch(vec![7, 8, 9], vec![Some(10), None, Some(20)], None))
+            .unwrap();
+
+        assert_eq!(output.num_columns(), 5);
+        assert_eq!(
+            output
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values(),
+            &[1, 1, 2, 2, 3]
+        );
+        assert_eq!(
+            output
+                .column(output.num_columns() - 1)
+                .as_any()
+                .downcast_ref::<Int8Array>()
+                .unwrap()
+                .values(),
+            &[
+                INSERT,
+                UPDATE_BEFORE,
+                UPDATE_AFTER,
+                UPDATE_BEFORE,
+                UPDATE_AFTER
             ]
         );
     }

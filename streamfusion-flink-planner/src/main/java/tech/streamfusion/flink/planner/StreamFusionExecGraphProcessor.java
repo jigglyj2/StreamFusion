@@ -1034,14 +1034,6 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
 
     private String unsupportedReason(StreamExecGroupAggregate aggregate, ProcessorContext context) {
         ExecEdge input = aggregate.getInputEdges().get(0);
-        ExecNode<?> inputSource = input.getSource();
-        if (inputSource instanceof StreamExecExchange
-                && inputSource.getInputEdges().size() == 1) {
-            inputSource = inputSource.getInputEdges().get(0).getSource();
-        }
-        if (inputSource instanceof StreamExecExpand) {
-            return "grouping sets: native group aggregate does not yet implement expanded grouping-set semantics";
-        }
         try {
             Class<?> translator = Class.forName(
                     GROUP_AGGREGATE_TRANSLATOR_CLASS,
