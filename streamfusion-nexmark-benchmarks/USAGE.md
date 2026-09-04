@@ -71,6 +71,11 @@ mvn -pl streamfusion-nexmark-benchmarks -am \
   -Dit.test=LocalRowDataNexmarkBenchmarkIT verify
 ```
 
+Use `install` instead of `package` before a standalone invocation that consumes
+`target/classpath.txt`; the generated classpath names reactor dependencies in the local Maven
+repository, and an older installed planner JAR would otherwise produce an explicit fallback rather
+than measure the just-built code.
+
 For standalone measurements, invoke `LocalRowDataNexmarkBenchmark` with the event count,
 comma-separated query names, `flink`, `streamfusion`, or `both`, `hashmap`, `rocksdb`, or
 `both`, and an optional parallelism. Use parallelism one when comparing the complete streaming
@@ -82,6 +87,11 @@ batches, plus native OVER-aggregate batches. Set
 samples for a standalone run. Run performance
 measurements from a release/native-CPU build and use separate JVM invocations for each engine;
 the `both` mode is primarily a convenience smoke test.
+
+Set `-Dstreamfusion.nexmark.mini-batch=true` to enable count-triggered mini-batching for a RowData
+run. `-Dstreamfusion.nexmark.aggregate-phase=ONE_PHASE` or `TWO_PHASE` fixes Flink's aggregate phase
+strategy; the default is `AUTO`. These are benchmark controls applied identically to Flink and
+StreamFusion, not deployment settings.
 
 For example, after the integration-profile build:
 

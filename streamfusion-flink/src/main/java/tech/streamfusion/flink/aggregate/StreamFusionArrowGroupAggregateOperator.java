@@ -28,6 +28,7 @@ final class StreamFusionArrowGroupAggregateOperator extends AbstractStreamFusion
     private final boolean selectDistinct;
     private final RowDataKeySelector keySelector;
     private final long miniBatchSize;
+    private transient long[] observedNativeStatistics;
 
     StreamFusionArrowGroupAggregateOperator(
             RowType inputType,
@@ -59,6 +60,7 @@ final class StreamFusionArrowGroupAggregateOperator extends AbstractStreamFusion
     @Override
     public void open() throws Exception {
         super.open();
+        observedNativeStatistics = NativeGroupAggregateBridge.statistics(nativeHandle());
         if (miniBatchSize > 0) {
             getRuntimeContext()
                     .getMetricGroup()
@@ -99,8 +101,9 @@ final class StreamFusionArrowGroupAggregateOperator extends AbstractStreamFusion
                         getMetricGroup().getIOMetricGroup().getNumRecordsOutCounter(),
                         physicalOutputRecords,
                         outputBatch.size());
-                recordProcessed(input, outputBatch);
+                recordProcessedWithoutStateCalls(input, outputBatch);
             }
+            updateNativeStatistics();
         } catch (Throwable failure) {
             recordProcessingFailure();
             throw failure;
@@ -140,10 +143,21 @@ final class StreamFusionArrowGroupAggregateOperator extends AbstractStreamFusion
                     physicalOutputRecords,
                     outputBatch.size());
             recordProcessedWithoutStateCalls(0, outputBatch);
+            updateNativeStatistics();
         } catch (Throwable failure) {
             recordProcessingFailure();
             throw failure;
         }
+    }
+
+    private void updateNativeStatistics() {
+        long[] current = NativeGroupAggregateBridge.statistics(nativeHandle());
+        if (current.length != 2 || observedNativeStatistics.length != 2) {
+            throw new IllegalStateException("Native group aggregate statistics have an incompatible shape");
+        }
+        recordNativeWindowStatistics(
+                current[0] - observedNativeStatistics[0], current[1] - observedNativeStatistics[1], 0, 0, 0);
+        observedNativeStatistics = current;
     }
 
     @Override

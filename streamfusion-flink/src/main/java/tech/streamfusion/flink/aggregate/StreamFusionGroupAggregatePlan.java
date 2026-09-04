@@ -18,8 +18,10 @@ import tech.streamfusion.flink.calc.StreamFusionCalcTranslator;
 import tech.streamfusion.flink.proto.FlinkLogicalTypeProto;
 import tech.streamfusion.proto.plan.v1.AggregateFunction;
 import tech.streamfusion.proto.plan.v1.Field;
+import tech.streamfusion.proto.plan.v1.GlobalGroupAggregate;
 import tech.streamfusion.proto.plan.v1.GroupAggregate;
 import tech.streamfusion.proto.plan.v1.Input;
+import tech.streamfusion.proto.plan.v1.LocalGroupAggregate;
 import tech.streamfusion.proto.plan.v1.NativePlan;
 import tech.streamfusion.proto.plan.v1.Operator;
 import tech.streamfusion.proto.plan.v1.Schema;
@@ -47,6 +49,69 @@ final class StreamFusionGroupAggregatePlan {
         for (int index : grouping) {
             aggregate.addGroupingIndices(index);
         }
+        aggregate.addAllAggregateCalls(aggregateCalls(inputType, calls, retractable));
+        return NativePlan.newBuilder()
+                .setProtocolVersion(1)
+                .setRoot(Operator.newBuilder().setGroupAggregate(aggregate))
+                .build()
+                .toByteArray();
+    }
+
+    static byte[] createLocal(
+            RowType inputType,
+            RowType internalOutputType,
+            int[] grouping,
+            AggregateCall[] calls,
+            boolean[] retractable,
+            boolean inputChangelog,
+            long miniBatchSize) {
+        LocalGroupAggregate.Builder aggregate = LocalGroupAggregate.newBuilder()
+                .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
+                .setInputChangelog(inputChangelog)
+                .setMiniBatchSize(miniBatchSize)
+                .setInputSchema(schema(inputType))
+                .setOutputSchema(schema(internalOutputType))
+                .addAllAggregateCalls(aggregateCalls(inputType, calls, retractable));
+        for (int index : grouping) {
+            aggregate.addGroupingIndices(index);
+        }
+        return NativePlan.newBuilder()
+                .setProtocolVersion(1)
+                .setRoot(Operator.newBuilder().setLocalGroupAggregate(aggregate))
+                .build()
+                .toByteArray();
+    }
+
+    static byte[] createGlobal(
+            RowType originalInputType,
+            RowType internalInputType,
+            RowType outputType,
+            int groupingCount,
+            AggregateCall[] calls,
+            boolean[] retractable,
+            boolean generateUpdateBefore,
+            long miniBatchSize) {
+        GlobalGroupAggregate.Builder aggregate = GlobalGroupAggregate.newBuilder()
+                .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
+                .setGenerateUpdateBefore(generateUpdateBefore)
+                .setMiniBatchSize(miniBatchSize)
+                .setInputSchema(schema(internalInputType))
+                .setOutputSchema(schema(outputType))
+                .addAllAggregateCalls(aggregateCalls(originalInputType, calls, retractable));
+        for (int index = 0; index < groupingCount; index++) {
+            aggregate.addGroupingIndices(index);
+        }
+        return NativePlan.newBuilder()
+                .setProtocolVersion(1)
+                .setRoot(Operator.newBuilder().setGlobalGroupAggregate(aggregate))
+                .build()
+                .toByteArray();
+    }
+
+    private static List<tech.streamfusion.proto.plan.v1.AggregateCall> aggregateCalls(
+            RowType inputType, AggregateCall[] calls, boolean[] retractable) {
+        java.util.ArrayList<tech.streamfusion.proto.plan.v1.AggregateCall> result =
+                new java.util.ArrayList<>(calls.length);
         for (int index = 0; index < calls.length; index++) {
             AggregateCall call = calls[index];
             tech.streamfusion.proto.plan.v1.AggregateCall.Builder nativeCall =
@@ -70,13 +135,9 @@ final class StreamFusionGroupAggregatePlan {
                 nativeCall.setAccumulatorType(StreamFusionCalcTranslator.operatorLogicalType(
                         averageAccumulatorType(inputType.getTypeAt(arguments.get(0)))));
             }
-            aggregate.addAggregateCalls(nativeCall);
+            result.add(nativeCall.build());
         }
-        return NativePlan.newBuilder()
-                .setProtocolVersion(1)
-                .setRoot(Operator.newBuilder().setGroupAggregate(aggregate))
-                .build()
-                .toByteArray();
+        return result;
     }
 
     private static Schema schema(RowType type) {

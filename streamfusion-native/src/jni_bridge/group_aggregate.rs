@@ -6,14 +6,155 @@ use std::sync::Arc;
 use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 use jni::errors::ThrowRuntimeExAndDefault;
 use jni::jni_str;
-use jni::objects::{JByteArray, JClass, JObject, JString};
+use jni::objects::{JByteArray, JClass, JLongArray, JObject, JString};
 use jni::strings::JNIString;
-use jni::sys::{jbyteArray, jint, jlong};
+use jni::sys::{jbyteArray, jint, jlong, jlongArray};
 use jni::EnvUnowned;
+use prost::Message;
 
 use super::common::{export_record_batch, import_record_batch};
 use crate::memory_pool::{HostMemoryReservation, JvmMemoryReservationBroker};
+use crate::planner::operators::global_group_aggregate::GlobalGroupAggregateProcessor;
 use crate::planner::operators::group_aggregate::GroupAggregateProcessor;
+use crate::proto;
+
+enum AggregateProcessor {
+    Group(GroupAggregateProcessor),
+    Global(GlobalGroupAggregateProcessor),
+}
+
+impl AggregateProcessor {
+    fn new(
+        plan: &[u8],
+        max_parallelism: u32,
+        first_key_group: u32,
+        last_key_group: u32,
+        reservation: HostMemoryReservation,
+    ) -> datafusion::error::Result<Self> {
+        if is_global(plan)? {
+            Ok(Self::Global(GlobalGroupAggregateProcessor::new(
+                plan,
+                max_parallelism,
+                first_key_group,
+                last_key_group,
+                reservation,
+            )?))
+        } else {
+            Ok(Self::Group(GroupAggregateProcessor::new(
+                plan,
+                max_parallelism,
+                first_key_group,
+                last_key_group,
+                reservation,
+            )?))
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_rocksdb(
+        plan: &[u8],
+        max_parallelism: u32,
+        first_key_group: u32,
+        last_key_group: u32,
+        plugin_path: &std::path::Path,
+        database_path: &std::path::Path,
+        memory_limit: usize,
+        reservation: HostMemoryReservation,
+    ) -> datafusion::error::Result<Self> {
+        if is_global(plan)? {
+            Ok(Self::Global(GlobalGroupAggregateProcessor::new_rocksdb(
+                plan,
+                max_parallelism,
+                first_key_group,
+                last_key_group,
+                plugin_path,
+                database_path,
+                memory_limit,
+                reservation,
+            )?))
+        } else {
+            Ok(Self::Group(GroupAggregateProcessor::new_rocksdb(
+                plan,
+                max_parallelism,
+                first_key_group,
+                last_key_group,
+                plugin_path,
+                database_path,
+                memory_limit,
+                reservation,
+            )?))
+        }
+    }
+
+    fn process_arrow(
+        &mut self,
+        batch: arrow::record_batch::RecordBatch,
+    ) -> datafusion::error::Result<arrow::record_batch::RecordBatch> {
+        match self {
+            Self::Group(processor) => processor.process_arrow(batch),
+            Self::Global(processor) => processor.process_arrow(batch),
+        }
+    }
+
+    fn finish_bundle(&mut self) -> datafusion::error::Result<arrow::record_batch::RecordBatch> {
+        match self {
+            Self::Group(processor) => processor.finish_bundle(),
+            Self::Global(processor) => processor.finish_bundle(),
+        }
+    }
+
+    fn pending_element_count(&self) -> usize {
+        match self {
+            Self::Group(processor) => processor.pending_element_count(),
+            Self::Global(processor) => processor.pending_element_count(),
+        }
+    }
+
+    fn pending_key_count(&self) -> usize {
+        match self {
+            Self::Group(processor) => processor.pending_key_count(),
+            Self::Global(processor) => processor.pending_key_count(),
+        }
+    }
+
+    fn statistics(&self) -> [u64; 2] {
+        match self {
+            Self::Group(processor) => processor.statistics(),
+            Self::Global(processor) => processor.statistics(),
+        }
+    }
+
+    fn snapshot_key_group(&self, key_group: u32) -> datafusion::error::Result<Vec<u8>> {
+        match self {
+            Self::Group(processor) => processor.snapshot_key_group(key_group),
+            Self::Global(processor) => processor.snapshot_key_group(key_group),
+        }
+    }
+
+    fn restore_key_group(&mut self, key_group: u32, bytes: &[u8]) -> datafusion::error::Result<()> {
+        match self {
+            Self::Group(processor) => processor.restore_key_group(key_group, bytes),
+            Self::Global(processor) => processor.restore_key_group(key_group, bytes),
+        }
+    }
+
+    fn checkpoint(&self, directory: &std::path::Path) -> datafusion::error::Result<()> {
+        match self {
+            Self::Group(processor) => processor.checkpoint(directory),
+            Self::Global(processor) => processor.checkpoint(directory),
+        }
+    }
+}
+
+fn is_global(plan: &[u8]) -> datafusion::error::Result<bool> {
+    let native = proto::NativePlan::decode(plan).map_err(|error| {
+        datafusion::error::DataFusionError::Plan(format!("invalid native plan: {error}"))
+    })?;
+    Ok(matches!(
+        native.root.and_then(|operator| operator.operator),
+        Some(proto::operator::Operator::GlobalGroupAggregate(_))
+    ))
+}
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeGroupAggregateBridge_createHandle<
@@ -42,7 +183,7 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeGroupAggregateB
                 env.new_global_ref(memory_manager)?,
             ));
             let processor = (|| -> datafusion::error::Result<_> {
-                GroupAggregateProcessor::new(
+                AggregateProcessor::new(
                     &plan,
                     non_negative(max_parallelism, "max parallelism")?,
                     non_negative(first_key_group, "first key group")?,
@@ -87,7 +228,7 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeGroupAggregateB
                 env.new_global_ref(memory_manager)?,
             ));
             let processor = (|| -> datafusion::error::Result<_> {
-                GroupAggregateProcessor::new_rocksdb(
+                AggregateProcessor::new_rocksdb(
                     &plan,
                     non_negative(max_parallelism, "max parallelism")?,
                     non_negative(first_key_group, "first key group")?,
@@ -201,6 +342,27 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeGroupAggregateB
                 .map(|processor| processor.pending_key_count())
                 .map_err(|error| throw(env, error))?;
             Ok(count as jlong)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeGroupAggregateBridge_nativeStatistics<
+    'caller,
+>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    handle: jlong,
+) -> jlongArray {
+    unowned_env
+        .with_env(|env| -> jni::errors::Result<_> {
+            let values = unsafe { processor(handle) }
+                .map(|processor| processor.statistics())
+                .map_err(|error| throw(env, error))?
+                .map(|value| value.min(i64::MAX as u64) as jlong);
+            let output: JLongArray<'_> = env.new_long_array(values.len())?;
+            output.set_region(env, 0, &values)?;
+            Ok(output.into_raw())
         })
         .resolve::<ThrowRuntimeExAndDefault>()
 }
@@ -327,7 +489,7 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeGroupAggregateB
         .with_env(|_env| -> jni::errors::Result<_> {
             if handle != 0 {
                 unsafe {
-                    drop(Box::from_raw(handle as *mut GroupAggregateProcessor));
+                    drop(Box::from_raw(handle as *mut AggregateProcessor));
                 }
             }
             Ok(())
@@ -343,15 +505,13 @@ fn non_negative(value: jint, description: &str) -> datafusion::error::Result<u32
     })
 }
 
-unsafe fn processor<'a>(
-    handle: jlong,
-) -> datafusion::error::Result<&'a mut GroupAggregateProcessor> {
+unsafe fn processor<'a>(handle: jlong) -> datafusion::error::Result<&'a mut AggregateProcessor> {
     if handle == 0 {
         return Err(datafusion::error::DataFusionError::Execution(
             "group aggregate native handle is closed".to_string(),
         ));
     }
-    unsafe { (handle as *mut GroupAggregateProcessor).as_mut() }.ok_or_else(|| {
+    unsafe { (handle as *mut AggregateProcessor).as_mut() }.ok_or_else(|| {
         datafusion::error::DataFusionError::Execution(
             "group aggregate native handle is invalid".to_string(),
         )

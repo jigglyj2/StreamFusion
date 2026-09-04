@@ -16,6 +16,7 @@ import java.util.List;
 import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.EnvironmentSettings;
 import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.api.Table;
@@ -32,15 +33,74 @@ import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 class GroupAggregateParityTest extends SqlParityTestSupport {
     @Test
     void onePhaseMiniBatchMatchesFlinkAcrossCountAndTerminalFlushes() throws Exception {
-        byte[] flink = executeMiniBatch(false);
-        byte[] streamFusion = executeMiniBatch(true);
+        byte[] flink = executeMiniBatch(false, AggregatePhaseStrategy.ONE_PHASE);
+        byte[] streamFusion = executeMiniBatch(true, AggregatePhaseStrategy.ONE_PHASE);
 
         assertThat(streamFusion).isEqualTo(flink);
         assertThat(StreamFusionPlannerFactory.nativeGroupAggregateBatchCount()).isGreaterThan(0);
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 
-    private static byte[] executeMiniBatch(boolean streamFusion) throws Exception {
+    @Test
+    void twoPhaseMiniBatchMatchesFlinkAcrossLocalAndGlobalBundleBoundaries() throws Exception {
+        byte[] flink = executeMiniBatch(false, AggregatePhaseStrategy.TWO_PHASE);
+        byte[] streamFusion = executeMiniBatch(true, AggregatePhaseStrategy.TWO_PHASE);
+
+        assertThat(streamFusion).isEqualTo(flink);
+        assertThat(StreamFusionPlannerFactory.nativeGroupAggregateBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
+    @Test
+    void twoPhaseMiniBatchUsesCanonicalFlinkKeysForNestedGroupingTypes() throws Exception {
+        byte[] flink = executeNestedTwoPhase(false);
+        byte[] streamFusion = executeNestedTwoPhase(true);
+
+        assertThat(streamFusion).isEqualTo(flink);
+        assertThat(StreamFusionPlannerFactory.nativeGroupAggregateBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
+    private static byte[] executeNestedTwoPhase(boolean streamFusion) throws Exception {
+        configurePlanner(streamFusion);
+        StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();
+        environment.setParallelism(1);
+        StreamTableEnvironment tables = StreamTableEnvironment.create(
+                environment, EnvironmentSettings.newInstance().inStreamingMode().build());
+        tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+        tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ENABLED, true);
+        tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_SIZE, 2L);
+        tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ALLOW_LATENCY, Duration.ofDays(1));
+        tables.getConfig()
+                .set(OptimizerConfigOptions.TABLE_OPTIMIZER_AGG_PHASE_STRATEGY, AggregatePhaseStrategy.TWO_PHASE);
+        DataStream<Row> rows = environment.fromCollection(
+                List.of(
+                        Row.of(new Integer[] {1, 2}, Row.of("alpha", 7), 5L),
+                        Row.of(new Integer[] {1, 2}, Row.of("alpha", 7), 6L),
+                        Row.of(new Integer[] {9}, Row.of("beta", 3), 4L)),
+                Types.ROW_NAMED(
+                        new String[] {"array_key", "row_key", "amount"},
+                        Types.OBJECT_ARRAY(Types.INT),
+                        Types.ROW_NAMED(new String[] {"label", "score"}, Types.STRING, Types.INT),
+                        Types.LONG));
+        tables.createTemporaryView(
+                "nested_two_phase_group_input",
+                tables.fromDataStream(
+                        rows,
+                        Schema.newBuilder()
+                                .column("array_key", DataTypes.ARRAY(DataTypes.INT()))
+                                .column(
+                                        "row_key",
+                                        DataTypes.ROW(
+                                                DataTypes.FIELD("label", DataTypes.STRING()),
+                                                DataTypes.FIELD("score", DataTypes.INT())))
+                                .column("amount", DataTypes.BIGINT())
+                                .build()));
+        return collect(tables.executeSql("SELECT array_key, row_key, COUNT(*), SUM(amount), AVG(amount) "
+                + "FROM nested_two_phase_group_input GROUP BY array_key, row_key"));
+    }
+
+    private static byte[] executeMiniBatch(boolean streamFusion, AggregatePhaseStrategy strategy) throws Exception {
         configurePlanner(streamFusion);
         StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();
         environment.setParallelism(1);
@@ -50,8 +110,7 @@ class GroupAggregateParityTest extends SqlParityTestSupport {
         tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ENABLED, true);
         tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_SIZE, 3L);
         tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ALLOW_LATENCY, Duration.ofDays(1));
-        tables.getConfig()
-                .set(OptimizerConfigOptions.TABLE_OPTIMIZER_AGG_PHASE_STRATEGY, AggregatePhaseStrategy.ONE_PHASE);
+        tables.getConfig().set(OptimizerConfigOptions.TABLE_OPTIMIZER_AGG_PHASE_STRATEGY, strategy);
         DataStream<Row> changes = environment.fromCollection(
                 List.of(
                         row(RowKind.INSERT, "a", "first", 10L),
@@ -186,13 +245,34 @@ class GroupAggregateParityTest extends SqlParityTestSupport {
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 
+    @Test
+    void twoPhaseDistinctAggregatesMergeLocalRetractionsLikeFlink() throws Exception {
+        byte[] flink = executeDistinctRetractions(false, true);
+        byte[] streamFusion = executeDistinctRetractions(true, true);
+
+        assertThat(streamFusion).isEqualTo(flink);
+        assertThat(StreamFusionPlannerFactory.nativeGroupAggregateBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
     private static byte[] executeDistinctRetractions(boolean streamFusion) throws Exception {
+        return executeDistinctRetractions(streamFusion, false);
+    }
+
+    private static byte[] executeDistinctRetractions(boolean streamFusion, boolean twoPhase) throws Exception {
         configurePlanner(streamFusion);
         StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();
         environment.setParallelism(1);
         StreamTableEnvironment tables = StreamTableEnvironment.create(
                 environment, EnvironmentSettings.newInstance().inStreamingMode().build());
         tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+        if (twoPhase) {
+            tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ENABLED, true);
+            tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_SIZE, 3L);
+            tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ALLOW_LATENCY, Duration.ofDays(1));
+            tables.getConfig()
+                    .set(OptimizerConfigOptions.TABLE_OPTIMIZER_AGG_PHASE_STRATEGY, AggregatePhaseStrategy.TWO_PHASE);
+        }
         Row five = Row.of("a", 5L, "x", true);
         Row seven = Row.of("a", 7L, "y", false);
         Row nullAmount = Row.of("a", null, "z", true);

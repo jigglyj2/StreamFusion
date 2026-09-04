@@ -7,6 +7,7 @@ import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.time.Duration;
 import org.apache.flink.configuration.CheckpointingOptions;
 import org.apache.flink.configuration.CoreOptions;
 import org.apache.flink.configuration.MemorySize;
@@ -14,7 +15,9 @@ import org.apache.flink.configuration.StateBackendOptions;
 import org.apache.flink.configuration.TaskManagerOptions;
 import org.apache.flink.table.api.EnvironmentSettings;
 import org.apache.flink.table.api.TableEnvironment;
+import org.apache.flink.table.api.config.AggregatePhaseStrategy;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
+import org.apache.flink.table.api.config.OptimizerConfigOptions;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
 
 /** Runs Nexmark's RowData generator through SQL into a deterministic changelog result sink. */
@@ -74,7 +77,20 @@ public final class NexmarkRowDataJob {
             tables.getConfig().getConfiguration().setString("execution.checkpointing.max-concurrent-checkpoints", "1");
             tables.getConfig().getConfiguration().setString("restart-strategy.type", "none");
             tables.getConfig().getConfiguration().set(CoreOptions.DEFAULT_PARALLELISM, parallelism);
-            tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ENABLED, false);
+            boolean miniBatch = Boolean.getBoolean("streamfusion.nexmark.mini-batch");
+            tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ENABLED, miniBatch);
+            if (miniBatch) {
+                tables.getConfig()
+                        .set(
+                                ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_SIZE,
+                                Long.getLong("streamfusion.nexmark.mini-batch-size", 5_000L));
+                tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ALLOW_LATENCY, Duration.ofDays(1));
+            }
+            String aggregatePhase = System.getProperty("streamfusion.nexmark.aggregate-phase", "AUTO");
+            tables.getConfig()
+                    .set(
+                            OptimizerConfigOptions.TABLE_OPTIMIZER_AGG_PHASE_STRATEGY,
+                            AggregatePhaseStrategy.valueOf(aggregatePhase.toUpperCase(java.util.Locale.ROOT)));
             tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, parallelism);
 
             tables.executeSql(sourceDdl(eventCount));

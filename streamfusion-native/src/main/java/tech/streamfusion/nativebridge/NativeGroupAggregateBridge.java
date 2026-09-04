@@ -76,6 +76,10 @@ public final class NativeGroupAggregateBridge {
         return pendingKeyCountNative(handle);
     }
 
+    public static long[] statistics(long handle) {
+        return nativeStatistics(handle);
+    }
+
     public static long executedBatchCount() {
         return EXECUTED_BATCHES.get();
     }
@@ -141,6 +145,8 @@ public final class NativeGroupAggregateBridge {
     private static native long pendingElementCountNative(long handle);
 
     private static native long pendingKeyCountNative(long handle);
+
+    private static native long[] nativeStatistics(long handle);
 
     private static native byte[] snapshotKeyGroup(long handle, int keyGroup);
 

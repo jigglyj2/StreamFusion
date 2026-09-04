@@ -118,6 +118,12 @@ fn create_operator(
         Some(proto::operator::Operator::GroupAggregate(_)) => Err(DataFusionError::Plan(
             "GroupAggregate requires a persistent stateful execution handle".to_string(),
         )),
+        Some(proto::operator::Operator::LocalGroupAggregate(_)) => Err(DataFusionError::Plan(
+            "LocalGroupAggregate requires a persistent bundle execution handle".to_string(),
+        )),
+        Some(proto::operator::Operator::GlobalGroupAggregate(_)) => Err(DataFusionError::Plan(
+            "GlobalGroupAggregate requires a persistent stateful execution handle".to_string(),
+        )),
         Some(proto::operator::Operator::WindowAggregate(_)) => Err(DataFusionError::Plan(
             "WindowAggregate requires a persistent stateful execution handle".to_string(),
         )),

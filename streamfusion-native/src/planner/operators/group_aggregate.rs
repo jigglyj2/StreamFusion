@@ -7,10 +7,11 @@ use std::sync::Arc;
 
 use ahash::RandomState;
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, Date32Array, Decimal128Array, Float32Array, Float64Array,
-    Int16Array, Int32Array, Int64Array, Int8Array, StringArray, Time32MillisecondArray,
-    Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
-    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt32Array,
+    Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Decimal128Array, Float32Array,
+    Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, StringArray,
+    Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
+    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+    TimestampSecondArray, UInt32Array,
 };
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow::record_batch::RecordBatch;
@@ -18,6 +19,7 @@ use arrow::row::{RowConverter, SortField};
 use datafusion::error::{DataFusionError, Result};
 use hashbrown::HashMap;
 
+use crate::exchange::binary_row_hash;
 use crate::exchange::{assign_key_group, encode_binary_row, KeyField};
 use crate::memory_pool::HostMemoryReservation;
 use crate::planner::expressions::null_literal;
@@ -52,6 +54,9 @@ pub(crate) struct GroupAggregateProcessor {
     pending: HashMap<StateKey, PendingGroup, RandomState>,
     pending_order: Vec<StateKey>,
     pending_elements: usize,
+    partial_input: bool,
+    state_read_batches: u64,
+    state_write_batches: u64,
 }
 
 #[derive(Clone)]
@@ -247,11 +252,28 @@ impl GroupAggregateProcessor {
         let root = native_plan
             .root
             .ok_or_else(|| DataFusionError::Plan("group aggregate plan has no root".to_string()))?;
-        let plan = match root.operator {
-            Some(proto::operator::Operator::GroupAggregate(plan)) => *plan,
+        let (plan, partial_input) = match root.operator {
+            Some(proto::operator::Operator::GroupAggregate(plan)) => (*plan, false),
+            Some(proto::operator::Operator::GlobalGroupAggregate(plan)) => {
+                let plan = *plan;
+                (
+                    proto::GroupAggregate {
+                        input: plan.input,
+                        grouping_indices: plan.grouping_indices,
+                        aggregate_calls: plan.aggregate_calls,
+                        generate_update_before: plan.generate_update_before,
+                        input_changelog: false,
+                        mini_batch_size: plan.mini_batch_size,
+                        input_schema: plan.input_schema,
+                        output_schema: plan.output_schema,
+                    },
+                    true,
+                )
+            }
             _ => {
                 return Err(DataFusionError::Plan(
-                    "stateful group aggregate handle requires a GroupAggregate root".to_string(),
+                    "stateful group aggregate handle requires a GroupAggregate or GlobalGroupAggregate root"
+                        .to_string(),
                 ));
             }
         };
@@ -286,6 +308,9 @@ impl GroupAggregateProcessor {
             pending: HashMap::with_hasher(RandomState::new()),
             pending_order: Vec::new(),
             pending_elements: 0,
+            partial_input,
+            state_read_batches: 0,
+            state_write_batches: 0,
         })
     }
 
@@ -296,7 +321,9 @@ impl GroupAggregateProcessor {
             .num_rows()
             .saturating_mul(192usize.saturating_add(self.calls.len().saturating_mul(64)));
         self.scratch_reservation.resize(base_reservation)?;
-        let result = if self.plan.mini_batch_size == 0 {
+        let result = if self.partial_input {
+            self.process_partial_mini_accounted(batch, base_reservation)
+        } else if self.plan.mini_batch_size == 0 {
             self.process_arrow_accounted(batch, base_reservation)
         } else {
             self.process_mini_batch_accounted(batch, base_reservation)
@@ -362,6 +389,7 @@ impl GroupAggregateProcessor {
             })
             .collect::<Vec<_>>();
         let existing = self.state.get_batch(&unique_key_refs)?;
+        self.state_read_batches = self.state_read_batches.saturating_add(1);
         drop(unique_key_refs);
         let serialized_state_bytes = existing.iter().fold(0usize, |bytes, value| {
             bytes.saturating_add(value.as_deref().map_or(0, <[u8]>::len))
@@ -464,6 +492,7 @@ impl GroupAggregateProcessor {
             })
             .collect();
         self.state.write_batch(mutations)?;
+        self.state_write_batches = self.state_write_batches.saturating_add(1);
         self.output_batch(&batch, events)
     }
 
@@ -502,6 +531,133 @@ impl GroupAggregateProcessor {
         self.scratch_reservation
             .resize(output_bytes.max(base_reservation))?;
         Ok(output)
+    }
+
+    fn process_partial_mini_accounted(
+        &mut self,
+        batch: RecordBatch,
+        base_reservation: usize,
+    ) -> Result<RecordBatch> {
+        self.prepare_schema(batch.schema(), batch.num_columns())?;
+        let grouping_rows = self.encode_grouping_rows(&batch)?;
+        let mut events = BundleOutputEvents::new(self.calls.len());
+        let trigger = usize::try_from(self.plan.mini_batch_size).map_err(|_| {
+            DataFusionError::Plan(
+                "global group aggregate mini-batch size exceeds usize".to_string(),
+            )
+        })?;
+        let mut offset = 0;
+        while offset < batch.num_rows() {
+            let remaining = trigger - self.pending_elements;
+            let length = remaining.min(batch.num_rows() - offset);
+            self.stage_partial_range(&batch, &grouping_rows, offset, length)?;
+            self.pending_elements += length;
+            offset += length;
+            if self.pending_elements == trigger {
+                self.finish_pending(&mut events)?;
+            }
+        }
+        self.bundle_reservation
+            .resize(self.estimated_pending_bytes())?;
+        let output = self.bundle_output_batch(events)?;
+        let output_bytes = output.get_array_memory_size();
+        self.scratch_reservation
+            .resize(output_bytes.max(base_reservation))?;
+        Ok(output)
+    }
+
+    fn stage_partial_range(
+        &mut self,
+        batch: &RecordBatch,
+        grouping_rows: &[Vec<u8>],
+        offset: usize,
+        length: usize,
+    ) -> Result<()> {
+        let mut unique = HashMap::<StateKey, usize, RandomState>::with_capacity_and_hasher(
+            length,
+            RandomState::new(),
+        );
+        let mut keys = Vec::new();
+        let mut first_rows = Vec::new();
+        let mut row_indices = Vec::with_capacity(length);
+        for row in offset..offset + length {
+            let key = self.state_key(batch, row)?;
+            let next = keys.len();
+            let index = match unique.entry(key.clone()) {
+                hashbrown::hash_map::Entry::Occupied(entry) => *entry.get(),
+                hashbrown::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(next);
+                    keys.push(key);
+                    first_rows.push(row);
+                    next
+                }
+            };
+            row_indices.push(index);
+        }
+        let missing = keys
+            .iter()
+            .enumerate()
+            .filter_map(|(index, key)| (!self.pending.contains_key(key)).then_some(index))
+            .collect::<Vec<_>>();
+        let refs = missing
+            .iter()
+            .map(|&index| StateKeyRef {
+                key_group: keys[index].key_group,
+                key: &keys[index].key,
+            })
+            .collect::<Vec<_>>();
+        let existing = if refs.is_empty() {
+            Vec::new()
+        } else {
+            let existing = self.state.get_batch(&refs)?;
+            self.state_read_batches = self.state_read_batches.saturating_add(1);
+            existing
+        };
+        for (&index, value) in missing.iter().zip(existing) {
+            let original = value
+                .as_deref()
+                .map(|bytes| decode_state(bytes, &self.calls))
+                .transpose()?;
+            self.pending_order.push(keys[index].clone());
+            self.pending.insert(
+                keys[index].clone(),
+                PendingGroup {
+                    grouping_row: grouping_rows[first_rows[index]].clone(),
+                    current: Some(
+                        original
+                            .clone()
+                            .unwrap_or_else(|| AccumulatorState::new(&self.calls)),
+                    ),
+                    original,
+                },
+            );
+        }
+        let accumulator_index = self
+            .visible_count
+            .expect("partial aggregate schema was prepared")
+            - 1;
+        let accumulators = batch
+            .column(accumulator_index)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .expect("partial accumulator type was validated");
+        for (local_row, &key_index) in row_indices.iter().enumerate() {
+            let row = offset + local_row;
+            if accumulators.is_null(row) {
+                return Err(DataFusionError::Execution(
+                    "local aggregate accumulator cannot be null".to_string(),
+                ));
+            }
+            let partial = decode_state(accumulators.value(row), &self.calls)?;
+            self.pending
+                .get_mut(&keys[key_index])
+                .expect("every global mini-batch key was staged")
+                .current
+                .as_mut()
+                .expect("global partial accumulation always has a current state")
+                .merge(&self.calls, &partial)?;
+        }
+        Ok(())
     }
 
     fn stage_mini_range(
@@ -545,7 +701,13 @@ impl GroupAggregateProcessor {
                 key: &keys[index].key,
             })
             .collect::<Vec<_>>();
-        let existing = self.state.get_batch(&refs)?;
+        let existing = if refs.is_empty() {
+            Vec::new()
+        } else {
+            let existing = self.state.get_batch(&refs)?;
+            self.state_read_batches = self.state_read_batches.saturating_add(1);
+            existing
+        };
         for (&index, value) in missing.iter().zip(existing) {
             let original = value
                 .as_deref()
@@ -604,7 +766,8 @@ impl GroupAggregateProcessor {
     }
 
     fn finish_pending(&mut self, events: &mut BundleOutputEvents) -> Result<()> {
-        let order = std::mem::take(&mut self.pending_order);
+        let mut order = std::mem::take(&mut self.pending_order);
+        sort_flink_hashmap_keys(&mut order, |key| &key.key);
         let mut mutations = Vec::with_capacity(order.len());
         for key in order {
             let group = self
@@ -646,6 +809,7 @@ impl GroupAggregateProcessor {
         }
         if !mutations.is_empty() {
             self.state.write_batch(mutations)?;
+            self.state_write_batches = self.state_write_batches.saturating_add(1);
         }
         self.pending_elements = 0;
         Ok(())
@@ -669,6 +833,10 @@ impl GroupAggregateProcessor {
 
     pub(crate) fn pending_key_count(&self) -> usize {
         self.pending.len()
+    }
+
+    pub(crate) fn statistics(&self) -> [u64; 2] {
+        [self.state_read_batches, self.state_write_batches]
     }
 
     fn estimated_pending_bytes(&self) -> usize {
@@ -930,23 +1098,37 @@ impl GroupAggregateProcessor {
             )));
             self.output_schema = Some(Arc::new(Schema::new(fields)));
         }
-        for call in &self.calls {
-            if let Some(index) = call.input_index {
-                let actual = schema
+        if self.partial_input {
+            if visible_count != self.plan.grouping_indices.len() + 1
+                || schema
                     .fields()
-                    .get(index)
-                    .filter(|_| index < visible_count)
-                    .ok_or_else(|| {
-                        DataFusionError::Plan(format!(
-                            "aggregate input index {index} is outside {visible_count} input fields"
-                        ))
-                    })?;
-                if Some(actual.data_type()) != call.input_type.as_ref() {
-                    return Err(DataFusionError::Plan(format!(
-                        "aggregate input {index} expected {:?}, got {}",
-                        call.input_type,
-                        actual.data_type()
-                    )));
+                    .get(visible_count - 1)
+                    .is_none_or(|field| field.data_type() != &DataType::Binary)
+            {
+                return Err(DataFusionError::Plan(
+                    "global group aggregate expects grouping fields followed by one BINARY accumulator"
+                        .to_string(),
+                ));
+            }
+        } else {
+            for call in &self.calls {
+                if let Some(index) = call.input_index {
+                    let actual = schema
+                        .fields()
+                        .get(index)
+                        .filter(|_| index < visible_count)
+                        .ok_or_else(|| {
+                            DataFusionError::Plan(format!(
+                                "aggregate input index {index} is outside {visible_count} input fields"
+                            ))
+                        })?;
+                    if Some(actual.data_type()) != call.input_type.as_ref() {
+                        return Err(DataFusionError::Plan(format!(
+                            "aggregate input {index} expected {:?}, got {}",
+                            call.input_type,
+                            actual.data_type()
+                        )));
+                    }
                 }
             }
         }
@@ -966,6 +1148,21 @@ impl GroupAggregateProcessor {
     pub(crate) fn restore_key_group(&mut self, key_group: u32, bytes: &[u8]) -> Result<()> {
         self.state.restore_key_group(key_group, bytes)
     }
+}
+
+pub(super) fn sort_flink_hashmap_keys<T>(keys: &mut [T], bytes: impl Fn(&T) -> &[u8]) {
+    if keys.len() < 2 {
+        return;
+    }
+    let mut capacity = 16usize;
+    while keys.len() > capacity.saturating_mul(3) / 4 {
+        capacity = capacity.saturating_mul(2);
+    }
+    keys.sort_by_key(|key| {
+        let hash = binary_row_hash(bytes(key)) as u32;
+        let spread = hash ^ (hash >> 16);
+        spread as usize & (capacity - 1)
+    });
 }
 
 impl AccumulatorState {
@@ -1026,7 +1223,7 @@ impl AccumulatorState {
         }
     }
 
-    fn estimated_dynamic_bytes(&self) -> usize {
+    pub(super) fn estimated_dynamic_bytes(&self) -> usize {
         self.accumulators
             .capacity()
             .saturating_mul(std::mem::size_of::<Accumulator>())
@@ -1342,12 +1539,116 @@ impl AccumulatorState {
                 (Accumulator::Count(value), Accumulator::Count(other)) => {
                     *value = value.wrapping_add(*other);
                 }
-                (Accumulator::DistinctCount { .. }, Accumulator::DistinctCount { .. })
-                | (Accumulator::DistinctSum { .. }, Accumulator::DistinctSum { .. })
-                | (Accumulator::DistinctAverage { .. }, Accumulator::DistinctAverage { .. }) => {
-                    return Err(DataFusionError::Execution(
-                        "merging DISTINCT aggregate namespaces is not supported".to_string(),
-                    ));
+                (
+                    Accumulator::DistinctCount { count, values },
+                    Accumulator::DistinctCount {
+                        values: other_values,
+                        ..
+                    },
+                ) => {
+                    for (value, delta) in other_values {
+                        let previous = values.get(value).copied().unwrap_or_default();
+                        let current = previous.wrapping_add(*delta);
+                        if current == 0 {
+                            values.remove(value);
+                        } else {
+                            values.insert(value.clone(), current);
+                        }
+                        *count =
+                            count.wrapping_add(i64::from(current > 0) - i64::from(previous > 0));
+                    }
+                }
+                (
+                    Accumulator::DistinctSum {
+                        value,
+                        count,
+                        values,
+                    },
+                    Accumulator::DistinctSum {
+                        values: other_values,
+                        ..
+                    },
+                ) => {
+                    for (other_value, delta) in other_values {
+                        let previous = values.get(other_value).copied().unwrap_or_default();
+                        let current = previous.wrapping_add(*delta);
+                        if current == 0 {
+                            values.remove(other_value);
+                        } else {
+                            values.insert(other_value.clone(), current);
+                        }
+                        match (previous > 0, current > 0) {
+                            (false, true) => {
+                                *value = match value.as_ref() {
+                                    Some(sum) => {
+                                        aggregate_add(sum, other_value, &call.output_type)?
+                                    }
+                                    None if *count == 0 => Some(other_value.clone()),
+                                    None => None,
+                                };
+                                *count = count.wrapping_add(1);
+                            }
+                            (true, false) => {
+                                *value = match value.as_ref() {
+                                    Some(sum) => {
+                                        aggregate_sub(sum, other_value, &call.output_type)?
+                                    }
+                                    None => None,
+                                };
+                                *count = count.wrapping_sub(1);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                (
+                    Accumulator::DistinctAverage {
+                        value,
+                        count,
+                        values,
+                    },
+                    Accumulator::DistinctAverage {
+                        values: other_values,
+                        ..
+                    },
+                ) => {
+                    for (other_value, delta) in other_values {
+                        let previous = values.get(other_value).copied().unwrap_or_default();
+                        let current = previous.wrapping_add(*delta);
+                        if current == 0 {
+                            values.remove(other_value);
+                        } else {
+                            values.insert(other_value.clone(), current);
+                        }
+                        let contribution = average_contribution(other_value, call)?;
+                        match (previous > 0, current > 0) {
+                            (false, true) => {
+                                *value = if let Some(sum) = value.as_ref() {
+                                    aggregate_add(
+                                        sum,
+                                        &contribution,
+                                        &call.average_accumulator_type(),
+                                    )?
+                                } else {
+                                    None
+                                };
+                                *count = count.wrapping_add(1);
+                            }
+                            (true, false) => {
+                                *value = if let Some(sum) = value.as_ref() {
+                                    aggregate_sub(
+                                        sum,
+                                        &contribution,
+                                        &call.average_accumulator_type(),
+                                    )?
+                                } else {
+                                    None
+                                };
+                                *count = count.wrapping_sub(1);
+                            }
+                            _ => {}
+                        }
+                    }
                 }
                 (
                     Accumulator::Sum { value, count },
@@ -3018,9 +3319,9 @@ mod tests {
                 INSERT,
                 UPDATE_BEFORE,
                 UPDATE_AFTER,
+                INSERT,
                 UPDATE_BEFORE,
-                UPDATE_AFTER,
-                INSERT
+                UPDATE_AFTER
             ]
         );
     }
@@ -3389,6 +3690,7 @@ mod tests {
         assert_eq!(read_keys.load(Ordering::Relaxed), 2);
         assert_eq!(writes.load(Ordering::Relaxed), 1);
         assert_eq!(written_keys.load(Ordering::Relaxed), 2);
+        assert_eq!(processor.statistics(), [1, 1]);
     }
 
     #[test]

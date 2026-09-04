@@ -9,7 +9,6 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -24,9 +23,6 @@ import org.apache.flink.runtime.state.StateInitializationContext;
 import org.apache.flink.runtime.state.StateSnapshotContext;
 import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
 import org.apache.flink.streaming.api.operators.OperatorSnapshotFutures;
-import org.apache.flink.table.data.RowData;
-import org.apache.flink.table.data.binary.BinaryRowData;
-import org.apache.flink.table.data.binary.BinarySegmentUtils;
 import org.apache.flink.table.runtime.keyselector.RowDataKeySelector;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
@@ -190,45 +186,11 @@ public abstract class AbstractStreamFusionArrowKeyedStateOperator extends Abstra
 
     protected final List<byte[]> preencodeKeys(
             ArrowRowDataBatch input, RowDataKeySelector keySelector, String operatorName) throws Exception {
-        List<byte[]> keys = new ArrayList<>(input.size());
-        for (int row = 0; row < input.size(); row++) {
-            RowData selected = keySelector.getKey(input.rowView(row));
-            if (!(selected instanceof BinaryRowData)) {
-                throw new IllegalStateException(
-                        "Native " + operatorName + " requires Flink's BinaryRowData key selector");
-            }
-            BinaryRowData binary = (BinaryRowData) selected;
-            keys.add(BinarySegmentUtils.copyToBytes(binary.getSegments(), binary.getOffset(), binary.getSizeInBytes()));
-        }
-        return keys;
+        return FlinkBinaryRowKeyEncoder.encode(input, keySelector, operatorName);
     }
 
     protected static boolean requiresPreencodedKeys(RowType rowType, int[] keyFields) {
-        for (int key : keyFields) {
-            switch (rowType.getTypeAt(key).getTypeRoot()) {
-                case BOOLEAN:
-                case TINYINT:
-                case SMALLINT:
-                case INTEGER:
-                case BIGINT:
-                case FLOAT:
-                case DOUBLE:
-                case CHAR:
-                case VARCHAR:
-                case BINARY:
-                case VARBINARY:
-                case DECIMAL:
-                case DATE:
-                case TIME_WITHOUT_TIME_ZONE:
-                case TIMESTAMP_WITHOUT_TIME_ZONE:
-                case INTERVAL_YEAR_MONTH:
-                case INTERVAL_DAY_TIME:
-                    break;
-                default:
-                    return true;
-            }
-        }
-        return false;
+        return FlinkBinaryRowKeyEncoder.requiresPreencoding(rowType, keyFields);
     }
 
     public void endInput() throws Exception {}

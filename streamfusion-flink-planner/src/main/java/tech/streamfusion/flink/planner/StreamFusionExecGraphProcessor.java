@@ -49,10 +49,12 @@ import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecDeduplica
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecDropUpdateBefore;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecExchange;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecExpand;
+import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecGlobalGroupAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecGlobalWindowAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecGroupAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecIntervalJoin;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecJoin;
+import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecLocalGroupAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecLocalWindowAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecMiniBatchAssigner;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecOverAggregate;
@@ -72,6 +74,7 @@ import org.apache.flink.table.runtime.operators.rank.RankRange;
 import org.apache.flink.table.runtime.operators.rank.RankType;
 import org.apache.flink.table.runtime.operators.rank.VariableRankRange;
 import org.apache.flink.table.types.logical.RowType;
+import org.apache.flink.table.types.logical.VarBinaryType;
 import org.apache.flink.util.TimeUtils;
 
 /** All-or-nothing physical rule modelled after Comet's distinct accelerator exec nodes. */
@@ -178,6 +181,23 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             if (reason != null) {
                 rejections.add(nodePath + "\n" + reason);
             }
+        } else if (node instanceof StreamExecGlobalGroupAggregate) {
+            TwoPhaseGroupAggregate twoPhase = twoPhaseGroupAggregate((StreamExecGlobalGroupAggregate) node);
+            if (twoPhase == null) {
+                rejections.add(nodePath
+                        + "\nglobal group aggregate: expected LocalGroupAggregate -> Exchange -> "
+                        + "GlobalGroupAggregate");
+                return;
+            }
+            String reason = unsupportedReason(twoPhase, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
+            collectRejections(twoPhase.inputEdge.getSource(), context, nodePath + "/native-input", rejections);
+            return;
+        } else if (node instanceof StreamExecLocalGroupAggregate) {
+            rejections.add(
+                    nodePath + "\nlocal group aggregate: native acceleration requires its paired global aggregate");
         } else if (node instanceof StreamExecGroupAggregate) {
             String reason = unsupportedReason((StreamExecGroupAggregate) node, context);
             if (reason != null) {
@@ -400,6 +420,45 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
                     .collect(Collectors.toList()));
             return replacement;
+        }
+        if (node instanceof StreamExecGlobalGroupAggregate) {
+            TwoPhaseGroupAggregate twoPhase = twoPhaseGroupAggregate((StreamExecGlobalGroupAggregate) node);
+            if (twoPhase == null) {
+                throw new IllegalStateException("Selected malformed two-phase group aggregate");
+            }
+            RowType internalType = nativeGroupAccumulatorType(
+                    (RowType) twoPhase.inputEdge.getOutputType(), localGroupGrouping(twoPhase.local));
+            StreamFusionExecLocalGroupAggregate local = new StreamFusionExecLocalGroupAggregate(
+                    twoPhase.local.getPersistedConfig(),
+                    localGroupGrouping(twoPhase.local),
+                    localGroupAggregateCalls(twoPhase.local),
+                    localGroupCallNeedRetractions(twoPhase.local),
+                    localGroupNeedRetraction(twoPhase.local),
+                    twoPhase.local.getPersistedConfig().get(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_SIZE),
+                    twoPhase.local.getInputProperties().get(0),
+                    internalType);
+            local.setInputEdges(List.of(copyEdge(twoPhase.inputEdge, convert(twoPhase.inputEdge.getSource()), local)));
+
+            StreamFusionExecExchange exchange = new StreamFusionExecExchange(
+                    twoPhase.exchange.getPersistedConfig(),
+                    twoPhase.exchange.getInputProperties().get(0),
+                    internalType,
+                    "StreamFusionExchange");
+            exchange.setInputEdges(
+                    List.of(copyEdge(twoPhase.exchange.getInputEdges().get(0), local, exchange)));
+
+            StreamFusionExecGlobalGroupAggregate global = new StreamFusionExecGlobalGroupAggregate(
+                    twoPhase.global.getPersistedConfig(),
+                    globalGroupOriginalInputType(twoPhase.global),
+                    localGroupGrouping(twoPhase.local).length,
+                    globalGroupAggregateCalls(twoPhase.global),
+                    globalGroupCallNeedRetractions(twoPhase.global),
+                    globalGroupGenerateUpdateBefore(twoPhase.global),
+                    twoPhase.global.getInputProperties().get(0),
+                    (RowType) twoPhase.global.getOutputType());
+            global.setInputEdges(
+                    List.of(copyEdge(twoPhase.global.getInputEdges().get(0), exchange, global)));
+            return global;
         }
         if (node instanceof StreamExecGroupAggregate) {
             StreamExecGroupAggregate aggregate = (StreamExecGroupAggregate) node;
@@ -1077,6 +1136,51 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         }
     }
 
+    private String unsupportedReason(TwoPhaseGroupAggregate aggregate, ProcessorContext context) {
+        StreamExecLocalGroupAggregate local = aggregate.local;
+        StreamExecGlobalGroupAggregate global = aggregate.global;
+        int[] expectedGlobalGrouping = java.util.stream.IntStream.range(0, localGroupGrouping(local).length)
+                .toArray();
+        if (!java.util.Arrays.equals(globalGroupGrouping(global), expectedGlobalGrouping)) {
+            return "two-phase aggregate: global grouping must address the local grouping prefix";
+        }
+        if (localGroupAggregateCalls(local).length != globalGroupAggregateCalls(global).length) {
+            return "two-phase aggregate: local and global aggregate call counts differ";
+        }
+        try {
+            Class<?> translator = Class.forName(
+                    GROUP_AGGREGATE_TRANSLATOR_CLASS,
+                    true,
+                    context.getPlanner().getFlinkContext().getClassLoader());
+            Method method = translator.getMethod(
+                    "unsupportedReason",
+                    RowType.class,
+                    RowType.class,
+                    int[].class,
+                    org.apache.calcite.rel.core.AggregateCall[].class,
+                    boolean[].class,
+                    boolean.class,
+                    boolean.class,
+                    long.class,
+                    ReadableConfig.class);
+            return (String) method.invoke(
+                    null,
+                    (RowType) aggregate.inputEdge.getOutputType(),
+                    (RowType) global.getOutputType(),
+                    localGroupGrouping(local),
+                    localGroupAggregateCalls(local),
+                    localGroupCallNeedRetractions(local),
+                    globalGroupGenerateUpdateBefore(global),
+                    localGroupNeedRetraction(local),
+                    globalGroupStateTtl(global),
+                    global.getPersistedConfig());
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
+            throw new IllegalStateException("Could not inspect two-phase GroupAggregate support", e);
+        } catch (InvocationTargetException e) {
+            throw new IllegalStateException("Two-phase GroupAggregate support inspection failed", e.getCause());
+        }
+    }
+
     private String unsupportedReason(StreamExecOverAggregate aggregate, ProcessorContext context) {
         ExecEdge input = aggregate.getInputEdges().get(0);
         long stateTtl = aggregate
@@ -1471,6 +1575,72 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         return TimeUtils.parseDuration(metadata.get(0).getStateTtl()).toMillis();
     }
 
+    private static int[] localGroupGrouping(StreamExecLocalGroupAggregate aggregate) {
+        return ((int[]) field(aggregate, StreamExecLocalGroupAggregate.class, "grouping")).clone();
+    }
+
+    private static org.apache.calcite.rel.core.AggregateCall[] localGroupAggregateCalls(
+            StreamExecLocalGroupAggregate aggregate) {
+        return ((org.apache.calcite.rel.core.AggregateCall[])
+                        field(aggregate, StreamExecLocalGroupAggregate.class, "aggCalls"))
+                .clone();
+    }
+
+    private static boolean[] localGroupCallNeedRetractions(StreamExecLocalGroupAggregate aggregate) {
+        return ((boolean[]) field(aggregate, StreamExecLocalGroupAggregate.class, "aggCallNeedRetractions")).clone();
+    }
+
+    private static boolean localGroupNeedRetraction(StreamExecLocalGroupAggregate aggregate) {
+        return (boolean) field(aggregate, StreamExecLocalGroupAggregate.class, "needRetraction");
+    }
+
+    private static int[] globalGroupGrouping(StreamExecGlobalGroupAggregate aggregate) {
+        return ((int[]) field(aggregate, StreamExecGlobalGroupAggregate.class, "grouping")).clone();
+    }
+
+    private static org.apache.calcite.rel.core.AggregateCall[] globalGroupAggregateCalls(
+            StreamExecGlobalGroupAggregate aggregate) {
+        return ((org.apache.calcite.rel.core.AggregateCall[])
+                        field(aggregate, StreamExecGlobalGroupAggregate.class, "aggCalls"))
+                .clone();
+    }
+
+    private static boolean[] globalGroupCallNeedRetractions(StreamExecGlobalGroupAggregate aggregate) {
+        return ((boolean[]) field(aggregate, StreamExecGlobalGroupAggregate.class, "aggCallNeedRetractions")).clone();
+    }
+
+    private static boolean globalGroupGenerateUpdateBefore(StreamExecGlobalGroupAggregate aggregate) {
+        return (boolean) field(aggregate, StreamExecGlobalGroupAggregate.class, "generateUpdateBefore");
+    }
+
+    private static RowType globalGroupOriginalInputType(StreamExecGlobalGroupAggregate aggregate) {
+        return (RowType) field(aggregate, StreamExecGlobalGroupAggregate.class, "localAggInputRowType");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static long globalGroupStateTtl(StreamExecGlobalGroupAggregate aggregate) {
+        List<StateMetadata> metadata =
+                (List<StateMetadata>) field(aggregate, StreamExecGlobalGroupAggregate.class, "stateMetadataList");
+        if (metadata == null || metadata.isEmpty()) {
+            return aggregate
+                    .getPersistedConfig()
+                    .get(ExecutionConfigOptions.IDLE_STATE_RETENTION)
+                    .toMillis();
+        }
+        return TimeUtils.parseDuration(metadata.get(0).getStateTtl()).toMillis();
+    }
+
+    private static RowType nativeGroupAccumulatorType(RowType inputType, int[] grouping) {
+        List<RowType.RowField> fields = new ArrayList<>(grouping.length + 1);
+        for (int index : grouping) {
+            RowType.RowField field = inputType.getFields().get(index);
+            fields.add(new RowType.RowField(field.getName(), field.getType()));
+        }
+        fields.add(
+                new RowType.RowField("__streamfusion_accumulator", new VarBinaryType(false, VarBinaryType.MAX_LENGTH)));
+        return new RowType(false, fields);
+    }
+
     private static int[] windowGrouping(StreamExecWindowAggregate aggregate) {
         return ((int[]) field(aggregate, StreamExecWindowAggregate.class, "grouping")).clone();
     }
@@ -1672,6 +1842,27 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         return new TwoPhaseWindowAggregate(
                 global,
                 (StreamExecLocalWindowAggregate) local,
+                local.getInputEdges().get(0));
+    }
+
+    private static TwoPhaseGroupAggregate twoPhaseGroupAggregate(StreamExecGlobalGroupAggregate global) {
+        if (global.getInputEdges().size() != 1) {
+            return null;
+        }
+        ExecNode<?> exchange = global.getInputEdges().get(0).getSource();
+        if (!(exchange instanceof StreamExecExchange)
+                || exchange.getInputEdges().size() != 1) {
+            return null;
+        }
+        ExecNode<?> local = exchange.getInputEdges().get(0).getSource();
+        if (!(local instanceof StreamExecLocalGroupAggregate)
+                || local.getInputEdges().size() != 1) {
+            return null;
+        }
+        return new TwoPhaseGroupAggregate(
+                global,
+                (StreamExecExchange) exchange,
+                (StreamExecLocalGroupAggregate) local,
                 local.getInputEdges().get(0));
     }
 
@@ -1949,6 +2140,24 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         private TwoPhaseWindowAggregate(
                 StreamExecGlobalWindowAggregate global, StreamExecLocalWindowAggregate local, ExecEdge inputEdge) {
             this.global = global;
+            this.local = local;
+            this.inputEdge = inputEdge;
+        }
+    }
+
+    private static final class TwoPhaseGroupAggregate {
+        private final StreamExecGlobalGroupAggregate global;
+        private final StreamExecExchange exchange;
+        private final StreamExecLocalGroupAggregate local;
+        private final ExecEdge inputEdge;
+
+        private TwoPhaseGroupAggregate(
+                StreamExecGlobalGroupAggregate global,
+                StreamExecExchange exchange,
+                StreamExecLocalGroupAggregate local,
+                ExecEdge inputEdge) {
+            this.global = global;
+            this.exchange = exchange;
             this.local = local;
             this.inputEdge = inputEdge;
         }

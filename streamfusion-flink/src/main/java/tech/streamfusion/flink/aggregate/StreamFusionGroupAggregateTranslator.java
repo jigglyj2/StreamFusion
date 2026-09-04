@@ -106,6 +106,48 @@ public final class StreamFusionGroupAggregateTranslator {
         return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
     }
 
+    public static Transformation<RowData> translateGlobal(
+            Transformation<RowData> input,
+            RowType originalInputType,
+            RowType internalInputType,
+            RowType outputType,
+            int groupingCount,
+            AggregateCall[] calls,
+            boolean[] retractable,
+            boolean generateUpdateBefore,
+            ReadableConfig config,
+            StreamExecutionEnvironment environment,
+            RowDataKeySelector keySelector) {
+        StreamFusionStateBackendFactory.install(environment);
+        long miniBatchSize = config.get(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_SIZE);
+        int[] grouping = java.util.stream.IntStream.range(0, groupingCount).toArray();
+        byte[] plan = StreamFusionGroupAggregatePlan.createGlobal(
+                originalInputType,
+                internalInputType,
+                outputType,
+                groupingCount,
+                calls,
+                retractable,
+                generateUpdateBefore,
+                miniBatchSize);
+        Transformation<ArrowRowDataBatch> arrowInput = StreamFusionArrowBoundaries.toArrow(input, internalInputType);
+        OneInputTransformation<ArrowRowDataBatch, ArrowRowDataBatch> transformation = new OneInputTransformation<>(
+                arrowInput,
+                "streamfusion-global-group-aggregate",
+                new StreamFusionArrowGroupAggregateOperator(
+                        internalInputType, outputType, grouping, plan, false, keySelector, miniBatchSize),
+                ArrowRowDataBatchTypeInfo.INSTANCE,
+                input.getParallelism(),
+                false);
+        if (input.getMaxParallelism() > 0) {
+            transformation.setMaxParallelism(input.getMaxParallelism());
+        }
+        transformation.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
+        transformation.setStateKeySelector(new ArrowBatchKeySelector(keySelector));
+        transformation.setStateKeyType(keySelector.getProducedType());
+        return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
+    }
+
     public static String unsupportedReason(
             RowType inputType,
             RowType outputType,

@@ -6,6 +6,7 @@ import java.util.List;
 import jdk.jfr.Configuration;
 import jdk.jfr.Recording;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
+import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 
 /** Runs fully accelerable Nexmark queries with checkpointed RowData inputs and RowData outputs. */
 public final class LocalRowDataNexmarkBenchmark {
@@ -28,11 +29,13 @@ public final class LocalRowDataNexmarkBenchmark {
                 for (boolean streamFusion : engines) {
                     for (String backend : backends) {
                         RunResult result = run(events, query, streamFusion, backend, parallelism);
+                        String explain = streamFusion ? StreamFusionPlanningDiagnostics.explain() : "";
                         System.out.printf(
-                                "%s engine=%s state_backend=%s input_events=%d elapsed_seconds=%.6f input_events_per_second=%.2f native_calc_batches=%d native_group_aggregate_batches=%d native_top_n_batches=%d native_window_aggregate_batches=%d native_window_join_batches=%d native_regular_join_batches=%d native_interval_join_batches=%d native_over_aggregate_batches=%d output_rows=%d output_sha256=%s%n",
+                                "%s engine=%s state_backend=%s accelerated=%s input_events=%d elapsed_seconds=%.6f input_events_per_second=%.2f native_calc_batches=%d native_group_aggregate_batches=%d native_top_n_batches=%d native_window_aggregate_batches=%d native_window_join_batches=%d native_regular_join_batches=%d native_interval_join_batches=%d native_over_aggregate_batches=%d output_rows=%d output_sha256=%s%n",
                                 query,
                                 streamFusion ? "streamfusion" : "flink",
                                 backend,
+                                streamFusion && explain.contains("Accelerated: yes"),
                                 events,
                                 result.elapsedSeconds(),
                                 result.recordsPerSecond(events),
@@ -46,6 +49,9 @@ public final class LocalRowDataNexmarkBenchmark {
                                 result.nativeOverAggregateBatches(),
                                 result.outputRows(),
                                 result.outputSha256());
+                        if (streamFusion && !explain.contains("Accelerated: yes")) {
+                            System.out.println("NEXMARK_EXPLAIN " + explain.replace('\n', ' '));
+                        }
                     }
                 }
             }

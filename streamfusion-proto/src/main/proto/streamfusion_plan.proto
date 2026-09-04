@@ -61,6 +61,8 @@ message Operator {
     RegularJoin regular_join = 16;
     IntervalJoin interval_join = 17;
     OverAggregate over_aggregate = 18;
+    LocalGroupAggregate local_group_aggregate = 19;
+    GlobalGroupAggregate global_group_aggregate = 20;
   }
 }
 
@@ -215,6 +217,30 @@ message GroupAggregate {
   uint64 mini_batch_size = 6;
   Schema input_schema = 7;
   Schema output_schema = 8;
+}
+
+// First stage of Flink's count-triggered local/global group aggregation. It holds no persistent
+// keyed state: each bundle emits grouping columns plus one opaque canonical accumulator payload.
+message LocalGroupAggregate {
+  Operator input = 1;
+  repeated uint32 grouping_indices = 2;
+  repeated AggregateCall aggregate_calls = 3;
+  bool input_changelog = 4;
+  uint64 mini_batch_size = 5;
+  Schema input_schema = 6;
+  Schema output_schema = 7;
+}
+
+// Second stage of Flink's local/global group aggregation. It merges opaque local accumulator
+// payloads first within the receiving bundle and then into backend-neutral keyed state.
+message GlobalGroupAggregate {
+  Operator input = 1;
+  repeated uint32 grouping_indices = 2;
+  repeated AggregateCall aggregate_calls = 3;
+  bool generate_update_before = 4;
+  uint64 mini_batch_size = 5;
+  Schema input_schema = 6;
+  Schema output_schema = 7;
 }
 
 // Stateful SQL window aggregation. Grouping rows and accumulators are opaque native state;
