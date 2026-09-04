@@ -42,11 +42,11 @@ class ArrowExpandCDataBridgeTest {
                         ArrowCDataBridge.executeWithSelection(expandPlan(), input, outputType, allocator)) {
             assertThat(result.batch().size()).isEqualTo(4);
             assertRow(result.batch().rowView(0), 4, 10);
-            assertRow(result.batch().rowView(1), 9, 10);
-            assertRow(result.batch().rowView(2), 4, 20);
+            assertRow(result.batch().rowView(1), 4, 20);
+            assertRow(result.batch().rowView(2), 9, 10);
             assertRow(result.batch().rowView(3), 9, 20);
             assertThat(List.of(result.inputRow(0), result.inputRow(1), result.inputRow(2), result.inputRow(3)))
-                    .containsExactly(0, 1, 0, 1);
+                    .containsExactly(0, 0, 1, 1);
         }
     }
 

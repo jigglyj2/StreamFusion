@@ -127,7 +127,9 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             return graph;
         }
         StreamFusionPlanningDiagnostics.accelerate();
-        activeTableConfig = context.getPlanner().getTableConfig();
+        // Focused graph-shape tests construct the processor without a planner. Persisted node
+        // configuration remains sufficient unless a translated mini-batch node omitted its size.
+        activeTableConfig = context == null ? null : context.getPlanner().getTableConfig();
         try {
             List<ExecNode<?>> roots =
                     graph.getRootNodes().stream().map(this::convertRoot).collect(Collectors.toList());
