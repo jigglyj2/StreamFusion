@@ -18,7 +18,7 @@ import org.apache.flink.types.RowKind;
 /** Reusable, directly written RowData-to-Arrow boundary batch. */
 public final class ArrowRowDataBatchWriter implements AutoCloseable {
     private static final int DEFAULT_BATCH_CAPACITY = 1024;
-    private static final int MINIMUM_ADAPTIVE_CAPACITY = 64;
+    private static final int MINIMUM_ADAPTIVE_CAPACITY = 1;
 
     private final RowType rowType;
     private final BufferAllocator allocator;

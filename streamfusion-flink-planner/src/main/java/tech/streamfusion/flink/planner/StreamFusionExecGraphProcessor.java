@@ -13,8 +13,12 @@ import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
+import org.apache.calcite.plan.RelOptUtil;
 import org.apache.calcite.rex.RexCall;
 import org.apache.calcite.rex.RexInputRef;
 import org.apache.calcite.rex.RexNode;
@@ -58,6 +62,7 @@ import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecJoin;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecLocalGroupAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecLocalWindowAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecMiniBatchAssigner;
+import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecMultiJoin;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecOverAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecRank;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecTemporalJoin;
@@ -72,6 +77,8 @@ import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWindowRan
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWindowTableFunction;
 import org.apache.flink.table.planner.plan.utils.RankProcessStrategy;
 import org.apache.flink.table.runtime.groupwindow.NamedWindowProperty;
+import org.apache.flink.table.runtime.operators.join.FlinkJoinType;
+import org.apache.flink.table.runtime.operators.join.stream.keyselector.AttributeBasedJoinKeyExtractor.ConditionAttributeRef;
 import org.apache.flink.table.runtime.operators.rank.ConstantRankRange;
 import org.apache.flink.table.runtime.operators.rank.RankRange;
 import org.apache.flink.table.runtime.operators.rank.RankType;
@@ -107,6 +114,8 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             "tech.streamfusion.flink.window.StreamFusionWindowJoinTranslator";
     private static final String REGULAR_JOIN_TRANSLATOR_CLASS =
             "tech.streamfusion.flink.join.StreamFusionRegularJoinTranslator";
+    private static final String MULTI_JOIN_TRANSLATOR_CLASS =
+            "tech.streamfusion.flink.join.StreamFusionMultiJoinTranslator";
     private static final String INTERVAL_JOIN_TRANSLATOR_CLASS =
             "tech.streamfusion.flink.join.StreamFusionIntervalJoinTranslator";
     private static final String TEMPORAL_JOIN_TRANSLATOR_CLASS =
@@ -301,6 +310,11 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             }
         } else if (node instanceof StreamExecIntervalJoin) {
             String reason = unsupportedReason((StreamExecIntervalJoin) node, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
+        } else if (node instanceof StreamExecMultiJoin) {
+            String reason = unsupportedReason((StreamExecMultiJoin) node, context);
             if (reason != null) {
                 rejections.add(nodePath + "\n" + reason);
             }
@@ -816,6 +830,23 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     .collect(Collectors.toList()));
             return replacement;
         }
+        if (node instanceof StreamExecMultiJoin) {
+            StreamExecMultiJoin join = (StreamExecMultiJoin) node;
+            StreamFusionExecMultiJoin replacement = new StreamFusionExecMultiJoin(
+                    join.getPersistedConfig(),
+                    multiJoinTypes(join),
+                    multiJoinAttributeMap(join),
+                    multiJoinUniqueKeys(join),
+                    multiJoinStateTtl(join),
+                    multiJoinEquiOnly(join),
+                    join.getInputProperties(),
+                    (RowType) join.getOutputType(),
+                    "StreamFusionMultiJoin");
+            replacement.setInputEdges(join.getInputEdges().stream()
+                    .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                    .collect(Collectors.toList()));
+            return replacement;
+        }
         if (node instanceof StreamExecJoin) {
             StreamExecJoin join = (StreamExecJoin) node;
             List<Long> ttl = regularJoinStateTtl(join);
@@ -1266,6 +1297,51 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             throw new IllegalStateException("Could not inspect StreamFusion temporal join support", e);
         } catch (InvocationTargetException e) {
             throw new IllegalStateException("StreamFusion temporal join support inspection failed", e.getCause());
+        }
+    }
+
+    private String unsupportedReason(StreamExecMultiJoin join, ProcessorContext context) {
+        List<RowType> inputTypes = join.getInputEdges().stream()
+                .map(edge -> (RowType) edge.getOutputType())
+                .collect(Collectors.toList());
+        Map<Integer, List<ConditionAttributeRef>> attributes = multiJoinAttributeMap(join);
+        org.apache.flink.table.runtime.operators.join.stream.keyselector.AttributeBasedJoinKeyExtractor extractor =
+                new org.apache.flink.table.runtime.operators.join.stream.keyselector.AttributeBasedJoinKeyExtractor(
+                        attributes, inputTypes);
+        List<int[]> commonKeys = java.util.stream.IntStream.range(0, inputTypes.size())
+                .mapToObj(extractor::getCommonJoinKeyIndices)
+                .collect(Collectors.toList());
+        try {
+            Class<?> translator = Class.forName(
+                    MULTI_JOIN_TRANSLATOR_CLASS,
+                    true,
+                    context.getPlanner().getFlinkContext().getClassLoader());
+            Method method = translator.getMethod(
+                    "unsupportedReason",
+                    List.class,
+                    RowType.class,
+                    List.class,
+                    List.class,
+                    Map.class,
+                    List.class,
+                    long[].class,
+                    boolean.class,
+                    ReadableConfig.class);
+            return (String) method.invoke(
+                    null,
+                    inputTypes,
+                    (RowType) join.getOutputType(),
+                    commonKeys,
+                    multiJoinTypes(join),
+                    attributes,
+                    multiJoinUniqueKeys(join),
+                    multiJoinStateTtl(join),
+                    multiJoinEquiOnly(join),
+                    join.getPersistedConfig());
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
+            throw new IllegalStateException("Could not inspect StreamFusion multi-join support", e);
+        } catch (InvocationTargetException e) {
+            throw new IllegalStateException("StreamFusion multi-join support inspection failed", e.getCause());
         }
     }
 
@@ -2225,6 +2301,106 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
 
     private static JoinSpec regularJoinSpec(StreamExecJoin join) {
         return (JoinSpec) field(join, StreamExecJoin.class, "joinSpec");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<FlinkJoinType> multiJoinTypes(StreamExecMultiJoin join) {
+        return (List<FlinkJoinType>) field(join, StreamExecMultiJoin.class, "joinTypes");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<Integer, List<ConditionAttributeRef>> multiJoinAttributeMap(StreamExecMultiJoin join) {
+        return (Map<Integer, List<ConditionAttributeRef>>) field(join, StreamExecMultiJoin.class, "joinAttributeMap");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<List<int[]>> multiJoinUniqueKeys(StreamExecMultiJoin join) {
+        return (List<List<int[]>>) field(join, StreamExecMultiJoin.class, "inputUniqueKeys");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<RexNode> multiJoinConditions(StreamExecMultiJoin join) {
+        return (List<RexNode>) field(join, StreamExecMultiJoin.class, "joinConditions");
+    }
+
+    private static boolean multiJoinEquiOnly(StreamExecMultiJoin join) {
+        List<RexNode> conditions = multiJoinConditions(join);
+        Map<Integer, List<ConditionAttributeRef>> attributes = multiJoinAttributeMap(join);
+        List<ExecEdge> inputs = join.getInputEdges();
+        if (conditions.size() != inputs.size()) {
+            return false;
+        }
+        for (int depth = 1; depth < conditions.size(); depth++) {
+            RexNode condition = conditions.get(depth);
+            List<RexNode> conjuncts = condition == null ? List.of() : RelOptUtil.conjunctions(condition);
+            Set<String> actual = new HashSet<>();
+            int leftArity = 0;
+            int[] offsets = new int[depth];
+            for (int input = 0; input < depth; input++) {
+                offsets[input] = leftArity;
+                leftArity += ((RowType) inputs.get(input).getOutputType()).getFieldCount();
+            }
+            for (RexNode conjunct : conjuncts) {
+                if (!(conjunct instanceof RexCall)) {
+                    return false;
+                }
+                RexCall call = (RexCall) conjunct;
+                if (call.getKind() != org.apache.calcite.sql.SqlKind.EQUALS
+                        || call.getOperands().size() != 2
+                        || !(call.getOperands().get(0) instanceof RexInputRef)
+                        || !(call.getOperands().get(1) instanceof RexInputRef)) {
+                    return false;
+                }
+                int first = ((RexInputRef) call.getOperands().get(0)).getIndex();
+                int second = ((RexInputRef) call.getOperands().get(1)).getIndex();
+                int left = Math.min(first, second);
+                int right = Math.max(first, second);
+                if (left >= leftArity || right < leftArity) {
+                    return false;
+                }
+                actual.add(left + ":" + (right - leftArity));
+            }
+            Set<String> expected = new HashSet<>();
+            for (ConditionAttributeRef attribute : attributes.getOrDefault(depth, List.of())) {
+                expected.add(
+                        (offsets[attribute.leftInputId] + attribute.leftFieldIndex) + ":" + attribute.rightFieldIndex);
+            }
+            if (!actual.equals(expected)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static long[] multiJoinStateTtl(StreamExecMultiJoin join) {
+        int inputCount = join.getInputEdges().size();
+        List<StateMetadata> metadata =
+                (List<StateMetadata>) field(join, StreamExecMultiJoin.class, "stateMetadataList");
+        long[] ttl = new long[inputCount];
+        if (metadata == null || metadata.isEmpty()) {
+            java.util.Arrays.fill(
+                    ttl,
+                    join.getPersistedConfig()
+                            .get(ExecutionConfigOptions.IDLE_STATE_RETENTION)
+                            .toMillis());
+            return ttl;
+        }
+        boolean[] seen = new boolean[inputCount];
+        for (StateMetadata state : metadata) {
+            int index = state.getStateIndex();
+            if (index < 0 || index >= inputCount || seen[index]) {
+                throw new IllegalStateException("Multi-join state TTL indices must be unique and cover every input");
+            }
+            ttl[index] = TimeUtils.parseDuration(state.getStateTtl()).toMillis();
+            seen[index] = true;
+        }
+        for (boolean present : seen) {
+            if (!present) {
+                throw new IllegalStateException("Multi-join state TTL must cover every input");
+            }
+        }
+        return ttl;
     }
 
     private static JoinSpec temporalJoinSpec(StreamExecTemporalJoin join) {

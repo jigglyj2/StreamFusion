@@ -5,8 +5,8 @@ sidebar:
   order: 9
 ---
 
-**Current status:** Partially accelerated for synchronous regular, time-bounded, and temporal
-streaming joins.
+**Current status:** Partially accelerated for synchronous regular, multi-way, time-bounded, and
+temporal streaming joins.
 
 ## SQL example
 
@@ -41,6 +41,13 @@ generated residual join conditions. A failed residual predicate drops an inner r
 null-padded right row for a left join. Keys and stored rows support every Arrow-representable Flink
 scalar and nested logical type.
 
+Flink `StreamExecMultiJoin` plans are accelerated when all join predicates are represented by its
+attribute-based equi-join map and all inputs share a non-empty partition key. The native recursive
+operator supports Flink's `INNER` and `LEFT` chain shapes, duplicate multiset rows, all four row
+kinds, SQL-null join semantics, and the null-padding retraction/insertion transitions of chained
+left joins. Stored payloads and predicate fields accept every Arrow-representable Flink scalar and
+nested logical type.
+
 The containing plan falls back to Flink with an EXPLAIN reason when a regular join has a non-equi
 condition, state TTL, mini-batch execution, asynchronous state, changelog-state wrapping, or a
 planner-provided unique/upsert key. Interval joins additionally fall back for a residual non-equi
@@ -51,6 +58,9 @@ only its temporal table-function form is accepted there. Lookup and bounded batc
 Flink-owned. These are explicit unimplemented shapes, not approximations of their semantics. In
 particular, the current Flink plans for official Nexmark q4 and q9 use an expiry-column residual
 condition on a regular join; they do not satisfy the constant-bound interval-join contract.
+Multi-way joins additionally fall back for residual predicates outside the attribute map,
+planner-provided unique/upsert keys, non-zero state TTL, mini-batching, asynchronous state, or
+changelog-state wrapping.
 
 ## Implementation
 
@@ -80,6 +90,20 @@ Residual conditions are evaluated by Flink's generated condition over Arrow-back
 all candidates pass, the bridge transfers the native output buffers without copying them; mixed
 pass/fail results copy only the selected or null-padded output required by the predicate.
 
+Multi-way joins reuse the same native keyed-state interface through a V2 multiple-input operator.
+Each incoming Arrow batch performs one distinct backend multi-get and one atomic write batch for
+all touched common keys. Per-input ordered multisets are encoded as opaque Arrow rows, while equi
+predicate fields use opaque Flink binary-key sidecars so nested and non-native hash types never
+cross JNI per row. The canonical key-group representation restores across parallelism and between
+managed memory and direct RocksDB; RocksDB uses the shared incremental-SST checkpoint path.
+The operator requests its scratch allowance from Flink's ordinary `OPERATOR` managed-memory pool
+in proportion to its input count. State, decode scratch, recursive candidate traversal, and exported
+Arrow output remain covered by that reservation; candidate traversal borrows stored rows rather
+than cloning them, and native output reuses the columns produced by Arrow row decoding instead of
+performing a second identity gather. Source-edge Arrow allowances scale with the physical nested
+vector tree, so complete logical-type payloads remain admitted without creating a separate memory
+budget.
+
 Deterministic native transition tests cover every join type, duplicates, retractions, null keys,
 rescaling, and memory-to-RocksDB restoration. Interval coverage additionally exercises every
 supported logical type as both a key and stored value, pending event-time and processing-time
@@ -92,5 +116,14 @@ both state backends. Temporal tests cover both time modes, all row kinds, residu
 semantics, every supported key and state type, managed-memory admission, metric parity, canonical
 memory/RocksDB restoration, rescaling, aligned and unaligned checkpoints, and incremental RocksDB
 SST reuse. Its SQL parity test compares the complete changelog against Flink on both backends.
+Multi-way join tests cover three-input duplicate inner joins, ordered chained-left null-padding
+transitions, missing retractions, SQL-null predicates, key-group rescaling, and canonical
+state migration in all four memory/RocksDB source and target combinations. Java operator-harness
+coverage checks the complete logical-I/O, row-kind, state-I/O, checkpoint, failure, watermark,
+timer, and backend metric surface; aligned and unaligned restore on both backends; incremental
+RocksDB SST reuse; and one-to-two-subtask key-group redistribution. Generated SQL tests require an
+accelerated EXPLAIN and non-zero native batch count for both inner and left shapes; the left SQL
+fixture uses disjoint right inputs so its complete changelog is deterministic despite independent
+bounded-source scheduling.
 
 See the [Flink 2.3 Joins documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/joins/).

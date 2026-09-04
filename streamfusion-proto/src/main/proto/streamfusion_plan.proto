@@ -66,7 +66,29 @@ message Operator {
     IncrementalGroupAggregate incremental_group_aggregate = 21;
     TemporalSort temporal_sort = 22;
     TemporalJoin temporal_join = 23;
+    MultiJoin multi_join = 24;
   }
+}
+
+// N-input streaming join. Inputs share a Flink partition key, while each depth can use additional
+// equi-attributes against any preceding input. Rows remain backend-neutral opaque Arrow encodings.
+message MultiJoin {
+  repeated MultiJoinInput inputs = 1;
+  repeated RegularJoinType join_types = 2;
+  repeated MultiJoinEquiCondition equi_conditions = 3;
+}
+
+message MultiJoinInput {
+  Schema schema = 1;
+  repeated uint32 common_key_indices = 2;
+  uint64 state_retention_millis = 3;
+}
+
+message MultiJoinEquiCondition {
+  uint32 depth = 1;
+  uint32 left_input_index = 2;
+  uint32 left_field_index = 3;
+  uint32 right_field_index = 4;
 }
 
 // Keyed temporal table join. Event-time mode buffers probe rows and versioned build rows until

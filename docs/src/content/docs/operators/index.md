@@ -18,7 +18,7 @@ This matrix follows the query operations documented by Flink 2.3, including the 
 | [Group aggregation](group-aggregation/) | **Partial** (timer-free keyed/global, grouping sets/`ROLLUP`/`CUBE`) | Yes | Native keyed state and Arrow aggregate kernels |
 | [Window aggregation](window-aggregation/) | **Partial** (`TUMBLE`, `HOP`, `CUMULATE`, `SESSION`) | Yes | Native keyed window state, timers, and Arrow aggregate kernels |
 | [OVER aggregation](over-aggregation/) | **Partial** (non-time unbounded plus processing/event-time bounded or unbounded `ROWS`/`RANGE`) | Yes | Native ordered state, timers, and aggregate kernels |
-| [Joins](joins/) | **Partial** (regular, constant-bound interval, and temporal streaming joins) | By join type | Native two-sided keyed state and timers; future DataFusion batch joins |
+| [Joins](joins/) | **Partial** (regular, multi-way, constant-bound interval, and temporal streaming joins) | By join type | Native keyed state and timers; future DataFusion batch joins |
 | [Window joins](window-join/) | **Yes** (event-time attached windows) | Yes | Native two-sided window state plus Flink join conditions |
 | [Set operations](set-operations/) | **Partial** (`UNION ALL`, `UNION DISTINCT`) | By operation | Arrow IPC at Flink multi-input gates; native distinct keyed state |
 | [Exchange](exchange/) | **Partial** (hash and singleton) | Yes | Native Flink-compatible key grouping with Flink-owned network transport |

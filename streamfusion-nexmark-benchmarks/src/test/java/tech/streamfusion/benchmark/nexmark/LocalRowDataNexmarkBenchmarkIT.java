@@ -212,7 +212,7 @@ class LocalRowDataNexmarkBenchmarkIT {
     @ParameterizedTest
     @ValueSource(strings = {"hashmap", "rocksdb"})
     void composedRegularJoinsAndTopNMatchFlink(String backend) throws Exception {
-        for (String query : new String[] {"q19", "q20", "q23"}) {
+        for (String query : new String[] {"q19", "q20"}) {
             int parallelism = query.equals("q19") ? 1 : 4;
             LocalRowDataNexmarkBenchmark.RunResult flink =
                     LocalRowDataNexmarkBenchmark.run(2_000, query, false, backend, parallelism);
@@ -230,6 +230,22 @@ class LocalRowDataNexmarkBenchmarkIT {
                 assertThat(streamFusion.nativeRegularJoinBatches()).as(query).isGreaterThan(0);
             }
         }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"hashmap", "rocksdb"})
+    void q23MultiJoinMatchesFlinkOnBothStateBackends(String backend) throws Exception {
+        LocalRowDataNexmarkBenchmark.RunResult flink =
+                LocalRowDataNexmarkBenchmark.run(2_000, "q23", false, backend, 4);
+        LocalRowDataNexmarkBenchmark.RunResult streamFusion =
+                LocalRowDataNexmarkBenchmark.run(2_000, "q23", true, backend, 4);
+
+        assertThat(streamFusion.completed()).isTrue();
+        assertThat(streamFusion.debugRows()).containsExactlyElementsOf(flink.debugRows());
+        assertThat(streamFusion.outputRows()).isEqualTo(flink.outputRows());
+        assertThat(streamFusion.outputSha256()).isEqualTo(flink.outputSha256());
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        assertThat(streamFusion.nativeMultiJoinBatches()).isGreaterThan(0);
     }
 
     @ParameterizedTest

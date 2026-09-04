@@ -27,10 +27,8 @@ public final class StreamFusionArrowBoundaries {
                 ArrowRowDataBatchTypeInfo.INSTANCE,
                 input.getParallelism(),
                 false);
-        // The source edge owns both the reusable transposition vectors and in-flight exported
-        // buffers. Give that conversion two shares so wide variable-width batches can grow while
-        // remaining inside Flink's existing managed-memory budget.
-        boundary.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 2);
+        boundary.declareManagedMemoryUseCaseAtOperatorScope(
+                ManagedMemoryUseCase.OPERATOR, managedMemoryWeight(rowType));
         return boundary;
     }
 
@@ -47,8 +45,26 @@ public final class StreamFusionArrowBoundaries {
                 ArrowRowDataBatchTypeInfo.INSTANCE,
                 input.getParallelism(),
                 false);
-        boundary.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 2);
+        boundary.declareManagedMemoryUseCaseAtOperatorScope(
+                ManagedMemoryUseCase.OPERATOR, managedMemoryWeight(projectedType));
         return boundary;
+    }
+
+    private static int managedMemoryWeight(RowType rowType) {
+        // Each nested Arrow vector owns independent validity/data/offset buffers. Scale the share
+        // with the physical vector tree so complete logical-type rows do not receive the same
+        // allowance as a narrow fixed-width projection.
+        int vectorCount = ArrowUtils.toArrowSchema(rowType).getFields().stream()
+                .mapToInt(StreamFusionArrowBoundaries::vectorCount)
+                .sum();
+        return Math.max(2, (vectorCount + 7) / 8);
+    }
+
+    private static int vectorCount(org.apache.arrow.vector.types.pojo.Field field) {
+        return 1
+                + field.getChildren().stream()
+                        .mapToInt(StreamFusionArrowBoundaries::vectorCount)
+                        .sum();
     }
 
     public static boolean isArrow(Transformation<RowData> input) {

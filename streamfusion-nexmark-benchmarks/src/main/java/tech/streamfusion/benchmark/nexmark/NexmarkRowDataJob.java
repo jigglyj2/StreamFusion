@@ -112,6 +112,7 @@ public final class NexmarkRowDataJob {
                 tables.getConfig().set(OptimizerConfigOptions.TABLE_OPTIMIZER_DISTINCT_AGG_SPLIT_ENABLED, true);
             }
             tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, parallelism);
+            tables.getConfig().set(OptimizerConfigOptions.TABLE_OPTIMIZER_MULTI_JOIN_ENABLED, true);
 
             tables.executeSql(sourceDdl(eventCount));
             NexmarkSqlJob.createViews(tables);

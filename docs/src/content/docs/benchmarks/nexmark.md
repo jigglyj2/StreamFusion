@@ -85,8 +85,8 @@ mvn -pl streamfusion-nexmark-benchmarks -am \
 engine selector (`flink`, `streamfusion`, or `both`) for standalone measurements. It reports
 end-to-end elapsed time, input-event throughput, native calc batches, native group-aggregate
 batches, native window-aggregate batches, native Window Join batches, native regular-join batches,
-native interval-join batches, native temporal-join batches, native OVER-aggregate batches, native
-Temporal Sort batches, and row counts plus SHA-256 hashes for the full result changelog and
+native multi-join batches, native interval-join batches, native temporal-join batches, native
+OVER-aggregate batches, native Temporal Sort batches, and row counts plus SHA-256 hashes for the full result changelog and
 final materialized multiset. An additional ordered SHA-256 retains sink arrival order for operators
 whose ordering is semantic.
 The `aggregate-modifiers`, `incremental-group-aggregate`,
@@ -121,6 +121,32 @@ bundle boundaries affect the comparison.
 Performance reports
 must come from separate, unprofiled JVM forks built with release-mode native code; profiler runs
 are diagnostic artifacts rather than benchmark measurements.
+
+On the September 4, 2026 local q23 multi-join run based on `980201e` plus the multi-join working
+change, three alternating fresh-JVM release/native-CPU forks processed 500,000 deterministic events
+at parallelism four with a 3GB heap and one-second exactly-once checkpoints. In memory, Flink and
+StreamFusion medians were 46,077 and 46,649 events/s respectively, a 1.2% StreamFusion gain; median
+absolute deviations were 0.723s and 0.440s, with elapsed ranges of 10.128–14.170s and
+10.278–19.050s. RocksDB medians were 39,992 and 45,011 events/s, a 12.6% StreamFusion gain; median
+absolute deviations were 0.093s and 0.248s, with elapsed ranges of 12.409–17.358s and
+10.527–11.357s. The wide ranges, including one storage/scheduling outlier, are retained rather
+than discarded. Every run emitted and materialized 515,539 rows with SHA-256
+`2b5f85f35733140d63a71f8dba79235f56152e97867c5728d203456504e52110`; StreamFusion EXPLAIN
+reported full acceleration and each fork executed 388–400 native multi-join batches. The host was a
+12th Gen Intel Core i7-12650H under x86-64 WSL2 with OpenJDK 24.0.2 and Rust 1.94.0.
+
+Separate longer 500,000-event, parallelism-one mixed JVM/native profiles covered both engines and
+backends with Java non-safepoint sampling, DWARF/frame-pointer unwinding, CPU, Java-allocation, and
+native-allocation JFRs, collapsed stacks, per-engine flame graphs, and differential flame graphs.
+Profiler timings were excluded from the throughput measurements. They found Flink's streaming
+multi-join path at 50.8% of RocksDB CPU samples, including 45.1% in its Java RocksDB path, while
+StreamFusion's complete native multi-join and direct RocksDB work accounted for 21.0% and 9.4%.
+In memory, those complete join paths accounted for 17.3% and 13.4% respectively. The profiles led
+to removal of a redundant identity gather after Arrow row decoding and recursive deep clones of
+candidate rows. The native operator performs one distinct multi-get and one atomic write batch per
+incoming Arrow batch, with no per-row JNI state access. Its state, scratch, exported Arrow, RocksDB
+cache, and write-buffer allocations remain admitted through Flink managed memory. These are local
+diagnostic results, not portable performance claims.
 
 On the September 4, 2026 local `temporal-join` run based on `b3fb8ed` plus the temporal-join
 working change, three alternating fresh-JVM release/native-CPU forks processed 500,000

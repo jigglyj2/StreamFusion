@@ -105,7 +105,7 @@ class TopNOpaquePayloadTypeParityTest extends SqlParityTestSupport {
         return row;
     }
 
-    private static TypeInformation<Row> payloadTypeInformation() {
+    static TypeInformation<Row> payloadTypeInformation() {
         return Types.ROW_NAMED(
                 new String[] {
                     "boolean_value",
@@ -155,7 +155,7 @@ class TopNOpaquePayloadTypeParityTest extends SqlParityTestSupport {
                 Types.ROW_NAMED(new String[] {"id", "label"}, Types.LONG, Types.STRING));
     }
 
-    private static DataType payloadDataType() {
+    static DataType payloadDataType() {
         return DataTypes.ROW(
                 DataTypes.FIELD("boolean_value", DataTypes.BOOLEAN()),
                 DataTypes.FIELD("tiny_value", DataTypes.TINYINT()),
@@ -186,7 +186,7 @@ class TopNOpaquePayloadTypeParityTest extends SqlParityTestSupport {
                                 DataTypes.FIELD("label", DataTypes.STRING()))));
     }
 
-    private static Row payload(String label, int value) {
+    static Row payload(String label, int value) {
         return Row.of(
                 value % 2 == 0,
                 (byte) value,
