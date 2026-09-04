@@ -60,6 +60,7 @@ import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecLocalWind
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecMiniBatchAssigner;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecOverAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecRank;
+import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecTemporalJoin;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecTemporalSort;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecUnion;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecValues;
@@ -108,6 +109,8 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             "tech.streamfusion.flink.join.StreamFusionRegularJoinTranslator";
     private static final String INTERVAL_JOIN_TRANSLATOR_CLASS =
             "tech.streamfusion.flink.join.StreamFusionIntervalJoinTranslator";
+    private static final String TEMPORAL_JOIN_TRANSLATOR_CLASS =
+            "tech.streamfusion.flink.join.StreamFusionTemporalJoinTranslator";
     private static final String OVER_AGGREGATE_TRANSLATOR_CLASS =
             "tech.streamfusion.flink.over.StreamFusionOverAggregateTranslator";
     private static final String TEMPORAL_SORT_TRANSLATOR_CLASS =
@@ -288,6 +291,11 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             }
         } else if (node instanceof StreamExecWindowJoin) {
             String reason = unsupportedReason((StreamExecWindowJoin) node, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
+        } else if (node instanceof StreamExecTemporalJoin) {
+            String reason = unsupportedReason((StreamExecTemporalJoin) node, context);
             if (reason != null) {
                 rejections.add(nodePath + "\n" + reason);
             }
@@ -777,6 +785,23 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     .collect(Collectors.toList()));
             return replacement;
         }
+        if (node instanceof StreamExecTemporalJoin) {
+            StreamExecTemporalJoin join = (StreamExecTemporalJoin) node;
+            StreamFusionExecTemporalJoin replacement = new StreamFusionExecTemporalJoin(
+                    join.getPersistedConfig(),
+                    temporalJoinSpec(join),
+                    temporalJoinFunction(join),
+                    temporalJoinLeftTimeIndex(join),
+                    temporalJoinRightTimeIndex(join),
+                    join.getInputProperties().get(0),
+                    join.getInputProperties().get(1),
+                    (RowType) join.getOutputType(),
+                    "StreamFusionTemporalJoin");
+            replacement.setInputEdges(join.getInputEdges().stream()
+                    .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                    .collect(Collectors.toList()));
+            return replacement;
+        }
         if (node instanceof StreamExecIntervalJoin) {
             StreamExecIntervalJoin join = (StreamExecIntervalJoin) node;
             StreamFusionExecIntervalJoin replacement = new StreamFusionExecIntervalJoin(
@@ -1206,6 +1231,41 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             throw new IllegalStateException("Could not inspect StreamFusion WindowJoin support", e);
         } catch (InvocationTargetException e) {
             throw new IllegalStateException("StreamFusion WindowJoin support inspection failed", e.getCause());
+        }
+    }
+
+    private String unsupportedReason(StreamExecTemporalJoin join, ProcessorContext context) {
+        ExecEdge left = join.getInputEdges().get(0);
+        ExecEdge right = join.getInputEdges().get(1);
+        try {
+            Class<?> translator = Class.forName(
+                    TEMPORAL_JOIN_TRANSLATOR_CLASS,
+                    true,
+                    context.getPlanner().getFlinkContext().getClassLoader());
+            Method method = translator.getMethod(
+                    "unsupportedReason",
+                    RowType.class,
+                    RowType.class,
+                    RowType.class,
+                    JoinSpec.class,
+                    boolean.class,
+                    int.class,
+                    int.class,
+                    ReadableConfig.class);
+            return (String) method.invoke(
+                    null,
+                    (RowType) left.getOutputType(),
+                    (RowType) right.getOutputType(),
+                    (RowType) join.getOutputType(),
+                    temporalJoinSpec(join),
+                    temporalJoinFunction(join),
+                    temporalJoinLeftTimeIndex(join),
+                    temporalJoinRightTimeIndex(join),
+                    join.getPersistedConfig());
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
+            throw new IllegalStateException("Could not inspect StreamFusion temporal join support", e);
+        } catch (InvocationTargetException e) {
+            throw new IllegalStateException("StreamFusion temporal join support inspection failed", e.getCause());
         }
     }
 
@@ -2165,6 +2225,22 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
 
     private static JoinSpec regularJoinSpec(StreamExecJoin join) {
         return (JoinSpec) field(join, StreamExecJoin.class, "joinSpec");
+    }
+
+    private static JoinSpec temporalJoinSpec(StreamExecTemporalJoin join) {
+        return (JoinSpec) field(join, StreamExecTemporalJoin.class, "joinSpec");
+    }
+
+    private static boolean temporalJoinFunction(StreamExecTemporalJoin join) {
+        return (boolean) field(join, StreamExecTemporalJoin.class, "isTemporalFunctionJoin");
+    }
+
+    private static int temporalJoinLeftTimeIndex(StreamExecTemporalJoin join) {
+        return (int) field(join, StreamExecTemporalJoin.class, "leftTimeAttributeIndex");
+    }
+
+    private static int temporalJoinRightTimeIndex(StreamExecTemporalJoin join) {
+        return (int) field(join, StreamExecTemporalJoin.class, "rightTimeAttributeIndex");
     }
 
     private static IntervalJoinSpec intervalJoinSpec(StreamExecIntervalJoin join) {

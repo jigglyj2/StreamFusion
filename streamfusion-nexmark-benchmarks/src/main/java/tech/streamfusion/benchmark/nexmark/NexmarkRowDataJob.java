@@ -115,6 +115,9 @@ public final class NexmarkRowDataJob {
 
             tables.executeSql(sourceDdl(eventCount));
             NexmarkSqlJob.createViews(tables);
+            if (query.equals("temporal-join")) {
+                tables.executeSql(versionedAuctionViewDdl());
+            }
             tables.executeSql(sinkDdl(query, resultRunId));
             String statement = "INSERT INTO nexmark_output\n" + NexmarkRowDataQueryCatalog.load(query);
             if (Boolean.getBoolean("streamfusion.nexmark.debug-plan")) {
@@ -148,6 +151,14 @@ public final class NexmarkRowDataJob {
         return sinkDdl(query, "test-run");
     }
 
+    private static String versionedAuctionViewDdl() {
+        return "CREATE VIEW versioned_auction AS "
+                + "SELECT id, seller, category, `dateTime` FROM ("
+                + "SELECT id, seller, category, `dateTime`, "
+                + "ROW_NUMBER() OVER (PARTITION BY id ORDER BY `dateTime` DESC) AS row_num "
+                + "FROM auction) WHERE row_num = 1";
+    }
+
     static String sinkDdl(String query, String runId) throws IOException {
         String columns;
         switch (query) {
@@ -171,6 +182,10 @@ public final class NexmarkRowDataJob {
                 break;
             case "interval-join":
                 columns = "auction BIGINT, bidder BIGINT, price BIGINT, bid_time TIMESTAMP(3)";
+                break;
+            case "temporal-join":
+                columns = "auction BIGINT, bidder BIGINT, price BIGINT, bid_time TIMESTAMP(3), "
+                        + "seller BIGINT, category BIGINT";
                 break;
             case "q19":
                 columns = "auction BIGINT, bidder BIGINT, price BIGINT, channel STRING, url STRING, "

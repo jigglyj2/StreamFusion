@@ -65,7 +65,32 @@ message Operator {
     GlobalGroupAggregate global_group_aggregate = 20;
     IncrementalGroupAggregate incremental_group_aggregate = 21;
     TemporalSort temporal_sort = 22;
+    TemporalJoin temporal_join = 23;
   }
+}
+
+// Keyed temporal table join. Event-time mode buffers probe rows and versioned build rows until
+// the two-input watermark proves their answer final. Processing-time mode implements Flink's
+// temporal table-function contract by probing the current build-side value immediately. Opaque
+// state and timer bytes are backend-neutral and partitioned by Flink key group.
+message TemporalJoin {
+  repeated uint32 left_key_indices = 1;
+  repeated uint32 right_key_indices = 2;
+  repeated bool filter_nulls = 3;
+  Schema left_schema = 4;
+  Schema right_schema = 5;
+  RegularJoinType join_type = 6;
+  TemporalJoinTimeMode time_mode = 7;
+  uint32 left_time_index = 8;
+  uint32 right_time_index = 9;
+  uint64 min_state_retention_millis = 10;
+  uint64 max_state_retention_millis = 11;
+}
+
+enum TemporalJoinTimeMode {
+  TEMPORAL_JOIN_TIME_MODE_UNSPECIFIED = 0;
+  TEMPORAL_JOIN_TIME_MODE_EVENT_TIME = 1;
+  TEMPORAL_JOIN_TIME_MODE_PROCESSING_TIME = 2;
 }
 
 // Streaming time-ascending sort. Rows are buffered under their event-time timestamp or the

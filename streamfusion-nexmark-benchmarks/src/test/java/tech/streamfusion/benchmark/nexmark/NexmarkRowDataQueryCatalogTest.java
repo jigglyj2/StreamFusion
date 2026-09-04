@@ -28,6 +28,7 @@ class NexmarkRowDataQueryCatalogTest {
                         "global-aggregate",
                         "grouping-sets",
                         "interval-join",
+                        "temporal-join",
                         "over-aggregate",
                         "over-aggregate-event-time",
                         "over-aggregate-processing-time",

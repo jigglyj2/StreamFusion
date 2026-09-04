@@ -85,15 +85,15 @@ mvn -pl streamfusion-nexmark-benchmarks -am \
 engine selector (`flink`, `streamfusion`, or `both`) for standalone measurements. It reports
 end-to-end elapsed time, input-event throughput, native calc batches, native group-aggregate
 batches, native window-aggregate batches, native Window Join batches, native regular-join batches,
-native interval-join batches, native OVER-aggregate batches,
-native Temporal Sort batches, and row counts plus SHA-256 hashes for the full result changelog and
+native interval-join batches, native temporal-join batches, native OVER-aggregate batches, native
+Temporal Sort batches, and row counts plus SHA-256 hashes for the full result changelog and
 final materialized multiset. An additional ordered SHA-256 retains sink arrival order for operators
 whose ordering is semantic.
 The `aggregate-modifiers`, `incremental-group-aggregate`,
 `group-aggregate`, `global-aggregate`, `grouping-sets`, `interval-join`, `over-aggregate`,
 `over-aggregate-event-time`, `over-aggregate-processing-time`,
-`over-aggregate-bounded-rows`, `over-aggregate-bounded-range`, `select-distinct`, `top-n`, and
-`limit`, and `temporal-sort` cases
+`over-aggregate-bounded-rows`, `over-aggregate-bounded-range`, `select-distinct`, `top-n`,
+`limit`, `temporal-join`, and `temporal-sort` cases
 exercise both native state backends over the bounded bid stream; they are focused operator workloads
 rather than numbered Nexmark queries. `over-aggregate` deliberately casts the timestamp to a
 regular value to exercise ordered non-time state, while `over-aggregate-event-time` retains the
@@ -104,6 +104,10 @@ ten-second event-time range respectively.
 `temporal-sort` orders the bounded bid stream by ascending event time and secondary price/auction
 keys. Its integration case compares both the changelog multiset and global arrival-order digest on
 memory and RocksDB, requires an accelerated EXPLAIN, and requires non-zero native sort batches.
+`temporal-join` derives a versioned auction table with row-time deduplication and probes it from the
+bid stream using an event-time left temporal join plus a residual predicate. Its integration case
+compares the complete raw and materialized changelogs on both state backends, requires an
+accelerated EXPLAIN, and requires non-zero native temporal-join batches.
 The bounded source adapter also replaces the upstream generator's process-random reusable payload
 and URL caches with stable, size-preserving values. Consequently, fresh JVM forks consume
 byte-identical events rather than relying on same-process parity.
@@ -117,6 +121,36 @@ bundle boundaries affect the comparison.
 Performance reports
 must come from separate, unprofiled JVM forks built with release-mode native code; profiler runs
 are diagnostic artifacts rather than benchmark measurements.
+
+On the September 4, 2026 local `temporal-join` run based on `b3fb8ed` plus the temporal-join
+working change, three alternating fresh-JVM release/native-CPU forks processed 500,000
+deterministic events at parallelism four with a 3GB heap, one-second exactly-once checkpoints, and
+the same 8GB Flink managed-memory setting for both engines. In memory, Flink and StreamFusion
+medians were 75,156 and 71,295 events/s respectively, or 94.9% throughput parity; median absolute
+deviations were 0.019s and 0.087s, with elapsed ranges of 6.372–6.672s and 6.780–7.101s. RocksDB
+medians were 60,677 and 69,773 events/s, a 15.0% StreamFusion gain; median absolute deviations were
+0.588s and 0.134s, with full elapsed ranges of 7.653–10.911s and 7.032–11.125s. The final RocksDB
+fork for each engine encountered the same local storage/scheduling outlier, which is retained in
+the ranges. Every run emitted and materialized 460,000 rows with SHA-256
+`fe511cd37719f5a419bf980d276ec0cbdbc0ae193bd7e535a88be5bbd6d69c0c`; StreamFusion EXPLAIN
+reported full acceleration and each fork executed 260–268 native temporal-join batches. The host
+was a 12th Gen Intel Core i7-12650H under x86-64 WSL2 with OpenJDK 24.0.2 and Rust 1.94.0.
+
+Separate mixed JVM/native CPU profiles for both engines and backends used Java non-safepoint
+sampling, DWARF/frame-pointer unwinding, JFR, collapsed stacks, per-engine flame graphs, and
+differential flame graphs. Java and native allocation recordings were captured separately; all
+profiler timings were excluded from the measurements above. An all-candidates-pass fast path
+removed an unnecessary residual-condition output copy, reducing that bridge from 3.0%/2.4% to
+0.6%/0.1% of CPU samples on memory/RocksDB. In the final profiles, native temporal processing plus
+timer firing accounted for 2.5%/2.2%, while the shared RowData-to-Arrow input boundary accounted
+for 3.8%/4.1%. Java allocations remained led by Flink binary-row copying and the benchmark result
+collector; temporal residual materialization accounted for 1.6%/0.7%. Native allocation samples
+were concentrated in the required watermark-triggered output batch and, on the RocksDB path, the
+database itself. Incoming batches perform one distinct native multi-get and one atomic write batch,
+and no per-row JNI state access or decoded-object cache was introduced. Native state, timer,
+scratch, exported Arrow, RocksDB cache, and write-buffer allocations remain admitted through the
+operator's existing Flink managed-memory reservation. These are local diagnostic results, not
+portable performance claims.
 
 The RowData harness uses 1,024 MiB of Flink managed memory by default and sets Flink's standard
 managed-memory consumer weights to `OPERATOR:90,STATE_BACKEND:10,PYTHON:30` for both engines. The

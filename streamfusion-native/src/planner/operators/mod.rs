@@ -23,6 +23,7 @@ pub(crate) mod regular_join;
 pub(crate) mod reusable_input;
 mod select_distinct;
 pub(crate) mod session_window_table_function;
+pub(crate) mod temporal_join;
 pub(crate) mod temporal_sort;
 pub(crate) mod top_n;
 pub(super) mod union;

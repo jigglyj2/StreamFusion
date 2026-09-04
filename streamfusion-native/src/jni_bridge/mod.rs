@@ -18,6 +18,7 @@ mod local_group_aggregate;
 mod over_aggregate;
 mod regular_join;
 mod session_window_table_function;
+mod temporal_join;
 mod temporal_sort;
 mod top_n;
 mod union;

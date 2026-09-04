@@ -151,6 +151,9 @@ fn create_operator(
         Some(proto::operator::Operator::IntervalJoin(_)) => Err(DataFusionError::Plan(
             "IntervalJoin requires a persistent stateful execution handle".to_string(),
         )),
+        Some(proto::operator::Operator::TemporalJoin(_)) => Err(DataFusionError::Plan(
+            "TemporalJoin requires a persistent stateful execution handle".to_string(),
+        )),
         Some(proto::operator::Operator::OverAggregate(_)) => Err(DataFusionError::Plan(
             "OverAggregate requires a persistent stateful execution handle".to_string(),
         )),
