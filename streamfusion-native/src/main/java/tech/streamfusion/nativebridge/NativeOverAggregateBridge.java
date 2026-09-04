@@ -55,9 +55,10 @@ public final class NativeOverAggregateBridge {
             long inputArrayAddress,
             long inputSchemaAddress,
             long outputArrayAddress,
-            long outputSchemaAddress) {
+            long outputSchemaAddress,
+            long processingTime) {
         long rows = processArrowBatch(
-                handle, inputArrayAddress, inputSchemaAddress, outputArrayAddress, outputSchemaAddress);
+                handle, inputArrayAddress, inputSchemaAddress, outputArrayAddress, outputSchemaAddress, processingTime);
         EXECUTED_BATCHES.incrementAndGet();
         return rows;
     }
@@ -69,6 +70,19 @@ public final class NativeOverAggregateBridge {
     public static long advanceEventTime(
             long handle, long watermark, long outputArrayAddress, long outputSchemaAddress) {
         return advanceEventTime0(handle, watermark, outputArrayAddress, outputSchemaAddress);
+    }
+
+    public static long advanceProcessingTime(
+            long handle, long timestamp, long outputArrayAddress, long outputSchemaAddress) {
+        return advanceProcessingTime0(handle, timestamp, outputArrayAddress, outputSchemaAddress);
+    }
+
+    public static long nextProcessingTimeTimer(long handle) {
+        return nextProcessingTimeTimer0(handle);
+    }
+
+    public static long nextEventTimeTimer(long handle) {
+        return nextEventTimeTimer0(handle);
     }
 
     public static long lateRecordsDropped(long handle) {
@@ -133,12 +147,20 @@ public final class NativeOverAggregateBridge {
             long inputArrayAddress,
             long inputSchemaAddress,
             long outputArrayAddress,
-            long outputSchemaAddress);
+            long outputSchemaAddress,
+            long processingTime);
 
     private static native long[] statistics0(long handle);
 
     private static native long advanceEventTime0(
             long handle, long watermark, long outputArrayAddress, long outputSchemaAddress);
+
+    private static native long advanceProcessingTime0(
+            long handle, long timestamp, long outputArrayAddress, long outputSchemaAddress);
+
+    private static native long nextProcessingTimeTimer0(long handle);
+
+    private static native long nextEventTimeTimer0(long handle);
 
     private static native long lateRecordsDropped0(long handle);
 

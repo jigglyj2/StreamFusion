@@ -154,6 +154,8 @@ public final class NexmarkRowDataJob {
             case "over-aggregate":
             case "over-aggregate-event-time":
             case "over-aggregate-processing-time":
+            case "over-aggregate-bounded-rows":
+            case "over-aggregate-bounded-range":
                 columns = "bidder BIGINT, auction BIGINT, price BIGINT, `dateTime` TIMESTAMP(3), running_spend BIGINT";
                 break;
             case "select-distinct":

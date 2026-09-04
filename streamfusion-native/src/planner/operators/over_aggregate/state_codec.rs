@@ -8,7 +8,8 @@ use datafusion::error::{DataFusionError, Result};
 use super::AggregateValue;
 
 const MAGIC: &[u8; 4] = b"SFOA";
-const VERSION: u8 = 2;
+const VERSION: u8 = 3;
+const EVENT_TIMESTAMP_VERSION: u8 = 2;
 const FIRST_VERSION: u8 = 1;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -45,21 +46,21 @@ pub(super) fn encode_state(state: &OverState) -> Vec<u8> {
         put_bytes(&mut bytes, order);
         put_u32(&mut bytes, rows.len());
         for row in rows {
-            bytes.extend_from_slice(&row.id.to_le_bytes());
+            put_var_u64(&mut bytes, row.id.wrapping_sub(i64::MIN) as u64);
             bytes.extend_from_slice(&row.event_timestamp.to_le_bytes());
             put_bytes(&mut bytes, &row.payload);
-            put_values(&mut bytes, &row.contributions);
-            put_values(&mut bytes, &row.output);
+            put_values_without_count(&mut bytes, &row.contributions);
+            bytes.push(u8::from(!row.output.is_empty()));
+            if !row.output.is_empty() {
+                put_values_without_count(&mut bytes, &row.output);
+            }
         }
     }
     bytes
 }
 
 pub(super) fn decode_state(bytes: &[u8], call_count: usize) -> Result<OverState> {
-    if bytes.len() < 17
-        || &bytes[..4] != MAGIC
-        || (bytes[4] != FIRST_VERSION && bytes[4] != VERSION)
-    {
+    if bytes.len() < 17 || &bytes[..4] != MAGIC || !(FIRST_VERSION..=VERSION).contains(&bytes[4]) {
         return Err(invalid("invalid native OVER aggregate state"));
     }
     let version = bytes[4];
@@ -72,15 +73,28 @@ pub(super) fn decode_state(bytes: &[u8], call_count: usize) -> Result<OverState>
         let row_count = cursor.u32()? as usize;
         let mut rows = Vec::with_capacity(row_count);
         for _ in 0..row_count {
-            let id = cursor.i64()?;
-            let event_timestamp = if version >= VERSION {
+            let id = if version >= VERSION {
+                i64::MIN.wrapping_add(cursor.var_u64()? as i64)
+            } else {
+                cursor.i64()?
+            };
+            let event_timestamp = if version >= EVENT_TIMESTAMP_VERSION {
                 cursor.i64()?
             } else {
                 i64::MIN
             };
             let payload = cursor.bytes()?.to_vec();
-            let contributions = cursor.values()?;
-            let output = cursor.values()?;
+            let (contributions, output) = if version >= VERSION {
+                let contributions = cursor.compact_values_exact(call_count)?;
+                let output = match cursor.u8()? {
+                    0 => Vec::new(),
+                    1 => cursor.compact_values_exact(call_count)?,
+                    tag => return Err(invalid(format!("unknown OVER output-presence tag {tag}"))),
+                };
+                (contributions, output)
+            } else {
+                (cursor.values()?, cursor.values()?)
+            };
             if contributions.len() != call_count
                 || (!output.is_empty() && output.len() != call_count)
             {
@@ -116,33 +130,64 @@ fn put_bytes(bytes: &mut Vec<u8>, value: &[u8]) {
     bytes.extend_from_slice(value);
 }
 
+#[cfg(test)]
 fn put_values(bytes: &mut Vec<u8>, values: &[Option<AggregateValue>]) {
     put_u32(bytes, values.len());
     for value in values {
-        match value {
-            None => bytes.push(0),
-            Some(AggregateValue::Boolean(value)) => {
-                bytes.push(1);
-                bytes.push(u8::from(*value));
-            }
-            Some(AggregateValue::Int(value)) => {
-                bytes.push(2);
+        put_value(bytes, value, false);
+    }
+}
+
+fn put_values_without_count(bytes: &mut Vec<u8>, values: &[Option<AggregateValue>]) {
+    for value in values {
+        put_value(bytes, value, true);
+    }
+}
+
+fn put_value(bytes: &mut Vec<u8>, value: &Option<AggregateValue>, compact_integer: bool) {
+    match value {
+        None => bytes.push(0),
+        Some(AggregateValue::Boolean(value)) => {
+            bytes.push(1);
+            bytes.push(u8::from(*value));
+        }
+        Some(AggregateValue::Int(value)) => {
+            bytes.push(2);
+            if compact_integer {
+                put_var_u128(bytes, ((*value as u128) << 1) ^ ((*value >> 127) as u128));
+            } else {
                 bytes.extend_from_slice(&value.to_le_bytes());
-            }
-            Some(AggregateValue::Float32(value)) => {
-                bytes.push(3);
-                bytes.extend_from_slice(&value.to_le_bytes());
-            }
-            Some(AggregateValue::Float64(value)) => {
-                bytes.push(4);
-                bytes.extend_from_slice(&value.to_le_bytes());
-            }
-            Some(AggregateValue::Bytes(value)) => {
-                bytes.push(5);
-                put_bytes(bytes, value);
             }
         }
+        Some(AggregateValue::Float32(value)) => {
+            bytes.push(3);
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        Some(AggregateValue::Float64(value)) => {
+            bytes.push(4);
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        Some(AggregateValue::Bytes(value)) => {
+            bytes.push(5);
+            put_bytes(bytes, value);
+        }
     }
+}
+
+fn put_var_u64(bytes: &mut Vec<u8>, mut value: u64) {
+    while value >= 0x80 {
+        bytes.push((value as u8) | 0x80);
+        value >>= 7;
+    }
+    bytes.push(value as u8);
+}
+
+fn put_var_u128(bytes: &mut Vec<u8>, mut value: u128) {
+    while value >= 0x80 {
+        bytes.push((value as u8) | 0x80);
+        value >>= 7;
+    }
+    bytes.push(value as u8);
 }
 
 struct Cursor<'a> {
@@ -170,6 +215,21 @@ impl<'a> Cursor<'a> {
         Ok(i64::from_le_bytes(self.take(8)?.try_into().unwrap()))
     }
 
+    fn var_u64(&mut self) -> Result<u64> {
+        let mut value = 0_u64;
+        for shift in (0..=63).step_by(7) {
+            let byte = self.u8()?;
+            if shift == 63 && byte > 1 {
+                return Err(invalid("native OVER varint exceeds u64"));
+            }
+            value |= u64::from(byte & 0x7f) << shift;
+            if byte & 0x80 == 0 {
+                return Ok(value);
+            }
+        }
+        Err(invalid("native OVER varint is unterminated"))
+    }
+
     fn bytes(&mut self) -> Result<&'a [u8]> {
         let len = self.u32()? as usize;
         self.take(len)
@@ -177,10 +237,32 @@ impl<'a> Cursor<'a> {
 
     fn values(&mut self) -> Result<Vec<Option<AggregateValue>>> {
         let count = self.u32()? as usize;
+        self.values_exact(count)
+    }
+
+    fn values_exact(&mut self, count: usize) -> Result<Vec<Option<AggregateValue>>> {
+        self.values_exact_with_integer_codec(count, false)
+    }
+
+    fn compact_values_exact(&mut self, count: usize) -> Result<Vec<Option<AggregateValue>>> {
+        self.values_exact_with_integer_codec(count, true)
+    }
+
+    fn values_exact_with_integer_codec(
+        &mut self,
+        count: usize,
+        compact_integer: bool,
+    ) -> Result<Vec<Option<AggregateValue>>> {
         (0..count)
             .map(|_| match self.u8()? {
                 0 => Ok(None),
                 1 => Ok(Some(AggregateValue::Boolean(self.u8()? != 0))),
+                2 if compact_integer => {
+                    let value = self.var_u128()?;
+                    Ok(Some(AggregateValue::Int(
+                        ((value >> 1) as i128) ^ -((value & 1) as i128),
+                    )))
+                }
                 2 => Ok(Some(AggregateValue::Int(i128::from_le_bytes(
                     self.take(16)?.try_into().unwrap(),
                 )))),
@@ -194,6 +276,21 @@ impl<'a> Cursor<'a> {
                 tag => Err(invalid(format!("unknown OVER aggregate value tag {tag}"))),
             })
             .collect()
+    }
+
+    fn var_u128(&mut self) -> Result<u128> {
+        let mut value = 0_u128;
+        for shift in (0..=126).step_by(7) {
+            let byte = self.u8()?;
+            if shift == 126 && byte > 3 {
+                return Err(invalid("native OVER varint exceeds u128"));
+            }
+            value |= u128::from(byte & 0x7f) << shift;
+            if byte & 0x80 == 0 {
+                return Ok(value);
+            }
+        }
+        Err(invalid("native OVER varint exceeds u128"))
     }
 }
 
@@ -228,6 +325,26 @@ mod tests {
         bytes
     }
 
+    fn encode_second_version(state: &OverState) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(MAGIC);
+        bytes.push(EVENT_TIMESTAMP_VERSION);
+        bytes.extend_from_slice(&state.next_id.to_le_bytes());
+        put_u32(&mut bytes, state.rows.len());
+        for (order, rows) in &state.rows {
+            put_bytes(&mut bytes, order);
+            put_u32(&mut bytes, rows.len());
+            for row in rows {
+                bytes.extend_from_slice(&row.id.to_le_bytes());
+                bytes.extend_from_slice(&row.event_timestamp.to_le_bytes());
+                put_bytes(&mut bytes, &row.payload);
+                put_values(&mut bytes, &row.contributions);
+                put_values(&mut bytes, &row.output);
+            }
+        }
+        bytes
+    }
+
     #[test]
     fn canonical_state_round_trips_values_and_rejects_trailing_bytes() {
         let state = OverState {
@@ -238,8 +355,14 @@ mod tests {
                     id: 7,
                     event_timestamp: 11,
                     payload: vec![3, 4],
-                    contributions: vec![Some(AggregateValue::Int(5)), None],
-                    output: vec![Some(AggregateValue::Float64(1.5f64.to_bits())), None],
+                    contributions: vec![
+                        Some(AggregateValue::Int(i128::MIN)),
+                        Some(AggregateValue::Int(i128::MAX)),
+                    ],
+                    output: vec![
+                        Some(AggregateValue::Int(-5)),
+                        Some(AggregateValue::Float64(1.5f64.to_bits())),
+                    ],
                 }],
             )]),
         };
@@ -273,6 +396,27 @@ mod tests {
         assert_eq!(
             restored.rows[&vec![1, 2]][0].contributions,
             vec![Some(AggregateValue::Int(5))]
+        );
+    }
+
+    #[test]
+    fn restores_second_version_fixed_width_rows() {
+        let state = OverState {
+            next_id: i64::MIN + 2,
+            rows: BTreeMap::from([(
+                vec![1, 2],
+                vec![StoredRow {
+                    id: i64::MIN + 1,
+                    event_timestamp: 11,
+                    payload: vec![3, 4],
+                    contributions: vec![Some(AggregateValue::Int(5))],
+                    output: Vec::new(),
+                }],
+            )]),
+        };
+        assert_eq!(
+            decode_state(&encode_second_version(&state), 1).unwrap(),
+            state
         );
     }
 }

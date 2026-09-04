@@ -31,7 +31,7 @@ fn rows_frame_recomputes_ordered_suffix_for_insert_and_retraction() {
         .unwrap();
     assert_eq!(kinds(&removed), vec![DELETE, UPDATE_BEFORE, UPDATE_AFTER]);
     assert_eq!(sums(&removed), vec![10, 30, 20]);
-    assert_eq!(processor.statistics(), [3, 3, 0, 0, 0, 0, 0, 0, 0]);
+    assert_eq!(processor.statistics(), [3, 3, 0, 0, 0, 0, 0, 0, 0, 0]);
     drop(processor);
     assert_eq!(broker.reserved(), 0);
 }
@@ -159,6 +159,196 @@ fn append_only_processing_time_uses_bounded_accumulator_state_and_restores_legac
 }
 
 #[test]
+fn bounded_processing_time_rows_retracts_the_expired_prefix() {
+    let broker = Arc::new(TestBroker::new(64 << 20));
+    let mut processor = OverAggregateProcessor::new(
+        &plan_with_offset(
+            true,
+            proto::OverTimeAttribute::ProcessingTime,
+            false,
+            Some(2),
+        ),
+        128,
+        0,
+        127,
+        HostMemoryReservation::new(broker.clone(), "bounded processing-time OVER test"),
+    )
+    .unwrap();
+    let output = processor
+        .process_arrow(batch(
+            &["a", "a", "a"],
+            &[0, 0, 0],
+            &[10, 20, 5],
+            &[INSERT; 3],
+        ))
+        .unwrap();
+    assert_eq!(kinds(&output), vec![INSERT; 3]);
+    assert_eq!(sums(&output), vec![10, 30, 25]);
+    drop(output);
+
+    let snapshots = (0..128)
+        .map(|group| processor.snapshot_key_group(group).unwrap())
+        .collect::<Vec<_>>();
+    drop(processor);
+    let mut restored = OverAggregateProcessor::new(
+        &plan_with_offset(
+            true,
+            proto::OverTimeAttribute::ProcessingTime,
+            false,
+            Some(2),
+        ),
+        128,
+        0,
+        127,
+        HostMemoryReservation::new(broker.clone(), "restored bounded processing-time OVER test"),
+    )
+    .unwrap();
+    for (group, snapshot) in snapshots.iter().enumerate() {
+        restored.restore_key_group(group as u32, snapshot).unwrap();
+    }
+    let output = restored
+        .process_arrow(batch(&["a"], &[0], &[7], &[INSERT]))
+        .unwrap();
+    assert_eq!(sums(&output), vec![12]);
+    drop(restored);
+    assert_eq!(broker.reserved(), 0);
+}
+
+#[test]
+fn bounded_event_time_rows_and_range_emit_on_watermarks() {
+    for (rows_frame, preceding_offset, expected) in [
+        (true, 2, vec![10, 30, 25]),
+        (false, 1_000, vec![10, 30, 25]),
+    ] {
+        let broker = Arc::new(TestBroker::new(64 << 20));
+        let mut processor = OverAggregateProcessor::new(
+            &plan_with_offset(
+                rows_frame,
+                proto::OverTimeAttribute::EventTime,
+                true,
+                Some(preceding_offset),
+            ),
+            128,
+            0,
+            127,
+            HostMemoryReservation::new(broker.clone(), "bounded event-time OVER test"),
+        )
+        .unwrap();
+        let pending = processor
+            .process_arrow(event_batch(
+                &["a", "a", "a"],
+                &[2_000, 1_000, 3_000],
+                &[20, 10, 5],
+                &[INSERT; 3],
+            ))
+            .unwrap();
+        assert_eq!(pending.num_rows(), 0);
+        let output = processor.advance_event_time(3_000).unwrap();
+        assert_eq!(kinds(&output), vec![INSERT; 3]);
+        assert_eq!(sums(&output), expected);
+        drop(output);
+        drop(processor);
+        assert_eq!(broker.reserved(), 0);
+    }
+}
+
+#[test]
+fn event_time_watermarks_drain_large_timer_sets_in_bounded_batches() {
+    let broker = Arc::new(TestBroker::new(128 << 20));
+    let mut processor = OverAggregateProcessor::new(
+        &plan_with_offset(
+            false,
+            proto::OverTimeAttribute::EventTime,
+            true,
+            Some(1_000),
+        ),
+        128,
+        0,
+        127,
+        HostMemoryReservation::new(broker.clone(), "chunked event-time OVER test"),
+    )
+    .unwrap();
+    let count = super::MAX_TIMERS_PER_CALLBACK + 1;
+    let owned_keys = (0..count)
+        .map(|index| format!("key-{index}"))
+        .collect::<Vec<_>>();
+    let keys = owned_keys.iter().map(String::as_str).collect::<Vec<_>>();
+    processor
+        .process_arrow(event_batch(
+            &keys,
+            &vec![1_000; count],
+            &vec![1; count],
+            &vec![INSERT; count],
+        ))
+        .unwrap();
+
+    let first = processor.advance_event_time(1_000).unwrap();
+    assert_eq!(first.num_rows(), super::MAX_TIMERS_PER_CALLBACK);
+    assert_eq!(processor.next_event_timer(), Some(1_000));
+    let second = processor.advance_event_time(1_000).unwrap();
+    assert_eq!(second.num_rows(), 1);
+    assert_eq!(processor.next_event_timer(), None);
+    drop(second);
+    drop(first);
+    drop(processor);
+    assert_eq!(broker.reserved(), 0);
+}
+
+#[test]
+fn bounded_processing_time_range_groups_millisecond_peers_and_restores_timer() {
+    let broker = Arc::new(TestBroker::new(64 << 20));
+    let plan = plan_with_offset(
+        false,
+        proto::OverTimeAttribute::ProcessingTime,
+        false,
+        Some(1),
+    );
+    let mut source = OverAggregateProcessor::new(
+        &plan,
+        128,
+        0,
+        127,
+        HostMemoryReservation::new(broker.clone(), "bounded processing-time RANGE test"),
+    )
+    .unwrap();
+    let pending = source
+        .process_arrow_at(batch(&["a", "a"], &[0, 0], &[10, 20], &[INSERT; 2]), 100)
+        .unwrap();
+    assert_eq!(pending.num_rows(), 0);
+    assert_eq!(source.next_processing_timer(), Some(101));
+    let snapshots = (0..128)
+        .map(|group| source.snapshot_key_group(group).unwrap())
+        .collect::<Vec<_>>();
+    drop(source);
+
+    let mut restored = OverAggregateProcessor::new(
+        &plan,
+        128,
+        0,
+        127,
+        HostMemoryReservation::new(broker.clone(), "restored processing-time RANGE test"),
+    )
+    .unwrap();
+    for (group, snapshot) in snapshots.iter().enumerate() {
+        restored.restore_key_group(group as u32, snapshot).unwrap();
+    }
+    assert_eq!(restored.next_processing_timer(), Some(101));
+    let peers = restored.advance_processing_time(101).unwrap();
+    assert_eq!(kinds(&peers), vec![INSERT; 2]);
+    assert_eq!(sums(&peers), vec![30, 30]);
+
+    let pending = restored
+        .process_arrow_at(batch(&["a"], &[0], &[5], &[INSERT]), 102)
+        .unwrap();
+    assert_eq!(pending.num_rows(), 0);
+    let output = restored.advance_processing_time(103).unwrap();
+    assert_eq!(sums(&output), vec![5]);
+    drop(output);
+    drop(restored);
+    assert_eq!(broker.reserved(), 0);
+}
+
+#[test]
 fn event_time_waits_for_watermarks_orders_rows_and_drops_late_input() {
     let broker = Arc::new(TestBroker::new(64 << 20));
     let mut processor =
@@ -172,11 +362,13 @@ fn event_time_waits_for_watermarks_orders_rows_and_drops_late_input() {
         ))
         .unwrap();
     assert_eq!(buffered.num_rows(), 0);
-    assert_eq!(processor.statistics()[7], 2);
+    assert_eq!(processor.statistics()[7], 1);
+    assert_eq!(processor.next_event_timer(), Some(1_000));
 
     let first = processor.advance_event_time(1_500).unwrap();
     assert_eq!(kinds(&first), vec![INSERT]);
     assert_eq!(sums(&first), vec![10]);
+    assert_eq!(processor.next_event_timer(), Some(2_000));
     let second = processor.advance_event_time(2_000).unwrap();
     assert_eq!(kinds(&second), vec![INSERT]);
     assert_eq!(sums(&second), vec![30]);
@@ -238,6 +430,15 @@ fn plan(
     time_attribute: proto::OverTimeAttribute,
     input_changelog: bool,
 ) -> Vec<u8> {
+    plan_with_offset(rows_frame, time_attribute, input_changelog, None)
+}
+
+fn plan_with_offset(
+    rows_frame: bool,
+    time_attribute: proto::OverTimeAttribute,
+    input_changelog: bool,
+    preceding_offset: Option<u64>,
+) -> Vec<u8> {
     let order_type = if time_attribute == proto::OverTimeAttribute::EventTime {
         timestamp()
     } else {
@@ -269,7 +470,7 @@ fn plan(
                     partition_key_indices: vec![0],
                     order_key_index: 1,
                     rows_frame,
-                    preceding_offset: None,
+                    preceding_offset,
                     time_attribute: time_attribute as i32,
                     aggregate_calls: vec![
                         call(proto::AggregateFunction::Sum, Some(2)),

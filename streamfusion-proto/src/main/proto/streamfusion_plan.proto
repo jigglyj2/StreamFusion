@@ -65,9 +65,9 @@ message Operator {
 }
 
 // Streaming OVER aggregation. Each partition owns order-keyed Arrow rows and aggregate
-// contributions in backend-neutral state. The current runtime accepts non-time unbounded-
-// preceding frames; the time-attribute and preceding-offset fields reserve the versioned contract
-// for later timer-backed frame implementations and are rejected until those semantics are exact.
+// contributions in backend-neutral state. A present preceding_offset uses Flink's normalized
+// representation: the retained row count (including the current row) for ROWS, and the inclusive
+// time distance in milliseconds for RANGE.
 message OverAggregate {
   Operator input = 1;
   repeated uint32 partition_key_indices = 2;

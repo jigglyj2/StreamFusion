@@ -19,6 +19,7 @@ import org.apache.flink.streaming.api.transformations.OneInputTransformation;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.planner.plan.nodes.exec.spec.OverSpec;
+import org.apache.flink.table.planner.plan.utils.OverAggregateUtil;
 import org.apache.flink.table.runtime.keyselector.RowDataKeySelector;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.RowType;
@@ -114,10 +115,28 @@ public final class StreamFusionOverAggregateTranslator {
         if (!processingTime && (orderKeys[0] < 0 || orderKeys[0] >= inputType.getFieldCount())) {
             return "ordering: native OVER order key is outside the input schema";
         }
-        if (!group.getLowerBound().isPreceding()
-                || !group.getLowerBound().isUnbounded()
-                || !group.getUpperBound().isCurrentRow()) {
-            return "frame: native non-time OVER currently requires UNBOUNDED PRECEDING to CURRENT ROW";
+        if (!group.getLowerBound().isPreceding() || !group.getUpperBound().isCurrentRow()) {
+            return "frame: native OVER requires PRECEDING to CURRENT ROW";
+        }
+        boolean bounded = !group.getLowerBound().isUnbounded();
+        LogicalType orderType = processingTime ? null : inputType.getTypeAt(orderKeys[0]);
+        boolean eventTime = !processingTime && isRowtimeAttribute(orderType);
+        if (bounded && !processingTime && !eventTime) {
+            return "frame: Flink bounded streaming OVER requires a processing-time or event-time order key";
+        }
+        if (bounded) {
+            Object boundary = OverAggregateUtil.getBoundary(overSpec, group.getLowerBound());
+            if (!(boundary instanceof Long)) {
+                return "frame: native bounded OVER requires a Flink long boundary";
+            }
+            try {
+                long precedingOffset = Math.addExact(Math.negateExact((Long) boundary), group.isRows() ? 1L : 0L);
+                if (precedingOffset < 0) {
+                    return "frame: native bounded OVER preceding offset must be non-negative";
+                }
+            } catch (ArithmeticException overflow) {
+                return "frame: native bounded OVER preceding offset exceeds 64 bits";
+            }
         }
         if (stateTtl != 0) {
             return "state: native OVER TTL is not implemented yet";

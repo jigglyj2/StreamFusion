@@ -29,6 +29,7 @@ public final class ArrowOverAggregateCDataBridge {
             ArrowRowDataBatch input,
             List<byte[]> preencodedKeys,
             boolean inputChangelog,
+            long processingTime,
             RowType outputType,
             BufferAllocator allocator,
             NativeMemoryManager memoryManager) {
@@ -55,7 +56,8 @@ public final class ArrowOverAggregateCDataBridge {
                         inputArray.memoryAddress(),
                         inputSchema.memoryAddress(),
                         outputArray.memoryAddress(),
-                        outputSchema.memoryAddress());
+                        outputSchema.memoryAddress(),
+                        processingTime);
                 if (rows < 0 || rows > Integer.MAX_VALUE) {
                     throw new IllegalStateException("Native OVER aggregate returned invalid row count " + rows);
                 }
@@ -87,6 +89,31 @@ public final class ArrowOverAggregateCDataBridge {
             try {
                 long rows = NativeOverAggregateBridge.advanceEventTime(
                         handle, watermark, outputArray.memoryAddress(), outputSchema.memoryAddress());
+                if (rows < 0 || rows > Integer.MAX_VALUE) {
+                    throw new IllegalStateException("Native OVER aggregate returned invalid row count " + rows);
+                }
+                VectorSchemaRoot output =
+                        Data.importVectorSchemaRoot(allocator, outputArray, outputSchema, dictionaries);
+                output.setRowCount((int) rows);
+                return removeTimerEnvelope(output, outputType, allocator);
+            } finally {
+                memoryManager.finishArrowTransfer();
+            }
+        }
+    }
+
+    public static ArrowRowDataBatch advanceProcessingTime(
+            long handle,
+            long timestamp,
+            RowType outputType,
+            BufferAllocator allocator,
+            NativeMemoryManager memoryManager) {
+        try (ArrowArray outputArray = ArrowArray.allocateNew(allocator);
+                ArrowSchema outputSchema = ArrowSchema.allocateNew(allocator);
+                CDataDictionaryProvider dictionaries = new CDataDictionaryProvider()) {
+            try {
+                long rows = NativeOverAggregateBridge.advanceProcessingTime(
+                        handle, timestamp, outputArray.memoryAddress(), outputSchema.memoryAddress());
                 if (rows < 0 || rows > Integer.MAX_VALUE) {
                     throw new IllegalStateException("Native OVER aggregate returned invalid row count " + rows);
                 }

@@ -7,6 +7,7 @@ package tech.streamfusion.flink.over;
 import java.nio.file.Path;
 import java.util.Collections;
 import java.util.List;
+import org.apache.flink.api.common.operators.ProcessingTimeService.ProcessingTimeCallback;
 import org.apache.flink.api.common.state.ListState;
 import org.apache.flink.api.common.state.ListStateDescriptor;
 import org.apache.flink.api.common.typeutils.base.LongSerializer;
@@ -29,7 +30,9 @@ import tech.streamfusion.nativebridge.NativeOverAggregateBridge;
 
 /** Ordered native OVER aggregation with canonical raw keyed state. */
 final class StreamFusionArrowOverAggregateOperator extends AbstractStreamFusionArrowKeyedStateOperator
-        implements OneInputStreamOperator<ArrowRowDataBatch, ArrowRowDataBatch>, BoundedOneInput {
+        implements OneInputStreamOperator<ArrowRowDataBatch, ArrowRowDataBatch>,
+                BoundedOneInput,
+                ProcessingTimeCallback {
     private final RowType outputType;
     private final boolean inputChangelog;
     private final boolean missingRowMetrics;
@@ -44,6 +47,7 @@ final class StreamFusionArrowOverAggregateOperator extends AbstractStreamFusionA
     private transient ListState<Long> watermarkState;
     private transient long restoredWatermark = Long.MIN_VALUE;
     private transient long currentWatermark = Long.MIN_VALUE;
+    private transient long registeredProcessingTimer = Long.MAX_VALUE;
 
     StreamFusionArrowOverAggregateOperator(
             RowType inputType,
@@ -71,40 +75,67 @@ final class StreamFusionArrowOverAggregateOperator extends AbstractStreamFusionA
             sortKeysNotFound = getMetricGroup().counter("numOfSortKeysNotFound");
         }
         observedStatistics = NativeOverAggregateBridge.statistics(nativeHandle());
+        MetricGroup diagnostics = getMetricGroup().addGroup("StreamFusion");
+        diagnostics.gauge("pendingEventTimeTimers", () -> NativeOverAggregateBridge.statistics(nativeHandle())[7]);
+        diagnostics.gauge("pendingProcessingTimeTimers", () -> NativeOverAggregateBridge.statistics(nativeHandle())[8]);
         if (eventTime) {
             lateRecordsDropped = getMetricGroup().counter("numLateRecordsDropped");
-            MetricGroup diagnostics = getMetricGroup().addGroup("StreamFusion");
-            diagnostics.gauge("pendingEventTimeTimers", () -> NativeOverAggregateBridge.statistics(nativeHandle())[7]);
             if (restoredWatermark != Long.MIN_VALUE) {
                 currentWatermark = restoredWatermark;
-                emitTimerOutput(restoredWatermark);
+                emitTimerOutput(false, restoredWatermark);
             }
         }
+        scheduleNextProcessingTimer();
     }
 
     @Override
     public void processWatermark(Watermark watermark) throws Exception {
         if (eventTime && watermark.getTimestamp() > currentWatermark) {
-            emitTimerOutput(watermark.getTimestamp());
+            emitTimerOutput(false, watermark.getTimestamp());
             currentWatermark = watermark.getTimestamp();
             recordWatermark();
         }
         super.processWatermark(watermark);
     }
 
-    private void emitTimerOutput(long watermark) throws Exception {
-        try (ArrowRowDataBatch result = ArrowOverAggregateCDataBridge.advanceEventTime(
-                nativeHandle(), watermark, outputType, allocator(), memoryManager())) {
-            int physicalOutputs = 0;
-            if (result.size() > 0) {
-                output.collect(new StreamRecord<>(result));
-                physicalOutputs = 1;
+    @Override
+    public void onProcessingTime(long timestamp) throws Exception {
+        registeredProcessingTimer = Long.MAX_VALUE;
+        emitTimerOutput(true, timestamp);
+        scheduleNextProcessingTimer();
+    }
+
+    private void emitTimerOutput(boolean processingTime, long timestamp) throws Exception {
+        boolean more;
+        do {
+            try (ArrowRowDataBatch result = processingTime
+                    ? ArrowOverAggregateCDataBridge.advanceProcessingTime(
+                            nativeHandle(), timestamp, outputType, allocator(), memoryManager())
+                    : ArrowOverAggregateCDataBridge.advanceEventTime(
+                            nativeHandle(), timestamp, outputType, allocator(), memoryManager())) {
+                int physicalOutputs = 0;
+                if (result.size() > 0) {
+                    output.collect(new StreamRecord<>(result));
+                    physicalOutputs = 1;
+                }
+                FlinkMetricParity.replacePhysicalRecords(
+                        getMetricGroup().getIOMetricGroup().getNumRecordsOutCounter(), physicalOutputs, result.size());
+                recordTimerOutput(result, processingTime);
             }
-            FlinkMetricParity.replacePhysicalRecords(
-                    getMetricGroup().getIOMetricGroup().getNumRecordsOutCounter(), physicalOutputs, result.size());
-            recordTimerOutput(result, false);
-        }
+            long next = processingTime
+                    ? NativeOverAggregateBridge.nextProcessingTimeTimer(nativeHandle())
+                    : NativeOverAggregateBridge.nextEventTimeTimer(nativeHandle());
+            more = next != Long.MAX_VALUE && next <= timestamp;
+        } while (more);
         updateStatistics();
+    }
+
+    private void scheduleNextProcessingTimer() {
+        long next = NativeOverAggregateBridge.nextProcessingTimeTimer(nativeHandle());
+        if (next != Long.MAX_VALUE && next != registeredProcessingTimer) {
+            registeredProcessingTimer = next;
+            getProcessingTimeService().registerTimer(next, this);
+        }
     }
 
     @Override
@@ -113,7 +144,14 @@ final class StreamFusionArrowOverAggregateOperator extends AbstractStreamFusionA
         try {
             List<byte[]> keys = preencodeKeys ? preencodeKeys(input, keySelector, "over aggregate") : null;
             try (ArrowRowDataBatch result = ArrowOverAggregateCDataBridge.process(
-                    nativeHandle(), input, keys, inputChangelog, outputType, allocator(), memoryManager())) {
+                    nativeHandle(),
+                    input,
+                    keys,
+                    inputChangelog,
+                    getProcessingTimeService().getCurrentProcessingTime(),
+                    outputType,
+                    allocator(),
+                    memoryManager())) {
                 int physicalOutputs = 0;
                 if (result.size() > 0) {
                     output.collect(new StreamRecord<>(result));
@@ -126,6 +164,7 @@ final class StreamFusionArrowOverAggregateOperator extends AbstractStreamFusionA
                 recordProcessedWithoutStateCalls(input, result);
             }
             updateStatistics();
+            scheduleNextProcessingTimer();
         } catch (Throwable failure) {
             recordProcessingFailure();
             throw failure;
@@ -134,7 +173,7 @@ final class StreamFusionArrowOverAggregateOperator extends AbstractStreamFusionA
 
     private void updateStatistics() {
         long[] current = NativeOverAggregateBridge.statistics(nativeHandle());
-        if (current.length != 9 || observedStatistics.length != 9) {
+        if (current.length != 10 || observedStatistics.length != 10) {
             throw new IllegalStateException("Native OVER statistics have an incompatible shape");
         }
         recordNativeWindowStatistics(
@@ -148,7 +187,7 @@ final class StreamFusionArrowOverAggregateOperator extends AbstractStreamFusionA
             sortKeysNotFound.inc(current[3] - observedStatistics[3]);
         }
         if (eventTime) {
-            lateRecordsDropped.inc(current[8] - observedStatistics[8]);
+            lateRecordsDropped.inc(current[9] - observedStatistics[9]);
         }
         observedStatistics = current;
     }

@@ -121,12 +121,29 @@ impl NativeTimerService {
         domain: TimerDomain,
         progress: i64,
     ) -> Result<Vec<FiredTimer>> {
+        self.advance_limited(domain, progress, usize::MAX)
+    }
+
+    /// Removes at most `limit` due timers. Repeated calls preserve the same deterministic order
+    /// as [`Self::advance`] while allowing Arrow-producing callbacks to bound output memory.
+    pub(crate) fn advance_limited(
+        &mut self,
+        domain: TimerDomain,
+        progress: i64,
+        limit: usize,
+    ) -> Result<Vec<FiredTimer>> {
         let mut fired = Vec::new();
         let mut released_bytes = 0usize;
         for (offset, group) in self.groups.iter_mut().enumerate() {
+            if fired.len() == limit {
+                break;
+            }
             let key_group = self.first_key_group + u32::try_from(offset).unwrap();
             let timers = timer_set(group, domain);
             loop {
+                if fired.len() == limit {
+                    break;
+                }
                 let Some(first) = timers.first() else {
                     break;
                 };
@@ -457,6 +474,36 @@ mod tests {
             .delete(2, TimerDomain::EventTime, &timer(10, b"a", b"w"))
             .unwrap());
         assert_eq!(broker.reserved(), base_bytes);
+        drop(timers);
+        assert_eq!(broker.reserved(), 0);
+    }
+
+    #[test]
+    fn limited_advancement_preserves_due_timer_order_across_calls() {
+        let broker = Arc::new(TestBroker::new(1 << 20));
+        let mut timers = service(2, 3, broker.clone());
+        for (group, timestamp, key) in [(2, 8, b"a"), (2, 9, b"b"), (3, 7, b"c")] {
+            timers
+                .register(group, TimerDomain::EventTime, timer(timestamp, key, b"w"))
+                .unwrap();
+        }
+        let first = timers
+            .advance_limited(TimerDomain::EventTime, 9, 2)
+            .unwrap();
+        assert_eq!(
+            first
+                .iter()
+                .map(|fired| fired.timer.timestamp)
+                .collect::<Vec<_>>(),
+            vec![8, 9]
+        );
+        assert_eq!(timers.next_timestamp(TimerDomain::EventTime), Some(7));
+        let second = timers
+            .advance_limited(TimerDomain::EventTime, 9, 2)
+            .unwrap();
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].key_group, 3);
+        assert_eq!(timers.next_timestamp(TimerDomain::EventTime), None);
         drop(timers);
         assert_eq!(broker.reserved(), 0);
     }

@@ -112,6 +112,7 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeOverAggregateBr
     input_schema_address: jlong,
     output_array_address: jlong,
     output_schema_address: jlong,
+    processing_time: jlong,
 ) -> jlong {
     unowned_env
         .with_env(|env| -> jni::errors::Result<_> {
@@ -122,7 +123,7 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeOverAggregateBr
                 )
                 .map_err(|error| throw(env, error))?;
                 let output = processor(handle)
-                    .and_then(|processor| processor.process_arrow(input))
+                    .and_then(|processor| processor.process_arrow_at(input, processing_time))
                     .map_err(|error| throw(env, error))?;
                 export_record_batch(
                     output,
@@ -132,6 +133,69 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeOverAggregateBr
                 .map_err(|error| throw(env, error))?
             };
             Ok(rows as jlong)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeOverAggregateBridge_advanceProcessingTime0<
+    'caller,
+>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    handle: jlong,
+    timestamp: jlong,
+    output_array_address: jlong,
+    output_schema_address: jlong,
+) -> jlong {
+    unowned_env
+        .with_env(|env| -> jni::errors::Result<_> {
+            let rows = (|| -> datafusion::error::Result<_> {
+                let output = unsafe { processor(handle) }?.advance_processing_time(timestamp)?;
+                unsafe {
+                    export_record_batch(
+                        output,
+                        output_array_address as *mut FFI_ArrowArray,
+                        output_schema_address as *mut FFI_ArrowSchema,
+                    )
+                }
+            })()
+            .map_err(|error| throw(env, error))?;
+            Ok(rows as jlong)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeOverAggregateBridge_nextProcessingTimeTimer0<
+    'caller,
+>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    handle: jlong,
+) -> jlong {
+    unowned_env
+        .with_env(|env| -> jni::errors::Result<_> {
+            unsafe { processor(handle) }
+                .map(|processor| processor.next_processing_timer().unwrap_or(i64::MAX))
+                .map_err(|error| throw(env, error))
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeOverAggregateBridge_nextEventTimeTimer0<
+    'caller,
+>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    handle: jlong,
+) -> jlong {
+    unowned_env
+        .with_env(|env| -> jni::errors::Result<_> {
+            unsafe { processor(handle) }
+                .map(|processor| processor.next_event_timer().unwrap_or(i64::MAX))
+                .map_err(|error| throw(env, error))
         })
         .resolve::<ThrowRuntimeExAndDefault>()
 }

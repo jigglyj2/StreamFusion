@@ -83,13 +83,15 @@ batches, native window-aggregate batches, native Window Join batches, native reg
 native interval-join batches, native OVER-aggregate batches,
 and a row count plus SHA-256 for the full result changelog. The `group-aggregate`,
 `interval-join`, `over-aggregate`, `over-aggregate-event-time`, `over-aggregate-processing-time`,
-`select-distinct`, `top-n`, and `limit` cases
+`over-aggregate-bounded-rows`, `over-aggregate-bounded-range`, `select-distinct`, `top-n`, and
+`limit` cases
 exercise both native state backends over the bounded bid stream; they are focused operator workloads
 rather than numbered Nexmark queries. `over-aggregate` deliberately casts the timestamp to a
 regular value to exercise ordered non-time state, while `over-aggregate-event-time` retains the
 rowtime attribute and exercises watermark-driven native timers and late-record handling. The
 processing-time case retains Nexmark's bid filter and nested-row projection below its synthetic
-`PROCTIME()` field.
+`PROCTIME()` field. The bounded cases exercise a 100-row processing-time suffix and an inclusive
+ten-second event-time range respectively.
 Performance reports
 must come from separate, unprofiled JVM forks built with release-mode native code; profiler runs
 are diagnostic artifacts rather than benchmark measurements.
@@ -134,6 +136,30 @@ and 19.1% of RocksDB CPU samples without a dominant leaf. Native RocksDB work wa
 14.5% in Flink's RocksDB profile, and the source RowData-to-Arrow boundary was about 7%. Output and
 Arrow materialization led allocation samples; historical input rows were no longer retained.
 Profiler timings were excluded from the throughput measurements.
+
+The bounded OVER workloads were measured over one million deterministic events in three
+alternating fresh-JVM forks. `over-aggregate-bounded-rows` produced in-memory medians of 125,804
+events/s for Flink and 125,718 events/s for StreamFusion (99.9% parity); elapsed ranges were
+7.870–7.992s and 7.867–8.053s. RocksDB medians were 55,406 and 120,289 events/s, a 2.17x native
+gain, with ranges of 17.709–18.231s and 8.193–8.337s. Every run emitted 920,000 rows with SHA-256
+`66d6a3d626e845ebd5f0e05af7a4c8b44e099284000de995b309699f011fd037`.
+
+`over-aggregate-bounded-range` produced in-memory medians of 116,211 events/s for Flink and
+111,770 events/s for StreamFusion (96.2% parity), with ranges of 8.122–8.760s and 8.780–9.052s.
+RocksDB medians were 35,446 and 108,597 events/s, a 3.06x native gain; elapsed ranges were
+20.363–30.669s and 8.879–19.310s. The wide RocksDB ranges are reported because local storage
+variance was substantial. Every run emitted 920,000 rows with SHA-256
+`6efa4c099108291ada48a6bde539fffd227870454a8702cf4e19de8e5ea12108`. All native forks reported
+non-zero OVER and Calc batch counters.
+
+Separate 500,000-event mixed-stack profiles retained CPU, Java-allocation, and native-allocation
+JFRs, collapsed stacks, flame graphs, and differential flame graphs. Native OVER accounted for
+4.9–5.6% of CPU samples, timer work for 1.9–2.0%, and direct native RocksDB for 1.5%. The explicit
+RowData/Arrow edges plus JNI accounted for approximately 8–9% in this operator-isolation topology.
+Java allocation volume was 2.70 GB for StreamFusion versus 4.55 GB for Flink in memory and 2.71 GB
+versus 30.06 GB on RocksDB. The final implementation keeps one earliest event timer per partition,
+defers timer-state serialization to checkpoint boundaries, and uses a compact canonical codec that
+restores older fixed-width versions. Profiler timings were excluded from throughput results.
 
 On the September 1, 2026 local release/native-CPU `select-distinct` run over two million generated
 events, the native in-memory path processed 365,779 events/s versus Flink's 377,002 events/s

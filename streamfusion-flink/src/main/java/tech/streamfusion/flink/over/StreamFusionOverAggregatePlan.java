@@ -9,6 +9,7 @@ import org.apache.calcite.rel.core.AggregateCall;
 import org.apache.calcite.sql.SqlKind;
 import org.apache.flink.table.planner.calcite.FlinkTypeFactory;
 import org.apache.flink.table.planner.plan.nodes.exec.spec.OverSpec;
+import org.apache.flink.table.planner.plan.utils.OverAggregateUtil;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.flink.calc.StreamFusionCalcTranslator;
@@ -44,6 +45,11 @@ final class StreamFusionOverAggregatePlan {
                 .setStateTtlMillis(stateTtl)
                 .setSortAscending(group.getSort().getAscendingOrders()[0])
                 .setSortNullsLast(group.getSort().getNullsIsLast()[0]);
+        if (!group.getLowerBound().isUnbounded()) {
+            long boundary = (long) OverAggregateUtil.getBoundary(spec, group.getLowerBound());
+            long precedingOffset = Math.addExact(Math.negateExact(boundary), group.isRows() ? 1L : 0L);
+            aggregate.setPrecedingOffset(precedingOffset);
+        }
         for (int key : spec.getPartition().getFieldIndices()) {
             aggregate.addPartitionKeyIndices(key);
         }

@@ -19,6 +19,8 @@ import org.apache.calcite.rex.RexCall;
 import org.apache.calcite.rex.RexInputRef;
 import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.rex.RexShuttle;
+import org.apache.calcite.rex.RexWindowBound;
+import org.apache.calcite.rex.RexWindowBounds;
 import org.apache.flink.configuration.ReadableConfig;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
 import org.apache.flink.table.planner.plan.logical.TimeAttributeWindowingStrategy;
@@ -1766,14 +1768,14 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                         originalGroup.getSort().getAscendingOrders()[0],
                         originalGroup.getSort().getNullsIsLast()[0])
                 .build();
+        RexWindowBound lowerBound = remapBound(originalGroup.getLowerBound(), timeIndex);
+        RexWindowBound upperBound = remapBound(originalGroup.getUpperBound(), timeIndex);
+        if (lowerBound == null || upperBound == null) {
+            return null;
+        }
         OverSpec remappedSpec = new OverSpec(
                 new PartitionSpec(partition),
-                List.of(new OverSpec.GroupSpec(
-                        sort,
-                        originalGroup.isRows(),
-                        originalGroup.getLowerBound(),
-                        originalGroup.getUpperBound(),
-                        calls)),
+                List.of(new OverSpec.GroupSpec(sort, originalGroup.isRows(), lowerBound, upperBound, calls)),
                 originalSpec.getConstants(),
                 originalSpec.getOriginalInputFields() - 1);
         RowType inputType = withoutField((RowType) inputCalc.getOutputType(), timeIndex);
@@ -1795,6 +1797,23 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         List<RowType.RowField> fields = new ArrayList<>(type.getFields());
         fields.remove(removed);
         return new RowType(type.isNullable(), fields);
+    }
+
+    private static RexWindowBound remapBound(RexWindowBound bound, int removed) {
+        if (bound.isCurrentRow() || bound.isUnbounded()) {
+            return bound;
+        }
+        RexNode offset = bound.getOffset();
+        if (!(offset instanceof RexInputRef)) {
+            return null;
+        }
+        RexInputRef inputRef = (RexInputRef) offset;
+        if (inputRef.getIndex() == removed) {
+            return null;
+        }
+        int index = inputRef.getIndex() > removed ? inputRef.getIndex() - 1 : inputRef.getIndex();
+        RexInputRef remapped = new RexInputRef(index, inputRef.getType());
+        return bound.isPreceding() ? RexWindowBounds.preceding(remapped) : RexWindowBounds.following(remapped);
     }
 
     private static RemappedExpressions remapExpressions(List<RexNode> projection, RexNode condition, int removed) {

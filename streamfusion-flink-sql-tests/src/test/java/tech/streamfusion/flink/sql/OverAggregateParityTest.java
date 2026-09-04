@@ -71,10 +71,38 @@ class OverAggregateParityTest extends SqlParityTestSupport {
     }
 
     @Test
+    void boundedEventTimeRowsAndRangeMatchFlinkByteForByte() throws Exception {
+        for (String[] frame : new String[][] {{"ROWS", "1 PRECEDING"}, {"RANGE", "INTERVAL '1' SECOND PRECEDING"}}) {
+            byte[] flink = executeEventTime(frame[0], frame[1], false);
+            byte[] streamFusion = executeEventTime(frame[0], frame[1], true);
+
+            assertThat(streamFusion).isEqualTo(flink);
+            assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+            assertThat(StreamFusionPlannerFactory.nativeOverAggregateBatchCount())
+                    .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                    .isGreaterThan(0);
+        }
+    }
+
+    @Test
     void processingTimeRowsAndRangeMatchFlinkByteForByte() throws Exception {
         for (String frame : new String[] {"ROWS", "RANGE"}) {
             byte[] flink = executeProcessingTime(frame, false);
             byte[] streamFusion = executeProcessingTime(frame, true);
+
+            assertThat(streamFusion).isEqualTo(flink);
+            assertThat(StreamFusionPlannerFactory.nativeOverAggregateBatchCount())
+                    .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                    .isGreaterThan(0);
+            assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        }
+    }
+
+    @Test
+    void boundedProcessingTimeRowsAndRangeMatchFlinkByteForByte() throws Exception {
+        for (String[] frame : new String[][] {{"ROWS", "1 PRECEDING"}, {"RANGE", "INTERVAL '1' SECOND PRECEDING"}}) {
+            byte[] flink = executeProcessingTime(frame[0], frame[1], false);
+            byte[] streamFusion = executeProcessingTime(frame[0], frame[1], true);
 
             assertThat(streamFusion).isEqualTo(flink);
             assertThat(StreamFusionPlannerFactory.nativeOverAggregateBatchCount())
@@ -147,6 +175,11 @@ class OverAggregateParityTest extends SqlParityTestSupport {
     }
 
     private static byte[] executeProcessingTime(String frame, boolean streamFusion) throws Exception {
+        return executeProcessingTime(frame, "UNBOUNDED PRECEDING", streamFusion);
+    }
+
+    private static byte[] executeProcessingTime(String frame, String lowerBound, boolean streamFusion)
+            throws Exception {
         if (streamFusion) {
             System.setProperty(
                     StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY, StreamFusionPlannerFactory.class.getName());
@@ -172,10 +205,14 @@ class OverAggregateParityTest extends SqlParityTestSupport {
         String sql = "SELECT category, amount, "
                 + "SUM(amount) OVER (PARTITION BY category ORDER BY pt "
                 + frame
-                + " BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_sum, "
+                + " BETWEEN "
+                + lowerBound
+                + " AND CURRENT ROW) AS running_sum, "
                 + "COUNT(*) OVER (PARTITION BY category ORDER BY pt "
                 + frame
-                + " BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_count "
+                + " BETWEEN "
+                + lowerBound
+                + " AND CURRENT ROW) AS running_count "
                 + "FROM proc_over_input WHERE amount > 0";
         return collect(tables.executeSql(sql));
     }
@@ -206,6 +243,10 @@ class OverAggregateParityTest extends SqlParityTestSupport {
     }
 
     private static byte[] executeEventTime(String frame, boolean streamFusion) throws Exception {
+        return executeEventTime(frame, "UNBOUNDED PRECEDING", streamFusion);
+    }
+
+    private static byte[] executeEventTime(String frame, String lowerBound, boolean streamFusion) throws Exception {
         if (streamFusion) {
             System.setProperty(
                     StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY, StreamFusionPlannerFactory.class.getName());
@@ -223,10 +264,10 @@ class OverAggregateParityTest extends SqlParityTestSupport {
                 tables.fromDataStream(
                         environment.fromCollection(
                                 List.of(
-                                        Row.of("a", 20L, LocalDateTime.of(2026, 9, 3, 12, 0, 2)),
                                         Row.of("a", 10L, LocalDateTime.of(2026, 9, 3, 12, 0, 1)),
-                                        Row.of("a", 4L, LocalDateTime.of(2026, 9, 3, 12, 0, 2)),
                                         Row.of("b", 7L, LocalDateTime.of(2026, 9, 3, 12, 0, 1)),
+                                        Row.of("a", 20L, LocalDateTime.of(2026, 9, 3, 12, 0, 2)),
+                                        Row.of("a", 4L, LocalDateTime.of(2026, 9, 3, 12, 0, 2)),
                                         Row.of("a", 5L, LocalDateTime.of(2026, 9, 3, 12, 0, 3))),
                                 Types.ROW_NAMED(
                                         new String[] {"category", "amount", "ts"},
@@ -242,10 +283,14 @@ class OverAggregateParityTest extends SqlParityTestSupport {
         return collect(tables.executeSql("SELECT category, amount, ts, "
                 + "SUM(amount) OVER (PARTITION BY category ORDER BY ts "
                 + frame
-                + " BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_sum, "
+                + " BETWEEN "
+                + lowerBound
+                + " AND CURRENT ROW) AS running_sum, "
                 + "COUNT(*) OVER (PARTITION BY category ORDER BY ts "
                 + frame
-                + " BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_count "
+                + " BETWEEN "
+                + lowerBound
+                + " AND CURRENT ROW) AS running_count "
                 + "FROM event_over_input"));
     }
 

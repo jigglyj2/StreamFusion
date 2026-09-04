@@ -5,9 +5,10 @@ sidebar:
   order: 8
 ---
 
-**Current status:** Partially accelerated. Streaming non-time, processing-time, and event-time `ROWS` and `RANGE`
-frames from `UNBOUNDED PRECEDING` through `CURRENT ROW` run natively when the query uses one
-ascending order key and supported aggregates.
+**Current status:** Partially accelerated. Streaming non-time `ROWS` and `RANGE` frames from
+`UNBOUNDED PRECEDING` through `CURRENT ROW` run natively. Processing-time and event-time frames
+also accept a constant bounded `PRECEDING` boundary. All forms require one ascending order key and
+supported aggregates.
 
 **Future acceleration target:** Yes.
 
@@ -31,14 +32,19 @@ partition keys are pre-encoded with Flink's binary-row hash contract before the 
 For an event-time order key, rows are buffered in timestamp and input order until the watermark
 fires the corresponding native timer. `ROWS` advances one row at a time and `RANGE` emits all peers
 with the same aggregate value. Rows arriving at or behind the current watermark are dropped with
-Flink-compatible late-record accounting.
+Flink-compatible late-record accounting. A bounded `ROWS` frame retains only its required row
+suffix; bounded `RANGE` uses the inclusive millisecond distance represented by Flink's window
+boundary. Large watermarks drain due timers into managed 8,192-row Arrow batches so a terminal
+watermark cannot require one unbounded output allocation.
 
 For processing time, the planner recognizes Flink's `Calc -> Exchange -> OVER -> Calc` shape,
 removes the unobservable synthetic `PROCTIME()` field, and keeps supported lower filters and
 projections as native Calcs. The native kernel uses arrival order, matching Flink's processing-time
-unbounded function for both `ROWS` and `RANGE`. Flink SQL only plans this operator for append-only
-input, so native state is one compact accumulator per partition rather than an ever-growing row
-history. The native changelog representation remains available for directly tested retractions and
+function for both `ROWS` and `RANGE`. Flink SQL only plans this operator for append-only input. An
+unbounded frame therefore uses one compact accumulator per partition, while a bounded `ROWS` frame
+keeps only the aggregate contributions in its rolling suffix. Bounded processing-time `RANGE`
+groups rows that observe the same millisecond and emits those peers from a native processing-time
+timer. The native changelog representation remains available for directly tested retractions and
 older row-history savepoints are upgraded by replaying their contributions once during the first
 post-restore batch.
 
@@ -46,19 +52,26 @@ State is available through both StreamFusion's managed in-memory backend and dir
 RocksDB backend. Both use Flink key groups, batched multi-get/write calls, canonical cross-backend
 key-group snapshots, rescaling, aligned and unaligned recovery, and incremental RocksDB native
 checkpoints. Native allocations are charged to the operator's Flink managed-memory reservation.
-Event timers and the current watermark are included in canonical snapshots, including pending
-timer redistribution during scale-out and scale-in recovery.
+Event and processing-time timers plus the current watermark are included in canonical snapshots,
+including pending-timer redistribution during scale-out and scale-in recovery. Dirty timer groups
+are materialized into keyed state only at canonical or native RocksDB checkpoint boundaries; the
+runtime does not rewrite an ever-growing timer snapshot on every input batch. Event-time OVER
+keeps one active earliest-pending timer per partition and advances that partition through the
+current watermark when it fires. The third canonical state-codec version uses variable-width
+sequence and aggregate encodings; restore coverage retains compatibility with the first two
+fixed-width versions.
 
 The non-time operator publishes Flink's `numOfIdsNotFound` and `numOfSortKeysNotFound` counters;
 the event-time operator publishes `numLateRecordsDropped`. Both publish the standard logical-record
-I/O metrics. StreamFusion state, checkpoint, recovery, allocation, pending-timer, and native batch
-diagnostics remain in the explicitly named StreamFusion metric subgroup.
+I/O metrics. StreamFusion state, checkpoint, recovery, allocation, pending event-time and
+processing-time timer, and native batch diagnostics remain in the explicitly named StreamFusion
+metric subgroup.
 
 If a query selects, filters on, or otherwise observes the synthetic processing-time field, the plan
-still falls back explicitly because removing that value would change semantics. Bounded preceding
-frames, descending or multiple order keys, aggregate functions beyond the set above, mini-batch
-mode, async state, changelog-state wrapping, and state TTL also fall back. These are not documented
-as accelerated until their end-to-end parity and recovery suites pass.
+still falls back explicitly because removing that value would change semantics. Following frames,
+non-constant frame boundaries, descending or multiple order keys, aggregate functions beyond the
+set above, mini-batch mode, async state, changelog-state wrapping, and state TTL also fall back.
+These are not documented as accelerated until their end-to-end parity and recovery suites pass.
 
 ## Implementation
 
@@ -120,5 +133,31 @@ RowData-to-Arrow boundary was about 7%. Java and native allocation profiles show
 output-row/Arrow materialization rather than retained historical rows; all state, scratch, and
 RocksDB allocations remain governed by Flink managed memory. Profiler-instrumented timings were
 excluded from the benchmark results.
+
+The bounded-frame workloads were measured over one million deterministic events in three
+alternating fresh-JVM forks. For `ROWS BETWEEN 100 PRECEDING AND CURRENT ROW`, the in-memory
+medians were 125,804 events/s for Flink and 125,718 events/s for StreamFusion (99.9% parity), with
+elapsed ranges of 7.870–7.992s and 7.867–8.053s. RocksDB medians were 55,406 and 120,289 events/s,
+a 2.17x StreamFusion gain, with elapsed ranges of 17.709–18.231s and 8.193–8.337s. Every run
+emitted the same 920,000 rows with SHA-256
+`66d6a3d626e845ebd5f0e05af7a4c8b44e099284000de995b309699f011fd037`.
+
+For the inclusive ten-second event-time `RANGE`, in-memory medians were 116,211 events/s for Flink
+and 111,770 events/s for StreamFusion (96.2% parity), with elapsed ranges of 8.122–8.760s and
+8.780–9.052s. RocksDB medians were 35,446 and 108,597 events/s, a 3.06x StreamFusion gain. The
+RocksDB elapsed ranges were 20.363–30.669s and 8.879–19.310s; the unusually wide ranges are
+retained because the local storage showed substantial run-to-run variance. Every run emitted the
+same 920,000 rows with SHA-256
+`6efa4c099108291ada48a6bde539fffd227870454a8702cf4e19de8e5ea12108`, and all StreamFusion forks
+reported native OVER and Calc batches.
+
+Separate 500,000-event diagnostic runs captured mixed JVM/native CPU, Java allocation, and native
+allocation JFRs plus collapsed stacks and differential flame graphs. The native OVER call tree was
+4.9% of in-memory and 5.6% of RocksDB CPU samples; timer work was 1.9–2.0%, and direct native
+RocksDB work was 1.5%. Required RowData/Arrow edges plus JNI were approximately 8–9% in this
+operator-isolation topology. Java allocation volume fell from 4.55 GB to 2.70 GB in memory and from
+30.06 GB to 2.71 GB on RocksDB. Native allocation samples show retained event rows and timers, all
+of which remain governed by Flink managed-memory admission and release. Profiler-instrumented
+timings were excluded from throughput results.
 
 See the [Flink 2.3 OVER aggregation documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/over-agg/).

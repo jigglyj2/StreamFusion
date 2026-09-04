@@ -26,6 +26,8 @@ class NexmarkRowDataQueryCatalogTest {
                         "over-aggregate",
                         "over-aggregate-event-time",
                         "over-aggregate-processing-time",
+                        "over-aggregate-bounded-rows",
+                        "over-aggregate-bounded-range",
                         "select-distinct",
                         "top-n",
                         "limit");

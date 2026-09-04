@@ -201,6 +201,7 @@ class StreamFusionArrowOverAggregateOperatorTest {
             assertThat(metrics.get("numOfIdsNotFound")).isNull();
             assertThat(metrics.get("numOfSortKeysNotFound")).isNull();
             assertThat(metrics.get("pendingEventTimeTimers")).isInstanceOf(Gauge.class);
+            assertThat(metrics.get("pendingProcessingTimeTimers")).isInstanceOf(Gauge.class);
 
             processEvent(harness, inputs, eventRow(7, 1_000, 20));
             assertThat(((Gauge<?>) metrics.get("pendingEventTimeTimers")).getValue())
@@ -217,6 +218,68 @@ class StreamFusionArrowOverAggregateOperatorTest {
             assertThat(((Counter) metrics.get("timersRegistered")).getCount()).isEqualTo(1L);
             assertThat(((Counter) metrics.get("timersFired")).getCount()).isEqualTo(1L);
             assertThat(((Gauge<?>) metrics.get("pendingEventTimeTimers")).getValue())
+                    .isEqualTo(0L);
+        }
+    }
+
+    @Test
+    void exposesProcessingTimeRangeTimerMetricsWithLogicalRecordSemantics() throws Exception {
+        InterceptingOperatorMetricGroup metrics = new InterceptingOperatorMetricGroup() {
+            @Override
+            public MetricGroup addGroup(String name) {
+                return this;
+            }
+
+            @Override
+            public MetricGroup addGroup(String key, String value) {
+                return this;
+            }
+        };
+        InterceptingTaskMetricGroup taskMetrics = new InterceptingTaskMetricGroup() {
+            @Override
+            public InternalOperatorMetricGroup getOrAddOperator(
+                    OperatorID id, String name, Map<String, String> additionalVariables) {
+                return metrics;
+            }
+        };
+        RowDataKeySelector selector = selector();
+        StreamFusionArrowOverAggregateOperator operator = new StreamFusionArrowOverAggregateOperator(
+                INPUT_TYPE, OUTPUT_TYPE, new int[] {0}, processingTimeRangePlan(), false, false, false, selector);
+        try (RootAllocator inputs = new RootAllocator(64L << 20);
+                MockEnvironment environment = new MockEnvironmentBuilder()
+                        .setTaskName("processing-time RANGE OVER metric parity")
+                        .setManagedMemorySize(64L << 20)
+                        .setInputSplitProvider(new MockInputSplitProvider())
+                        .setBufferSize(32 * 1024)
+                        .setMaxParallelism(MAX_PARALLELISM)
+                        .setParallelism(1)
+                        .setSubtaskIndex(0)
+                        .setMetricGroup(taskMetrics)
+                        .build();
+                KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> harness =
+                        new KeyedOneInputStreamOperatorTestHarness<>(
+                                operator,
+                                new ArrowBatchKeySelector(selector),
+                                selector.getProducedType(),
+                                environment)) {
+            harness.setStateBackend(new StreamFusionStateBackend(new HashMapStateBackend()));
+            harness.setup(ArrowRowDataBatchSerializer.INSTANCE);
+            harness.open();
+            harness.setProcessingTime(100);
+
+            process(harness, inputs, row(7, 20, 20));
+            assertThat(takeKinds(harness)).isEmpty();
+            assertThat(((Gauge<?>) metrics.get("pendingProcessingTimeTimers")).getValue())
+                    .isEqualTo(1L);
+            assertThat(((Counter) metrics.get("timersRegistered")).getCount()).isEqualTo(1L);
+
+            harness.setProcessingTime(101);
+            assertThat(takeKinds(harness)).containsExactly(RowKind.INSERT);
+            assertThat(((Counter) metrics.get("timersFired")).getCount()).isEqualTo(1L);
+            assertThat(((Counter) metrics.get("processingTimeTimersFired")).getCount())
+                    .isEqualTo(1L);
+            assertThat(((Counter) metrics.get("emittedRows")).getCount()).isEqualTo(1L);
+            assertThat(((Gauge<?>) metrics.get("pendingProcessingTimeTimers")).getValue())
                     .isEqualTo(0L);
         }
     }
@@ -287,6 +350,64 @@ class StreamFusionArrowOverAggregateOperatorTest {
                         }
                         try (Harness target = processingTimeHarness(snapshot, targetRocks)) {
                             process(target.operator, inputs, row(7, 10, 10));
+                            assertThat(takeKinds(target.operator)).containsExactly(RowKind.INSERT);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    void boundedProcessingTimeRangeTimersRestoreAcrossCheckpointKindsAndBackendPairs() throws Exception {
+        try (RootAllocator inputs = new RootAllocator(64L << 20)) {
+            for (boolean sourceRocks : new boolean[] {false, true}) {
+                for (boolean targetRocks : new boolean[] {false, true}) {
+                    for (int recoveryKind = 0; recoveryKind < 3; recoveryKind++) {
+                        OperatorSubtaskState snapshot;
+                        try (Harness source = processingTimeRangeHarness(null, sourceRocks)) {
+                            source.operator.setProcessingTime(100);
+                            process(source.operator, inputs, row(7, 20, 20));
+                            process(source.operator, inputs, row(7, 10, 10));
+                            assertThat(takeKinds(source.operator)).isEmpty();
+                            snapshot = recoveryKind == 2
+                                    ? source.operator
+                                            .snapshotWithLocalState(
+                                                    43, 43, SavepointType.savepoint(SavepointFormatType.CANONICAL))
+                                            .getJobManagerOwnedState()
+                                    : snapshot(source.operator, 43, recoveryKind == 1);
+                        }
+                        try (Harness target = processingTimeRangeHarness(snapshot, targetRocks)) {
+                            target.operator.setProcessingTime(101);
+                            assertThat(takeKinds(target.operator)).containsExactly(RowKind.INSERT, RowKind.INSERT);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    void boundedRowsRestoreExactFrameAcrossCheckpointKindsAndBackendPairs() throws Exception {
+        try (RootAllocator inputs = new RootAllocator(64L << 20)) {
+            for (boolean sourceRocks : new boolean[] {false, true}) {
+                for (boolean targetRocks : new boolean[] {false, true}) {
+                    for (int recoveryKind = 0; recoveryKind < 3; recoveryKind++) {
+                        OperatorSubtaskState snapshot;
+                        try (Harness source = boundedRowsHarness(null, sourceRocks)) {
+                            process(source.operator, inputs, row(7, 1, 20));
+                            assertThat(takeKinds(source.operator)).containsExactly(RowKind.INSERT);
+                            process(source.operator, inputs, row(7, 2, 10));
+                            assertThat(takeKinds(source.operator)).containsExactly(RowKind.INSERT);
+                            snapshot = recoveryKind == 2
+                                    ? source.operator
+                                            .snapshotWithLocalState(
+                                                    44, 44, SavepointType.savepoint(SavepointFormatType.CANONICAL))
+                                            .getJobManagerOwnedState()
+                                    : snapshot(source.operator, 44, recoveryKind == 1);
+                        }
+                        try (Harness target = boundedRowsHarness(snapshot, targetRocks)) {
+                            process(target.operator, inputs, row(7, 3, 5));
                             assertThat(takeKinds(target.operator)).containsExactly(RowKind.INSERT);
                         }
                     }
@@ -568,6 +689,37 @@ class StreamFusionArrowOverAggregateOperatorTest {
         return new Harness(harness);
     }
 
+    private static Harness processingTimeRangeHarness(OperatorSubtaskState state, boolean rocksDb) throws Exception {
+        return processingTimeHarness(processingTimeRangePlan(), state, rocksDb);
+    }
+
+    private static Harness boundedRowsHarness(OperatorSubtaskState state, boolean rocksDb) throws Exception {
+        return processingTimeHarness(boundedRowsPlan(), state, rocksDb);
+    }
+
+    private static Harness processingTimeHarness(byte[] plan, OperatorSubtaskState state, boolean rocksDb)
+            throws Exception {
+        RowDataKeySelector selector = selector();
+        StreamFusionArrowOverAggregateOperator operator = new StreamFusionArrowOverAggregateOperator(
+                INPUT_TYPE, OUTPUT_TYPE, new int[] {0}, plan, false, false, false, selector);
+        KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> harness =
+                new KeyedOneInputStreamOperatorTestHarness<>(
+                        operator,
+                        new ArrowBatchKeySelector(selector),
+                        selector.getProducedType(),
+                        MAX_PARALLELISM,
+                        1,
+                        0);
+        harness.setStateBackend(new StreamFusionStateBackend(
+                rocksDb ? new EmbeddedRocksDBStateBackend(true) : new HashMapStateBackend()));
+        harness.setup(ArrowRowDataBatchSerializer.INSTANCE);
+        if (state != null) {
+            harness.initializeState(state);
+        }
+        harness.open();
+        return new Harness(harness);
+    }
+
     private static void process(
             KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> operator,
             RootAllocator allocator,
@@ -712,6 +864,58 @@ class StreamFusionArrowOverAggregateOperatorTest {
                 .addPartitionKeyIndices(0)
                 .setOrderKeyIndex(1)
                 .setRowsFrame(true)
+                .setTimeAttribute(OverTimeAttribute.OVER_TIME_ATTRIBUTE_PROCESSING_TIME)
+                .addAggregateCalls(AggregateCall.newBuilder()
+                        .setFunction(AggregateFunction.AGGREGATE_FUNCTION_SUM)
+                        .setInputIndex(2)
+                        .setInputType(FlinkLogicalTypeProto.serialize(INPUT_TYPE.getTypeAt(2)))
+                        .setOutputType(FlinkLogicalTypeProto.serialize(OUTPUT_TYPE.getTypeAt(3)))
+                        .setRetractable(true))
+                .setInputSchema(schema(INPUT_TYPE))
+                .setOutputSchema(schema(OUTPUT_TYPE))
+                .setInputChangelog(false)
+                .setSortAscending(true)
+                .build();
+        return NativePlan.newBuilder()
+                .setProtocolVersion(1)
+                .setRoot(Operator.newBuilder().setOverAggregate(aggregate))
+                .build()
+                .toByteArray();
+    }
+
+    private static byte[] processingTimeRangePlan() {
+        OverAggregate aggregate = OverAggregate.newBuilder()
+                .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
+                .addPartitionKeyIndices(0)
+                .setOrderKeyIndex(1)
+                .setRowsFrame(false)
+                .setPrecedingOffset(1_000)
+                .setTimeAttribute(OverTimeAttribute.OVER_TIME_ATTRIBUTE_PROCESSING_TIME)
+                .addAggregateCalls(AggregateCall.newBuilder()
+                        .setFunction(AggregateFunction.AGGREGATE_FUNCTION_SUM)
+                        .setInputIndex(2)
+                        .setInputType(FlinkLogicalTypeProto.serialize(INPUT_TYPE.getTypeAt(2)))
+                        .setOutputType(FlinkLogicalTypeProto.serialize(OUTPUT_TYPE.getTypeAt(3)))
+                        .setRetractable(true))
+                .setInputSchema(schema(INPUT_TYPE))
+                .setOutputSchema(schema(OUTPUT_TYPE))
+                .setInputChangelog(false)
+                .setSortAscending(true)
+                .build();
+        return NativePlan.newBuilder()
+                .setProtocolVersion(1)
+                .setRoot(Operator.newBuilder().setOverAggregate(aggregate))
+                .build()
+                .toByteArray();
+    }
+
+    private static byte[] boundedRowsPlan() {
+        OverAggregate aggregate = OverAggregate.newBuilder()
+                .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
+                .addPartitionKeyIndices(0)
+                .setOrderKeyIndex(1)
+                .setRowsFrame(true)
+                .setPrecedingOffset(2)
                 .setTimeAttribute(OverTimeAttribute.OVER_TIME_ATTRIBUTE_PROCESSING_TIME)
                 .addAggregateCalls(AggregateCall.newBuilder()
                         .setFunction(AggregateFunction.AGGREGATE_FUNCTION_SUM)
