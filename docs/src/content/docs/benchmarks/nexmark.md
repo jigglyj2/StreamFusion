@@ -110,6 +110,14 @@ Performance reports
 must come from separate, unprofiled JVM forks built with release-mode native code; profiler runs
 are diagnostic artifacts rather than benchmark measurements.
 
+The RowData harness uses 1,024 MiB of Flink managed memory by default and sets Flink's standard
+managed-memory consumer weights to `OPERATOR:90,STATE_BACKEND:10,PYTHON:30` for both engines. The
+bounded workloads have small RocksDB working sets but retain multiple Arrow batches and native
+operator scratch buffers, so the default Flink 50/50 split between the two active consumers is not
+representative. Pass the ordinary
+`-Dtaskmanager.memory.managed.consumer-weights=OPERATOR:...,STATE_BACKEND:...,PYTHON:...` property to
+override the harness choice; StreamFusion does not introduce a separate deployment memory budget.
+
 On the September 3, 2026 local release/native-CPU run over one million deterministic events,
 `global-aggregate` produced in-memory medians of 107,827 events/s for Flink and 103,550 events/s
 for StreamFusion (96.0% parity), and RocksDB medians of 99,061 and 106,810 events/s (a 7.8%

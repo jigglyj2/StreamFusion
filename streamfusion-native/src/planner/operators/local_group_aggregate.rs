@@ -7,7 +7,7 @@ use ahash::RandomState;
 use arrow::array::{Array, ArrayRef, BinaryArray, Int8Array};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use arrow::row::{RowConverter, SortField};
+use arrow::row::{RowConverter, Rows, SortField};
 use datafusion::error::{DataFusionError, Result};
 use hashbrown::HashMap;
 use prost::Message;
@@ -158,20 +158,20 @@ impl LocalGroupAggregateProcessor {
             let length = (trigger - self.pending_elements).min(batch.num_rows() - offset);
             for row in offset..offset + length {
                 let key = self.key(&batch, row)?;
-                if !self.pending.contains_key(&key) {
-                    self.pending_order.push(key.clone());
-                    self.pending.insert(
-                        key.clone(),
-                        PendingLocal {
-                            grouping_row: grouping_rows[row].clone(),
-                            accumulator: AccumulatorState::new(&self.calls),
-                        },
-                    );
-                }
                 let accumulate = self.accumulates(&batch, row)?;
-                self.pending
-                    .get_mut(&key)
-                    .expect("local aggregate key was inserted")
+                let pending = match self.pending.entry(key) {
+                    hashbrown::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                    hashbrown::hash_map::Entry::Vacant(entry) => {
+                        self.pending_order.push(entry.key().clone());
+                        entry.insert(PendingLocal {
+                            grouping_row: grouping_rows
+                                .as_ref()
+                                .map_or_else(Vec::new, |rows| rows.row(row).as_ref().to_vec()),
+                            accumulator: AccumulatorState::new(&self.calls),
+                        })
+                    }
+                };
+                pending
                     .accumulator
                     .apply(&self.calls, &batch, row, accumulate)?;
             }
@@ -281,9 +281,9 @@ impl LocalGroupAggregateProcessor {
         }
     }
 
-    fn encode_grouping_rows(&self, batch: &RecordBatch) -> Result<Vec<Vec<u8>>> {
+    fn encode_grouping_rows(&self, batch: &RecordBatch) -> Result<Option<Rows>> {
         if self.plan.grouping_indices.is_empty() {
-            return Ok((0..batch.num_rows()).map(|_| Vec::new()).collect());
+            return Ok(None);
         }
         let columns = self
             .plan
@@ -291,10 +291,7 @@ impl LocalGroupAggregateProcessor {
             .iter()
             .map(|&index| Arc::clone(batch.column(index as usize)))
             .collect::<Vec<_>>();
-        let rows = self.grouping_converter.convert_columns(&columns)?;
-        Ok((0..batch.num_rows())
-            .map(|row| rows.row(row).as_ref().to_vec())
-            .collect())
+        Ok(Some(self.grouping_converter.convert_columns(&columns)?))
     }
 
     fn accumulates(&self, batch: &RecordBatch, row: usize) -> Result<bool> {

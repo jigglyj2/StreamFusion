@@ -140,6 +140,12 @@ reads and writes,
 checkpoint kind/bytes/duration/failures, incremental upload and SST-reuse bytes, and restore
 bytes/duration/failures.
 
+Stateful aggregate stages declare a larger Flink `OPERATOR` managed-memory weight than stateless
+Arrow stages, while the bounded local bundle declares a smaller intermediate weight. These are
+relative Flink operator weights, not a StreamFusion memory pool or deployment setting. They keep
+persistent grouping and DISTINCT state from inheriting the same per-slot share as a transient Calc
+buffer; allocation remains fail-fast when the resulting Flink allowance is exhausted.
+
 Retractable `MIN` and `MAX` keep counted ordered values so deleting the current extremum reveals the
 next one. Insert-only extrema use a single scalar instead. The immediate batch path deduplicates
 keys with `ahash`, decodes each touched accumulator once, and applies every row in input order. The

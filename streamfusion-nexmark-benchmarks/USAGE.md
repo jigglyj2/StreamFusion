@@ -104,6 +104,10 @@ interval; their defaults are 5,000 and 1,000 milliseconds. The optional
 `-Dstreamfusion.nexmark.managed-memory-mb=<MiB>` sets Flink's ordinary TaskManager managed-memory
 size for both engines and defaults to 1,024 MiB. Increase it for high-cardinality DISTINCT profiles
 instead of allowing either implementation to allocate state outside Flink's budget. The optional
+standard Flink `-Dtaskmanager.memory.managed.consumer-weights=OPERATOR:90,STATE_BACKEND:10,PYTHON:30`
+property overrides the harness default. The default favors Arrow operator scratch because the
+bounded workloads have a small RocksDB working set; it is applied identically to both engines.
+The optional
 `-Dstreamfusion.nexmark.debug-rows=true` and `-Dstreamfusion.nexmark.debug-plan=true` switches print
 the collected rows and optimized SQL plan for diagnosis and should remain off for measurements.
 

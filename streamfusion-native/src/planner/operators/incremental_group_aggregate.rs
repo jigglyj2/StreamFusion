@@ -478,12 +478,12 @@ impl IncrementalGroupAggregateProcessor {
                 .pending
                 .remove(&state_key)
                 .expect("incremental order and map remain synchronized");
-            let entry = match finals.entry(partial.final_key.clone()) {
+            let entry = match finals.entry(partial.final_key) {
                 hashbrown::hash_map::Entry::Occupied(entry) => entry.into_mut(),
                 hashbrown::hash_map::Entry::Vacant(entry) => {
-                    final_order.push(partial.final_key.clone());
+                    final_order.push(entry.key().clone());
                     entry.insert(PendingFinal {
-                        grouping_row: partial.grouping_row.clone(),
+                        grouping_row: partial.grouping_row,
                         accumulator: AccumulatorState::new(&self.final_calls),
                     })
                 }

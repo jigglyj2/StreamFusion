@@ -100,7 +100,8 @@ public final class StreamFusionGroupAggregateTranslator {
         if (partitionedInput.getMaxParallelism() > 0) {
             transformation.setMaxParallelism(partitionedInput.getMaxParallelism());
         }
-        transformation.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
+        transformation.declareManagedMemoryUseCaseAtOperatorScope(
+                ManagedMemoryUseCase.OPERATOR, AggregateManagedMemoryWeights.STATEFUL);
         transformation.setStateKeySelector(new ArrowBatchKeySelector(keySelector));
         transformation.setStateKeyType(keySelector.getProducedType());
         return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
@@ -142,7 +143,8 @@ public final class StreamFusionGroupAggregateTranslator {
         if (input.getMaxParallelism() > 0) {
             transformation.setMaxParallelism(input.getMaxParallelism());
         }
-        transformation.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
+        transformation.declareManagedMemoryUseCaseAtOperatorScope(
+                ManagedMemoryUseCase.OPERATOR, AggregateManagedMemoryWeights.STATEFUL);
         transformation.setStateKeySelector(new ArrowBatchKeySelector(keySelector));
         transformation.setStateKeyType(keySelector.getProducedType());
         return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);

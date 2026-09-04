@@ -40,7 +40,8 @@ public final class StreamFusionLocalGroupAggregateTranslator {
                 ArrowRowDataBatchTypeInfo.INSTANCE,
                 input.getParallelism(),
                 false);
-        transformation.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
+        transformation.declareManagedMemoryUseCaseAtOperatorScope(
+                ManagedMemoryUseCase.OPERATOR, AggregateManagedMemoryWeights.LOCAL);
         return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
     }
 }

@@ -63,7 +63,8 @@ public final class StreamFusionIncrementalGroupAggregateTranslator {
                 ArrowRowDataBatchTypeInfo.INSTANCE,
                 input.getParallelism(),
                 false);
-        transformation.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
+        transformation.declareManagedMemoryUseCaseAtOperatorScope(
+                ManagedMemoryUseCase.OPERATOR, AggregateManagedMemoryWeights.STATEFUL);
         if (input.getMaxParallelism() > 0) {
             transformation.setMaxParallelism(input.getMaxParallelism());
         }
