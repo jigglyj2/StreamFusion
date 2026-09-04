@@ -255,6 +255,9 @@ public final class NexmarkRowDataJob {
             case "select-distinct":
                 columns = "bidder BIGINT";
                 break;
+            case "set-intersect-all":
+                columns = "auction BIGINT, bidder BIGINT, price BIGINT";
+                break;
             case "top-n":
                 columns = "auction BIGINT, bidder BIGINT, price BIGINT, `dateTime` TIMESTAMP(3), "
                         + "extra STRING, row_num BIGINT";

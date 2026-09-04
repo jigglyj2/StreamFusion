@@ -28,7 +28,7 @@ use crate::proto;
 
 pub(crate) struct NativeExecutionContext {
     plan: proto::NativePlan,
-    runtime: tokio::runtime::Runtime,
+    runtime: Arc<tokio::runtime::Runtime>,
     task_context: Arc<TaskContext>,
     memory_pool: Arc<dyn MemoryPool>,
     physical_plan: Mutex<Option<CachedPhysicalPlan>>,
@@ -58,9 +58,11 @@ impl NativeExecutionContext {
             .map(Arc::new)?;
         let task_context =
             SessionContext::new_with_config_rt(SessionConfig::new(), runtime_env).task_ctx();
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        let runtime = Arc::new(
+            tokio::runtime::Builder::new_current_thread()
+                .build()
+                .map_err(|error| DataFusionError::External(Box::new(error)))?,
+        );
         Ok(Self {
             plan,
             runtime,
@@ -74,6 +76,10 @@ impl NativeExecutionContext {
 
     pub(crate) fn runtime(&self) -> &tokio::runtime::Runtime {
         &self.runtime
+    }
+
+    pub(crate) fn shared_runtime(&self) -> Arc<tokio::runtime::Runtime> {
+        Arc::clone(&self.runtime)
     }
 
     pub(crate) fn task_context(&self) -> Arc<TaskContext> {

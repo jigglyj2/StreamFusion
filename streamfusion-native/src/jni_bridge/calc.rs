@@ -7,6 +7,7 @@
 //     http://www.apache.org/licenses/LICENSE-2.0
 
 use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
+use arrow::ffi_stream::FFI_ArrowArrayStream;
 use jni::errors::ThrowRuntimeExAndDefault;
 use jni::jni_str;
 use jni::objects::JClass;
@@ -14,7 +15,7 @@ use jni::strings::JNIString;
 use jni::sys::jlong;
 use jni::EnvUnowned;
 
-use super::common::{execute_and_export, import_input};
+use super::common::{execute_and_export, execute_and_export_stream, import_input};
 use crate::execution_context::{self, NativeExecutionContext};
 
 #[unsafe(no_mangle)]
@@ -59,6 +60,46 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeCalcBridge_exec
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeCalcBridge_executeArrowStreamBatch<
+    'caller,
+>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    execution_context: jlong,
+    input_array_address: jlong,
+    input_schema_address: jlong,
+    output_stream_address: jlong,
+) {
+    unowned_env
+        .with_env(|env| -> jni::errors::Result<_> {
+            let context = execution_context::get(execution_context).map_err(|error| {
+                let _ = env.throw_new(
+                    jni_str!("java/lang/IllegalStateException"),
+                    JNIString::new(error.to_string()),
+                );
+                jni::errors::Error::JavaException
+            })?;
+            unsafe {
+                execute_arrow_stream(
+                    &context,
+                    input_array_address as *mut FFI_ArrowArray,
+                    input_schema_address as *mut FFI_ArrowSchema,
+                    output_stream_address as *mut FFI_ArrowArrayStream,
+                )
+            }
+            .map_err(|error| {
+                let _ = env.throw_new(
+                    jni_str!("java/lang/IllegalStateException"),
+                    JNIString::new(error.to_string()),
+                );
+                jni::errors::Error::JavaException
+            })?;
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>();
+}
+
 unsafe fn execute_arrow(
     context: &NativeExecutionContext,
     input_array_address: *mut FFI_ArrowArray,
@@ -70,5 +111,23 @@ unsafe fn execute_arrow(
         unsafe { import_input(context, input_array_address, input_schema_address, 0, 0) }?;
     context.execute_plan(vec![input_batch], |plan| unsafe {
         execute_and_export(context, plan, output_array_address, output_schema_address)
+    })
+}
+
+unsafe fn execute_arrow_stream(
+    context: &NativeExecutionContext,
+    input_array_address: *mut FFI_ArrowArray,
+    input_schema_address: *mut FFI_ArrowSchema,
+    output_stream_address: *mut FFI_ArrowArrayStream,
+) -> datafusion::error::Result<()> {
+    let (input_batch, input_reservation) =
+        unsafe { import_input(context, input_array_address, input_schema_address, 0, 0) }?;
+    context.execute_plan(vec![input_batch], |plan| unsafe {
+        execute_and_export_stream(
+            context,
+            plan,
+            vec![input_reservation],
+            output_stream_address,
+        )
     })
 }

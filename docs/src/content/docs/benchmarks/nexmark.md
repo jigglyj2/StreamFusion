@@ -93,7 +93,8 @@ whose ordering is semantic.
 The `aggregate-modifiers`, `incremental-group-aggregate`,
 `group-aggregate`, `global-aggregate`, `grouping-sets`, `interval-join`, `over-aggregate`,
 `over-aggregate-event-time`, `over-aggregate-processing-time`,
-`over-aggregate-bounded-rows`, `over-aggregate-bounded-range`, `select-distinct`, `top-n`,
+`over-aggregate-bounded-rows`, `over-aggregate-bounded-range`, `select-distinct`,
+`set-intersect-all`, `top-n`,
 `limit`, `bounded-sort`, `legacy-window-aggregate`, `temporal-join`, and `temporal-sort` cases
 exercise both native state backends over the bounded bid stream; they are focused operator workloads
 rather than numbered Nexmark queries. `over-aggregate` deliberately casts the timestamp to a
@@ -109,6 +110,9 @@ memory and RocksDB, requires an accelerated EXPLAIN, and requires non-zero nativ
 Because Flink's bounded full-sort task rejects periodic checkpoints for its sorted input, this one
 case disables the checkpoint interval for both engines; the operator recovery suite independently
 covers aligned, unaligned, canonical cross-backend, and incremental RocksDB checkpoints.
+`set-intersect-all` uses the three-BIGINT auction/bidder/price identity so the measured pipeline is
+the complete native UNION, hash exchange, grouped-count state, Calc, and row-replication rewrite
+without conflating set execution with rowtime-attribute scheduling.
 `temporal-join` derives a versioned auction table with row-time deduplication and probes it from the
 bid stream using an event-time left temporal join plus a residual predicate. Its integration case
 compares the complete raw and materialized changelogs on both state backends, requires an
@@ -533,6 +537,43 @@ its expected write-batch and memtable traffic and still performs one `multi_get`
 differential flame graphs are retained under
 `streamfusion-nexmark-benchmarks/target/bounded-sort-profiles-postfix/`; profiler timings are
 excluded from throughput results. These are local diagnostics, not portable performance claims.
+
+## INTERSECT ALL RowData target
+
+The Kafka-free production harness includes `set-intersect-all`, which intersects two filtered bid
+streams on auction, bidder, and price. The integration test runs both engines on memory and RocksDB,
+compares the final materialized multiset, requires an accelerated EXPLAIN, and requires non-zero
+native grouped-count and Calc/replication batches. Generated SQL parity tests separately compare the
+complete changelog for DISTINCT and ALL forms of INTERSECT and EXCEPT, including retractions, nulls,
+and every Arrow-representable Flink equality-key type.
+
+On the September 4, 2026 local release/native-CPU run based on `1caf1b2` plus the set-operation
+working change, three alternating fresh-JVM forks per engine/backend processed one million
+deterministic events at parallelism one, with a 3GB heap and one-second exactly-once checkpoints.
+Every fork materialized 195,079 rows with SHA-256
+`811b5c5f19b551165db37bbe7365703923d2d126223c7b8d1dc2796cd0e43b97`. In memory, Flink and
+StreamFusion median elapsed times were 12.136s and 10.490s, equivalent to 82,401 and 95,333
+events/s and a 15.7% StreamFusion throughput gain. Median absolute deviations were 1.576s and
+0.297s, with ranges of 9.209–13.712s and 9.564–10.786s. With RocksDB, medians were 9.553s and
+9.293s, or 104,678 and 107,611 events/s and a 2.8% gain. Median absolute deviations were 0.069s
+and 0.053s, with ranges of 9.484–9.717s and 9.240–9.438s. The wide Flink in-memory dispersion is
+reported explicitly; profiler-instrumented timings were excluded.
+
+The first implementation collected and concatenated every replicated output batch, allowing one
+large duplicate count to request tens of MiB beyond the operator's assigned managed memory. The
+final path exposes the DataFusion result as Arrow C Stream and limits replication chunks to 16,384
+rows. Its release callback and input/output reservations have direct leak and double-close tests.
+Mixed JVM/native CPU captures use Java non-safepoint samples, DWARF/frame-pointer unwinding, JFR,
+collapsed stacks, per-engine flame graphs, and differential flame graphs for both backends. The
+native replication kernel accounted for 0.01% of CPU samples on either backend and 0.24% of native
+allocation samples; C Stream pulling accounted for 0.36%/0.34% of CPU and 5.66%/5.28% of native
+allocation samples on memory/RocksDB. Java allocation sampling recorded 9,920/9,723 StreamFusion
+samples versus 18,642/18,632 Flink samples at the same interval; Flink's row replicator alone was
+5.05%/5.20%. The remaining visible StreamFusion costs are the shared source conversion, result
+materialization, grouped state, and expected RocksDB traffic. The native RocksDB aggregate retains
+one `multi_get` and one atomic `WriteBatch` per incoming Arrow batch. Profiles are retained under
+`streamfusion-nexmark-benchmarks/target/set-intersect-all-profiles/`. These are local diagnostics,
+not portable performance claims.
 
 ## Fixed-sequence MATCH_RECOGNIZE RowData target
 

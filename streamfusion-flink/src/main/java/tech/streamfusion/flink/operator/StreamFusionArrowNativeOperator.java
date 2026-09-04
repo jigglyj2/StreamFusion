@@ -79,24 +79,38 @@ public final class StreamFusionArrowNativeOperator extends AbstractStreamOperato
         if (nullMetric != null) {
             nullMetric.inc(input.root().getVector(nullMetricFieldIndex).getNullCount());
         }
-        if (input.hasTrivialEnvelope()) {
-            try (ArrowRowDataBatch outputBatch = nativeExecution.execute(input)) {
-                emitOutput(input, outputBatch);
-            }
-        } else {
-            try (NativeCalcResult result = nativeExecution.executeWithSelection(input)) {
-                emitOutput(input, result.selectEnvelopeFrom(input));
+        try (ArrowCDataBridge.NativeOutputStream stream = nativeExecution.executeStream(input)) {
+            if (input.hasTrivialEnvelope()) {
+                while (true) {
+                    ArrowRowDataBatch next = stream.next();
+                    if (next == null) {
+                        break;
+                    }
+                    try (ArrowRowDataBatch outputBatch = next) {
+                        emitOutput(outputBatch);
+                    }
+                }
+            } else {
+                while (true) {
+                    NativeCalcResult next = stream.nextWithSelection();
+                    if (next == null) {
+                        break;
+                    }
+                    try (NativeCalcResult result = next) {
+                        emitOutput(result.selectEnvelopeFrom(input));
+                    }
+                }
             }
         }
+        FlinkMetricParity.replacePhysicalRecords(
+                getMetricGroup().getIOMetricGroup().getNumRecordsInCounter(), 1, input.size());
     }
 
-    private void emitOutput(ArrowRowDataBatch input, ArrowRowDataBatch outputBatch) {
+    private void emitOutput(ArrowRowDataBatch outputBatch) {
         if (!preserveRecordTimestamps) {
             outputBatch.withoutTimestamps();
         }
         output.collect(new StreamRecord<>(outputBatch));
-        FlinkMetricParity.replacePhysicalRecords(
-                getMetricGroup().getIOMetricGroup().getNumRecordsInCounter(), 1, input.size());
         FlinkMetricParity.replacePhysicalRecords(
                 getMetricGroup().getIOMetricGroup().getNumRecordsOutCounter(), 1, outputBatch.size());
     }

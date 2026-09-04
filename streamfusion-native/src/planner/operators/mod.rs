@@ -23,6 +23,7 @@ pub(crate) mod match_recognize;
 pub(crate) mod multi_join;
 pub(crate) mod over_aggregate;
 pub(crate) mod regular_join;
+pub(super) mod replicate_rows;
 pub(crate) mod reusable_input;
 mod select_distinct;
 pub(crate) mod session_window_table_function;

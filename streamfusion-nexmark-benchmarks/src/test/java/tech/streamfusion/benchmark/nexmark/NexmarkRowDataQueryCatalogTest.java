@@ -38,6 +38,7 @@ class NexmarkRowDataQueryCatalogTest {
                         "over-aggregate-bounded-rows",
                         "over-aggregate-bounded-range",
                         "select-distinct",
+                        "set-intersect-all",
                         "deduplicate-processing-time-keep-first",
                         "deduplicate-processing-time-keep-last",
                         "temporal-sort",

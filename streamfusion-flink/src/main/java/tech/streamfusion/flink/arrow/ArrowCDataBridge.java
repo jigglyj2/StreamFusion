@@ -10,6 +10,7 @@
 package tech.streamfusion.flink.arrow;
 
 import org.apache.arrow.c.ArrowArray;
+import org.apache.arrow.c.ArrowArrayStream;
 import org.apache.arrow.c.ArrowSchema;
 import org.apache.arrow.c.CDataDictionaryProvider;
 import org.apache.arrow.c.Data;
@@ -49,6 +50,41 @@ public final class ArrowCDataBridge {
         public ArrowRowDataBatch execute(ArrowRowDataBatch input) {
             VectorSchemaRoot output = executeNative(input);
             return removeUnusedSelection(output, outputType, allocator);
+        }
+
+        /** Executes one input through the Arrow C Stream output boundary. */
+        public NativeOutputStream executeStream(ArrowRowDataBatch input) {
+            Schema currentInputSchema = input.root().getSchema();
+            if (inputSchema != null && !inputSchema.equals(currentInputSchema)) {
+                throw new IllegalStateException("Arrow input schema changed after native negotiation");
+            }
+            boolean negotiate = inputSchema == null;
+            BufferAllocator inputAllocator = input.allocator();
+            try (ArrowArray inputArray = ArrowArray.allocateNew(inputAllocator);
+                    ArrowSchema inputSchemaHandle = negotiate ? ArrowSchema.allocateNew(inputAllocator) : null) {
+                if (negotiate) {
+                    Data.exportVectorSchemaRoot(inputAllocator, input.root(), null, inputArray, inputSchemaHandle);
+                } else {
+                    Data.exportVectorSchemaRoot(inputAllocator, input.root(), null, inputArray);
+                }
+                ArrowArrayStream stream = ArrowArrayStream.allocateNew(allocator);
+                try {
+                    NativeCalcBridge.executeArrowStream(
+                            context,
+                            inputArray.memoryAddress(),
+                            negotiate ? inputSchemaHandle.memoryAddress() : 0,
+                            stream.memoryAddress());
+                    NativeOutputStream output = new NativeOutputStream(stream, outputType, allocator, outputSchema);
+                    if (outputSchema == null) {
+                        outputSchema = output.schema();
+                    }
+                    inputSchema = currentInputSchema;
+                    return output;
+                } catch (RuntimeException | Error failure) {
+                    releaseStream(stream);
+                    throw failure;
+                }
+            }
         }
 
         private VectorSchemaRoot executeNative(ArrowRowDataBatch input) {
@@ -92,6 +128,92 @@ public final class ArrowCDataBridge {
                 output.setRowCount((int) rowCount);
                 return output;
             }
+        }
+    }
+
+    /** Pull-based ownership wrapper over one native Arrow C Stream invocation. */
+    public static final class NativeOutputStream implements AutoCloseable {
+        private final ArrowArrayStream stream;
+        private final RowType outputType;
+        private final BufferAllocator allocator;
+        private final CDataDictionaryProvider dictionaries = new CDataDictionaryProvider();
+        private final Schema schema;
+        private boolean closed;
+
+        private NativeOutputStream(
+                ArrowArrayStream stream, RowType outputType, BufferAllocator allocator, Schema expectedSchema) {
+            this.stream = stream;
+            this.outputType = outputType;
+            this.allocator = allocator;
+            try (ArrowSchema schemaHandle = ArrowSchema.allocateNew(allocator)) {
+                stream.getSchema(schemaHandle);
+                this.schema = Data.importSchema(allocator, schemaHandle, dictionaries);
+            } catch (java.io.IOException error) {
+                throw new IllegalStateException("Failed to import native Arrow stream schema", error);
+            }
+            if (expectedSchema != null && !expectedSchema.equals(schema)) {
+                throw new IllegalStateException("Arrow output schema changed after native negotiation");
+            }
+        }
+
+        private Schema schema() {
+            return schema;
+        }
+
+        public ArrowRowDataBatch next() {
+            VectorSchemaRoot root = nextRoot();
+            return root == null ? null : removeUnusedSelection(root, outputType, allocator);
+        }
+
+        public NativeCalcResult nextWithSelection() {
+            VectorSchemaRoot root = nextRoot();
+            return root == null ? null : removeSelection(root, outputType, allocator);
+        }
+
+        private VectorSchemaRoot nextRoot() {
+            try (ArrowArray array = ArrowArray.allocateNew(allocator)) {
+                stream.getNext(array);
+                ArrowArray.Snapshot snapshot = array.snapshot();
+                if (snapshot.release == 0) {
+                    return null;
+                }
+                if (snapshot.length < 0 || snapshot.length > Integer.MAX_VALUE) {
+                    throw new IllegalStateException("Native Arrow stream returned an invalid row count");
+                }
+                VectorSchemaRoot root = VectorSchemaRoot.create(schema, allocator);
+                try {
+                    Data.importIntoVectorSchemaRoot(allocator, array, root, dictionaries);
+                    root.setRowCount((int) snapshot.length);
+                    return root;
+                } catch (RuntimeException | Error failure) {
+                    root.close();
+                    throw failure;
+                }
+            } catch (java.io.IOException error) {
+                throw new IllegalStateException("Failed to read native Arrow stream", error);
+            }
+        }
+
+        @Override
+        public void close() {
+            if (!closed) {
+                closed = true;
+                try {
+                    releaseStream(stream);
+                } finally {
+                    dictionaries.close();
+                }
+            }
+        }
+    }
+
+    private static void releaseStream(ArrowArrayStream stream) {
+        try {
+            if (stream.snapshot().release != 0) {
+                stream.release();
+            }
+        } finally {
+            stream.close();
         }
     }
 

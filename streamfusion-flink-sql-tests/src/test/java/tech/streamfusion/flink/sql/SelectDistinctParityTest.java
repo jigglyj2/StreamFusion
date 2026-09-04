@@ -63,7 +63,7 @@ class SelectDistinctParityTest extends SqlParityTestSupport {
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 
-    private static Stream<Arguments> distinctTypes() {
+    static Stream<Arguments> distinctTypes() {
         return Stream.of(
                 Arguments.of("BOOLEAN", Types.BOOLEAN, DataTypes.BOOLEAN(), true, false),
                 Arguments.of("TINYINT", Types.BYTE, DataTypes.TINYINT(), (byte) -7, (byte) 8),

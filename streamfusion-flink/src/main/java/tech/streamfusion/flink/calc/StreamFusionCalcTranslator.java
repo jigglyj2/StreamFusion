@@ -20,6 +20,7 @@ import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatchTypeInfo;
 import tech.streamfusion.flink.arrow.StreamFusionArrowBoundaries;
 import tech.streamfusion.flink.operator.StreamFusionArrowNativeOperator;
+import tech.streamfusion.flink.replicate.StreamFusionReplicateRowsTranslator;
 import tech.streamfusion.flink.unnest.StreamFusionArrayUnnestTranslator;
 import tech.streamfusion.proto.plan.v1.Expression;
 
@@ -212,6 +213,63 @@ public final class StreamFusionCalcTranslator extends StreamFusionExpressionTran
                 arrowInput,
                 "streamfusion-array-unnest-calc-chain[" + inputTypes.size() + "]",
                 new StreamFusionArrowNativeOperator(outputType, plan, "streamfusion-array-unnest-calc"),
+                ArrowRowDataBatchTypeInfo.INSTANCE,
+                input.getParallelism(),
+                false);
+        transformation.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
+        return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
+    }
+
+    /** Fuses Flink's set-operation row replicator and every immediately following Calc. */
+    public static Transformation<RowData> translateReplicateRowsChain(
+            Transformation<RowData> input,
+            RowType replicateInputType,
+            RowType replicateOutputType,
+            Object joinType,
+            Object invocation,
+            List<RowType> inputTypes,
+            List<RowType> outputTypes,
+            List<List<?>> projectionStages,
+            List<?> conditions) {
+        if (StreamFusionReplicateRowsTranslator.unsupportedReason(
+                        replicateInputType, replicateOutputType, joinType, invocation, null)
+                != null) {
+            return null;
+        }
+        if (inputTypes.isEmpty() || !inputTypes.get(0).equals(replicateOutputType)) {
+            throw new IllegalArgumentException("The first Calc input must equal the fused REPLICATE_ROWS output");
+        }
+        List<List<Expression>> nativeProjectionStages = new ArrayList<>(projectionStages.size());
+        List<Expression> nativeConditions = new ArrayList<>(conditions.size());
+        for (int stage = 0; stage < inputTypes.size(); stage++) {
+            RowType stageInputType = inputTypes.get(stage);
+            RowType stageOutputType = outputTypes.get(stage);
+            List<?> stageProjections = projectionStages.get(stage);
+            if (unsupportedReason(stageInputType, stageOutputType, stageProjections, conditions.get(stage)) != null) {
+                return null;
+            }
+            List<Expression> nativeProjections = new ArrayList<>(stageProjections.size());
+            for (int outputIndex = 0; outputIndex < stageProjections.size(); outputIndex++) {
+                nativeProjections.add(projectionExpression(
+                        stageProjections.get(outputIndex), stageInputType, stageOutputType.getTypeAt(outputIndex)));
+            }
+            nativeProjectionStages.add(nativeProjections);
+            nativeConditions.add(conditionExpression(conditions.get(stage), stageInputType));
+        }
+        List<Expression> replicateExpressions = StreamFusionReplicateRowsTranslator.expressions(
+                replicateInputType, (org.apache.calcite.rex.RexCall) invocation);
+        RowType outputType = outputTypes.get(outputTypes.size() - 1);
+        byte[] plan = StreamFusionCalcPlan.createFusedReplicateRows(
+                replicateExpressions.get(0),
+                replicateExpressions.subList(1, replicateExpressions.size()),
+                replicateOutputType.getFieldCount(),
+                nativeProjectionStages,
+                nativeConditions);
+        Transformation<ArrowRowDataBatch> arrowInput = StreamFusionArrowBoundaries.toArrow(input, replicateInputType);
+        OneInputTransformation<ArrowRowDataBatch, ArrowRowDataBatch> transformation = new OneInputTransformation<>(
+                arrowInput,
+                "streamfusion-replicate-rows-calc-chain[" + inputTypes.size() + "]",
+                new StreamFusionArrowNativeOperator(outputType, plan, "streamfusion-replicate-rows-calc"),
                 ArrowRowDataBatchTypeInfo.INSTANCE,
                 input.getParallelism(),
                 false);

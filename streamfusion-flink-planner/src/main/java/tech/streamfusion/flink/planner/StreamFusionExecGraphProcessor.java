@@ -98,6 +98,8 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
     private static final String TRANSLATOR_CLASS = "tech.streamfusion.flink.calc.StreamFusionCalcTranslator";
     private static final String UNNEST_TRANSLATOR_CLASS =
             "tech.streamfusion.flink.unnest.StreamFusionArrayUnnestTranslator";
+    private static final String REPLICATE_ROWS_TRANSLATOR_CLASS =
+            "tech.streamfusion.flink.replicate.StreamFusionReplicateRowsTranslator";
     private static final String EXPAND_TRANSLATOR_CLASS = "tech.streamfusion.flink.expand.StreamFusionExpandTranslator";
     private static final String VALUES_TRANSLATOR_CLASS = "tech.streamfusion.flink.values.StreamFusionValuesTranslator";
     private static final String UNION_TRANSLATOR_CLASS = "tech.streamfusion.flink.union.StreamFusionUnionTranslator";
@@ -1088,6 +1090,22 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         }
         if (node instanceof StreamExecCorrelate) {
             StreamExecCorrelate correlate = (StreamExecCorrelate) node;
+            org.apache.calcite.rex.RexCall invocation =
+                    (org.apache.calcite.rex.RexCall) field(correlate, CommonExecCorrelate.class, "invocation");
+            if ("$REPLICATE_ROWS$1".equals(invocation.getOperator().getName())) {
+                StreamFusionExecReplicateRows replacement = new StreamFusionExecReplicateRows(
+                        correlate.getPersistedConfig(),
+                        (org.apache.flink.table.runtime.operators.join.FlinkJoinType)
+                                field(correlate, CommonExecCorrelate.class, "joinType"),
+                        invocation,
+                        correlate.getInputProperties().get(0),
+                        (RowType) correlate.getOutputType(),
+                        "StreamFusionReplicateRows");
+                replacement.setInputEdges(correlate.getInputEdges().stream()
+                        .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                        .collect(Collectors.toList()));
+                return replacement;
+            }
             StreamFusionExecArrayUnnest replacement = new StreamFusionExecArrayUnnest(
                     correlate.getPersistedConfig(),
                     (org.apache.flink.table.runtime.operators.join.FlinkJoinType)
@@ -1965,9 +1983,14 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         Object joinType = field(correlate, CommonExecCorrelate.class, "joinType");
         Object invocation = field(correlate, CommonExecCorrelate.class, "invocation");
         Object condition = field(correlate, CommonExecCorrelate.class, "condition");
+        String translatorClass = invocation instanceof RexCall
+                        && "$REPLICATE_ROWS$1"
+                                .equals(((RexCall) invocation).getOperator().getName())
+                ? REPLICATE_ROWS_TRANSLATOR_CLASS
+                : UNNEST_TRANSLATOR_CLASS;
         try {
             Class<?> translator = Class.forName(
-                    UNNEST_TRANSLATOR_CLASS,
+                    translatorClass,
                     true,
                     context.getPlanner().getFlinkContext().getClassLoader());
             Method method = translator.getMethod(

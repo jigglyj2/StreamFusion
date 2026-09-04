@@ -14,6 +14,7 @@ import tech.streamfusion.proto.plan.v1.InputReference;
 import tech.streamfusion.proto.plan.v1.LogicalType;
 import tech.streamfusion.proto.plan.v1.NativePlan;
 import tech.streamfusion.proto.plan.v1.Operator;
+import tech.streamfusion.proto.plan.v1.ReplicateRows;
 import tech.streamfusion.proto.plan.v1.UnnestCollection;
 
 /** Builds protobuf plans for Arrow-native Calc and fused UNNEST/Calc execution. */
@@ -58,6 +59,22 @@ final class StreamFusionCalcPlan {
             operator = Operator.newBuilder().setArrayUnnest(unnest).build();
         }
         return appendCalcs(operator, outputFieldCounts.get(stages - 1), projectionStages, conditions);
+    }
+
+    static byte[] createFusedReplicateRows(
+            Expression repetition,
+            List<Expression> values,
+            int replicateOutputFieldCount,
+            List<List<Expression>> projectionStages,
+            List<Expression> conditions) {
+        Operator input = Operator.newBuilder().setInput(Input.newBuilder()).build();
+        Operator replicate = Operator.newBuilder()
+                .setReplicateRows(ReplicateRows.newBuilder()
+                        .setInput(input)
+                        .setRepetition(repetition)
+                        .addAllValues(values))
+                .build();
+        return appendCalcs(replicate, replicateOutputFieldCount, projectionStages, conditions);
     }
 
     private static byte[] appendCalcs(

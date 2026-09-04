@@ -20,7 +20,7 @@ This matrix follows the query operations documented by Flink 2.3, including the 
 | [OVER aggregation](over-aggregation/) | **Partial** (non-time unbounded plus processing/event-time bounded or unbounded `ROWS`/`RANGE`) | Yes | Native ordered state, timers, and aggregate kernels |
 | [Joins](joins/) | **Partial** (regular, multi-way, constant-bound interval, and temporal streaming joins) | By join type | Native keyed state and timers; future DataFusion batch joins |
 | [Window joins](window-join/) | **Yes** (event-time attached windows) | Yes | Native two-sided window state plus Flink join conditions |
-| [Set operations](set-operations/) | **Partial** (`UNION ALL`, `UNION DISTINCT`) | By operation | Arrow IPC at Flink multi-input gates; native distinct keyed state |
+| [Set operations](set-operations/) | **Yes** (`UNION`, `INTERSECT`, `EXCEPT`, including `ALL`) | By physical rewrite | Arrow IPC at Flink multi-input gates; native aggregate/join state and row replication |
 | [Exchange](exchange/) | **Partial** (hash and singleton) | Yes | Native Flink-compatible key grouping with Flink-owned network transport |
 | [Table and collection expansion](table-expansion/) | **Partial** (scalar array `UNNEST`) | Yes | DataFusion `UnnestExec` with Flink-compatible correlate semantics |
 | [ORDER BY](order-by/) | **Yes** (bounded full sort, streaming finite Top-N, and time-ascending temporal sort) | Yes | Native counted full sort, Top-N, or timer/state sort |

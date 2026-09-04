@@ -49,7 +49,8 @@ by default and a benchmark result sink serializes and hashes both the complete s
 changelog and its final materialized multiset. Checkpointing uses exactly-once mode and task restart is disabled so resource failures
 surface instead of contaminating a timing with retries. It currently runs the fully accelerable q0,
 q1, q2, q8, q11, q12, q22, q23, group-aggregate, legacy-window-aggregate, select-distinct, top-n, limit, bounded-sort, over-aggregate,
-over-aggregate-event-time, over-aggregate-processing-time, temporal-join, match-recognize, and incremental-group-aggregate queries through both unmodified Flink
+over-aggregate-event-time, over-aggregate-processing-time, temporal-join, match-recognize,
+set-intersect-all, and incremental-group-aggregate queries through both unmodified Flink
 and StreamFusion. The focused
 workloads use the Nexmark bid stream to exercise keyed `COUNT(*)`/`SUM`/`AVG`/`MIN`/`MAX`, legacy
 event-time group-window aggregation, filtered
@@ -63,6 +64,9 @@ the bid filter and nested-row projection below its synthetic `PROCTIME()` order 
 the bid stream with an event-time left temporal join and a residual condition.
 `match-recognize` partitions bids by bidder and recognizes strict processing-time `A B C` sequences
 with `AFTER MATCH SKIP PAST LAST ROW`, exercising partial-match state and three direct measures.
+`set-intersect-all` intersects two filtered bid streams on the three-BIGINT auction/bidder/price
+identity. It exercises Flink's complete UNION, grouped count, Calc, and `$REPLICATE_ROWS$1` physical
+rewrite without making rowtime scheduling part of the benchmark key.
 `incremental-group-aggregate` enables Flink's split-DISTINCT optimization and covers the complete
 local aggregate, expand, incremental aggregate, and final aggregate pipeline. Wall-clock checkpoint
 flushes can change valid intermediate update boundaries from run to run, so standalone output

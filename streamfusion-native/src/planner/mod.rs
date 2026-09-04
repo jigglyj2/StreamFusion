@@ -84,6 +84,15 @@ fn create_operator(
             )?;
             operators::array_unnest::create(unnest, child)
         }
+        Some(proto::operator::Operator::ReplicateRows(replicate)) => {
+            let child = create_operator(
+                replicate.input.as_ref().ok_or_else(|| {
+                    DataFusionError::Plan("replicate rows has no input".to_string())
+                })?,
+                external_inputs,
+            )?;
+            operators::replicate_rows::create(replicate, child)
+        }
         Some(proto::operator::Operator::Union(union)) => {
             let children = union
                 .inputs

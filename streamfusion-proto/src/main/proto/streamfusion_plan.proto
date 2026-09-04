@@ -69,6 +69,7 @@ message Operator {
     MultiJoin multi_join = 24;
     MatchRecognize match_recognize = 25;
     BoundedSort bounded_sort = 26;
+    ReplicateRows replicate_rows = 27;
   }
 }
 
@@ -509,6 +510,15 @@ message ArrayUnnest {
   bool preserve_empty = 4;
   UnnestCollection collection = 5;
   optional Expression collection_expression = 6;
+}
+
+// Flink's internal table function used by INTERSECT ALL and EXCEPT ALL. The first expression
+// supplies the repetition count; every remaining expression forms the table-function row that is
+// appended to the preserved correlate input.
+message ReplicateRows {
+  Operator input = 1;
+  Expression repetition = 2;
+  repeated Expression values = 3;
 }
 
 enum UnnestCollection {

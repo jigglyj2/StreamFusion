@@ -34,6 +34,12 @@ public final class NativeCalcBridge {
         }
     }
 
+    public static void executeArrowStream(
+            NativeExecutionContext context, long inputArrayAddress, long inputSchemaAddress, long outputStreamAddress) {
+        executeArrowStreamBatch(context.handle(), inputArrayAddress, inputSchemaAddress, outputStreamAddress);
+        EXECUTED_BATCHES.incrementAndGet();
+    }
+
     public static long executeArrow(
             NativeExecutionContext context,
             long inputArrayAddress,
@@ -60,4 +66,7 @@ public final class NativeCalcBridge {
             long inputSchemaAddress,
             long outputArrayAddress,
             long outputSchemaAddress);
+
+    private static native void executeArrowStreamBatch(
+            long executionContext, long inputArrayAddress, long inputSchemaAddress, long outputStreamAddress);
 }

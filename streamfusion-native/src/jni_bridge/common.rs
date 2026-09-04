@@ -10,9 +10,13 @@ use std::sync::Arc;
 
 use arrow::array::{Array, Int32Array, RecordBatch, StructArray};
 use arrow::datatypes::{DataType, Field, Schema};
+use arrow::error::ArrowError;
 use arrow::ffi::{from_ffi, from_ffi_and_data_type, FFI_ArrowArray, FFI_ArrowSchema};
+use arrow::ffi_stream::FFI_ArrowArrayStream;
+use arrow::record_batch::RecordBatchReader;
 use datafusion::execution::memory_pool::MemoryReservation;
-use datafusion::physical_plan::{collect, ExecutionPlan};
+use datafusion::physical_plan::{collect, ExecutionPlan, SendableRecordBatchStream};
+use futures::StreamExt;
 
 use crate::execution_context::NativeExecutionContext;
 
@@ -135,6 +139,66 @@ pub(super) unsafe fn execute_and_export(
     drop(batches);
     output_reservation.try_resize(output_bytes)?;
     unsafe { export_record_batch(output_batch, output_array_address, output_schema_address) }
+}
+
+pub(super) unsafe fn execute_and_export_stream(
+    context: &NativeExecutionContext,
+    plan: Arc<dyn ExecutionPlan>,
+    input_reservations: Vec<MemoryReservation>,
+    output_stream_address: *mut FFI_ArrowArrayStream,
+) -> datafusion::error::Result<()> {
+    if output_stream_address.is_null() {
+        return Err(datafusion::error::DataFusionError::Execution(
+            "Arrow C Stream output address was null".to_string(),
+        ));
+    }
+    let schema = plan.schema();
+    let stream = plan.execute(0, context.task_context())?;
+    let reader = DataFusionStreamReader {
+        schema,
+        stream,
+        runtime: context.shared_runtime(),
+        output_reservation: context.reservation("native Arrow stream output"),
+        _input_reservations: input_reservations,
+    };
+    unsafe {
+        std::ptr::write(
+            output_stream_address,
+            FFI_ArrowArrayStream::new(Box::new(reader)),
+        );
+    }
+    Ok(())
+}
+
+struct DataFusionStreamReader {
+    schema: Arc<Schema>,
+    stream: SendableRecordBatchStream,
+    runtime: Arc<tokio::runtime::Runtime>,
+    output_reservation: MemoryReservation,
+    _input_reservations: Vec<MemoryReservation>,
+}
+
+impl Iterator for DataFusionStreamReader {
+    type Item = Result<RecordBatch, ArrowError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let next = self.runtime.block_on(self.stream.next())?;
+        Some(
+            next.map_err(|error| ArrowError::ExternalError(Box::new(error)))
+                .and_then(|batch| {
+                    self.output_reservation
+                        .try_resize(batch.get_array_memory_size())
+                        .map_err(|error| ArrowError::ExternalError(Box::new(error)))?;
+                    Ok(batch)
+                }),
+        )
+    }
+}
+
+impl RecordBatchReader for DataFusionStreamReader {
+    fn schema(&self) -> Arc<Schema> {
+        Arc::clone(&self.schema)
+    }
 }
 
 pub(super) unsafe fn export_record_batch(

@@ -73,6 +73,23 @@ class LocalRowDataNexmarkBenchmarkIT {
 
     @ParameterizedTest
     @ValueSource(strings = {"hashmap", "rocksdb"})
+    void intersectAllMatchesMaterializedFlinkResultsOnBothStateBackends(String backend) throws Exception {
+        LocalRowDataNexmarkBenchmark.RunResult flink =
+                LocalRowDataNexmarkBenchmark.run(2_000, "set-intersect-all", false, backend, 1);
+        LocalRowDataNexmarkBenchmark.RunResult streamFusion =
+                LocalRowDataNexmarkBenchmark.run(2_000, "set-intersect-all", true, backend, 1);
+
+        assertThat(streamFusion.completed()).isTrue();
+        assertThat(streamFusion.materializedDebugRows()).containsExactlyElementsOf(flink.materializedDebugRows());
+        assertThat(streamFusion.materializedRows()).isEqualTo(flink.materializedRows());
+        assertThat(streamFusion.materializedSha256()).isEqualTo(flink.materializedSha256());
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        assertThat(streamFusion.nativeGroupAggregateBatches()).isGreaterThan(0);
+        assertThat(streamFusion.nativeCalcBatches()).isGreaterThan(0);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"hashmap", "rocksdb"})
     void everySynchronousDeduplicateModeMatchesFlinkOnBothStateBackends(String backend) throws Exception {
         for (String query :
                 List.of("q18", "deduplicate-processing-time-keep-first", "deduplicate-processing-time-keep-last")) {

@@ -65,9 +65,12 @@ public final class StreamFusionExecCalc extends CommonExecCalc implements Stream
         List<StreamFusionExecArrayUnnest> fusedUnnests = inputEdge.getSource() instanceof StreamFusionExecArrayUnnest
                 ? StreamFusionExecArrayUnnest.adjacentChain((StreamFusionExecArrayUnnest) inputEdge.getSource())
                 : Collections.emptyList();
-        ExecEdge boundaryEdge = fusedUnnests.isEmpty()
-                ? inputEdge
-                : fusedUnnests.get(0).getInputEdges().get(0);
+        StreamFusionExecReplicateRows fusedReplicate = inputEdge.getSource() instanceof StreamFusionExecReplicateRows
+                ? (StreamFusionExecReplicateRows) inputEdge.getSource()
+                : null;
+        ExecEdge boundaryEdge = !fusedUnnests.isEmpty()
+                ? fusedUnnests.get(0).getInputEdges().get(0)
+                : fusedReplicate != null ? fusedReplicate.getInputEdges().get(0) : inputEdge;
         Transformation<RowData> input = (Transformation<RowData>) boundaryEdge.translateToPlan(planner);
         List<RowType> inputTypes = new ArrayList<>(chain.size());
         List<RowType> outputTypes = new ArrayList<>(chain.size());
@@ -84,7 +87,30 @@ public final class StreamFusionExecCalc extends CommonExecCalc implements Stream
                     TRANSLATOR_CLASS, true, planner.getFlinkContext().getClassLoader());
             Method translate;
             Transformation<RowData> result;
-            if (fusedUnnests.isEmpty()) {
+            if (fusedReplicate != null) {
+                translate = translator.getMethod(
+                        "translateReplicateRowsChain",
+                        Transformation.class,
+                        RowType.class,
+                        RowType.class,
+                        Object.class,
+                        Object.class,
+                        List.class,
+                        List.class,
+                        List.class,
+                        List.class);
+                result = (Transformation<RowData>) translate.invoke(
+                        null,
+                        input,
+                        (RowType) fusedReplicate.getInputEdges().get(0).getOutputType(),
+                        (RowType) fusedReplicate.getOutputType(),
+                        fusedReplicate.streamFusionJoinType(),
+                        fusedReplicate.streamFusionInvocation(),
+                        inputTypes,
+                        outputTypes,
+                        projections,
+                        conditions);
+            } else if (fusedUnnests.isEmpty()) {
                 translate = translator.getMethod(
                         "translateChain", Transformation.class, List.class, List.class, List.class, List.class);
                 result = (Transformation<RowData>)

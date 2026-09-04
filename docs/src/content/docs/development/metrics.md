@@ -26,6 +26,7 @@ The current operator-specific audit is:
 | Calc | generated Flink Calc operator | No additional reference metrics; standard Flink metrics are retained. |
 | Expand | generated Flink Expand operator | No additional reference metrics; standard Flink metrics are retained. |
 | Array/Map/Multiset Unnest | generated Flink Correlate operator | No additional reference metrics; standard Flink metrics are retained. |
+| Set-operation Row Replication | generated Flink Correlate operator for `$REPLICATE_ROWS$1` | The reference function adds no operator-specific metric. Standard IO counters are corrected to logical input and repeated output rows; managed-memory gauges cover the gather selection and output. The enclosing set plan retains the native aggregate or semi/anti-join state, changelog, checkpoint, and backend metrics described below. |
 | Union All | Flink `UnionStreamOperator` | No additional reference metrics; standard Flink metrics are retained. |
 | Values | Flink `ValuesInputFormat` source | No additional reference metrics; standard Flink source metrics are retained. |
 | Aligned Window TVF | Flink `AlignedWindowTableFunctionOperator` | Publishes `numNullRowTimeRecordsDropped` and increments it at the same per-record decision point. |

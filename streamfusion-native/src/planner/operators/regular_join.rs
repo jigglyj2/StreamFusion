@@ -991,6 +991,40 @@ mod tests {
     }
 
     #[test]
+    fn null_safe_keys_match_for_intersect_and_except_join_shapes() {
+        let broker = Arc::new(TestBroker::new(64 << 20));
+        for (join_type, expected_before, expected_match) in [
+            (proto::RegularJoinType::Semi, Vec::new(), vec![INSERT]),
+            (proto::RegularJoinType::Anti, vec![INSERT], vec![DELETE]),
+        ] {
+            let mut processor = RegularJoinProcessor::new(
+                &plan_with_filter(join_type, false),
+                128,
+                0,
+                127,
+                HostMemoryReservation::new(broker.clone(), "regular join null-safe keys"),
+            )
+            .unwrap();
+            assert_eq!(
+                kinds(
+                    &processor
+                        .process_arrow(0, nullable_batch(&[None], &["left"], &[INSERT]))
+                        .unwrap()
+                ),
+                expected_before
+            );
+            assert_eq!(
+                kinds(
+                    &processor
+                        .process_arrow(1, nullable_batch(&[None], &["right"], &[INSERT]))
+                        .unwrap()
+                ),
+                expected_match
+            );
+        }
+    }
+
+    #[test]
     fn canonical_state_restores_after_rescaling() {
         let broker = Arc::new(TestBroker::new(1 << 30));
         let mut source = processor(broker.clone(), 0, 127);
@@ -1078,13 +1112,17 @@ mod tests {
     }
 
     fn plan(join_type: proto::RegularJoinType) -> Vec<u8> {
+        plan_with_filter(join_type, true)
+    }
+
+    fn plan_with_filter(join_type: proto::RegularJoinType, filter_nulls: bool) -> Vec<u8> {
         proto::NativePlan {
             protocol_version: crate::PLAN_PROTOCOL_VERSION,
             root: Some(proto::Operator {
                 operator: Some(proto::operator::Operator::RegularJoin(proto::RegularJoin {
                     left_key_indices: vec![0],
                     right_key_indices: vec![0],
-                    filter_nulls: vec![true],
+                    filter_nulls: vec![filter_nulls],
                     left_schema: Some(schema()),
                     right_schema: Some(schema()),
                     join_type: join_type as i32,

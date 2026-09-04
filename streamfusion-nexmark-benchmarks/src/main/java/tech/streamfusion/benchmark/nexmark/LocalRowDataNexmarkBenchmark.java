@@ -220,7 +220,7 @@ public final class LocalRowDataNexmarkBenchmark {
             return elapsedNanos / 1_000_000_000.0;
         }
 
-        private long nativeCalcBatches() {
+        long nativeCalcBatches() {
             return nativeCalcBatches;
         }
 
