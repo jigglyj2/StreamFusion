@@ -112,6 +112,27 @@ global-key fast path that materializes the canonical empty key once per batch; t
 aggregate path accounts for only 1.2–1.3% of global CPU samples. Profiler timings were excluded
 from these measurements.
 
+On the September 4, 2026 local release/native-CPU `aggregate-modifiers` run for implementation
+commit `ba4fffb`, three alternating fresh-JVM forks processed one million deterministic events at
+parallelism one with a 3GB heap and one-second exactly-once checkpoints. In-memory Flink and
+StreamFusion medians were 108,549 and 109,276 events/s respectively, a 0.7% StreamFusion gain;
+elapsed-time ranges were 9.065–9.243s and 8.908–11.620s. RocksDB medians were 75,337 and 96,157
+events/s, a 27.6% gain, with elapsed ranges of 12.820–16.063s and 8.966–10.672s. Every run emitted
+984,827 changelog rows with SHA-256
+`07c7088abc7c53ae58d9d84e8e5b7a1c6d5cee1279796889825ee3638cafa56a`; native Calc and
+GroupAggregate counters were non-zero in every StreamFusion fork.
+
+Mixed JVM/native CPU, Java-allocation, and native-allocation profiles cover both engines and both
+backends. The complete native GroupAggregate path accounted for 7.0% of in-memory CPU samples and
+7.5% with RocksDB; state encode/decode and ordered distinct-set work were each at or below 1.1%,
+and RocksDB itself accounted for about 1.1%. Rebuilding canonical opaque accumulator values
+accounted for 34–39% of sampled native allocation bytes, but those transient bytes are admitted by
+the operator's Flink managed-memory scratch reservation. Java allocation remained dominated by
+generated rows, binary materialization, and result collection. No decoded object cache was added:
+the runtime state remains the same backend-neutral opaque-byte representation used by canonical
+savepoints. Profiler timings were excluded from the throughput measurements. The machine was a
+12th Gen Intel Core i7-12650H under x86-64 WSL2 with OpenJDK 24.0.2 and Rust 1.94.0.
+
 On the September 3, 2026 local release/native-CPU `over-aggregate` run over 100,000 deterministic
 events at parallelism one, three alternating fresh-JVM forks produced in-memory medians of 20,908
 events/s for Flink and 20,759 events/s for StreamFusion (99.3% parity). Elapsed-time ranges were
