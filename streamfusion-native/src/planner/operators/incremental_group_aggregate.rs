@@ -7,7 +7,7 @@ use ahash::RandomState;
 use arrow::array::{Array, ArrayRef, BinaryArray, Int8Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use arrow::row::{RowConverter, SortField};
+use arrow::row::{RowConverter, Rows, SortField};
 use datafusion::error::{DataFusionError, Result};
 use hashbrown::HashMap;
 use prost::Message;
@@ -55,7 +55,7 @@ struct PendingPartial {
     grouping_row: Vec<u8>,
     original: Option<AccumulatorState>,
     state_loaded: bool,
-    current: AccumulatorState,
+    current: Option<AccumulatorState>,
     bundle: AccumulatorState,
 }
 
@@ -330,7 +330,7 @@ impl IncrementalGroupAggregateProcessor {
     fn stage_range(
         &mut self,
         batch: &RecordBatch,
-        final_rows: &[Vec<u8>],
+        final_rows: &Rows,
         offset: usize,
         length: usize,
     ) -> Result<()> {
@@ -343,23 +343,29 @@ impl IncrementalGroupAggregateProcessor {
             length,
             RandomState::new(),
         );
-        let mut keys = Vec::new();
         let mut first_rows = Vec::new();
         let mut row_indices = Vec::with_capacity(length);
         for row in offset..offset + length {
             let key = self.state_key(batch, row)?;
-            let next = keys.len();
-            let index = match unique.entry(key.clone()) {
+            let next = unique.len();
+            let index = match unique.entry(key) {
                 hashbrown::hash_map::Entry::Occupied(entry) => *entry.get(),
                 hashbrown::hash_map::Entry::Vacant(entry) => {
                     entry.insert(next);
-                    keys.push(key);
                     first_rows.push(row);
                     next
                 }
             };
             row_indices.push(index);
         }
+        let mut ordered_keys = (0..unique.len()).map(|_| None).collect::<Vec<_>>();
+        for (key, index) in unique.drain() {
+            ordered_keys[index] = Some(key);
+        }
+        let keys = ordered_keys
+            .into_iter()
+            .map(|key| key.expect("every incremental key index is populated"))
+            .collect::<Vec<_>>();
         let missing = keys
             .iter()
             .enumerate()
@@ -371,8 +377,8 @@ impl IncrementalGroupAggregateProcessor {
                 keys[index].clone(),
                 PendingPartial {
                     final_key: self.final_key(batch, first_rows[index])?,
-                    grouping_row: final_rows[first_rows[index]].clone(),
-                    current: AccumulatorState::new(&self.partial_calls),
+                    grouping_row: final_rows.row(first_rows[index]).as_ref().to_vec(),
+                    current: None,
                     original: None,
                     state_loaded: false,
                     bundle: AccumulatorState::new(&self.partial_calls),
@@ -391,7 +397,14 @@ impl IncrementalGroupAggregateProcessor {
                 .pending
                 .get_mut(&keys[key_index])
                 .expect("incremental key was staged");
-            pending.current.merge(&self.partial_calls, &delta)?;
+            if pending.current.is_some()
+                || delta.has_incremental_persistent_state(&self.partial_calls)
+            {
+                pending
+                    .current
+                    .get_or_insert_with(|| AccumulatorState::new(&self.partial_calls))
+                    .merge(&self.partial_calls, &delta)?;
+            }
             pending.bundle.merge(&self.partial_calls, &delta)?;
         }
         // Ordinary COUNT/SUM/AVG and append-only extrema branches are bundle-local. Delay the
@@ -408,9 +421,9 @@ impl IncrementalGroupAggregateProcessor {
                     .get(key)
                     .expect("incremental key was staged before state lookup");
                 (!pending.state_loaded
-                    && pending
-                        .current
-                        .has_incremental_persistent_state(&self.partial_calls))
+                    && pending.current.as_ref().is_some_and(|current| {
+                        current.has_incremental_persistent_state(&self.partial_calls)
+                    }))
                 .then_some(index)
             })
             .collect::<Vec<_>>();
@@ -434,9 +447,15 @@ impl IncrementalGroupAggregateProcessor {
                     let original = decode_state(&value, &self.partial_calls)?
                         .incremental_persistent_only(&self.partial_calls);
                     let mut current = original.clone();
-                    current.merge(&self.partial_calls, &pending.current)?;
+                    current.merge(
+                        &self.partial_calls,
+                        pending
+                            .current
+                            .as_ref()
+                            .expect("persistent change initialized current accumulator"),
+                    )?;
                     pending.original = Some(original);
-                    pending.current = current;
+                    pending.current = Some(current);
                 }
             }
         }
@@ -482,10 +501,11 @@ impl IncrementalGroupAggregateProcessor {
                 )?;
                 entry.accumulator.merge(&self.final_calls, &delta)?;
             }
+            let current = partial.current.as_ref().unwrap_or(&partial.bundle);
             let delta = AccumulatorState::from_mapped_partial(
                 &self.final_calls,
                 &self.partial_calls,
-                &partial.current,
+                current,
                 &partial.bundle,
                 &self.plan.final_call_value_indices,
                 false,
@@ -495,12 +515,18 @@ impl IncrementalGroupAggregateProcessor {
             entry.accumulator.merge(&self.final_calls, &delta)?;
             let persistent = partial
                 .current
-                .incremental_persistent_only(&self.partial_calls);
-            let has_persistent = persistent.has_incremental_persistent_state(&self.partial_calls);
+                .as_ref()
+                .map(|current| current.incremental_persistent_only(&self.partial_calls));
+            let has_persistent = persistent.as_ref().is_some_and(|persistent| {
+                persistent.has_incremental_persistent_state(&self.partial_calls)
+            });
             if partial.original.is_some() || has_persistent {
                 mutations.push(StateMutation {
                     key: state_key,
-                    value: has_persistent.then(|| encode_state(&persistent)),
+                    value: persistent
+                        .as_ref()
+                        .filter(|_| has_persistent)
+                        .map(encode_state),
                 });
             }
         }
@@ -547,17 +573,14 @@ impl IncrementalGroupAggregateProcessor {
         })
     }
 
-    fn final_rows(&self, batch: &RecordBatch) -> Result<Vec<Vec<u8>>> {
+    fn final_rows(&self, batch: &RecordBatch) -> Result<Rows> {
         let columns = self
             .plan
             .final_grouping_indices
             .iter()
             .map(|&index| Arc::clone(batch.column(index as usize)))
             .collect::<Vec<_>>();
-        let rows = self.final_converter.convert_columns(&columns)?;
-        Ok((0..batch.num_rows())
-            .map(|row| rows.row(row).as_ref().to_vec())
-            .collect())
+        Ok(self.final_converter.convert_columns(&columns)?)
     }
 
     fn final_key(&self, batch: &RecordBatch, row: usize) -> Result<Vec<u8>> {
@@ -585,7 +608,12 @@ impl IncrementalGroupAggregateProcessor {
                     .saturating_add(key.key.capacity().saturating_mul(2))
                     .saturating_add(value.final_key.capacity())
                     .saturating_add(value.grouping_row.capacity())
-                    .saturating_add(value.current.estimated_dynamic_bytes())
+                    .saturating_add(
+                        value
+                            .current
+                            .as_ref()
+                            .map_or(0, AccumulatorState::estimated_dynamic_bytes),
+                    )
                     .saturating_add(value.bundle.estimated_dynamic_bytes())
                     .saturating_add(
                         value
