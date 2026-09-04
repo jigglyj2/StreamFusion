@@ -25,6 +25,7 @@ class NexmarkRowDataQueryCatalogTest {
                         "interval-join",
                         "over-aggregate",
                         "over-aggregate-event-time",
+                        "over-aggregate-processing-time",
                         "select-distinct",
                         "top-n",
                         "limit");

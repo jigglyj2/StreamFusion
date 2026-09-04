@@ -71,18 +71,25 @@ class OverAggregateParityTest extends SqlParityTestSupport {
     }
 
     @Test
-    void processingTimeMaterializationStillHasAnExplicitWholePlanFallback() throws Exception {
+    void processingTimeRowsAndRangeMatchFlinkByteForByte() throws Exception {
         for (String frame : new String[] {"ROWS", "RANGE"}) {
             byte[] flink = executeProcessingTime(frame, false);
             byte[] streamFusion = executeProcessingTime(frame, true);
 
             assertThat(streamFusion).isEqualTo(flink);
             assertThat(StreamFusionPlannerFactory.nativeOverAggregateBatchCount())
-                    .isZero();
-            assertThat(StreamFusionPlanningDiagnostics.explain())
-                    .contains("Accelerated: no")
-                    .contains("PROCTIME");
+                    .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                    .isGreaterThan(0);
+            assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
         }
+    }
+
+    @Test
+    void observableProcessingTimeRemainsAnExplicitWholePlanFallback() {
+        String explain = explainObservableProcessingTime();
+
+        assertThat(StreamFusionPlannerFactory.nativeOverAggregateBatchCount()).isZero();
+        assertThat(explain).contains("Accelerated: no").contains("PROCTIME");
     }
 
     @Test
@@ -162,14 +169,40 @@ class OverAggregateParityTest extends SqlParityTestSupport {
                         .columnByExpression("pt", "PROCTIME()")
                         .build());
         tables.createTemporaryView("proc_over_input", input);
-        return collect(tables.executeSql("SELECT category, amount, "
+        String sql = "SELECT category, amount, "
                 + "SUM(amount) OVER (PARTITION BY category ORDER BY pt "
                 + frame
                 + " BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_sum, "
                 + "COUNT(*) OVER (PARTITION BY category ORDER BY pt "
                 + frame
                 + " BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_count "
-                + "FROM proc_over_input"));
+                + "FROM proc_over_input WHERE amount > 0";
+        return collect(tables.executeSql(sql));
+    }
+
+    private static String explainObservableProcessingTime() {
+        System.setProperty(
+                StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY, StreamFusionPlannerFactory.class.getName());
+        StreamFusionPlannerFactory.resetMetrics();
+        StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();
+        environment.setParallelism(1);
+        StreamTableEnvironment tables = StreamTableEnvironment.create(
+                environment, EnvironmentSettings.newInstance().inStreamingMode().build());
+        tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+        Table input = tables.fromDataStream(
+                environment.fromCollection(
+                        List.of(Row.of("a", 10L)),
+                        Types.ROW_NAMED(new String[] {"category", "amount"}, Types.STRING, Types.LONG)),
+                Schema.newBuilder()
+                        .column("category", "STRING")
+                        .column("amount", "BIGINT")
+                        .columnByExpression("pt", "PROCTIME()")
+                        .build());
+        tables.createTemporaryView("observable_proc_over_input", input);
+        return tables.explainSql("SELECT category, pt, "
+                + "SUM(amount) OVER (PARTITION BY category ORDER BY pt ROWS "
+                + "BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_sum "
+                + "FROM observable_proc_over_input");
     }
 
     private static byte[] executeEventTime(String frame, boolean streamFusion) throws Exception {

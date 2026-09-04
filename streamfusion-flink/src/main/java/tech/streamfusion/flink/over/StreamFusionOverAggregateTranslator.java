@@ -30,7 +30,7 @@ import tech.streamfusion.flink.deduplicate.ArrowBatchKeySelector;
 import tech.streamfusion.flink.exchange.StreamFusionExchangeTranslator;
 import tech.streamfusion.flink.state.StreamFusionStateBackendFactory;
 
-/** Reflection entry point for native non-time unbounded streaming OVER aggregation. */
+/** Reflection entry point for native unbounded streaming OVER aggregation. */
 public final class StreamFusionOverAggregateTranslator {
     private StreamFusionOverAggregateTranslator() {}
 
@@ -42,8 +42,9 @@ public final class StreamFusionOverAggregateTranslator {
             long stateTtl,
             ReadableConfig config,
             StreamExecutionEnvironment environment,
-            RowDataKeySelector keySelector) {
-        if (unsupportedReason(inputType, outputType, overSpec, stateTtl, config) != null) {
+            RowDataKeySelector keySelector,
+            boolean processingTime) {
+        if (unsupportedReason(inputType, outputType, overSpec, stateTtl, config, processingTime) != null) {
             return null;
         }
         int[] partitionKeys = overSpec.getPartition().getFieldIndices();
@@ -61,9 +62,10 @@ public final class StreamFusionOverAggregateTranslator {
                             config.get(CheckpointingOptions.ENABLE_UNALIGNED)
                                     || config.get(CheckpointingOptions.FORCE_UNALIGNED));
         }
-        byte[] plan = StreamFusionOverAggregatePlan.create(inputType, outputType, overSpec, stateTtl);
-        LogicalType orderType =
-                inputType.getTypeAt(overSpec.getGroups().get(0).getSort().getFieldIndices()[0]);
+        byte[] plan = StreamFusionOverAggregatePlan.create(inputType, outputType, overSpec, stateTtl, processingTime);
+        LogicalType orderType = processingTime
+                ? null
+                : inputType.getTypeAt(overSpec.getGroups().get(0).getSort().getFieldIndices()[0]);
         Transformation<ArrowRowDataBatch> arrowInput = StreamFusionArrowBoundaries.toArrow(partitioned, inputType);
         OneInputTransformation<ArrowRowDataBatch, ArrowRowDataBatch> result = new OneInputTransformation<>(
                 arrowInput,
@@ -73,9 +75,9 @@ public final class StreamFusionOverAggregateTranslator {
                         outputType,
                         partitionKeys,
                         plan,
-                        true,
-                        !isProctimeAttribute(orderType) && !isRowtimeAttribute(orderType),
-                        isRowtimeAttribute(orderType),
+                        !processingTime,
+                        !processingTime && !isProctimeAttribute(orderType) && !isRowtimeAttribute(orderType),
+                        !processingTime && isRowtimeAttribute(orderType),
                         keySelector),
                 ArrowRowDataBatchTypeInfo.INSTANCE,
                 partitioned.getParallelism(),
@@ -91,6 +93,16 @@ public final class StreamFusionOverAggregateTranslator {
 
     public static String unsupportedReason(
             RowType inputType, RowType outputType, OverSpec overSpec, long stateTtl, ReadableConfig config) {
+        return unsupportedReason(inputType, outputType, overSpec, stateTtl, config, false);
+    }
+
+    public static String unsupportedReason(
+            RowType inputType,
+            RowType outputType,
+            OverSpec overSpec,
+            long stateTtl,
+            ReadableConfig config,
+            boolean processingTime) {
         if (overSpec.getGroups().size() != 1) {
             return "window groups: native OVER requires one Flink-compatible group";
         }
@@ -99,7 +111,9 @@ public final class StreamFusionOverAggregateTranslator {
         if (orderKeys.length != 1 || !group.getSort().getAscendingOrders()[0]) {
             return "ordering: native OVER currently requires one ascending order key";
         }
-        LogicalType orderType = inputType.getTypeAt(orderKeys[0]);
+        if (!processingTime && (orderKeys[0] < 0 || orderKeys[0] >= inputType.getFieldCount())) {
+            return "ordering: native OVER order key is outside the input schema";
+        }
         if (!group.getLowerBound().isPreceding()
                 || !group.getLowerBound().isUnbounded()
                 || !group.getUpperBound().isCurrentRow()) {

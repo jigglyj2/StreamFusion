@@ -5,7 +5,7 @@ sidebar:
   order: 8
 ---
 
-**Current status:** Partially accelerated. Streaming non-time and event-time `ROWS` and `RANGE`
+**Current status:** Partially accelerated. Streaming non-time, processing-time, and event-time `ROWS` and `RANGE`
 frames from `UNBOUNDED PRECEDING` through `CURRENT ROW` run natively when the query uses one
 ascending order key and supported aggregates.
 
@@ -33,6 +33,15 @@ fires the corresponding native timer. `ROWS` advances one row at a time and `RAN
 with the same aggregate value. Rows arriving at or behind the current watermark are dropped with
 Flink-compatible late-record accounting.
 
+For processing time, the planner recognizes Flink's `Calc -> Exchange -> OVER -> Calc` shape,
+removes the unobservable synthetic `PROCTIME()` field, and keeps supported lower filters and
+projections as native Calcs. The native kernel uses arrival order, matching Flink's processing-time
+unbounded function for both `ROWS` and `RANGE`. Flink SQL only plans this operator for append-only
+input, so native state is one compact accumulator per partition rather than an ever-growing row
+history. The native changelog representation remains available for directly tested retractions and
+older row-history savepoints are upgraded by replaying their contributions once during the first
+post-restore batch.
+
 State is available through both StreamFusion's managed in-memory backend and direct native
 RocksDB backend. Both use Flink key groups, batched multi-get/write calls, canonical cross-backend
 key-group snapshots, rescaling, aligned and unaligned recovery, and incremental RocksDB native
@@ -45,12 +54,11 @@ the event-time operator publishes `numLateRecordsDropped`. Both publish the stan
 I/O metrics. StreamFusion state, checkpoint, recovery, allocation, pending-timer, and native batch
 diagnostics remain in the explicitly named StreamFusion metric subgroup.
 
-Processing-time queries currently cause an explicit whole-plan fallback because the preceding
-`PROCTIME()` Calc materialization is not yet representable by StreamFusion, even though the native
-OVER kernel has processing-time support. Bounded preceding frames, descending or multiple order
-keys, aggregate functions beyond the set above, mini-batch mode, async state, changelog-state
-wrapping, and state TTL also fall back. These are not documented as accelerated until their
-end-to-end parity and recovery suites pass.
+If a query selects, filters on, or otherwise observes the synthetic processing-time field, the plan
+still falls back explicitly because removing that value would change semantics. Bounded preceding
+frames, descending or multiple order keys, aggregate functions beyond the set above, mini-batch
+mode, async state, changelog-state wrapping, and state TTL also fall back. These are not documented
+as accelerated until their end-to-end parity and recovery suites pass.
 
 ## Implementation
 
@@ -94,5 +102,23 @@ benchmark sink. Native samples showed expected row retention and timer registrat
 corresponding CPU hot path. The implementation therefore retains the shared timer service and
 canonical state format instead of introducing an OVER-specific benchmark shortcut. Profiler-
 instrumented timings were excluded from the throughput results.
+
+The `over-aggregate-processing-time` workload exercises the real Nexmark bid filter and nested-row
+projection below `PROCTIME()`. Three alternating separate-JVM release/native-CPU forks over two
+million events at parallelism one produced in-memory medians of 175,965 events/s for Flink and
+185,511 events/s for StreamFusion, a 5.4% gain; elapsed ranges were 10.677–11.500s and
+10.398–10.833s. RocksDB medians were 151,893 and 152,452 events/s respectively (0.4% gain), with
+wider elapsed ranges of 12.813–14.811s and 10.767–15.856s. Every fork emitted 1,840,000 rows with
+SHA-256 `667f3fe5bdcc5417f2aed194286f9ecfd983a245ce08a2e316b3f579705b2e55`; StreamFusion
+reported 124–125 native OVER batches and 373–377 native Calc batches.
+
+Separate three-million-event mixed JVM/native profiles retained JFR, collapsed stacks, flame
+graphs, and differential flame graphs for both engines and backends. The complete native OVER call
+tree accounted for 15.8% of memory and 19.1% of RocksDB CPU samples, with no dominant leaf; direct
+native RocksDB work was 4.2%, compared with 14.5% in the Flink RocksDB profile. The source
+RowData-to-Arrow boundary was about 7%. Java and native allocation profiles show the expected
+output-row/Arrow materialization rather than retained historical rows; all state, scratch, and
+RocksDB allocations remain governed by Flink managed memory. Profiler-instrumented timings were
+excluded from the benchmark results.
 
 See the [Flink 2.3 OVER aggregation documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/over-agg/).

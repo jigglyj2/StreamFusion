@@ -18,6 +18,7 @@ import java.util.stream.Collectors;
 import org.apache.calcite.rex.RexCall;
 import org.apache.calcite.rex.RexInputRef;
 import org.apache.calcite.rex.RexNode;
+import org.apache.calcite.rex.RexShuttle;
 import org.apache.flink.configuration.ReadableConfig;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
 import org.apache.flink.table.planner.plan.logical.TimeAttributeWindowingStrategy;
@@ -149,9 +150,16 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         } else if (node.getInputEdges().isEmpty()) {
             return;
         } else if (node instanceof StreamExecCalc) {
-            String reason = unsupportedReason((StreamExecCalc) node, context);
+            ProcessingTimeOverAggregate folded = processingTimeOverAggregate((StreamExecCalc) node);
+            String reason = folded == null
+                    ? unsupportedReason((StreamExecCalc) node, context)
+                    : unsupportedReason(folded, context);
             if (reason != null) {
                 rejections.add(nodePath + "\n" + reason);
+            }
+            if (folded != null) {
+                collectRejections(folded.inputEdge.getSource(), context, nodePath + "/native-input", rejections);
+                return;
             }
         } else if (node instanceof StreamExecCorrelate) {
             String reason = unsupportedReason((StreamExecCorrelate) node, context);
@@ -308,6 +316,43 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         }
         if (node instanceof StreamExecCalc) {
             StreamExecCalc calc = (StreamExecCalc) node;
+            ProcessingTimeOverAggregate folded = processingTimeOverAggregate(calc);
+            if (folded != null) {
+                StreamFusionExecCalc inputProjection = new StreamFusionExecCalc(
+                        folded.inputCalc.getPersistedConfig(),
+                        folded.inputProjection,
+                        condition(folded.inputCalc),
+                        folded.inputCalc.getInputProperties().get(0),
+                        folded.inputType,
+                        "StreamFusionCalc");
+                inputProjection.setInputEdges(
+                        List.of(copyEdge(folded.inputEdge, convert(folded.inputEdge.getSource()), inputProjection)));
+                StreamFusionExecOverAggregate over = new StreamFusionExecOverAggregate(
+                        folded.aggregate.getPersistedConfig(),
+                        folded.overSpec,
+                        folded.inputCalc.getInputProperties().get(0),
+                        folded.overOutputType,
+                        "StreamFusionOverAggregate",
+                        true);
+                over.setInputEdges(List.of(ExecEdge.builder()
+                        .source(inputProjection)
+                        .target(over)
+                        .shuffle(ExecEdge.FORWARD_SHUFFLE)
+                        .build()));
+                StreamFusionExecCalc replacement = new StreamFusionExecCalc(
+                        calc.getPersistedConfig(),
+                        folded.outputProjection,
+                        folded.outputCondition,
+                        calc.getInputProperties().get(0),
+                        (RowType) calc.getOutputType(),
+                        "StreamFusionCalc");
+                replacement.setInputEdges(List.of(ExecEdge.builder()
+                        .source(over)
+                        .target(replacement)
+                        .shuffle(ExecEdge.FORWARD_SHUFFLE)
+                        .build()));
+                return replacement;
+            }
             StreamFusionExecCalc replacement = new StreamFusionExecCalc(
                     calc.getPersistedConfig(),
                     projection(calc),
@@ -379,7 +424,8 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     overSpec(aggregate),
                     aggregate.getInputProperties().get(0),
                     (RowType) aggregate.getOutputType(),
-                    "StreamFusionOverAggregate");
+                    "StreamFusionOverAggregate",
+                    false);
             replacement.setInputEdges(aggregate.getInputEdges().stream()
                     .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
                     .collect(Collectors.toList()));
@@ -663,6 +709,20 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
 
     private String unsupportedReason(StreamExecCalc calc, ProcessorContext context) {
         ExecEdge input = calc.getInputEdges().get(0);
+        return unsupportedCalcReason(
+                (RowType) input.getOutputType(),
+                (RowType) calc.getOutputType(),
+                projection(calc),
+                condition(calc),
+                context);
+    }
+
+    private String unsupportedCalcReason(
+            RowType inputType,
+            RowType outputType,
+            List<RexNode> projections,
+            RexNode condition,
+            ProcessorContext context) {
         try {
             Class<?> translator = Class.forName(
                     TRANSLATOR_CLASS,
@@ -670,12 +730,7 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     context.getPlanner().getFlinkContext().getClassLoader());
             Method method =
                     translator.getMethod("unsupportedReason", RowType.class, RowType.class, List.class, Object.class);
-            return (String) method.invoke(
-                    null,
-                    (RowType) input.getOutputType(),
-                    (RowType) calc.getOutputType(),
-                    projection(calc),
-                    condition(calc));
+            return (String) method.invoke(null, inputType, outputType, projections, condition);
         } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
             throw new IllegalStateException("Could not inspect StreamFusion calc support", e);
         } catch (InvocationTargetException e) {
@@ -1049,6 +1104,59 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         } catch (InvocationTargetException failure) {
             throw new IllegalStateException("StreamFusion OVER support inspection failed", failure.getCause());
         }
+    }
+
+    private String unsupportedReason(ProcessingTimeOverAggregate folded, ProcessorContext context) {
+        String reason = unsupportedCalcReason(
+                (RowType) folded.inputEdge.getOutputType(),
+                folded.inputType,
+                folded.inputProjection,
+                condition(folded.inputCalc),
+                context);
+        if (reason != null) {
+            return "processing-time input projection: " + reason;
+        }
+        long stateTtl = folded.aggregate
+                .getPersistedConfig()
+                .get(ExecutionConfigOptions.IDLE_STATE_RETENTION)
+                .toMillis();
+        try {
+            Class<?> translator = Class.forName(
+                    OVER_AGGREGATE_TRANSLATOR_CLASS,
+                    true,
+                    context.getPlanner().getFlinkContext().getClassLoader());
+            Method method = translator.getMethod(
+                    "unsupportedReason",
+                    RowType.class,
+                    RowType.class,
+                    OverSpec.class,
+                    long.class,
+                    ReadableConfig.class,
+                    boolean.class);
+            reason = (String) method.invoke(
+                    null,
+                    folded.inputType,
+                    folded.overOutputType,
+                    folded.overSpec,
+                    stateTtl,
+                    folded.aggregate.getPersistedConfig(),
+                    true);
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException failure) {
+            throw new IllegalStateException("Could not inspect folded processing-time OVER support", failure);
+        } catch (InvocationTargetException failure) {
+            throw new IllegalStateException(
+                    "Folded processing-time OVER support inspection failed", failure.getCause());
+        }
+        if (reason != null) {
+            return reason;
+        }
+        reason = unsupportedCalcReason(
+                folded.overOutputType,
+                (RowType) folded.outputCalc.getOutputType(),
+                folded.outputProjection,
+                folded.outputCondition,
+                context);
+        return reason == null ? null : "processing-time output projection: " + reason;
     }
 
     private String unsupportedReason(StreamExecWindowAggregate aggregate, ProcessorContext context) {
@@ -1565,6 +1673,151 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
     }
 
     /**
+     * Flink materializes {@code PROCTIME()} below an exchange and keeps that synthetic field in an
+     * OVER operator's internal output. The native processing-time kernel only needs arrival order.
+     * Fold the exchange and synthetic field while retaining native Calcs for the real input and
+     * output projections. This is deliberately limited to a parent Calc that does not observe the
+     * synthetic field, so an observable processing timestamp remains on Flink.
+     */
+    private static ProcessingTimeOverAggregate processingTimeOverAggregate(StreamExecCalc outputCalc) {
+        if (outputCalc.getInputEdges().size() != 1
+                || !(outputCalc.getInputEdges().get(0).getSource() instanceof StreamExecOverAggregate)) {
+            return null;
+        }
+        StreamExecOverAggregate aggregate =
+                (StreamExecOverAggregate) outputCalc.getInputEdges().get(0).getSource();
+        OverSpec originalSpec = overSpec(aggregate);
+        if (originalSpec.getGroups().size() != 1 || aggregate.getInputEdges().size() != 1) {
+            return null;
+        }
+        OverSpec.GroupSpec originalGroup = originalSpec.getGroups().get(0);
+        int[] orderFields = originalGroup.getSort().getFieldIndices();
+        if (orderFields.length != 1) {
+            return null;
+        }
+        int timeIndex = orderFields[0];
+        ExecEdge aggregateInput = aggregate.getInputEdges().get(0);
+        if (!(aggregateInput.getSource() instanceof StreamExecExchange)) {
+            return null;
+        }
+        StreamExecExchange exchange = (StreamExecExchange) aggregateInput.getSource();
+        if (exchange.getInputEdges().size() != 1
+                || !(exchange.getInputEdges().get(0).getSource() instanceof StreamExecCalc)) {
+            return null;
+        }
+        StreamExecCalc inputCalc =
+                (StreamExecCalc) exchange.getInputEdges().get(0).getSource();
+        if (inputCalc.getInputEdges().size() != 1) {
+            return null;
+        }
+        List<RexNode> originalInputProjection = projection(inputCalc);
+        if (timeIndex < 0
+                || timeIndex >= originalInputProjection.size()
+                || !isProctimeCall(originalInputProjection.get(timeIndex))) {
+            return null;
+        }
+        List<RexNode> inputProjection = new ArrayList<>(originalInputProjection.size() - 1);
+        for (int index = 0; index < originalInputProjection.size(); index++) {
+            if (index == timeIndex) {
+                continue;
+            }
+            RexNode expression = originalInputProjection.get(index);
+            inputProjection.add(expression);
+        }
+        if (inputProjection.isEmpty()) {
+            return null;
+        }
+
+        RemappedExpressions output = remapExpressions(projection(outputCalc), condition(outputCalc), timeIndex);
+        if (output == null) {
+            return null;
+        }
+        int[] partition = originalSpec.getPartition().getFieldIndices().clone();
+        for (int index = 0; index < partition.length; index++) {
+            if (partition[index] == timeIndex) {
+                return null;
+            }
+            if (partition[index] > timeIndex) {
+                partition[index]--;
+            }
+        }
+        List<org.apache.calcite.rel.core.AggregateCall> calls =
+                new ArrayList<>(originalGroup.getAggCalls().size());
+        for (org.apache.calcite.rel.core.AggregateCall call : originalGroup.getAggCalls()) {
+            List<Integer> arguments = new ArrayList<>(call.getArgList().size());
+            for (int argument : call.getArgList()) {
+                if (argument == timeIndex) {
+                    return null;
+                }
+                arguments.add(argument > timeIndex ? argument - 1 : argument);
+            }
+            org.apache.calcite.rel.core.AggregateCall remapped = call.withArgList(arguments);
+            if (call.filterArg == timeIndex) {
+                return null;
+            }
+            if (call.filterArg > timeIndex) {
+                remapped = remapped.withFilter(call.filterArg - 1);
+            }
+            calls.add(remapped);
+        }
+        SortSpec sort = SortSpec.builder()
+                .addField(
+                        0,
+                        originalGroup.getSort().getAscendingOrders()[0],
+                        originalGroup.getSort().getNullsIsLast()[0])
+                .build();
+        OverSpec remappedSpec = new OverSpec(
+                new PartitionSpec(partition),
+                List.of(new OverSpec.GroupSpec(
+                        sort,
+                        originalGroup.isRows(),
+                        originalGroup.getLowerBound(),
+                        originalGroup.getUpperBound(),
+                        calls)),
+                originalSpec.getConstants(),
+                originalSpec.getOriginalInputFields() - 1);
+        RowType inputType = withoutField((RowType) inputCalc.getOutputType(), timeIndex);
+        RowType overOutputType = withoutField((RowType) aggregate.getOutputType(), timeIndex);
+        return new ProcessingTimeOverAggregate(
+                aggregate,
+                inputCalc,
+                inputCalc.getInputEdges().get(0),
+                inputProjection,
+                inputType,
+                remappedSpec,
+                overOutputType,
+                outputCalc,
+                output.projection,
+                output.condition);
+    }
+
+    private static RowType withoutField(RowType type, int removed) {
+        List<RowType.RowField> fields = new ArrayList<>(type.getFields());
+        fields.remove(removed);
+        return new RowType(type.isNullable(), fields);
+    }
+
+    private static RemappedExpressions remapExpressions(List<RexNode> projection, RexNode condition, int removed) {
+        boolean[] observedRemovedField = {false};
+        RexShuttle shuttle = new RexShuttle() {
+            @Override
+            public RexNode visitInputRef(RexInputRef inputRef) {
+                if (inputRef.getIndex() == removed) {
+                    observedRemovedField[0] = true;
+                    return inputRef;
+                }
+                int index = inputRef.getIndex() > removed ? inputRef.getIndex() - 1 : inputRef.getIndex();
+                return index == inputRef.getIndex() ? inputRef : new RexInputRef(index, inputRef.getType());
+            }
+        };
+        List<RexNode> remappedProjection = projection.stream()
+                .map(expression -> expression.accept(shuttle))
+                .collect(Collectors.toList());
+        RexNode remappedCondition = condition == null ? null : condition.accept(shuttle);
+        return observedRemovedField[0] ? null : new RemappedExpressions(remappedProjection, remappedCondition);
+    }
+
+    /**
      * Flink materializes {@code PROCTIME()} in a Calc directly below the distribution required by
      * a one-phase processing-time window. The native window operator reads Flink's processing-time
      * service instead of that synthetic column, so fold the Calc and its exchange while remapping
@@ -1696,6 +1949,52 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             this.grouping = grouping;
             this.aggregateCalls = aggregateCalls;
             this.windowing = windowing;
+        }
+    }
+
+    private static final class RemappedExpressions {
+        private final List<RexNode> projection;
+        private final RexNode condition;
+
+        private RemappedExpressions(List<RexNode> projection, RexNode condition) {
+            this.projection = projection;
+            this.condition = condition;
+        }
+    }
+
+    private static final class ProcessingTimeOverAggregate {
+        private final StreamExecOverAggregate aggregate;
+        private final StreamExecCalc inputCalc;
+        private final ExecEdge inputEdge;
+        private final List<RexNode> inputProjection;
+        private final RowType inputType;
+        private final OverSpec overSpec;
+        private final RowType overOutputType;
+        private final StreamExecCalc outputCalc;
+        private final List<RexNode> outputProjection;
+        private final RexNode outputCondition;
+
+        private ProcessingTimeOverAggregate(
+                StreamExecOverAggregate aggregate,
+                StreamExecCalc inputCalc,
+                ExecEdge inputEdge,
+                List<RexNode> inputProjection,
+                RowType inputType,
+                OverSpec overSpec,
+                RowType overOutputType,
+                StreamExecCalc outputCalc,
+                List<RexNode> outputProjection,
+                RexNode outputCondition) {
+            this.aggregate = aggregate;
+            this.inputCalc = inputCalc;
+            this.inputEdge = inputEdge;
+            this.inputProjection = inputProjection;
+            this.inputType = inputType;
+            this.overSpec = overSpec;
+            this.overOutputType = overOutputType;
+            this.outputCalc = outputCalc;
+            this.outputProjection = outputProjection;
+            this.outputCondition = outputCondition;
         }
     }
 

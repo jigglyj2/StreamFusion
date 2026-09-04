@@ -17,7 +17,9 @@ use crate::exchange::{assign_key_group, encode_binary_row, KeyField};
 use crate::memory_pool::HostMemoryReservation;
 use crate::planner::arrow_schema;
 use crate::planner::operators::group_aggregate::{
-    aggregate_array, lower_call, row_aggregate_values, AccumulatorState, AggregateValue, Call,
+    aggregate_array, decode_state as decode_accumulator_state,
+    encode_state as encode_accumulator_state, lower_call, row_aggregate_values, AccumulatorState,
+    AggregateValue, Call,
 };
 use crate::planner::operators::window_table_function::timestamp_millis;
 use crate::state::{
@@ -30,7 +32,9 @@ mod state_codec;
 #[cfg(test)]
 mod tests;
 
-use state_codec::{decode_state, encode_state, OverState, StoredRow};
+use state_codec::{
+    decode_state as decode_over_state, encode_state as encode_over_state, OverState, StoredRow,
+};
 
 const INSERT: i8 = 0;
 const UPDATE_BEFORE: i8 = 1;
@@ -264,12 +268,55 @@ impl OverAggregateProcessor {
             .collect::<Vec<_>>();
         let existing = self.state.get_batch(&refs)?;
         self.state_read_batches = self.state_read_batches.saturating_add(1);
+        if time_attribute == proto::OverTimeAttribute::ProcessingTime && !self.plan.input_changelog
+        {
+            let mut accumulators = existing
+                .iter()
+                .map(|value| match value.as_deref() {
+                    Some(bytes) => self.decode_processing_time_accumulator(bytes),
+                    None => Ok(AccumulatorState::new(&self.calls)),
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let mut touched = vec![false; accumulators.len()];
+            let mut events = Vec::with_capacity(batch.num_rows());
+            for row in 0..batch.num_rows() {
+                let state_index = row_state_indices[row];
+                let accumulator = &mut accumulators[state_index];
+                accumulator.apply(&self.calls, &batch, row, true)?;
+                events.push(OutputEvent {
+                    payload: payload_rows.row(row).as_ref().to_vec(),
+                    values: accumulator.values(&self.calls),
+                    kind: INSERT,
+                    input_ordinal: i32::try_from(row).map_err(|_| {
+                        DataFusionError::Execution(
+                            "OVER aggregate batch exceeds i32 rows".to_string(),
+                        )
+                    })?,
+                });
+                touched[state_index] = true;
+            }
+            let mutations = state_keys
+                .into_iter()
+                .zip(accumulators.into_iter().zip(touched))
+                .filter_map(|(key, (state, touched))| {
+                    touched.then(|| StateMutation {
+                        key,
+                        value: Some(encode_accumulator_state(&state)),
+                    })
+                })
+                .collect::<Vec<_>>();
+            if !mutations.is_empty() {
+                self.state.write_batch(mutations)?;
+                self.state_write_batches = self.state_write_batches.saturating_add(1);
+            }
+            return self.output_batch(events);
+        }
         let mut states = existing
             .iter()
             .map(|value| {
                 value
                     .as_deref()
-                    .map(|bytes| decode_state(bytes, self.calls.len()))
+                    .map(|bytes| decode_over_state(bytes, self.calls.len()))
                     .transpose()
                     .map(Option::unwrap_or_default)
             })
@@ -409,7 +456,7 @@ impl OverAggregateProcessor {
             .filter_map(|(key, (state, touched))| {
                 touched.then(|| StateMutation {
                     key,
-                    value: (!state.rows.is_empty()).then(|| encode_state(&state)),
+                    value: (!state.rows.is_empty()).then(|| encode_over_state(&state)),
                 })
             })
             .collect::<Vec<_>>();
@@ -484,6 +531,19 @@ impl OverAggregateProcessor {
         }
         self.input_schema = Some(schema);
         Ok(())
+    }
+
+    fn decode_processing_time_accumulator(&self, bytes: &[u8]) -> Result<AccumulatorState> {
+        if bytes.starts_with(b"SFOA") {
+            let legacy = decode_over_state(bytes, self.calls.len())?;
+            let mut accumulator = AccumulatorState::new(&self.calls);
+            for row in legacy.rows.values().flatten() {
+                accumulator.apply_values(&self.calls, &row.contributions, true)?;
+            }
+            Ok(accumulator)
+        } else {
+            decode_accumulator_state(bytes, &self.calls)
+        }
     }
 
     fn state_key(&self, batch: &RecordBatch, row: usize) -> Result<StateKey> {
@@ -593,7 +653,7 @@ impl OverAggregateProcessor {
             let Some(value) = value else {
                 continue;
             };
-            let mut state = decode_state(value.as_ref(), self.calls.len())?;
+            let mut state = decode_over_state(value.as_ref(), self.calls.len())?;
             emit_ready_event_time(
                 &mut state,
                 &self.calls,
@@ -603,7 +663,7 @@ impl OverAggregateProcessor {
             )?;
             mutations.push(StateMutation {
                 key,
-                value: Some(encode_state(&state)),
+                value: Some(encode_over_state(&state)),
             });
         }
         self.append_timer_mutations(&mut mutations, dirty_timer_groups)?;

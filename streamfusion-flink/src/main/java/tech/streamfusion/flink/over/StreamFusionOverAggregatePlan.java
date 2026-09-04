@@ -26,17 +26,21 @@ import tech.streamfusion.proto.plan.v1.Schema;
 final class StreamFusionOverAggregatePlan {
     private StreamFusionOverAggregatePlan() {}
 
-    static byte[] create(RowType inputType, RowType outputType, OverSpec spec, long stateTtl) {
+    static byte[] create(RowType inputType, RowType outputType, OverSpec spec, long stateTtl, boolean processingTime) {
         OverSpec.GroupSpec group = spec.getGroups().get(0);
-        LogicalType orderType = inputType.getTypeAt(group.getSort().getFieldIndices()[0]);
+        LogicalType orderType =
+                processingTime ? null : inputType.getTypeAt(group.getSort().getFieldIndices()[0]);
         OverAggregate.Builder aggregate = OverAggregate.newBuilder()
                 .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
                 .setOrderKeyIndex(group.getSort().getFieldIndices()[0])
                 .setRowsFrame(group.isRows())
-                .setTimeAttribute(timeAttribute(orderType))
+                .setTimeAttribute(
+                        processingTime
+                                ? OverTimeAttribute.OVER_TIME_ATTRIBUTE_PROCESSING_TIME
+                                : timeAttribute(orderType))
                 .setInputSchema(schema(inputType))
                 .setOutputSchema(schema(outputType))
-                .setInputChangelog(true)
+                .setInputChangelog(!processingTime)
                 .setStateTtlMillis(stateTtl)
                 .setSortAscending(group.getSort().getAscendingOrders()[0])
                 .setSortNullsLast(group.getSort().getNullsIsLast()[0]);

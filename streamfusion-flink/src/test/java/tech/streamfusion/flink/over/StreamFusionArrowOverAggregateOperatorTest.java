@@ -269,6 +269,74 @@ class StreamFusionArrowOverAggregateOperatorTest {
     }
 
     @Test
+    void compactProcessingTimeStateRestoresAcrossCheckpointKindsAndBackendPairs() throws Exception {
+        try (RootAllocator inputs = new RootAllocator(64L << 20)) {
+            for (boolean sourceRocks : new boolean[] {false, true}) {
+                for (boolean targetRocks : new boolean[] {false, true}) {
+                    for (int recoveryKind = 0; recoveryKind < 3; recoveryKind++) {
+                        OperatorSubtaskState snapshot;
+                        try (Harness source = processingTimeHarness(null, sourceRocks)) {
+                            process(source.operator, inputs, row(7, 20, 20));
+                            assertThat(takeKinds(source.operator)).containsExactly(RowKind.INSERT);
+                            snapshot = recoveryKind == 2
+                                    ? source.operator
+                                            .snapshotWithLocalState(
+                                                    40, 40, SavepointType.savepoint(SavepointFormatType.CANONICAL))
+                                            .getJobManagerOwnedState()
+                                    : snapshot(source.operator, 40, recoveryKind == 1);
+                        }
+                        try (Harness target = processingTimeHarness(snapshot, targetRocks)) {
+                            process(target.operator, inputs, row(7, 10, 10));
+                            assertThat(takeKinds(target.operator)).containsExactly(RowKind.INSERT);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    void compactProcessingTimeStateRedistributesFromOneToTwoAndBack() throws Exception {
+        try (RootAllocator inputs = new RootAllocator(64L << 20)) {
+            RowDataKeySelector selector = selector();
+            Map<Integer, Long> accountByOwner = accountsForEverySubtask(selector, 2);
+            for (boolean rocksDb : new boolean[] {false, true}) {
+                OperatorSubtaskState initialSnapshot;
+                try (Harness initial = processingTimeHarness(1, 0, null, rocksDb)) {
+                    for (long account : accountByOwner.values()) {
+                        process(initial.operator, inputs, row(account, 20, 20));
+                        assertThat(takeKinds(initial.operator)).containsExactly(RowKind.INSERT);
+                    }
+                    initialSnapshot = initial.operator.snapshot(41, 41);
+                }
+
+                OperatorSubtaskState packaged = AbstractStreamOperatorTestHarness.repackageState(initialSnapshot);
+                List<OperatorSubtaskState> scaledSnapshots = new ArrayList<>();
+                for (int subtask = 0; subtask < 2; subtask++) {
+                    OperatorSubtaskState assigned = AbstractStreamOperatorTestHarness.repartitionOperatorState(
+                            packaged, MAX_PARALLELISM, 1, 2, subtask);
+                    try (Harness scaled = processingTimeHarness(2, subtask, assigned, rocksDb)) {
+                        process(scaled.operator, inputs, row(accountByOwner.get(subtask), 10, 10));
+                        assertThat(takeKinds(scaled.operator)).containsExactly(RowKind.INSERT);
+                        scaledSnapshots.add(scaled.operator.snapshot(42, 42));
+                    }
+                }
+
+                OperatorSubtaskState packagedScaled = AbstractStreamOperatorTestHarness.repackageState(
+                        scaledSnapshots.toArray(new OperatorSubtaskState[0]));
+                OperatorSubtaskState assignedBack = AbstractStreamOperatorTestHarness.repartitionOperatorState(
+                        packagedScaled, MAX_PARALLELISM, 2, 1, 0);
+                try (Harness scaledBack = processingTimeHarness(1, 0, assignedBack, rocksDb)) {
+                    for (long account : accountByOwner.values()) {
+                        process(scaledBack.operator, inputs, row(account, 5, 5));
+                        assertThat(takeKinds(scaledBack.operator)).containsExactly(RowKind.INSERT);
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
     void redistributesKeyGroupsFromOneToTwoAndBackOnBothBackends() throws Exception {
         try (RootAllocator inputs = new RootAllocator(64L << 20)) {
             RowDataKeySelector selector = selector();
@@ -473,6 +541,33 @@ class StreamFusionArrowOverAggregateOperatorTest {
         return new Harness(harness);
     }
 
+    private static Harness processingTimeHarness(OperatorSubtaskState state, boolean rocksDb) throws Exception {
+        return processingTimeHarness(1, 0, state, rocksDb);
+    }
+
+    private static Harness processingTimeHarness(
+            int parallelism, int subtask, OperatorSubtaskState state, boolean rocksDb) throws Exception {
+        RowDataKeySelector selector = selector();
+        StreamFusionArrowOverAggregateOperator operator = new StreamFusionArrowOverAggregateOperator(
+                INPUT_TYPE, OUTPUT_TYPE, new int[] {0}, processingTimePlan(), false, false, false, selector);
+        KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> harness =
+                new KeyedOneInputStreamOperatorTestHarness<>(
+                        operator,
+                        new ArrowBatchKeySelector(selector),
+                        selector.getProducedType(),
+                        MAX_PARALLELISM,
+                        parallelism,
+                        subtask);
+        harness.setStateBackend(new StreamFusionStateBackend(
+                rocksDb ? new EmbeddedRocksDBStateBackend(true) : new HashMapStateBackend()));
+        harness.setup(ArrowRowDataBatchSerializer.INSTANCE);
+        if (state != null) {
+            harness.initializeState(state);
+        }
+        harness.open();
+        return new Harness(harness);
+    }
+
     private static void process(
             KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> operator,
             RootAllocator allocator,
@@ -602,6 +697,31 @@ class StreamFusionArrowOverAggregateOperatorTest {
                 .setInputSchema(schema(EVENT_INPUT_TYPE))
                 .setOutputSchema(schema(EVENT_OUTPUT_TYPE))
                 .setInputChangelog(true)
+                .setSortAscending(true)
+                .build();
+        return NativePlan.newBuilder()
+                .setProtocolVersion(1)
+                .setRoot(Operator.newBuilder().setOverAggregate(aggregate))
+                .build()
+                .toByteArray();
+    }
+
+    private static byte[] processingTimePlan() {
+        OverAggregate aggregate = OverAggregate.newBuilder()
+                .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
+                .addPartitionKeyIndices(0)
+                .setOrderKeyIndex(1)
+                .setRowsFrame(true)
+                .setTimeAttribute(OverTimeAttribute.OVER_TIME_ATTRIBUTE_PROCESSING_TIME)
+                .addAggregateCalls(AggregateCall.newBuilder()
+                        .setFunction(AggregateFunction.AGGREGATE_FUNCTION_SUM)
+                        .setInputIndex(2)
+                        .setInputType(FlinkLogicalTypeProto.serialize(INPUT_TYPE.getTypeAt(2)))
+                        .setOutputType(FlinkLogicalTypeProto.serialize(OUTPUT_TYPE.getTypeAt(3)))
+                        .setRetractable(true))
+                .setInputSchema(schema(INPUT_TYPE))
+                .setOutputSchema(schema(OUTPUT_TYPE))
+                .setInputChangelog(false)
                 .setSortAscending(true)
                 .build();
         return NativePlan.newBuilder()

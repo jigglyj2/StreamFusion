@@ -30,13 +30,15 @@ public final class StreamFusionExecOverAggregate extends ExecNodeBase<RowData> i
     private static final String TRANSLATOR_CLASS = "tech.streamfusion.flink.over.StreamFusionOverAggregateTranslator";
 
     private final OverSpec overSpec;
+    private final boolean processingTime;
 
     public StreamFusionExecOverAggregate(
             ReadableConfig config,
             OverSpec overSpec,
             InputProperty inputProperty,
             RowType outputType,
-            String description) {
+            String description,
+            boolean processingTime) {
         super(
                 ExecNodeContext.newNodeId(),
                 new ExecNodeContext("streamfusion-exec-over-aggregate_1"),
@@ -45,6 +47,7 @@ public final class StreamFusionExecOverAggregate extends ExecNodeBase<RowData> i
                 outputType,
                 description);
         this.overSpec = overSpec;
+        this.processingTime = processingTime;
     }
 
     @SuppressWarnings("unchecked")
@@ -69,7 +72,8 @@ public final class StreamFusionExecOverAggregate extends ExecNodeBase<RowData> i
                     long.class,
                     ReadableConfig.class,
                     StreamExecutionEnvironment.class,
-                    RowDataKeySelector.class);
+                    RowDataKeySelector.class,
+                    boolean.class);
             Transformation<RowData> result = (Transformation<RowData>) method.invoke(
                     null,
                     input,
@@ -79,7 +83,8 @@ public final class StreamFusionExecOverAggregate extends ExecNodeBase<RowData> i
                     stateTtl,
                     getPersistedConfig(),
                     planner.getExecEnv(),
-                    selector);
+                    selector,
+                    processingTime);
             if (result == null) {
                 throw new IllegalStateException("A selected StreamFusion OVER aggregate failed translation");
             }

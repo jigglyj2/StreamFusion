@@ -123,7 +123,8 @@ class LocalRowDataNexmarkBenchmarkIT {
     @ParameterizedTest
     @ValueSource(strings = {"hashmap", "rocksdb"})
     void overAggregateMatchesFlinkOnBothStateBackends(String backend) throws Exception {
-        for (String query : new String[] {"over-aggregate", "over-aggregate-event-time"}) {
+        for (String query :
+                new String[] {"over-aggregate", "over-aggregate-event-time", "over-aggregate-processing-time"}) {
             LocalRowDataNexmarkBenchmark.RunResult flink =
                     LocalRowDataNexmarkBenchmark.run(2_000, query, false, backend, 1);
             LocalRowDataNexmarkBenchmark.RunResult streamFusion =

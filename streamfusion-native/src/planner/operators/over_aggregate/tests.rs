@@ -104,6 +104,61 @@ fn processing_time_rows_and_range_are_incremental_in_arrival_order() {
 }
 
 #[test]
+fn append_only_processing_time_uses_bounded_accumulator_state_and_restores_legacy_rows() {
+    let legacy_broker = Arc::new(TestBroker::new(64 << 20));
+    let mut legacy = processor_with_time(
+        legacy_broker.clone(),
+        true,
+        proto::OverTimeAttribute::ProcessingTime,
+    );
+    legacy
+        .process_arrow(batch(&["a", "a"], &[7, 7], &[10, 20], &[INSERT; 2]))
+        .unwrap();
+    let legacy_snapshots = (0..128)
+        .map(|group| legacy.snapshot_key_group(group).unwrap())
+        .collect::<Vec<_>>();
+    drop(legacy);
+    assert_eq!(legacy_broker.reserved(), 0);
+
+    let broker = Arc::new(TestBroker::new(64 << 20));
+    let mut compact = OverAggregateProcessor::new(
+        &plan(true, proto::OverTimeAttribute::ProcessingTime, false),
+        128,
+        0,
+        127,
+        HostMemoryReservation::new(broker.clone(), "compact OVER test"),
+    )
+    .unwrap();
+    for (group, snapshot) in legacy_snapshots.iter().enumerate() {
+        compact.restore_key_group(group as u32, snapshot).unwrap();
+    }
+    let output = compact
+        .process_arrow(batch(&["a"], &[7], &[5], &[INSERT]))
+        .unwrap();
+    assert_eq!(sums(&output), vec![35]);
+    drop(output);
+
+    let first_size = (0..128)
+        .map(|group| compact.snapshot_key_group(group).unwrap().len())
+        .sum::<usize>();
+    let keys = vec!["a"; 2_000];
+    let order = vec![7; 2_000];
+    let values = vec![1; 2_000];
+    let kinds = vec![INSERT; 2_000];
+    let output = compact
+        .process_arrow(batch(&keys, &order, &values, &kinds))
+        .unwrap();
+    assert_eq!(sums(&output).last(), Some(&2_035));
+    drop(output);
+    let second_size = (0..128)
+        .map(|group| compact.snapshot_key_group(group).unwrap().len())
+        .sum::<usize>();
+    assert_eq!(second_size, first_size);
+    drop(compact);
+    assert_eq!(broker.reserved(), 0);
+}
+
+#[test]
 fn event_time_waits_for_watermarks_orders_rows_and_drops_late_input() {
     let broker = Arc::new(TestBroker::new(64 << 20));
     let mut processor =
@@ -169,7 +224,7 @@ fn processor_with_time(
     time_attribute: proto::OverTimeAttribute,
 ) -> OverAggregateProcessor {
     OverAggregateProcessor::new(
-        &plan(rows_frame, time_attribute),
+        &plan(rows_frame, time_attribute, true),
         128,
         0,
         127,
@@ -178,7 +233,11 @@ fn processor_with_time(
     .unwrap()
 }
 
-fn plan(rows_frame: bool, time_attribute: proto::OverTimeAttribute) -> Vec<u8> {
+fn plan(
+    rows_frame: bool,
+    time_attribute: proto::OverTimeAttribute,
+    input_changelog: bool,
+) -> Vec<u8> {
     let order_type = if time_attribute == proto::OverTimeAttribute::EventTime {
         timestamp()
     } else {
@@ -218,7 +277,7 @@ fn plan(rows_frame: bool, time_attribute: proto::OverTimeAttribute) -> Vec<u8> {
                     ],
                     input_schema: Some(input),
                     output_schema: Some(output),
-                    input_changelog: true,
+                    input_changelog,
                     state_ttl_millis: 0,
                     sort_ascending: true,
                     sort_nulls_last: false,
