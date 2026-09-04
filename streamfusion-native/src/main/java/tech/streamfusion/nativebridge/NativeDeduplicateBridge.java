@@ -8,10 +8,12 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.concurrent.atomic.AtomicLong;
 
 /** Lifecycle and Arrow C Data boundary for one persistent native deduplicate operator. */
 public final class NativeDeduplicateBridge {
     private static final String ROCKSDB_RESOURCE = "/META-INF/native/linux-x86_64/libstreamfusion_state_rocksdb.so";
+    private static final AtomicLong EXECUTED_BATCHES = new AtomicLong();
     private static Path extractedRocksDbLibrary;
 
     static {
@@ -31,7 +33,13 @@ public final class NativeDeduplicateBridge {
     }
 
     public static long createRocksDb(
-            byte[] plan, int maxParallelism, int firstKeyGroup, int lastKeyGroup, Path databasePath, long memoryLimit) {
+            byte[] plan,
+            int maxParallelism,
+            int firstKeyGroup,
+            int lastKeyGroup,
+            Path databasePath,
+            long memoryLimit,
+            NativeMemoryManager memoryManager) {
         long handle = createRocksHandle(
                 plan,
                 maxParallelism,
@@ -39,6 +47,7 @@ public final class NativeDeduplicateBridge {
                 lastKeyGroup,
                 rocksDbLibraryPath().toString(),
                 databasePath.toString(),
+                memoryManager,
                 memoryLimit);
         if (handle == 0) {
             throw new IllegalStateException("Native RocksDB deduplicate returned a null handle");
@@ -76,6 +85,7 @@ public final class NativeDeduplicateBridge {
             long inputSchemaAddress,
             long outputArrayAddress,
             long outputSchemaAddress) {
+        EXECUTED_BATCHES.incrementAndGet();
         return processArrowBatch(
                 handle, inputArrayAddress, inputSchemaAddress, outputArrayAddress, outputSchemaAddress);
     }
@@ -87,8 +97,17 @@ public final class NativeDeduplicateBridge {
             long inputSchemaAddress,
             long outputArrayAddress,
             long outputSchemaAddress) {
+        EXECUTED_BATCHES.incrementAndGet();
         return processOutputArrowBatch(
                 handle, inputArrayAddress, inputSchemaAddress, outputArrayAddress, outputSchemaAddress);
+    }
+
+    public static long executedBatchCount() {
+        return EXECUTED_BATCHES.get();
+    }
+
+    public static void resetMetrics() {
+        EXECUTED_BATCHES.set(0);
     }
 
     public static byte[] snapshot(long handle, int keyGroup) {
@@ -133,6 +152,7 @@ public final class NativeDeduplicateBridge {
             int lastKeyGroup,
             String pluginPath,
             String databasePath,
+            NativeMemoryManager memoryManager,
             long memoryLimit);
 
     private static native long processArrowBatch(

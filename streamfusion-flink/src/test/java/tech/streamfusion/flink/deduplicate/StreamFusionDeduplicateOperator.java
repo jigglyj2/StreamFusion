@@ -128,7 +128,8 @@ final class StreamFusionDeduplicateOperator extends AbstractStreamOperator<RowDa
                         keyGroupRange.getStartKeyGroup(),
                         keyGroupRange.getEndKeyGroup(),
                         rocksDbDirectory,
-                        rocksDbMemory);
+                        rocksDbMemory,
+                        managedMemory);
             } catch (RuntimeException failure) {
                 managedMemory.release(rocksDbMemory);
                 throw failure;

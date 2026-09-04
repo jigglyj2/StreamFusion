@@ -31,7 +31,7 @@ public final class LocalRowDataNexmarkBenchmark {
                         RunResult result = run(events, query, streamFusion, backend, parallelism);
                         String explain = streamFusion ? StreamFusionPlanningDiagnostics.explain() : "";
                         System.out.printf(
-                                "%s engine=%s state_backend=%s accelerated=%s input_events=%d elapsed_seconds=%.6f input_events_per_second=%.2f native_calc_batches=%d native_group_aggregate_batches=%d native_top_n_batches=%d native_window_aggregate_batches=%d native_window_join_batches=%d native_regular_join_batches=%d native_interval_join_batches=%d native_over_aggregate_batches=%d output_rows=%d output_sha256=%s materialized_rows=%d materialized_sha256=%s%n",
+                                "%s engine=%s state_backend=%s accelerated=%s input_events=%d elapsed_seconds=%.6f input_events_per_second=%.2f native_calc_batches=%d native_deduplicate_batches=%d native_group_aggregate_batches=%d native_top_n_batches=%d native_window_aggregate_batches=%d native_window_join_batches=%d native_regular_join_batches=%d native_interval_join_batches=%d native_over_aggregate_batches=%d output_rows=%d output_sha256=%s materialized_rows=%d materialized_sha256=%s%n",
                                 query,
                                 streamFusion ? "streamfusion" : "flink",
                                 backend,
@@ -40,6 +40,7 @@ public final class LocalRowDataNexmarkBenchmark {
                                 result.elapsedSeconds(),
                                 result.recordsPerSecond(events),
                                 result.nativeCalcBatches(),
+                                result.nativeDeduplicateBatches(),
                                 result.nativeGroupAggregateBatches(),
                                 result.nativeTopNBatches(),
                                 result.nativeWindowAggregateBatches(),
@@ -85,6 +86,7 @@ public final class LocalRowDataNexmarkBenchmark {
         return new RunResult(
                 System.nanoTime() - start,
                 StreamFusionPlannerFactory.nativeCalcBatchCount(),
+                StreamFusionPlannerFactory.nativeDeduplicateBatchCount(),
                 StreamFusionPlannerFactory.nativeGroupAggregateBatchCount(),
                 StreamFusionPlannerFactory.nativeTopNBatchCount(),
                 StreamFusionPlannerFactory.nativeWindowAggregateBatchCount(),
@@ -130,6 +132,7 @@ public final class LocalRowDataNexmarkBenchmark {
     static final class RunResult {
         private final long elapsedNanos;
         private final long nativeCalcBatches;
+        private final long nativeDeduplicateBatches;
         private final long nativeGroupAggregateBatches;
         private final long nativeTopNBatches;
         private final long nativeWindowAggregateBatches;
@@ -147,6 +150,7 @@ public final class LocalRowDataNexmarkBenchmark {
         private RunResult(
                 long elapsedNanos,
                 long nativeCalcBatches,
+                long nativeDeduplicateBatches,
                 long nativeGroupAggregateBatches,
                 long nativeTopNBatches,
                 long nativeWindowAggregateBatches,
@@ -162,6 +166,7 @@ public final class LocalRowDataNexmarkBenchmark {
                 List<String> materializedDebugRows) {
             this.elapsedNanos = elapsedNanos;
             this.nativeCalcBatches = nativeCalcBatches;
+            this.nativeDeduplicateBatches = nativeDeduplicateBatches;
             this.nativeGroupAggregateBatches = nativeGroupAggregateBatches;
             this.nativeTopNBatches = nativeTopNBatches;
             this.nativeWindowAggregateBatches = nativeWindowAggregateBatches;
@@ -187,6 +192,10 @@ public final class LocalRowDataNexmarkBenchmark {
 
         private long nativeCalcBatches() {
             return nativeCalcBatches;
+        }
+
+        long nativeDeduplicateBatches() {
+            return nativeDeduplicateBatches;
         }
 
         long nativeGroupAggregateBatches() {

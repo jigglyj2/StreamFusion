@@ -17,6 +17,7 @@ class NexmarkRowDataQueryCatalogTest {
                         "q8",
                         "q11",
                         "q12",
+                        "q18",
                         "q19",
                         "q20",
                         "q22",
@@ -33,6 +34,8 @@ class NexmarkRowDataQueryCatalogTest {
                         "over-aggregate-bounded-rows",
                         "over-aggregate-bounded-range",
                         "select-distinct",
+                        "deduplicate-processing-time-keep-first",
+                        "deduplicate-processing-time-keep-last",
                         "top-n",
                         "limit");
         for (String query : NexmarkRowDataQueryCatalog.supportedQueries()) {

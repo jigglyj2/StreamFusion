@@ -23,7 +23,7 @@ import tech.streamfusion.flink.arrow.ArrowRowDataBatchTypeInfo;
 import tech.streamfusion.flink.arrow.StreamFusionArrowBoundaries;
 import tech.streamfusion.flink.state.StreamFusionStateBackendFactory;
 
-/** Reflection entry point for the timer-free rowtime keep-last deduplicate slice. */
+/** Reflection entry point for synchronous timer-free deduplication. */
 public final class StreamFusionDeduplicateTranslator {
     private StreamFusionDeduplicateTranslator() {}
 
@@ -54,19 +54,29 @@ public final class StreamFusionDeduplicateTranslator {
             return null;
         }
         StreamFusionStateBackendFactory.install(environment);
-        int rowtimeIndex = rowtimeIndex(inputType);
+        int rowtimeIndex = isRowtime ? rowtimeIndex(inputType) : 0;
         boolean generateInsert =
                 config.get(ExecutionConfigOptions.TABLE_EXEC_DEDUPLICATE_INSERT_UPDATE_AFTER_SENSITIVE_ENABLED);
         Transformation<ArrowRowDataBatch> arrowInput = StreamFusionArrowBoundaries.toArrow(input, inputType);
         OneInputTransformation<ArrowRowDataBatch, ArrowRowDataBatch> transformation = new OneInputTransformation<>(
                 arrowInput,
-                "streamfusion-deduplicate[keep-last]",
+                "streamfusion-deduplicate[" + (isRowtime ? "rowtime" : "proctime") + ","
+                        + (keepLastRow ? "keep-last" : "keep-first") + "]",
                 new StreamFusionArrowDeduplicateOperator(
-                        inputType, uniqueKeys, rowtimeIndex, generateInsert, keySelector),
+                        inputType,
+                        uniqueKeys,
+                        rowtimeIndex,
+                        isRowtime,
+                        keepLastRow,
+                        generateInsert,
+                        generateUpdateBefore,
+                        keySelector),
                 ArrowRowDataBatchTypeInfo.INSTANCE,
                 input.getParallelism(),
                 false);
-        transformation.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
+        // Stateful byte maps and their resize peak need a larger share than stateless Arrow
+        // stages. This remains Flink's standard operator-weight mechanism, not a new budget.
+        transformation.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 8);
         transformation.setStateKeySelector(new ArrowBatchKeySelector(keySelector));
         transformation.setStateKeyType(keySelector.getProducedType());
         return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
@@ -82,17 +92,8 @@ public final class StreamFusionDeduplicateTranslator {
             boolean generateUpdateBefore,
             long stateRetentionTime,
             ReadableConfig config) {
-        if (!isRowtime) {
-            return "ordering: the initial native deduplicate requires ROWTIME DESC";
-        }
-        if (!keepLastRow) {
-            return "ordering: keep-first deduplicate requires event-time timers";
-        }
-        if (outputInsertOnly) {
-            return "changelog: keep-last deduplicate must produce updating output";
-        }
-        if (generateUpdateBefore) {
-            return "changelog: Arrow-native deduplicate cannot materialize UPDATE_BEFORE rows yet";
+        if (outputInsertOnly && (isRowtime || keepLastRow)) {
+            return "changelog: insert-only output is supported only by processing-time keep-first deduplicate";
         }
         if (stateRetentionTime != 0) {
             return "state: native deduplicate TTL is not implemented";
@@ -120,9 +121,11 @@ public final class StreamFusionDeduplicateTranslator {
                 return "key[" + key + "]: " + inputType.getTypeAt(key) + " has no Flink BinaryRow parity";
             }
         }
-        int rowtimeIndex = rowtimeIndex(inputType);
-        if (rowtimeIndex < 0) {
-            return "ordering: Flink marked deduplicate as rowtime but its input has no ROWTIME field";
+        if (isRowtime) {
+            int rowtimeIndex = rowtimeIndex(inputType);
+            if (rowtimeIndex < 0) {
+                return "ordering: Flink marked deduplicate as rowtime but its input has no ROWTIME field";
+            }
         }
         for (int index = 0; index < inputType.getFieldCount(); index++) {
             if (!supportedValue(inputType.getTypeAt(index))) {

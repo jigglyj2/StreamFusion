@@ -383,7 +383,42 @@ rows, timers, state scratch, exported batches, RocksDB cache, and write buffers 
 Flink managed-memory admission and focused failure/release tests. These are local diagnostic results,
 not portable performance claims.
 
-## Q18 RowData profiling target
+## Q18 and synchronous deduplicate RowData targets
+
+The Kafka-free production harness now includes `q18`,
+`deduplicate-processing-time-keep-first`, and `deduplicate-processing-time-keep-last`. The generated
+inputs and result sink use the same Flink `RowData` conversions as a non-native source and sink, while
+every internal StreamFusion edge remains Arrow-backed. The integration test runs all three SQL
+shapes against Flink and StreamFusion on heap and RocksDB, compares the complete raw changelog and
+materialized result, requires an accelerated EXPLAIN, and requires non-zero native deduplicate batch
+counts. Q18 also provides the release benchmark and mixed-profile workload below.
+
+On the September 4, 2026 local release/native-CPU production-harness run based on `0006704` plus
+the synchronous-deduplicate working change, each engine/backend received one excluded 100,000-event
+warmup followed by alternating fresh-JVM forks over one million events at parallelism one, with a
+3GB heap and one-second exactly-once checkpoints. The in-memory medians were 66,870 events/s for
+Flink and 69,286 events/s for StreamFusion, a 3.6% StreamFusion gain. Median absolute deviations
+were 2.287s and 0.354s, and elapsed ranges were 12.667–17.951s and 14.079–18.335s respectively.
+RocksDB was extended to six forks after a storage outlier: the medians were 60,342 events/s for
+Flink and 63,172 events/s for StreamFusion, a 4.7% gain, with median absolute deviations of 0.059s
+and 0.280s and full elapsed ranges of 16.497–20.383s and 15.336–26.174s. Every StreamFusion fork
+reported 62–64 native deduplicate batches. Each fork emitted 1,547,283 raw changelog rows and
+materialized 292,717 final rows; the integration suite, rather than independently generated
+benchmark forks, is the byte-for-byte parity authority.
+
+Longer mixed JVM/native profiles used Java non-safepoint sampling, DWARF/frame-pointer unwinding,
+JFR, collapsed stacks, and differential flame graphs for both engines and backends. In the final
+StreamFusion profiles, RowData-to-Arrow conversion accounted for 1.18%/1.15% of CPU samples on
+memory/RocksDB, the native deduplicate processor for 2.04%/1.78%, Arrow C transport for
+0.49%/0.56%, and heap checkpoint key-group snapshotting for 0.43%; incremental RocksDB
+checkpointing had no corresponding full-state scan. Reusing the already encoded selected rows
+halved `RowConverter.convert_columns` from about 0.4% to 0.20–0.21%. The RocksDB bridge remains
+inclusive of downstream work and storage at 7.04%, while the implementation performs one native
+`multi_get` and one `WriteBatch` per incoming Arrow batch. Native allocation profiles confirmed
+that required row encoding, checkpoint framing, and RocksDB write batches dominate the visible
+state-path allocations; all are charged to the operator's Flink managed-memory reservations, with
+focused admission-failure and release tests. Profiler timings were excluded from the throughput
+measurements. These are local diagnostic results, not portable performance guarantees.
 
 The initial stateful path also has an opt-in Q18-shaped microbenchmark that bypasses Kafka and
 feeds the same Flink `RowData` representation used at the production boundary. It compares the

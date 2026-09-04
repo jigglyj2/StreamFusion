@@ -15,6 +15,7 @@ final class NexmarkRowDataQueryCatalog {
             "q8",
             "q11",
             "q12",
+            "q18",
             "q19",
             "q20",
             "q22",
@@ -31,6 +32,8 @@ final class NexmarkRowDataQueryCatalog {
             "over-aggregate-bounded-rows",
             "over-aggregate-bounded-range",
             "select-distinct",
+            "deduplicate-processing-time-keep-first",
+            "deduplicate-processing-time-keep-last",
             "top-n",
             "limit");
 

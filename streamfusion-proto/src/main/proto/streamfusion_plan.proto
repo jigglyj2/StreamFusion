@@ -192,6 +192,9 @@ message Deduplicate {
   bool generate_insert = 5;
   bool input_changelog = 6;
   bool generate_update_before = 7;
+  // False preserves the original row-time plan encoding. Processing-time plans use arrival
+  // order and do not interpret order_index.
+  bool processing_time = 8;
 }
 
 // Normalizes keyed upsert/changelog input to Flink's regular changelog contract. Values are

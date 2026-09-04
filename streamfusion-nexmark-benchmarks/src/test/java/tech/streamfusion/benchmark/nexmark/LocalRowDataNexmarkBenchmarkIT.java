@@ -73,6 +73,30 @@ class LocalRowDataNexmarkBenchmarkIT {
 
     @ParameterizedTest
     @ValueSource(strings = {"hashmap", "rocksdb"})
+    void everySynchronousDeduplicateModeMatchesFlinkOnBothStateBackends(String backend) throws Exception {
+        for (String query :
+                List.of("q18", "deduplicate-processing-time-keep-first", "deduplicate-processing-time-keep-last")) {
+            LocalRowDataNexmarkBenchmark.RunResult flink =
+                    LocalRowDataNexmarkBenchmark.run(2_000, query, false, backend, 1);
+            LocalRowDataNexmarkBenchmark.RunResult streamFusion =
+                    LocalRowDataNexmarkBenchmark.run(2_000, query, true, backend, 1);
+
+            assertThat(streamFusion.completed()).as(query).isTrue();
+            assertThat(streamFusion.debugRows()).as(query).containsExactlyElementsOf(flink.debugRows());
+            assertThat(streamFusion.outputRows()).as(query).isEqualTo(flink.outputRows());
+            assertThat(streamFusion.outputSha256()).as(query).isEqualTo(flink.outputSha256());
+            assertThat(streamFusion.materializedDebugRows())
+                    .as(query)
+                    .containsExactlyElementsOf(flink.materializedDebugRows());
+            assertThat(streamFusion.materializedRows()).as(query).isEqualTo(flink.materializedRows());
+            assertThat(streamFusion.materializedSha256()).as(query).isEqualTo(flink.materializedSha256());
+            assertThat(StreamFusionPlanningDiagnostics.explain()).as(query).contains("Accelerated: yes");
+            assertThat(streamFusion.nativeDeduplicateBatches()).as(query).isGreaterThan(0);
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"hashmap", "rocksdb"})
     void incrementalGroupAggregateMatchesFlinkOnBothStateBackends(String backend) throws Exception {
         System.setProperty("streamfusion.nexmark.mini-batch", "true");
         System.setProperty("streamfusion.nexmark.mini-batch-size", "32");

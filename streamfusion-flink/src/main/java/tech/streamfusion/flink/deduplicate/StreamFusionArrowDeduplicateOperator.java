@@ -23,18 +23,29 @@ import tech.streamfusion.proto.plan.v1.Input;
 import tech.streamfusion.proto.plan.v1.NativePlan;
 import tech.streamfusion.proto.plan.v1.Operator;
 
-/** Stateful keep-last deduplicate whose input and output remain Arrow-backed. */
+/** Stateful synchronous deduplicate whose input and output remain Arrow-backed. */
 final class StreamFusionArrowDeduplicateOperator extends AbstractStreamFusionArrowKeyedStateOperator
         implements OneInputStreamOperator<ArrowRowDataBatch, ArrowRowDataBatch>, BoundedOneInput {
     private final RowType rowType;
     private final boolean preencodeKeys;
+    private final boolean usesState;
     private final RowDataKeySelector keySelector;
 
     StreamFusionArrowDeduplicateOperator(
-            RowType rowType, int[] uniqueKeys, int orderIndex, boolean generateInsert, RowDataKeySelector keySelector) {
-        super(createPlan(uniqueKeys, orderIndex, generateInsert), "deduplicate");
+            RowType rowType,
+            int[] uniqueKeys,
+            int orderIndex,
+            boolean isRowtime,
+            boolean keepLast,
+            boolean generateInsert,
+            boolean generateUpdateBefore,
+            RowDataKeySelector keySelector) {
+        super(
+                createPlan(uniqueKeys, orderIndex, isRowtime, keepLast, generateInsert, generateUpdateBefore),
+                "deduplicate");
         this.rowType = rowType;
         this.preencodeKeys = requiresPreencodedKeys(rowType, uniqueKeys);
+        this.usesState = isRowtime || !keepLast || generateInsert || generateUpdateBefore;
         this.keySelector = keySelector;
     }
 
@@ -45,8 +56,7 @@ final class StreamFusionArrowDeduplicateOperator extends AbstractStreamFusionArr
             for (int row = 0; row < input.size(); row++) {
                 if (input.rowKind(row) != org.apache.flink.types.RowKind.INSERT) {
                     throw new IllegalStateException(
-                            "Native rowtime keep-last deduplicate requires insert-only input, got "
-                                    + input.rowKind(row));
+                            "Native SQL deduplicate requires insert-only input, got " + input.rowKind(row));
                 }
             }
             List<byte[]> keys = preencodeKeys ? preencodeKeys(input, keySelector, "deduplicate") : null;
@@ -58,7 +68,11 @@ final class StreamFusionArrowDeduplicateOperator extends AbstractStreamFusionArr
                         getMetricGroup().getIOMetricGroup().getNumRecordsInCounter(), 1, input.size());
                 FlinkMetricParity.replacePhysicalRecords(
                         getMetricGroup().getIOMetricGroup().getNumRecordsOutCounter(), 1, result.size());
-                recordProcessed(input, outputBatch);
+                if (usesState) {
+                    recordProcessed(input, outputBatch);
+                } else {
+                    recordProcessedWithoutStateCalls(input, outputBatch);
+                }
             }
         } catch (Throwable failure) {
             recordProcessingFailure();
@@ -66,12 +80,20 @@ final class StreamFusionArrowDeduplicateOperator extends AbstractStreamFusionArr
         }
     }
 
-    private static byte[] createPlan(int[] uniqueKeys, int orderIndex, boolean generateInsert) {
+    private static byte[] createPlan(
+            int[] uniqueKeys,
+            int orderIndex,
+            boolean isRowtime,
+            boolean keepLast,
+            boolean generateInsert,
+            boolean generateUpdateBefore) {
         Deduplicate.Builder deduplicate = Deduplicate.newBuilder()
                 .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
                 .setOrderIndex(orderIndex)
-                .setKeepLast(true)
-                .setGenerateInsert(generateInsert);
+                .setKeepLast(keepLast)
+                .setGenerateInsert(generateInsert)
+                .setGenerateUpdateBefore(generateUpdateBefore)
+                .setProcessingTime(!isRowtime);
         for (int key : uniqueKeys) {
             deduplicate.addKeyIndices(key);
         }
@@ -98,7 +120,7 @@ final class StreamFusionArrowDeduplicateOperator extends AbstractStreamFusionArr
             long memoryLimit,
             NativeMemoryManager memoryManager) {
         return NativeDeduplicateBridge.createRocksDb(
-                plan, maxParallelism, firstKeyGroup, lastKeyGroup, databasePath, memoryLimit);
+                plan, maxParallelism, firstKeyGroup, lastKeyGroup, databasePath, memoryLimit, memoryManager);
     }
 
     @Override

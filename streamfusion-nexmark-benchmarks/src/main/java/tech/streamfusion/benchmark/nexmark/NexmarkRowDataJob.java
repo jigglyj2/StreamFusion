@@ -160,6 +160,12 @@ public final class NexmarkRowDataJob {
             case "q2":
                 columns = "auction BIGINT, price BIGINT";
                 break;
+            case "q18":
+            case "deduplicate-processing-time-keep-first":
+            case "deduplicate-processing-time-keep-last":
+                columns = "auction BIGINT, bidder BIGINT, price BIGINT, channel STRING, url STRING, "
+                        + "`dateTime` TIMESTAMP(3), extra STRING";
+                break;
             case "q3":
                 columns = "name STRING, city STRING, state STRING, id BIGINT";
                 break;

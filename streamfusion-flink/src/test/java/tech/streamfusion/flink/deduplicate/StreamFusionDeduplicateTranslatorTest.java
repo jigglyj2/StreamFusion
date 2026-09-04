@@ -24,13 +24,17 @@ class StreamFusionDeduplicateTranslatorTest {
             new String[] {"auction", "bidder", "dateTime"});
 
     @Test
-    void acceptsTimerFreeQ18Shape() {
+    void acceptsSynchronousRowtimeAndProcessingTimeShapes() {
         assertThat(reason(true, true, false, 0L, new Configuration())).isNull();
+        assertThat(reason(true, false, false, 0L, new Configuration())).isNull();
+        assertThat(reason(false, true, false, 0L, new Configuration())).isNull();
+        assertThat(reason(false, false, true, 0L, new Configuration())).isNull();
     }
 
     @Test
     void rejectsShapesThatNeedTimersOrUnsupportedMiniBatchState() {
-        assertThat(reason(true, false, false, 0L, new Configuration())).contains("event-time timers");
+        assertThat(reason(true, false, true, 0L, new Configuration())).contains("insert-only output");
+        assertThat(reason(false, true, true, 0L, new Configuration())).contains("insert-only output");
         assertThat(reason(true, true, false, 1L, new Configuration())).contains("TTL");
 
         Configuration miniBatch = new Configuration();
@@ -43,10 +47,10 @@ class StreamFusionDeduplicateTranslatorTest {
     }
 
     @Test
-    void rejectsUpdateBeforeUntilStoredRowsCanRemainArrowBacked() {
+    void acceptsArrowNativeUpdateBeforeMaterialization() {
         assertThat(StreamFusionDeduplicateTranslator.unsupportedReason(
                         Q18_TYPE, Q18_TYPE, new int[] {1, 0}, true, true, false, true, 0L, new Configuration()))
-                .contains("UPDATE_BEFORE");
+                .isNull();
     }
 
     private static String reason(

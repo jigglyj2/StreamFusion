@@ -164,12 +164,19 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         } else if (node.getInputEdges().isEmpty()) {
             return;
         } else if (node instanceof StreamExecCalc) {
-            ProcessingTimeOverAggregate folded = processingTimeOverAggregate((StreamExecCalc) node);
-            String reason = folded == null
-                    ? unsupportedReason((StreamExecCalc) node, context)
-                    : unsupportedReason(folded, context);
+            StreamExecCalc calc = (StreamExecCalc) node;
+            ProcessingTimeDeduplicate foldedDeduplicate = processingTimeDeduplicate(calc);
+            ProcessingTimeOverAggregate folded = foldedDeduplicate == null ? processingTimeOverAggregate(calc) : null;
+            String reason = foldedDeduplicate != null
+                    ? unsupportedReason(foldedDeduplicate, context)
+                    : folded == null ? unsupportedReason(calc, context) : unsupportedReason(folded, context);
             if (reason != null) {
                 rejections.add(nodePath + "\n" + reason);
+            }
+            if (foldedDeduplicate != null) {
+                collectRejections(
+                        foldedDeduplicate.inputEdge.getSource(), context, nodePath + "/native-input", rejections);
+                return;
             }
             if (folded != null) {
                 collectRejections(folded.inputEdge.getSource(), context, nodePath + "/native-input", rejections);
@@ -362,6 +369,56 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         }
         if (node instanceof StreamExecCalc) {
             StreamExecCalc calc = (StreamExecCalc) node;
+            ProcessingTimeDeduplicate foldedDeduplicate = processingTimeDeduplicate(calc);
+            if (foldedDeduplicate != null) {
+                StreamFusionExecCalc inputProjection = new StreamFusionExecCalc(
+                        foldedDeduplicate.inputCalc.getPersistedConfig(),
+                        foldedDeduplicate.inputProjection,
+                        condition(foldedDeduplicate.inputCalc),
+                        foldedDeduplicate.inputCalc.getInputProperties().get(0),
+                        foldedDeduplicate.inputType,
+                        "StreamFusionCalc");
+                inputProjection.setInputEdges(List.of(copyEdge(
+                        foldedDeduplicate.inputEdge,
+                        convert(foldedDeduplicate.inputEdge.getSource()),
+                        inputProjection)));
+
+                StreamFusionExecExchange exchange = new StreamFusionExecExchange(
+                        foldedDeduplicate.exchange.getPersistedConfig(),
+                        foldedDeduplicate.exchange.getInputProperties().get(0),
+                        foldedDeduplicate.inputType,
+                        "StreamFusionExchange");
+                exchange.setInputEdges(List.of(
+                        copyEdge(foldedDeduplicate.exchange.getInputEdges().get(0), inputProjection, exchange)));
+
+                StreamFusionExecDeduplicate deduplicate = new StreamFusionExecDeduplicate(
+                        foldedDeduplicate.deduplicate.getPersistedConfig(),
+                        foldedDeduplicate.uniqueKeys,
+                        false,
+                        booleanField(foldedDeduplicate.deduplicate, "keepLastRow"),
+                        booleanField(foldedDeduplicate.deduplicate, "outputInsertOnly"),
+                        booleanField(foldedDeduplicate.deduplicate, "generateUpdateBefore"),
+                        stateMetadata(foldedDeduplicate.deduplicate),
+                        foldedDeduplicate.deduplicate.getInputProperties().get(0),
+                        foldedDeduplicate.deduplicateOutputType,
+                        "StreamFusionDeduplicate");
+                deduplicate.setInputEdges(List.of(
+                        copyEdge(foldedDeduplicate.deduplicate.getInputEdges().get(0), exchange, deduplicate)));
+
+                StreamFusionExecCalc replacement = new StreamFusionExecCalc(
+                        calc.getPersistedConfig(),
+                        foldedDeduplicate.outputProjection,
+                        foldedDeduplicate.outputCondition,
+                        calc.getInputProperties().get(0),
+                        (RowType) calc.getOutputType(),
+                        "StreamFusionCalc");
+                replacement.setInputEdges(List.of(ExecEdge.builder()
+                        .source(deduplicate)
+                        .target(replacement)
+                        .shuffle(ExecEdge.FORWARD_SHUFFLE)
+                        .build()));
+                return replacement;
+            }
             ProcessingTimeOverAggregate folded = processingTimeOverAggregate(calc);
             if (folded != null) {
                 StreamFusionExecCalc inputProjection = new StreamFusionExecCalc(
@@ -1385,6 +1442,61 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         }
     }
 
+    private String unsupportedReason(ProcessingTimeDeduplicate folded, ProcessorContext context) {
+        String reason = unsupportedCalcReason(
+                (RowType) folded.inputEdge.getOutputType(),
+                folded.inputType,
+                folded.inputProjection,
+                condition(folded.inputCalc),
+                context);
+        if (reason != null) {
+            return "processing-time input projection: " + reason;
+        }
+        try {
+            Class<?> translator = Class.forName(
+                    DEDUPLICATE_TRANSLATOR_CLASS,
+                    true,
+                    context.getPlanner().getFlinkContext().getClassLoader());
+            Method method = translator.getMethod(
+                    "unsupportedReason",
+                    RowType.class,
+                    RowType.class,
+                    int[].class,
+                    boolean.class,
+                    boolean.class,
+                    boolean.class,
+                    boolean.class,
+                    long.class,
+                    ReadableConfig.class);
+            reason = (String) method.invoke(
+                    null,
+                    folded.inputType,
+                    folded.deduplicateOutputType,
+                    folded.uniqueKeys,
+                    false,
+                    booleanField(folded.deduplicate, "keepLastRow"),
+                    booleanField(folded.deduplicate, "outputInsertOnly"),
+                    booleanField(folded.deduplicate, "generateUpdateBefore"),
+                    stateTtl(folded.deduplicate),
+                    folded.deduplicate.getPersistedConfig());
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException failure) {
+            throw new IllegalStateException("Could not inspect folded processing-time deduplicate support", failure);
+        } catch (InvocationTargetException failure) {
+            throw new IllegalStateException(
+                    "Folded processing-time deduplicate support inspection failed", failure.getCause());
+        }
+        if (reason != null) {
+            return reason;
+        }
+        reason = unsupportedCalcReason(
+                folded.deduplicateOutputType,
+                (RowType) folded.outputCalc.getOutputType(),
+                folded.outputProjection,
+                folded.outputCondition,
+                context);
+        return reason == null ? null : "processing-time output projection: " + reason;
+    }
+
     private String unsupportedReason(ProcessingTimeOverAggregate folded, ProcessorContext context) {
         String reason = unsupportedCalcReason(
                 (RowType) folded.inputEdge.getOutputType(),
@@ -2279,6 +2391,81 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                 output.condition);
     }
 
+    /**
+     * Removes Flink's synthetic {@code PROCTIME()} field when it is consumed only as the ordering
+     * marker of a processing-time deduplicate. The native operator uses arrival order directly;
+     * observable processing-time values remain on Flink.
+     */
+    private static ProcessingTimeDeduplicate processingTimeDeduplicate(StreamExecCalc outputCalc) {
+        if (outputCalc.getInputEdges().size() != 1
+                || !(outputCalc.getInputEdges().get(0).getSource() instanceof StreamExecDeduplicate)) {
+            return null;
+        }
+        StreamExecDeduplicate deduplicate =
+                (StreamExecDeduplicate) outputCalc.getInputEdges().get(0).getSource();
+        if (booleanField(deduplicate, "isRowtime")
+                || deduplicate.getInputEdges().size() != 1) {
+            return null;
+        }
+        ExecEdge deduplicateInput = deduplicate.getInputEdges().get(0);
+        if (!(deduplicateInput.getSource() instanceof StreamExecExchange)) {
+            return null;
+        }
+        StreamExecExchange exchange = (StreamExecExchange) deduplicateInput.getSource();
+        if (exchange.getInputEdges().size() != 1
+                || !(exchange.getInputEdges().get(0).getSource() instanceof StreamExecCalc)) {
+            return null;
+        }
+        StreamExecCalc inputCalc =
+                (StreamExecCalc) exchange.getInputEdges().get(0).getSource();
+        if (inputCalc.getInputEdges().size() != 1) {
+            return null;
+        }
+        List<RexNode> originalProjection = projection(inputCalc);
+        int timeIndex = -1;
+        for (int index = 0; index < originalProjection.size(); index++) {
+            if (isProctimeCall(originalProjection.get(index))) {
+                if (timeIndex >= 0) {
+                    return null;
+                }
+                timeIndex = index;
+            }
+        }
+        if (timeIndex < 0) {
+            return null;
+        }
+        int[] keys = uniqueKeys(deduplicate);
+        for (int index = 0; index < keys.length; index++) {
+            if (keys[index] == timeIndex) {
+                return null;
+            }
+            if (keys[index] > timeIndex) {
+                keys[index]--;
+            }
+        }
+        RemappedExpressions output = remapExpressions(projection(outputCalc), condition(outputCalc), timeIndex);
+        if (output == null) {
+            return null;
+        }
+        List<RexNode> inputProjection = new ArrayList<>(originalProjection);
+        inputProjection.remove(timeIndex);
+        if (inputProjection.isEmpty()) {
+            return null;
+        }
+        return new ProcessingTimeDeduplicate(
+                deduplicate,
+                exchange,
+                inputCalc,
+                inputCalc.getInputEdges().get(0),
+                inputProjection,
+                withoutField((RowType) inputCalc.getOutputType(), timeIndex),
+                keys,
+                withoutField((RowType) deduplicate.getOutputType(), timeIndex),
+                outputCalc,
+                output.projection,
+                output.condition);
+    }
+
     private static RowType withoutField(RowType type, int removed) {
         List<RowType.RowField> fields = new ArrayList<>(type.getFields());
         fields.remove(removed);
@@ -2539,6 +2726,45 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             this.inputType = inputType;
             this.overSpec = overSpec;
             this.overOutputType = overOutputType;
+            this.outputCalc = outputCalc;
+            this.outputProjection = outputProjection;
+            this.outputCondition = outputCondition;
+        }
+    }
+
+    private static final class ProcessingTimeDeduplicate {
+        private final StreamExecDeduplicate deduplicate;
+        private final StreamExecExchange exchange;
+        private final StreamExecCalc inputCalc;
+        private final ExecEdge inputEdge;
+        private final List<RexNode> inputProjection;
+        private final RowType inputType;
+        private final int[] uniqueKeys;
+        private final RowType deduplicateOutputType;
+        private final StreamExecCalc outputCalc;
+        private final List<RexNode> outputProjection;
+        private final RexNode outputCondition;
+
+        private ProcessingTimeDeduplicate(
+                StreamExecDeduplicate deduplicate,
+                StreamExecExchange exchange,
+                StreamExecCalc inputCalc,
+                ExecEdge inputEdge,
+                List<RexNode> inputProjection,
+                RowType inputType,
+                int[] uniqueKeys,
+                RowType deduplicateOutputType,
+                StreamExecCalc outputCalc,
+                List<RexNode> outputProjection,
+                RexNode outputCondition) {
+            this.deduplicate = deduplicate;
+            this.exchange = exchange;
+            this.inputCalc = inputCalc;
+            this.inputEdge = inputEdge;
+            this.inputProjection = inputProjection;
+            this.inputType = inputType;
+            this.uniqueKeys = uniqueKeys;
+            this.deduplicateOutputType = deduplicateOutputType;
             this.outputCalc = outputCalc;
             this.outputProjection = outputProjection;
             this.outputCondition = outputCondition;

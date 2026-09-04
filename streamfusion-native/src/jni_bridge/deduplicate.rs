@@ -68,6 +68,7 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeDeduplicateBrid
     last_key_group: jint,
     plugin_path: JString<'caller>,
     database_path: JString<'caller>,
+    memory_manager: JObject<'caller>,
     memory_limit: jlong,
 ) -> jlong {
     unowned_env
@@ -81,6 +82,10 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeDeduplicateBrid
                     "RocksDB native memory limit must be positive and fit usize",
                 )
             })?;
+            let broker = Arc::new(JvmMemoryReservationBroker::new(
+                env.get_java_vm()?,
+                env.new_global_ref(memory_manager)?,
+            ));
             let processor = (|| -> datafusion::error::Result<_> {
                 DeduplicateProcessor::new_rocksdb(
                     &plan,
@@ -90,6 +95,7 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeDeduplicateBrid
                     std::path::Path::new(&plugin_path),
                     std::path::Path::new(&database_path),
                     memory_limit,
+                    HostMemoryReservation::new(broker, "native RocksDB deduplicate scratch"),
                 )
             })()
             .map_err(|error| throw(env, error))?;
