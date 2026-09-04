@@ -1182,7 +1182,7 @@ impl AccumulatorState {
                             Accumulator::Count(0)
                         }
                     }
-                    proto::AggregateFunction::Sum => {
+                    proto::AggregateFunction::Sum | proto::AggregateFunction::Sum0 => {
                         if call.distinct {
                             Accumulator::DistinctSum {
                                 value: None,
@@ -1282,12 +1282,14 @@ impl AccumulatorState {
                     };
                     Ok(Accumulator::Count(count))
                 }
-                proto::AggregateFunction::Sum => Ok(Accumulator::Sum {
-                    value: value.clone(),
-                    // Only zero versus non-zero affects accumulation output. This seed is never
-                    // retracted, so the exact historical non-null count is not needed.
-                    count: i64::from(value.is_some()),
-                }),
+                proto::AggregateFunction::Sum | proto::AggregateFunction::Sum0 => {
+                    Ok(Accumulator::Sum {
+                        value: value.clone(),
+                        // Only zero versus non-zero affects accumulation output. This seed is never
+                        // retracted, so the exact historical non-null count is not needed.
+                        count: i64::from(value.is_some()),
+                    })
+                }
                 proto::AggregateFunction::Avg => Err(DataFusionError::Internal(
                     "OVER AVG cannot reconstruct its sum and count from a compact prefix"
                         .to_string(),
@@ -1731,7 +1733,8 @@ impl AccumulatorState {
                 }
                 Accumulator::Sum { value, count } => {
                     if *count == 0 {
-                        None
+                        (call.function == proto::AggregateFunction::Sum0)
+                            .then(|| zero_value(&call.output_type))
                     } else {
                         value.clone()
                     }
@@ -1925,7 +1928,7 @@ pub(super) fn lower_call(call: &proto::AggregateCall) -> Result<Call> {
                 )));
             }
         }
-        proto::AggregateFunction::Sum => {
+        proto::AggregateFunction::Sum | proto::AggregateFunction::Sum0 => {
             ensure_sum_type(&output_type)?;
             ensure_sum_type(input_type.as_ref().expect("SUM input was validated"))?;
         }
@@ -2790,7 +2793,7 @@ pub(super) fn decode_state(bytes: &[u8], calls: &[Call]) -> Result<AccumulatorSt
                     1
                 }
             }
-            proto::AggregateFunction::Sum => {
+            proto::AggregateFunction::Sum | proto::AggregateFunction::Sum0 => {
                 if call.distinct {
                     6
                 } else {
@@ -4225,6 +4228,32 @@ mod tests {
             .unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn sum0_returns_a_typed_zero_for_an_empty_or_all_null_accumulator() {
+        let calls = vec![Call {
+            function: proto::AggregateFunction::Sum0,
+            input_index: Some(0),
+            filter_index: None,
+            distinct: false,
+            input_type: Some(DataType::Int64),
+            output_type: DataType::Int64,
+            retractable: true,
+        }];
+        let mut state = AccumulatorState::new(&calls);
+        assert_eq!(state.values(&calls), vec![Some(AggregateValue::Int(0))]);
+
+        state.apply_values(&calls, &[None], true).unwrap();
+        assert_eq!(state.values(&calls), vec![Some(AggregateValue::Int(0))]);
+        state
+            .apply_values(&calls, &[Some(AggregateValue::Int(5))], true)
+            .unwrap();
+        assert_eq!(state.values(&calls), vec![Some(AggregateValue::Int(5))]);
+        state
+            .apply_values(&calls, &[Some(AggregateValue::Int(5))], false)
+            .unwrap();
+        assert_eq!(state.values(&calls), vec![Some(AggregateValue::Int(0))]);
     }
 
     fn output_rows(

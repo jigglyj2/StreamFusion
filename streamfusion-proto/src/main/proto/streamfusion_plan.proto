@@ -322,6 +322,8 @@ enum AggregateFunction {
   AGGREGATE_FUNCTION_MIN = 4;
   AGGREGATE_FUNCTION_MAX = 5;
   AGGREGATE_FUNCTION_AVG = 6;
+  // Flink's internal $SUM0 accumulator is observably non-null when every input is null.
+  AGGREGATE_FUNCTION_SUM0 = 7;
 }
 
 message WindowTableFunction {

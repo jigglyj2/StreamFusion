@@ -24,8 +24,10 @@ FROM bid;
 
 ## Acceleration and fallback
 
-The current native path supports `COUNT`, `SUM`, `MIN`, and `MAX`, including Flink's internal
-`$SUM0` rewrite. It accepts the complete insert/update/delete changelog. `RANGE` peers receive the
+The current native path supports `COUNT`, `SUM`, `AVG`, `MIN`, and `MAX`, including Flink's internal
+`$SUM0` rewrite. Flink lowers SQL `AVG` to its typed sum/count accumulator plus an output projection;
+both stages remain inside the accelerated Arrow plan for every numeric input family. It accepts the
+complete insert/update/delete changelog. `RANGE` peers receive the
 same aggregate value, while `ROWS` peers retain deterministic input order. All partition-key and
 row payload types representable by the Arrow row codec are retained as opaque Arrow rows; complex
 partition keys are pre-encoded with Flink's binary-row hash contract before the native boundary.
@@ -69,8 +71,7 @@ metric subgroup.
 
 If a query selects, filters on, or otherwise observes the synthetic processing-time field, the plan
 still falls back explicitly because removing that value would change semantics. Following frames,
-non-constant frame boundaries, descending or multiple order keys, `AVG` (whose sum/count state
-cannot yet be reconstructed from the compact OVER prefix), aggregate functions beyond the set
+non-constant frame boundaries, descending or multiple order keys, aggregate functions beyond the set
 above, mini-batch mode, async state, changelog-state wrapping, and state TTL also fall back.
 These are not documented as accelerated until their end-to-end parity and recovery suites pass.
 
