@@ -27,6 +27,7 @@ import tech.streamfusion.nativebridge.NativeGroupAggregateBridge;
 import tech.streamfusion.nativebridge.NativeIntervalJoinBridge;
 import tech.streamfusion.nativebridge.NativeOverAggregateBridge;
 import tech.streamfusion.nativebridge.NativeRegularJoinBridge;
+import tech.streamfusion.nativebridge.NativeTemporalSortBridge;
 import tech.streamfusion.nativebridge.NativeTopNBridge;
 import tech.streamfusion.nativebridge.NativeUnionBridge;
 import tech.streamfusion.nativebridge.NativeValuesBridge;
@@ -129,6 +130,10 @@ public final class StreamFusionPlannerFactory implements PlannerFactory {
         return NativeIntervalJoinBridge.executedBatchCount();
     }
 
+    public static long nativeTemporalSortBatchCount() {
+        return NativeTemporalSortBridge.executedBatchCount();
+    }
+
     public static long nativeValuesBatchCount() {
         return NativeValuesBridge.executedBatchCount();
     }
@@ -148,6 +153,7 @@ public final class StreamFusionPlannerFactory implements PlannerFactory {
         NativeWindowJoinBridge.resetMetrics();
         NativeRegularJoinBridge.resetMetrics();
         NativeIntervalJoinBridge.resetMetrics();
+        NativeTemporalSortBridge.resetMetrics();
         NativeUnionBridge.resetMetrics();
         NativeValuesBridge.resetMetrics();
         System.clearProperty(EXEC_GRAPH_PROCESSOR_PROPERTY);

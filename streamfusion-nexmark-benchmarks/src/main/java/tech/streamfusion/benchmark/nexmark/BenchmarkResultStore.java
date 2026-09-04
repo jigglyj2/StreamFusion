@@ -42,15 +42,21 @@ final class BenchmarkResultStore {
             throw new IllegalStateException("Unknown benchmark result run: " + runId);
         }
         List<RecordedRow> rows = new ArrayList<>(collected);
+        String orderedSha256;
+        try {
+            MessageDigest orderedDigest = MessageDigest.getInstance("SHA-256");
+            for (RecordedRow row : rows) {
+                update(orderedDigest, row.bytes);
+            }
+            orderedSha256 = hex(orderedDigest.digest());
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256 is unavailable", impossible);
+        }
         rows.sort((left, right) -> Arrays.compareUnsigned(left.bytes, right.bytes));
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             for (RecordedRow row : rows) {
-                digest.update((byte) (row.bytes.length >>> 24));
-                digest.update((byte) (row.bytes.length >>> 16));
-                digest.update((byte) (row.bytes.length >>> 8));
-                digest.update((byte) row.bytes.length);
-                digest.update(row.bytes);
+                update(digest, row.bytes);
             }
             List<String> debugRows = new ArrayList<>(rows.size());
             for (RecordedRow row : rows) {
@@ -87,6 +93,7 @@ final class BenchmarkResultStore {
             return new Result(
                     rows.size(),
                     hex(digest.digest()),
+                    orderedSha256,
                     debugRows,
                     materializedCount,
                     hex(materializedDigest.digest()),
@@ -107,9 +114,18 @@ final class BenchmarkResultStore {
         return new String(output);
     }
 
+    private static void update(MessageDigest digest, byte[] bytes) {
+        digest.update((byte) (bytes.length >>> 24));
+        digest.update((byte) (bytes.length >>> 16));
+        digest.update((byte) (bytes.length >>> 8));
+        digest.update((byte) bytes.length);
+        digest.update(bytes);
+    }
+
     static final class Result {
         private final long rowCount;
         private final String sha256;
+        private final String orderedSha256;
         private final List<String> debugRows;
         private final long materializedRowCount;
         private final String materializedSha256;
@@ -118,12 +134,14 @@ final class BenchmarkResultStore {
         Result(
                 long rowCount,
                 String sha256,
+                String orderedSha256,
                 List<String> debugRows,
                 long materializedRowCount,
                 String materializedSha256,
                 List<String> materializedDebugRows) {
             this.rowCount = rowCount;
             this.sha256 = sha256;
+            this.orderedSha256 = orderedSha256;
             this.debugRows = List.copyOf(debugRows);
             this.materializedRowCount = materializedRowCount;
             this.materializedSha256 = materializedSha256;
@@ -136,6 +154,10 @@ final class BenchmarkResultStore {
 
         String sha256() {
             return sha256;
+        }
+
+        String orderedSha256() {
+            return orderedSha256;
         }
 
         List<String> debugRows() {

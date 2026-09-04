@@ -34,6 +34,7 @@ final class NexmarkRowDataQueryCatalog {
             "select-distinct",
             "deduplicate-processing-time-keep-first",
             "deduplicate-processing-time-keep-last",
+            "temporal-sort",
             "top-n",
             "limit");
 

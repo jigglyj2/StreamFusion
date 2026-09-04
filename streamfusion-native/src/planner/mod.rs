@@ -157,6 +157,9 @@ fn create_operator(
         Some(proto::operator::Operator::ChangelogNormalize(_)) => Err(DataFusionError::Plan(
             "ChangelogNormalize requires a persistent stateful execution handle".to_string(),
         )),
+        Some(proto::operator::Operator::TemporalSort(_)) => Err(DataFusionError::Plan(
+            "TemporalSort requires a persistent stateful execution handle".to_string(),
+        )),
         None => Err(DataFusionError::Plan(
             "StreamFusion operator is empty".to_string(),
         )),

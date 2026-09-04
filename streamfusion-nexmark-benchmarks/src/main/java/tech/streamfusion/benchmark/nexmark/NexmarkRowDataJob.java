@@ -225,6 +225,7 @@ public final class NexmarkRowDataJob {
                         + "extra STRING, row_num BIGINT";
                 break;
             case "limit":
+            case "temporal-sort":
                 columns = "auction BIGINT, bidder BIGINT, price BIGINT, `dateTime` TIMESTAMP(3), extra STRING";
                 break;
             case "q11":

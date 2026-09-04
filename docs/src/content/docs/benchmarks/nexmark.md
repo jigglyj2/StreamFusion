@@ -86,12 +86,14 @@ engine selector (`flink`, `streamfusion`, or `both`) for standalone measurements
 end-to-end elapsed time, input-event throughput, native calc batches, native group-aggregate
 batches, native window-aggregate batches, native Window Join batches, native regular-join batches,
 native interval-join batches, native OVER-aggregate batches,
-and row counts plus SHA-256 hashes for the full result changelog and final materialized multiset.
+native Temporal Sort batches, and row counts plus SHA-256 hashes for the full result changelog and
+final materialized multiset. An additional ordered SHA-256 retains sink arrival order for operators
+whose ordering is semantic.
 The `aggregate-modifiers`, `incremental-group-aggregate`,
 `group-aggregate`, `global-aggregate`, `grouping-sets`, `interval-join`, `over-aggregate`,
 `over-aggregate-event-time`, `over-aggregate-processing-time`,
 `over-aggregate-bounded-rows`, `over-aggregate-bounded-range`, `select-distinct`, `top-n`, and
-`limit` cases
+`limit`, and `temporal-sort` cases
 exercise both native state backends over the bounded bid stream; they are focused operator workloads
 rather than numbered Nexmark queries. `over-aggregate` deliberately casts the timestamp to a
 regular value to exercise ordered non-time state, while `over-aggregate-event-time` retains the
@@ -99,6 +101,9 @@ rowtime attribute and exercises watermark-driven native timers and late-record h
 processing-time case retains Nexmark's bid filter and nested-row projection below its synthetic
 `PROCTIME()` field. The bounded cases exercise a 100-row processing-time suffix and an inclusive
 ten-second event-time range respectively.
+`temporal-sort` orders the bounded bid stream by ascending event time and secondary price/auction
+keys. Its integration case compares both the changelog multiset and global arrival-order digest on
+memory and RocksDB, requires an accelerated EXPLAIN, and requires non-zero native sort batches.
 `aggregate-modifiers` includes ordinary and counted-distinct AVG plus an explicit
 `BIGINT`-to-`DECIMAL` AVG, so release profiles cover both fixed-width integer and exact decimal
 sum/count state rather than only the aggregate modifier dispatch.

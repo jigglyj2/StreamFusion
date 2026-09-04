@@ -64,7 +64,22 @@ message Operator {
     LocalGroupAggregate local_group_aggregate = 19;
     GlobalGroupAggregate global_group_aggregate = 20;
     IncrementalGroupAggregate incremental_group_aggregate = 21;
+    TemporalSort temporal_sort = 22;
   }
+}
+
+// Streaming time-ascending sort. Rows are buffered under their event-time timestamp or the
+// processing-time millisecond observed at the Arrow operator boundary, then sorted by the
+// remaining fields when the corresponding timer fires. State and timer encodings are backend
+// neutral so canonical savepoints can move between native memory and RocksDB.
+message TemporalSort {
+  Operator input = 1;
+  Schema input_schema = 2;
+  uint32 time_index = 3;
+  bool processing_time = 4;
+  repeated uint32 secondary_key_indices = 5;
+  repeated bool secondary_ascending = 6;
+  repeated bool secondary_nulls_last = 7;
 }
 
 // Streaming OVER aggregation. Each partition owns order-keyed Arrow rows and aggregate
@@ -1209,6 +1224,7 @@ message LogicalType {
     CollectionType array = 18;
     MapType map = 19;
     RowType row = 20;
+    EmptyType null = 21;
   }
 }
 

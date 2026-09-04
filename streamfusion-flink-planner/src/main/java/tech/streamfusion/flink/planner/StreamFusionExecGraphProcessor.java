@@ -60,6 +60,7 @@ import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecLocalWind
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecMiniBatchAssigner;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecOverAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecRank;
+import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecTemporalSort;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecUnion;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecValues;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWatermarkAssigner;
@@ -109,6 +110,8 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             "tech.streamfusion.flink.join.StreamFusionIntervalJoinTranslator";
     private static final String OVER_AGGREGATE_TRANSLATOR_CLASS =
             "tech.streamfusion.flink.over.StreamFusionOverAggregateTranslator";
+    private static final String TEMPORAL_SORT_TRANSLATOR_CLASS =
+            "tech.streamfusion.flink.sort.StreamFusionTemporalSortTranslator";
     private transient ReadableConfig activeTableConfig;
 
     @Override
@@ -303,6 +306,11 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         } else if (node instanceof StreamExecMiniBatchAssigner) {
             // Native stateful operators already consume Arrow mini-batches. The latency-marker
             // assigner is folded into the native stateful node during conversion.
+        } else if (node instanceof StreamExecTemporalSort) {
+            String reason = unsupportedReason((StreamExecTemporalSort) node, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
         } else if (node instanceof StreamExecWatermarkAssigner) {
             // The distinct node retains Flink's generated expression and watermark state machine.
         } else if (node instanceof StreamExecExpand) {
@@ -823,6 +831,21 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     (RowType) assigner.getOutputType(),
                     "StreamFusionMiniBatchAssigner");
             replacement.setInputEdges(assigner.getInputEdges().stream()
+                    .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                    .collect(Collectors.toList()));
+            return replacement;
+        }
+        if (node instanceof StreamExecTemporalSort) {
+            StreamExecTemporalSort sort = (StreamExecTemporalSort) node;
+            SortSpec sortSpec = temporalSortSpec(sort);
+            StreamFusionExecTemporalSort replacement = new StreamFusionExecTemporalSort(
+                    sort.getPersistedConfig(),
+                    sortSpec,
+                    temporalSortProcessingTime(sort, sortSpec),
+                    sort.getInputProperties().get(0),
+                    (RowType) sort.getOutputType(),
+                    "StreamFusionTemporalSort");
+            replacement.setInputEdges(sort.getInputEdges().stream()
                     .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
                     .collect(Collectors.toList()));
             return replacement;
@@ -1710,6 +1733,28 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         }
     }
 
+    private String unsupportedReason(StreamExecTemporalSort sort, ProcessorContext context) {
+        SortSpec sortSpec = temporalSortSpec(sort);
+        try {
+            Class<?> translator = Class.forName(
+                    TEMPORAL_SORT_TRANSLATOR_CLASS,
+                    true,
+                    context.getPlanner().getFlinkContext().getClassLoader());
+            Method method = translator.getMethod(
+                    "unsupportedReason", RowType.class, SortSpec.class, boolean.class, ReadableConfig.class);
+            return (String) method.invoke(
+                    null,
+                    (RowType) sort.getInputEdges().get(0).getOutputType(),
+                    sortSpec,
+                    temporalSortProcessingTime(sort, sortSpec),
+                    sort.getPersistedConfig());
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException failure) {
+            throw new IllegalStateException("Could not inspect StreamFusion TemporalSort support", failure);
+        } catch (InvocationTargetException failure) {
+            throw new IllegalStateException("StreamFusion TemporalSort support inspection failed", failure.getCause());
+        }
+    }
+
     private String unsupportedReason(StreamExecUnion union, ProcessorContext context) {
         if (context == null) {
             return null;
@@ -2027,6 +2072,17 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
 
     private static SortSpec rankSortSpec(StreamExecRank rank) {
         return (SortSpec) field(rank, StreamExecRank.class, "sortSpec");
+    }
+
+    private static SortSpec temporalSortSpec(StreamExecTemporalSort sort) {
+        return (SortSpec) field(sort, StreamExecTemporalSort.class, "sortSpec");
+    }
+
+    private static boolean temporalSortProcessingTime(StreamExecTemporalSort sort, SortSpec sortSpec) {
+        int timeIndex = sortSpec.getFieldSpec(0).getFieldIndex();
+        RowType inputType = (RowType) sort.getInputEdges().get(0).getOutputType();
+        return org.apache.flink.table.types.logical.utils.LogicalTypeChecks.isProctimeAttribute(
+                inputType.getTypeAt(timeIndex));
     }
 
     private static RankRange rankRange(StreamExecRank rank) {

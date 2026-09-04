@@ -31,7 +31,7 @@ public final class LocalRowDataNexmarkBenchmark {
                         RunResult result = run(events, query, streamFusion, backend, parallelism);
                         String explain = streamFusion ? StreamFusionPlanningDiagnostics.explain() : "";
                         System.out.printf(
-                                "%s engine=%s state_backend=%s accelerated=%s input_events=%d elapsed_seconds=%.6f input_events_per_second=%.2f native_calc_batches=%d native_deduplicate_batches=%d native_group_aggregate_batches=%d native_top_n_batches=%d native_window_aggregate_batches=%d native_window_join_batches=%d native_regular_join_batches=%d native_interval_join_batches=%d native_over_aggregate_batches=%d output_rows=%d output_sha256=%s materialized_rows=%d materialized_sha256=%s%n",
+                                "%s engine=%s state_backend=%s accelerated=%s input_events=%d elapsed_seconds=%.6f input_events_per_second=%.2f native_calc_batches=%d native_deduplicate_batches=%d native_group_aggregate_batches=%d native_top_n_batches=%d native_window_aggregate_batches=%d native_window_join_batches=%d native_regular_join_batches=%d native_interval_join_batches=%d native_over_aggregate_batches=%d native_temporal_sort_batches=%d output_rows=%d output_sha256=%s ordered_sha256=%s materialized_rows=%d materialized_sha256=%s%n",
                                 query,
                                 streamFusion ? "streamfusion" : "flink",
                                 backend,
@@ -48,8 +48,10 @@ public final class LocalRowDataNexmarkBenchmark {
                                 result.nativeRegularJoinBatches(),
                                 result.nativeIntervalJoinBatches(),
                                 result.nativeOverAggregateBatches(),
+                                result.nativeTemporalSortBatches(),
                                 result.outputRows(),
                                 result.outputSha256(),
+                                result.orderedSha256(),
                                 result.materializedRows(),
                                 result.materializedSha256());
                         if (streamFusion && !explain.contains("Accelerated: yes")) {
@@ -94,8 +96,10 @@ public final class LocalRowDataNexmarkBenchmark {
                 StreamFusionPlannerFactory.nativeRegularJoinBatchCount(),
                 StreamFusionPlannerFactory.nativeIntervalJoinBatchCount(),
                 StreamFusionPlannerFactory.nativeOverAggregateBatchCount(),
+                StreamFusionPlannerFactory.nativeTemporalSortBatchCount(),
                 output.rowCount(),
                 output.sha256(),
+                output.orderedSha256(),
                 output.debugRows(),
                 output.materializedRowCount(),
                 output.materializedSha256(),
@@ -140,8 +144,10 @@ public final class LocalRowDataNexmarkBenchmark {
         private final long nativeRegularJoinBatches;
         private final long nativeIntervalJoinBatches;
         private final long nativeOverAggregateBatches;
+        private final long nativeTemporalSortBatches;
         private final long outputRows;
         private final String outputSha256;
+        private final String orderedSha256;
         private final List<String> debugRows;
         private final long materializedRows;
         private final String materializedSha256;
@@ -158,8 +164,10 @@ public final class LocalRowDataNexmarkBenchmark {
                 long nativeRegularJoinBatches,
                 long nativeIntervalJoinBatches,
                 long nativeOverAggregateBatches,
+                long nativeTemporalSortBatches,
                 long outputRows,
                 String outputSha256,
+                String orderedSha256,
                 List<String> debugRows,
                 long materializedRows,
                 String materializedSha256,
@@ -174,8 +182,10 @@ public final class LocalRowDataNexmarkBenchmark {
             this.nativeRegularJoinBatches = nativeRegularJoinBatches;
             this.nativeIntervalJoinBatches = nativeIntervalJoinBatches;
             this.nativeOverAggregateBatches = nativeOverAggregateBatches;
+            this.nativeTemporalSortBatches = nativeTemporalSortBatches;
             this.outputRows = outputRows;
             this.outputSha256 = outputSha256;
+            this.orderedSha256 = orderedSha256;
             this.debugRows = List.copyOf(debugRows);
             this.materializedRows = materializedRows;
             this.materializedSha256 = materializedSha256;
@@ -226,12 +236,20 @@ public final class LocalRowDataNexmarkBenchmark {
             return nativeOverAggregateBatches;
         }
 
+        long nativeTemporalSortBatches() {
+            return nativeTemporalSortBatches;
+        }
+
         long outputRows() {
             return outputRows;
         }
 
         String outputSha256() {
             return outputSha256;
+        }
+
+        String orderedSha256() {
+            return orderedSha256;
         }
 
         List<String> debugRows() {

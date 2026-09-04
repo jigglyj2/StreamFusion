@@ -264,6 +264,23 @@ class LocalRowDataNexmarkBenchmarkIT {
         assertThat(streamFusion.nativeTopNBatches()).isGreaterThan(0);
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"hashmap", "rocksdb"})
+    void temporalSortMatchesFlinkIncludingGlobalOutputOrder(String backend) throws Exception {
+        LocalRowDataNexmarkBenchmark.RunResult flink =
+                LocalRowDataNexmarkBenchmark.run(2_000, "temporal-sort", false, backend, 4);
+        LocalRowDataNexmarkBenchmark.RunResult streamFusion =
+                LocalRowDataNexmarkBenchmark.run(2_000, "temporal-sort", true, backend, 4);
+
+        assertThat(streamFusion.completed()).isTrue();
+        assertThat(streamFusion.debugRows()).containsExactlyElementsOf(flink.debugRows());
+        assertThat(streamFusion.outputRows()).isEqualTo(flink.outputRows());
+        assertThat(streamFusion.outputSha256()).isEqualTo(flink.outputSha256());
+        assertThat(streamFusion.orderedSha256()).isEqualTo(flink.orderedSha256());
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        assertThat(streamFusion.nativeTemporalSortBatches()).isGreaterThan(0);
+    }
+
     private static boolean isPresent(String className) {
         try {
             Class.forName(className);

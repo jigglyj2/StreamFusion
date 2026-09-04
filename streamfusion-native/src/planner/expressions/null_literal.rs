@@ -15,6 +15,7 @@ use crate::proto;
 
 pub(crate) fn data_type(logical_type: &proto::LogicalType) -> Result<DataType> {
     match logical_type.r#type.as_ref() {
+        Some(proto::logical_type::Type::Null(_)) => Ok(DataType::Null),
         Some(proto::logical_type::Type::Tinyint(_)) => Ok(DataType::Int8),
         Some(proto::logical_type::Type::Smallint(_)) => Ok(DataType::Int16),
         Some(proto::logical_type::Type::Integer(_)) => Ok(DataType::Int32),
@@ -152,5 +153,15 @@ mod tests {
             data_type(&logical_type).unwrap(),
             DataType::Timestamp(TimeUnit::Microsecond, None)
         );
+    }
+
+    #[test]
+    fn maps_flink_null_type_for_state_payload_schemas() {
+        let logical_type = proto::LogicalType {
+            nullable: true,
+            r#type: Some(proto::logical_type::Type::Null(proto::EmptyType::default())),
+        };
+
+        assert_eq!(data_type(&logical_type).unwrap(), DataType::Null);
     }
 }

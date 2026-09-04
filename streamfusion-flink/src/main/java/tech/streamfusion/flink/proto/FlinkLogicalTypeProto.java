@@ -111,6 +111,8 @@ public final class FlinkLogicalTypeProto {
                             RowField.newBuilder().setName(field.getName()).setType(serialize(field.getType())));
                 }
                 return type.setRow(rowType).build();
+            case NULL:
+                return type.setNull(EmptyType.getDefaultInstance()).build();
             default:
                 throw new IllegalArgumentException("Unsupported native type " + flinkType);
         }

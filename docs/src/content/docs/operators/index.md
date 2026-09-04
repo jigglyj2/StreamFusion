@@ -23,7 +23,7 @@ This matrix follows the query operations documented by Flink 2.3, including the 
 | [Set operations](set-operations/) | **Partial** (`UNION ALL`, `UNION DISTINCT`) | By operation | Arrow IPC at Flink multi-input gates; native distinct keyed state |
 | [Exchange](exchange/) | **Partial** (hash and singleton) | Yes | Native Flink-compatible key grouping with Flink-owned network transport |
 | [Table and collection expansion](table-expansion/) | **Partial** (scalar array `UNNEST`) | Yes | DataFusion `UnnestExec` with Flink-compatible correlate semantics |
-| [ORDER BY](order-by/) | **Partial** (streaming finite Top-N) | Yes | Native Top-N state; DataFusion sort for future bounded full sorts |
+| [ORDER BY](order-by/) | **Partial** (streaming finite Top-N and time-ascending temporal sort) | Yes | Native Top-N or timer/state sort; DataFusion sort for future bounded full sorts |
 | [LIMIT](limit/) | **Yes** (streaming constant `LIMIT`/`OFFSET`) | Yes | Native counter/Top-N state with memory or RocksDB backing |
 | [Top-N](top-n/) | **Yes** (streaming `ROW_NUMBER`) | Yes | Native Arrow ranking state with memory or RocksDB backing |
 | [Window Top-N](window-top-n/) | **Yes** (event-time constant `ROW_NUMBER` range) | Yes | Native per-window state plus Flink's exact generated comparator |

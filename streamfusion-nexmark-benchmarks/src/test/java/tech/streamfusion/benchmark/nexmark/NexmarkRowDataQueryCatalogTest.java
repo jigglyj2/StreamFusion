@@ -36,6 +36,7 @@ class NexmarkRowDataQueryCatalogTest {
                         "select-distinct",
                         "deduplicate-processing-time-keep-first",
                         "deduplicate-processing-time-keep-last",
+                        "temporal-sort",
                         "top-n",
                         "limit");
         for (String query : NexmarkRowDataQueryCatalog.supportedQueries()) {
