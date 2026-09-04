@@ -14,6 +14,7 @@ use arrow::array::{
 };
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow::record_batch::RecordBatch;
+use arrow::row::{RowConverter, SortField};
 use datafusion::error::{DataFusionError, Result};
 use hashbrown::HashMap;
 
@@ -45,6 +46,12 @@ pub(crate) struct GroupAggregateProcessor {
     input_kind_index: Option<usize>,
     visible_count: Option<usize>,
     scratch_reservation: HostMemoryReservation,
+    bundle_reservation: HostMemoryReservation,
+    grouping_converter: Option<RowConverter>,
+    output_schema: Option<SchemaRef>,
+    pending: HashMap<StateKey, PendingGroup, RandomState>,
+    pending_order: Vec<StateKey>,
+    pending_elements: usize,
 }
 
 #[derive(Clone)]
@@ -142,6 +149,37 @@ struct OutputEvents {
     values: Vec<Vec<Option<AggregateValue>>>,
 }
 
+struct PendingGroup {
+    grouping_row: Vec<u8>,
+    original: Option<AccumulatorState>,
+    current: Option<AccumulatorState>,
+}
+
+struct BundleOutputEvents {
+    grouping_rows: Vec<Vec<u8>>,
+    row_kinds: Vec<i8>,
+    values: Vec<Vec<Option<AggregateValue>>>,
+}
+
+impl BundleOutputEvents {
+    fn new(calls: usize) -> Self {
+        Self {
+            grouping_rows: Vec::new(),
+            row_kinds: Vec::new(),
+            values: (0..calls).map(|_| Vec::new()).collect(),
+        }
+    }
+
+    fn push(&mut self, grouping_row: Vec<u8>, row_kind: i8, values: Vec<Option<AggregateValue>>) {
+        debug_assert_eq!(values.len(), self.values.len());
+        self.grouping_rows.push(grouping_row);
+        self.row_kinds.push(row_kind);
+        for (column, value) in self.values.iter_mut().zip(values) {
+            column.push(value);
+        }
+    }
+}
+
 impl OutputEvents {
     fn with_capacity(rows: usize, calls: usize) -> Self {
         Self {
@@ -228,6 +266,9 @@ impl GroupAggregateProcessor {
                 "changelog group aggregate requires retractable aggregate calls".to_string(),
             ));
         }
+        let bundle_reservation =
+            scratch_reservation.sibling("native group aggregate pending mini-batch");
+        let (grouping_converter, output_schema) = planned_group_output(&plan)?;
         Ok(Self {
             plan,
             calls,
@@ -239,6 +280,12 @@ impl GroupAggregateProcessor {
             input_kind_index: None,
             visible_count: None,
             scratch_reservation,
+            bundle_reservation,
+            grouping_converter,
+            output_schema,
+            pending: HashMap::with_hasher(RandomState::new()),
+            pending_order: Vec::new(),
+            pending_elements: 0,
         })
     }
 
@@ -249,7 +296,12 @@ impl GroupAggregateProcessor {
             .num_rows()
             .saturating_mul(192usize.saturating_add(self.calls.len().saturating_mul(64)));
         self.scratch_reservation.resize(base_reservation)?;
-        match self.process_arrow_accounted(batch, base_reservation) {
+        let result = if self.plan.mini_batch_size == 0 {
+            self.process_arrow_accounted(batch, base_reservation)
+        } else {
+            self.process_mini_batch_accounted(batch, base_reservation)
+        };
+        match result {
             Ok(output) => {
                 let output_bytes = output.get_array_memory_size();
                 self.scratch_reservation
@@ -415,6 +467,287 @@ impl GroupAggregateProcessor {
         self.output_batch(&batch, events)
     }
 
+    fn process_mini_batch_accounted(
+        &mut self,
+        batch: RecordBatch,
+        base_reservation: usize,
+    ) -> Result<RecordBatch> {
+        self.prepare_schema(batch.schema(), batch.num_columns())?;
+        let admitted = self.estimated_pending_bytes().saturating_add(
+            batch
+                .num_rows()
+                .saturating_mul(192usize.saturating_add(self.calls.len().saturating_mul(64))),
+        );
+        self.bundle_reservation.resize(admitted)?;
+        let grouping_rows = self.encode_grouping_rows(&batch)?;
+        let mut events = BundleOutputEvents::new(self.calls.len());
+        let trigger = usize::try_from(self.plan.mini_batch_size).map_err(|_| {
+            DataFusionError::Plan("group aggregate mini-batch size exceeds usize".to_string())
+        })?;
+        let mut offset = 0;
+        while offset < batch.num_rows() {
+            let remaining = trigger - self.pending_elements;
+            let length = remaining.min(batch.num_rows() - offset);
+            self.stage_mini_range(&batch, &grouping_rows, offset, length)?;
+            self.pending_elements += length;
+            offset += length;
+            if self.pending_elements == trigger {
+                self.finish_pending(&mut events)?;
+            }
+        }
+        self.bundle_reservation
+            .resize(self.estimated_pending_bytes())?;
+        let output = self.bundle_output_batch(events)?;
+        let output_bytes = output.get_array_memory_size();
+        self.scratch_reservation
+            .resize(output_bytes.max(base_reservation))?;
+        Ok(output)
+    }
+
+    fn stage_mini_range(
+        &mut self,
+        batch: &RecordBatch,
+        grouping_rows: &[Vec<u8>],
+        offset: usize,
+        length: usize,
+    ) -> Result<()> {
+        let mut unique = HashMap::<StateKey, usize, RandomState>::with_capacity_and_hasher(
+            length,
+            RandomState::new(),
+        );
+        let mut keys = Vec::new();
+        let mut first_rows = Vec::new();
+        let mut row_indices = Vec::with_capacity(length);
+        for row in offset..offset + length {
+            let key = self.state_key(batch, row)?;
+            let next = keys.len();
+            let index = match unique.entry(key.clone()) {
+                hashbrown::hash_map::Entry::Occupied(entry) => *entry.get(),
+                hashbrown::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(next);
+                    keys.push(key);
+                    first_rows.push(row);
+                    next
+                }
+            };
+            row_indices.push(index);
+        }
+
+        let missing = keys
+            .iter()
+            .enumerate()
+            .filter_map(|(index, key)| (!self.pending.contains_key(key)).then_some(index))
+            .collect::<Vec<_>>();
+        let refs = missing
+            .iter()
+            .map(|&index| StateKeyRef {
+                key_group: keys[index].key_group,
+                key: &keys[index].key,
+            })
+            .collect::<Vec<_>>();
+        let existing = self.state.get_batch(&refs)?;
+        for (&index, value) in missing.iter().zip(existing) {
+            let original = value
+                .as_deref()
+                .map(|bytes| decode_state(bytes, &self.calls))
+                .transpose()?;
+            self.pending_order.push(keys[index].clone());
+            self.pending.insert(
+                keys[index].clone(),
+                PendingGroup {
+                    grouping_row: grouping_rows[first_rows[index]].clone(),
+                    current: original.clone(),
+                    original,
+                },
+            );
+        }
+
+        for (local_row, &key_index) in row_indices.iter().enumerate() {
+            let row = offset + local_row;
+            let accumulate = self.accumulates(batch, row)?;
+            let entry = self
+                .pending
+                .get_mut(&keys[key_index])
+                .expect("every mini-batch key was staged");
+            if self.calls.is_empty() {
+                let previous = entry.current.as_ref().map(|state| state.row_count);
+                match apply_count_change(previous, accumulate) {
+                    CountChange::Ignored => {}
+                    CountChange::Present(count, _) => {
+                        entry.current = Some(AccumulatorState {
+                            row_count: count,
+                            accumulators: Vec::new(),
+                        });
+                    }
+                    CountChange::Removed => {
+                        entry.current = Some(AccumulatorState {
+                            row_count: 0,
+                            accumulators: Vec::new(),
+                        });
+                    }
+                }
+                continue;
+            }
+            let empty = entry
+                .current
+                .as_ref()
+                .is_none_or(|state| state.row_count == 0);
+            if empty && !accumulate {
+                continue;
+            }
+            entry
+                .current
+                .get_or_insert_with(|| AccumulatorState::new(&self.calls))
+                .apply(&self.calls, batch, row, accumulate)?;
+        }
+        Ok(())
+    }
+
+    fn finish_pending(&mut self, events: &mut BundleOutputEvents) -> Result<()> {
+        let order = std::mem::take(&mut self.pending_order);
+        let mut mutations = Vec::with_capacity(order.len());
+        for key in order {
+            let group = self
+                .pending
+                .remove(&key)
+                .expect("pending mini-batch order and map remain synchronized");
+            let first_row = group
+                .original
+                .as_ref()
+                .is_none_or(|state| state.row_count == 0);
+            let Some(current) = group.current else {
+                continue;
+            };
+            let previous_values = group
+                .original
+                .as_ref()
+                .map(|state| state.values(&self.calls))
+                .unwrap_or_else(|| vec![None; self.calls.len()]);
+            if current.row_count == 0 {
+                if !first_row {
+                    events.push(group.grouping_row, DELETE, previous_values);
+                    mutations.push(StateMutation { key, value: None });
+                }
+                continue;
+            }
+            let current_values = current.values(&self.calls);
+            mutations.push(StateMutation {
+                key,
+                value: Some(encode_state(&current)),
+            });
+            if first_row {
+                events.push(group.grouping_row, INSERT, current_values);
+            } else if previous_values != current_values {
+                if self.plan.generate_update_before {
+                    events.push(group.grouping_row.clone(), UPDATE_BEFORE, previous_values);
+                }
+                events.push(group.grouping_row, UPDATE_AFTER, current_values);
+            }
+        }
+        if !mutations.is_empty() {
+            self.state.write_batch(mutations)?;
+        }
+        self.pending_elements = 0;
+        Ok(())
+    }
+
+    pub(crate) fn finish_bundle(&mut self) -> Result<RecordBatch> {
+        let mut events = BundleOutputEvents::new(self.calls.len());
+        self.finish_pending(&mut events)?;
+        self.bundle_reservation.resize(0)?;
+        let output = self.bundle_output_batch(events)?;
+        let output_bytes = output.get_array_memory_size();
+        self.scratch_reservation.resize(output_bytes)?;
+        self.scratch_reservation.transfer_to_arrow(output_bytes)?;
+        self.scratch_reservation.resize(0)?;
+        Ok(output)
+    }
+
+    pub(crate) fn pending_element_count(&self) -> usize {
+        self.pending_elements
+    }
+
+    pub(crate) fn pending_key_count(&self) -> usize {
+        self.pending.len()
+    }
+
+    fn estimated_pending_bytes(&self) -> usize {
+        let map_storage = self
+            .pending
+            .capacity()
+            .saturating_mul(std::mem::size_of::<(StateKey, PendingGroup)>().saturating_add(16));
+        let order_storage = self
+            .pending_order
+            .capacity()
+            .saturating_mul(std::mem::size_of::<StateKey>());
+        self.pending.iter().fold(
+            map_storage.saturating_add(order_storage),
+            |bytes, (key, group)| {
+                bytes
+                    // The map key and the order vector deliberately own independent key bytes.
+                    .saturating_add(key.key.capacity().saturating_mul(2))
+                    .saturating_add(group.grouping_row.capacity())
+                    .saturating_add(
+                        group
+                            .original
+                            .as_ref()
+                            .map_or(0, AccumulatorState::estimated_dynamic_bytes),
+                    )
+                    .saturating_add(
+                        group
+                            .current
+                            .as_ref()
+                            .map_or(0, AccumulatorState::estimated_dynamic_bytes),
+                    )
+            },
+        )
+    }
+
+    fn encode_grouping_rows(&self, batch: &RecordBatch) -> Result<Vec<Vec<u8>>> {
+        if self.plan.grouping_indices.is_empty() {
+            return Ok((0..batch.num_rows()).map(|_| Vec::new()).collect());
+        }
+        let columns = self
+            .plan
+            .grouping_indices
+            .iter()
+            .map(|&index| Arc::clone(batch.column(index as usize)))
+            .collect::<Vec<_>>();
+        let rows = self
+            .grouping_converter
+            .as_ref()
+            .expect("grouping converter was negotiated")
+            .convert_columns(&columns)?;
+        Ok((0..batch.num_rows())
+            .map(|row| rows.row(row).as_ref().to_vec())
+            .collect())
+    }
+
+    fn bundle_output_batch(&self, events: BundleOutputEvents) -> Result<RecordBatch> {
+        let mut columns = if self.plan.grouping_indices.is_empty() {
+            Vec::new()
+        } else {
+            let converter = self
+                .grouping_converter
+                .as_ref()
+                .expect("grouping converter was negotiated");
+            let parser = converter.parser();
+            converter.convert_rows(events.grouping_rows.iter().map(|row| parser.parse(row)))?
+        };
+        for (call, values) in self.calls.iter().zip(events.values) {
+            columns.push(aggregate_array(&values, &call.output_type)?);
+        }
+        columns.push(Arc::new(Int8Array::from(events.row_kinds)) as ArrayRef);
+        Ok(RecordBatch::try_new(
+            Arc::clone(self.output_schema.as_ref().ok_or_else(|| {
+                DataFusionError::Execution(
+                    "group aggregate mini-batch output schema is not negotiated".to_string(),
+                )
+            })?),
+            columns,
+        )?)
+    }
+
     fn accumulates(&self, batch: &RecordBatch, row: usize) -> Result<bool> {
         if !self.plan.input_changelog {
             return Ok(true);
@@ -548,6 +881,55 @@ impl GroupAggregateProcessor {
                 })
                 .collect::<std::result::Result<Vec<_>, arrow::error::ArrowError>>()?;
         }
+        let grouping_fields = self
+            .plan
+            .grouping_indices
+            .iter()
+            .map(|&index| {
+                let index = index as usize;
+                schema
+                    .fields()
+                    .get(index)
+                    .filter(|_| index < visible_count)
+                    .cloned()
+                    .ok_or_else(|| {
+                        DataFusionError::Plan(format!(
+                            "grouping index {index} is outside {visible_count} input fields"
+                        ))
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if self.grouping_converter.is_none() {
+            let sort_fields = grouping_fields
+                .iter()
+                .map(|field| SortField::new(field.data_type().clone()))
+                .collect::<Vec<_>>();
+            if !RowConverter::supports_fields(&sort_fields) {
+                return Err(DataFusionError::Plan(
+                    "group aggregate key type is not supported by Arrow row encoding".to_string(),
+                ));
+            }
+            self.grouping_converter = Some(RowConverter::new(sort_fields)?);
+        }
+        if self.output_schema.is_none() {
+            let mut fields = grouping_fields;
+            fields.extend(self.calls.iter().enumerate().map(|(index, call)| {
+                Arc::new(Field::new(
+                    format!("aggregate_{index}"),
+                    call.output_type.clone(),
+                    !matches!(
+                        call.function,
+                        proto::AggregateFunction::CountStar | proto::AggregateFunction::Count
+                    ),
+                ))
+            }));
+            fields.push(Arc::new(Field::new(
+                "__streamfusion_row_kind",
+                DataType::Int8,
+                false,
+            )));
+            self.output_schema = Some(Arc::new(Schema::new(fields)));
+        }
         for call in &self.calls {
             if let Some(index) = call.input_index {
                 let actual = schema
@@ -642,6 +1024,30 @@ impl AccumulatorState {
                 })
                 .collect(),
         }
+    }
+
+    fn estimated_dynamic_bytes(&self) -> usize {
+        self.accumulators
+            .capacity()
+            .saturating_mul(std::mem::size_of::<Accumulator>())
+            .saturating_add(self.accumulators.iter().fold(0usize, |bytes, accumulator| {
+                bytes.saturating_add(match accumulator {
+                    Accumulator::Count(_) => 0,
+                    Accumulator::DistinctCount { values, .. } | Accumulator::Extremum(values) => {
+                        estimated_value_map_bytes(values)
+                    }
+                    Accumulator::Sum { value, .. }
+                    | Accumulator::Average { value, .. }
+                    | Accumulator::AppendExtremum(value) => {
+                        value.as_ref().map_or(0, AggregateValue::dynamic_bytes)
+                    }
+                    Accumulator::DistinctSum { value, values, .. }
+                    | Accumulator::DistinctAverage { value, values, .. } => value
+                        .as_ref()
+                        .map_or(0, AggregateValue::dynamic_bytes)
+                        .saturating_add(estimated_value_map_bytes(values)),
+                })
+            }))
     }
 
     /// Creates an accumulator seed from the result at the end of an already processed prefix.
@@ -1056,6 +1462,25 @@ impl AccumulatorState {
     }
 }
 
+fn estimated_value_map_bytes(values: &BTreeMap<AggregateValue, i64>) -> usize {
+    values.iter().fold(0usize, |bytes, (value, _)| {
+        bytes
+            // Include the key/value pair plus conservative B-tree node links and occupancy slack.
+            .saturating_add(std::mem::size_of::<(AggregateValue, i64)>())
+            .saturating_add(64)
+            .saturating_add(value.dynamic_bytes())
+    })
+}
+
+impl AggregateValue {
+    fn dynamic_bytes(&self) -> usize {
+        match self {
+            Self::Bytes(value) => value.capacity(),
+            _ => 0,
+        }
+    }
+}
+
 pub(super) fn row_aggregate_values(
     calls: &[Call],
     batch: &RecordBatch,
@@ -1095,7 +1520,61 @@ fn validate_plan(_plan: &proto::GroupAggregate, max_parallelism: u32) -> Result<
             "group aggregate max parallelism must be positive".to_string(),
         ));
     }
+    if _plan.mini_batch_size > usize::MAX as u64 {
+        return Err(DataFusionError::Plan(
+            "group aggregate mini-batch size exceeds usize".to_string(),
+        ));
+    }
+    if _plan.mini_batch_size > 0 && (_plan.input_schema.is_none() || _plan.output_schema.is_none())
+    {
+        return Err(DataFusionError::Plan(
+            "mini-batch group aggregate requires input and output schemas".to_string(),
+        ));
+    }
     Ok(())
+}
+
+fn planned_group_output(
+    plan: &proto::GroupAggregate,
+) -> Result<(Option<RowConverter>, Option<SchemaRef>)> {
+    let (Some(input), Some(output)) = (&plan.input_schema, &plan.output_schema) else {
+        return Ok((None, None));
+    };
+    let input = crate::planner::arrow_schema(input)?;
+    let output = crate::planner::arrow_schema(output)?;
+    if output.fields().len() != plan.grouping_indices.len() + plan.aggregate_calls.len() {
+        return Err(DataFusionError::Plan(
+            "group aggregate output schema does not match keys and calls".to_string(),
+        ));
+    }
+    let sort_fields = plan
+        .grouping_indices
+        .iter()
+        .map(|&index| {
+            input
+                .fields()
+                .get(index as usize)
+                .map(|field| SortField::new(field.data_type().clone()))
+                .ok_or_else(|| {
+                    DataFusionError::Plan(format!(
+                        "group aggregate grouping index {index} is outside the planned input"
+                    ))
+                })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if !RowConverter::supports_fields(&sort_fields) {
+        return Err(DataFusionError::Plan(
+            "group aggregate key type is not supported by Arrow row encoding".to_string(),
+        ));
+    }
+    let converter = RowConverter::new(sort_fields)?;
+    let mut fields = output.fields().iter().cloned().collect::<Vec<_>>();
+    fields.push(Arc::new(Field::new(
+        "__streamfusion_row_kind",
+        DataType::Int8,
+        false,
+    )));
+    Ok((Some(converter), Some(Arc::new(Schema::new(fields)))))
 }
 
 pub(super) fn lower_call(call: &proto::AggregateCall) -> Result<Call> {
@@ -2272,6 +2751,48 @@ mod tests {
         }
     }
 
+    fn group_schema() -> proto::Schema {
+        proto::Schema {
+            fields: vec![
+                proto::Field {
+                    name: "bidder".to_string(),
+                    r#type: Some(logical_bigint(false)),
+                },
+                proto::Field {
+                    name: "price".to_string(),
+                    r#type: Some(logical_bigint(true)),
+                },
+            ],
+        }
+    }
+
+    fn group_output_schema() -> proto::Schema {
+        proto::Schema {
+            fields: vec![
+                proto::Field {
+                    name: "bidder".to_string(),
+                    r#type: Some(logical_bigint(false)),
+                },
+                proto::Field {
+                    name: "count".to_string(),
+                    r#type: Some(logical_bigint(false)),
+                },
+                proto::Field {
+                    name: "sum".to_string(),
+                    r#type: Some(logical_bigint(true)),
+                },
+                proto::Field {
+                    name: "min".to_string(),
+                    r#type: Some(logical_bigint(true)),
+                },
+                proto::Field {
+                    name: "max".to_string(),
+                    r#type: Some(logical_bigint(true)),
+                },
+            ],
+        }
+    }
+
     fn plan(input_changelog: bool, update_before: bool) -> Vec<u8> {
         plan_with_grouping(input_changelog, update_before, vec![0])
     }
@@ -2314,6 +2835,7 @@ mod tests {
                         ],
                         generate_update_before: update_before,
                         input_changelog,
+                        ..Default::default()
                     },
                 ))),
             }),
@@ -2337,6 +2859,7 @@ mod tests {
                         aggregate_calls: Vec::new(),
                         generate_update_before: false,
                         input_changelog: true,
+                        ..Default::default()
                     },
                 ))),
             }),
@@ -2368,6 +2891,7 @@ mod tests {
                         ],
                         generate_update_before: true,
                         input_changelog: true,
+                        ..Default::default()
                     },
                 ))),
             }),
@@ -2391,6 +2915,37 @@ mod tests {
 
     fn processor(input_changelog: bool, update_before: bool) -> GroupAggregateProcessor {
         processor_range(input_changelog, update_before, 0, 127)
+    }
+
+    fn mini_processor(size: u64, input_changelog: bool) -> GroupAggregateProcessor {
+        let native = proto::NativePlan::decode(plan(input_changelog, true).as_slice()).unwrap();
+        let mut aggregate = match native.root.unwrap().operator.unwrap() {
+            proto::operator::Operator::GroupAggregate(aggregate) => *aggregate,
+            _ => unreachable!(),
+        };
+        aggregate.mini_batch_size = size;
+        aggregate.input_schema = Some(group_schema());
+        aggregate.output_schema = Some(group_output_schema());
+        let plan = proto::NativePlan {
+            protocol_version: crate::PLAN_PROTOCOL_VERSION,
+            root: Some(proto::Operator {
+                operator: Some(proto::operator::Operator::GroupAggregate(Box::new(
+                    aggregate,
+                ))),
+            }),
+        }
+        .encode_to_vec();
+        GroupAggregateProcessor::new(
+            &plan,
+            128,
+            0,
+            127,
+            HostMemoryReservation::new(
+                Arc::new(TestBroker::new(1 << 30)),
+                "test mini-batch group aggregate state",
+            ),
+        )
+        .unwrap()
     }
 
     fn processor_range(
@@ -2430,6 +2985,64 @@ mod tests {
             columns.push(Arc::new(Int8Array::from(kinds)));
         }
         RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap()
+    }
+
+    #[test]
+    fn mini_batch_uses_exact_count_boundaries_across_arrow_batches() {
+        let mut processor = mini_processor(3, false);
+        let first = processor
+            .process_arrow(batch(vec![7, 7], vec![Some(10), Some(20)], None))
+            .unwrap();
+        assert_eq!(first.num_rows(), 0);
+        assert_eq!(processor.pending_element_count(), 2);
+        assert_eq!(processor.pending_key_count(), 1);
+
+        let second = processor
+            .process_arrow(batch(
+                vec![8, 7, 8, 9],
+                vec![Some(5), Some(30), Some(7), Some(1)],
+                None,
+            ))
+            .unwrap();
+        assert_eq!(second.num_rows(), 7);
+        assert_eq!(processor.pending_element_count(), 0);
+        assert_eq!(
+            second
+                .column(5)
+                .as_any()
+                .downcast_ref::<Int8Array>()
+                .unwrap()
+                .values(),
+            &[
+                INSERT,
+                INSERT,
+                UPDATE_BEFORE,
+                UPDATE_AFTER,
+                UPDATE_BEFORE,
+                UPDATE_AFTER,
+                INSERT
+            ]
+        );
+    }
+
+    #[test]
+    fn mini_batch_flushes_partial_bundle_and_suppresses_equal_result() {
+        let mut processor = mini_processor(10, true);
+        let initial = processor
+            .process_arrow(batch(vec![7], vec![Some(10)], Some(vec![INSERT])))
+            .unwrap();
+        assert_eq!(initial.num_rows(), 0);
+        assert_eq!(processor.finish_bundle().unwrap().num_rows(), 1);
+
+        let unchanged = processor
+            .process_arrow(batch(
+                vec![7, 7],
+                vec![Some(10), Some(10)],
+                Some(vec![DELETE, INSERT]),
+            ))
+            .unwrap();
+        assert_eq!(unchanged.num_rows(), 0);
+        assert_eq!(processor.finish_bundle().unwrap().num_rows(), 0);
     }
 
     #[test]
@@ -2697,6 +3310,7 @@ mod tests {
             }],
             generate_update_before: false,
             input_changelog: false,
+            ..Default::default()
         };
         let bytes = proto::NativePlan {
             protocol_version: crate::PLAN_PROTOCOL_VERSION,

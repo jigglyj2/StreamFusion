@@ -7,6 +7,7 @@ package tech.streamfusion.flink.sql;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -19,7 +20,9 @@ import org.apache.flink.table.api.EnvironmentSettings;
 import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.api.Table;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
+import org.apache.flink.table.api.config.AggregatePhaseStrategy;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
+import org.apache.flink.table.api.config.OptimizerConfigOptions;
 import org.apache.flink.types.Row;
 import org.apache.flink.types.RowKind;
 import org.junit.jupiter.api.Test;
@@ -27,6 +30,53 @@ import tech.streamfusion.flink.StreamFusionPlannerFactory;
 import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 
 class GroupAggregateParityTest extends SqlParityTestSupport {
+    @Test
+    void onePhaseMiniBatchMatchesFlinkAcrossCountAndTerminalFlushes() throws Exception {
+        byte[] flink = executeMiniBatch(false);
+        byte[] streamFusion = executeMiniBatch(true);
+
+        assertThat(streamFusion).isEqualTo(flink);
+        assertThat(StreamFusionPlannerFactory.nativeGroupAggregateBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
+    private static byte[] executeMiniBatch(boolean streamFusion) throws Exception {
+        configurePlanner(streamFusion);
+        StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();
+        environment.setParallelism(1);
+        StreamTableEnvironment tables = StreamTableEnvironment.create(
+                environment, EnvironmentSettings.newInstance().inStreamingMode().build());
+        tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+        tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ENABLED, true);
+        tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_SIZE, 3L);
+        tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ALLOW_LATENCY, Duration.ofDays(1));
+        tables.getConfig()
+                .set(OptimizerConfigOptions.TABLE_OPTIMIZER_AGG_PHASE_STRATEGY, AggregatePhaseStrategy.ONE_PHASE);
+        DataStream<Row> changes = environment.fromCollection(
+                List.of(
+                        row(RowKind.INSERT, "a", "first", 10L),
+                        row(RowKind.INSERT, "a", "second", 20L),
+                        row(RowKind.INSERT, "b", "only", 5L),
+                        row(RowKind.UPDATE_BEFORE, "a", "second", 20L),
+                        row(RowKind.UPDATE_AFTER, "a", "replacement", 7L),
+                        row(RowKind.DELETE, "b", "only", 5L),
+                        row(RowKind.DELETE, "a", "first", 10L),
+                        row(RowKind.DELETE, "a", "replacement", 7L)),
+                Types.ROW_NAMED(new String[] {"category", "label", "amount"}, Types.STRING, Types.STRING, Types.LONG));
+        tables.createTemporaryView(
+                "mini_batch_group_input",
+                tables.fromChangelogStream(
+                        changes,
+                        Schema.newBuilder()
+                                .column("category", "STRING NOT NULL")
+                                .column("label", "STRING")
+                                .column("amount", "BIGINT")
+                                .build()));
+        return collect(
+                tables.executeSql("SELECT category, COUNT(*), SUM(amount), AVG(amount), MIN(amount), MAX(amount) "
+                        + "FROM mini_batch_group_input GROUP BY category"));
+    }
+
     @Test
     void globalAggregateUsesSingletonNativeStateAndMatchesFlinkByteForByte() throws Exception {
         byte[] flink = executeGlobalAggregate(false);

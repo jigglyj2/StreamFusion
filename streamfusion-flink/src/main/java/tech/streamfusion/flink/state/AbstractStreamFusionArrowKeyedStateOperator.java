@@ -231,7 +231,7 @@ public abstract class AbstractStreamFusionArrowKeyedStateOperator extends Abstra
         return false;
     }
 
-    public final void endInput() {}
+    public void endInput() throws Exception {}
 
     @Override
     public final OperatorSnapshotFutures snapshotState(

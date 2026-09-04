@@ -142,6 +142,70 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeGroupAggregateB
 }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeGroupAggregateBridge_finishBundleNative<
+    'caller,
+>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    handle: jlong,
+    output_array_address: jlong,
+    output_schema_address: jlong,
+) -> jlong {
+    unowned_env
+        .with_env(|env| -> jni::errors::Result<_> {
+            let rows = (|| -> datafusion::error::Result<_> {
+                unsafe {
+                    let output = processor(handle)?.finish_bundle()?;
+                    export_record_batch(
+                        output,
+                        output_array_address as *mut FFI_ArrowArray,
+                        output_schema_address as *mut FFI_ArrowSchema,
+                    )
+                }
+            })()
+            .map_err(|error| throw(env, error))?;
+            Ok(rows as jlong)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeGroupAggregateBridge_pendingElementCountNative<
+    'caller,
+>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    handle: jlong,
+) -> jlong {
+    unowned_env
+        .with_env(|env| -> jni::errors::Result<_> {
+            let count = unsafe { processor(handle) }
+                .map(|processor| processor.pending_element_count())
+                .map_err(|error| throw(env, error))?;
+            Ok(count as jlong)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeGroupAggregateBridge_pendingKeyCountNative<
+    'caller,
+>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    handle: jlong,
+) -> jlong {
+    unowned_env
+        .with_env(|env| -> jni::errors::Result<_> {
+            let count = unsafe { processor(handle) }
+                .map(|processor| processor.pending_key_count())
+                .map_err(|error| throw(env, error))?;
+            Ok(count as jlong)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeGroupAggregateBridge_snapshotKeyGroup<
     'caller,
 >(

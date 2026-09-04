@@ -611,8 +611,17 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             return replacement;
         }
         if (node instanceof StreamExecMiniBatchAssigner) {
-            ExecEdge edge = node.getInputEdges().get(0);
-            return convert(edge.getSource());
+            StreamExecMiniBatchAssigner assigner = (StreamExecMiniBatchAssigner) node;
+            StreamFusionExecMiniBatchAssigner replacement = new StreamFusionExecMiniBatchAssigner(
+                    assigner.getPersistedConfig(),
+                    miniBatchInterval(assigner),
+                    assigner.getInputProperties().get(0),
+                    (RowType) assigner.getOutputType(),
+                    "StreamFusionMiniBatchAssigner");
+            replacement.setInputEdges(assigner.getInputEdges().stream()
+                    .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                    .collect(Collectors.toList()));
+            return replacement;
         }
         if (node instanceof StreamExecWatermarkAssigner) {
             StreamExecWatermarkAssigner watermark = (StreamExecWatermarkAssigner) node;
@@ -1664,6 +1673,12 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                 global,
                 (StreamExecLocalWindowAggregate) local,
                 local.getInputEdges().get(0));
+    }
+
+    private static org.apache.flink.table.planner.plan.trait.MiniBatchInterval miniBatchInterval(
+            StreamExecMiniBatchAssigner assigner) {
+        return (org.apache.flink.table.planner.plan.trait.MiniBatchInterval)
+                field(assigner, StreamExecMiniBatchAssigner.class, "miniBatchInterval");
     }
 
     /**

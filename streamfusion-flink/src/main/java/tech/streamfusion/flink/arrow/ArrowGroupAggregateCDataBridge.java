@@ -34,6 +34,29 @@ public final class ArrowGroupAggregateCDataBridge {
                 handle, input, preencodedKeys, inputChangelog, outputType, allocator, NativeMemoryManager.unbounded());
     }
 
+    /** Flushes a native mini-batch without manufacturing an empty Java-side input batch. */
+    public static ArrowRowDataBatch finishBundle(
+            long handle, RowType outputType, BufferAllocator allocator, NativeMemoryManager memoryManager) {
+        try (ArrowArray outputArray = ArrowArray.allocateNew(allocator);
+                ArrowSchema outputSchema = ArrowSchema.allocateNew(allocator);
+                CDataDictionaryProvider dictionaries = new CDataDictionaryProvider()) {
+            try {
+                long rowCount = NativeGroupAggregateBridge.finishBundle(
+                        handle, outputArray.memoryAddress(), outputSchema.memoryAddress());
+                if (rowCount < 0 || rowCount > Integer.MAX_VALUE) {
+                    throw new IllegalStateException(
+                            "Native group aggregate returned invalid bundle row count " + rowCount);
+                }
+                VectorSchemaRoot output =
+                        Data.importVectorSchemaRoot(allocator, outputArray, outputSchema, dictionaries);
+                output.setRowCount((int) rowCount);
+                return removeRowKinds(output, outputType, allocator);
+            } finally {
+                memoryManager.finishArrowTransfer();
+            }
+        }
+    }
+
     public static ArrowRowDataBatch execute(
             long handle,
             ArrowRowDataBatch input,

@@ -15,11 +15,14 @@ import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.utils.LogicalTypeMerging;
 import tech.streamfusion.flink.calc.StreamFusionCalcTranslator;
+import tech.streamfusion.flink.proto.FlinkLogicalTypeProto;
 import tech.streamfusion.proto.plan.v1.AggregateFunction;
+import tech.streamfusion.proto.plan.v1.Field;
 import tech.streamfusion.proto.plan.v1.GroupAggregate;
 import tech.streamfusion.proto.plan.v1.Input;
 import tech.streamfusion.proto.plan.v1.NativePlan;
 import tech.streamfusion.proto.plan.v1.Operator;
+import tech.streamfusion.proto.plan.v1.Schema;
 
 /** Builds the versioned protobuf contract for native keyed group aggregation. */
 final class StreamFusionGroupAggregatePlan {
@@ -31,11 +34,16 @@ final class StreamFusionGroupAggregatePlan {
             AggregateCall[] calls,
             boolean[] retractable,
             boolean generateUpdateBefore,
-            boolean inputChangelog) {
+            boolean inputChangelog,
+            long miniBatchSize,
+            RowType outputType) {
         GroupAggregate.Builder aggregate = GroupAggregate.newBuilder()
                 .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
                 .setGenerateUpdateBefore(generateUpdateBefore)
-                .setInputChangelog(inputChangelog);
+                .setInputChangelog(inputChangelog)
+                .setMiniBatchSize(miniBatchSize)
+                .setInputSchema(schema(inputType))
+                .setOutputSchema(schema(outputType));
         for (int index : grouping) {
             aggregate.addGroupingIndices(index);
         }
@@ -69,6 +77,16 @@ final class StreamFusionGroupAggregatePlan {
                 .setRoot(Operator.newBuilder().setGroupAggregate(aggregate))
                 .build()
                 .toByteArray();
+    }
+
+    private static Schema schema(RowType type) {
+        Schema.Builder schema = Schema.newBuilder();
+        for (RowType.RowField field : type.getFields()) {
+            schema.addFields(Field.newBuilder()
+                    .setName(field.getName())
+                    .setType(FlinkLogicalTypeProto.serialize(field.getType())));
+        }
+        return schema.build();
     }
 
     private static AggregateFunction function(AggregateCall call) {

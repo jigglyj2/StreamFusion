@@ -210,6 +210,11 @@ message GroupAggregate {
   repeated AggregateCall aggregate_calls = 3;
   bool generate_update_before = 4;
   bool input_changelog = 5;
+  // Zero selects Flink's per-record GroupAggFunction contract. A positive value selects
+  // MiniBatchGroupAggFunction semantics and is the exact receiving-subtask element trigger.
+  uint64 mini_batch_size = 6;
+  Schema input_schema = 7;
+  Schema output_schema = 8;
 }
 
 // Stateful SQL window aggregation. Grouping rows and accumulators are opaque native state;

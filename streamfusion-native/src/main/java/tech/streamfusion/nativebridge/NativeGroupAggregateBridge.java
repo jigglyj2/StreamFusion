@@ -62,6 +62,20 @@ public final class NativeGroupAggregateBridge {
         return rows;
     }
 
+    public static long finishBundle(long handle, long outputArrayAddress, long outputSchemaAddress) {
+        long rows = finishBundleNative(handle, outputArrayAddress, outputSchemaAddress);
+        EXECUTED_BATCHES.incrementAndGet();
+        return rows;
+    }
+
+    public static long pendingElementCount(long handle) {
+        return pendingElementCountNative(handle);
+    }
+
+    public static long pendingKeyCount(long handle) {
+        return pendingKeyCountNative(handle);
+    }
+
     public static long executedBatchCount() {
         return EXECUTED_BATCHES.get();
     }
@@ -121,6 +135,12 @@ public final class NativeGroupAggregateBridge {
             long inputSchemaAddress,
             long outputArrayAddress,
             long outputSchemaAddress);
+
+    private static native long finishBundleNative(long handle, long outputArrayAddress, long outputSchemaAddress);
+
+    private static native long pendingElementCountNative(long handle);
+
+    private static native long pendingKeyCountNative(long handle);
 
     private static native byte[] snapshotKeyGroup(long handle, int keyGroup);
 

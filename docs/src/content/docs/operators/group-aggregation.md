@@ -49,7 +49,16 @@ identical allocation per input row. Flink's `StreamExecExpand` is accelerated fo
 changing their logical type. Generated parity cases cover scalar binary, decimal, date, and
 timestamp keys as well as opaque array and row keys through that nullable boundary.
 
-State TTL, mini-batching, async state, Flink's changelog-state wrapper, multi-column `DISTINCT`,
+One-phase count-triggered mini-batch aggregation is accelerated. StreamFusion preserves Flink's
+exact bundle boundaries even when one Arrow input batch crosses several boundaries, buffers opaque
+group keys and accumulator deltas in managed native memory, and emits at most one aggregate-level
+change per key when a bundle is finished. Bundles finish at their configured count, before a
+watermark or checkpoint, and at bounded input completion. Processing-time and row-time mini-batch
+assigners remain Arrow control operators and never transpose the payload back to rows. Two-phase
+local/global mini-batch aggregation is not yet accelerated and therefore remains an explicit
+whole-plan fallback.
+
+State TTL, async state, Flink's changelog-state wrapper, multi-column `DISTINCT`,
 ordered or approximate aggregates, `IGNORE NULLS`, unsupported aggregate functions, and
 unsupported aggregate value types fall back with a specific EXPLAIN reason. Flink's internal
 `SUM0` call uses the same accumulator as `SUM` here: a group has no output after its last row is
@@ -87,13 +96,14 @@ backend pairs with canonical savepoints and with both aligned and unaligned chec
 state remains singleton state; keyed and grouping-set aggregates retain the normal Flink key-group
 rescaling contract.
 
-The operator has no timers in this supported shape. A batch is applied synchronously before the
-mailbox processes a checkpoint barrier. Aligned and unaligned checkpoints therefore snapshot the
-same native operator state, while Flink's channel-state machinery owns messages still in flight;
-the native state does not need a second message sequence log. With aligned checkpoints, exchange
-rows are gathered into one Arrow frame per non-empty destination. With unaligned checkpoints,
-exchange frames retain a single key group so Flink can redistribute captured channel state during
-rescaling without splitting a frame.
+The aggregate operator has no timers in either the immediate or count-triggered mini-batch shape.
+A pending mini-batch is finished before the checkpoint pre-barrier hook, so aligned and unaligned
+checkpoints snapshot the same canonical aggregate state; Flink's channel-state machinery owns
+messages still in flight and the native state does not need a second message sequence log. The
+processing-time mini-batch assigner uses Flink processing timers only to advance its batch
+watermark. With aligned checkpoints, exchange rows are gathered into one Arrow frame per non-empty
+destination. With unaligned checkpoints, exchange frames retain a single key group so Flink can
+redistribute captured channel state during rescaling without splitting a frame.
 
 Arrow buffers, in-memory state, aggregate scratch/output storage, RocksDB cache and write buffers,
 and restore readers are admitted through the operator's existing Flink managed-memory allowance.
@@ -103,10 +113,12 @@ checkpoint kind/bytes/duration/failures, incremental upload and SST-reuse bytes,
 bytes/duration/failures.
 
 Retractable `MIN` and `MAX` keep counted ordered values so deleting the current extremum reveals the
-next one. Insert-only extrema use a single scalar instead. The batch path deduplicates keys with
-`ahash`, decodes each touched accumulator once, and applies every row in input order. This is close
-to RisingWave's keyed aggregate-group/cache design and Arroyo's Arrow incremental aggregate, while
-emitting immediately to preserve Flink's non-mini-batch changelog contract.
+next one. Insert-only extrema use a single scalar instead. The immediate batch path deduplicates
+keys with `ahash`, decodes each touched accumulator once, and applies every row in input order. The
+mini-batch path performs one backend multi-get for missing keys and one mutation batch per completed
+bundle, while preserving first-seen key order inside the bundle. This follows the keyed
+aggregate-group/cache shape used by RisingWave and Arroyo's Arrow incremental aggregates while
+retaining Flink's immediate or mini-batch changelog contract as planned.
 
 The RowData Nexmark `group-aggregate`, `global-aggregate`, and `grouping-sets` harnesses compare
 Flink and StreamFusion in separate JVMs for both state backends. Benchmark builds use the Rust

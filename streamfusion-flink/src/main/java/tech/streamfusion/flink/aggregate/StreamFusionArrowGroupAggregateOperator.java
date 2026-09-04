@@ -8,6 +8,7 @@ import java.nio.file.Path;
 import java.util.List;
 import org.apache.flink.streaming.api.operators.BoundedOneInput;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
+import org.apache.flink.streaming.api.watermark.Watermark;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.table.runtime.keyselector.RowDataKeySelector;
 import org.apache.flink.table.types.logical.RowType;
@@ -26,6 +27,7 @@ final class StreamFusionArrowGroupAggregateOperator extends AbstractStreamFusion
     private final boolean preencodeKeys;
     private final boolean selectDistinct;
     private final RowDataKeySelector keySelector;
+    private final long miniBatchSize;
 
     StreamFusionArrowGroupAggregateOperator(
             RowType inputType,
@@ -34,12 +36,40 @@ final class StreamFusionArrowGroupAggregateOperator extends AbstractStreamFusion
             byte[] serializedPlan,
             boolean inputChangelog,
             RowDataKeySelector keySelector) {
+        this(inputType, outputType, grouping, serializedPlan, inputChangelog, keySelector, 0L);
+    }
+
+    StreamFusionArrowGroupAggregateOperator(
+            RowType inputType,
+            RowType outputType,
+            int[] grouping,
+            byte[] serializedPlan,
+            boolean inputChangelog,
+            RowDataKeySelector keySelector,
+            long miniBatchSize) {
         super(serializedPlan, grouping.length == outputType.getFieldCount() ? "select distinct" : "group aggregate");
         this.outputType = outputType;
         this.inputChangelog = inputChangelog;
         this.preencodeKeys = requiresPreencodedKeys(inputType, grouping);
         this.selectDistinct = grouping.length == outputType.getFieldCount();
         this.keySelector = keySelector;
+        this.miniBatchSize = miniBatchSize;
+    }
+
+    @Override
+    public void open() throws Exception {
+        super.open();
+        if (miniBatchSize > 0) {
+            getRuntimeContext()
+                    .getMetricGroup()
+                    .gauge(
+                            "bundleSize",
+                            () -> Math.toIntExact(NativeGroupAggregateBridge.pendingElementCount(nativeHandle())));
+            getRuntimeContext().getMetricGroup().gauge("bundleRatio", () -> {
+                long keys = NativeGroupAggregateBridge.pendingKeyCount(nativeHandle());
+                return keys == 0 ? 0.0 : 1.0 * NativeGroupAggregateBridge.pendingElementCount(nativeHandle()) / keys;
+            });
+        }
     }
 
     @Override
@@ -71,6 +101,45 @@ final class StreamFusionArrowGroupAggregateOperator extends AbstractStreamFusion
                         outputBatch.size());
                 recordProcessed(input, outputBatch);
             }
+        } catch (Throwable failure) {
+            recordProcessingFailure();
+            throw failure;
+        }
+    }
+
+    @Override
+    public void processWatermark(Watermark watermark) throws Exception {
+        flushBundle();
+        recordWatermark();
+        super.processWatermark(watermark);
+    }
+
+    @Override
+    public void prepareSnapshotPreBarrier(long checkpointId) throws Exception {
+        flushBundle();
+    }
+
+    @Override
+    public void endInput() throws Exception {
+        flushBundle();
+    }
+
+    private void flushBundle() throws Exception {
+        if (miniBatchSize == 0 || NativeGroupAggregateBridge.pendingElementCount(nativeHandle()) == 0) {
+            return;
+        }
+        try (ArrowRowDataBatch outputBatch =
+                ArrowGroupAggregateCDataBridge.finishBundle(nativeHandle(), outputType, allocator(), memoryManager())) {
+            int physicalOutputRecords = 0;
+            if (outputBatch.size() > 0) {
+                output.collect(new StreamRecord<>(outputBatch));
+                physicalOutputRecords = 1;
+            }
+            FlinkMetricParity.replacePhysicalRecords(
+                    getMetricGroup().getIOMetricGroup().getNumRecordsOutCounter(),
+                    physicalOutputRecords,
+                    outputBatch.size());
+            recordProcessedWithoutStateCalls(0, outputBatch);
         } catch (Throwable failure) {
             recordProcessingFailure();
             throw failure;

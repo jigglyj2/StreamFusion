@@ -60,8 +60,18 @@ public final class StreamFusionGroupAggregateTranslator {
             return null;
         }
         StreamFusionStateBackendFactory.install(environment);
+        long miniBatchSize = config.get(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ENABLED)
+                ? config.get(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_SIZE)
+                : 0L;
         byte[] plan = StreamFusionGroupAggregatePlan.create(
-                inputType, grouping, calls, retractable, generateUpdateBefore, needRetraction);
+                inputType,
+                grouping,
+                calls,
+                retractable,
+                generateUpdateBefore,
+                needRetraction,
+                miniBatchSize,
+                outputType);
         Transformation<RowData> partitionedInput = input;
         if (!"StreamFusionExchangeReader".equals(input.getName())) {
             // A keyed transformation may become a separate task even when the planner elides an
@@ -83,7 +93,7 @@ public final class StreamFusionGroupAggregateTranslator {
                 arrowInput,
                 calls.length == 0 ? "streamfusion-select-distinct" : "streamfusion-group-aggregate",
                 new StreamFusionArrowGroupAggregateOperator(
-                        inputType, outputType, grouping, plan, needRetraction, keySelector),
+                        inputType, outputType, grouping, plan, needRetraction, keySelector, miniBatchSize),
                 ArrowRowDataBatchTypeInfo.INSTANCE,
                 partitionedInput.getParallelism(),
                 false);
@@ -115,8 +125,9 @@ public final class StreamFusionGroupAggregateTranslator {
         if (stateRetentionTime != 0) {
             return "state: native group aggregate TTL is not implemented";
         }
-        if (config.get(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ENABLED)) {
-            return "mini-batch: native group aggregation is not implemented";
+        if (config.get(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ENABLED)
+                && config.get(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_SIZE) <= 0) {
+            return "mini-batch: size must be positive";
         }
         if (config.get(ExecutionConfigOptions.TABLE_EXEC_ASYNC_STATE_ENABLED)) {
             return "state: Flink async-state mode is not implemented by native group aggregate";

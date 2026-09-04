@@ -40,6 +40,7 @@ import org.apache.flink.runtime.state.hashmap.HashMapStateBackend;
 import org.apache.flink.runtime.state.memory.MemCheckpointStreamFactory;
 import org.apache.flink.state.rocksdb.EmbeddedRocksDBStateBackend;
 import org.apache.flink.streaming.api.operators.OperatorSnapshotFinalizer;
+import org.apache.flink.streaming.api.watermark.Watermark;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.util.AbstractStreamOperatorTestHarness;
 import org.apache.flink.streaming.util.KeyedOneInputStreamOperatorTestHarness;
@@ -56,6 +57,7 @@ import org.junit.jupiter.api.Test;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatchSerializer;
 import tech.streamfusion.flink.deduplicate.ArrowBatchKeySelector;
+import tech.streamfusion.flink.proto.FlinkLogicalTypeProto;
 import tech.streamfusion.flink.state.StreamFusionStateBackend;
 import tech.streamfusion.proto.plan.v1.AggregateCall;
 import tech.streamfusion.proto.plan.v1.AggregateFunction;
@@ -80,6 +82,35 @@ class StreamFusionArrowGroupAggregateOperatorTest {
             RowType.of(new LogicalType[] {new BigIntType(false)}, new String[] {"bidder"});
     private static final RowType GLOBAL_OUTPUT_TYPE =
             RowType.of(new LogicalType[] {new BigIntType(false)}, new String[] {"bids"});
+
+    @Test
+    void miniBatchFlushesBeforeAlignedAndUnalignedSnapshotsAcrossBackendPairs() throws Exception {
+        try (RootAllocator inputs = new RootAllocator(64L << 20)) {
+            for (boolean sourceRocks : new boolean[] {false, true}) {
+                for (boolean targetRocks : new boolean[] {false, true}) {
+                    for (boolean unaligned : new boolean[] {false, true}) {
+                        OperatorSubtaskState snapshot;
+                        try (KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch>
+                                source = miniHarness(null, sourceRocks)) {
+                            process(source, inputs, row(7, 10));
+                            process(source, inputs, row(7, 20));
+                            assertThat(takeKinds(source)).isEmpty();
+                            source.getOperator().prepareSnapshotPreBarrier(901L);
+                            assertThat(takeKinds(source)).containsExactly(RowKind.INSERT);
+                            snapshot = snapshot(source, unaligned ? 902 : 901, unaligned);
+                        }
+                        try (KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch>
+                                target = miniHarness(snapshot, targetRocks)) {
+                            process(target, inputs, row(7, 30));
+                            assertThat(takeKinds(target)).isEmpty();
+                            target.processWatermark(new Watermark(100));
+                            assertThat(takeKinds(target)).containsExactly(RowKind.UPDATE_BEFORE, RowKind.UPDATE_AFTER);
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     @Test
     void exposesLogicalFlinkIoAndCompleteTimerFreeStateMetricsForGlobalAggregation() throws Exception {
@@ -524,6 +555,9 @@ class StreamFusionArrowGroupAggregateOperatorTest {
         List<RowKind> kinds = new ArrayList<>();
         Object output;
         while ((output = harness.getOutput().poll()) != null) {
+            if (!(output instanceof StreamRecord)) {
+                continue;
+            }
             @SuppressWarnings("unchecked")
             StreamRecord<ArrowRowDataBatch> record = (StreamRecord<ArrowRowDataBatch>) output;
             ArrowRowDataBatch batch = record.getValue();
@@ -561,6 +595,29 @@ class StreamFusionArrowGroupAggregateOperatorTest {
                         MAX_PARALLELISM,
                         parallelism,
                         subtask);
+        harness.setStateBackend(new StreamFusionStateBackend(
+                rocksDb ? new EmbeddedRocksDBStateBackend(true) : new HashMapStateBackend()));
+        harness.setup(ArrowRowDataBatchSerializer.INSTANCE);
+        if (state != null) {
+            harness.initializeState(state);
+        }
+        harness.open();
+        return harness;
+    }
+
+    private static KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> miniHarness(
+            OperatorSubtaskState state, boolean rocksDb) throws Exception {
+        RowDataKeySelector selector = rowSelector();
+        StreamFusionArrowGroupAggregateOperator operator = new StreamFusionArrowGroupAggregateOperator(
+                INPUT_TYPE, OUTPUT_TYPE, new int[] {0}, miniPlan(), false, selector, 10L);
+        KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> harness =
+                new KeyedOneInputStreamOperatorTestHarness<>(
+                        operator,
+                        new ArrowBatchKeySelector(selector),
+                        selector.getProducedType(),
+                        MAX_PARALLELISM,
+                        1,
+                        0);
         harness.setStateBackend(new StreamFusionStateBackend(
                 rocksDb ? new EmbeddedRocksDBStateBackend(true) : new HashMapStateBackend()));
         harness.setup(ArrowRowDataBatchSerializer.INSTANCE);
@@ -713,6 +770,30 @@ class StreamFusionArrowGroupAggregateOperatorTest {
                 .setRoot(Operator.newBuilder().setGroupAggregate(aggregate))
                 .build()
                 .toByteArray();
+    }
+
+    private static byte[] miniPlan() throws Exception {
+        GroupAggregate aggregate = NativePlan.parseFrom(plan()).getRoot().getGroupAggregate().toBuilder()
+                .setGenerateUpdateBefore(true)
+                .setMiniBatchSize(10L)
+                .setInputSchema(protoSchema(INPUT_TYPE))
+                .setOutputSchema(protoSchema(OUTPUT_TYPE))
+                .build();
+        return NativePlan.newBuilder()
+                .setProtocolVersion(1)
+                .setRoot(Operator.newBuilder().setGroupAggregate(aggregate))
+                .build()
+                .toByteArray();
+    }
+
+    private static tech.streamfusion.proto.plan.v1.Schema protoSchema(RowType type) {
+        tech.streamfusion.proto.plan.v1.Schema.Builder schema = tech.streamfusion.proto.plan.v1.Schema.newBuilder();
+        for (RowType.RowField field : type.getFields()) {
+            schema.addFields(tech.streamfusion.proto.plan.v1.Field.newBuilder()
+                    .setName(field.getName())
+                    .setType(FlinkLogicalTypeProto.serialize(field.getType())));
+        }
+        return schema.build();
     }
 
     private static byte[] distinctAggregatePlan() {
