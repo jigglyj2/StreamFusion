@@ -43,7 +43,7 @@ class TopNOrderingTypeParityTest extends SqlParityTestSupport {
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 
-    private static Stream<Arguments> orderableTypes() {
+    static Stream<Arguments> orderableTypes() {
         return Stream.of(
                 Arguments.of("BOOLEAN", Types.BOOLEAN, DataTypes.BOOLEAN(), false, true),
                 Arguments.of("TINYINT", Types.BYTE, DataTypes.TINYINT(), (byte) -7, (byte) 8),

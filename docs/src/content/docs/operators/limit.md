@@ -20,7 +20,7 @@ LIMIT 100 OFFSET 10;
 StreamFusion replaces Flink's `StreamExecLimit`, represented by an unordered, all-in-one
 `ROW_NUMBER` range. The range must have a constant upper bound and must not expose a rank column.
 Other unordered rank shapes fall back with an EXPLAIN reason. An ordered finite range is handled by
-[Top-N](../top-n/); a full `ORDER BY` remains on Flink.
+[Top-N](../top-n/); a bounded full `ORDER BY` uses the native [ORDER BY](../order-by/) operator.
 
 The payload may contain every Flink logical type supported by the Arrow boundary, including nested
 arrays, maps, multisets, and rows. Append, update, and retract changelogs use the strategy selected

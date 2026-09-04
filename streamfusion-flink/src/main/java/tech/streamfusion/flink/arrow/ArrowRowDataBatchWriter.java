@@ -19,6 +19,7 @@ import org.apache.flink.types.RowKind;
 public final class ArrowRowDataBatchWriter implements AutoCloseable {
     private static final int DEFAULT_BATCH_CAPACITY = 1024;
     private static final int MINIMUM_ADAPTIVE_CAPACITY = 1;
+    private static final int ADAPTIVE_ALLOCATION_HEADROOM = 4;
 
     private final RowType rowType;
     private final BufferAllocator allocator;
@@ -56,7 +57,18 @@ public final class ArrowRowDataBatchWriter implements AutoCloseable {
         int capacity = maximumBatchCapacity;
         while (true) {
             try {
-                return new ArrowRowDataBatchWriter(rowType, allocator, capacity);
+                ArrowRowDataBatchWriter writer = new ArrowRowDataBatchWriter(rowType, allocator, capacity);
+                // Initial variable-width buffers assume 32 bytes per value. Real strings,
+                // binaries, arrays, and maps may need those buffers to grow while filling the
+                // batch. Retain enough of the assigned Flink allowance for that growth instead
+                // of accepting the largest capacity whose empty vectors only barely fit.
+                if (capacity > MINIMUM_ADAPTIVE_CAPACITY
+                        && allocator.getAllocatedMemory() > allocator.getLimit() / ADAPTIVE_ALLOCATION_HEADROOM) {
+                    writer.close();
+                    capacity = Math.max(MINIMUM_ADAPTIVE_CAPACITY, capacity / 2);
+                    continue;
+                }
+                return writer;
             } catch (org.apache.arrow.memory.OutOfMemoryException unavailable) {
                 if (capacity <= MINIMUM_ADAPTIVE_CAPACITY) {
                     throw unavailable;

@@ -68,7 +68,19 @@ message Operator {
     TemporalJoin temporal_join = 23;
     MultiJoin multi_join = 24;
     MatchRecognize match_recognize = 25;
+    BoundedSort bounded_sort = 26;
   }
+}
+
+// Bounded global full sort. Input changelog messages update a counted multiset of complete Arrow
+// rows in one singleton key group. The native operator emits surviving rows only after bounded
+// input completion, matching Flink's StreamSortOperator contract.
+message BoundedSort {
+  Operator input = 1;
+  Schema input_schema = 2;
+  repeated uint32 sort_key_indices = 3;
+  repeated bool sort_ascending = 4;
+  repeated bool sort_nulls_last = 5;
 }
 
 // A strict fixed-length MATCH_RECOGNIZE sequence. Each input row can start a candidate and can

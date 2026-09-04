@@ -68,6 +68,7 @@ import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecMiniBatch
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecMultiJoin;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecOverAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecRank;
+import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecSort;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecTemporalJoin;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecTemporalSort;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecUnion;
@@ -131,6 +132,8 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             "tech.streamfusion.flink.over.StreamFusionOverAggregateTranslator";
     private static final String TEMPORAL_SORT_TRANSLATOR_CLASS =
             "tech.streamfusion.flink.sort.StreamFusionTemporalSortTranslator";
+    private static final String BOUNDED_SORT_TRANSLATOR_CLASS =
+            "tech.streamfusion.flink.sort.StreamFusionBoundedSortTranslator";
     private transient ReadableConfig activeTableConfig;
 
     @Override
@@ -370,6 +373,11 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             // assigner is folded into the native stateful node during conversion.
         } else if (node instanceof StreamExecTemporalSort) {
             String reason = unsupportedReason((StreamExecTemporalSort) node, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
+        } else if (node instanceof StreamExecSort) {
+            String reason = unsupportedReason((StreamExecSort) node, context);
             if (reason != null) {
                 rejections.add(nodePath + "\n" + reason);
             }
@@ -996,6 +1004,19 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     sort.getInputProperties().get(0),
                     (RowType) sort.getOutputType(),
                     "StreamFusionTemporalSort");
+            replacement.setInputEdges(sort.getInputEdges().stream()
+                    .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                    .collect(Collectors.toList()));
+            return replacement;
+        }
+        if (node instanceof StreamExecSort) {
+            StreamExecSort sort = (StreamExecSort) node;
+            StreamFusionExecBoundedSort replacement = new StreamFusionExecBoundedSort(
+                    sort.getPersistedConfig(),
+                    boundedSortSpec(sort),
+                    sort.getInputProperties().get(0),
+                    (RowType) sort.getOutputType(),
+                    "StreamFusionBoundedSort");
             replacement.setInputEdges(sort.getInputEdges().stream()
                     .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
                     .collect(Collectors.toList()));
@@ -2019,6 +2040,26 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         }
     }
 
+    private String unsupportedReason(StreamExecSort sort, ProcessorContext context) {
+        try {
+            Class<?> translator = Class.forName(
+                    BOUNDED_SORT_TRANSLATOR_CLASS,
+                    true,
+                    context.getPlanner().getFlinkContext().getClassLoader());
+            Method method =
+                    translator.getMethod("unsupportedReason", RowType.class, SortSpec.class, ReadableConfig.class);
+            return (String) method.invoke(
+                    null,
+                    (RowType) sort.getInputEdges().get(0).getOutputType(),
+                    boundedSortSpec(sort),
+                    sort.getPersistedConfig());
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException failure) {
+            throw new IllegalStateException("Could not inspect StreamFusion bounded sort support", failure);
+        } catch (InvocationTargetException failure) {
+            throw new IllegalStateException("StreamFusion bounded sort support inspection failed", failure.getCause());
+        }
+    }
+
     private String unsupportedReason(StreamExecUnion union, ProcessorContext context) {
         if (context == null) {
             return null;
@@ -2340,6 +2381,10 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
 
     private static SortSpec temporalSortSpec(StreamExecTemporalSort sort) {
         return (SortSpec) field(sort, StreamExecTemporalSort.class, "sortSpec");
+    }
+
+    private static SortSpec boundedSortSpec(StreamExecSort sort) {
+        return (SortSpec) field(sort, StreamExecSort.class, "sortSpec");
     }
 
     private static boolean temporalSortProcessingTime(StreamExecTemporalSort sort, SortSpec sortSpec) {

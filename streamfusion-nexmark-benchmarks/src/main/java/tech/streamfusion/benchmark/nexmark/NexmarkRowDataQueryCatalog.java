@@ -21,6 +21,7 @@ final class NexmarkRowDataQueryCatalog {
             "q22",
             "q23",
             "aggregate-modifiers",
+            "bounded-sort",
             "incremental-group-aggregate",
             "group-aggregate",
             "global-aggregate",

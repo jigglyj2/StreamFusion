@@ -48,7 +48,7 @@ deserializer, reader, and split checkpoint state remain in use. The SQL plan run
 by default and a benchmark result sink serializes and hashes both the complete sorted `RowData`
 changelog and its final materialized multiset. Checkpointing uses exactly-once mode and task restart is disabled so resource failures
 surface instead of contaminating a timing with retries. It currently runs the fully accelerable q0,
-q1, q2, q8, q11, q12, q22, q23, group-aggregate, legacy-window-aggregate, select-distinct, top-n, limit, over-aggregate,
+q1, q2, q8, q11, q12, q22, q23, group-aggregate, legacy-window-aggregate, select-distinct, top-n, limit, bounded-sort, over-aggregate,
 over-aggregate-event-time, over-aggregate-processing-time, temporal-join, match-recognize, and incremental-group-aggregate queries through both unmodified Flink
 and StreamFusion. The focused
 workloads use the Nexmark bid stream to exercise keyed `COUNT(*)`/`SUM`/`AVG`/`MIN`/`MAX`, legacy
@@ -68,6 +68,10 @@ local aggregate, expand, incremental aggregate, and final aggregate pipeline. Wa
 flushes can change valid intermediate update boundaries from run to run, so standalone output
 reports both `output_sha256` for the raw changelog and `materialized_sha256` for the final multiset.
 Use controlled SQL parity tests to validate byte-for-byte intermediate changelog semantics.
+`bounded-sort` globally orders the filtered bid stream by price, auction, bidder, timestamp, and
+payload. Flink's finite full-sort executor rejects periodic checkpoints for its sorted input, so
+this isolated benchmark disables the interval for both engines; dedicated operator tests cover
+aligned, unaligned, canonical cross-backend, and incremental RocksDB recovery.
 
 Build the generator against Flink 2.3 and run all supported cases with:
 
@@ -92,7 +96,7 @@ comma-separated query names, `flink`, `streamfusion`, or `both`, `hashmap`, `roc
 Top-N changelog: independent multi-input network scheduling can produce different but equivalent
 intermediate Top-N updates. Its stable output includes elapsed time, input-event throughput, native calc batches, and
 native deduplicate, group-aggregate, Top-N, window-aggregate, window-join, regular-join, multi-join,
-interval-join, temporal-join, OVER-aggregate, Temporal Sort, and MATCH_RECOGNIZE batches. Set
+interval-join, temporal-join, OVER-aggregate, Temporal Sort, bounded full Sort, and MATCH_RECOGNIZE batches. Set
 `-Dstreamfusion.nexmark.jfr=/absolute/path/top-n.jfr` to capture the JVM profile and allocation
 samples for a standalone run. Run performance
 measurements from a release/native-CPU build and use separate JVM invocations for each engine;

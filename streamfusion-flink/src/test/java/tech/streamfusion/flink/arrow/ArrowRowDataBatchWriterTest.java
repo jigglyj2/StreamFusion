@@ -215,6 +215,15 @@ class ArrowRowDataBatchWriterTest {
         try (RootAllocator allocator = new RootAllocator(256 * 1024);
                 ArrowRowDataBatchWriter writer = ArrowRowDataBatchWriter.createAdaptive(ROW_TYPE, allocator, 8192)) {
             assertThat(writer.batchCapacity()).isLessThan(8192).isGreaterThanOrEqualTo(64);
+            assertThat(allocator.getAllocatedMemory()).isLessThanOrEqualTo(allocator.getLimit() / 4);
+
+            StringData widerThanTheInitialEstimate = StringData.fromString("x".repeat(96));
+            for (int index = 0; index < writer.batchCapacity(); index++) {
+                writer.write(GenericRowData.of(index, widerThanTheInitialEstimate));
+            }
+            try (ArrowRowDataBatch batch = writer.finishBatch()) {
+                assertThat(batch.root().getRowCount()).isEqualTo(writer.batchCapacity());
+            }
         }
     }
 }

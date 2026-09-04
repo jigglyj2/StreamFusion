@@ -86,14 +86,15 @@ engine selector (`flink`, `streamfusion`, or `both`) for standalone measurements
 end-to-end elapsed time, input-event throughput, native calc batches, native group-aggregate
 batches, native window-aggregate batches, native Window Join batches, native regular-join batches,
 native multi-join batches, native interval-join batches, native temporal-join batches, native
-OVER-aggregate batches, native Temporal Sort batches, and row counts plus SHA-256 hashes for the full result changelog and
+OVER-aggregate batches, native Temporal Sort batches, native bounded full-Sort batches, and row
+counts plus SHA-256 hashes for the full result changelog and
 final materialized multiset. An additional ordered SHA-256 retains sink arrival order for operators
 whose ordering is semantic.
 The `aggregate-modifiers`, `incremental-group-aggregate`,
 `group-aggregate`, `global-aggregate`, `grouping-sets`, `interval-join`, `over-aggregate`,
 `over-aggregate-event-time`, `over-aggregate-processing-time`,
 `over-aggregate-bounded-rows`, `over-aggregate-bounded-range`, `select-distinct`, `top-n`,
-`limit`, `legacy-window-aggregate`, `temporal-join`, and `temporal-sort` cases
+`limit`, `bounded-sort`, `legacy-window-aggregate`, `temporal-join`, and `temporal-sort` cases
 exercise both native state backends over the bounded bid stream; they are focused operator workloads
 rather than numbered Nexmark queries. `over-aggregate` deliberately casts the timestamp to a
 regular value to exercise ordered non-time state, while `over-aggregate-event-time` retains the
@@ -104,6 +105,10 @@ ten-second event-time range respectively.
 `temporal-sort` orders the bounded bid stream by ascending event time and secondary price/auction
 keys. Its integration case compares both the changelog multiset and global arrival-order digest on
 memory and RocksDB, requires an accelerated EXPLAIN, and requires non-zero native sort batches.
+`bounded-sort` exercises `StreamExecSort` with a total price/auction/bidder/timestamp/payload order.
+Because Flink's bounded full-sort task rejects periodic checkpoints for its sorted input, this one
+case disables the checkpoint interval for both engines; the operator recovery suite independently
+covers aligned, unaligned, canonical cross-backend, and incremental RocksDB checkpoints.
 `temporal-join` derives a versioned auction table with row-time deduplication and probes it from the
 bid stream using an event-time left temporal join plus a residual predicate. Its integration case
 compares the complete raw and materialized changelogs on both state backends, requires an
@@ -494,6 +499,40 @@ boundaries and result materialization rather than an obvious repeated state-loop
 rows, timers, state scratch, exported batches, RocksDB cache, and write buffers remain subject to
 Flink managed-memory admission and focused failure/release tests. These are local diagnostic results,
 not portable performance claims.
+
+## Bounded full-Sort RowData target
+
+The Kafka-free production harness includes `bounded-sort`, which filters the bid stream and applies
+a deterministic global order over price, auction, bidder, timestamp, and payload. The integration
+test runs both engines on memory and RocksDB, requires byte-identical raw, ordered, and materialized
+digests, verifies an accelerated EXPLAIN, and requires non-zero native bounded-sort batches. Periodic
+checkpoints are disabled for this isolated query on both engines because Flink rejects checkpointing
+its bounded sorted input; aligned, unaligned, canonical cross-backend, and incremental RocksDB
+recovery are covered by dedicated operator tests.
+
+On the September 4, 2026 local release/native-CPU run, three fresh-JVM forks per engine/backend
+processed 250,000 deterministic events at parallelism four upstream of the required singleton
+exchange. Every fork emitted 230,000 rows with raw SHA-256
+`be936c9af5af60dff75147361e571e97284a7c2c5837d47e77758391d60d9a85` and ordered SHA-256
+`218058bfcf41f3863c6b7c5522f7d4bb1f4b484feab12332e43acdd68a439852`. Memory medians were
+5.642 s for Flink and 6.154 s for StreamFusion, or 91.7% end-to-end throughput parity; MADs were
+0.051 s and 0.071 s, with ranges of 5.488–5.693 s and 5.970–6.225 s. RocksDB medians were 5.466 s
+and 7.392 s, or 73.9% parity; MADs were 0.074 s and 0.245 s, with ranges of 5.392–6.034 s and
+7.148–8.124 s. Flink's full-sort executor is not keyed-state-backed, while the StreamFusion RocksDB
+case deliberately persists its counted multiset, so the latter comparison includes direct native
+backend durability work. StreamFusion reported 64 native batches in memory and 124 with RocksDB.
+
+Mixed JVM/native CPU profiles with non-safepoint Java samples and DWARF/frame-pointer unwinding
+cover both engines and backends. They exposed Flink's runtime inserting `SortingDataInput` before
+the keyed native sorter; marking the replacement as internally sorted removed the duplicate full
+sort, and final captures contain no such stack. Separate Java and native-allocation JFRs show
+source deserialization and result materialization dominating Java allocation, while native sort
+allocation is primarily durable opaque row keys and chunked terminal Arrow output. RocksDB adds
+its expected write-batch and memtable traffic and still performs one `multi_get` plus one
+`WriteBatch` per incoming Arrow batch. JFRs, collapsed stacks, per-engine flame graphs, and
+differential flame graphs are retained under
+`streamfusion-nexmark-benchmarks/target/bounded-sort-profiles-postfix/`; profiler timings are
+excluded from throughput results. These are local diagnostics, not portable performance claims.
 
 ## Fixed-sequence MATCH_RECOGNIZE RowData target
 

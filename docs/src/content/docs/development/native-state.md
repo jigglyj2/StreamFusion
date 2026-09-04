@@ -62,9 +62,10 @@ raw keyed state so they can move between the native memory and RocksDB implement
 The focused recovery matrix is shared by native group aggregation—including the stateful
 split-DISTINCT/retractable-extrema incremental stage—deduplication, SELECT DISTINCT,
 non-window Top-N, window aggregation, Window Deduplicate, Window Top-N, Window Join, and regular
-and interval streaming Join, plus Temporal Sort. Window, interval, and temporal-sort cases include pending event-time and
-processing-time timers; two-input joins also preserve their independently advancing input-watermark
-frontiers. Interval Join keeps its live timer index in native memory and materializes dirty timer
+and interval streaming Join, plus Temporal Sort and bounded full Sort. Window, interval, and
+temporal-sort cases include pending event-time and processing-time timers; two-input joins also
+preserve their independently advancing input-watermark frontiers. Interval Join keeps its live timer
+index in native memory and materializes dirty timer
 groups into the backend at the checkpoint/savepoint boundary, so recovery remains canonical without
 rewriting its complete timer group on every input batch:
 
@@ -77,10 +78,11 @@ rewriting its complete timer group on every input batch:
 | Rescaling | 1 → 2 → 1 | 1 → 2 → 1 |
 | Incremental metadata serialization and unchanged-SST reuse | Not applicable | Tested |
 
-The one exception to the rescaling row is Temporal Sort: SQL total ordering requires Flink's
-singleton distribution, so its transformation is fixed at parallelism/max-parallelism one. Its
-canonical format is still backend-neutral and its pending rows/timers are covered by the same
-aligned, unaligned, and cross-backend recovery matrix.
+The exceptions to the rescaling row are Temporal Sort and bounded full Sort: SQL total ordering
+requires Flink's singleton distribution, so their transformations are fixed at
+parallelism/max-parallelism one. Their canonical formats are still backend-neutral. Both are
+covered by aligned, unaligned, same-backend, and cross-backend recovery tests; bounded Sort also
+tests incremental RocksDB SST reuse, while Temporal Sort additionally preserves pending timers.
 
 The operator processes a batch synchronously before the mailbox can snapshot it. Flink therefore
 owns in-flight channel data for unaligned checkpoints, while the native keyed snapshot contains the

@@ -169,6 +169,9 @@ fn create_operator(
         Some(proto::operator::Operator::MatchRecognize(_)) => Err(DataFusionError::Plan(
             "MatchRecognize requires a persistent stateful execution handle".to_string(),
         )),
+        Some(proto::operator::Operator::BoundedSort(_)) => Err(DataFusionError::Plan(
+            "BoundedSort requires a persistent stateful execution handle".to_string(),
+        )),
         None => Err(DataFusionError::Plan(
             "StreamFusion operator is empty".to_string(),
         )),

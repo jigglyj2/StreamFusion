@@ -13,6 +13,7 @@ use datafusion::error::Result;
 
 pub(crate) use memory::MemoryKeyedState;
 pub(crate) use rocks_plugin::RocksPluginKeyedState;
+pub(crate) use snapshot::decode as decode_key_group_snapshot;
 pub(crate) use timer::{NativeTimerService, TimerDomain, TimerKey};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

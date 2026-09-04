@@ -84,14 +84,23 @@ public final class NexmarkRowDataJob {
                     .set(
                             CheckpointingOptions.CHECKPOINTS_DIRECTORY,
                             checkpointDirectory.toUri().toString());
-            tables.getConfig()
-                    .getConfiguration()
-                    .setString(
-                            "execution.checkpointing.interval",
-                            Long.getLong("streamfusion.nexmark.checkpoint-interval-ms", CHECKPOINT_INTERVAL_MILLIS)
-                                    + " ms");
-            tables.getConfig().getConfiguration().setString("execution.checkpointing.mode", "EXACTLY_ONCE");
-            tables.getConfig().getConfiguration().setString("execution.checkpointing.max-concurrent-checkpoints", "1");
+            // Flink's bounded full-sort transformation declares sorted inputs, and Flink's
+            // OneInputStreamTask rejects checkpointing for that input contract. Leave periodic
+            // checkpoints disabled for both engines in this one apples-to-apples workload. The
+            // native operator's aligned/unaligned and cross-backend recovery is exercised by its
+            // dedicated operator tests.
+            if (!query.equals("bounded-sort")) {
+                tables.getConfig()
+                        .getConfiguration()
+                        .setString(
+                                "execution.checkpointing.interval",
+                                Long.getLong("streamfusion.nexmark.checkpoint-interval-ms", CHECKPOINT_INTERVAL_MILLIS)
+                                        + " ms");
+                tables.getConfig().getConfiguration().setString("execution.checkpointing.mode", "EXACTLY_ONCE");
+                tables.getConfig()
+                        .getConfiguration()
+                        .setString("execution.checkpointing.max-concurrent-checkpoints", "1");
+            }
             tables.getConfig().getConfiguration().setString("restart-strategy.type", "none");
             tables.getConfig().getConfiguration().set(CoreOptions.DEFAULT_PARALLELISM, parallelism);
             boolean miniBatch = Boolean.getBoolean("streamfusion.nexmark.mini-batch");
@@ -113,6 +122,9 @@ public final class NexmarkRowDataJob {
             }
             tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, parallelism);
             tables.getConfig().set(OptimizerConfigOptions.TABLE_OPTIMIZER_MULTI_JOIN_ENABLED, true);
+            if (query.equals("bounded-sort")) {
+                tables.getConfig().getConfiguration().setString("__table.exec.sort.non-temporal.enabled__", "true");
+            }
 
             tables.executeSql(sourceDdl(eventCount));
             NexmarkSqlJob.createViews(tables);
@@ -248,6 +260,7 @@ public final class NexmarkRowDataJob {
                         + "extra STRING, row_num BIGINT";
                 break;
             case "limit":
+            case "bounded-sort":
             case "temporal-sort":
                 columns = "auction BIGINT, bidder BIGINT, price BIGINT, `dateTime` TIMESTAMP(3), extra STRING";
                 break;
