@@ -14,7 +14,7 @@ use chrono_tz::Tz;
 use datafusion::error::{DataFusionError, Result};
 use hashbrown::HashMap;
 
-use crate::exchange::{assign_key_group, encode_binary_row, KeyField};
+use crate::exchange::{assign_key_group, encode_binary_row_into, KeyField};
 use crate::memory_pool::HostMemoryReservation;
 use crate::state::{
     KeyedState, MemoryKeyedState, NativeTimerService, RocksPluginKeyedState, StateKey, StateKeyRef,
@@ -26,7 +26,7 @@ use super::group_aggregate::{
     aggregate_array, decode_state, encode_state, lower_call, row_aggregate_values,
     AccumulatorState, AggregateValue, Call,
 };
-use super::window_table_function::{assign_windows, timestamp_millis};
+use super::window_table_function::{assign_windows_into, timestamp_millis};
 
 const INSERT: i8 = 0;
 const UPDATE_BEFORE: i8 = 1;
@@ -36,8 +36,10 @@ const WINDOW_STATE_MAGIC: &[u8; 4] = b"SFWA";
 const WINDOW_STATE_VERSION: u8 = 1;
 const WINDOW_KEY_PREFIX: u8 = 1;
 const SESSION_INDEX_PREFIX: u8 = 2;
+const COUNT_INDEX_PREFIX: u8 = 3;
 const SESSION_STATE_MAGIC: &[u8; 4] = b"SFWS";
 const SESSION_INDEX_MAGIC: &[u8; 4] = b"SFWI";
+const COUNT_INDEX_MAGIC: &[u8; 4] = b"SFWC";
 const TIMER_STATE_KEY: &[u8] = b"\0streamfusion-window-timers";
 
 /// Persistent native SQL window aggregation shared by the memory and direct RocksDB backends.
@@ -284,6 +286,12 @@ impl WindowAggregateProcessor {
         self.current_processing_time = self.current_processing_time.max(processing_time);
         let window_copies = match proto::WindowKind::try_from(self.plan.kind) {
             Ok(proto::WindowKind::Hop) => self.plan.size_millis / self.plan.slide_or_step_millis,
+            Ok(proto::WindowKind::CountHop) => {
+                self.plan
+                    .size_millis
+                    .saturating_add(self.plan.slide_or_step_millis.saturating_sub(1))
+                    / self.plan.slide_or_step_millis
+            }
             Ok(proto::WindowKind::Cumulate) => {
                 self.plan.size_millis / self.plan.slide_or_step_millis
             }
@@ -307,6 +315,12 @@ impl WindowAggregateProcessor {
     fn process_arrow_accounted(&mut self, batch: &RecordBatch) -> Result<RecordBatch> {
         if matches!(
             proto::WindowKind::try_from(self.plan.kind),
+            Ok(proto::WindowKind::CountTumble | proto::WindowKind::CountHop)
+        ) {
+            return self.process_count_batch(batch);
+        }
+        if matches!(
+            proto::WindowKind::try_from(self.plan.kind),
             Ok(proto::WindowKind::Session)
         ) {
             return self.process_session_batch(batch);
@@ -317,6 +331,8 @@ impl WindowAggregateProcessor {
             RandomState::new(),
         );
         let mut row_windows = Vec::new();
+        let mut group_key = Vec::new();
+        let mut assigned_windows = Vec::new();
         let timestamp_column = (!self.plan.processing_time)
             .then(|| batch.column(self.plan.time_attribute_index as usize));
         for row in 0..batch.num_rows() {
@@ -332,9 +348,10 @@ impl WindowAggregateProcessor {
                 };
                 self.to_window_time(timestamp)?
             };
-            let group_key = self.group_key(batch, row)?;
+            self.group_key_into(batch, row, &mut group_key)?;
             let key_group = assign_key_group(&group_key, self.max_parallelism);
-            for (start, end) in assign_windows(&self.window, timestamp) {
+            assign_windows_into(&self.window, timestamp, &mut assigned_windows);
+            for &(start, end) in &assigned_windows {
                 let deadline = self.timer_timestamp(end.saturating_sub(1))?;
                 let progress = if self.plan.processing_time {
                     self.current_processing_time
@@ -434,6 +451,175 @@ impl WindowAggregateProcessor {
         self.empty_output()
     }
 
+    fn process_count_batch(&mut self, batch: &RecordBatch) -> Result<RecordBatch> {
+        let grouping_rows = self.encode_grouping_rows(batch)?;
+        let mut unique_groups = HashMap::<StateKey, usize, RandomState>::with_capacity_and_hasher(
+            batch.num_rows(),
+            RandomState::new(),
+        );
+        let mut groups = Vec::<(StateKey, Vec<u8>, i64)>::new();
+        let mut row_groups = Vec::with_capacity(batch.num_rows());
+        let mut group_key = Vec::new();
+        for row in 0..batch.num_rows() {
+            self.group_key_into(batch, row, &mut group_key)?;
+            let key_group = assign_key_group(&group_key, self.max_parallelism);
+            let count_key = count_index_key(key_group, &group_key);
+            let next = groups.len();
+            let index = *unique_groups.entry(count_key.clone()).or_insert(next);
+            if index == groups.len() {
+                groups.push((count_key, grouping_rows[row].clone(), 0));
+            }
+            row_groups.push(index);
+        }
+        let count_refs = groups
+            .iter()
+            .map(|(key, _, _)| StateKeyRef {
+                key_group: key.key_group,
+                key: &key.key,
+            })
+            .collect::<Vec<_>>();
+        let counts = self.state.get_batch(&count_refs)?;
+        if !count_refs.is_empty() {
+            self.state_read_batches = self.state_read_batches.saturating_add(1);
+        }
+        for (group, value) in groups.iter_mut().zip(counts) {
+            group.2 = value
+                .as_deref()
+                .map(decode_count_index)
+                .transpose()?
+                .unwrap_or(0);
+        }
+
+        let kind = proto::WindowKind::try_from(self.plan.kind).map_err(|_| {
+            DataFusionError::Plan(format!("unknown window kind {}", self.plan.kind))
+        })?;
+        let size = self.plan.size_millis;
+        let slide = self.plan.slide_or_step_millis;
+        let mut unique_windows = HashMap::<StateKey, usize, RandomState>::with_capacity_and_hasher(
+            batch.num_rows(),
+            RandomState::new(),
+        );
+        let mut window_keys = Vec::new();
+        let mut row_windows = Vec::<(usize, usize, bool)>::new();
+        for (row, group_index) in row_groups.into_iter().enumerate() {
+            let group = &mut groups[group_index];
+            let current = group.2;
+            group.2 = current.wrapping_add(1);
+            let group_key = count_group_key(&group.0.key)?;
+            let mut ids = Vec::new();
+            match kind {
+                proto::WindowKind::CountTumble => ids.push(current / size),
+                proto::WindowKind::CountHop => {
+                    let mut id = current / slide;
+                    loop {
+                        let start = id.saturating_mul(slide);
+                        let end = start.saturating_add(size).saturating_sub(1);
+                        if start <= current && current <= end {
+                            ids.push(id);
+                        }
+                        if id == 0 {
+                            break;
+                        }
+                        id -= 1;
+                        if id
+                            .saturating_mul(slide)
+                            .saturating_add(size)
+                            .saturating_sub(1)
+                            < current
+                        {
+                            break;
+                        }
+                    }
+                }
+                _ => unreachable!("count processing is called only for count windows"),
+            }
+            for id in ids {
+                let start = id.saturating_mul(if kind == proto::WindowKind::CountTumble {
+                    size
+                } else {
+                    slide
+                });
+                let end = start.saturating_add(size);
+                let state_key = window_state_key(group.0.key_group, group_key, start, end);
+                let next = window_keys.len();
+                let index = *unique_windows.entry(state_key.clone()).or_insert(next);
+                if index == window_keys.len() {
+                    window_keys.push(state_key);
+                }
+                row_windows.push((row, index, current == end.saturating_sub(1)));
+            }
+        }
+
+        let state_refs = window_keys
+            .iter()
+            .map(|key| StateKeyRef {
+                key_group: key.key_group,
+                key: &key.key,
+            })
+            .collect::<Vec<_>>();
+        let existing = self.state.get_batch(&state_refs)?;
+        if !state_refs.is_empty() {
+            self.state_read_batches = self.state_read_batches.saturating_add(1);
+        }
+        let mut staged = window_keys
+            .into_iter()
+            .zip(existing)
+            .map(|(key, value)| {
+                let (grouping_row, accumulator) = match value {
+                    Some(value) => decode_window_state(value.as_ref(), &self.calls)?,
+                    None => (Vec::new(), AccumulatorState::new(&self.calls)),
+                };
+                Ok((key, grouping_row, accumulator, false, false))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut output_grouping = Vec::new();
+        let mut output_values = (0..self.calls.len())
+            .map(|_| Vec::new())
+            .collect::<Vec<_>>();
+        let mut output_starts = Vec::new();
+        let mut output_ends = Vec::new();
+        for (row, index, emit) in row_windows {
+            let entry = &mut staged[index];
+            if entry.1.is_empty() {
+                entry.1 = grouping_rows[row].clone();
+            }
+            entry
+                .2
+                .apply(&self.calls, batch, row, self.accumulates(batch, row)?)?;
+            entry.3 = true;
+            if emit {
+                let (start, end) = decode_window_state_key_bounds(&entry.0.key)?;
+                output_grouping.push(entry.1.clone());
+                for (column, value) in output_values.iter_mut().zip(entry.2.values(&self.calls)) {
+                    column.push(value);
+                }
+                output_starts.push(start);
+                output_ends.push(end);
+                entry.4 = true;
+            }
+        }
+        let mut mutations = Vec::with_capacity(groups.len() + staged.len());
+        for (key, _, count) in groups {
+            mutations.push(StateMutation {
+                key,
+                value: Some(encode_count_index(count)),
+            });
+        }
+        for (key, grouping_row, accumulator, touched, emitted) in staged {
+            if touched {
+                mutations.push(StateMutation {
+                    key,
+                    value: (!emitted).then(|| encode_window_state(&grouping_row, &accumulator)),
+                });
+            }
+        }
+        if !mutations.is_empty() {
+            self.state.write_batch(mutations)?;
+            self.state_write_batches = self.state_write_batches.saturating_add(1);
+        }
+        self.output_batch(output_grouping, output_values, output_starts, output_ends)
+    }
+
     fn process_session_batch(&mut self, batch: &RecordBatch) -> Result<RecordBatch> {
         let grouping_rows = self.encode_grouping_rows(batch)?;
         let timestamp_column = (!self.plan.processing_time)
@@ -449,6 +635,7 @@ impl WindowAggregateProcessor {
             RandomState::new(),
         );
         let mut groups = Vec::<PendingSessionGroup>::new();
+        let mut group_key = Vec::new();
         for row in 0..batch.num_rows() {
             let timestamp = if self.plan.processing_time {
                 self.to_window_time(self.current_processing_time)?
@@ -467,7 +654,7 @@ impl WindowAggregateProcessor {
                 self.late_records_dropped = self.late_records_dropped.saturating_add(1);
                 continue;
             }
-            let group_key = self.group_key(batch, row)?;
+            self.group_key_into(batch, row, &mut group_key)?;
             let key_group = assign_key_group(&group_key, self.max_parallelism);
             let index_key = session_index_key(key_group, &group_key);
             let next = groups.len();
@@ -475,7 +662,7 @@ impl WindowAggregateProcessor {
             if index == groups.len() {
                 groups.push(PendingSessionGroup {
                     key_group,
-                    group_key,
+                    group_key: group_key.clone(),
                     grouping_row: grouping_rows[row].clone(),
                     changes: Vec::new(),
                 });
@@ -884,21 +1071,34 @@ impl WindowAggregateProcessor {
             .collect())
     }
 
-    fn group_key(&self, batch: &RecordBatch, row: usize) -> Result<Vec<u8>> {
+    fn group_key_into(&self, batch: &RecordBatch, row: usize, output: &mut Vec<u8>) -> Result<()> {
         match self.preencoded_key_index {
-            Some(index) => Ok(batch
-                .column(index)
-                .as_any()
-                .downcast_ref::<arrow::array::BinaryArray>()
-                .ok_or_else(|| {
-                    DataFusionError::Execution(
-                        "window aggregate preencoded key column is not Arrow Binary".to_string(),
-                    )
-                })?
-                .value(row)
-                .to_vec()),
-            None if self.key_fields.is_empty() => Ok(Vec::new()),
-            None => Ok(encode_binary_row(batch, row, &self.key_fields)?),
+            Some(index) => {
+                let value = batch
+                    .column(index)
+                    .as_any()
+                    .downcast_ref::<arrow::array::BinaryArray>()
+                    .ok_or_else(|| {
+                        DataFusionError::Execution(
+                            "window aggregate preencoded key column is not Arrow Binary"
+                                .to_string(),
+                        )
+                    })?
+                    .value(row);
+                output.clear();
+                output.extend_from_slice(value);
+                Ok(())
+            }
+            None if self.key_fields.is_empty() => {
+                output.clear();
+                Ok(())
+            }
+            None => Ok(encode_binary_row_into(
+                batch,
+                row,
+                &self.key_fields,
+                output,
+            )?),
         }
     }
 
@@ -1213,6 +1413,18 @@ fn validate_plan(plan: &proto::WindowAggregate, max_parallelism: u32) -> Result<
                 && plan.slide_or_step_millis > 0
                 && plan.size_millis % plan.slide_or_step_millis == 0 => {}
         proto::WindowKind::Session if plan.size_millis > 0 => {}
+        proto::WindowKind::CountTumble
+            if plan.processing_time
+                && plan.size_millis > 0
+                && plan.slide_or_step_millis == 0
+                && plan.offset_millis == 0
+                && plan.window_properties.is_empty() => {}
+        proto::WindowKind::CountHop
+            if plan.processing_time
+                && plan.size_millis > 0
+                && plan.slide_or_step_millis > 0
+                && plan.offset_millis == 0
+                && plan.window_properties.is_empty() => {}
         proto::WindowKind::Tumble => {
             return Err(DataFusionError::Plan(
                 "TUMBLE window size must be positive".to_string(),
@@ -1231,6 +1443,18 @@ fn validate_plan(plan: &proto::WindowAggregate, max_parallelism: u32) -> Result<
         proto::WindowKind::Session => {
             return Err(DataFusionError::Plan(
                 "SESSION gap must be positive".to_string(),
+            ));
+        }
+        proto::WindowKind::CountTumble => {
+            return Err(DataFusionError::Plan(
+                "count TUMBLE requires a positive size, processing time, no offset, and no time properties"
+                    .to_string(),
+            ));
+        }
+        proto::WindowKind::CountHop => {
+            return Err(DataFusionError::Plan(
+                "count HOP requires positive size and slide, processing time, no offset, and no time properties"
+                    .to_string(),
             ));
         }
         proto::WindowKind::Unspecified => {
@@ -1268,6 +1492,53 @@ fn session_index_key(key_group: u32, group_key: &[u8]) -> StateKey {
     key.push(SESSION_INDEX_PREFIX);
     key.extend_from_slice(group_key);
     StateKey { key_group, key }
+}
+
+fn count_index_key(key_group: u32, group_key: &[u8]) -> StateKey {
+    let mut key = Vec::with_capacity(1 + group_key.len());
+    key.push(COUNT_INDEX_PREFIX);
+    key.extend_from_slice(group_key);
+    StateKey { key_group, key }
+}
+
+fn count_group_key(key: &[u8]) -> Result<&[u8]> {
+    if key.first() != Some(&COUNT_INDEX_PREFIX) {
+        return Err(DataFusionError::Execution(
+            "count-window index key is malformed".to_string(),
+        ));
+    }
+    Ok(&key[1..])
+}
+
+fn encode_count_index(count: i64) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(13);
+    bytes.extend_from_slice(COUNT_INDEX_MAGIC);
+    bytes.push(1);
+    bytes.extend_from_slice(&count.to_be_bytes());
+    bytes
+}
+
+fn decode_count_index(bytes: &[u8]) -> Result<i64> {
+    if bytes.len() != 13 || &bytes[..4] != COUNT_INDEX_MAGIC || bytes[4] != 1 {
+        return Err(DataFusionError::Execution(
+            "count-window index state is corrupt or has an unsupported version".to_string(),
+        ));
+    }
+    Ok(i64::from_be_bytes(
+        bytes[5..13].try_into().expect("length checked"),
+    ))
+}
+
+fn decode_window_state_key_bounds(key: &[u8]) -> Result<(i64, i64)> {
+    if key.len() < 17 || key[0] != WINDOW_KEY_PREFIX {
+        return Err(DataFusionError::Execution(
+            "window state key is malformed".to_string(),
+        ));
+    }
+    let offset = key.len() - 16;
+    let start = i64::from_be_bytes(key[offset..offset + 8].try_into().expect("length checked"));
+    let end = i64::from_be_bytes(key[offset + 8..].try_into().expect("length checked"));
+    Ok((start, end))
 }
 
 fn group_key_from_window_state_key(key: &[u8]) -> Result<&[u8]> {
@@ -1633,6 +1904,7 @@ mod tests {
     use prost::Message;
 
     use super::*;
+    use crate::exchange::encode_binary_row;
     use crate::memory_pool::tests_support::TestBroker;
     use crate::PLAN_PROTOCOL_VERSION;
 
@@ -1660,6 +1932,10 @@ mod tests {
     }
 
     fn plan(kind: proto::WindowKind, size: i64, slide: i64, input_changelog: bool) -> Vec<u8> {
+        let count_window = matches!(
+            kind,
+            proto::WindowKind::CountTumble | proto::WindowKind::CountHop
+        );
         proto::NativePlan {
             protocol_version: PLAN_PROTOCOL_VERSION,
             root: Some(proto::Operator {
@@ -1684,11 +1960,15 @@ mod tests {
                         size_millis: size,
                         slide_or_step_millis: slide,
                         offset_millis: 0,
-                        processing_time: false,
-                        window_properties: vec![
-                            proto::WindowProperty::Start as i32,
-                            proto::WindowProperty::End as i32,
-                        ],
+                        processing_time: count_window,
+                        window_properties: if count_window {
+                            Vec::new()
+                        } else {
+                            vec![
+                                proto::WindowProperty::Start as i32,
+                                proto::WindowProperty::End as i32,
+                            ]
+                        },
                         input_schema: Some(proto::Schema {
                             fields: vec![
                                 field("key", logical_bigint(false)),
@@ -1696,12 +1976,19 @@ mod tests {
                             ],
                         }),
                         output_schema: Some(proto::Schema {
-                            fields: vec![
-                                field("key", logical_bigint(false)),
-                                field("count", logical_bigint(false)),
-                                field("window_start", logical_timestamp(false)),
-                                field("window_end", logical_timestamp(false)),
-                            ],
+                            fields: if count_window {
+                                vec![
+                                    field("key", logical_bigint(false)),
+                                    field("count", logical_bigint(false)),
+                                ]
+                            } else {
+                                vec![
+                                    field("key", logical_bigint(false)),
+                                    field("count", logical_bigint(false)),
+                                    field("window_start", logical_timestamp(false)),
+                                    field("window_end", logical_timestamp(false)),
+                                ]
+                            },
                         }),
                     },
                 ))),
@@ -1711,11 +1998,20 @@ mod tests {
     }
 
     fn processor(plan: &[u8], broker: Arc<TestBroker>) -> WindowAggregateProcessor {
+        processor_for_range(plan, broker, 0, 127)
+    }
+
+    fn processor_for_range(
+        plan: &[u8],
+        broker: Arc<TestBroker>,
+        first_key_group: u32,
+        last_key_group: u32,
+    ) -> WindowAggregateProcessor {
         WindowAggregateProcessor::new(
             plan,
             128,
-            0,
-            127,
+            first_key_group,
+            last_key_group,
             HostMemoryReservation::new(broker, "window state test"),
         )
         .unwrap()
@@ -1769,6 +2065,127 @@ mod tests {
         drop(output);
         drop(processor);
         assert_eq!(broker.reserved(), 0);
+    }
+
+    #[test]
+    fn count_tumble_and_hop_emit_on_flink_element_boundaries_and_restore() {
+        let broker = Arc::new(TestBroker::new(32 << 20));
+        let tumble = plan(proto::WindowKind::CountTumble, 3, 0, false);
+        let mut before = processor(&tumble, broker.clone());
+        let first = before
+            .process_arrow(batch(vec![1, 1, 1, 1, 2, 2, 2], vec![0; 7], None), 0)
+            .unwrap();
+        assert_eq!(first.num_rows(), 2);
+        assert!(first
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .iter()
+            .all(|value| value == Some(3)));
+        let key_group = assign_key_group(
+            &encode_binary_row(&batch(vec![1], vec![0], None), 0, &[(0, KeyField::BigInt)])
+                .unwrap(),
+            128,
+        );
+        let snapshot = before.snapshot_key_group(key_group).unwrap();
+        drop(before);
+        let mut after = processor(&tumble, broker.clone());
+        after.restore_key_group(key_group, &snapshot).unwrap();
+        let restored = after
+            .process_arrow(batch(vec![1, 1], vec![0; 2], None), 0)
+            .unwrap();
+        assert_eq!(restored.num_rows(), 1);
+        assert_eq!(
+            restored
+                .column(1)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .value(0),
+            3
+        );
+
+        let hop = plan(proto::WindowKind::CountHop, 3, 2, false);
+        let mut hopping = processor(&hop, broker);
+        let output = hopping
+            .process_arrow(batch(vec![9, 9, 9, 9, 9], vec![0; 5], None), 0)
+            .unwrap();
+        assert_eq!(output.num_rows(), 2);
+        assert!(output
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .iter()
+            .all(|value| value == Some(3)));
+    }
+
+    #[test]
+    fn count_window_state_rescales_and_moves_from_memory_to_rocksdb() {
+        let broker = Arc::new(TestBroker::new(1 << 30));
+        let bytes = plan(proto::WindowKind::CountTumble, 3, 0, false);
+        let mut source = processor(&bytes, broker.clone());
+        assert_eq!(
+            source
+                .process_arrow(batch(vec![1, 1, 2, 2], vec![0; 4], None), 0)
+                .unwrap()
+                .num_rows(),
+            0
+        );
+        let snapshots = (0..128)
+            .map(|group| source.snapshot_key_group(group).unwrap())
+            .collect::<Vec<_>>();
+
+        let mut lower = processor_for_range(&bytes, broker.clone(), 0, 63);
+        let mut upper = processor_for_range(&bytes, broker.clone(), 64, 127);
+        for (group, snapshot) in snapshots.iter().enumerate() {
+            if group < 64 {
+                lower.restore_key_group(group as u32, snapshot).unwrap();
+            } else {
+                upper.restore_key_group(group as u32, snapshot).unwrap();
+            }
+        }
+        let mut rescaled_rows = 0;
+        for key in [1, 2] {
+            let input = batch(vec![key], vec![0], None);
+            let encoded = encode_binary_row(&input, 0, &[(0, KeyField::BigInt)]).unwrap();
+            let target = if assign_key_group(&encoded, 128) < 64 {
+                &mut lower
+            } else {
+                &mut upper
+            };
+            rescaled_rows += target.process_arrow(input, 0).unwrap().num_rows();
+        }
+        assert_eq!(rescaled_rows, 2);
+
+        let Ok(plugin_path) = std::env::var("STREAMFUSION_TEST_ROCKSDB_PLUGIN") else {
+            return;
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let mut rocks = WindowAggregateProcessor::new_rocksdb(
+            &bytes,
+            128,
+            0,
+            127,
+            std::path::Path::new(&plugin_path),
+            directory.path(),
+            64 << 20,
+            HostMemoryReservation::new(broker, "window aggregate RocksDB scratch"),
+        )
+        .unwrap();
+        for (group, snapshot) in snapshots.iter().enumerate() {
+            rocks.restore_key_group(group as u32, snapshot).unwrap();
+            assert_eq!(rocks.snapshot_key_group(group as u32).unwrap(), *snapshot);
+        }
+        let before_io = rocks.statistics();
+        let output = rocks
+            .process_arrow(batch(vec![1, 2], vec![0; 2], None), 0)
+            .unwrap();
+        assert_eq!(output.num_rows(), 2);
+        let after_io = rocks.statistics();
+        assert_eq!(after_io[0] - before_io[0], 2);
+        assert_eq!(after_io[1] - before_io[1], 1);
     }
 
     #[test]

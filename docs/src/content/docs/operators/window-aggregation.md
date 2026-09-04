@@ -6,7 +6,7 @@ sidebar:
 ---
 
 **Current status:** Partially accelerated for native `TUMBLE`, `HOP`, `CUMULATE`, and `SESSION`
-aggregation.
+aggregation, including Flink's legacy group-window physical node.
 
 ## SQL example
 
@@ -21,6 +21,9 @@ GROUP BY window_start, window_end, bidder;
 StreamFusion accelerates direct time-attribute window aggregation for event time and processing
 time. It recognizes both Flink's one-phase node and its default local-aggregate, exchange,
 global-aggregate shape; the latter is collapsed so original Arrow rows reach one native operator.
+Legacy SQL/Table API time windows lower to the same canonical native state machine. Legacy Table
+API processing-time row-count tumbling and sliding windows are also accelerated; Flink 2.3's SQL
+grammar does not expose numeric row-count intervals, but its Table API and physical executor do.
 The native calls are `COUNT(*)`, `COUNT(value)`, `SUM`, `AVG`, `MIN`, and `MAX`, including SQL
 `FILTER (WHERE ...)` with nullable Boolean predicates. `AVG` accepts every Flink numeric input,
 supports retractions, and merges its sum/count buffers across session namespaces. Keys use Arrow's canonical row encoding and
@@ -33,9 +36,10 @@ late rows, watermark cleanup, timer ordering, offsets, negative epochs, `TIMESTA
 local time zones, and daylight-saving gaps/overlaps follow Flink. Session windows perform
 transitive merging and keep Flink's merged namespace when a bridging row retracts.
 
-Legacy group-window nodes, distinct/approximate or user-defined aggregate calls, async state,
+Legacy early/late firing, distinct/approximate or user-defined aggregate calls, async state,
 changelog-state wrapping, and unsupported surrounding physical nodes produce an explicit
-whole-plan fallback reason.
+whole-plan fallback reason. Row-count windows do not expose time window properties, matching
+Flink's legacy contract.
 
 ## Implementation
 
@@ -43,6 +47,11 @@ The Java planner serializes the complete physical contract in the versioned plan
 batches records by key and window, computes Flink key groups, and uses the shared opaque keyed-state
 interface. Both the managed in-memory backend and the optional direct RocksDB component perform
 batched reads and atomic batched mutations without per-record JNI state calls.
+Row-count windows store their per-key element index in the same canonical key-group envelope; each
+input batch performs one batched index read, one batched window-state read, and one atomic write.
+Time windows perform one batched state read and one atomic state/timer write per input batch. The
+hot input loop reuses Flink BinaryRow-key and assigned-window scratch buffers, while canonical
+state keys receive owned storage only when a new key/window is staged.
 
 A backend-neutral native timer service stores event-time and processing-time timers per key group.
 Its canonical bytes travel with raw keyed snapshots, so aligned and unaligned checkpoints,

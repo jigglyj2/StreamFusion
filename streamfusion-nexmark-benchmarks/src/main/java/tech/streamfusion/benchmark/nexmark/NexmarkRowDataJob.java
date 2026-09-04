@@ -226,6 +226,10 @@ public final class NexmarkRowDataJob {
             case "grouping-sets":
                 columns = "bidder BIGINT, channel STRING, bids BIGINT, spend BIGINT";
                 break;
+            case "legacy-window-aggregate":
+                columns = "bidder BIGINT, bid_count BIGINT, spend BIGINT, average_price BIGINT, "
+                        + "minimum_price BIGINT, maximum_price BIGINT, starttime TIMESTAMP(3), endtime TIMESTAMP(3)";
+                break;
             case "over-aggregate":
             case "over-aggregate-event-time":
             case "over-aggregate-processing-time":

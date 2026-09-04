@@ -73,6 +73,21 @@ pub fn encode_binary_row(
     row: usize,
     fields: &[(usize, KeyField)],
 ) -> Result<Vec<u8>> {
+    let mut output = Vec::new();
+    encode_binary_row_into(batch, row, fields, &mut output)?;
+    Ok(output)
+}
+
+/// Encodes a Flink `BinaryRowData` key into a caller-owned scratch buffer.
+///
+/// Stateful operators use this form while scanning a batch so duplicate keys do not allocate a
+/// temporary `Vec` for every input row. Operators still copy a key when it becomes owned state.
+pub fn encode_binary_row_into(
+    batch: &RecordBatch,
+    row: usize,
+    fields: &[(usize, KeyField)],
+    output: &mut Vec<u8>,
+) -> Result<()> {
     if row >= batch.num_rows() {
         return Err(ArrowError::InvalidArgumentError(format!(
             "key row {row} is outside a {}-row batch",
@@ -95,14 +110,18 @@ pub fn encode_binary_row(
             ));
         }
         return match array.data_type() {
-            DataType::Binary => Ok(value::<BinaryArray>(array, row)?.value(row).to_vec()),
+            DataType::Binary => {
+                output.clear();
+                output.extend_from_slice(value::<BinaryArray>(array, row)?.value(row));
+                Ok(())
+            }
             other => Err(ArrowError::CastError(format!(
                 "a preencoded BinaryRow exchange key requires Arrow Binary, got {other}"
             ))),
         };
     }
 
-    let mut writer = BinaryRowWriter::new(fields.len());
+    let mut writer = BinaryRowWriter::new(fields.len(), output);
     for (position, (column_index, kind)) in fields.iter().copied().enumerate() {
         let array = batch.column(column_index);
         if array.is_null(row) {
@@ -185,7 +204,7 @@ pub fn encode_binary_row(
             }
         }
     }
-    Ok(writer.finish())
+    Ok(())
 }
 
 fn time_millis(array: &dyn Array, row: usize) -> Result<i32> {
@@ -255,18 +274,17 @@ fn value<'a, T: Array + 'static>(array: &'a dyn Array, row: usize) -> Result<&'a
     })
 }
 
-struct BinaryRowWriter {
+struct BinaryRowWriter<'a> {
     null_bytes: usize,
-    bytes: Vec<u8>,
+    bytes: &'a mut Vec<u8>,
 }
 
-impl BinaryRowWriter {
-    fn new(arity: usize) -> Self {
+impl<'a> BinaryRowWriter<'a> {
+    fn new(arity: usize, bytes: &'a mut Vec<u8>) -> Self {
         let null_bytes = (arity + 63 + 8) / 64 * 8;
-        Self {
-            null_bytes,
-            bytes: vec![0; null_bytes + arity * 8],
-        }
+        bytes.clear();
+        bytes.resize(null_bytes + arity * 8, 0);
+        Self { null_bytes, bytes }
     }
 
     fn field_offset(&self, position: usize) -> usize {
@@ -311,10 +329,6 @@ impl BinaryRowWriter {
         self.bytes[variable_offset..variable_offset + encoded.len()].copy_from_slice(&encoded);
         let offset_and_size = ((variable_offset as u64) << 32) | encoded.len() as u64;
         self.write_fixed(position, &offset_and_size.to_le_bytes());
-    }
-
-    fn finish(self) -> Vec<u8> {
-        self.bytes
     }
 }
 
@@ -370,6 +384,26 @@ mod tests {
                 0x83,
             ]
         );
+
+        let mut scratch = Vec::with_capacity(64);
+        let allocation = scratch.as_ptr();
+        encode_binary_row_into(
+            &batch,
+            0,
+            &[(0, KeyField::Integer), (1, KeyField::String)],
+            &mut scratch,
+        )
+        .unwrap();
+        assert_eq!(scratch, bytes);
+        assert_eq!(scratch.as_ptr(), allocation);
+        encode_binary_row_into(
+            &batch,
+            0,
+            &[(0, KeyField::Integer), (1, KeyField::String)],
+            &mut scratch,
+        )
+        .unwrap();
+        assert_eq!(scratch.as_ptr(), allocation);
     }
 
     #[test]

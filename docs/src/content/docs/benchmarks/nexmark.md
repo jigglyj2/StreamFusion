@@ -93,7 +93,7 @@ The `aggregate-modifiers`, `incremental-group-aggregate`,
 `group-aggregate`, `global-aggregate`, `grouping-sets`, `interval-join`, `over-aggregate`,
 `over-aggregate-event-time`, `over-aggregate-processing-time`,
 `over-aggregate-bounded-rows`, `over-aggregate-bounded-range`, `select-distinct`, `top-n`,
-`limit`, `temporal-join`, and `temporal-sort` cases
+`limit`, `legacy-window-aggregate`, `temporal-join`, and `temporal-sort` cases
 exercise both native state backends over the bounded bid stream; they are focused operator workloads
 rather than numbered Nexmark queries. `over-aggregate` deliberately casts the timestamp to a
 regular value to exercise ordered non-time state, while `over-aggregate-event-time` retains the
@@ -121,6 +121,31 @@ bundle boundaries affect the comparison.
 Performance reports
 must come from separate, unprofiled JVM forks built with release-mode native code; profiler runs
 are diagnostic artifacts rather than benchmark measurements.
+
+On the September 4, 2026 local `legacy-window-aggregate` run based on `b0a3b97` plus the
+legacy-window working change, three alternating fresh-JVM release/native-CPU forks processed
+500,000 deterministic events at parallelism one with a 2GB heap and one-second exactly-once
+checkpoints. In memory, Flink and StreamFusion medians were 83,173 and 81,043 events/s
+respectively, or 97.4% throughput parity; median absolute deviations were 0.011s and 0.213s, with
+elapsed ranges of 6.001–6.755s and 5.953–6.383s. RocksDB medians were 79,011 and 80,887 events/s,
+a 2.4% StreamFusion gain; median absolute deviations were 0.026s and 0.011s, with elapsed ranges
+of 6.228–6.354s and 6.171–6.372s. Every fork materialized the same 9,920-row multiset with
+SHA-256 `495d281e404c8e1cbd44d4ba9bb275c84ea61f635148c2702a5a50d83f8a45da`.
+StreamFusion EXPLAIN reported full acceleration and every fork executed 31–32 native window
+batches. The host was a 12th Gen Intel Core i7-12650H under x86-64 WSL2 with OpenJDK 24.0.2 and
+Rust 1.94.0.
+
+Separate one-million-event mixed JVM/native profiles covered both engines and both backends with
+Java non-safepoint sampling, DWARF/frame-pointer unwinding, collapsed stacks, per-engine flame
+graphs, differential flame graphs, Java allocation recordings, and native allocation recordings.
+Profiler timings were excluded from the measurements above. The complete native window path
+accounted for 2.6% of in-memory CPU samples and 3.5% with RocksDB; RowData-to-Arrow conversion
+accounted for 2.5% and 2.8%. Sampled Java allocation volume was 48% of Flink's in memory and 44%
+with RocksDB. Native allocation profiles identified a temporary BinaryRow key and assigned-window
+list per input row. Reusing those two buffers across each Arrow batch reduced their post-change
+shares to 0.0001% and less than 0.0001% of sampled native allocation volume. Owned canonical
+state keys, accumulators, output Arrow buffers, and RocksDB allocations remain charged through
+the operator's Flink managed-memory reservations.
 
 On the September 4, 2026 local q23 multi-join run based on `980201e` plus the multi-join working
 change, three alternating fresh-JVM release/native-CPU forks processed 500,000 deterministic events

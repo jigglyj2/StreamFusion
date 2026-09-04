@@ -27,6 +27,7 @@ import org.apache.calcite.rex.RexWindowBound;
 import org.apache.calcite.rex.RexWindowBounds;
 import org.apache.flink.configuration.ReadableConfig;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
+import org.apache.flink.table.planner.plan.logical.LogicalWindow;
 import org.apache.flink.table.planner.plan.logical.TimeAttributeWindowingStrategy;
 import org.apache.flink.table.planner.plan.logical.WindowingStrategy;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecEdge;
@@ -56,6 +57,7 @@ import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecExpand;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecGlobalGroupAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecGlobalWindowAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecGroupAggregate;
+import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecGroupWindowAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecIncrementalGroupAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecIntervalJoin;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecJoin;
@@ -105,6 +107,8 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             "tech.streamfusion.flink.aggregate.StreamFusionGroupAggregateTranslator";
     private static final String WINDOW_AGGREGATE_TRANSLATOR_CLASS =
             "tech.streamfusion.flink.window.StreamFusionWindowAggregateTranslator";
+    private static final String GROUP_WINDOW_AGGREGATE_TRANSLATOR_CLASS =
+            "tech.streamfusion.flink.window.StreamFusionGroupWindowAggregateTranslator";
     private static final String WINDOW_DEDUPLICATE_TRANSLATOR_CLASS =
             "tech.streamfusion.flink.window.StreamFusionWindowDeduplicateTranslator";
     private static final String WINDOW_RANK_TRANSLATOR_CLASS =
@@ -129,23 +133,23 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
     @Override
     public ExecNodeGraph process(ExecNodeGraph graph, ProcessorContext context) {
         StreamFusionPlanningDiagnostics.begin();
-        List<String> rejections = new ArrayList<>();
-        for (int index = 0; index < graph.getRootNodes().size(); index++) {
-            collectRejections(graph.getRootNodes().get(index), context, "root[" + index + "]", rejections);
-        }
-        if (!rejections.isEmpty()) {
-            rejections.forEach(rejection -> {
-                int separator = rejection.indexOf('\n');
-                StreamFusionPlanningDiagnostics.reject(
-                        rejection.substring(0, separator), rejection.substring(separator + 1));
-            });
-            return graph;
-        }
-        StreamFusionPlanningDiagnostics.accelerate();
         // Focused graph-shape tests construct the processor without a planner. Persisted node
         // configuration remains sufficient unless a translated mini-batch node omitted its size.
         activeTableConfig = context == null ? null : context.getPlanner().getTableConfig();
         try {
+            List<String> rejections = new ArrayList<>();
+            for (int index = 0; index < graph.getRootNodes().size(); index++) {
+                collectRejections(graph.getRootNodes().get(index), context, "root[" + index + "]", rejections);
+            }
+            if (!rejections.isEmpty()) {
+                rejections.forEach(rejection -> {
+                    int separator = rejection.indexOf('\n');
+                    StreamFusionPlanningDiagnostics.reject(
+                            rejection.substring(0, separator), rejection.substring(separator + 1));
+                });
+                return graph;
+            }
+            StreamFusionPlanningDiagnostics.accelerate();
             List<ExecNode<?>> roots =
                     graph.getRootNodes().stream().map(this::convertRoot).collect(Collectors.toList());
             return new ExecNodeGraph(graph.getFlinkVersion(), roots);
@@ -246,6 +250,12 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     nodePath + "\nlocal group aggregate: native acceleration requires its paired global aggregate");
         } else if (node instanceof StreamExecGroupAggregate) {
             String reason = unsupportedReason((StreamExecGroupAggregate) node, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
+        } else if (node instanceof StreamExecGroupWindowAggregate) {
+            LegacyGroupWindowAggregate legacy = legacyGroupWindowAggregate((StreamExecGroupWindowAggregate) node);
+            String reason = unsupportedReason(legacy, context);
             if (reason != null) {
                 rejections.add(nodePath + "\n" + reason);
             }
@@ -648,6 +658,24 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     aggregate.getInputProperties().get(0),
                     (RowType) aggregate.getOutputType(),
                     "StreamFusionGroupAggregate");
+            replacement.setInputEdges(aggregate.getInputEdges().stream()
+                    .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                    .collect(Collectors.toList()));
+            return replacement;
+        }
+        if (node instanceof StreamExecGroupWindowAggregate) {
+            StreamExecGroupWindowAggregate aggregate = (StreamExecGroupWindowAggregate) node;
+            LegacyGroupWindowAggregate legacy = legacyGroupWindowAggregate(aggregate);
+            StreamFusionExecGroupWindowAggregate replacement = new StreamFusionExecGroupWindowAggregate(
+                    activeTableConfig == null ? aggregate.getPersistedConfig() : activeTableConfig,
+                    legacy.grouping,
+                    legacy.aggregateCalls,
+                    legacy.window,
+                    legacy.properties,
+                    legacy.needRetraction,
+                    aggregate.getInputProperties().get(0),
+                    (RowType) aggregate.getOutputType(),
+                    "StreamFusionGroupWindowAggregate");
             replacement.setInputEdges(aggregate.getInputEdges().stream()
                     .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
                     .collect(Collectors.toList()));
@@ -1740,6 +1768,39 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             throw new IllegalStateException("Could not inspect StreamFusion WindowAggregate support", e);
         } catch (InvocationTargetException e) {
             throw new IllegalStateException("StreamFusion WindowAggregate support inspection failed", e.getCause());
+        }
+    }
+
+    private String unsupportedReason(LegacyGroupWindowAggregate aggregate, ProcessorContext context) {
+        try {
+            Class<?> translator = Class.forName(
+                    GROUP_WINDOW_AGGREGATE_TRANSLATOR_CLASS,
+                    true,
+                    context.getPlanner().getFlinkContext().getClassLoader());
+            Method method = translator.getMethod(
+                    "unsupportedReason",
+                    RowType.class,
+                    RowType.class,
+                    int[].class,
+                    org.apache.calcite.rel.core.AggregateCall[].class,
+                    LogicalWindow.class,
+                    NamedWindowProperty[].class,
+                    boolean.class,
+                    ReadableConfig.class);
+            return (String) method.invoke(
+                    null,
+                    (RowType) aggregate.node.getInputEdges().get(0).getOutputType(),
+                    (RowType) aggregate.node.getOutputType(),
+                    aggregate.grouping,
+                    aggregate.aggregateCalls,
+                    aggregate.window,
+                    aggregate.properties,
+                    aggregate.needRetraction,
+                    activeTableConfig == null ? aggregate.node.getPersistedConfig() : activeTableConfig);
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
+            throw new IllegalStateException("Could not inspect legacy group-window support", e);
+        } catch (InvocationTargetException e) {
+            throw new IllegalStateException("Legacy group-window support inspection failed", e.getCause());
         }
     }
 
@@ -2890,6 +2951,20 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                 && ((RexCall) expression).getOperator().getName().equalsIgnoreCase("PROCTIME");
     }
 
+    private static LegacyGroupWindowAggregate legacyGroupWindowAggregate(StreamExecGroupWindowAggregate node) {
+        int[] grouping = ((int[]) field(node, StreamExecGroupWindowAggregate.class, "grouping")).clone();
+        org.apache.calcite.rel.core.AggregateCall[] aggregateCalls = ((org.apache.calcite.rel.core.AggregateCall[])
+                        field(node, StreamExecGroupWindowAggregate.class, "aggCalls"))
+                .clone();
+        LogicalWindow logicalWindow = (LogicalWindow) field(node, StreamExecGroupWindowAggregate.class, "window");
+        NamedWindowProperty[] properties = ((NamedWindowProperty[])
+                        field(node, StreamExecGroupWindowAggregate.class, "namedWindowProperties"))
+                .clone();
+        boolean needRetraction = (boolean) field(node, StreamExecGroupWindowAggregate.class, "needRetraction");
+        return new LegacyGroupWindowAggregate(
+                node, grouping, aggregateCalls, logicalWindow, properties, needRetraction);
+    }
+
     private static int[] localWindowGrouping(StreamExecLocalWindowAggregate aggregate) {
         return ((int[]) field(aggregate, StreamExecLocalWindowAggregate.class, "grouping")).clone();
     }
@@ -2925,6 +3000,30 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             this.global = global;
             this.local = local;
             this.inputEdge = inputEdge;
+        }
+    }
+
+    private static final class LegacyGroupWindowAggregate {
+        private final StreamExecGroupWindowAggregate node;
+        private final int[] grouping;
+        private final org.apache.calcite.rel.core.AggregateCall[] aggregateCalls;
+        private final LogicalWindow window;
+        private final NamedWindowProperty[] properties;
+        private final boolean needRetraction;
+
+        private LegacyGroupWindowAggregate(
+                StreamExecGroupWindowAggregate node,
+                int[] grouping,
+                org.apache.calcite.rel.core.AggregateCall[] aggregateCalls,
+                LogicalWindow window,
+                NamedWindowProperty[] properties,
+                boolean needRetraction) {
+            this.node = node;
+            this.grouping = grouping;
+            this.aggregateCalls = aggregateCalls;
+            this.window = window;
+            this.properties = properties;
+            this.needRetraction = needRetraction;
         }
     }
 

@@ -19,30 +19,33 @@ import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
 import org.apache.flink.types.Row;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
 import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 
 class WindowAggregateKeyTypeParityTest extends SqlParityTestSupport {
-    @Test
-    void everyScalarKeyRepresentationMatchesFlink() throws Exception {
-        byte[] flink = executeScalars(false);
-        byte[] streamFusion = executeScalars(true);
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void everyScalarKeyRepresentationMatchesFlink(boolean legacy) throws Exception {
+        byte[] flink = executeScalars(false, legacy);
+        byte[] streamFusion = executeScalars(true, legacy);
 
         assertThat(streamFusion).isEqualTo(flink);
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 
-    @Test
-    void arrayAndRowKeysUseCanonicalOpaqueFlinkKeys() throws Exception {
-        byte[] flink = executeNested(false);
-        byte[] streamFusion = executeNested(true);
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void arrayAndRowKeysUseCanonicalOpaqueFlinkKeys(boolean legacy) throws Exception {
+        byte[] flink = executeNested(false, legacy);
+        byte[] streamFusion = executeNested(true, legacy);
 
         assertThat(streamFusion).isEqualTo(flink);
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 
-    private static byte[] executeScalars(boolean streamFusion) throws Exception {
+    private static byte[] executeScalars(boolean streamFusion, boolean legacy) throws Exception {
         configure(streamFusion);
         StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();
         environment.setParallelism(1);
@@ -121,12 +124,20 @@ class WindowAggregateKeyTypeParityTest extends SqlParityTestSupport {
         String keys = "tiny_value, small_value, integer_value, big_value, float_value, double_value, "
                 + "boolean_value, char_value, varchar_value, binary_value, varbinary_value, decimal_value, "
                 + "date_value, time_value, timestamp_value, timestamp_ltz_value";
-        return collect(tables.executeSql("SELECT "
-                + keys
-                + ", COUNT(*), window_start, window_end FROM TABLE("
-                + "TUMBLE(TABLE scalar_window_keys, DESCRIPTOR(ts), INTERVAL '10' SECOND)) GROUP BY "
-                + keys
-                + ", window_start, window_end"));
+        String sql = legacy
+                ? "SELECT "
+                        + keys
+                        + ", COUNT(*), TUMBLE_START(ts, INTERVAL '10' SECOND), "
+                        + "TUMBLE_END(ts, INTERVAL '10' SECOND) FROM scalar_window_keys GROUP BY "
+                        + keys
+                        + ", TUMBLE(ts, INTERVAL '10' SECOND)"
+                : "SELECT "
+                        + keys
+                        + ", COUNT(*), window_start, window_end FROM TABLE("
+                        + "TUMBLE(TABLE scalar_window_keys, DESCRIPTOR(ts), INTERVAL '10' SECOND)) GROUP BY "
+                        + keys
+                        + ", window_start, window_end";
+        return collect(tables.executeSql(sql));
     }
 
     private static Row scalarRow(LocalDateTime keyTimestamp, LocalDateTime eventTimestamp) {
@@ -150,7 +161,7 @@ class WindowAggregateKeyTypeParityTest extends SqlParityTestSupport {
                 eventTimestamp);
     }
 
-    private static byte[] executeNested(boolean streamFusion) throws Exception {
+    private static byte[] executeNested(boolean streamFusion, boolean legacy) throws Exception {
         configure(streamFusion);
         StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();
         environment.setParallelism(1);
@@ -185,9 +196,14 @@ class WindowAggregateKeyTypeParityTest extends SqlParityTestSupport {
                                 .column("ts", DataTypes.TIMESTAMP(3))
                                 .watermark("ts", "ts - INTERVAL '1' SECOND")
                                 .build()));
-        return collect(tables.executeSql("SELECT array_value, row_value, COUNT(*), window_start, window_end "
-                + "FROM TABLE(TUMBLE(TABLE nested_window_keys, DESCRIPTOR(ts), INTERVAL '10' SECOND)) "
-                + "GROUP BY array_value, row_value, window_start, window_end"));
+        String sql = legacy
+                ? "SELECT array_value, row_value, COUNT(*), TUMBLE_START(ts, INTERVAL '10' SECOND), "
+                        + "TUMBLE_END(ts, INTERVAL '10' SECOND) FROM nested_window_keys "
+                        + "GROUP BY array_value, row_value, TUMBLE(ts, INTERVAL '10' SECOND)"
+                : "SELECT array_value, row_value, COUNT(*), window_start, window_end "
+                        + "FROM TABLE(TUMBLE(TABLE nested_window_keys, DESCRIPTOR(ts), INTERVAL '10' SECOND)) "
+                        + "GROUP BY array_value, row_value, window_start, window_end";
+        return collect(tables.executeSql(sql));
     }
 
     private static void configure(boolean streamFusion) {

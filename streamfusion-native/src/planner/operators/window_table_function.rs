@@ -187,12 +187,14 @@ fn expand_batch(
     let mut indices = Vec::new();
     let mut starts = Vec::new();
     let mut ends = Vec::new();
+    let mut assigned_windows = Vec::new();
     for row in 0..batch.num_rows() {
         let Some(epoch_millis) = timestamp_millis(timestamps, row)? else {
             continue;
         };
         let timestamp = to_window_time(epoch_millis, shift_time_zone)?;
-        for (start, end) in assign_windows(window, timestamp) {
+        assign_windows_into(window, timestamp, &mut assigned_windows);
+        for &(start, end) in &assigned_windows {
             indices.push(u32::try_from(row).map_err(|_| {
                 DataFusionError::Execution("Window TVF batch exceeds UInt32 indexing".to_string())
             })?);
@@ -317,6 +319,9 @@ fn validate(window: &proto::WindowTableFunction) -> Result<()> {
         })?;
     }
     match kind {
+        proto::WindowKind::CountTumble | proto::WindowKind::CountHop => Err(DataFusionError::Plan(
+            "count windows are only valid for legacy group aggregation".to_string(),
+        )),
         proto::WindowKind::Tumble if window.slide_or_step_millis != 0 => Err(
             DataFusionError::Plan("TUMBLE must not define a slide or step".to_string()),
         ),
@@ -344,42 +349,52 @@ fn window_start(timestamp: i64, offset: i64, size: i64) -> i64 {
     }
 }
 
+#[cfg(test)]
 pub(super) fn assign_windows(
     window: &proto::WindowTableFunction,
     timestamp: i64,
 ) -> Vec<(i64, i64)> {
+    let mut windows = Vec::new();
+    assign_windows_into(window, timestamp, &mut windows);
+    windows
+}
+
+pub(super) fn assign_windows_into(
+    window: &proto::WindowTableFunction,
+    timestamp: i64,
+    windows: &mut Vec<(i64, i64)>,
+) {
+    windows.clear();
     match proto::WindowKind::try_from(window.kind).expect("validated kind") {
         proto::WindowKind::Tumble => {
             let start = window_start(timestamp, window.offset_millis, window.size_millis);
-            vec![(start, start.wrapping_add(window.size_millis))]
+            windows.push((start, start.wrapping_add(window.size_millis)));
         }
         proto::WindowKind::Hop => {
             let slide = window.slide_or_step_millis;
             let mut start = window_start(timestamp, window.offset_millis, slide);
             let lower = timestamp.wrapping_sub(window.size_millis);
-            let mut windows = Vec::new();
             while start > lower {
                 windows.push((start, start.wrapping_add(window.size_millis)));
                 start = start.wrapping_sub(slide);
             }
-            windows
         }
         proto::WindowKind::Cumulate => {
             let step = window.slide_or_step_millis;
             let start = window_start(timestamp, window.offset_millis, window.size_millis);
             let last_end = start.wrapping_add(window.size_millis);
             let mut end = window_start(timestamp, window.offset_millis, step).wrapping_add(step);
-            let mut windows = Vec::new();
             while end <= last_end {
                 windows.push((start, end));
                 end = end.wrapping_add(step);
             }
-            windows
         }
         proto::WindowKind::Session => {
-            vec![(timestamp, timestamp.saturating_add(window.size_millis))]
+            windows.push((timestamp, timestamp.saturating_add(window.size_millis)));
         }
-        proto::WindowKind::Unspecified => unreachable!(),
+        proto::WindowKind::Unspecified
+        | proto::WindowKind::CountTumble
+        | proto::WindowKind::CountHop => unreachable!(),
     }
 }
 

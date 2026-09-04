@@ -12,10 +12,21 @@ import java.util.List;
 import java.util.Map;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.flink.core.execution.SavepointFormatType;
+import org.apache.flink.metrics.Counter;
+import org.apache.flink.metrics.Gauge;
+import org.apache.flink.metrics.Meter;
+import org.apache.flink.metrics.MetricGroup;
 import org.apache.flink.runtime.checkpoint.CheckpointOptions;
 import org.apache.flink.runtime.checkpoint.CheckpointType;
 import org.apache.flink.runtime.checkpoint.OperatorSubtaskState;
 import org.apache.flink.runtime.checkpoint.SavepointType;
+import org.apache.flink.runtime.jobgraph.OperatorID;
+import org.apache.flink.runtime.metrics.groups.InternalOperatorMetricGroup;
+import org.apache.flink.runtime.metrics.util.InterceptingOperatorMetricGroup;
+import org.apache.flink.runtime.metrics.util.InterceptingTaskMetricGroup;
+import org.apache.flink.runtime.operators.testutils.MockEnvironment;
+import org.apache.flink.runtime.operators.testutils.MockEnvironmentBuilder;
+import org.apache.flink.runtime.operators.testutils.MockInputSplitProvider;
 import org.apache.flink.runtime.state.CheckpointStorageLocationReference;
 import org.apache.flink.runtime.state.IncrementalRemoteKeyedStateHandle;
 import org.apache.flink.runtime.state.KeyGroupRangeAssignment;
@@ -69,6 +80,89 @@ class StreamFusionArrowWindowAggregateOperatorTest {
                 new TimestampType(false, 3)
             },
             new String[] {"key", "count", "average_key", "window_start", "window_end"});
+
+    @Test
+    void exposesFlinkWindowMetricsWithLogicalRecordAndNativeStateSemantics() throws Exception {
+        InterceptingOperatorMetricGroup metrics = new InterceptingOperatorMetricGroup() {
+            @Override
+            public MetricGroup addGroup(String name) {
+                return this;
+            }
+
+            @Override
+            public MetricGroup addGroup(String key, String value) {
+                return this;
+            }
+        };
+        InterceptingTaskMetricGroup taskMetrics = new InterceptingTaskMetricGroup() {
+            @Override
+            public InternalOperatorMetricGroup getOrAddOperator(
+                    OperatorID id, String name, Map<String, String> additionalVariables) {
+                return metrics;
+            }
+        };
+        RowDataKeySelector selector = selector();
+        StreamFusionArrowWindowAggregateOperator operator = new StreamFusionArrowWindowAggregateOperator(
+                INPUT_TYPE, OUTPUT_TYPE, new int[] {0}, plan(), false, false, selector);
+        try (RootAllocator inputs = new RootAllocator(64L << 20);
+                MockEnvironment environment = new MockEnvironmentBuilder()
+                        .setTaskName("Window aggregate metric parity")
+                        .setManagedMemorySize(64L << 20)
+                        .setInputSplitProvider(new MockInputSplitProvider())
+                        .setBufferSize(32 * 1024)
+                        .setMaxParallelism(MAX_PARALLELISM)
+                        .setParallelism(1)
+                        .setSubtaskIndex(0)
+                        .setMetricGroup(taskMetrics)
+                        .build();
+                KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> harness =
+                        new KeyedOneInputStreamOperatorTestHarness<>(
+                                operator,
+                                new ArrowBatchKeySelector(selector),
+                                selector.getProducedType(),
+                                environment)) {
+            harness.setStateBackend(new StreamFusionStateBackend(new HashMapStateBackend()));
+            harness.setup(ArrowRowDataBatchSerializer.INSTANCE);
+            harness.open();
+
+            assertThat(metrics.get("numLateRecordsDropped")).isInstanceOf(Counter.class);
+            assertThat(metrics.get("lateRecordsDroppedRate")).isInstanceOf(Meter.class);
+            assertThat(metrics.get("pendingEventTimeTimers")).isInstanceOf(Gauge.class);
+            assertThat(metrics.get("pendingProcessingTimeTimers")).isInstanceOf(Gauge.class);
+            assertThat(metrics.get("watermarkLatency")).isInstanceOf(Gauge.class);
+
+            ((Counter) metrics.get("numRecordsIn")).inc();
+            process(harness, inputs, row(7, 1_000));
+            assertCounter(metrics, "processedBatches", 1);
+            assertCounter(metrics, "processedRows", 1);
+            assertCounter(metrics, "stateReadBatches", 1);
+            assertCounter(metrics, "stateWriteBatches", 1);
+            assertCounter(metrics, "timersRegistered", 1);
+            assertThat(((Gauge<?>) metrics.get("pendingEventTimeTimers")).getValue())
+                    .isEqualTo(1L);
+            assertCounter(metrics, "numRecordsIn", 1);
+            assertCounter(metrics, "numRecordsOut", 0);
+
+            harness.setProcessingTime(12_000);
+            ((Counter) metrics.get("numRecordsOut")).inc();
+            harness.processWatermark(new Watermark(9_999));
+            assertCounter(metrics, "emittedRows", 1);
+            assertCounter(metrics, "emittedInserts", 1);
+            assertCounter(metrics, "eventTimeTimersFired", 1);
+            assertCounter(metrics, "timersFired", 1);
+            assertCounter(metrics, "watermarksAdvanced", 1);
+            assertCounter(metrics, "numRecordsOut", 1);
+            assertThat(((Gauge<?>) metrics.get("pendingEventTimeTimers")).getValue())
+                    .isEqualTo(0L);
+            assertThat(((Gauge<?>) metrics.get("pendingProcessingTimeTimers")).getValue())
+                    .isEqualTo(0L);
+            assertThat(((Gauge<?>) metrics.get("watermarkLatency")).getValue()).isEqualTo(2_001L);
+
+            ((Counter) metrics.get("numRecordsIn")).inc();
+            process(harness, inputs, row(8, 1_000));
+            assertCounter(metrics, "numLateRecordsDropped", 1);
+        }
+    }
 
     @Test
     void pendingTimersAndStateRestoreAcrossEveryBackendAndCheckpointFormat() throws Exception {
@@ -218,6 +312,10 @@ class StreamFusionArrowWindowAggregateOperatorTest {
             rows += batch.size();
         }
         return rows;
+    }
+
+    private static void assertCounter(InterceptingOperatorMetricGroup metrics, String name, long expected) {
+        assertThat(((Counter) metrics.get(name)).getCount()).isEqualTo(expected);
     }
 
     private static Harness harness(OperatorSubtaskState state, boolean rocks) throws Exception {

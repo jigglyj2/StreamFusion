@@ -428,6 +428,9 @@ enum WindowKind {
   WINDOW_KIND_HOP = 2;
   WINDOW_KIND_CUMULATE = 3;
   WINDOW_KIND_SESSION = 4;
+  // Legacy group-window SQL uses the size fields as element counts for these two kinds.
+  WINDOW_KIND_COUNT_TUMBLE = 5;
+  WINDOW_KIND_COUNT_HOP = 6;
 }
 
 message Input {
