@@ -104,6 +104,9 @@ ten-second event-time range respectively.
 `temporal-sort` orders the bounded bid stream by ascending event time and secondary price/auction
 keys. Its integration case compares both the changelog multiset and global arrival-order digest on
 memory and RocksDB, requires an accelerated EXPLAIN, and requires non-zero native sort batches.
+The bounded source adapter also replaces the upstream generator's process-random reusable payload
+and URL caches with stable, size-preserving values. Consequently, fresh JVM forks consume
+byte-identical events rather than relying on same-process parity.
 `aggregate-modifiers` includes ordinary and counted-distinct AVG plus an explicit
 `BIGINT`-to-`DECIMAL` AVG, so release profiles cover both fixed-width integer and exact decimal
 sum/count state rather than only the aggregate modifier dispatch.
@@ -303,6 +306,25 @@ on memory. RocksDB attributes about 0.1% CPU, 0.2% Java allocation samples, and 
 allocation samples to LIMIT, while RocksDB itself remains below 0.7%. RowData-to-Arrow conversion,
 exchange, source materialization, and GC are now the visible costs. These are local diagnostic
 results, not portable performance claims; profiler timings were excluded from the benchmark.
+
+On the September 4, 2026 release/native-CPU `temporal-sort` run at commit `1e1e98d`, three
+alternating fresh-JVM forks used a 2 GiB heap, parallelism four, and one-second exactly-once
+checkpoints. At 100,000 events, in-memory Flink and StreamFusion medians were 4.756 s and 5.260 s
+respectively (90.4% throughput parity), with elapsed ranges of 4.668–5.240 s and 5.222–5.423 s.
+At 20,000 events on RocksDB, medians were 24.669 s and 4.819 s, a 5.12x StreamFusion gain; ranges
+were 22.975–40.518 s and 4.728–5.375 s, retaining Flink's storage outlier. All forks agreed on both
+the unordered and global ordered SHA-256, and all StreamFusion forks reported native Temporal Sort
+batches.
+
+Mixed CPU and separate JVM/native allocation profiles cover both engines and backends. Temporal
+Sort occupied 5.1% of in-memory and 2.8% of RocksDB StreamFusion CPU samples, while inclusive
+Arrow/native boundary work occupied 9.2% and 6.1%. Flink RocksDB work occupied 62.8% of its CPU
+samples versus 2.1% for direct native RocksDB. JVM allocation was 87.11 GB for Flink RocksDB and
+0.65 GB for StreamFusion; native allocator samples were 89.35 GB and 3.65 GB. Profiling found and
+removed repeated growth of the canonical row-state buffer; its native allocation share fell from
+8.0% to 2.9% after exact pre-sizing. The complete artifacts are retained under
+`streamfusion-nexmark-benchmarks/target/profiles/temporal-sort/1e1e98d/`. Profiler timings are not
+benchmark results.
 
 On the September 1, 2026 local release/native-CPU Q11 run over five million deterministic events,
 StreamFusion's in-memory session aggregate processed 648,986 events/s versus Flink's 627,817
