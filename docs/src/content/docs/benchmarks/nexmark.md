@@ -115,9 +115,10 @@ global-key fast path that materializes the canonical empty key once per batch; t
 aggregate path accounts for only 1.2–1.3% of global CPU samples. Profiler timings were excluded
 from these measurements.
 
-On the September 4, 2026 local release/native-CPU `aggregate-modifiers` run for implementation
-commit `ba4fffb`, three alternating fresh-JVM forks processed one million deterministic events at
-parallelism one with a 3GB heap and one-second exactly-once checkpoints. In-memory Flink and
+On the September 4, 2026 local release/native-CPU pre-AVG `aggregate-modifiers` run for
+implementation commit `ba4fffb`, three alternating fresh-JVM forks processed one million
+deterministic events at parallelism one with a 3GB heap and one-second exactly-once checkpoints.
+In-memory Flink and
 StreamFusion medians were 108,549 and 109,276 events/s respectively, a 0.7% StreamFusion gain;
 elapsed-time ranges were 9.065–9.243s and 8.908–11.620s. RocksDB medians were 75,337 and 96,157
 events/s, a 27.6% gain, with elapsed ranges of 12.820–16.063s and 8.966–10.672s. Every run emitted
@@ -135,6 +136,27 @@ generated rows, binary materialization, and result collection. No decoded object
 the runtime state remains the same backend-neutral opaque-byte representation used by canonical
 savepoints. Profiler timings were excluded from the throughput measurements. The machine was a
 12th Gen Intel Core i7-12650H under x86-64 WSL2 with OpenJDK 24.0.2 and Rust 1.94.0.
+
+The AVG-expanded workload at implementation commit `0e89128` adds ordinary integral AVG,
+counted-distinct integral AVG, and decimal AVG to the same modifier mix. Three new alternating
+fresh-JVM forks over one million events reached in-memory medians of 99,298 events/s for Flink and
+94,383 events/s for StreamFusion (95.0% parity), with elapsed ranges of 9.879–11.613s and
+10.453–10.681s. RocksDB medians were 44,910 and 91,263 events/s respectively, a 103.2%
+StreamFusion gain, with elapsed ranges of 15.224–26.728s and 10.928–11.026s. All twelve runs
+emitted 1,820,087 byte-identical changelog rows with SHA-256
+`f6b14f624b1151e518c892de4c0cf9c78d907a3c59db2c4f7ab37d0906d0f2f0`; every StreamFusion
+fork reported nonzero native Calc and GroupAggregate batches.
+
+Mixed CPU, Java-allocation, and native-allocation JFR profiles were retained for both engines and
+backends, with DWARF native unwinding and differential flame graphs. They identified repeated
+arbitrary-precision power/scaling work in decimal AVG; replacing the common path with precomputed
+Arrow `i256` powers raised the in-memory median from 83,820 to 94,383 events/s while preserving an
+exact BigInt fallback. In the final profiles the complete native GroupAggregate path occupied
+9.4–10.0% of CPU samples, native decimal arithmetic occupied 1.9%, and the BigInt fallback had no
+samples. Decimal arithmetic contributed only 0.12–0.17% of sampled native allocations. Total
+sampled Java allocation volume was about 54% of Flink's in memory and 49% with RocksDB; native
+state, Arrow, and RocksDB allocations remained charged through the existing managed-memory and
+scratch reservations. Profiler timings were excluded from the throughput numbers above.
 
 On the September 3, 2026 local release/native-CPU `over-aggregate` run over 100,000 deterministic
 events at parallelism one, three alternating fresh-JVM forks produced in-memory medians of 20,908
