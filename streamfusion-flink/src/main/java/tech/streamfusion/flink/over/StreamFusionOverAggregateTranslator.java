@@ -156,6 +156,12 @@ public final class StreamFusionOverAggregateTranslator {
         }
         for (int index = 0; index < group.getAggCalls().size(); index++) {
             AggregateCall call = group.getAggCalls().get(index);
+            if (call.isDistinct()) {
+                return "aggregate[" + index + "]: DISTINCT is not implemented by native OVER aggregation";
+            }
+            if (call.filterArg >= 0) {
+                return "aggregate[" + index + "]: FILTER is not implemented by native OVER aggregation";
+            }
             String reason = StreamFusionGroupAggregateTranslator.unsupportedCall(
                     inputType, outputType.getTypeAt(inputType.getFieldCount() + index), call);
             if (reason != null) {

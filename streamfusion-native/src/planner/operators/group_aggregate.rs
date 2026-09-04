@@ -31,7 +31,7 @@ const UPDATE_BEFORE: i8 = 1;
 const UPDATE_AFTER: i8 = 2;
 const DELETE: i8 = 3;
 const STATE_MAGIC: &[u8; 4] = b"SFGA";
-const STATE_VERSION: u8 = 3;
+const STATE_VERSION: u8 = 4;
 
 /// Persistent timer-free keyed aggregation handle shared by memory and RocksDB state.
 pub(crate) struct GroupAggregateProcessor {
@@ -51,6 +51,8 @@ pub(crate) struct GroupAggregateProcessor {
 pub(super) struct Call {
     pub(super) function: proto::AggregateFunction,
     pub(super) input_index: Option<usize>,
+    pub(super) filter_index: Option<usize>,
+    pub(super) distinct: bool,
     pub(super) input_type: Option<DataType>,
     pub(super) output_type: DataType,
     pub(super) retractable: bool,
@@ -65,9 +67,18 @@ pub(super) struct AccumulatorState {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Accumulator {
     Count(i64),
+    DistinctCount {
+        count: i64,
+        values: BTreeMap<AggregateValue, i64>,
+    },
     Sum {
         value: Option<AggregateValue>,
         count: i64,
+    },
+    DistinctSum {
+        value: Option<AggregateValue>,
+        count: i64,
+        values: BTreeMap<AggregateValue, i64>,
     },
     AppendExtremum(Option<AggregateValue>),
     Extremum(BTreeMap<AggregateValue, i64>),
@@ -559,12 +570,29 @@ impl AccumulatorState {
                 .iter()
                 .map(|call| match call.function {
                     proto::AggregateFunction::CountStar | proto::AggregateFunction::Count => {
-                        Accumulator::Count(0)
+                        if call.distinct {
+                            Accumulator::DistinctCount {
+                                count: 0,
+                                values: BTreeMap::new(),
+                            }
+                        } else {
+                            Accumulator::Count(0)
+                        }
                     }
-                    proto::AggregateFunction::Sum => Accumulator::Sum {
-                        value: None,
-                        count: 0,
-                    },
+                    proto::AggregateFunction::Sum => {
+                        if call.distinct {
+                            Accumulator::DistinctSum {
+                                value: None,
+                                count: 0,
+                                values: BTreeMap::new(),
+                            }
+                        } else {
+                            Accumulator::Sum {
+                                value: None,
+                                count: 0,
+                            }
+                        }
+                    }
                     proto::AggregateFunction::Min | proto::AggregateFunction::Max => {
                         if call.retractable {
                             Accumulator::Extremum(BTreeMap::new())
@@ -647,13 +675,28 @@ impl AccumulatorState {
         accumulate: bool,
     ) -> Result<()> {
         let values = row_aggregate_values(calls, batch, row)?;
-        self.apply_values(calls, &values, accumulate)
+        let active = calls
+            .iter()
+            .map(|call| aggregate_filter(call, batch, row))
+            .collect::<Result<Vec<_>>>()?;
+        self.apply_values_with_activity(calls, &values, &active, accumulate)
     }
 
     pub(super) fn apply_values(
         &mut self,
         calls: &[Call],
         values: &[Option<AggregateValue>],
+        accumulate: bool,
+    ) -> Result<()> {
+        let active = vec![true; calls.len()];
+        self.apply_values_with_activity(calls, values, &active, accumulate)
+    }
+
+    fn apply_values_with_activity(
+        &mut self,
+        calls: &[Call],
+        values: &[Option<AggregateValue>],
+        active: &[bool],
         accumulate: bool,
     ) -> Result<()> {
         if values.len() != calls.len() {
@@ -665,12 +708,34 @@ impl AccumulatorState {
         }
         let delta = if accumulate { 1 } else { -1 };
         self.row_count = self.row_count.wrapping_add(delta);
-        for ((call, accumulator), value) in calls.iter().zip(&mut self.accumulators).zip(values) {
+        for (((call, accumulator), value), active) in calls
+            .iter()
+            .zip(&mut self.accumulators)
+            .zip(values)
+            .zip(active)
+        {
+            if !active {
+                continue;
+            }
             match accumulator {
                 Accumulator::Count(count) => {
                     let present = call.input_index.is_none() || value.is_some();
                     if present {
                         *count = count.wrapping_add(delta);
+                    }
+                }
+                Accumulator::DistinctCount { count, values } => {
+                    if let Some(value) = value.as_ref() {
+                        let previous = values.get(value).copied().unwrap_or_default();
+                        let current = previous.wrapping_add(delta);
+                        if current == 0 {
+                            values.remove(value);
+                        } else {
+                            values.insert(value.clone(), current);
+                        }
+                        if (accumulate && previous == 0) || (!accumulate && current == 0) {
+                            *count = count.wrapping_add(delta);
+                        }
                     }
                 }
                 Accumulator::Sum { value: sum, count } => {
@@ -687,6 +752,39 @@ impl AccumulatorState {
                             aggregate_sub(&zero_value(&call.output_type), value, &call.output_type)?
                         };
                         *count = count.wrapping_add(delta);
+                    }
+                }
+                Accumulator::DistinctSum {
+                    value: sum,
+                    count,
+                    values,
+                } => {
+                    if let Some(value) = value.as_ref() {
+                        let previous = values.get(value).copied().unwrap_or_default();
+                        let current = previous.wrapping_add(delta);
+                        if current == 0 {
+                            values.remove(value);
+                        } else {
+                            values.insert(value.clone(), current);
+                        }
+                        if (accumulate && previous == 0) || (!accumulate && current == 0) {
+                            *sum = if let Some(current_sum) = sum.as_ref() {
+                                if accumulate {
+                                    aggregate_add(current_sum, value, &call.output_type)?
+                                } else {
+                                    aggregate_sub(current_sum, value, &call.output_type)?
+                                }
+                            } else if accumulate {
+                                Some(value.clone())
+                            } else {
+                                aggregate_sub(
+                                    &zero_value(&call.output_type),
+                                    value,
+                                    &call.output_type,
+                                )?
+                            };
+                            *count = count.wrapping_add(delta);
+                        }
                     }
                 }
                 Accumulator::AppendExtremum(extremum) => {
@@ -736,6 +834,12 @@ impl AccumulatorState {
             match (accumulator, other) {
                 (Accumulator::Count(value), Accumulator::Count(other)) => {
                     *value = value.wrapping_add(*other);
+                }
+                (Accumulator::DistinctCount { .. }, Accumulator::DistinctCount { .. })
+                | (Accumulator::DistinctSum { .. }, Accumulator::DistinctSum { .. }) => {
+                    return Err(DataFusionError::Execution(
+                        "merging DISTINCT aggregate namespaces is not supported".to_string(),
+                    ));
                 }
                 (
                     Accumulator::Sum { value, count },
@@ -796,7 +900,17 @@ impl AccumulatorState {
             .zip(&self.accumulators)
             .map(|(call, accumulator)| match accumulator {
                 Accumulator::Count(value) => Some(AggregateValue::Int(*value as i128)),
+                Accumulator::DistinctCount { count, .. } => {
+                    Some(AggregateValue::Int(*count as i128))
+                }
                 Accumulator::Sum { value, count } => {
+                    if *count == 0 {
+                        None
+                    } else {
+                        value.clone()
+                    }
+                }
+                Accumulator::DistinctSum { value, count, .. } => {
                     if *count == 0 {
                         None
                     } else {
@@ -827,10 +941,29 @@ pub(super) fn row_aggregate_values(
     calls
         .iter()
         .map(|call| match call.input_index {
+            Some(index) if call.function == proto::AggregateFunction::Count && !call.distinct => {
+                Ok((!batch.column(index).is_null(row)).then_some(AggregateValue::Boolean(true)))
+            }
             Some(index) => aggregate_value(batch.column(index).as_ref(), row),
             None => Ok(None),
         })
         .collect()
+}
+
+fn aggregate_filter(call: &Call, batch: &RecordBatch, row: usize) -> Result<bool> {
+    let Some(index) = call.filter_index else {
+        return Ok(true);
+    };
+    let filter = batch
+        .column(index)
+        .as_any()
+        .downcast_ref::<BooleanArray>()
+        .ok_or_else(|| {
+            DataFusionError::Execution(format!(
+                "aggregate FILTER input {index} is not Arrow Boolean"
+            ))
+        })?;
+    Ok(!filter.is_null(row) && filter.value(row))
 }
 
 fn validate_plan(_plan: &proto::GroupAggregate, max_parallelism: u32) -> Result<()> {
@@ -852,9 +985,15 @@ pub(super) fn lower_call(call: &proto::AggregateCall) -> Result<Call> {
         ));
     }
     let input_index = call.input_index.map(|index| index as usize);
+    let filter_index = call.filter_index.map(|index| index as usize);
     if function == proto::AggregateFunction::CountStar && input_index.is_some() {
         return Err(DataFusionError::Plan(
             "COUNT(*) must not name an input field".to_string(),
+        ));
+    }
+    if function == proto::AggregateFunction::CountStar && call.distinct {
+        return Err(DataFusionError::Plan(
+            "COUNT(DISTINCT *) is not a valid aggregate call".to_string(),
         ));
     }
     if function != proto::AggregateFunction::CountStar && input_index.is_none() {
@@ -898,6 +1037,8 @@ pub(super) fn lower_call(call: &proto::AggregateCall) -> Result<Call> {
     Ok(Call {
         function,
         input_index,
+        filter_index,
+        distinct: call.distinct,
         input_type,
         output_type,
         retractable: call.retractable,
@@ -1450,6 +1591,11 @@ pub(super) fn encode_state(state: &AccumulatorState) -> Vec<u8> {
                 bytes.push(1);
                 bytes.extend_from_slice(&value.to_le_bytes());
             }
+            Accumulator::DistinctCount { count, values } => {
+                bytes.push(5);
+                bytes.extend_from_slice(&count.to_le_bytes());
+                encode_counted_values(values, &mut bytes);
+            }
             Accumulator::Sum { value, count } => {
                 bytes.push(2);
                 bytes.push(value.is_some() as u8);
@@ -1457,6 +1603,19 @@ pub(super) fn encode_state(state: &AccumulatorState) -> Vec<u8> {
                     encode_value(value, &mut bytes);
                 }
                 bytes.extend_from_slice(&count.to_le_bytes());
+            }
+            Accumulator::DistinctSum {
+                value,
+                count,
+                values,
+            } => {
+                bytes.push(6);
+                bytes.push(value.is_some() as u8);
+                if let Some(value) = value {
+                    encode_value(value, &mut bytes);
+                }
+                bytes.extend_from_slice(&count.to_le_bytes());
+                encode_counted_values(values, &mut bytes);
             }
             Accumulator::AppendExtremum(value) => {
                 bytes.push(4);
@@ -1478,6 +1637,14 @@ pub(super) fn encode_state(state: &AccumulatorState) -> Vec<u8> {
     bytes
 }
 
+fn encode_counted_values(values: &BTreeMap<AggregateValue, i64>, bytes: &mut Vec<u8>) {
+    bytes.extend_from_slice(&(values.len() as u32).to_le_bytes());
+    for (value, count) in values {
+        encode_value(value, bytes);
+        bytes.extend_from_slice(&count.to_le_bytes());
+    }
+}
+
 pub(super) fn decode_state(bytes: &[u8], calls: &[Call]) -> Result<AccumulatorState> {
     let mut cursor = Cursor::new(bytes);
     if cursor.read_exact(4)? != STATE_MAGIC {
@@ -1486,7 +1653,7 @@ pub(super) fn decode_state(bytes: &[u8], calls: &[Call]) -> Result<AccumulatorSt
         ));
     }
     let version = cursor.read_u8()?;
-    if version != 1 && version != 2 && version != STATE_VERSION {
+    if version != 1 && version != 2 && version != 3 && version != STATE_VERSION {
         return Err(DataFusionError::Execution(format!(
             "group aggregate state version {version} is unsupported"
         )));
@@ -1551,6 +1718,26 @@ pub(super) fn decode_state(bytes: &[u8], calls: &[Call]) -> Result<AccumulatorSt
                 };
                 Accumulator::AppendExtremum(value)
             }
+            5 if version >= 4 => Accumulator::DistinctCount {
+                count: cursor.read_i64()?,
+                values: decode_counted_values(&mut cursor)?,
+            },
+            6 if version >= 4 => {
+                let value = match cursor.read_u8()? {
+                    0 => None,
+                    1 => Some(decode_value(&mut cursor)?),
+                    other => {
+                        return Err(DataFusionError::Execution(format!(
+                            "group aggregate distinct sum presence {other} is invalid"
+                        )))
+                    }
+                };
+                Accumulator::DistinctSum {
+                    value,
+                    count: cursor.read_i64()?,
+                    values: decode_counted_values(&mut cursor)?,
+                }
+            }
             other => {
                 return Err(DataFusionError::Execution(format!(
                     "group aggregate state accumulator tag {other} is invalid"
@@ -1558,8 +1745,20 @@ pub(super) fn decode_state(bytes: &[u8], calls: &[Call]) -> Result<AccumulatorSt
             }
         };
         let expected = match call.function {
-            proto::AggregateFunction::CountStar | proto::AggregateFunction::Count => 1,
-            proto::AggregateFunction::Sum => 2,
+            proto::AggregateFunction::CountStar | proto::AggregateFunction::Count => {
+                if call.distinct {
+                    5
+                } else {
+                    1
+                }
+            }
+            proto::AggregateFunction::Sum => {
+                if call.distinct {
+                    6
+                } else {
+                    2
+                }
+            }
             proto::AggregateFunction::Min | proto::AggregateFunction::Max => {
                 if call.retractable {
                     3
@@ -1588,10 +1787,50 @@ pub(super) fn decode_state(bytes: &[u8], calls: &[Call]) -> Result<AccumulatorSt
     })
 }
 
+fn decode_counted_values(cursor: &mut Cursor<'_>) -> Result<BTreeMap<AggregateValue, i64>> {
+    let entries = cursor.read_u32()? as usize;
+    let mut values = BTreeMap::new();
+    for _ in 0..entries {
+        let value = decode_value(cursor)?;
+        values.insert(value, cursor.read_i64()?);
+    }
+    Ok(values)
+}
+
 fn validate_accumulator_values(accumulator: &Accumulator, call: &Call) -> Result<()> {
     let values: Box<dyn Iterator<Item = &AggregateValue> + '_> = match accumulator {
         Accumulator::Count(_) => return Ok(()),
+        Accumulator::DistinctCount { values, .. } => {
+            for value in values.keys() {
+                if !aggregate_value_matches_type(
+                    value,
+                    call.input_type
+                        .as_ref()
+                        .expect("DISTINCT COUNT has input type"),
+                ) {
+                    return Err(DataFusionError::Execution(format!(
+                        "group aggregate distinct value {value:?} does not match its input type"
+                    )));
+                }
+            }
+            return Ok(());
+        }
         Accumulator::Sum { value, .. } => Box::new(value.iter()),
+        Accumulator::DistinctSum { value, values, .. } => {
+            for distinct in values.keys() {
+                if !aggregate_value_matches_type(
+                    distinct,
+                    call.input_type
+                        .as_ref()
+                        .expect("DISTINCT SUM has input type"),
+                ) {
+                    return Err(DataFusionError::Execution(format!(
+                        "group aggregate distinct value {distinct:?} does not match its input type"
+                    )));
+                }
+            }
+            Box::new(value.iter())
+        }
         Accumulator::AppendExtremum(value) => Box::new(value.iter()),
         Accumulator::Extremum(values) => Box::new(values.keys()),
     };
@@ -1753,6 +1992,8 @@ mod tests {
                     function != proto::AggregateFunction::CountStar,
                 )),
                 retractable: input_changelog,
+                filter_index: None,
+                distinct: false,
             };
         proto::NativePlan {
             protocol_version: crate::PLAN_PROTOCOL_VERSION,
@@ -1796,6 +2037,36 @@ mod tests {
                         grouping_indices: vec![0],
                         aggregate_calls: Vec::new(),
                         generate_update_before: false,
+                        input_changelog: true,
+                    },
+                ))),
+            }),
+        }
+        .encode_to_vec()
+    }
+
+    fn aggregate_distinct_plan() -> Vec<u8> {
+        let call = |function: proto::AggregateFunction| proto::AggregateCall {
+            function: function as i32,
+            input_index: Some(1),
+            input_type: Some(logical_bigint(true)),
+            output_type: Some(logical_bigint(function != proto::AggregateFunction::Count)),
+            retractable: true,
+            filter_index: None,
+            distinct: true,
+        };
+        proto::NativePlan {
+            protocol_version: crate::PLAN_PROTOCOL_VERSION,
+            root: Some(proto::Operator {
+                operator: Some(proto::operator::Operator::GroupAggregate(Box::new(
+                    proto::GroupAggregate {
+                        input: None,
+                        grouping_indices: vec![0],
+                        aggregate_calls: vec![
+                            call(proto::AggregateFunction::Count),
+                            call(proto::AggregateFunction::Sum),
+                        ],
+                        generate_update_before: true,
                         input_changelog: true,
                     },
                 ))),
@@ -2023,6 +2294,63 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_distinct_restores_counted_values_and_retracts_membership_boundaries() {
+        let plan = aggregate_distinct_plan();
+        let reservation = || {
+            HostMemoryReservation::new(
+                Arc::new(TestBroker::new(1 << 30)),
+                "test aggregate distinct state",
+            )
+        };
+        let mut source = GroupAggregateProcessor::new(&plan, 128, 0, 127, reservation()).unwrap();
+        let inserted = source
+            .process_arrow(batch(
+                vec![7, 7, 7],
+                vec![Some(10), Some(10), Some(20)],
+                Some(vec![INSERT, INSERT, INSERT]),
+            ))
+            .unwrap();
+        assert_eq!(inserted.num_rows(), 3);
+        let key = encode_binary_row(
+            &batch(vec![7], vec![Some(10)], None),
+            0,
+            &[(0, KeyField::BigInt)],
+        )
+        .unwrap();
+        let key_group = assign_key_group(&key, 128);
+        let snapshot = source.snapshot_key_group(key_group).unwrap();
+
+        let mut restored = GroupAggregateProcessor::new(&plan, 128, 0, 127, reservation()).unwrap();
+        restored.restore_key_group(key_group, &snapshot).unwrap();
+        let retracted = restored
+            .process_arrow(batch(
+                vec![7, 7],
+                vec![Some(10), Some(10)],
+                Some(vec![DELETE, DELETE]),
+            ))
+            .unwrap();
+        assert_eq!(retracted.num_rows(), 2);
+        assert_eq!(
+            retracted
+                .column(1)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values(),
+            &[2, 1]
+        );
+        assert_eq!(
+            retracted
+                .column(2)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values(),
+            &[30, 20]
+        );
+    }
+
+    #[test]
     fn delete_then_reinsert_in_one_batch_starts_a_new_group() {
         let mut processor = processor(true, true);
         processor
@@ -2063,6 +2391,8 @@ mod tests {
                 input_type: Some(logical_varchar(true)),
                 output_type: Some(logical_bigint(false)),
                 retractable: false,
+                filter_index: None,
+                distinct: false,
             }],
             generate_update_before: false,
             input_changelog: false,
@@ -2272,6 +2602,63 @@ mod tests {
     }
 
     #[test]
+    fn canonical_distinct_state_moves_from_memory_to_rocksdb() {
+        let Ok(plugin_path) = std::env::var("STREAMFUSION_TEST_ROCKSDB_PLUGIN") else {
+            return;
+        };
+        let plan = aggregate_distinct_plan();
+        let mut memory = GroupAggregateProcessor::new(
+            &plan,
+            128,
+            0,
+            127,
+            HostMemoryReservation::new(
+                Arc::new(TestBroker::new(1 << 30)),
+                "test distinct memory state",
+            ),
+        )
+        .unwrap();
+        memory
+            .process_arrow(batch(
+                vec![7, 7, 7],
+                vec![Some(10), Some(10), Some(20)],
+                Some(vec![INSERT, INSERT, INSERT]),
+            ))
+            .unwrap();
+        let snapshots = (0..128)
+            .map(|key_group| memory.snapshot_key_group(key_group).unwrap())
+            .collect::<Vec<_>>();
+        let directory = tempfile::tempdir().unwrap();
+        let mut rocks = GroupAggregateProcessor::new_rocksdb(
+            &plan,
+            128,
+            0,
+            127,
+            std::path::Path::new(&plugin_path),
+            directory.path(),
+            64 << 20,
+            HostMemoryReservation::new(
+                Arc::new(TestBroker::new(256 << 20)),
+                "test distinct RocksDB scratch",
+            ),
+        )
+        .unwrap();
+        for (key_group, snapshot) in snapshots.iter().enumerate() {
+            rocks.restore_key_group(key_group as u32, snapshot).unwrap();
+        }
+
+        let update = batch(
+            vec![7, 7],
+            vec![Some(10), Some(10)],
+            Some(vec![DELETE, DELETE]),
+        );
+        assert_eq!(
+            rocks.process_arrow(update.clone()).unwrap(),
+            memory.process_arrow(update).unwrap()
+        );
+    }
+
+    #[test]
     fn state_codec_round_trips_every_accumulator_value_family() {
         let state = AccumulatorState {
             row_count: 3,
@@ -2290,12 +2677,29 @@ mod tests {
                     (AggregateValue::Int(100), 2),
                     (AggregateValue::Int(200), -1),
                 ])),
+                Accumulator::DistinctCount {
+                    count: 2,
+                    values: BTreeMap::from([
+                        (AggregateValue::Int(10), 2),
+                        (AggregateValue::Int(20), 1),
+                    ]),
+                },
+                Accumulator::DistinctSum {
+                    value: Some(AggregateValue::Int(30)),
+                    count: 2,
+                    values: BTreeMap::from([
+                        (AggregateValue::Int(10), 2),
+                        (AggregateValue::Int(20), 1),
+                    ]),
+                },
             ],
         };
         let calls = vec![
             Call {
                 function: proto::AggregateFunction::CountStar,
                 input_index: None,
+                filter_index: None,
+                distinct: false,
                 input_type: None,
                 output_type: DataType::Int64,
                 retractable: true,
@@ -2303,6 +2707,8 @@ mod tests {
             Call {
                 function: proto::AggregateFunction::Sum,
                 input_index: Some(1),
+                filter_index: None,
+                distinct: false,
                 input_type: Some(DataType::Float32),
                 output_type: DataType::Float32,
                 retractable: true,
@@ -2310,6 +2716,8 @@ mod tests {
             Call {
                 function: proto::AggregateFunction::Min,
                 input_index: Some(1),
+                filter_index: None,
+                distinct: false,
                 input_type: Some(DataType::Boolean),
                 output_type: DataType::Boolean,
                 retractable: true,
@@ -2317,6 +2725,8 @@ mod tests {
             Call {
                 function: proto::AggregateFunction::Max,
                 input_index: Some(1),
+                filter_index: None,
+                distinct: false,
                 input_type: Some(DataType::Utf8),
                 output_type: DataType::Utf8,
                 retractable: false,
@@ -2324,8 +2734,28 @@ mod tests {
             Call {
                 function: proto::AggregateFunction::Min,
                 input_index: Some(1),
+                filter_index: None,
+                distinct: false,
                 input_type: Some(DataType::Date32),
                 output_type: DataType::Date32,
+                retractable: true,
+            },
+            Call {
+                function: proto::AggregateFunction::Count,
+                input_index: Some(1),
+                filter_index: None,
+                distinct: true,
+                input_type: Some(DataType::Int64),
+                output_type: DataType::Int64,
+                retractable: true,
+            },
+            Call {
+                function: proto::AggregateFunction::Sum,
+                input_index: Some(1),
+                filter_index: None,
+                distinct: true,
+                input_type: Some(DataType::Int64),
+                output_type: DataType::Int64,
                 retractable: true,
             },
         ];
@@ -2345,6 +2775,8 @@ mod tests {
         let calls = vec![Call {
             function: proto::AggregateFunction::Sum,
             input_index: Some(1),
+            filter_index: None,
+            distinct: false,
             input_type: Some(DataType::Int64),
             output_type: DataType::Int64,
             retractable: true,
@@ -2371,6 +2803,8 @@ mod tests {
         let float_calls = vec![Call {
             function: proto::AggregateFunction::Sum,
             input_index: Some(1),
+            filter_index: None,
+            distinct: false,
             input_type: Some(DataType::Float32),
             output_type: DataType::Float32,
             retractable: true,

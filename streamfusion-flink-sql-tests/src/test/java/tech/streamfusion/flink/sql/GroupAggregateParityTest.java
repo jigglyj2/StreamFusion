@@ -116,6 +116,107 @@ class GroupAggregateParityTest extends SqlParityTestSupport {
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 
+    @Test
+    void filteredAggregatesWithRetractionsMatchFlinkByteForByte() throws Exception {
+        byte[] flink = executeFilteredRetractions(false);
+        byte[] streamFusion = executeFilteredRetractions(true);
+
+        assertThat(streamFusion).isEqualTo(flink);
+        assertThat(StreamFusionPlannerFactory.nativeGroupAggregateBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
+    @Test
+    void distinctAggregatesWithFiltersAndRetractionsMatchFlinkByteForByte() throws Exception {
+        byte[] flink = executeDistinctRetractions(false);
+        byte[] streamFusion = executeDistinctRetractions(true);
+
+        assertThat(streamFusion).isEqualTo(flink);
+        assertThat(StreamFusionPlannerFactory.nativeGroupAggregateBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
+    private static byte[] executeDistinctRetractions(boolean streamFusion) throws Exception {
+        configurePlanner(streamFusion);
+        StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();
+        environment.setParallelism(1);
+        StreamTableEnvironment tables = StreamTableEnvironment.create(
+                environment, EnvironmentSettings.newInstance().inStreamingMode().build());
+        tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+        Row five = Row.of("a", 5L, "x", true);
+        Row seven = Row.of("a", 7L, "y", false);
+        Row nullAmount = Row.of("a", null, "z", true);
+        DataStream<Row> changes = environment.fromCollection(
+                List.of(
+                        withKind(five, RowKind.INSERT),
+                        withKind(five, RowKind.INSERT),
+                        withKind(seven, RowKind.INSERT),
+                        withKind(nullAmount, RowKind.INSERT),
+                        withKind(five, RowKind.DELETE),
+                        withKind(five, RowKind.DELETE),
+                        withKind(seven, RowKind.DELETE),
+                        withKind(nullAmount, RowKind.DELETE)),
+                Types.ROW_NAMED(
+                        new String[] {"category", "amount", "label", "selected"},
+                        Types.STRING,
+                        Types.LONG,
+                        Types.STRING,
+                        Types.BOOLEAN));
+        tables.createTemporaryView(
+                "distinct_aggregate_input",
+                tables.fromChangelogStream(
+                        changes,
+                        Schema.newBuilder()
+                                .column("category", "STRING NOT NULL")
+                                .column("amount", "BIGINT")
+                                .column("label", "STRING")
+                                .column("selected", "BOOLEAN")
+                                .build()));
+        return collect(tables.executeSql("SELECT category, COUNT(DISTINCT amount), SUM(DISTINCT amount), "
+                + "MIN(DISTINCT amount), MAX(DISTINCT amount), "
+                + "COUNT(DISTINCT label) FILTER (WHERE selected) "
+                + "FROM distinct_aggregate_input GROUP BY category"));
+    }
+
+    private static byte[] executeFilteredRetractions(boolean streamFusion) throws Exception {
+        configurePlanner(streamFusion);
+        StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();
+        environment.setParallelism(1);
+        StreamTableEnvironment tables = StreamTableEnvironment.create(
+                environment, EnvironmentSettings.newInstance().inStreamingMode().build());
+        tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+        Row selected = Row.of("a", 5L, true);
+        Row rejected = Row.of("a", 7L, false);
+        Row selectedNull = Row.of("a", null, true);
+        Row nullPredicate = Row.of("a", 2L, null);
+        DataStream<Row> changes = environment.fromCollection(
+                List.of(
+                        withKind(selected, RowKind.INSERT),
+                        withKind(rejected, RowKind.INSERT),
+                        withKind(selectedNull, RowKind.INSERT),
+                        withKind(nullPredicate, RowKind.INSERT),
+                        withKind(selected, RowKind.DELETE),
+                        withKind(rejected, RowKind.DELETE),
+                        withKind(selectedNull, RowKind.DELETE),
+                        withKind(nullPredicate, RowKind.DELETE)),
+                Types.ROW_NAMED(
+                        new String[] {"category", "amount", "selected"}, Types.STRING, Types.LONG, Types.BOOLEAN));
+        tables.createTemporaryView(
+                "filtered_aggregate_input",
+                tables.fromChangelogStream(
+                        changes,
+                        Schema.newBuilder()
+                                .column("category", "STRING NOT NULL")
+                                .column("amount", "BIGINT")
+                                .column("selected", "BOOLEAN")
+                                .build()));
+        return collect(tables.executeSql("SELECT category, "
+                + "COUNT(*) FILTER (WHERE selected), COUNT(amount) FILTER (WHERE selected), "
+                + "SUM(amount) FILTER (WHERE selected), MIN(amount) FILTER (WHERE selected), "
+                + "MAX(amount) FILTER (WHERE selected) "
+                + "FROM filtered_aggregate_input GROUP BY category"));
+    }
+
     private static byte[] executeOverflow(boolean streamFusion) throws Exception {
         configurePlanner(streamFusion);
         StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();
@@ -314,7 +415,12 @@ class GroupAggregateParityTest extends SqlParityTestSupport {
                 + "MIN(double_value), MAX(double_value), MIN(flag), MAX(flag), MIN(label), MAX(label), "
                 + "MIN(date_value), MAX(date_value), MIN(time_value), MAX(time_value), "
                 + "MIN(timestamp_value), MAX(timestamp_value), "
-                + "MIN(timestamp_ltz_value), MAX(timestamp_ltz_value) "
+                + "MIN(timestamp_ltz_value), MAX(timestamp_ltz_value), "
+                + "COUNT(DISTINCT float_value), SUM(DISTINCT float_value), "
+                + "COUNT(DISTINCT double_value), SUM(DISTINCT double_value), "
+                + "COUNT(DISTINCT flag), COUNT(DISTINCT label), COUNT(DISTINCT date_value), "
+                + "COUNT(DISTINCT time_value), COUNT(DISTINCT timestamp_value), "
+                + "COUNT(DISTINCT timestamp_ltz_value) "
                 + "FROM group_aggregate_expanded_types GROUP BY category"));
     }
 
@@ -406,7 +512,9 @@ class GroupAggregateParityTest extends SqlParityTestSupport {
         tables.createTemporaryView("group_aggregate_inserts", input);
         return collect(
                 tables.executeSql("SELECT category, COUNT(*), COUNT(label), SUM(amount), MIN(amount), MAX(amount), "
-                        + "SUM(decimal_amount), MIN(decimal_amount), MAX(decimal_amount) "
+                        + "SUM(decimal_amount), MIN(decimal_amount), MAX(decimal_amount), "
+                        + "COUNT(DISTINCT amount), SUM(DISTINCT amount), "
+                        + "COUNT(DISTINCT decimal_amount), SUM(DISTINCT decimal_amount) "
                         + "FROM group_aggregate_inserts GROUP BY category"));
     }
 

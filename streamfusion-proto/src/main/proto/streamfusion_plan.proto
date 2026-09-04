@@ -274,6 +274,10 @@ message AggregateCall {
   LogicalType input_type = 3;
   LogicalType output_type = 4;
   bool retractable = 5;
+  // SQL FILTER (WHERE ...) is lowered by Flink to a nullable BOOLEAN input field. A null
+  // predicate is false, matching Flink's generated aggregate handler.
+  optional uint32 filter_index = 6;
+  bool distinct = 7;
 }
 
 enum AggregateFunction {

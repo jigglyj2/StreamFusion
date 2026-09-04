@@ -41,13 +41,17 @@ final class StreamFusionGroupAggregatePlan {
                             .setFunction(function(call))
                             .setOutputType(StreamFusionCalcTranslator.operatorLogicalType(
                                     FlinkTypeFactory.toLogicalType(call.getType())))
-                            .setRetractable(retractable[index]);
+                            .setRetractable(retractable[index])
+                            .setDistinct(call.isDistinct());
             List<Integer> arguments = call.getArgList();
             if (!arguments.isEmpty()) {
                 int inputIndex = arguments.get(0);
                 nativeCall
                         .setInputIndex(inputIndex)
                         .setInputType(StreamFusionCalcTranslator.operatorLogicalType(inputType.getTypeAt(inputIndex)));
+            }
+            if (call.filterArg >= 0) {
+                nativeCall.setFilterIndex(call.filterArg);
             }
             aggregate.addAggregateCalls(nativeCall);
         }

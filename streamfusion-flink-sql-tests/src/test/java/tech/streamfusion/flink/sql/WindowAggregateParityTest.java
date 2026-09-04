@@ -67,6 +67,58 @@ class WindowAggregateParityTest extends SqlParityTestSupport {
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 
+    @org.junit.jupiter.api.Test
+    void filteredWindowAggregatesMatchFlinkByteForByte() throws Exception {
+        byte[] flink = executeFilteredWindow(false);
+        byte[] streamFusion = executeFilteredWindow(true);
+
+        assertThat(streamFusion).isEqualTo(flink);
+        assertThat(StreamFusionPlannerFactory.nativeWindowAggregateBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
+    private static byte[] executeFilteredWindow(boolean streamFusionEnabled) throws Exception {
+        if (streamFusionEnabled) {
+            System.setProperty(
+                    StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY, StreamFusionPlannerFactory.class.getName());
+        } else {
+            System.clearProperty(StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY);
+            StreamFusionPlannerFactory.resetMetrics();
+        }
+        StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();
+        environment.setParallelism(1);
+        StreamTableEnvironment tables = StreamTableEnvironment.create(
+                environment, EnvironmentSettings.newInstance().inStreamingMode().build());
+        tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+        tables.createTemporaryView(
+                "filtered_window_input",
+                tables.fromDataStream(
+                        environment.fromCollection(
+                                List.of(
+                                        Row.of("a", 3L, true, LocalDateTime.of(2026, 8, 29, 12, 0, 1)),
+                                        Row.of("a", 5L, false, LocalDateTime.of(2026, 8, 29, 12, 0, 2)),
+                                        Row.of("a", 7L, null, LocalDateTime.of(2026, 8, 29, 12, 0, 3))),
+                                Types.ROW_NAMED(
+                                        new String[] {"category", "amount", "selected", "ts"},
+                                        Types.STRING,
+                                        Types.LONG,
+                                        Types.BOOLEAN,
+                                        Types.LOCAL_DATE_TIME)),
+                        Schema.newBuilder()
+                                .column("category", DataTypes.STRING().notNull())
+                                .column("amount", DataTypes.BIGINT().notNull())
+                                .column("selected", DataTypes.BOOLEAN())
+                                .column("ts", DataTypes.TIMESTAMP(3))
+                                .watermark("ts", "ts - INTERVAL '1' SECOND")
+                                .build()));
+        return collect(tables.executeSql("SELECT category, "
+                + "COUNT(*) FILTER (WHERE selected), SUM(amount) FILTER (WHERE selected), "
+                + "MIN(amount) FILTER (WHERE selected), MAX(amount) FILTER (WHERE selected), "
+                + "window_start, window_end "
+                + "FROM TABLE(TUMBLE(TABLE filtered_window_input, DESCRIPTOR(ts), INTERVAL '5' SECOND)) "
+                + "GROUP BY category, window_start, window_end"));
+    }
+
     private static byte[] executeTimestampLtz(boolean streamFusionEnabled) throws Exception {
         if (streamFusionEnabled) {
             System.setProperty(

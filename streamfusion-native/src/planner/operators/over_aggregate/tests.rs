@@ -496,6 +496,8 @@ fn call(function: proto::AggregateFunction, input_index: Option<u32>) -> proto::
         input_type: input_index.map(|_| bigint()),
         output_type: Some(bigint()),
         retractable: true,
+        filter_index: None,
+        distinct: false,
     }
 }
 

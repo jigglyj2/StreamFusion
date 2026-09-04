@@ -57,7 +57,7 @@ class LocalRowDataNexmarkBenchmarkIT {
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
         assertThat(streamFusion.nativeGroupAggregateBatches()).isGreaterThan(0);
 
-        for (String query : List.of("global-aggregate", "grouping-sets")) {
+        for (String query : List.of("aggregate-modifiers", "global-aggregate", "grouping-sets")) {
             LocalRowDataNexmarkBenchmark.RunResult flink =
                     LocalRowDataNexmarkBenchmark.run(1_000, query, false, backend, 1);
             streamFusion = LocalRowDataNexmarkBenchmark.run(1_000, query, true, backend, 1);

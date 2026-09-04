@@ -21,18 +21,19 @@ GROUP BY window_start, window_end, bidder;
 StreamFusion accelerates direct time-attribute window aggregation for event time and processing
 time. It recognizes both Flink's one-phase node and its default local-aggregate, exchange,
 global-aggregate shape; the latter is collapsed so original Arrow rows reach one native operator.
-The native calls are `COUNT(*)`, `COUNT(value)`, `SUM`, `MIN`, and `MAX`. Keys use Arrow's canonical
-row encoding and include nullable scalar, decimal, temporal, binary, array, map, multiset, row, and
-nested SQL values. Input `INSERT`, `UPDATE_BEFORE`, `UPDATE_AFTER`, and `DELETE` kinds are supported
-when Flink selects retractable accumulators.
+The native calls are `COUNT(*)`, `COUNT(value)`, `SUM`, `MIN`, and `MAX`, including SQL
+`FILTER (WHERE ...)` with nullable Boolean predicates. Keys use Arrow's canonical row encoding and
+include nullable scalar, decimal, temporal, binary, array, map, multiset, row, and nested SQL
+values. Input `INSERT`, `UPDATE_BEFORE`, `UPDATE_AFTER`, and `DELETE` kinds are supported when Flink
+selects retractable accumulators.
 
 Window start, end, row-time, and processing-time properties are supported. Null event timestamps,
 late rows, watermark cleanup, timer ordering, offsets, negative epochs, `TIMESTAMP_LTZ`, configured
 local time zones, and daylight-saving gaps/overlaps follow Flink. Session windows perform
 transitive merging and keep Flink's merged namespace when a bridging row retracts.
 
-Legacy group-window nodes, distinct/filter/approximate or user-defined aggregate calls, async
-state, changelog-state wrapping, and unsupported surrounding physical nodes produce an explicit
+Legacy group-window nodes, distinct/approximate or user-defined aggregate calls, async state,
+changelog-state wrapping, and unsupported surrounding physical nodes produce an explicit
 whole-plan fallback reason.
 
 ## Implementation

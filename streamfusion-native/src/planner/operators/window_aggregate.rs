@@ -1674,6 +1674,8 @@ mod tests {
                             input_type: None,
                             output_type: Some(logical_bigint(false)),
                             retractable: true,
+                            filter_index: None,
+                            distinct: false,
                         }],
                         input_changelog,
                         time_attribute_index: 1,

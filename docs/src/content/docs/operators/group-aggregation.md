@@ -20,12 +20,18 @@ GROUP BY bidder;
 ## Acceleration and fallback
 
 StreamFusion accelerates keyed `StreamExecGroupAggregate` plans containing `COUNT(*)`,
-single-input `COUNT`, and the following aggregate/type combinations:
+single-input `COUNT`, and the following aggregate/type combinations. Every listed call also
+supports SQL `FILTER (WHERE ...)`; null filter predicates are false.
 
 | Aggregate | Supported Flink SQL types |
 | --- | --- |
 | `SUM` | `TINYINT`, `SMALLINT`, `INTEGER`, `BIGINT`, `FLOAT`, `DOUBLE`, `DECIMAL` |
 | `MIN`, `MAX` | All `SUM` types plus `BOOLEAN`, `CHAR`, `VARCHAR`, `DATE`, `TIME`, `TIMESTAMP`, and `TIMESTAMP_LTZ` |
+
+`COUNT(DISTINCT value)` supports the same scalar types as `MIN`/`MAX`, and `SUM(DISTINCT value)`
+supports the numeric `SUM` types. Distinct values are counted in native state, so duplicate
+inserts and retractions change the result only at first/last membership boundaries. `DISTINCT`
+and `FILTER` may be combined.
 
 Input may be insert-only or a Flink changelog. Changelog output preserves Flink's per-record
 `INSERT`, `UPDATE_BEFORE`, `UPDATE_AFTER`, and `DELETE` behavior byte-for-byte; unchanged aggregate
@@ -41,9 +47,9 @@ identical allocation per input row. Flink's `StreamExecExpand` is accelerated fo
 changing their logical type. Generated parity cases cover scalar binary, decimal, date, and
 timestamp keys as well as opaque array and row keys through that nullable boundary.
 
-State TTL, mini-batching, async state, Flink's changelog-state wrapper, aggregate-level `DISTINCT`
-and `FILTER`, ordered or approximate aggregates, `IGNORE NULLS`, unsupported aggregate functions,
-and unsupported aggregate value types fall back with a specific EXPLAIN reason. Flink's internal
+State TTL, mini-batching, async state, Flink's changelog-state wrapper, multi-column `DISTINCT`,
+ordered or approximate aggregates, `IGNORE NULLS`, unsupported aggregate functions, and
+unsupported aggregate value types fall back with a specific EXPLAIN reason. Flink's internal
 `SUM0` call uses the same accumulator as `SUM` here: a group has no output after its last row is
 retracted, so an empty accumulator value is not observable in this physical operator.
 
@@ -62,8 +68,8 @@ The aggregate uses the shared backend-neutral native keyed-state interface:
   `WriteBatch`, including deletes.
 
 Both backends use the same versioned canonical key-group snapshot format. Accumulator payload
-version 3 adds typed boolean, floating-point, string, and temporal values plus Flink-compatible
-nullable decimal-overflow state while continuing to read version 1 and version 2 payloads.
+version 4 adds counted `DISTINCT` sets while continuing to read versions 1–3; version 3 introduced
+typed boolean, floating-point, string, temporal, and nullable decimal-overflow state.
 Canonical savepoints are tested across all four source/target
 backend pairs and redistribute key groups during both 1-to-N and N-to-1 rescaling. Regular RocksDB
 checkpoints use incremental Flink keyed-state handles, reuse completed immutable SST files, survive

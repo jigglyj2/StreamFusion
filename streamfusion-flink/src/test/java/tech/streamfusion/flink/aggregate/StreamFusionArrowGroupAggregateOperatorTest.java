@@ -71,6 +71,9 @@ class StreamFusionArrowGroupAggregateOperatorTest {
             new LogicalType[] {new BigIntType(false), new BigIntType(true)}, new String[] {"bidder", "price"});
     private static final RowType OUTPUT_TYPE = RowType.of(
             new LogicalType[] {new BigIntType(false), new BigIntType(false)}, new String[] {"bidder", "bids"});
+    private static final RowType DISTINCT_AGGREGATE_OUTPUT_TYPE = RowType.of(
+            new LogicalType[] {new BigIntType(false), new BigIntType(false), new BigIntType(true)},
+            new String[] {"bidder", "distinct_prices", "distinct_sum"});
     private static final RowType DISTINCT_OUTPUT_TYPE =
             RowType.of(new LogicalType[] {new BigIntType(false)}, new String[] {"bidder"});
     private static final RowType GLOBAL_OUTPUT_TYPE =
@@ -240,6 +243,61 @@ class StreamFusionArrowGroupAggregateOperatorTest {
                     try (KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> target =
                             distinctHarness(1, 0, savepoint, targetRocks)) {
                         process(target, inputs, row(RowKind.UPDATE_BEFORE, 7, 20));
+                        assertThat(takeKinds(target)).isEmpty();
+                        process(target, inputs, row(RowKind.DELETE, 7, 10));
+                        assertThat(takeKinds(target)).containsExactly(RowKind.DELETE);
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    void distinctAggregateRestoresAcrossBackendPairsAndCheckpointModes() throws Exception {
+        try (RootAllocator inputs = new RootAllocator(64L << 20)) {
+            for (boolean sourceRocks : new boolean[] {false, true}) {
+                for (boolean targetRocks : new boolean[] {false, true}) {
+                    for (boolean unaligned : new boolean[] {false, true}) {
+                        OperatorSubtaskState snapshot;
+                        try (KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch>
+                                source = distinctAggregateHarness(null, sourceRocks)) {
+                            process(source, inputs, row(RowKind.INSERT, 7, 10));
+                            process(source, inputs, row(RowKind.INSERT, 7, 10));
+                            assertThat(takeKinds(source)).containsExactly(RowKind.INSERT);
+                            snapshot = snapshot(source, unaligned ? 212 : 211, unaligned);
+                        }
+                        try (KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch>
+                                target = distinctAggregateHarness(snapshot, targetRocks)) {
+                            process(target, inputs, row(RowKind.DELETE, 7, 10));
+                            assertThat(takeKinds(target)).isEmpty();
+                            process(target, inputs, row(RowKind.DELETE, 7, 10));
+                            assertThat(takeKinds(target)).containsExactly(RowKind.DELETE);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    void distinctAggregateCanonicalSavepointRestoresAcrossEveryBackendPair() throws Exception {
+        try (RootAllocator inputs = new RootAllocator(64L << 20)) {
+            for (boolean sourceRocks : new boolean[] {false, true}) {
+                for (boolean targetRocks : new boolean[] {false, true}) {
+                    OperatorSubtaskState savepoint;
+                    try (KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> source =
+                            distinctAggregateHarness(null, sourceRocks)) {
+                        process(source, inputs, row(RowKind.INSERT, 7, 10));
+                        process(source, inputs, row(RowKind.INSERT, 7, 10));
+                        assertThat(takeKinds(source)).containsExactly(RowKind.INSERT);
+                        savepoint = source.snapshotWithLocalState(
+                                        213, 213, SavepointType.savepoint(SavepointFormatType.CANONICAL))
+                                .getJobManagerOwnedState();
+                        assertThat(savepoint.getRawKeyedState()).hasSize(1);
+                    }
+                    try (KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> target =
+                            distinctAggregateHarness(savepoint, targetRocks)) {
+                        process(target, inputs, row(RowKind.DELETE, 7, 10));
                         assertThat(takeKinds(target)).isEmpty();
                         process(target, inputs, row(RowKind.DELETE, 7, 10));
                         assertThat(takeKinds(target)).containsExactly(RowKind.DELETE);
@@ -535,6 +593,29 @@ class StreamFusionArrowGroupAggregateOperatorTest {
         return harness;
     }
 
+    private static KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch>
+            distinctAggregateHarness(OperatorSubtaskState state, boolean rocksDb) throws Exception {
+        RowDataKeySelector selector = rowSelector();
+        StreamFusionArrowGroupAggregateOperator operator = new StreamFusionArrowGroupAggregateOperator(
+                INPUT_TYPE, DISTINCT_AGGREGATE_OUTPUT_TYPE, new int[] {0}, distinctAggregatePlan(), true, selector);
+        KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> harness =
+                new KeyedOneInputStreamOperatorTestHarness<>(
+                        operator,
+                        new ArrowBatchKeySelector(selector),
+                        selector.getProducedType(),
+                        MAX_PARALLELISM,
+                        1,
+                        0);
+        harness.setStateBackend(new StreamFusionStateBackend(
+                rocksDb ? new EmbeddedRocksDBStateBackend(true) : new HashMapStateBackend()));
+        harness.setup(ArrowRowDataBatchSerializer.INSTANCE);
+        if (state != null) {
+            harness.initializeState(state);
+        }
+        harness.open();
+        return harness;
+    }
+
     private static KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> globalHarness(
             OperatorSubtaskState state, boolean rocksDb) throws Exception {
         RowDataKeySelector selector = emptySelector();
@@ -617,6 +698,36 @@ class StreamFusionArrowGroupAggregateOperatorTest {
                 .addAggregateCalls(AggregateCall.newBuilder()
                         .setFunction(AggregateFunction.AGGREGATE_FUNCTION_COUNT_STAR)
                         .setOutputType(bigint))
+                .build();
+        return NativePlan.newBuilder()
+                .setProtocolVersion(1)
+                .setRoot(Operator.newBuilder().setGroupAggregate(aggregate))
+                .build()
+                .toByteArray();
+    }
+
+    private static byte[] distinctAggregatePlan() {
+        tech.streamfusion.proto.plan.v1.LogicalType bigint = tech.streamfusion.proto.plan.v1.LogicalType.newBuilder()
+                .setBigint(EmptyType.getDefaultInstance())
+                .build();
+        GroupAggregate aggregate = GroupAggregate.newBuilder()
+                .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
+                .addGroupingIndices(0)
+                .setInputChangelog(true)
+                .addAggregateCalls(AggregateCall.newBuilder()
+                        .setFunction(AggregateFunction.AGGREGATE_FUNCTION_COUNT)
+                        .setInputIndex(1)
+                        .setInputType(bigint)
+                        .setOutputType(bigint)
+                        .setRetractable(true)
+                        .setDistinct(true))
+                .addAggregateCalls(AggregateCall.newBuilder()
+                        .setFunction(AggregateFunction.AGGREGATE_FUNCTION_SUM)
+                        .setInputIndex(1)
+                        .setInputType(bigint)
+                        .setOutputType(bigint)
+                        .setRetractable(true)
+                        .setDistinct(true))
                 .build();
         return NativePlan.newBuilder()
                 .setProtocolVersion(1)

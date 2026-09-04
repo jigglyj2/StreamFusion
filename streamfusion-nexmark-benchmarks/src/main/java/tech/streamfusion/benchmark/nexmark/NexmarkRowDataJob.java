@@ -151,6 +151,11 @@ public final class NexmarkRowDataJob {
             case "group-aggregate":
                 columns = "bidder BIGINT, bids BIGINT, spend BIGINT, minimum_price BIGINT, maximum_price BIGINT";
                 break;
+            case "aggregate-modifiers":
+                columns = "bidder BIGINT, distinct_auctions BIGINT, expensive_bids BIGINT, "
+                        + "distinct_expensive_spend BIGINT, minimum_expensive_price BIGINT, "
+                        + "maximum_expensive_price BIGINT";
+                break;
             case "global-aggregate":
                 columns = "bids BIGINT, prices BIGINT, spend BIGINT, minimum_bidder BIGINT, maximum_auction BIGINT";
                 break;

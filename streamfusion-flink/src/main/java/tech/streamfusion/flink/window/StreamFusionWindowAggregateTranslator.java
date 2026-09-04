@@ -146,6 +146,9 @@ public final class StreamFusionWindowAggregateTranslator {
         }
         for (int index = 0; index < calls.length; index++) {
             LogicalType output = outputType.getTypeAt(grouping.length + index);
+            if (calls[index].isDistinct()) {
+                return "aggregate[" + index + "]: DISTINCT window aggregation is not implemented";
+            }
             String reason = StreamFusionGroupAggregateTranslator.unsupportedCall(inputType, output, calls[index]);
             if (reason != null) {
                 return "aggregate[" + index + "]: " + reason;

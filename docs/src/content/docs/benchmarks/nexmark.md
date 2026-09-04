@@ -81,8 +81,8 @@ engine selector (`flink`, `streamfusion`, or `both`) for standalone measurements
 end-to-end elapsed time, input-event throughput, native calc batches, native group-aggregate
 batches, native window-aggregate batches, native Window Join batches, native regular-join batches,
 native interval-join batches, native OVER-aggregate batches,
-and a row count plus SHA-256 for the full result changelog. The `group-aggregate`,
-`global-aggregate`, `grouping-sets`, `interval-join`, `over-aggregate`,
+and a row count plus SHA-256 for the full result changelog. The `aggregate-modifiers`,
+`group-aggregate`, `global-aggregate`, `grouping-sets`, `interval-join`, `over-aggregate`,
 `over-aggregate-event-time`, `over-aggregate-processing-time`,
 `over-aggregate-bounded-rows`, `over-aggregate-bounded-range`, `select-distinct`, `top-n`, and
 `limit` cases

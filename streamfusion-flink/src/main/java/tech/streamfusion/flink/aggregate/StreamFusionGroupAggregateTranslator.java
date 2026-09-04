@@ -146,17 +146,17 @@ public final class StreamFusionGroupAggregateTranslator {
     }
 
     public static String unsupportedCall(RowType inputType, LogicalType outputType, AggregateCall call) {
-        if (call.isDistinct()) {
-            return "DISTINCT is not implemented";
-        }
         if (call.isApproximate()) {
             return "approximate aggregation is not implemented";
         }
         if (call.ignoreNulls()) {
             return "IGNORE NULLS is not implemented";
         }
-        if (call.filterArg >= 0) {
-            return "FILTER is not implemented";
+        if (call.filterArg >= inputType.getFieldCount()) {
+            return "FILTER index " + call.filterArg + " is outside the input row";
+        }
+        if (call.filterArg >= 0 && inputType.getTypeAt(call.filterArg).getTypeRoot() != LogicalTypeRoot.BOOLEAN) {
+            return "FILTER input must be BOOLEAN, got " + inputType.getTypeAt(call.filterArg);
         }
         if (!call.getCollation().getFieldCollations().isEmpty()) {
             return "ordered aggregation is not implemented";
@@ -182,6 +182,9 @@ public final class StreamFusionGroupAggregateTranslator {
                 return "input index " + inputIndex + " is outside the input row";
             }
             LogicalTypeRoot inputRoot = inputType.getTypeAt(inputIndex).getTypeRoot();
+            if (call.isDistinct() && !supportedDistinct(inputRoot)) {
+                return inputType.getTypeAt(inputIndex) + " is not supported by native DISTINCT aggregation";
+            }
             if ((kind == SqlKind.SUM || kind == SqlKind.SUM0) && !supportedSum(inputRoot)) {
                 return inputType.getTypeAt(inputIndex) + " is not supported by native SUM";
             }
@@ -240,5 +243,9 @@ public final class StreamFusionGroupAggregateTranslator {
             default:
                 return false;
         }
+    }
+
+    private static boolean supportedDistinct(LogicalTypeRoot root) {
+        return supportedExtremum(root);
     }
 }
