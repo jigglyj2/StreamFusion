@@ -27,6 +27,31 @@ flush the checkpoint boundary to immutable SSTs and emit Flink's standard
 StreamFusion metadata marker use exclusive scope. Empty RocksDB files are recorded in that marker
 and recreated without inventing null state handles.
 
+The planner installs this adapter in the `TableConfig` configuration before translation. This is
+the configuration from which Flink creates the real pipeline; installing it only on the planner's
+dummy `StreamExecutionEnvironment` would leave SQL jobs on the unwrapped backend. A planner-boundary
+test observes the configured backend at translation time for both delegated HashMap and RocksDB
+state. The shaded runtime resolves Flink's backend loader through its stable configuration and
+class-loader parameters so SLF4J relocation cannot change the external Flink method signature.
+
+For a planner-owned native operator, the adapter creates only a lightweight heap keyed-backend
+shell for Flink's current-key and key-group lifecycle. Creating an otherwise empty Java RocksDB
+instance beside the native database would duplicate cache reservations and checkpoint work. The
+native database instead leases the task's normal Flink `STATE_BACKEND` managed-memory fraction;
+Arrow buffers and operator scratch continue to use the operator's `OPERATOR` fraction. Operators
+that do not carry StreamFusion's planner-owned identifier still receive the configured Flink
+backend unchanged, so an all-or-nothing fallback remains an ordinary Flink RocksDB job.
+As in Flink's embedded backend, all native RocksDB instances in the task manager share one LRU
+block cache and one cache-charged write-buffer manager. The corresponding Flink shared-memory
+resource is reserved once and reference-counted across operators, rather than multiplying the
+state-backend fraction for every native database.
+
+The RocksDB checkpoint API itself establishes the synchronous immutable-SST boundary for
+WAL-disabled writes. StreamFusion does not issue a redundant explicit flush before that call. The
+component test checkpoints writes that have not otherwise been flushed, opens the checkpoint as a
+fresh database, verifies every value, and then checks unchanged-SST reuse in the following
+checkpoint.
+
 The adapter reuses an SST only after its checkpoint completes, carries Flink's backend UUID and
 physical state-handle identities through metadata serialization, and drops pending reuse state on
 abort or subsumption. Tests round-trip the handle through Flink's version-3 durable metadata

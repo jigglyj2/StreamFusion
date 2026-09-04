@@ -17,6 +17,11 @@ public interface NativeMemoryManager {
     /** Releases bytes previously reserved by {@link #tryReserve(long)}. */
     void release(long bytes);
 
+    /** Bytes this consumer can currently reserve after local and task-wide limits are applied. */
+    default long available() {
+        return limit();
+    }
+
     /**
      * Transfers an existing native reservation to an Arrow Java foreign-buffer import.
      *
@@ -56,6 +61,11 @@ public interface NativeMemoryManager {
 
         @Override
         public long limit() {
+            return Long.MAX_VALUE;
+        }
+
+        @Override
+        public long available() {
             return Long.MAX_VALUE;
         }
     }

@@ -19,6 +19,10 @@ pub(crate) trait MemoryReservationBroker: Debug + Send + Sync {
 
     fn release(&self, bytes: usize) -> Result<()>;
 
+    fn available(&self) -> Result<Option<usize>> {
+        Ok(None)
+    }
+
     fn transfer_to_arrow(&self, bytes: usize) -> Result<()> {
         self.release(bytes)
     }
@@ -57,9 +61,13 @@ impl HostMemoryReservation {
             ))
         })?;
         if !self.broker.try_reserve(additional)? {
+            let available = self
+                .broker
+                .available()?
+                .map_or_else(|| "unknown".to_string(), |bytes| bytes.to_string());
             return Err(DataFusionError::ResourcesExhausted(format!(
-                "Flink denied {additional} bytes for {}; {} bytes are already reserved by this consumer",
-                self.consumer, self.size
+                "Flink denied {additional} bytes for {}; {} bytes are already reserved by this consumer and {available} bytes remain available to it",
+                self.consumer, self.size,
             )));
         }
         self.size = requested;
@@ -164,6 +172,26 @@ impl MemoryReservationBroker for JvmMemoryReservationBroker {
                 Ok(())
             })
             .map_err(|error| DataFusionError::External(Box::new(error)))
+    }
+
+    fn available(&self) -> Result<Option<usize>> {
+        let bytes = self
+            .java_vm
+            .attach_current_thread(|env| -> jni::errors::Result<i64> {
+                env.call_method(
+                    &self.memory_manager,
+                    jni_str!("available"),
+                    jni_sig!("()J"),
+                    &[],
+                )?
+                .j()
+            })
+            .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        usize::try_from(bytes).map(Some).map_err(|_| {
+            DataFusionError::Internal(format!(
+                "JVM reported an invalid native-memory availability of {bytes}"
+            ))
+        })
     }
 
     fn transfer_to_arrow(&self, bytes: usize) -> Result<()> {

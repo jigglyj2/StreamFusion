@@ -5,6 +5,8 @@
 package tech.streamfusion.flink.state;
 
 import java.io.IOException;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.configuration.ConfigOptions;
 import org.apache.flink.configuration.Configuration;
@@ -28,7 +30,11 @@ public final class StreamFusionStateBackendFactory implements StateBackendFactor
         if (!(environment.getConfiguration() instanceof Configuration)) {
             throw new IllegalStateException("Flink execution configuration is not mutable");
         }
-        Configuration configuration = (Configuration) environment.getConfiguration();
+        install((Configuration) environment.getConfiguration());
+    }
+
+    /** Installs the delegating backend in the configuration used to create the real pipeline. */
+    public static void install(Configuration configuration) {
         String configured = configuration.get(StateBackendOptions.STATE_BACKEND);
         if (FACTORY_NAME.equals(configured)) {
             return;
@@ -50,11 +56,39 @@ public final class StreamFusionStateBackendFactory implements StateBackendFactor
         }
         delegateConfig.set(StateBackendOptions.STATE_BACKEND, delegateName);
         try {
-            StateBackend delegate = StateBackendLoader.loadStateBackendFromConfig(delegateConfig, classLoader, null);
+            StateBackend delegate = loadDelegate(delegateConfig, classLoader);
             return new StreamFusionStateBackend(delegate);
-        } catch (org.apache.flink.util.DynamicCodeLoadingException error) {
+        } catch (ReflectiveOperationException error) {
             throw new IllegalConfigurationException(
                     "Could not load delegated Flink state backend " + delegateName, error);
         }
+    }
+
+    private static StateBackend loadDelegate(Configuration configuration, ClassLoader classLoader)
+            throws ReflectiveOperationException, IOException {
+        // The third StateBackendLoader argument is SLF4J Logger. Calling it directly lets the
+        // shaded runtime rewrite that external signature, which then fails against Flink's
+        // unshaded API. Resolve the method by its stable first two parameters instead.
+        for (Method method : StateBackendLoader.class.getMethods()) {
+            Class<?>[] parameters = method.getParameterTypes();
+            if (method.getName().equals("loadStateBackendFromConfig")
+                    && parameters.length == 3
+                    && ReadableConfig.class.isAssignableFrom(parameters[0])
+                    && parameters[1] == ClassLoader.class) {
+                try {
+                    return (StateBackend) method.invoke(null, configuration, classLoader, null);
+                } catch (InvocationTargetException error) {
+                    Throwable cause = error.getCause();
+                    if (cause instanceof IOException) {
+                        throw (IOException) cause;
+                    }
+                    if (cause instanceof ReflectiveOperationException) {
+                        throw (ReflectiveOperationException) cause;
+                    }
+                    throw new IllegalConfigurationException("Could not load delegated Flink state backend", cause);
+                }
+            }
+        }
+        throw new NoSuchMethodException("Flink StateBackendLoader.loadStateBackendFromConfig");
     }
 }

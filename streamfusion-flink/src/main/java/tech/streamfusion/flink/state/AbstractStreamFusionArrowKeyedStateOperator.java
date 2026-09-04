@@ -41,6 +41,7 @@ public abstract class AbstractStreamFusionArrowKeyedStateOperator extends Abstra
     private transient FlinkManagedMemory managedMemory;
     private transient BufferAllocator allocator;
     private transient Path rocksDbDirectory;
+    private transient long rocksDbManagedMemory;
     private transient boolean writeRawKeyedSnapshot = true;
     private transient long rawSnapshotBytes;
     private transient StreamFusionStatefulOperatorMetrics statefulMetrics;
@@ -73,8 +74,12 @@ public abstract class AbstractStreamFusionArrowKeyedStateOperator extends Abstra
                     .getSpillingDirectories()[0]
                     .toPath();
             rocksDbDirectory = Files.createTempDirectory(spillDirectory, "streamfusion-rocksdb-");
-            long rocksDbMemory = managedMemory.limit() * 3 / 4;
-            if (!managedMemory.tryReserve(rocksDbMemory)) {
+            long stateBackendMemory = getKeyedStateBackend() instanceof StreamFusionKeyedStateBackend
+                    ? ((StreamFusionKeyedStateBackend<?>) getKeyedStateBackend()).nativeRocksDbMemoryLimit()
+                    : 0;
+            long rocksDbMemory = stateBackendMemory > 0 ? stateBackendMemory : managedMemory.limit() * 3 / 4;
+            boolean operatorMemoryFallback = stateBackendMemory == 0;
+            if (operatorMemoryFallback && !managedMemory.tryReserve(rocksDbMemory)) {
                 throw new IllegalStateException("Flink denied " + rocksDbMemory + " bytes for native RocksDB state");
             }
             try {
@@ -86,8 +91,11 @@ public abstract class AbstractStreamFusionArrowKeyedStateOperator extends Abstra
                         rocksDbDirectory,
                         rocksDbMemory,
                         managedMemory);
+                rocksDbManagedMemory = rocksDbMemory;
             } catch (RuntimeException failure) {
-                managedMemory.release(rocksDbMemory);
+                if (operatorMemoryFallback) {
+                    managedMemory.release(rocksDbMemory);
+                }
                 throw failure;
             }
         } else if ("hashmap".equals(backendType)) {
@@ -102,6 +110,9 @@ public abstract class AbstractStreamFusionArrowKeyedStateOperator extends Abstra
                     "Native " + stateName + " supports Flink hashmap and RocksDB state backends, got " + backendType);
         }
         statefulMetrics = new StreamFusionStatefulOperatorMetrics(getMetricGroup(), "rocksdb".equals(backendType));
+        getMetricGroup()
+                .addGroup("StreamFusion")
+                .gauge("rocksDbSharedManagedMemoryReserved", () -> rocksDbManagedMemory);
         incrementalCheckpoints = new ConcurrentHashMap<>();
         if (getKeyedStateBackend() instanceof StreamFusionKeyedStateBackend) {
             ((StreamFusionKeyedStateBackend<?>) getKeyedStateBackend())

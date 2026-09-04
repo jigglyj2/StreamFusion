@@ -57,6 +57,8 @@ public final class StreamFusionKeyedStateBackend<K>
     private final CheckpointableKeyedStateBackend<K> delegate;
     private final List<IncrementalRemoteKeyedStateHandle> restoredNativeHandles;
     private final UUID backendIdentifier;
+    private final String nativeBackendType;
+    private final NativeRocksDbMemoryLease nativeRocksDbMemory;
     private final Map<Long, Map<String, SharedFile>> pendingSharedFiles = new ConcurrentHashMap<>();
     private volatile Map<String, SharedFile> completedSharedFiles = Map.of();
     private volatile long completedCheckpointId = -1;
@@ -65,9 +67,13 @@ public final class StreamFusionKeyedStateBackend<K>
 
     StreamFusionKeyedStateBackend(
             CheckpointableKeyedStateBackend<K> delegate,
-            List<IncrementalRemoteKeyedStateHandle> restoredNativeHandles) {
+            List<IncrementalRemoteKeyedStateHandle> restoredNativeHandles,
+            String nativeBackendType,
+            NativeRocksDbMemoryLease nativeRocksDbMemory) {
         this.delegate = delegate;
         this.restoredNativeHandles = new ArrayList<>(restoredNativeHandles);
+        this.nativeBackendType = nativeBackendType;
+        this.nativeRocksDbMemory = nativeRocksDbMemory;
         this.backendIdentifier = restoredNativeHandles.isEmpty()
                 ? UUID.randomUUID()
                 : restoredNativeHandles.get(0).getBackendIdentifier();
@@ -96,6 +102,10 @@ public final class StreamFusionKeyedStateBackend<K>
 
     public boolean usesNativeIncrementalCheckpoints() {
         return participant != null && incrementalSnapshotsEnabled;
+    }
+
+    long nativeRocksDbMemoryLimit() {
+        return nativeRocksDbMemory == null ? 0 : nativeRocksDbMemory.size();
     }
 
     static boolean isNativeHandle(IncrementalRemoteKeyedStateHandle handle) {
@@ -436,12 +446,24 @@ public final class StreamFusionKeyedStateBackend<K>
 
     @Override
     public void dispose() {
-        delegate.dispose();
+        try {
+            delegate.dispose();
+        } finally {
+            if (nativeRocksDbMemory != null) {
+                nativeRocksDbMemory.close();
+            }
+        }
     }
 
     @Override
     public void close() throws IOException {
-        delegate.close();
+        try {
+            delegate.close();
+        } finally {
+            if (nativeRocksDbMemory != null) {
+                nativeRocksDbMemory.close();
+            }
+        }
     }
 
     @Override
@@ -461,7 +483,7 @@ public final class StreamFusionKeyedStateBackend<K>
 
     @Override
     public String getBackendTypeIdentifier() {
-        return delegate.getBackendTypeIdentifier();
+        return nativeBackendType;
     }
 
     private static final class SharedFile {

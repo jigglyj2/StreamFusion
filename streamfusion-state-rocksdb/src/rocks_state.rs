@@ -1,12 +1,16 @@
 // Copyright 2026 StreamFusion Authors
 // Licensed under the Apache License, Version 2.0
 
+use std::collections::HashMap;
 use std::fs;
 use std::io::{Error, ErrorKind, Result};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex, Weak};
 
 use rocksdb::checkpoint::Checkpoint;
-use rocksdb::{BlockBasedOptions, Cache, Direction, IteratorMode, Options, WriteBatch, DB};
+use rocksdb::{
+    BlockBasedOptions, Cache, Direction, IteratorMode, Options, WriteBatch, WriteBufferManager, DB,
+};
 use streamfusion_state_abi::{decode_key_group_snapshot, encode_key_group_snapshot};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,9 +41,18 @@ pub struct RocksCheckpoint {
 /// snapshots never require scanning unrelated groups.
 pub struct RocksStateBackend {
     db: DB,
+    _shared_memory: Arc<SharedRocksMemory>,
     first_key_group: u32,
     last_key_group: u32,
 }
+
+struct SharedRocksMemory {
+    cache: Cache,
+    write_buffers: WriteBufferManager,
+}
+
+static SHARED_ROCKS_MEMORY: LazyLock<Mutex<HashMap<usize, Weak<SharedRocksMemory>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 impl RocksStateBackend {
     pub fn open(path: &Path, first_key_group: u32, last_key_group: u32) -> Result<Self> {
@@ -64,18 +77,19 @@ impl RocksStateBackend {
                 "RocksDB state memory limit must be at least 256 KiB",
             ));
         }
+        let shared_memory = shared_rocks_memory(memory_limit)?;
         let mut options = Options::default();
         options.create_if_missing(true);
-        let component_budget = memory_limit / 4;
-        let cache = Cache::new_lru_cache(component_budget);
         let mut table_options = BlockBasedOptions::default();
-        table_options.set_block_cache(&cache);
+        table_options.set_block_cache(&shared_memory.cache);
         options.set_block_based_table_factory(&table_options);
-        options.set_write_buffer_size(component_budget);
+        options.set_write_buffer_manager(&shared_memory.write_buffers);
+        options.set_write_buffer_size(memory_limit / 4);
         options.set_max_write_buffer_number(2);
         let db = DB::open(&options, path).map_err(rocks_error)?;
         Ok(Self {
             db,
+            _shared_memory: shared_memory,
             first_key_group,
             last_key_group,
         })
@@ -176,9 +190,10 @@ impl RocksStateBackend {
     /// Creates a native RocksDB checkpoint. RocksDB hard-links unchanged SSTs; callers can use
     /// this file manifest as Flink shared state and upload only file identities not seen before.
     pub fn checkpoint(&self, directory: &Path) -> Result<RocksCheckpoint> {
-        // Materialize the checkpoint boundary as immutable SSTs. WAL files are mutable/private
-        // checkpoint state and cannot participate in Flink shared-state reuse.
-        self.db.flush().map_err(rocks_error)?;
+        // RocksDB's checkpoint call uses a zero log-size threshold, which flushes the WAL-disabled
+        // memtables into immutable SSTs before it links the database files. Do not flush a second
+        // time here: that adds another synchronous native call to every barrier without changing
+        // the checkpoint boundary.
         Checkpoint::new(&self.db)
             .map_err(rocks_error)?
             .create_checkpoint(directory)
@@ -202,6 +217,31 @@ impl RocksStateBackend {
             ))
         }
     }
+}
+
+fn shared_rocks_memory(memory_limit: usize) -> Result<Arc<SharedRocksMemory>> {
+    let mut pools = SHARED_ROCKS_MEMORY
+        .lock()
+        .map_err(|_| Error::other("native RocksDB shared-memory registry is poisoned"))?;
+    if let Some(existing) = pools.get(&memory_limit).and_then(Weak::upgrade) {
+        return Ok(existing);
+    }
+    // Match Flink's shared RocksDB design: one cache and one write-buffer manager cap memory
+    // across all DB instances in the task manager instead of multiplying the budget per operator.
+    // Charging memtables to the cache keeps their combined footprint within this single limit.
+    let cache = Cache::new_lru_cache(memory_limit);
+    let write_buffers = WriteBufferManager::new_write_buffer_manager_with_cache(
+        memory_limit / 2,
+        false,
+        cache.clone(),
+    );
+    let shared = Arc::new(SharedRocksMemory {
+        cache,
+        write_buffers,
+    });
+    pools.retain(|_, pool| pool.strong_count() > 0);
+    pools.insert(memory_limit, Arc::downgrade(&shared));
+    Ok(shared)
 }
 
 fn database_key_parts(key_group: u32, key: &[u8]) -> Vec<u8> {
@@ -271,15 +311,21 @@ mod tests {
         backend
             .write_batch(vec![mutation(0, b"a", Some(b"one"))])
             .unwrap();
-        backend.db.flush().unwrap();
 
         let checkpoints = tempfile::tempdir().unwrap();
         let first = backend.checkpoint(&checkpoints.path().join("1")).unwrap();
         backend
             .write_batch(vec![mutation(0, b"b", Some(b"two"))])
             .unwrap();
-        backend.db.flush().unwrap();
         let second = backend.checkpoint(&checkpoints.path().join("2")).unwrap();
+
+        // Both writes were still in WAL-disabled memtables when checkpoint was called. Reopening
+        // the physical checkpoint proves that the checkpoint API established the durable boundary.
+        let restored = RocksStateBackend::open(&second.directory, 0, 0).unwrap();
+        assert_eq!(
+            restored.get_batch(&[key(0, b"a"), key(0, b"b")]).unwrap(),
+            vec![Some(b"one".to_vec()), Some(b"two".to_vec())]
+        );
 
         let first_ssts = first
             .files
@@ -295,6 +341,18 @@ mod tests {
             |second_file| second_file.relative_path == first_file.relative_path
                 && second_file.size == first_file.size
         )));
+    }
+
+    #[test]
+    fn shares_one_cache_and_write_buffer_budget_across_databases() {
+        let first_dir = tempfile::tempdir().unwrap();
+        let second_dir = tempfile::tempdir().unwrap();
+        let first =
+            RocksStateBackend::open_with_memory_limit(first_dir.path(), 0, 0, 1 << 20).unwrap();
+        let second =
+            RocksStateBackend::open_with_memory_limit(second_dir.path(), 0, 0, 1 << 20).unwrap();
+
+        assert!(Arc::ptr_eq(&first._shared_memory, &second._shared_memory));
     }
 
     fn key(key_group: u32, key: &[u8]) -> StateKey {

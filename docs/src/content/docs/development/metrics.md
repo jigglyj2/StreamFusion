@@ -56,12 +56,15 @@ metrics. Native keyed operators publish these metrics under their operator's `St
 | Snapshot | `checkpoints`, `alignedCheckpoints`, `unalignedCheckpoints`, `canonicalSavepoints`, `incrementalCheckpoints`, `checkpointBytes`, `checkpointDurationNanos`, `checkpointFailures` |
 | Incremental RocksDB | `incrementalUploadedBytes`, `incrementalReusedBytes` |
 | Restore | `restores`, `restoreBytes`, `restoreDurationNanos`, `restoreFailures` |
+| Native RocksDB memory | `rocksDbSharedManagedMemoryReserved` |
 
 The state-call counters describe the one native multi-get and one atomic mutation batch attempted
 for each successfully processed Arrow batch; they are not estimates of individual key lookups.
 Checkpoint byte counters describe StreamFusion's native payload. Duration counters accumulate
 native snapshot/restore work and incremental upload completion, not the whole distributed Flink
-checkpoint. Existing managed-memory gauges expose used, peak, and assigned bytes. As fused plans
+checkpoint. Existing managed-memory gauges expose used, peak, and assigned operator bytes;
+`rocksDbSharedManagedMemoryReserved` exposes the process-shared native database lease charged to
+Flink's separate state-backend consumer fraction. As fused plans
 gain more stateful DataFusion operators, native plan-node metrics will be mapped back to their
 corresponding Java physical nodes using stable protobuf identities, following Comet's metric-tree
 model.

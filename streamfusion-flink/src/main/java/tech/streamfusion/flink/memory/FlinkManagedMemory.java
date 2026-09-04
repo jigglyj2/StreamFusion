@@ -147,6 +147,11 @@ public final class FlinkManagedMemory implements AllocationListener, NativeMemor
     }
 
     @Override
+    public synchronized long available() {
+        return Math.min(limit - reserved, memoryManager.availableMemory());
+    }
+
+    @Override
     public synchronized void onPreAllocation(long size) {
         checkNonNegative(size);
         long transferred = Math.min(size, pendingArrowTransfer);

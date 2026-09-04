@@ -24,11 +24,13 @@ import org.apache.flink.api.dag.Transformation;
 import org.apache.flink.table.api.ExplainDetail;
 import org.apache.flink.table.api.ExplainFormat;
 import org.apache.flink.table.api.PlanReference;
+import org.apache.flink.table.api.TableConfig;
 import org.apache.flink.table.delegation.InternalPlan;
 import org.apache.flink.table.delegation.Parser;
 import org.apache.flink.table.delegation.Planner;
 import org.apache.flink.table.operations.ModifyOperation;
 import org.apache.flink.table.operations.Operation;
+import tech.streamfusion.flink.state.StreamFusionStateBackendFactory;
 
 /** Planner boundary where StreamFusion will replace supported Flink plans with native operators. */
 final class StreamFusionPlanner implements Planner {
@@ -48,11 +50,13 @@ final class StreamFusionPlanner implements Planner {
     @Override
     public List<Transformation<?>> translate(List<ModifyOperation> modifyOperations) {
         TRANSLATED_PLANS.incrementAndGet();
+        prepareTranslation();
         return delegate.translate(modifyOperations);
     }
 
     @Override
     public String explain(List<Operation> operations, ExplainFormat format, ExplainDetail... extraDetails) {
+        prepareTranslation();
         return appendCurrentPlanningStatus(delegate.explain(operations, format, extraDetails));
     }
 
@@ -64,18 +68,39 @@ final class StreamFusionPlanner implements Planner {
     @Override
     public InternalPlan compilePlan(List<ModifyOperation> modifyOperations) {
         TRANSLATED_PLANS.incrementAndGet();
+        prepareTranslation();
         return delegate.compilePlan(modifyOperations);
     }
 
     @Override
     public List<Transformation<?>> translatePlan(InternalPlan plan) {
         TRANSLATED_PLANS.incrementAndGet();
+        prepareTranslation();
         return delegate.translatePlan(plan);
     }
 
     @Override
     public String explainPlan(InternalPlan plan, ExplainDetail... extraDetails) {
+        prepareTranslation();
         return appendCurrentPlanningStatus(delegate.explainPlan(plan, extraDetails));
+    }
+
+    private void prepareTranslation() {
+        try {
+            Method tableConfigMethod = delegate.getClass().getMethod("getTableConfig");
+            Object value = tableConfigMethod.invoke(delegate);
+            if (!(value instanceof TableConfig)) {
+                throw new IllegalStateException("Flink planner returned an incompatible table configuration: " + value);
+            }
+            // Flink 2.3 translates with a dummy StreamExecutionEnvironment, then creates the real
+            // pipeline from TableConfig. Installing only on that dummy environment silently left
+            // production checkpoints on the unwrapped backend.
+            StreamFusionStateBackendFactory.install(((TableConfig) value).getConfiguration());
+        } catch (NoSuchMethodException | IllegalAccessException e) {
+            throw new IllegalStateException("Flink planner does not expose its table configuration", e);
+        } catch (InvocationTargetException e) {
+            throw new IllegalStateException("Could not read Flink planner table configuration", e.getCause());
+        }
     }
 
     static int translatedPlanCount() {
