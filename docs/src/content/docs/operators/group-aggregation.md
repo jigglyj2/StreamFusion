@@ -47,7 +47,9 @@ Global aggregates use Flink's required singleton exchange and the canonical zero
 identical allocation per input row. Flink's `StreamExecExpand` is accelerated for grouping sets,
 `ROLLUP`, and `CUBE`; the expanded grouping fields may widen from non-null to nullable without
 changing their logical type. Generated parity cases cover scalar binary, decimal, date, and
-timestamp keys as well as opaque array and row keys through that nullable boundary.
+timestamp keys as well as opaque array and row keys through that nullable boundary. Native Expand
+derives each output field's nullability across every projection, including a later grouping-set
+projection that replaces a non-null input reference with a typed null.
 
 One- and two-phase count-triggered mini-batch aggregation are accelerated. Flink's split-DISTINCT
 three-stage shape is also accelerated for the aggregate/type combinations above. It remains three

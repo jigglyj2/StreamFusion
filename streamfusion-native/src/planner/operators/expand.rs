@@ -62,15 +62,29 @@ pub(crate) fn create(
                 .collect::<Result<Vec<_>>>()
         })
         .collect::<Result<Vec<_>>>()?;
-    let mut fields = projections[0]
-        .iter()
-        .enumerate()
-        .map(|(index, expression)| {
-            expression
-                .return_field(child_schema.as_ref())
-                .map(|field| field.as_ref().clone().with_name(format!("expand_{index}")))
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let mut fields = Vec::with_capacity(output_width + 1);
+    for index in 0..output_width {
+        let field = projections[0][index].return_field(child_schema.as_ref())?;
+        let mut nullable = field.is_nullable();
+        for projection in projections.iter().skip(1) {
+            let candidate = projection[index].return_field(child_schema.as_ref())?;
+            if candidate.data_type() != field.data_type() {
+                return Err(DataFusionError::Plan(format!(
+                    "Expand projection field {index} changes type from {:?} to {:?}",
+                    field.data_type(),
+                    candidate.data_type()
+                )));
+            }
+            nullable |= candidate.is_nullable();
+        }
+        fields.push(
+            field
+                .as_ref()
+                .clone()
+                .with_name(format!("expand_{index}"))
+                .with_nullable(nullable),
+        );
+    }
     fields.push(ordinal_field.as_ref().clone());
     Ok(Arc::new(ExpandExec::new(
         child,
@@ -264,6 +278,38 @@ mod tests {
         assert_eq!(int_values(&output[0], 2), &[0, 0, 1, 1]);
     }
 
+    #[tokio::test]
+    async fn widens_output_nullability_across_every_projection() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("__streamfusion_input_row", DataType::Int32, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![10])),
+                Arc::new(Int32Array::from(vec![0])),
+            ],
+        )
+        .unwrap();
+        let child = MemorySourceConfig::try_new_exec(&[vec![batch]], schema, None).unwrap();
+        let expand = proto::Expand {
+            input: None,
+            projections: vec![projection(0), nullable_projection(1)],
+        };
+
+        let output = collect(
+            create(&expand, child).unwrap(),
+            SessionContext::new().task_ctx(),
+        )
+        .await
+        .unwrap();
+
+        assert!(output[0].schema().field(0).is_nullable());
+        assert!(!output[0].column(0).is_null(0));
+        assert!(output[0].column(0).is_null(1));
+    }
+
     fn projection(grouping_id: i32) -> proto::ExpandProjection {
         proto::ExpandProjection {
             expressions: vec![
@@ -282,6 +328,21 @@ mod tests {
                 },
             ],
         }
+    }
+
+    fn nullable_projection(grouping_id: i32) -> proto::ExpandProjection {
+        let mut projection = projection(grouping_id);
+        projection.expressions[0] = proto::Expression {
+            expression: Some(proto::expression::Expression::NullLiteral(
+                proto::NullLiteral {
+                    r#type: Some(proto::LogicalType {
+                        nullable: true,
+                        r#type: Some(proto::logical_type::Type::Integer(proto::EmptyType {})),
+                    }),
+                },
+            )),
+        };
+        projection
     }
 
     fn int_values(batch: &RecordBatch, index: usize) -> &[i32] {
