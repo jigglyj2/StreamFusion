@@ -91,6 +91,14 @@
                                     </resources>
                                 </configuration>
                             </execution>
+                            <execution>
+                                <id>add-bounded-nexmark-adapter-tests</id>
+                                <phase>generate-test-sources</phase>
+                                <goals><goal>add-test-source</goal></goals>
+                                <configuration>
+                                    <sources><source>src/rowdata-nexmark-test/java</source></sources>
+                                </configuration>
+                            </execution>
                         </executions>
                     </plugin>
                     <plugin>
@@ -102,6 +110,7 @@
                                     <include>src/main/java/**/*.java</include>
                                     <include>src/test/java/**/*.java</include>
                                     <include>src/rowdata-nexmark/java/**/*.java</include>
+                                    <include>src/rowdata-nexmark-test/java/**/*.java</include>
                                 </includes>
                             </java>
                         </configuration>

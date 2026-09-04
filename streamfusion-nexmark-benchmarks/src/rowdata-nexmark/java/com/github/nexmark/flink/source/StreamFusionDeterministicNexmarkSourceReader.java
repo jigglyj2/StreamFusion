@@ -31,7 +31,7 @@ final class StreamFusionDeterministicNexmarkSourceReader extends NexmarkSourceRe
     private final GeneratorConfig config;
 
     StreamFusionDeterministicNexmarkSourceReader(SourceReaderContext context, GeneratorConfig config) {
-        super(context, config, new RowDataEventDeserializer());
+        super(context, config, new StreamFusionDeterministicRowDataEventDeserializer());
         this.config = config;
     }
 
