@@ -118,6 +118,15 @@ representative. Pass the ordinary
 `-Dtaskmanager.memory.managed.consumer-weights=OPERATOR:...,STATE_BACKEND:...,PYTHON:...` property to
 override the harness choice; StreamFusion does not introduce a separate deployment memory budget.
 
+On the September 4, 2026 one-million-event `incremental-group-aggregate` run for commits `00d5bfe`
+and `c946c63`, three alternating fresh-JVM forks at parallelism one measured 94.6% in-memory
+throughput parity and a 9.8% StreamFusion RocksDB gain. Every fork materialized the same 19,913-row
+final multiset and SHA-256
+`43fc431b4c20fd8c9cf6aacae7f0c4b7332e6f470b4386cf910d66301081ad49`. One checkpoint/storage
+outlier appeared for each engine on RocksDB, so the full elapsed ranges—13.760–19.417s for Flink
+and 12.745–28.031s for StreamFusion—are retained rather than hidden. The detailed environment,
+throughput, and mixed-stack profile breakdown is recorded on the group-aggregation operator page.
+
 On the September 3, 2026 local release/native-CPU run over one million deterministic events,
 `global-aggregate` produced in-memory medians of 107,827 events/s for Flink and 103,550 events/s
 for StreamFusion (96.0% parity), and RocksDB medians of 99,061 and 106,810 events/s (a 7.8%

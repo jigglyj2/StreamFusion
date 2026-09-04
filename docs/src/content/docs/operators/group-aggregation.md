@@ -160,9 +160,26 @@ state backends. Benchmark builds use the Rust release profile and the build mach
 feature set. The harness records elapsed time, input throughput, native calculation batches, and
 native aggregate batches so exchange fragmentation and JNI call amplification remain visible.
 
-The published measurements below predate the split-DISTINCT incremental executor and therefore do
-not claim performance results for that three-stage shape. Its dedicated alternating-fork memory
-and RocksDB measurement and mixed-stack profiles have not yet been published.
+The September 4, 2026 split-DISTINCT measurement covers implementation commits `00d5bfe` and
+`c946c63`. Three alternating fresh-JVM forks processed one million deterministic events at
+parallelism one with a 3GB heap, 1,024 MiB of Flink managed memory, count-triggered mini-batching,
+and one-second exactly-once checkpoints. In-memory medians were 86,319 events/s for Flink and
+81,639 events/s for StreamFusion (94.6% parity), with elapsed ranges of 11.585–12.963s and
+12.152–12.537s. RocksDB medians were 70,449 and 77,324 events/s respectively, a 9.8%
+StreamFusion gain. RocksDB ranges were 13.760–19.417s and 12.745–28.031s; those wide ranges are
+retained because one storage/checkpoint outlier occurred on each side in repeated runs. Every
+StreamFusion fork reported acceleration and nonzero native Calc and aggregate batches. Every fork
+materialized 19,913 rows with SHA-256
+`43fc431b4c20fd8c9cf6aacae7f0c4b7332e6f470b4386cf910d66301081ad49`.
+
+A two-million-event mixed JVM/native CPU profile attributed 28.4% inclusively to the required
+RowData-to-Arrow source boundary, 34.7% to the incremental aggregate, and 21.8% to the local
+aggregate. Within the incremental stage, finishing a bundle accounted for 19.6% and accumulator
+application for 9.3%. Allocation samples led to retaining grouping rows only for newly observed
+keys and moving final-map keys and rows instead of cloning them. Java JFR showed filesystem sync
+waits from asynchronous checkpoint completion as the largest sampled native method; native RocksDB
+checkpoint creation no longer performs a redundant explicit flush before RocksDB creates its
+checkpoint. Profiler-instrumented timing was excluded from the throughput measurements.
 
 On the September 4, 2026 local one-million-event two-phase run at parallelism four and bundle size
 5,000, three alternating fresh-JVM forks produced in-memory medians of 184,336 events/s for Flink
