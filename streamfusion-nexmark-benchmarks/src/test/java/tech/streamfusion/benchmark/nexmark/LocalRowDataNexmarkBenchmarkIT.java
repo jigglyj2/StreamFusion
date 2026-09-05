@@ -208,7 +208,7 @@ class LocalRowDataNexmarkBenchmarkIT {
 
     @ParameterizedTest
     @ValueSource(strings = {"hashmap", "rocksdb"})
-    void q8WindowJoinMatchesFlinkOnBothStateBackends(String backend) throws Exception {
+    void q8WindowCompositionMatchesFlinkOnBothStateBackends(String backend) throws Exception {
         LocalRowDataNexmarkBenchmark.RunResult flink = LocalRowDataNexmarkBenchmark.run(1_000, "q8", false, backend, 4);
         LocalRowDataNexmarkBenchmark.RunResult streamFusion =
                 LocalRowDataNexmarkBenchmark.run(1_000, "q8", true, backend, 4);
@@ -218,7 +218,10 @@ class LocalRowDataNexmarkBenchmarkIT {
         assertThat(streamFusion.outputRows()).isEqualTo(flink.outputRows());
         assertThat(streamFusion.outputSha256()).isEqualTo(flink.outputSha256());
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
-        assertThat(streamFusion.nativeWindowJoinBatches()).isGreaterThan(0);
+        // Flink 2.3 may retain an attached WindowJoin or normalize the same equality shape to a
+        // binary MultiJoin. StreamFusion lowers the latter through its regular-join kernel.
+        assertThat(streamFusion.nativeWindowJoinBatches() + streamFusion.nativeRegularJoinBatches())
+                .isGreaterThan(0);
     }
 
     @ParameterizedTest

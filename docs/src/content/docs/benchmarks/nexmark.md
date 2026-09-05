@@ -56,7 +56,8 @@ operator benchmark and does not replace the Kafka-in/Kafka-out north-star benchm
 Current all-or-nothing coverage can fully accelerate q0 (pass-through), q1 (decimal currency
 conversion), q2 (selection), q3 (regular streaming join), q4 (residual join plus grouped
 aggregation), q5 (nested hopping aggregates plus residual join), q7 (tumbling maximum plus a
-timestamp-interval residual join), q8 (tumbling aggregates plus Window Join), q9 (residual join plus Top-1), q11
+timestamp-interval residual join), q8 (tumbling aggregates plus Flink's selected Window Join or
+binary MultiJoin), q9 (residual join plus Top-1), q11
 (event-time session aggregation), q19 (Top-N), q20 (regular join), q22 (URL directory extraction),
 and q23 (two regular joins). A deterministic `interval-join` workload exercises
 Flink's constant-bound event-time interval physical operator.
@@ -523,6 +524,13 @@ copies, memory-segment wrappers, generated strings/rows, Arrow foreign-buffer wr
 deserialization. Native state, timer, scratch, output, RocksDB cache, and write-buffer allocations
 are covered by host-memory reservation tests and remain charged to Flink managed memory. These are
 local diagnostic results, not portable performance claims.
+
+Flink 2.3 can normalize Q8's equality join over attached window bounds to a binary `MultiJoin`
+instead of retaining `StreamExecWindowJoin`, depending on the optimizer shape. The native planner
+lowers that binary form to the regular-join kernel while preserving the keys and condition.
+Integration activity checks therefore accept either the native Window Join or native regular-join
+counter, while still requiring exact output parity; they do not infer a physical node from the SQL
+query name.
 
 On the September 3, 2026 local Q3 run for implementation commit `f6acfb2`, three alternating,
 separate-JVM release/native-CPU forks processed twenty million deterministic events at parallelism

@@ -69,6 +69,9 @@ primary-keyed result tables are materialized as ordered upserts rather than full
 Official q5 exercises an aggregate over attached hopping-window bounds before its residual join;
 official q7 exercises timestamp subtraction by a typed ten-second interval in the join residual.
 Both retain independently observable native window stages inside the fused plan.
+Official q8 exercises two tumbling aggregate branches and accepts Flink's equivalent attached
+Window Join or binary MultiJoin physical form; the binary form is lowered to the native regular
+join and is reported by that activity counter.
 `match-recognize` partitions bids by bidder and recognizes strict processing-time `A B C` sequences
 with `AFTER MATCH SKIP PAST LAST ROW`, exercising partial-match state and three direct measures.
 `set-intersect-all` intersects two filtered bid streams on the three-BIGINT auction/bidder/price
