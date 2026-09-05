@@ -57,6 +57,41 @@ class ArrayUnnestParityTest extends SqlParityTestSupport {
     }
 
     @Test
+    void boundedArrayUnnestMatchesFlinkCardinalityNullsAndDuplicates() throws Exception {
+        assertBatchDataStreamParity(
+                "SELECT item FROM bounded_array_unnest_input " + "CROSS JOIN UNNEST(metric) AS expanded(item)",
+                Types.OBJECT_ARRAY(Types.INT),
+                DataTypes.ARRAY(DataTypes.INT()),
+                INPUTS,
+                "bounded_array_unnest_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isGreaterThan(0);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
+    @Test
+    void boundedArrayOfRowsRetainsNestedAndNullableFields() throws Exception {
+        assertBatchDataStreamParity(
+                "SELECT label, amount FROM bounded_row_array_unnest_input "
+                        + "CROSS JOIN UNNEST(metric) AS expanded(label, amount)",
+                Types.OBJECT_ARRAY(Types.ROW_NAMED(new String[] {"label", "amount"}, Types.STRING, Types.INT)),
+                DataTypes.ARRAY(DataTypes.ROW(
+                        DataTypes.FIELD("label", DataTypes.STRING()), DataTypes.FIELD("amount", DataTypes.INT()))),
+                Arrays.asList(
+                        Row.of((Object) new Row[] {Row.of("alpha", 1), Row.of("你好", null), null}),
+                        Row.of((Object) new Row[] {}),
+                        Row.of((Object) null)),
+                "bounded_row_array_unnest_input");
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isGreaterThan(0);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
+    @Test
     void nativeLeftArrayUnnestNullExtendsNullAndEmptyArrays() throws Exception {
         assertDataStreamParity(
                 "SELECT item FROM array_left_unnest_input " + "LEFT JOIN UNNEST(metric) AS expanded(item) ON TRUE",

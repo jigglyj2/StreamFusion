@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import tech.streamfusion.proto.plan.v1.Calc;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.NativePlan;
+import tech.streamfusion.proto.plan.v1.UnnestCollection;
 
 class StreamFusionCalcChainPlanTest {
     @Test
@@ -37,5 +38,30 @@ class StreamFusionCalcChainPlanTest {
         assertThat(outer.getProjectionsCount()).isEqualTo(2);
         assertThat(inner.getProjections(1).getInputReference().getIndex()).isEqualTo(1);
         assertThat(outer.getProjections(1).getInputReference().getIndex()).isEqualTo(1);
+    }
+
+    @Test
+    void serializesCalcsOnBothSidesOfUnnestAsOneNativePlan() throws Exception {
+        RowType rowType = RowType.of(new IntType(false));
+        Expression value = StreamFusionCalcPlan.inputReference(0, StreamFusionCalcPlan.logicalType(rowType, 0));
+
+        byte[] bytes = StreamFusionCalcPlan.createFusedCalcUnnest(
+                List.of(0),
+                List.of(false),
+                List.of(false),
+                List.of(UnnestCollection.UNNEST_COLLECTION_ARRAY),
+                Arrays.asList((Expression) null),
+                List.of(2),
+                1,
+                List.of(List.of(value)),
+                Arrays.asList((Expression) null),
+                List.of(List.of(value)),
+                Arrays.asList((Expression) null));
+
+        NativePlan plan = NativePlan.parseFrom(bytes);
+        Calc outputCalc = plan.getRoot().getCalc();
+        Calc inputCalc = outputCalc.getInput().getArrayUnnest().getInput().getCalc();
+        assertThat(inputCalc.getInput().hasInput()).isTrue();
+        assertThat(outputCalc.getInput().hasArrayUnnest()).isTrue();
     }
 }

@@ -18,7 +18,7 @@ import tech.streamfusion.proto.plan.v1.ReplicateRows;
 import tech.streamfusion.proto.plan.v1.UnnestCollection;
 
 /** Builds protobuf plans for Arrow-native Calc and fused UNNEST/Calc execution. */
-final class StreamFusionCalcPlan {
+public final class StreamFusionCalcPlan {
     private StreamFusionCalcPlan() {}
 
     static byte[] create(RowType inputType, List<List<Expression>> projectionStages, List<Expression> conditions) {
@@ -35,6 +35,32 @@ final class StreamFusionCalcPlan {
             List<Integer> outputFieldCounts,
             List<List<Expression>> projectionStages,
             List<Expression> conditions) {
+        return createFusedCalcUnnest(
+                indexes,
+                withOrdinalities,
+                preserveEmpty,
+                collections,
+                collectionExpressions,
+                outputFieldCounts,
+                outputFieldCounts.get(0) - 1,
+                java.util.Collections.emptyList(),
+                java.util.Collections.emptyList(),
+                projectionStages,
+                conditions);
+    }
+
+    static byte[] createFusedCalcUnnest(
+            List<Integer> indexes,
+            List<Boolean> withOrdinalities,
+            List<Boolean> preserveEmpty,
+            List<UnnestCollection> collections,
+            List<Expression> collectionExpressions,
+            List<Integer> outputFieldCounts,
+            int planInputFieldCount,
+            List<List<Expression>> inputProjectionStages,
+            List<Expression> inputConditions,
+            List<List<Expression>> outputProjectionStages,
+            List<Expression> outputConditions) {
         int stages = indexes.size();
         if (stages == 0
                 || withOrdinalities.size() != stages
@@ -45,6 +71,7 @@ final class StreamFusionCalcPlan {
             throw new IllegalArgumentException("A fused UNNEST chain must contain equally sized, non-empty stages");
         }
         Operator operator = Operator.newBuilder().setInput(Input.newBuilder()).build();
+        operator = appendCalcOperators(operator, planInputFieldCount, inputProjectionStages, inputConditions);
         for (int stage = 0; stage < stages; stage++) {
             ArrayUnnest.Builder unnest = ArrayUnnest.newBuilder()
                     .setInput(operator)
@@ -58,7 +85,7 @@ final class StreamFusionCalcPlan {
             }
             operator = Operator.newBuilder().setArrayUnnest(unnest).build();
         }
-        return appendCalcs(operator, outputFieldCounts.get(stages - 1), projectionStages, conditions);
+        return appendCalcs(operator, outputFieldCounts.get(stages - 1), outputProjectionStages, outputConditions);
     }
 
     static byte[] createFusedReplicateRows(
@@ -79,6 +106,17 @@ final class StreamFusionCalcPlan {
 
     private static byte[] appendCalcs(
             Operator input, int inputFieldCount, List<List<Expression>> projectionStages, List<Expression> conditions) {
+        Operator operator = appendCalcOperators(input, inputFieldCount, projectionStages, conditions);
+        return NativePlan.newBuilder()
+                .setProtocolVersion(1)
+                .setRoot(operator)
+                .build()
+                .toByteArray();
+    }
+
+    /** Appends Calc stages below another native operator while retaining the hidden row ordinal. */
+    public static Operator appendCalcOperators(
+            Operator input, int inputFieldCount, List<List<Expression>> projectionStages, List<Expression> conditions) {
         if (projectionStages.size() != conditions.size()) {
             throw new IllegalArgumentException("Calc projections and conditions must have the same stage count");
         }
@@ -96,11 +134,7 @@ final class StreamFusionCalcPlan {
             operator = Operator.newBuilder().setCalc(calc).build();
             stageInputFieldCount = projections.size();
         }
-        return NativePlan.newBuilder()
-                .setProtocolVersion(1)
-                .setRoot(operator)
-                .build()
-                .toByteArray();
+        return operator;
     }
 
     static LogicalType logicalType(RowType inputType, int inputIndex) {

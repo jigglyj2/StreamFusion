@@ -24,8 +24,26 @@ final class StreamFusionWindowTableFunctionPlan {
             boolean processingTime,
             String shiftTimeZone,
             StreamFusionWindowTableFunctionTranslator.WindowParameters parameters) {
+        return create(
+                Operator.newBuilder().setInput(Input.newBuilder()).build(),
+                inputType,
+                timeAttributeIndex,
+                partitionKeys,
+                processingTime,
+                shiftTimeZone,
+                parameters);
+    }
+
+    static byte[] create(
+            Operator input,
+            RowType inputType,
+            int timeAttributeIndex,
+            int[] partitionKeys,
+            boolean processingTime,
+            String shiftTimeZone,
+            StreamFusionWindowTableFunctionTranslator.WindowParameters parameters) {
         WindowTableFunction.Builder window = WindowTableFunction.newBuilder()
-                .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
+                .setInput(input)
                 .setTimeAttributeIndex(timeAttributeIndex)
                 .setKind(parameters.kind)
                 .setSizeMillis(parameters.sizeMillis)

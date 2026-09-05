@@ -4,7 +4,6 @@
  */
 package tech.streamfusion.flink.sort;
 
-import java.nio.file.Path;
 import java.util.Collections;
 import org.apache.flink.api.common.operators.ProcessingTimeService.ProcessingTimeCallback;
 import org.apache.flink.api.common.state.ListState;
@@ -23,7 +22,6 @@ import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.ArrowTemporalSortCDataBridge;
 import tech.streamfusion.flink.metrics.FlinkMetricParity;
 import tech.streamfusion.flink.state.AbstractStreamFusionArrowKeyedStateOperator;
-import tech.streamfusion.nativebridge.NativeMemoryManager;
 import tech.streamfusion.nativebridge.NativeTemporalSortBridge;
 
 /** Time-ascending native sort over Arrow rows with native timers and keyed state. */
@@ -42,7 +40,7 @@ final class StreamFusionArrowTemporalSortOperator extends AbstractStreamFusionAr
     private transient Counter lateRecordsDropped;
 
     StreamFusionArrowTemporalSortOperator(RowType outputType, boolean processingTime, byte[] plan) {
-        super(plan, "temporal sort");
+        super(plan, "temporal sort", NativeTemporalSortBridge.keyedStateBridge());
         this.outputType = outputType;
         this.processingTime = processingTime;
     }
@@ -183,51 +181,5 @@ final class StreamFusionArrowTemporalSortOperator extends AbstractStreamFusionAr
     @Override
     protected void beforeNativeStateSnapshot(StateSnapshotContext context) throws Exception {
         watermarkState.update(Collections.singletonList(currentWatermark));
-    }
-
-    @Override
-    protected long createMemoryHandle(
-            byte[] plan, int maxParallelism, int firstKeyGroup, int lastKeyGroup, NativeMemoryManager memoryManager) {
-        return NativeTemporalSortBridge.create(plan, maxParallelism, firstKeyGroup, lastKeyGroup, memoryManager);
-    }
-
-    @Override
-    protected long createRocksDbHandle(
-            byte[] plan,
-            int maxParallelism,
-            int firstKeyGroup,
-            int lastKeyGroup,
-            Path databasePath,
-            long memoryLimit,
-            NativeMemoryManager memoryManager) {
-        return NativeTemporalSortBridge.createRocksDb(
-                plan, maxParallelism, firstKeyGroup, lastKeyGroup, databasePath, memoryLimit, memoryManager);
-    }
-
-    @Override
-    protected byte[] snapshotKeyGroup(long handle, int keyGroup) {
-        return NativeTemporalSortBridge.snapshot(handle, keyGroup);
-    }
-
-    @Override
-    protected void restoreKeyGroup(long handle, int keyGroup, byte[] state) {
-        NativeTemporalSortBridge.restore(handle, keyGroup, state);
-    }
-
-    @Override
-    protected void checkpointRocks(long handle, Path checkpointDirectory) {
-        NativeTemporalSortBridge.checkpointRocks(handle, checkpointDirectory);
-    }
-
-    @Override
-    protected void importRocksCheckpoint(
-            long handle, Path checkpointDirectory, int firstKeyGroup, int lastKeyGroup, long memoryLimit) {
-        NativeTemporalSortBridge.importRocksCheckpoint(
-                handle, checkpointDirectory, firstKeyGroup, lastKeyGroup, memoryLimit);
-    }
-
-    @Override
-    protected void destroyHandle(long handle) {
-        NativeTemporalSortBridge.destroy(handle);
     }
 }

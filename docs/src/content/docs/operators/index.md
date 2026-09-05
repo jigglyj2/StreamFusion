@@ -13,7 +13,7 @@ This matrix follows the query operations documented by Flink 2.3, including the 
 | [SELECT DISTINCT](select-distinct/) | **Yes** (timer-free streaming) | Yes | Native counted keyed state |
 | [WITH](with/) | **No** | Not directly | Inlined by Flink; accelerate resulting operators |
 | [VALUES](values/) | **Partial** (streaming and bounded scalar literals) | Yes | Source-free native Arrow batch |
-| [Windowing TVFs](window-tvf/) | **Yes** (`TUMBLE`, `HOP`, `CUMULATE`, `SESSION`) | Yes | Native aligned assignment and keyed session merging |
+| [Windowing TVFs](window-tvf/) | **Yes** (streaming/bounded event-time `TUMBLE`, `HOP`, `CUMULATE`; streaming `SESSION`) | Yes | Native aligned assignment and keyed session merging |
 | [Watermark assignment](watermark-assignment/) | **Plan-compatible** | Flink-owned | Distinct StreamFusion node delegating Flink's exact timer and idleness runtime |
 | [Group aggregation](group-aggregation/) | **Partial** (timer-free keyed/global, grouping sets/`ROLLUP`/`CUBE`) | Yes | Native keyed state and Arrow aggregate kernels |
 | [Window aggregation](window-aggregation/) | **Partial** (`TUMBLE`, `HOP`, `CUMULATE`, `SESSION`, legacy time/count windows) | Yes | Native keyed window state, timers, and Arrow aggregate kernels |
@@ -22,7 +22,7 @@ This matrix follows the query operations documented by Flink 2.3, including the 
 | [Window joins](window-join/) | **Yes** (event-time attached windows) | Yes | Native two-sided window state plus Flink join conditions |
 | [Set operations](set-operations/) | **Yes** (`UNION ALL` in streaming and bounded plans; remaining forms in streaming plans) | By physical rewrite | Arrow IPC at Flink multi-input gates; native aggregate/join state and row replication |
 | [Exchange](exchange/) | **Partial** (hash and singleton) | Yes | Native Flink-compatible key grouping with Flink-owned network transport |
-| [Table and collection expansion](table-expansion/) | **Partial** (scalar array `UNNEST`) | Yes | DataFusion `UnnestExec` with Flink-compatible correlate semantics |
+| [Table and collection expansion](table-expansion/) | **Partial** (streaming/bounded ARRAY, MAP, and MULTISET `UNNEST`) | Yes | DataFusion `UnnestExec` with Flink-compatible correlate semantics |
 | [ORDER BY](order-by/) | **Yes** (bounded full sort, streaming finite Top-N, and time-ascending temporal sort) | Yes | Native counted full sort, Top-N, or timer/state sort |
 | [LIMIT](limit/) | **Yes** (streaming constant `LIMIT`/`OFFSET`) | Yes | Native counter/Top-N state with memory or RocksDB backing |
 | [Top-N](top-n/) | **Yes** (streaming `ROW_NUMBER`) | Yes | Native Arrow ranking state with memory or RocksDB backing |

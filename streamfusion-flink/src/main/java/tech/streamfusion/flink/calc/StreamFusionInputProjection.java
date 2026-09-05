@@ -19,10 +19,10 @@ import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.InputReference;
 
 /** Pushes first-stage top-level and nested input references into the source-edge Arrow writer. */
-final class StreamFusionInputProjection {
+public final class StreamFusionInputProjection {
     private StreamFusionInputProjection() {}
 
-    static Projection create(RowType inputType, List<Expression> projections, Expression condition) {
+    public static Projection create(RowType inputType, List<Expression> projections, Expression condition) {
         TreeMap<PathKey, ProjectedPath> referenced = new TreeMap<>(PathKey.COMPARATOR);
         for (Expression expression : projections) {
             collectInputReferences(expression, inputType, referenced);
@@ -230,7 +230,7 @@ final class StreamFusionInputProjection {
         }
     }
 
-    static final class Projection {
+    public static final class Projection {
         private final RowType inputType;
         private final int[][] fieldPaths;
         private final int[][] rowArities;
@@ -250,23 +250,23 @@ final class StreamFusionInputProjection {
             this.condition = condition;
         }
 
-        RowType inputType() {
+        public RowType inputType() {
             return inputType;
         }
 
-        int[][] fieldPaths() {
+        public int[][] fieldPaths() {
             return fieldPaths;
         }
 
-        int[][] rowArities() {
+        public int[][] rowArities() {
             return rowArities;
         }
 
-        List<Expression> projections() {
+        public List<Expression> projections() {
             return projections;
         }
 
-        Expression condition() {
+        public Expression condition() {
             return condition;
         }
     }

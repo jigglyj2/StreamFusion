@@ -4,7 +4,6 @@
  */
 package tech.streamfusion.flink.window;
 
-import java.nio.file.Path;
 import java.util.Collections;
 import java.util.List;
 import org.apache.flink.api.common.state.ListState;
@@ -25,7 +24,6 @@ import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.ArrowWindowDeduplicateCDataBridge;
 import tech.streamfusion.flink.metrics.FlinkMetricParity;
 import tech.streamfusion.flink.state.AbstractStreamFusionArrowKeyedStateOperator;
-import tech.streamfusion.nativebridge.NativeMemoryManager;
 import tech.streamfusion.nativebridge.NativeWindowDeduplicateBridge;
 
 /** Key-grouped native window first/last-row deduplication. */
@@ -46,7 +44,7 @@ final class StreamFusionArrowWindowDeduplicateOperator extends AbstractStreamFus
 
     StreamFusionArrowWindowDeduplicateOperator(
             RowType rowType, int[] partitionKeys, byte[] plan, RowDataKeySelector keySelector) {
-        super(plan, "window deduplicate");
+        super(plan, "window deduplicate", NativeWindowDeduplicateBridge.keyedStateBridge());
         this.rowType = rowType;
         this.partitionKeys = partitionKeys.clone();
         this.keySelector = keySelector;
@@ -164,51 +162,5 @@ final class StreamFusionArrowWindowDeduplicateOperator extends AbstractStreamFus
     @Override
     protected void beforeNativeStateSnapshot(StateSnapshotContext context) throws Exception {
         watermarkState.update(Collections.singletonList(currentWatermark));
-    }
-
-    @Override
-    protected long createMemoryHandle(
-            byte[] plan, int maxParallelism, int firstKeyGroup, int lastKeyGroup, NativeMemoryManager memoryManager) {
-        return NativeWindowDeduplicateBridge.create(plan, maxParallelism, firstKeyGroup, lastKeyGroup, memoryManager);
-    }
-
-    @Override
-    protected long createRocksDbHandle(
-            byte[] plan,
-            int maxParallelism,
-            int firstKeyGroup,
-            int lastKeyGroup,
-            Path databasePath,
-            long memoryLimit,
-            NativeMemoryManager memoryManager) {
-        return NativeWindowDeduplicateBridge.createRocksDb(
-                plan, maxParallelism, firstKeyGroup, lastKeyGroup, databasePath, memoryLimit, memoryManager);
-    }
-
-    @Override
-    protected byte[] snapshotKeyGroup(long handle, int keyGroup) {
-        return NativeWindowDeduplicateBridge.snapshot(handle, keyGroup);
-    }
-
-    @Override
-    protected void restoreKeyGroup(long handle, int keyGroup, byte[] state) {
-        NativeWindowDeduplicateBridge.restore(handle, keyGroup, state);
-    }
-
-    @Override
-    protected void checkpointRocks(long handle, Path checkpointDirectory) {
-        NativeWindowDeduplicateBridge.checkpointRocks(handle, checkpointDirectory);
-    }
-
-    @Override
-    protected void importRocksCheckpoint(
-            long handle, Path checkpointDirectory, int firstKeyGroup, int lastKeyGroup, long memoryLimit) {
-        NativeWindowDeduplicateBridge.importRocksCheckpoint(
-                handle, checkpointDirectory, firstKeyGroup, lastKeyGroup, memoryLimit);
-    }
-
-    @Override
-    protected void destroyHandle(long handle) {
-        NativeWindowDeduplicateBridge.destroy(handle);
     }
 }

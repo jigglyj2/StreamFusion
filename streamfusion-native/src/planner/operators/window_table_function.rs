@@ -19,6 +19,7 @@ use datafusion::execution::memory_pool::MemoryConsumer;
 use datafusion::execution::TaskContext;
 use datafusion::physical_expr::{EquivalenceProperties, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::EmissionType;
+use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
@@ -73,6 +74,7 @@ struct WindowTableFunctionExec {
     window: proto::WindowTableFunction,
     schema: SchemaRef,
     properties: Arc<PlanProperties>,
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl WindowTableFunctionExec {
@@ -105,6 +107,7 @@ impl WindowTableFunctionExec {
             window,
             schema,
             properties,
+            metrics: ExecutionPlanMetricsSet::new(),
         }
     }
 }
@@ -126,6 +129,10 @@ impl ExecutionPlan for WindowTableFunctionExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
     }
 
     fn apply_expressions(
@@ -159,8 +166,16 @@ impl ExecutionPlan for WindowTableFunctionExec {
         let memory_pool = Arc::clone(&context.runtime_env().memory_pool);
         let reservation =
             MemoryConsumer::new("StreamFusionWindowTableFunctionExec").register(&memory_pool);
+        let null_row_times =
+            MetricBuilder::new(&self.metrics).counter("numNullRowTimeRecordsDropped", partition);
         let stream = self.input.execute(partition, context)?.map(move |batch| {
-            let output = expand_batch(batch?, &window, Arc::clone(&output_schema))?;
+            let batch = batch?;
+            null_row_times.add(
+                batch
+                    .column(window.time_attribute_index as usize)
+                    .null_count(),
+            );
+            let output = expand_batch(batch, &window, Arc::clone(&output_schema))?;
             reservation.try_resize(output.get_array_memory_size())?;
             Ok(output)
         });
@@ -495,12 +510,10 @@ mod tests {
         )
         .unwrap();
         let input = MemorySourceConfig::try_new_exec(&[vec![batch]], schema, None).unwrap();
-        let output = collect(
-            create(&window(proto::WindowKind::Tumble, 5_000, 0, 0), input).unwrap(),
-            SessionContext::new().task_ctx(),
-        )
-        .await
-        .unwrap();
+        let plan = create(&window(proto::WindowKind::Tumble, 5_000, 0, 0), input).unwrap();
+        let output = collect(Arc::clone(&plan), SessionContext::new().task_ctx())
+            .await
+            .unwrap();
 
         assert_eq!(output[0].num_rows(), 2);
         assert_eq!(
@@ -529,6 +542,14 @@ mod tests {
                 .unwrap()
                 .values(),
             &[0, 2]
+        );
+        assert_eq!(
+            plan.metrics()
+                .unwrap()
+                .sum_by_name("numNullRowTimeRecordsDropped")
+                .unwrap()
+                .as_usize(),
+            1
         );
     }
 

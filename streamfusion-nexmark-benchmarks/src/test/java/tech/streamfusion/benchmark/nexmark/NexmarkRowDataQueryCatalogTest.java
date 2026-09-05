@@ -27,6 +27,8 @@ class NexmarkRowDataQueryCatalogTest {
                         "q22",
                         "q23",
                         "aggregate-modifiers",
+                        "batch-unnest",
+                        "batch-window-tvf",
                         "bounded-sort",
                         "incremental-group-aggregate",
                         "group-aggregate",

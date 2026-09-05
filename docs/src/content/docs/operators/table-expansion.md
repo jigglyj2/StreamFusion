@@ -5,7 +5,8 @@ sidebar:
   order: 12
 ---
 
-**Current status:** inner/cross and left `UNNEST`, with or without `WITH ORDINALITY`, over directly
+**Current status:** streaming and bounded inner/cross and left `UNNEST`, with or without
+`WITH ORDINALITY`, over directly
 referenced arrays of supported scalar values are accelerated. Inner/cross expansion also supports
 arrays of rows whose fields are scalars or recursively nested arrays. Inner/cross and left expansion of maps with supported scalar or
 scalar-field row keys and scalar, recursively nested array, or row values composed of scalars and recursively nested arrays
@@ -107,8 +108,11 @@ shape on Flink until it can reproduce the serialized key order exactly.
 
 ## Implementation
 
-The Java planner replaces the eligible `StreamExecCorrelate` with the distinct
-`StreamFusionExecArrayUnnest` node and sends a versioned `ArrayUnnest` protobuf operator to Rust.
+The Java planner replaces an eligible `StreamExecCorrelate` or `BatchExecCorrelate` with the
+distinct `StreamFusionExecArrayUnnest` or `StreamFusionBatchExecArrayUnnest` node and sends the
+same versioned `ArrayUnnest` protobuf operator to Rust. The bounded implementation is not a
+row-oriented alternate path and has no operator state, so the configured keyed-state backend is
+not involved.
 The protobuf retains its field index for existing direct-column plans and optionally carries the
 same typed `Expression` contract used by Calc. Rust lowers a computed operand through the shared
 DataFusion expression planner before `UnnestExec`, keeping expression evaluation and expansion in
@@ -146,6 +150,9 @@ does not serialize rows or copy the array merely to hand it to the next native s
 For `WITH ORDINALITY`, StreamFusion derives a second Arrow list from the source offsets, fills its
 values with vectorized 1-based positions, and unnests the value and position lists together.
 
+Calcs immediately below or above an UNNEST are nested around it in the same protobuf tree. This
+keeps projection pruning, collection computation, expansion, filtering, and final projection in
+one Comet-style native plan and one Arrow/JNI invocation per source batch.
 The hidden input-row ordinal is repeated with each element and remains the final Arrow column, so
 the JVM restores the exact input `RowKind` for every produced row. An immediately following Calc
 is nested above `ArrayUnnest` in the same DataFusion execution-plan tree, crosses the Arrow C Data

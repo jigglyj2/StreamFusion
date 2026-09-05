@@ -4,7 +4,6 @@
  */
 package tech.streamfusion.flink.join;
 
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -31,7 +30,6 @@ import tech.streamfusion.flink.exchange.ArrowExchangeInputBatch;
 import tech.streamfusion.flink.exchange.NativeExchangeFrame;
 import tech.streamfusion.flink.metrics.FlinkMetricParity;
 import tech.streamfusion.flink.state.AbstractStreamFusionArrowKeyedStateOperatorV2;
-import tech.streamfusion.nativebridge.NativeMemoryManager;
 import tech.streamfusion.nativebridge.NativeMultiJoinBridge;
 
 /** Native N-input streaming join over ordered, backend-neutral Arrow-row multiset state. */
@@ -57,7 +55,7 @@ final class StreamFusionArrowMultiJoinOperator extends AbstractStreamFusionArrow
             List<RowDataKeySelector> commonKeySelectors,
             List<Map<Integer, RowDataKeySelector>> conditionSelectors,
             List<byte[]> exchangePlans) {
-        super(parameters, inputTypes.size(), plan, "multi-join");
+        super(parameters, inputTypes.size(), plan, "multi-join", NativeMultiJoinBridge.keyedStateBridge());
         this.inputTypes = List.copyOf(inputTypes);
         this.outputType = outputType;
         this.commonKeyFields = new ArrayList<>(commonKeyFields.size());
@@ -116,49 +114,6 @@ final class StreamFusionArrowMultiJoinOperator extends AbstractStreamFusionArrow
         for (int input = 0; input < inputTypes.size(); input++) {
             watermarkStates.get(input).update(Collections.singletonList(inputWatermarks[input]));
         }
-    }
-
-    @Override
-    protected long createMemoryHandle(
-            byte[] plan, int maxParallelism, int first, int last, NativeMemoryManager manager) {
-        return NativeMultiJoinBridge.create(plan, maxParallelism, first, last, manager);
-    }
-
-    @Override
-    protected long createRocksDbHandle(
-            byte[] plan,
-            int maxParallelism,
-            int first,
-            int last,
-            Path database,
-            long limit,
-            NativeMemoryManager manager) {
-        return NativeMultiJoinBridge.createRocksDb(plan, maxParallelism, first, last, database, limit, manager);
-    }
-
-    @Override
-    protected byte[] snapshotKeyGroup(long handle, int group) {
-        return NativeMultiJoinBridge.snapshot(handle, group);
-    }
-
-    @Override
-    protected void restoreKeyGroup(long handle, int group, byte[] state) {
-        NativeMultiJoinBridge.restore(handle, group, state);
-    }
-
-    @Override
-    protected void checkpointRocks(long handle, Path checkpoint) {
-        NativeMultiJoinBridge.checkpointRocks(handle, checkpoint);
-    }
-
-    @Override
-    protected void importRocksCheckpoint(long handle, Path checkpoint, int first, int last, long limit) {
-        NativeMultiJoinBridge.importRocksCheckpoint(handle, checkpoint, first, last, limit);
-    }
-
-    @Override
-    protected void destroyHandle(long handle) {
-        NativeMultiJoinBridge.destroy(handle);
     }
 
     private final class MultiJoinInput extends AbstractInput<Object, ArrowRowDataBatch> {

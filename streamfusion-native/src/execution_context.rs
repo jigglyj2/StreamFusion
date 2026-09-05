@@ -246,6 +246,30 @@ impl NativeExecutionContext {
         }
         result
     }
+
+    pub(crate) fn metric_value(&self, name: &str) -> Result<usize> {
+        fn sum(plan: &Arc<dyn ExecutionPlan>, name: &str) -> usize {
+            let current = plan
+                .metrics()
+                .and_then(|metrics| metrics.sum_by_name(name))
+                .map(|value| value.as_usize())
+                .unwrap_or(0);
+            current.saturating_add(
+                plan.children()
+                    .into_iter()
+                    .map(|child| sum(child, name))
+                    .sum(),
+            )
+        }
+
+        let cached = self.physical_plan.lock().map_err(|_| {
+            DataFusionError::Internal("native physical-plan cache lock poisoned".to_string())
+        })?;
+        Ok(cached
+            .as_ref()
+            .map(|cached| sum(&cached.plan, name))
+            .unwrap_or(0))
+    }
 }
 
 static NEXT_CONTEXT_HANDLE: AtomicI64 = AtomicI64::new(1);

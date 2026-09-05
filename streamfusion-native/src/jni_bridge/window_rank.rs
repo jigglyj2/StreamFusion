@@ -5,13 +5,11 @@ use std::sync::Arc;
 
 use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 use jni::errors::ThrowRuntimeExAndDefault;
-use jni::jni_str;
 use jni::objects::{JByteArray, JClass, JLongArray, JObject, JString};
-use jni::strings::JNIString;
 use jni::sys::{jbyteArray, jint, jlong, jlongArray};
 use jni::EnvUnowned;
 
-use super::common::{export_record_batch, import_record_batch};
+use super::common::{export_record_batch, import_record_batch, processor_mut, throw};
 use crate::memory_pool::{HostMemoryReservation, JvmMemoryReservationBroker};
 use crate::planner::operators::window_rank::WindowRankProcessor;
 
@@ -328,30 +326,9 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeWindowRankBridg
 }
 
 fn non_negative(value: jint, description: &str) -> datafusion::error::Result<u32> {
-    u32::try_from(value).map_err(|_| {
-        datafusion::error::DataFusionError::Execution(format!(
-            "window rank {description} must be non-negative"
-        ))
-    })
+    super::common::non_negative(value, "window rank", description)
 }
 
 unsafe fn processor<'a>(handle: jlong) -> datafusion::error::Result<&'a mut WindowRankProcessor> {
-    if handle == 0 {
-        return Err(datafusion::error::DataFusionError::Execution(
-            "window rank native handle is closed".to_string(),
-        ));
-    }
-    unsafe { (handle as *mut WindowRankProcessor).as_mut() }.ok_or_else(|| {
-        datafusion::error::DataFusionError::Execution(
-            "window rank native handle is invalid".to_string(),
-        )
-    })
-}
-
-fn throw(env: &mut jni::Env<'_>, error: impl std::fmt::Display) -> jni::errors::Error {
-    let _ = env.throw_new(
-        jni_str!("java/lang/IllegalStateException"),
-        JNIString::new(error.to_string()),
-    );
-    jni::errors::Error::JavaException
+    unsafe { processor_mut(handle, "window rank") }
 }

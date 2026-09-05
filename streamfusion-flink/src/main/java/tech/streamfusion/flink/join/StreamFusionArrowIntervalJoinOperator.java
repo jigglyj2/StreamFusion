@@ -4,7 +4,6 @@
  */
 package tech.streamfusion.flink.join;
 
-import java.nio.file.Path;
 import java.util.Collections;
 import java.util.List;
 import org.apache.flink.api.common.operators.ProcessingTimeService.ProcessingTimeCallback;
@@ -26,7 +25,6 @@ import tech.streamfusion.flink.exchange.NativeExchangeFrame;
 import tech.streamfusion.flink.metrics.FlinkMetricParity;
 import tech.streamfusion.flink.state.AbstractStreamFusionArrowKeyedStateOperator;
 import tech.streamfusion.nativebridge.NativeIntervalJoinBridge;
-import tech.streamfusion.nativebridge.NativeMemoryManager;
 
 /** Arrow-native Flink interval join with native timestamp-ordered keyed state and timers. */
 final class StreamFusionArrowIntervalJoinOperator extends AbstractStreamFusionArrowKeyedStateOperator
@@ -61,7 +59,7 @@ final class StreamFusionArrowIntervalJoinOperator extends AbstractStreamFusionAr
             byte[] rightExchangePlan,
             boolean eventTime,
             long maxOutputDelay) {
-        super(plan, "interval join");
+        super(plan, "interval join", NativeIntervalJoinBridge.keyedStateBridge());
         this.inputTypes = new RowType[] {leftType, rightType};
         this.outputType = outputType;
         this.keySelectors = new RowDataKeySelector[] {leftSelector, rightSelector};
@@ -238,48 +236,5 @@ final class StreamFusionArrowIntervalJoinOperator extends AbstractStreamFusionAr
             restored = Math.max(restored, candidate);
         }
         return restored;
-    }
-
-    @Override
-    protected long createMemoryHandle(
-            byte[] plan, int maxParallelism, int first, int last, NativeMemoryManager manager) {
-        return NativeIntervalJoinBridge.create(plan, maxParallelism, first, last, manager);
-    }
-
-    @Override
-    protected long createRocksDbHandle(
-            byte[] plan,
-            int maxParallelism,
-            int first,
-            int last,
-            Path database,
-            long limit,
-            NativeMemoryManager manager) {
-        return NativeIntervalJoinBridge.createRocksDb(plan, maxParallelism, first, last, database, limit, manager);
-    }
-
-    @Override
-    protected byte[] snapshotKeyGroup(long handle, int group) {
-        return NativeIntervalJoinBridge.snapshot(handle, group);
-    }
-
-    @Override
-    protected void restoreKeyGroup(long handle, int group, byte[] state) {
-        NativeIntervalJoinBridge.restore(handle, group, state);
-    }
-
-    @Override
-    protected void checkpointRocks(long handle, Path checkpoint) {
-        NativeIntervalJoinBridge.checkpointRocks(handle, checkpoint);
-    }
-
-    @Override
-    protected void importRocksCheckpoint(long handle, Path checkpoint, int first, int last, long limit) {
-        NativeIntervalJoinBridge.importRocksCheckpoint(handle, checkpoint, first, last, limit);
-    }
-
-    @Override
-    protected void destroyHandle(long handle) {
-        NativeIntervalJoinBridge.destroy(handle);
     }
 }

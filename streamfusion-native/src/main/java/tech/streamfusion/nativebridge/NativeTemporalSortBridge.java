@@ -15,7 +15,20 @@ public final class NativeTemporalSortBridge {
         NativeLibraryLoader.load();
     }
 
+    private static final NativeKeyedStateBridge KEYED_STATE_BRIDGE = NativeKeyedStateBridge.of(
+            NativeTemporalSortBridge::create,
+            NativeTemporalSortBridge::createRocksDb,
+            NativeTemporalSortBridge::snapshot,
+            NativeTemporalSortBridge::restore,
+            NativeTemporalSortBridge::checkpointRocks,
+            NativeTemporalSortBridge::importRocksCheckpoint,
+            NativeTemporalSortBridge::destroy);
+
     private NativeTemporalSortBridge() {}
+
+    public static NativeKeyedStateBridge keyedStateBridge() {
+        return KEYED_STATE_BRIDGE;
+    }
 
     public static long create(
             byte[] plan, int maxParallelism, int firstKeyGroup, int lastKeyGroup, NativeMemoryManager memoryManager) {
@@ -40,7 +53,7 @@ public final class NativeTemporalSortBridge {
                 maxParallelism,
                 firstKeyGroup,
                 lastKeyGroup,
-                NativeDeduplicateBridge.rocksDbLibraryPath().toString(),
+                NativeRocksDbLibrary.path().toString(),
                 databasePath.toString(),
                 memoryManager,
                 memoryLimit);
@@ -99,7 +112,7 @@ public final class NativeTemporalSortBridge {
             long targetHandle, Path checkpointPath, int firstKeyGroup, int lastKeyGroup, long memoryLimit) {
         importRocksCheckpointHandle(
                 targetHandle,
-                NativeDeduplicateBridge.rocksDbLibraryPath().toString(),
+                NativeRocksDbLibrary.path().toString(),
                 checkpointPath.toString(),
                 firstKeyGroup,
                 lastKeyGroup,

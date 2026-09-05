@@ -10,7 +10,8 @@ accelerator nodes. Flink first builds its normal exec graph. The StreamFusion gr
 processor proves whole-plan eligibility and replaces eligible `StreamExecCalc` and
 `StreamExecUnion` nodes with distinct `StreamFusionExecCalc` and
 `StreamFusionExecUnion` nodes. It applies the same rule to eligible `BatchExecCalc`,
-`BatchExecValues`, and `BatchExecUnion` nodes, producing distinct bounded StreamFusion nodes.
+`BatchExecValues`, `BatchExecUnion`, eligible `BatchExecCorrelate`, and eligible
+`BatchExecWindowTableFunction` nodes, producing distinct bounded StreamFusion nodes.
 Streaming and bounded replacements share the same protobuf and native DataFusion operator tree;
 bounded execution is not a parallel JNI or RowData implementation. The original Flink nodes are neither modified nor
 given native execution branches; if eligibility fails, the original graph is returned
@@ -95,6 +96,10 @@ projection stages. Each input batch crosses JNI once for the complete chain. The
 input ordinal used to preserve Flink `RowKind` is projected through every stage and is
 removed only at the outer output boundary. Identity-chain tests also compare Arrow
 buffer addresses and prove that adjacent projections retain the same underlying buffer.
+Eligible Calc chains on either side of UNNEST, and a Calc chain directly below an aligned bounded
+Window TVF, use the same recursive construction. The connected physical nodes remain distinct in
+Flink EXPLAIN and in the protobuf metric tree, but source batches cross JNI only once for the
+complete native subtree.
 
 ## Protobuf plan handoff
 

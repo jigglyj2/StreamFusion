@@ -4,22 +4,12 @@
  */
 package tech.streamfusion.flink.state;
 
-import java.io.DataInputStream;
-import java.io.DataOutputStream;
-import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Comparator;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.flink.runtime.execution.Environment;
 import org.apache.flink.runtime.state.CheckpointStreamFactory;
-import org.apache.flink.runtime.state.CheckpointableKeyedStateBackend;
 import org.apache.flink.runtime.state.KeyGroupRange;
-import org.apache.flink.runtime.state.KeyGroupStatePartitionStreamProvider;
-import org.apache.flink.runtime.state.KeyedStateCheckpointOutputStream;
 import org.apache.flink.runtime.state.StateInitializationContext;
 import org.apache.flink.runtime.state.StateSnapshotContext;
 import org.apache.flink.streaming.api.operators.AbstractStreamOperatorV2;
@@ -28,122 +18,36 @@ import org.apache.flink.streaming.api.operators.StreamOperatorParameters;
 import org.apache.flink.table.runtime.keyselector.RowDataKeySelector;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
-import tech.streamfusion.flink.memory.FlinkManagedMemory;
-import tech.streamfusion.flink.metrics.StreamFusionStatefulOperatorMetrics;
+import tech.streamfusion.nativebridge.NativeKeyedStateBridge;
 import tech.streamfusion.nativebridge.NativeMemoryManager;
 
-/** Shared Flink V2 lifecycle for persistent native keyed multiple-input operators. */
+/** Flink V2 adapter for the shared persistent native keyed-state lifecycle. */
 public abstract class AbstractStreamFusionArrowKeyedStateOperatorV2 extends AbstractStreamOperatorV2<ArrowRowDataBatch>
         implements NativeIncrementalStateParticipant {
-    private final byte[] serializedPlan;
-    private final String stateName;
+    private final NativeKeyedStateLifecycle lifecycle;
     private final transient Environment taskEnvironment;
-
-    private transient long nativeHandle;
-    private transient KeyGroupRange keyGroupRange;
-    private transient FlinkManagedMemory managedMemory;
-    private transient BufferAllocator allocator;
-    private transient Path rocksDbDirectory;
-    private transient long rocksDbManagedMemory;
-    private transient boolean writeRawKeyedSnapshot = true;
-    private transient long rawSnapshotBytes;
-    private transient StreamFusionStatefulOperatorMetrics statefulMetrics;
-    private transient Map<Long, CheckpointObservation> incrementalCheckpoints;
 
     protected AbstractStreamFusionArrowKeyedStateOperatorV2(
             StreamOperatorParameters<ArrowRowDataBatch> parameters,
             int inputCount,
             byte[] serializedPlan,
-            String stateName) {
+            String stateName,
+            NativeKeyedStateBridge bridge) {
         super(parameters, inputCount);
-        this.serializedPlan = serializedPlan.clone();
-        this.stateName = stateName;
-        this.taskEnvironment = parameters.getContainingTask().getEnvironment();
+        lifecycle = new NativeKeyedStateLifecycle(serializedPlan, stateName, bridge);
+        taskEnvironment = parameters.getContainingTask().getEnvironment();
     }
 
     @Override
     public final void initializeState(StateInitializationContext context) throws Exception {
-        if (!(getKeyedStateBackend() instanceof CheckpointableKeyedStateBackend)) {
-            throw new IllegalStateException("Native " + stateName + " requires a checkpointable keyed state backend");
-        }
-        keyGroupRange = ((CheckpointableKeyedStateBackend<?>) getKeyedStateBackend()).getKeyGroupRange();
-        int maxParallelism = getRuntimeContext().getTaskInfo().getMaxNumberOfParallelSubtasks();
-        managedMemory = FlinkManagedMemory.create(
-                taskEnvironment, getOperatorConfig(), getMetricGroup(), "streamfusion-" + stateName.replace(' ', '-'));
-        allocator = managedMemory.allocator();
-        String backendType = getKeyedStateBackend().getBackendTypeIdentifier();
-        if ("rocksdb".equals(backendType)) {
-            Path spillDirectory =
-                    taskEnvironment.getIOManager().getSpillingDirectories()[0].toPath();
-            rocksDbDirectory = Files.createTempDirectory(spillDirectory, "streamfusion-rocksdb-");
-            long stateBackendMemory = getKeyedStateBackend() instanceof StreamFusionKeyedStateBackend
-                    ? ((StreamFusionKeyedStateBackend<?>) getKeyedStateBackend()).nativeRocksDbMemoryLimit()
-                    : 0;
-            long rocksDbMemory = stateBackendMemory > 0 ? stateBackendMemory : managedMemory.limit() / 4;
-            boolean operatorMemoryFallback = stateBackendMemory == 0;
-            if (operatorMemoryFallback && !managedMemory.tryReserve(rocksDbMemory)) {
-                throw new IllegalStateException("Flink denied " + rocksDbMemory + " bytes for native RocksDB state");
-            }
-            try {
-                nativeHandle = createRocksDbHandle(
-                        serializedPlan,
-                        maxParallelism,
-                        keyGroupRange.getStartKeyGroup(),
-                        keyGroupRange.getEndKeyGroup(),
-                        rocksDbDirectory,
-                        rocksDbMemory,
-                        managedMemory);
-                rocksDbManagedMemory = rocksDbMemory;
-            } catch (RuntimeException failure) {
-                if (operatorMemoryFallback) {
-                    managedMemory.release(rocksDbMemory);
-                }
-                throw failure;
-            }
-        } else if ("hashmap".equals(backendType)) {
-            nativeHandle = createMemoryHandle(
-                    serializedPlan,
-                    maxParallelism,
-                    keyGroupRange.getStartKeyGroup(),
-                    keyGroupRange.getEndKeyGroup(),
-                    managedMemory);
-        } else {
-            throw new IllegalStateException(
-                    "Native " + stateName + " supports Flink hashmap and RocksDB state backends, got " + backendType);
-        }
-        statefulMetrics = new StreamFusionStatefulOperatorMetrics(getMetricGroup(), "rocksdb".equals(backendType));
-        getMetricGroup()
-                .addGroup("StreamFusion")
-                .gauge("rocksDbSharedManagedMemoryReserved", () -> rocksDbManagedMemory);
-        incrementalCheckpoints = new ConcurrentHashMap<>();
-        if (getKeyedStateBackend() instanceof StreamFusionKeyedStateBackend) {
-            ((StreamFusionKeyedStateBackend<?>) getKeyedStateBackend())
-                    .registerNativeStateParticipant(this, "rocksdb".equals(backendType));
-        }
-        long restoreStarted = System.nanoTime();
-        long restoredBytes = 0;
-        boolean restored = false;
-        try {
-            for (KeyGroupStatePartitionStreamProvider provider : context.getRawKeyedStateInputs()) {
-                restored = true;
-                DataInputStream input = new DataInputStream(provider.getStream());
-                int length = input.readInt();
-                if (length < 0) {
-                    throw new IOException(
-                            "Negative native " + stateName + " state length for key group " + provider.getKeyGroupId());
-                }
-                byte[] state = new byte[length];
-                input.readFully(state);
-                restoredBytes += Integer.BYTES + length;
-                restoreKeyGroup(nativeHandle, provider.getKeyGroupId(), state);
-            }
-            if (restored) {
-                statefulMetrics.restored(restoredBytes, System.nanoTime() - restoreStarted);
-            }
-        } catch (Throwable failure) {
-            statefulMetrics.restoreFailed();
-            throw failure;
-        }
+        lifecycle.initialize(
+                context,
+                taskEnvironment,
+                getOperatorConfig(),
+                getMetricGroup(),
+                getKeyedStateBackend(),
+                getRuntimeContext().getTaskInfo().getMaxNumberOfParallelSubtasks(),
+                this);
         afterNativeStateInitialized(context);
     }
 
@@ -153,31 +57,31 @@ public abstract class AbstractStreamFusionArrowKeyedStateOperatorV2 extends Abst
     }
 
     protected final long nativeHandle() {
-        return nativeHandle;
+        return lifecycle.nativeHandle();
     }
 
     protected final BufferAllocator allocator() {
-        return allocator;
+        return lifecycle.allocator();
     }
 
     protected final NativeMemoryManager memoryManager() {
-        return managedMemory;
+        return lifecycle.memoryManager();
     }
 
     protected final void recordProcessedWithoutStateCalls(long inputRows, ArrowRowDataBatch output) {
-        statefulMetrics.processedWithoutStateCalls(inputRows, output);
+        lifecycle.metrics().processedWithoutStateCalls(inputRows, output);
     }
 
     protected final void recordNativeStateStatistics(long stateReads, long stateWrites) {
-        statefulMetrics.nativeWindowStatistics(stateReads, stateWrites, 0, 0, 0);
+        lifecycle.metrics().nativeWindowStatistics(stateReads, stateWrites, 0, 0, 0);
     }
 
     protected final void recordProcessingFailure() {
-        statefulMetrics.processingFailed();
+        lifecycle.metrics().processingFailed();
     }
 
     protected final void recordWatermark() {
-        statefulMetrics.watermarkAdvanced();
+        lifecycle.metrics().watermarkAdvanced();
     }
 
     protected final List<byte[]> preencodeKeys(
@@ -196,211 +100,57 @@ public abstract class AbstractStreamFusionArrowKeyedStateOperatorV2 extends Abst
             org.apache.flink.runtime.checkpoint.CheckpointOptions checkpointOptions,
             CheckpointStreamFactory factory)
             throws Exception {
-        boolean incremental = getKeyedStateBackend() instanceof StreamFusionKeyedStateBackend
-                && ((StreamFusionKeyedStateBackend<?>) getKeyedStateBackend()).usesNativeIncrementalCheckpoints()
-                && !checkpointOptions.getCheckpointType().isSavepoint();
-        writeRawKeyedSnapshot = !incremental;
-        rawSnapshotBytes = 0;
-        CheckpointObservation observation = new CheckpointObservation(checkpointOptions, System.nanoTime());
-        if (incremental) {
-            incrementalCheckpoints.put(checkpointId, observation);
-        }
+        long startedNanos = lifecycle.beginSnapshot(checkpointId, checkpointOptions, getKeyedStateBackend());
         try {
             OperatorSnapshotFutures futures = super.snapshotState(checkpointId, timestamp, checkpointOptions, factory);
-            if (!incremental) {
-                statefulMetrics.checkpointCompleted(
-                        checkpointOptions, rawSnapshotBytes, -1, 0, System.nanoTime() - observation.startedNanos);
-            }
+            lifecycle.snapshotSucceeded(checkpointId, checkpointOptions, startedNanos);
             return futures;
         } catch (Throwable failure) {
-            incrementalCheckpoints.remove(checkpointId);
-            statefulMetrics.checkpointFailed();
+            lifecycle.snapshotFailed(checkpointId);
             throw failure;
         } finally {
-            writeRawKeyedSnapshot = true;
+            lifecycle.finishSnapshotAttempt();
         }
     }
 
     @Override
     public final void snapshotState(StateSnapshotContext context) throws Exception {
         beforeNativeStateSnapshot(context);
-        if (!writeRawKeyedSnapshot) {
-            return;
-        }
-        KeyedStateCheckpointOutputStream output = context.getRawKeyedOperatorStateOutput();
-        DataOutputStream framedOutput = new DataOutputStream(output);
-        for (int keyGroup : keyGroupRange) {
-            output.startNewKeyGroup(keyGroup);
-            byte[] state = snapshotKeyGroup(nativeHandle, keyGroup);
-            framedOutput.writeInt(state.length);
-            framedOutput.write(state);
-            rawSnapshotBytes += Integer.BYTES + state.length;
-        }
+        lifecycle.writeRawSnapshot(context);
     }
 
     @Override
     public final Path prepareIncrementalCheckpoint(long checkpointId) {
-        if (rocksDbDirectory == null) {
-            throw new IllegalStateException("Only native RocksDB state supports incremental checkpoints");
-        }
-        Path checkpointDirectory = rocksDbDirectory.resolveSibling(
-                "streamfusion-rocks-checkpoint-" + checkpointId + "-" + java.util.UUID.randomUUID());
-        checkpointRocks(nativeHandle, checkpointDirectory);
-        return checkpointDirectory;
+        return lifecycle.prepareIncrementalCheckpoint(checkpointId);
     }
 
     @Override
     public final void completeIncrementalCheckpoint(long checkpointId, long uploadedBytes, long reusedBytes) {
-        CheckpointObservation observation = incrementalCheckpoints.remove(checkpointId);
-        if (observation != null) {
-            statefulMetrics.checkpointCompleted(
-                    observation.options,
-                    uploadedBytes + reusedBytes,
-                    uploadedBytes,
-                    reusedBytes,
-                    System.nanoTime() - observation.startedNanos);
-        }
+        lifecycle.completeIncrementalCheckpoint(checkpointId, uploadedBytes, reusedBytes);
     }
 
     @Override
     public final void failIncrementalCheckpoint(long checkpointId) {
-        if (incrementalCheckpoints.remove(checkpointId) != null) {
-            statefulMetrics.checkpointFailed();
-        }
+        lifecycle.failIncrementalCheckpoint(checkpointId);
     }
 
     @Override
     public final void restoreIncrementalCheckpoint(Path checkpointDirectory, KeyGroupRange restoredRange) {
-        long restoreStarted = System.nanoTime();
-        long restoredBytes;
-        try {
-            restoredBytes = directorySize(checkpointDirectory);
-        } catch (IOException failure) {
-            statefulMetrics.restoreFailed();
-            throw new IllegalStateException("Could not measure native RocksDB restore", failure);
-        }
-        long restoreReaderMemory = 256L * 1024;
-        if (!managedMemory.tryReserve(restoreReaderMemory)) {
-            statefulMetrics.restoreFailed();
-            throw new IllegalStateException(
-                    "Flink denied " + restoreReaderMemory + " bytes for the native RocksDB restore reader");
-        }
-        try {
-            importRocksCheckpoint(
-                    nativeHandle,
-                    checkpointDirectory,
-                    restoredRange.getStartKeyGroup(),
-                    restoredRange.getEndKeyGroup(),
-                    restoreReaderMemory);
-            statefulMetrics.restored(restoredBytes, System.nanoTime() - restoreStarted);
-        } catch (Throwable failure) {
-            statefulMetrics.restoreFailed();
-            throw failure;
-        } finally {
-            managedMemory.release(restoreReaderMemory);
-        }
+        lifecycle.restoreIncrementalCheckpoint(checkpointDirectory, restoredRange);
     }
 
     @Override
     public void close() throws Exception {
-        long handle = nativeHandle;
-        nativeHandle = 0;
         try {
-            beforeNativeClose();
-            if (handle != 0) {
-                destroyHandle(handle);
-            }
+            lifecycle.close(this::beforeNativeClose);
         } finally {
-            try {
-                if (managedMemory != null) {
-                    managedMemory.close();
-                    managedMemory = null;
-                    allocator = null;
-                }
-            } finally {
-                try {
-                    deleteDirectory(rocksDbDirectory);
-                    rocksDbDirectory = null;
-                } finally {
-                    super.close();
-                }
-            }
+            super.close();
         }
     }
-
-    protected abstract long createMemoryHandle(
-            byte[] plan, int maxParallelism, int firstKeyGroup, int lastKeyGroup, NativeMemoryManager memoryManager);
-
-    protected abstract long createRocksDbHandle(
-            byte[] plan,
-            int maxParallelism,
-            int firstKeyGroup,
-            int lastKeyGroup,
-            Path databasePath,
-            long memoryLimit,
-            NativeMemoryManager memoryManager);
-
-    protected abstract byte[] snapshotKeyGroup(long handle, int keyGroup);
-
-    protected abstract void restoreKeyGroup(long handle, int keyGroup, byte[] state);
-
-    protected abstract void checkpointRocks(long handle, Path checkpointDirectory);
-
-    protected abstract void importRocksCheckpoint(
-            long handle, Path checkpointDirectory, int firstKeyGroup, int lastKeyGroup, long memoryLimit);
-
-    protected abstract void destroyHandle(long handle);
 
     protected void afterNativeStateInitialized(StateInitializationContext context) throws Exception {}
 
     protected void beforeNativeStateSnapshot(StateSnapshotContext context) throws Exception {}
 
     protected void beforeNativeClose() throws Exception {}
-
-    private static void deleteDirectory(Path directory) throws IOException {
-        if (directory == null || !Files.exists(directory)) {
-            return;
-        }
-        try (java.util.stream.Stream<Path> paths = Files.walk(directory)) {
-            for (Path path : paths.sorted(Comparator.reverseOrder()).toArray(Path[]::new)) {
-                Files.deleteIfExists(path);
-            }
-        }
-    }
-
-    private static long directorySize(Path directory) throws IOException {
-        try (java.util.stream.Stream<Path> paths = Files.walk(directory)) {
-            return paths.filter(Files::isRegularFile)
-                    .mapToLong(path -> {
-                        try {
-                            return Files.size(path);
-                        } catch (IOException failure) {
-                            throw new DirectorySizeException(failure);
-                        }
-                    })
-                    .sum();
-        } catch (DirectorySizeException failure) {
-            throw failure.ioException;
-        }
-    }
-
-    private static final class CheckpointObservation {
-        private final org.apache.flink.runtime.checkpoint.CheckpointOptions options;
-        private final long startedNanos;
-
-        private CheckpointObservation(
-                org.apache.flink.runtime.checkpoint.CheckpointOptions options, long startedNanos) {
-            this.options = options;
-            this.startedNanos = startedNanos;
-        }
-    }
-
-    private static final class DirectorySizeException extends RuntimeException {
-        private final IOException ioException;
-
-        private DirectorySizeException(IOException ioException) {
-            super(ioException);
-            this.ioException = ioException;
-        }
-    }
 }

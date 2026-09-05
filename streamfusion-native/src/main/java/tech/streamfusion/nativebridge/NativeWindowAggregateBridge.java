@@ -15,7 +15,20 @@ public final class NativeWindowAggregateBridge {
         NativeLibraryLoader.load();
     }
 
+    private static final NativeKeyedStateBridge KEYED_STATE_BRIDGE = NativeKeyedStateBridge.of(
+            NativeWindowAggregateBridge::create,
+            NativeWindowAggregateBridge::createRocksDb,
+            NativeWindowAggregateBridge::snapshot,
+            NativeWindowAggregateBridge::restore,
+            NativeWindowAggregateBridge::checkpointRocks,
+            NativeWindowAggregateBridge::importRocksCheckpoint,
+            NativeWindowAggregateBridge::destroy);
+
     private NativeWindowAggregateBridge() {}
+
+    public static NativeKeyedStateBridge keyedStateBridge() {
+        return KEYED_STATE_BRIDGE;
+    }
 
     public static long create(
             byte[] plan, int maxParallelism, int firstKeyGroup, int lastKeyGroup, NativeMemoryManager memoryManager) {
@@ -40,7 +53,7 @@ public final class NativeWindowAggregateBridge {
                 maxParallelism,
                 firstKeyGroup,
                 lastKeyGroup,
-                NativeDeduplicateBridge.rocksDbLibraryPath().toString(),
+                NativeRocksDbLibrary.path().toString(),
                 databasePath.toString(),
                 memoryManager,
                 memoryLimit);
@@ -98,7 +111,7 @@ public final class NativeWindowAggregateBridge {
             long targetHandle, Path checkpointPath, int firstKeyGroup, int lastKeyGroup, long memoryLimit) {
         importRocksCheckpointHandle(
                 targetHandle,
-                NativeDeduplicateBridge.rocksDbLibraryPath().toString(),
+                NativeRocksDbLibrary.path().toString(),
                 checkpointPath.toString(),
                 firstKeyGroup,
                 lastKeyGroup,

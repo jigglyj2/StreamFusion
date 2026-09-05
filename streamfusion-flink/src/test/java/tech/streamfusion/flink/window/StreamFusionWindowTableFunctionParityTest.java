@@ -31,6 +31,8 @@ import org.junit.jupiter.api.Test;
 import tech.streamfusion.flink.arrow.ArrowCDataBridge;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.NativeCalcResult;
+import tech.streamfusion.nativebridge.NativeExecutionContext;
+import tech.streamfusion.nativebridge.NativeMemoryManager;
 import tech.streamfusion.proto.plan.v1.WindowKind;
 
 class StreamFusionWindowTableFunctionParityTest {
@@ -90,19 +92,18 @@ class StreamFusionWindowTableFunctionParityTest {
                 "UTC",
                 new StreamFusionWindowTableFunctionTranslator.WindowParameters(
                         testCase.kind, testCase.size, testCase.slideOrStep, testCase.offset));
+        NativeMemoryManager memoryManager = tech.streamfusion.flink.TestingNativeMemoryManager.create();
         try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+                NativeExecutionContext context = new NativeExecutionContext(plan, memoryManager);
                 ArrowRowDataBatch input = ArrowRowDataBatch.transpose(rows, INPUT_TYPE, allocator)
                         .withEnvelope(kinds, hasTimestamps, timestamps);
-                NativeCalcResult result = ArrowCDataBridge.executeWithSelection(
-                        plan,
-                        input,
-                        OUTPUT_TYPE,
-                        allocator,
-                        tech.streamfusion.flink.TestingNativeMemoryManager.create())) {
+                NativeCalcResult result = new ArrowCDataBridge.ReusableExecution(context, OUTPUT_TYPE, allocator)
+                        .executeWithSelection(input)) {
             ArrowRowDataBatch output = result.selectEnvelopeFrom(input).withoutTimestamps();
             List<String> formatted = format(output);
             formatted.add("watermark:20000");
             assertThat(input.root().getVector(1).getNullCount()).isEqualTo(1);
+            assertThat(context.metricValue("numNullRowTimeRecordsDropped")).isEqualTo(1);
             return formatted;
         }
     }

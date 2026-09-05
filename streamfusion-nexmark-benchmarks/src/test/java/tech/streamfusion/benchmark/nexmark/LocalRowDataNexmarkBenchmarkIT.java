@@ -26,7 +26,25 @@ class LocalRowDataNexmarkBenchmarkIT {
     @AfterEach
     void clearPlanner() {
         System.clearProperty(StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY);
+        System.clearProperty("streamfusion.nexmark.batch-mode");
         StreamFusionPlannerFactory.resetMetrics();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"batch-unnest", "batch-window-tvf"})
+    void boundedTableExpansionMatchesFlink(String query) throws Exception {
+        System.setProperty("streamfusion.nexmark.batch-mode", "true");
+        LocalRowDataNexmarkBenchmark.RunResult flink =
+                LocalRowDataNexmarkBenchmark.run(2_000, query, false, "hashmap", 1);
+        LocalRowDataNexmarkBenchmark.RunResult streamFusion =
+                LocalRowDataNexmarkBenchmark.run(2_000, query, true, "hashmap", 1);
+
+        assertThat(streamFusion.completed()).isTrue();
+        assertThat(streamFusion.debugRows()).containsExactlyElementsOf(flink.debugRows());
+        assertThat(streamFusion.outputRows()).isEqualTo(flink.outputRows());
+        assertThat(streamFusion.outputSha256()).isEqualTo(flink.outputSha256());
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        assertThat(streamFusion.nativeCalcBatches()).isGreaterThan(0);
     }
 
     @ParameterizedTest

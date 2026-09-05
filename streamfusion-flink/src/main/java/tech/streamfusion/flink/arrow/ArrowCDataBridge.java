@@ -88,6 +88,10 @@ public final class ArrowCDataBridge {
             }
         }
 
+        public long metricValue(String name) {
+            return context.metricValue(name);
+        }
+
         private VectorSchemaRoot executeNative(ArrowRowDataBatch input) {
             Schema currentInputSchema = input.root().getSchema();
             if (inputSchema != null && !inputSchema.equals(currentInputSchema)) {

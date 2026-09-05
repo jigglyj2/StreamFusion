@@ -8,7 +8,7 @@
 
 use jni::errors::ThrowRuntimeExAndDefault;
 use jni::jni_str;
-use jni::objects::{JByteArray, JClass, JObject};
+use jni::objects::{JByteArray, JClass, JObject, JString};
 use jni::strings::JNIString;
 use jni::sys::jlong;
 use jni::EnvUnowned;
@@ -75,6 +75,32 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeExecutionContex
                 );
                 jni::errors::Error::JavaException
             })
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeExecutionContext_readMetricValue<
+    'caller,
+>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    handle: jlong,
+    name: JString<'caller>,
+) -> jlong {
+    unowned_env
+        .with_env(|env| -> jni::errors::Result<_> {
+            let name = name.try_to_string(env)?;
+            execution_context::get(handle)
+                .and_then(|context| context.metric_value(&name))
+                .map(|value| value as jlong)
+                .map_err(|error| {
+                    let _ = env.throw_new(
+                        jni_str!("java/lang/IllegalStateException"),
+                        JNIString::new(error.to_string()),
+                    );
+                    jni::errors::Error::JavaException
+                })
         })
         .resolve::<ThrowRuntimeExAndDefault>()
 }

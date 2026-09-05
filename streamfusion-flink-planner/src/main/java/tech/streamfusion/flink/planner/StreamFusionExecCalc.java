@@ -68,9 +68,15 @@ public final class StreamFusionExecCalc extends CommonExecCalc implements Stream
         StreamFusionExecReplicateRows fusedReplicate = inputEdge.getSource() instanceof StreamFusionExecReplicateRows
                 ? (StreamFusionExecReplicateRows) inputEdge.getSource()
                 : null;
-        ExecEdge boundaryEdge = !fusedUnnests.isEmpty()
-                ? fusedUnnests.get(0).getInputEdges().get(0)
-                : fusedReplicate != null ? fusedReplicate.getInputEdges().get(0) : inputEdge;
+        ExecEdge unnestBoundaryEdge =
+                !fusedUnnests.isEmpty() ? fusedUnnests.get(0).getInputEdges().get(0) : inputEdge;
+        List<StreamFusionExecCalc> boundaryCalcs =
+                !fusedUnnests.isEmpty() && unnestBoundaryEdge.getSource() instanceof StreamFusionExecCalc
+                        ? adjacentChain((StreamFusionExecCalc) unnestBoundaryEdge.getSource())
+                        : Collections.emptyList();
+        ExecEdge boundaryEdge = !boundaryCalcs.isEmpty()
+                ? boundaryCalcs.get(0).getInputEdges().get(0)
+                : fusedReplicate != null ? fusedReplicate.getInputEdges().get(0) : unnestBoundaryEdge;
         Transformation<RowData> input = (Transformation<RowData>) boundaryEdge.translateToPlan(planner);
         List<RowType> inputTypes = new ArrayList<>(chain.size());
         List<RowType> outputTypes = new ArrayList<>(chain.size());
@@ -116,6 +122,17 @@ public final class StreamFusionExecCalc extends CommonExecCalc implements Stream
                 result = (Transformation<RowData>)
                         translate.invoke(null, input, inputTypes, outputTypes, projections, conditions);
             } else {
+                List<RowType> boundaryCalcInputTypes = new ArrayList<>(boundaryCalcs.size());
+                List<RowType> boundaryCalcOutputTypes = new ArrayList<>(boundaryCalcs.size());
+                List<List<RexNode>> boundaryCalcProjections = new ArrayList<>(boundaryCalcs.size());
+                List<RexNode> boundaryCalcConditions = new ArrayList<>(boundaryCalcs.size());
+                for (StreamFusionExecCalc calc : boundaryCalcs) {
+                    boundaryCalcInputTypes.add(
+                            (RowType) calc.getInputEdges().get(0).getOutputType());
+                    boundaryCalcOutputTypes.add((RowType) calc.getOutputType());
+                    boundaryCalcProjections.add(calc.streamFusionProjection);
+                    boundaryCalcConditions.add(calc.streamFusionCondition);
+                }
                 List<RowType> unnestInputTypes = new ArrayList<>(fusedUnnests.size());
                 List<RowType> unnestOutputTypes = new ArrayList<>(fusedUnnests.size());
                 List<Object> joinTypes = new ArrayList<>(fusedUnnests.size());
@@ -127,8 +144,12 @@ public final class StreamFusionExecCalc extends CommonExecCalc implements Stream
                     invocations.add(unnest.streamFusionInvocation());
                 }
                 translate = translator.getMethod(
-                        "translateArrayUnnestChains",
+                        "translateCalcArrayUnnestCalcChains",
                         Transformation.class,
+                        List.class,
+                        List.class,
+                        List.class,
+                        List.class,
                         List.class,
                         List.class,
                         List.class,
@@ -140,6 +161,10 @@ public final class StreamFusionExecCalc extends CommonExecCalc implements Stream
                 result = (Transformation<RowData>) translate.invoke(
                         null,
                         input,
+                        boundaryCalcInputTypes,
+                        boundaryCalcOutputTypes,
+                        boundaryCalcProjections,
+                        boundaryCalcConditions,
                         unnestInputTypes,
                         unnestOutputTypes,
                         joinTypes,

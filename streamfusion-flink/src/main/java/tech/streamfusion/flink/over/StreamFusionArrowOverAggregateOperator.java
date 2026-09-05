@@ -4,7 +4,6 @@
  */
 package tech.streamfusion.flink.over;
 
-import java.nio.file.Path;
 import java.util.Collections;
 import java.util.List;
 import org.apache.flink.api.common.operators.ProcessingTimeService.ProcessingTimeCallback;
@@ -25,7 +24,6 @@ import tech.streamfusion.flink.arrow.ArrowOverAggregateCDataBridge;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.metrics.FlinkMetricParity;
 import tech.streamfusion.flink.state.AbstractStreamFusionArrowKeyedStateOperator;
-import tech.streamfusion.nativebridge.NativeMemoryManager;
 import tech.streamfusion.nativebridge.NativeOverAggregateBridge;
 
 /** Ordered native OVER aggregation with canonical raw keyed state. */
@@ -58,7 +56,7 @@ final class StreamFusionArrowOverAggregateOperator extends AbstractStreamFusionA
             boolean missingRowMetrics,
             boolean eventTime,
             RowDataKeySelector keySelector) {
-        super(plan, "over aggregate");
+        super(plan, "over aggregate", NativeOverAggregateBridge.keyedStateBridge());
         this.outputType = outputType;
         this.inputChangelog = inputChangelog;
         this.missingRowMetrics = missingRowMetrics;
@@ -207,51 +205,5 @@ final class StreamFusionArrowOverAggregateOperator extends AbstractStreamFusionA
     @Override
     protected void beforeNativeStateSnapshot(StateSnapshotContext context) throws Exception {
         watermarkState.update(Collections.singletonList(currentWatermark));
-    }
-
-    @Override
-    protected long createMemoryHandle(
-            byte[] plan, int maxParallelism, int firstKeyGroup, int lastKeyGroup, NativeMemoryManager memoryManager) {
-        return NativeOverAggregateBridge.create(plan, maxParallelism, firstKeyGroup, lastKeyGroup, memoryManager);
-    }
-
-    @Override
-    protected long createRocksDbHandle(
-            byte[] plan,
-            int maxParallelism,
-            int firstKeyGroup,
-            int lastKeyGroup,
-            Path databasePath,
-            long memoryLimit,
-            NativeMemoryManager memoryManager) {
-        return NativeOverAggregateBridge.createRocksDb(
-                plan, maxParallelism, firstKeyGroup, lastKeyGroup, databasePath, memoryLimit, memoryManager);
-    }
-
-    @Override
-    protected byte[] snapshotKeyGroup(long handle, int keyGroup) {
-        return NativeOverAggregateBridge.snapshot(handle, keyGroup);
-    }
-
-    @Override
-    protected void restoreKeyGroup(long handle, int keyGroup, byte[] state) {
-        NativeOverAggregateBridge.restore(handle, keyGroup, state);
-    }
-
-    @Override
-    protected void checkpointRocks(long handle, Path checkpointDirectory) {
-        NativeOverAggregateBridge.checkpointRocks(handle, checkpointDirectory);
-    }
-
-    @Override
-    protected void importRocksCheckpoint(
-            long handle, Path checkpointDirectory, int firstKeyGroup, int lastKeyGroup, long memoryLimit) {
-        NativeOverAggregateBridge.importRocksCheckpoint(
-                handle, checkpointDirectory, firstKeyGroup, lastKeyGroup, memoryLimit);
-    }
-
-    @Override
-    protected void destroyHandle(long handle) {
-        NativeOverAggregateBridge.destroy(handle);
     }
 }

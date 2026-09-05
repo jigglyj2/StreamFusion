@@ -4,7 +4,6 @@
  */
 package tech.streamfusion.flink.match;
 
-import java.nio.file.Path;
 import java.util.List;
 import org.apache.flink.metrics.Counter;
 import org.apache.flink.streaming.api.operators.BoundedOneInput;
@@ -17,7 +16,6 @@ import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.metrics.FlinkMetricParity;
 import tech.streamfusion.flink.state.AbstractStreamFusionArrowKeyedStateOperator;
 import tech.streamfusion.nativebridge.NativeMatchRecognizeBridge;
-import tech.streamfusion.nativebridge.NativeMemoryManager;
 import tech.streamfusion.proto.plan.v1.Expression;
 
 /** Arrow-native fixed-sequence MATCH_RECOGNIZE. */
@@ -51,7 +49,8 @@ final class StreamFusionArrowMatchRecognizeOperator extends AbstractStreamFusion
                         measureVariables,
                         measureFields,
                         skipPastLastRow),
-                "match recognize");
+                "match recognize",
+                NativeMatchRecognizeBridge.keyedStateBridge());
         this.outputType = outputType;
         this.preencodeKeys = requiresPreencodedKeys(inputType, partitionKeys);
         this.keySelector = keySelector;
@@ -100,51 +99,5 @@ final class StreamFusionArrowMatchRecognizeOperator extends AbstractStreamFusion
         recordNativeWindowStatistics(current[0] - observedStatistics[0], current[1] - observedStatistics[1], 0, 0, 0);
         completedMatches.inc(current[2] - observedStatistics[2]);
         observedStatistics = current;
-    }
-
-    @Override
-    protected long createMemoryHandle(
-            byte[] plan, int maxParallelism, int firstKeyGroup, int lastKeyGroup, NativeMemoryManager memoryManager) {
-        return NativeMatchRecognizeBridge.create(plan, maxParallelism, firstKeyGroup, lastKeyGroup, memoryManager);
-    }
-
-    @Override
-    protected long createRocksDbHandle(
-            byte[] plan,
-            int maxParallelism,
-            int firstKeyGroup,
-            int lastKeyGroup,
-            Path databasePath,
-            long memoryLimit,
-            NativeMemoryManager memoryManager) {
-        return NativeMatchRecognizeBridge.createRocksDb(
-                plan, maxParallelism, firstKeyGroup, lastKeyGroup, databasePath, memoryLimit, memoryManager);
-    }
-
-    @Override
-    protected byte[] snapshotKeyGroup(long handle, int keyGroup) {
-        return NativeMatchRecognizeBridge.snapshot(handle, keyGroup);
-    }
-
-    @Override
-    protected void restoreKeyGroup(long handle, int keyGroup, byte[] state) {
-        NativeMatchRecognizeBridge.restore(handle, keyGroup, state);
-    }
-
-    @Override
-    protected void checkpointRocks(long handle, Path checkpointDirectory) {
-        NativeMatchRecognizeBridge.checkpointRocks(handle, checkpointDirectory);
-    }
-
-    @Override
-    protected void importRocksCheckpoint(
-            long handle, Path checkpointDirectory, int firstKeyGroup, int lastKeyGroup, long memoryLimit) {
-        NativeMatchRecognizeBridge.importRocksCheckpoint(
-                handle, checkpointDirectory, firstKeyGroup, lastKeyGroup, memoryLimit);
-    }
-
-    @Override
-    protected void destroyHandle(long handle) {
-        NativeMatchRecognizeBridge.destroy(handle);
     }
 }

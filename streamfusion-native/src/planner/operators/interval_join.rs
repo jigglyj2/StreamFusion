@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use ahash::RandomState;
-use arrow::array::{Array, BinaryArray, Int32Array, Int8Array, UInt32Array};
+use arrow::array::{Array, Int32Array, Int8Array, UInt32Array};
 use arrow::compute::{take, SortOptions};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -13,7 +13,7 @@ use arrow_row::{RowConverter, Rows, SortField};
 use datafusion::error::{DataFusionError, Result};
 use hashbrown::HashMap;
 
-use crate::exchange::{assign_key_group, encode_binary_row, KeyField};
+use crate::exchange::{assign_key_group, KeyField};
 use crate::memory_pool::HostMemoryReservation;
 use crate::planner::arrow_schema;
 use crate::state::{
@@ -22,6 +22,9 @@ use crate::state::{
 };
 use crate::{decode_plan, proto};
 
+use super::stateful_utils::{
+    finish_output, group_key, metadata_index, restore_timer_state, timer_statistics,
+};
 use super::window_table_function::timestamp_millis;
 
 mod state_codec;
@@ -244,7 +247,7 @@ impl IntervalJoinProcessor {
             Err(error) => Err(error.into()),
         };
         match result {
-            Ok(output) => self.finish_output(output, base),
+            Ok(output) => finish_output(output, base, &mut self.scratch_reservation),
             Err(error) => {
                 self.scratch_reservation.resize(0)?;
                 Err(error)
@@ -271,7 +274,13 @@ impl IntervalJoinProcessor {
         );
         let mut changes = Vec::with_capacity(batch.num_rows());
         for row in 0..batch.num_rows() {
-            let group_key = self.group_key(side, batch, row)?;
+            let group_key = group_key(
+                batch,
+                row,
+                self.preencoded_key_indices[side],
+                &self.key_fields[side],
+                "interval join",
+            )?;
             let key_group = assign_key_group(&group_key, self.max_parallelism);
             let state_key = join_state_key(key_group, &group_key);
             let next = unique.len();
@@ -467,7 +476,7 @@ impl IntervalJoinProcessor {
         }
         self.current_event_time = watermark;
         let output = self.fire(TimerDomain::EventTime, watermark)?;
-        self.finish_output(output, 0)
+        finish_output(output, 0, &mut self.scratch_reservation)
     }
 
     pub(crate) fn advance_processing_time(&mut self, timestamp: i64) -> Result<RecordBatch> {
@@ -476,7 +485,7 @@ impl IntervalJoinProcessor {
         }
         self.current_processing_time = timestamp;
         let output = self.fire(TimerDomain::ProcessingTime, timestamp)?;
-        self.finish_output(output, 0)
+        finish_output(output, 0, &mut self.scratch_reservation)
     }
 
     fn fire(&mut self, domain: TimerDomain, progress: i64) -> Result<RecordBatch> {
@@ -684,24 +693,6 @@ impl IntervalJoinProcessor {
         }
     }
 
-    fn group_key(&self, side: usize, batch: &RecordBatch, row: usize) -> Result<Vec<u8>> {
-        match self.preencoded_key_indices[side] {
-            Some(index) => Ok(batch
-                .column(index)
-                .as_any()
-                .downcast_ref::<BinaryArray>()
-                .ok_or_else(|| {
-                    DataFusionError::Execution(
-                        "interval join preencoded keys are not Binary".to_string(),
-                    )
-                })?
-                .value(row)
-                .to_vec()),
-            None if self.key_fields[side].is_empty() => Ok(Vec::new()),
-            None => Ok(encode_binary_row(batch, row, &self.key_fields[side])?),
-        }
-    }
-
     fn row_is_matchable(&self, side: usize, batch: &RecordBatch, row: usize) -> bool {
         self.plan
             .filter_nulls
@@ -781,15 +772,14 @@ impl IntervalJoinProcessor {
     }
 
     pub(crate) fn statistics(&self) -> [u64; 7] {
-        [
+        timer_statistics(
             self.state_read_batches,
             self.state_write_batches,
             self.timer_registrations,
             self.timer_deletions,
             self.timers_fired,
-            self.timers.timer_count(TimerDomain::EventTime) as u64,
-            self.timers.timer_count(TimerDomain::ProcessingTime) as u64,
-        ]
+            &self.timers,
+        )
     }
 
     pub(crate) fn snapshot_key_group(&mut self, key_group: u32) -> Result<Vec<u8>> {
@@ -798,15 +788,14 @@ impl IntervalJoinProcessor {
     }
 
     pub(crate) fn restore_key_group(&mut self, key_group: u32, bytes: &[u8]) -> Result<()> {
-        self.state.restore_key_group(key_group, bytes)?;
-        let timer = self.state.get_batch(&[StateKeyRef {
+        restore_timer_state(
+            self.state.as_mut(),
+            &mut self.timers,
             key_group,
-            key: TIMER_STATE_KEY,
-        }])?;
-        self.state_read_batches = self.state_read_batches.saturating_add(1);
-        if let Some(bytes) = timer.into_iter().next().flatten() {
-            self.timers.restore_key_group(key_group, bytes.as_ref())?;
-        }
+            bytes,
+            TIMER_STATE_KEY,
+            &mut self.state_read_batches,
+        )?;
         self.dirty_timer_groups.remove(&key_group);
         Ok(())
     }
@@ -887,14 +876,6 @@ impl IntervalJoinProcessor {
 
     fn empty_output(&self) -> Result<RecordBatch> {
         Ok(RecordBatch::new_empty(self.output_schema.clone()))
-    }
-
-    fn finish_output(&mut self, output: RecordBatch, base: usize) -> Result<RecordBatch> {
-        let output_bytes = output.get_array_memory_size();
-        self.scratch_reservation.resize(output_bytes.max(base))?;
-        self.scratch_reservation.transfer_to_arrow(output_bytes)?;
-        self.scratch_reservation.resize(0)?;
-        Ok(output)
     }
 }
 
@@ -1007,13 +988,6 @@ fn validate_plan(plan: &proto::IntervalJoin, max_parallelism: u32) -> Result<()>
         ));
     }
     Ok(())
-}
-
-fn metadata_index(schema: &SchemaRef, name: &str) -> Option<usize> {
-    schema
-        .fields()
-        .iter()
-        .position(|field| field.name() == name)
 }
 
 fn row_converter(schema: &SchemaRef) -> Result<RowConverter> {

@@ -15,7 +15,20 @@ public final class NativeIntervalJoinBridge {
         NativeLibraryLoader.load();
     }
 
+    private static final NativeKeyedStateBridge KEYED_STATE_BRIDGE = NativeKeyedStateBridge.of(
+            NativeIntervalJoinBridge::create,
+            NativeIntervalJoinBridge::createRocksDb,
+            NativeIntervalJoinBridge::snapshot,
+            NativeIntervalJoinBridge::restore,
+            NativeIntervalJoinBridge::checkpointRocks,
+            NativeIntervalJoinBridge::importRocksCheckpoint,
+            NativeIntervalJoinBridge::destroy);
+
     private NativeIntervalJoinBridge() {}
+
+    public static NativeKeyedStateBridge keyedStateBridge() {
+        return KEYED_STATE_BRIDGE;
+    }
 
     public static long create(
             byte[] plan, int maxParallelism, int firstKeyGroup, int lastKeyGroup, NativeMemoryManager manager) {
@@ -39,7 +52,7 @@ public final class NativeIntervalJoinBridge {
                 maxParallelism,
                 firstKeyGroup,
                 lastKeyGroup,
-                NativeDeduplicateBridge.rocksDbLibraryPath().toString(),
+                NativeRocksDbLibrary.path().toString(),
                 databasePath.toString(),
                 manager,
                 memoryLimit);
@@ -99,7 +112,7 @@ public final class NativeIntervalJoinBridge {
             long handle, Path checkpoint, int firstKeyGroup, int lastKeyGroup, long memoryLimit) {
         importRocksCheckpointHandle(
                 handle,
-                NativeDeduplicateBridge.rocksDbLibraryPath().toString(),
+                NativeRocksDbLibrary.path().toString(),
                 checkpoint.toString(),
                 firstKeyGroup,
                 lastKeyGroup,

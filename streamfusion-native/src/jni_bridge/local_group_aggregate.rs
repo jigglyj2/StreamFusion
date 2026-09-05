@@ -5,9 +5,7 @@ use std::sync::Arc;
 
 use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 use jni::errors::ThrowRuntimeExAndDefault;
-use jni::jni_str;
 use jni::objects::{JByteArray, JClass, JObject};
-use jni::strings::JNIString;
 use jni::sys::jlong;
 use jni::EnvUnowned;
 
@@ -167,22 +165,9 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeLocalGroupAggre
 unsafe fn processor<'a>(
     handle: jlong,
 ) -> datafusion::error::Result<&'a mut LocalGroupAggregateProcessor> {
-    if handle == 0 {
-        return Err(datafusion::error::DataFusionError::Execution(
-            "local group aggregate native handle is closed".to_string(),
-        ));
-    }
-    unsafe { (handle as *mut LocalGroupAggregateProcessor).as_mut() }.ok_or_else(|| {
-        datafusion::error::DataFusionError::Execution(
-            "local group aggregate native handle is invalid".to_string(),
-        )
-    })
+    unsafe { super::common::processor_mut(handle, "local group aggregate") }
 }
 
 fn throw(env: &mut jni::Env<'_>, error: impl std::fmt::Display) -> jni::errors::Error {
-    let _ = env.throw_new(
-        jni_str!("java/lang/IllegalStateException"),
-        JNIString::new(error.to_string()),
-    );
-    jni::errors::Error::JavaException
+    super::common::throw(env, error)
 }

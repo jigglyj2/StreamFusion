@@ -28,6 +28,7 @@ public final class StreamFusionArrowNativeOperator extends AbstractStreamOperato
     private transient StreamFusionTaskMemory taskMemory;
     private transient ArrowCDataBridge.ReusableExecution nativeExecution;
     private transient Counter nullMetric;
+    private transient long lastNativeNullMetric;
 
     public StreamFusionArrowNativeOperator(RowType outputType, byte[] serializedPlan, String memoryConsumerName) {
         this(outputType, serializedPlan, memoryConsumerName, -1, null, true);
@@ -76,8 +77,13 @@ public final class StreamFusionArrowNativeOperator extends AbstractStreamOperato
     @Override
     public void processElement(StreamRecord<ArrowRowDataBatch> element) {
         ArrowRowDataBatch input = element.getValue();
-        if (nullMetric != null) {
+        if (nullMetric != null && nullMetricFieldIndex >= 0) {
             nullMetric.inc(input.root().getVector(nullMetricFieldIndex).getNullCount());
+        }
+        if (nullMetric != null && nullMetricFieldIndex < 0) {
+            long current = nativeExecution.metricValue(nullMetricName);
+            nullMetric.inc(current - lastNativeNullMetric);
+            lastNativeNullMetric = current;
         }
         try (ArrowCDataBridge.NativeOutputStream stream = nativeExecution.executeStream(input)) {
             if (input.hasTrivialEnvelope()) {

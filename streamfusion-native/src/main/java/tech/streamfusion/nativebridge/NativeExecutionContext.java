@@ -47,6 +47,11 @@ public final class NativeExecutionContext implements AutoCloseable {
         return handle;
     }
 
+    public long metricValue(String name) {
+        Objects.requireNonNull(name, "name");
+        return readMetricValue(handle(), name);
+    }
+
     @Override
     public synchronized void close() {
         if (handle != 0) {
@@ -59,4 +64,6 @@ public final class NativeExecutionContext implements AutoCloseable {
             byte[] serializedPlan, NativeMemoryManager memoryManager, long memoryLimit);
 
     private static native void closeExecutionContext(long handle);
+
+    private static native long readMetricValue(long handle, String name);
 }

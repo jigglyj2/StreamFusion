@@ -4,7 +4,6 @@
  */
 package tech.streamfusion.flink.window;
 
-import java.nio.file.Path;
 import java.util.Collections;
 import java.util.List;
 import org.apache.flink.api.common.operators.ProcessingTimeService.ProcessingTimeCallback;
@@ -26,7 +25,6 @@ import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.ArrowWindowAggregateCDataBridge;
 import tech.streamfusion.flink.metrics.FlinkMetricParity;
 import tech.streamfusion.flink.state.AbstractStreamFusionArrowKeyedStateOperator;
-import tech.streamfusion.nativebridge.NativeMemoryManager;
 import tech.streamfusion.nativebridge.NativeWindowAggregateBridge;
 
 /** Key-grouped native window aggregation with batch-native state access and timer firing. */
@@ -59,7 +57,7 @@ final class StreamFusionArrowWindowAggregateOperator extends AbstractStreamFusio
             boolean inputChangelog,
             boolean processingTime,
             RowDataKeySelector keySelector) {
-        super(plan, "window aggregate");
+        super(plan, "window aggregate", NativeWindowAggregateBridge.keyedStateBridge());
         this.inputType = inputType;
         this.outputType = outputType;
         this.grouping = grouping.clone();
@@ -216,51 +214,5 @@ final class StreamFusionArrowWindowAggregateOperator extends AbstractStreamFusio
     @Override
     protected void beforeNativeStateSnapshot(StateSnapshotContext context) throws Exception {
         watermarkState.update(Collections.singletonList(currentWatermark));
-    }
-
-    @Override
-    protected long createMemoryHandle(
-            byte[] plan, int maxParallelism, int firstKeyGroup, int lastKeyGroup, NativeMemoryManager memoryManager) {
-        return NativeWindowAggregateBridge.create(plan, maxParallelism, firstKeyGroup, lastKeyGroup, memoryManager);
-    }
-
-    @Override
-    protected long createRocksDbHandle(
-            byte[] plan,
-            int maxParallelism,
-            int firstKeyGroup,
-            int lastKeyGroup,
-            Path databasePath,
-            long memoryLimit,
-            NativeMemoryManager memoryManager) {
-        return NativeWindowAggregateBridge.createRocksDb(
-                plan, maxParallelism, firstKeyGroup, lastKeyGroup, databasePath, memoryLimit, memoryManager);
-    }
-
-    @Override
-    protected byte[] snapshotKeyGroup(long handle, int keyGroup) {
-        return NativeWindowAggregateBridge.snapshot(handle, keyGroup);
-    }
-
-    @Override
-    protected void restoreKeyGroup(long handle, int keyGroup, byte[] state) {
-        NativeWindowAggregateBridge.restore(handle, keyGroup, state);
-    }
-
-    @Override
-    protected void checkpointRocks(long handle, Path checkpointDirectory) {
-        NativeWindowAggregateBridge.checkpointRocks(handle, checkpointDirectory);
-    }
-
-    @Override
-    protected void importRocksCheckpoint(
-            long handle, Path checkpointDirectory, int firstKeyGroup, int lastKeyGroup, long memoryLimit) {
-        NativeWindowAggregateBridge.importRocksCheckpoint(
-                handle, checkpointDirectory, firstKeyGroup, lastKeyGroup, memoryLimit);
-    }
-
-    @Override
-    protected void destroyHandle(long handle) {
-        NativeWindowAggregateBridge.destroy(handle);
     }
 }

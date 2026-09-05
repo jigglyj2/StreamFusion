@@ -4,7 +4,6 @@
  */
 package tech.streamfusion.flink.aggregate;
 
-import java.nio.file.Path;
 import java.util.List;
 import org.apache.flink.streaming.api.operators.BoundedOneInput;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
@@ -17,7 +16,6 @@ import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.metrics.FlinkMetricParity;
 import tech.streamfusion.flink.state.AbstractStreamFusionArrowKeyedStateOperator;
 import tech.streamfusion.nativebridge.NativeGroupAggregateBridge;
-import tech.streamfusion.nativebridge.NativeMemoryManager;
 
 /** Timer-free keyed group aggregate whose input and output remain Arrow-backed. */
 final class StreamFusionArrowGroupAggregateOperator extends AbstractStreamFusionArrowKeyedStateOperator
@@ -68,7 +66,7 @@ final class StreamFusionArrowGroupAggregateOperator extends AbstractStreamFusion
             RowDataKeySelector keySelector,
             long miniBatchSize,
             String operatorName) {
-        super(serializedPlan, operatorName);
+        super(serializedPlan, operatorName, NativeGroupAggregateBridge.keyedStateBridge());
         this.outputType = outputType;
         this.inputChangelog = inputChangelog;
         this.preencodeKeys = requiresPreencodedKeys(inputType, grouping);
@@ -176,51 +174,5 @@ final class StreamFusionArrowGroupAggregateOperator extends AbstractStreamFusion
         recordNativeWindowStatistics(
                 current[0] - observedNativeStatistics[0], current[1] - observedNativeStatistics[1], 0, 0, 0);
         observedNativeStatistics = current;
-    }
-
-    @Override
-    protected long createMemoryHandle(
-            byte[] plan, int maxParallelism, int firstKeyGroup, int lastKeyGroup, NativeMemoryManager memoryManager) {
-        return NativeGroupAggregateBridge.create(plan, maxParallelism, firstKeyGroup, lastKeyGroup, memoryManager);
-    }
-
-    @Override
-    protected long createRocksDbHandle(
-            byte[] plan,
-            int maxParallelism,
-            int firstKeyGroup,
-            int lastKeyGroup,
-            Path databasePath,
-            long memoryLimit,
-            NativeMemoryManager memoryManager) {
-        return NativeGroupAggregateBridge.createRocksDb(
-                plan, maxParallelism, firstKeyGroup, lastKeyGroup, databasePath, memoryLimit, memoryManager);
-    }
-
-    @Override
-    protected byte[] snapshotKeyGroup(long handle, int keyGroup) {
-        return NativeGroupAggregateBridge.snapshot(handle, keyGroup);
-    }
-
-    @Override
-    protected void restoreKeyGroup(long handle, int keyGroup, byte[] state) {
-        NativeGroupAggregateBridge.restore(handle, keyGroup, state);
-    }
-
-    @Override
-    protected void checkpointRocks(long handle, Path checkpointDirectory) {
-        NativeGroupAggregateBridge.checkpointRocks(handle, checkpointDirectory);
-    }
-
-    @Override
-    protected void importRocksCheckpoint(
-            long handle, Path checkpointDirectory, int firstKeyGroup, int lastKeyGroup, long memoryLimit) {
-        NativeGroupAggregateBridge.importRocksCheckpoint(
-                handle, checkpointDirectory, firstKeyGroup, lastKeyGroup, memoryLimit);
-    }
-
-    @Override
-    protected void destroyHandle(long handle) {
-        NativeGroupAggregateBridge.destroy(handle);
     }
 }

@@ -4,7 +4,6 @@
  */
 package tech.streamfusion.flink.sort;
 
-import java.nio.file.Path;
 import org.apache.flink.metrics.Counter;
 import org.apache.flink.streaming.api.operators.BoundedOneInput;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
@@ -20,7 +19,6 @@ import tech.streamfusion.flink.exchange.NativeExchangeFrame;
 import tech.streamfusion.flink.metrics.FlinkMetricParity;
 import tech.streamfusion.flink.state.AbstractStreamFusionArrowKeyedStateOperator;
 import tech.streamfusion.nativebridge.NativeBoundedSortBridge;
-import tech.streamfusion.nativebridge.NativeMemoryManager;
 
 /** Bounded native full sort; Java owns Flink lifecycle, metrics, and checkpoint coordination. */
 final class StreamFusionArrowBoundedSortOperator extends AbstractStreamFusionArrowKeyedStateOperator
@@ -37,7 +35,7 @@ final class StreamFusionArrowBoundedSortOperator extends AbstractStreamFusionArr
     private transient boolean finished;
 
     StreamFusionArrowBoundedSortOperator(RowType outputType, byte[] plan, byte[] exchangePlan) {
-        super(plan, "bounded sort");
+        super(plan, "bounded sort", NativeBoundedSortBridge.keyedStateBridge());
         this.outputType = outputType;
         this.exchangePlan = exchangePlan.clone();
     }
@@ -117,51 +115,5 @@ final class StreamFusionArrowBoundedSortOperator extends AbstractStreamFusionArr
                 // SortingDataInput for keyed batch operators and sorts every record a second time.
                 .setInternalSorterSupported(true)
                 .build();
-    }
-
-    @Override
-    protected long createMemoryHandle(
-            byte[] plan, int maxParallelism, int firstKeyGroup, int lastKeyGroup, NativeMemoryManager memoryManager) {
-        return NativeBoundedSortBridge.create(plan, firstKeyGroup, lastKeyGroup, memoryManager);
-    }
-
-    @Override
-    protected long createRocksDbHandle(
-            byte[] plan,
-            int maxParallelism,
-            int firstKeyGroup,
-            int lastKeyGroup,
-            Path databasePath,
-            long memoryLimit,
-            NativeMemoryManager memoryManager) {
-        return NativeBoundedSortBridge.createRocksDb(
-                plan, firstKeyGroup, lastKeyGroup, databasePath, memoryLimit, memoryManager);
-    }
-
-    @Override
-    protected byte[] snapshotKeyGroup(long handle, int keyGroup) {
-        return NativeBoundedSortBridge.snapshot(handle, keyGroup);
-    }
-
-    @Override
-    protected void restoreKeyGroup(long handle, int keyGroup, byte[] state) {
-        NativeBoundedSortBridge.restore(handle, keyGroup, state);
-    }
-
-    @Override
-    protected void checkpointRocks(long handle, Path checkpointDirectory) {
-        NativeBoundedSortBridge.checkpointRocks(handle, checkpointDirectory);
-    }
-
-    @Override
-    protected void importRocksCheckpoint(
-            long handle, Path checkpointDirectory, int firstKeyGroup, int lastKeyGroup, long memoryLimit) {
-        NativeBoundedSortBridge.importRocksCheckpoint(
-                handle, checkpointDirectory, firstKeyGroup, lastKeyGroup, memoryLimit);
-    }
-
-    @Override
-    protected void destroyHandle(long handle) {
-        NativeBoundedSortBridge.destroy(handle);
     }
 }

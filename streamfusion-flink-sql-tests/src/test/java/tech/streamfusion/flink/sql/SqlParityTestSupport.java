@@ -111,8 +111,25 @@ abstract class SqlParityTestSupport {
     protected static void assertDataStreamParity(
             String sql, TypeInformation<?> type, DataType logicalType, List<Row> rows, String tableName)
             throws Exception {
-        byte[] flinkResult = executeDataStream(sql, type, logicalType, rows, tableName, false);
-        byte[] streamFusionResult = executeDataStream(sql, type, logicalType, rows, tableName, true);
+        assertDataStreamParity(sql, type, logicalType, rows, tableName, true);
+    }
+
+    protected static void assertBatchDataStreamParity(
+            String sql, TypeInformation<?> type, DataType logicalType, List<Row> rows, String tableName)
+            throws Exception {
+        assertDataStreamParity(sql, type, logicalType, rows, tableName, false);
+    }
+
+    private static void assertDataStreamParity(
+            String sql,
+            TypeInformation<?> type,
+            DataType logicalType,
+            List<Row> rows,
+            String tableName,
+            boolean streaming)
+            throws Exception {
+        byte[] flinkResult = executeDataStream(sql, type, logicalType, rows, tableName, false, streaming);
+        byte[] streamFusionResult = executeDataStream(sql, type, logicalType, rows, tableName, true, streaming);
 
         assertThat(StreamFusionPlannerFactory.createdPlannerCount()).isEqualTo(1);
         assertThat(StreamFusionPlannerFactory.translatedPlanCount()).isGreaterThan(0);
@@ -133,6 +150,18 @@ abstract class SqlParityTestSupport {
             String tableName,
             boolean streamFusionEnabled)
             throws Exception {
+        return executeDataStream(sql, type, logicalType, rows, tableName, streamFusionEnabled, true);
+    }
+
+    private static byte[] executeDataStream(
+            String sql,
+            TypeInformation<?> type,
+            DataType logicalType,
+            List<Row> rows,
+            String tableName,
+            boolean streamFusionEnabled,
+            boolean streaming)
+            throws Exception {
         if (streamFusionEnabled) {
             System.setProperty(
                     StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY, StreamFusionPlannerFactory.class.getName());
@@ -143,9 +172,12 @@ abstract class SqlParityTestSupport {
 
         StreamExecutionEnvironment executionEnvironment = StreamExecutionEnvironment.getExecutionEnvironment();
         executionEnvironment.setParallelism(1);
+        executionEnvironment.setRuntimeMode(streaming ? RuntimeExecutionMode.STREAMING : RuntimeExecutionMode.BATCH);
         StreamTableEnvironment tableEnvironment = StreamTableEnvironment.create(
                 executionEnvironment,
-                EnvironmentSettings.newInstance().inStreamingMode().build());
+                streaming
+                        ? EnvironmentSettings.newInstance().inStreamingMode().build()
+                        : EnvironmentSettings.newInstance().inBatchMode().build());
         tableEnvironment.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
         DataStream<Row> input =
                 executionEnvironment.fromCollection(rows, Types.ROW_NAMED(new String[] {"metric"}, type));

@@ -15,7 +15,20 @@ public final class NativeWindowJoinBridge {
         NativeLibraryLoader.load();
     }
 
+    private static final NativeKeyedStateBridge KEYED_STATE_BRIDGE = NativeKeyedStateBridge.of(
+            NativeWindowJoinBridge::create,
+            NativeWindowJoinBridge::createRocksDb,
+            NativeWindowJoinBridge::snapshot,
+            NativeWindowJoinBridge::restore,
+            NativeWindowJoinBridge::checkpointRocks,
+            NativeWindowJoinBridge::importRocksCheckpoint,
+            NativeWindowJoinBridge::destroy);
+
     private NativeWindowJoinBridge() {}
+
+    public static NativeKeyedStateBridge keyedStateBridge() {
+        return KEYED_STATE_BRIDGE;
+    }
 
     public static long create(
             byte[] plan, int maxParallelism, int firstKeyGroup, int lastKeyGroup, NativeMemoryManager manager) {
@@ -39,7 +52,7 @@ public final class NativeWindowJoinBridge {
                 maxParallelism,
                 firstKeyGroup,
                 lastKeyGroup,
-                NativeDeduplicateBridge.rocksDbLibraryPath().toString(),
+                NativeRocksDbLibrary.path().toString(),
                 database.toString(),
                 manager,
                 limit);
@@ -90,12 +103,7 @@ public final class NativeWindowJoinBridge {
 
     public static void importRocksCheckpoint(long handle, Path checkpoint, int first, int last, long limit) {
         importRocksCheckpointHandle(
-                handle,
-                NativeDeduplicateBridge.rocksDbLibraryPath().toString(),
-                checkpoint.toString(),
-                first,
-                last,
-                limit);
+                handle, NativeRocksDbLibrary.path().toString(), checkpoint.toString(), first, last, limit);
     }
 
     public static void destroy(long handle) {

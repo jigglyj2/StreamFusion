@@ -17,7 +17,7 @@ use chrono_tz::Tz;
 use datafusion::error::{DataFusionError, Result};
 use hashbrown::HashMap;
 
-use crate::exchange::{assign_key_group, encode_binary_row, KeyField};
+use crate::exchange::{assign_key_group, KeyField};
 use crate::memory_pool::HostMemoryReservation;
 use crate::planner::arrow_schema;
 use crate::state::{
@@ -26,6 +26,10 @@ use crate::state::{
 };
 use crate::{decode_plan, proto};
 
+use super::stateful_utils::{
+    append_timer_mutations, finish_output, group_key, metadata_index, restore_timer_state,
+    timer_statistics,
+};
 use super::window_aggregate::local_to_timer_epoch;
 use super::window_table_function::timestamp_millis;
 
@@ -230,7 +234,7 @@ impl WindowDeduplicateProcessor {
             Err(error) => Err(error.into()),
         };
         match result {
-            Ok(output) => self.finish_output(output, base_reservation),
+            Ok(output) => finish_output(output, base_reservation, &mut self.scratch_reservation),
             Err(error) => {
                 self.scratch_reservation.resize(0)?;
                 Err(error)
@@ -271,7 +275,13 @@ impl WindowDeduplicateProcessor {
                 self.late_records_dropped = self.late_records_dropped.saturating_add(1);
                 continue;
             }
-            let group_key = self.group_key(batch, row)?;
+            let group_key = group_key(
+                batch,
+                row,
+                self.preencoded_key_index,
+                &self.key_fields,
+                "window deduplicate",
+            )?;
             let key_group = assign_key_group(&group_key, self.max_parallelism);
             let state_key = window_state_key(key_group, &group_key, window_end);
             let next = unique.len();
@@ -391,7 +401,12 @@ impl WindowDeduplicateProcessor {
                 value: (!entry.value.candidates.is_empty()).then(|| encode_state(&entry.value)),
             })
             .collect::<Vec<_>>();
-        self.append_timer_mutations(&mut mutations, dirty_timer_groups)?;
+        append_timer_mutations(
+            &self.timers,
+            &mut mutations,
+            dirty_timer_groups,
+            TIMER_STATE_KEY,
+        )?;
         if !mutations.is_empty() {
             self.state.write_batch(mutations)?;
             self.state_write_batches = self.state_write_batches.saturating_add(1);
@@ -437,11 +452,11 @@ impl WindowDeduplicateProcessor {
                 value: None,
             });
         }
-        self.append_timer_mutations(&mut mutations, dirty_groups)?;
+        append_timer_mutations(&self.timers, &mut mutations, dirty_groups, TIMER_STATE_KEY)?;
         self.state.write_batch(mutations)?;
         self.state_write_batches = self.state_write_batches.saturating_add(1);
         let output = self.output_batch(rows)?;
-        self.finish_output(output, 0)
+        finish_output(output, 0, &mut self.scratch_reservation)
     }
 
     pub(crate) fn late_records_dropped(&self) -> u64 {
@@ -449,15 +464,14 @@ impl WindowDeduplicateProcessor {
     }
 
     pub(crate) fn statistics(&self) -> [u64; 7] {
-        [
+        timer_statistics(
             self.state_read_batches,
             self.state_write_batches,
             self.timer_registrations,
             self.timer_deletions,
             self.timers_fired,
-            self.timers.timer_count(TimerDomain::EventTime) as u64,
-            0,
-        ]
+            &self.timers,
+        )
     }
 
     pub(crate) fn snapshot_key_group(&self, key_group: u32) -> Result<Vec<u8>> {
@@ -465,55 +479,18 @@ impl WindowDeduplicateProcessor {
     }
 
     pub(crate) fn restore_key_group(&mut self, key_group: u32, bytes: &[u8]) -> Result<()> {
-        self.state.restore_key_group(key_group, bytes)?;
-        let timer = self.state.get_batch(&[StateKeyRef {
+        restore_timer_state(
+            self.state.as_mut(),
+            &mut self.timers,
             key_group,
-            key: TIMER_STATE_KEY,
-        }])?;
-        self.state_read_batches = self.state_read_batches.saturating_add(1);
-        if let Some(bytes) = timer.into_iter().next().flatten() {
-            self.timers.restore_key_group(key_group, bytes.as_ref())?;
-        }
-        Ok(())
+            bytes,
+            TIMER_STATE_KEY,
+            &mut self.state_read_batches,
+        )
     }
 
     pub(crate) fn checkpoint(&self, directory: &std::path::Path) -> Result<()> {
         self.state.checkpoint(directory)
-    }
-
-    fn append_timer_mutations(
-        &self,
-        mutations: &mut Vec<StateMutation>,
-        key_groups: BTreeSet<u32>,
-    ) -> Result<()> {
-        for key_group in key_groups {
-            mutations.push(StateMutation {
-                key: StateKey {
-                    key_group,
-                    key: TIMER_STATE_KEY.to_vec(),
-                },
-                value: Some(self.timers.snapshot_key_group(key_group)?),
-            });
-        }
-        Ok(())
-    }
-
-    fn group_key(&self, batch: &RecordBatch, row: usize) -> Result<Vec<u8>> {
-        match self.preencoded_key_index {
-            Some(index) => Ok(batch
-                .column(index)
-                .as_any()
-                .downcast_ref::<BinaryArray>()
-                .ok_or_else(|| {
-                    DataFusionError::Execution(
-                        "window deduplicate preencoded key is not Arrow Binary".to_string(),
-                    )
-                })?
-                .value(row)
-                .to_vec()),
-            None if self.key_fields.is_empty() => Ok(Vec::new()),
-            None => Ok(encode_binary_row(batch, row, &self.key_fields)?),
-        }
     }
 
     fn prepare_schema(&mut self, schema: SchemaRef) -> Result<()> {
@@ -616,14 +593,6 @@ impl WindowDeduplicateProcessor {
         columns.push(Arc::new(Int8Array::from(vec![INSERT; rows.len()])));
         Ok(RecordBatch::try_new(self.output_schema.clone(), columns)?)
     }
-
-    fn finish_output(&mut self, output: RecordBatch, base: usize) -> Result<RecordBatch> {
-        let output_bytes = output.get_array_memory_size();
-        self.scratch_reservation.resize(output_bytes.max(base))?;
-        self.scratch_reservation.transfer_to_arrow(output_bytes)?;
-        self.scratch_reservation.resize(0)?;
-        Ok(output)
-    }
 }
 
 fn validate_plan(plan: &proto::WindowDeduplicate, max_parallelism: u32) -> Result<()> {
@@ -638,13 +607,6 @@ fn validate_plan(plan: &proto::WindowDeduplicate, max_parallelism: u32) -> Resul
         ));
     }
     Ok(())
-}
-
-fn metadata_index(schema: &SchemaRef, name: &str) -> Option<usize> {
-    schema
-        .fields()
-        .iter()
-        .position(|field| field.name() == name)
 }
 
 fn window_state_key(key_group: u32, group_key: &[u8], window_end: i64) -> StateKey {

@@ -4,7 +4,6 @@
  */
 package tech.streamfusion.flink.join;
 
-import java.nio.file.Path;
 import java.util.Collections;
 import java.util.List;
 import org.apache.flink.api.common.functions.DefaultOpenContext;
@@ -31,7 +30,6 @@ import tech.streamfusion.flink.exchange.ArrowExchangeInputBatch;
 import tech.streamfusion.flink.exchange.NativeExchangeFrame;
 import tech.streamfusion.flink.metrics.FlinkMetricParity;
 import tech.streamfusion.flink.state.AbstractStreamFusionArrowKeyedStateOperator;
-import tech.streamfusion.nativebridge.NativeMemoryManager;
 import tech.streamfusion.nativebridge.NativeTemporalJoinBridge;
 
 /** Arrow-native Flink temporal join over versioned keyed state. */
@@ -71,7 +69,7 @@ final class StreamFusionArrowTemporalJoinOperator extends AbstractStreamFusionAr
             boolean processingTime,
             FlinkJoinType joinType,
             GeneratedJoinCondition generatedCondition) {
-        super(plan, "temporal join");
+        super(plan, "temporal join", NativeTemporalJoinBridge.keyedStateBridge());
         this.inputTypes = new RowType[] {leftType, rightType};
         this.outputType = outputType;
         this.keySelectors = new RowDataKeySelector[] {leftSelector, rightSelector};
@@ -271,48 +269,5 @@ final class StreamFusionArrowTemporalJoinOperator extends AbstractStreamFusionAr
             restored = Math.max(restored, candidate);
         }
         return restored;
-    }
-
-    @Override
-    protected long createMemoryHandle(
-            byte[] plan, int maxParallelism, int first, int last, NativeMemoryManager manager) {
-        return NativeTemporalJoinBridge.create(plan, maxParallelism, first, last, manager);
-    }
-
-    @Override
-    protected long createRocksDbHandle(
-            byte[] plan,
-            int maxParallelism,
-            int first,
-            int last,
-            Path database,
-            long limit,
-            NativeMemoryManager manager) {
-        return NativeTemporalJoinBridge.createRocksDb(plan, maxParallelism, first, last, database, limit, manager);
-    }
-
-    @Override
-    protected byte[] snapshotKeyGroup(long handle, int group) {
-        return NativeTemporalJoinBridge.snapshot(handle, group);
-    }
-
-    @Override
-    protected void restoreKeyGroup(long handle, int group, byte[] state) {
-        NativeTemporalJoinBridge.restore(handle, group, state);
-    }
-
-    @Override
-    protected void checkpointRocks(long handle, Path checkpoint) {
-        NativeTemporalJoinBridge.checkpointRocks(handle, checkpoint);
-    }
-
-    @Override
-    protected void importRocksCheckpoint(long handle, Path checkpoint, int first, int last, long limit) {
-        NativeTemporalJoinBridge.importRocksCheckpoint(handle, checkpoint, first, last, limit);
-    }
-
-    @Override
-    protected void destroyHandle(long handle) {
-        NativeTemporalJoinBridge.destroy(handle);
     }
 }

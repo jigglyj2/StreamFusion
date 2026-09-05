@@ -4,23 +4,31 @@
  */
 package tech.streamfusion.nativebridge;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.atomic.AtomicLong;
 
 /** Lifecycle and Arrow C Data boundary for one persistent native deduplicate operator. */
 public final class NativeDeduplicateBridge {
-    private static final String ROCKSDB_RESOURCE = "/META-INF/native/linux-x86_64/libstreamfusion_state_rocksdb.so";
     private static final AtomicLong EXECUTED_BATCHES = new AtomicLong();
-    private static Path extractedRocksDbLibrary;
 
     static {
         NativeLibraryLoader.load();
     }
 
+    private static final NativeKeyedStateBridge KEYED_STATE_BRIDGE = NativeKeyedStateBridge.of(
+            NativeDeduplicateBridge::create,
+            NativeDeduplicateBridge::createRocksDb,
+            NativeDeduplicateBridge::snapshot,
+            NativeDeduplicateBridge::restore,
+            NativeDeduplicateBridge::checkpointRocks,
+            NativeDeduplicateBridge::importRocksCheckpoint,
+            NativeDeduplicateBridge::destroy);
+
     private NativeDeduplicateBridge() {}
+
+    public static NativeKeyedStateBridge keyedStateBridge() {
+        return KEYED_STATE_BRIDGE;
+    }
 
     public static long create(
             byte[] plan, int maxParallelism, int firstKeyGroup, int lastKeyGroup, NativeMemoryManager memoryManager) {
@@ -45,7 +53,7 @@ public final class NativeDeduplicateBridge {
                 maxParallelism,
                 firstKeyGroup,
                 lastKeyGroup,
-                rocksDbLibraryPath().toString(),
+                NativeRocksDbLibrary.path().toString(),
                 databasePath.toString(),
                 memoryManager,
                 memoryLimit);
@@ -57,26 +65,7 @@ public final class NativeDeduplicateBridge {
 
     /** Returns whether the independently packaged native RocksDB component is on the classpath. */
     public static boolean isRocksDbAvailable() {
-        return NativeDeduplicateBridge.class.getResource(ROCKSDB_RESOURCE) != null;
-    }
-
-    static synchronized Path rocksDbLibraryPath() {
-        if (extractedRocksDbLibrary != null) {
-            return extractedRocksDbLibrary;
-        }
-        try (InputStream library = NativeDeduplicateBridge.class.getResourceAsStream(ROCKSDB_RESOURCE)) {
-            if (library == null) {
-                throw new IllegalStateException(
-                        "Flink selected RocksDB state, but streamfusion-state-rocksdb is not on the classpath");
-            }
-            Path extracted = Files.createTempFile("streamfusion-state-rocksdb-", ".so");
-            Files.copy(library, extracted, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-            extracted.toFile().deleteOnExit();
-            extractedRocksDbLibrary = extracted.toAbsolutePath();
-            return extractedRocksDbLibrary;
-        } catch (IOException error) {
-            throw new IllegalStateException("Could not extract the native RocksDB state component", error);
-        }
+        return NativeRocksDbLibrary.isAvailable();
     }
 
     public static long process(
@@ -126,7 +115,7 @@ public final class NativeDeduplicateBridge {
             long targetHandle, Path checkpointPath, int firstKeyGroup, int lastKeyGroup, long memoryLimit) {
         importRocksCheckpointHandle(
                 targetHandle,
-                rocksDbLibraryPath().toString(),
+                NativeRocksDbLibrary.path().toString(),
                 checkpointPath.toString(),
                 firstKeyGroup,
                 lastKeyGroup,

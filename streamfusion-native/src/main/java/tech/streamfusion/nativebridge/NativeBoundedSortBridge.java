@@ -15,7 +15,22 @@ public final class NativeBoundedSortBridge {
         NativeLibraryLoader.load();
     }
 
+    private static final NativeKeyedStateBridge KEYED_STATE_BRIDGE = NativeKeyedStateBridge.of(
+            (plan, ignoredMaxParallelism, firstKeyGroup, lastKeyGroup, memoryManager) ->
+                    create(plan, firstKeyGroup, lastKeyGroup, memoryManager),
+            (plan, ignoredMaxParallelism, firstKeyGroup, lastKeyGroup, databasePath, memoryLimit, memoryManager) ->
+                    createRocksDb(plan, firstKeyGroup, lastKeyGroup, databasePath, memoryLimit, memoryManager),
+            NativeBoundedSortBridge::snapshot,
+            NativeBoundedSortBridge::restore,
+            NativeBoundedSortBridge::checkpointRocks,
+            NativeBoundedSortBridge::importRocksCheckpoint,
+            NativeBoundedSortBridge::destroy);
+
     private NativeBoundedSortBridge() {}
+
+    public static NativeKeyedStateBridge keyedStateBridge() {
+        return KEYED_STATE_BRIDGE;
+    }
 
     public static long create(byte[] plan, int firstKeyGroup, int lastKeyGroup, NativeMemoryManager memoryManager) {
         long handle = createHandle(plan, firstKeyGroup, lastKeyGroup, memoryManager, memoryManager.limit());
@@ -36,7 +51,7 @@ public final class NativeBoundedSortBridge {
                 plan,
                 firstKeyGroup,
                 lastKeyGroup,
-                NativeDeduplicateBridge.rocksDbLibraryPath().toString(),
+                NativeRocksDbLibrary.path().toString(),
                 databasePath.toString(),
                 memoryManager,
                 memoryLimit);
@@ -83,7 +98,7 @@ public final class NativeBoundedSortBridge {
             long targetHandle, Path checkpointPath, int firstKeyGroup, int lastKeyGroup, long memoryLimit) {
         importRocksCheckpointHandle(
                 targetHandle,
-                NativeDeduplicateBridge.rocksDbLibraryPath().toString(),
+                NativeRocksDbLibrary.path().toString(),
                 checkpointPath.toString(),
                 firstKeyGroup,
                 lastKeyGroup,

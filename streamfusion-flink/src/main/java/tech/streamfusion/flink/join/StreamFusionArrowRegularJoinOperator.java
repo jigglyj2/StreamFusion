@@ -4,7 +4,6 @@
  */
 package tech.streamfusion.flink.join;
 
-import java.nio.file.Path;
 import java.util.Collections;
 import java.util.List;
 import org.apache.flink.api.common.state.ListState;
@@ -24,7 +23,6 @@ import tech.streamfusion.flink.exchange.ArrowExchangeInputBatch;
 import tech.streamfusion.flink.exchange.NativeExchangeFrame;
 import tech.streamfusion.flink.metrics.FlinkMetricParity;
 import tech.streamfusion.flink.state.AbstractStreamFusionArrowKeyedStateOperator;
-import tech.streamfusion.nativebridge.NativeMemoryManager;
 import tech.streamfusion.nativebridge.NativeRegularJoinBridge;
 
 /** Native two-input regular streaming join over ordered Arrow-row multiset state. */
@@ -54,7 +52,7 @@ final class StreamFusionArrowRegularJoinOperator extends AbstractStreamFusionArr
             RowDataKeySelector rightSelector,
             byte[] leftExchangePlan,
             byte[] rightExchangePlan) {
-        super(plan, "regular join");
+        super(plan, "regular join", NativeRegularJoinBridge.keyedStateBridge());
         this.inputTypes = new RowType[] {leftType, rightType};
         this.outputType = outputType;
         this.keySelectors = new RowDataKeySelector[] {leftSelector, rightSelector};
@@ -173,48 +171,5 @@ final class StreamFusionArrowRegularJoinOperator extends AbstractStreamFusionArr
             restored = Math.max(restored, candidate);
         }
         return restored;
-    }
-
-    @Override
-    protected long createMemoryHandle(
-            byte[] plan, int maxParallelism, int first, int last, NativeMemoryManager manager) {
-        return NativeRegularJoinBridge.create(plan, maxParallelism, first, last, manager);
-    }
-
-    @Override
-    protected long createRocksDbHandle(
-            byte[] plan,
-            int maxParallelism,
-            int first,
-            int last,
-            Path database,
-            long limit,
-            NativeMemoryManager manager) {
-        return NativeRegularJoinBridge.createRocksDb(plan, maxParallelism, first, last, database, limit, manager);
-    }
-
-    @Override
-    protected byte[] snapshotKeyGroup(long handle, int group) {
-        return NativeRegularJoinBridge.snapshot(handle, group);
-    }
-
-    @Override
-    protected void restoreKeyGroup(long handle, int group, byte[] state) {
-        NativeRegularJoinBridge.restore(handle, group, state);
-    }
-
-    @Override
-    protected void checkpointRocks(long handle, Path checkpoint) {
-        NativeRegularJoinBridge.checkpointRocks(handle, checkpoint);
-    }
-
-    @Override
-    protected void importRocksCheckpoint(long handle, Path checkpoint, int first, int last, long limit) {
-        NativeRegularJoinBridge.importRocksCheckpoint(handle, checkpoint, first, last, limit);
-    }
-
-    @Override
-    protected void destroyHandle(long handle) {
-        NativeRegularJoinBridge.destroy(handle);
     }
 }

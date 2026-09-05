@@ -4,7 +4,6 @@
  */
 package tech.streamfusion.flink.changelog;
 
-import java.nio.file.Path;
 import java.util.List;
 import org.apache.flink.api.common.functions.DefaultOpenContext;
 import org.apache.flink.api.common.functions.util.FunctionUtils;
@@ -23,7 +22,6 @@ import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.metrics.FlinkMetricParity;
 import tech.streamfusion.flink.state.AbstractStreamFusionArrowKeyedStateOperator;
 import tech.streamfusion.nativebridge.NativeChangelogNormalizeBridge;
-import tech.streamfusion.nativebridge.NativeMemoryManager;
 
 /** Native keyed changelog normalization over schema-aware Arrow-row state. */
 final class StreamFusionArrowChangelogNormalizeOperator extends AbstractStreamFusionArrowKeyedStateOperator
@@ -50,7 +48,8 @@ final class StreamFusionArrowChangelogNormalizeOperator extends AbstractStreamFu
         super(
                 StreamFusionChangelogNormalizePlan.create(
                         inputType, uniqueKeys, generateUpdateBefore, stateTtlMillis, generatedFilter != null),
-                "changelog normalize");
+                "changelog normalize",
+                NativeChangelogNormalizeBridge.keyedStateBridge());
         this.outputType = outputType;
         this.preencodeKeys = requiresPreencodedKeys(inputType, uniqueKeys);
         this.keySelector = keySelector;
@@ -128,52 +127,6 @@ final class StreamFusionArrowChangelogNormalizeOperator extends AbstractStreamFu
         recordNativeWindowStatistics(current[0] - observedStatistics[0], current[1] - observedStatistics[1], 0, 0, 0);
         expiredStateEntries.inc(current[2] - observedStatistics[2]);
         observedStatistics = current;
-    }
-
-    @Override
-    protected long createMemoryHandle(
-            byte[] plan, int maxParallelism, int firstKeyGroup, int lastKeyGroup, NativeMemoryManager memoryManager) {
-        return NativeChangelogNormalizeBridge.create(plan, maxParallelism, firstKeyGroup, lastKeyGroup, memoryManager);
-    }
-
-    @Override
-    protected long createRocksDbHandle(
-            byte[] plan,
-            int maxParallelism,
-            int firstKeyGroup,
-            int lastKeyGroup,
-            Path databasePath,
-            long memoryLimit,
-            NativeMemoryManager memoryManager) {
-        return NativeChangelogNormalizeBridge.createRocksDb(
-                plan, maxParallelism, firstKeyGroup, lastKeyGroup, databasePath, memoryLimit, memoryManager);
-    }
-
-    @Override
-    protected byte[] snapshotKeyGroup(long handle, int keyGroup) {
-        return NativeChangelogNormalizeBridge.snapshot(handle, keyGroup);
-    }
-
-    @Override
-    protected void restoreKeyGroup(long handle, int keyGroup, byte[] state) {
-        NativeChangelogNormalizeBridge.restore(handle, keyGroup, state);
-    }
-
-    @Override
-    protected void checkpointRocks(long handle, Path checkpointDirectory) {
-        NativeChangelogNormalizeBridge.checkpointRocks(handle, checkpointDirectory);
-    }
-
-    @Override
-    protected void importRocksCheckpoint(
-            long handle, Path checkpointDirectory, int firstKeyGroup, int lastKeyGroup, long memoryLimit) {
-        NativeChangelogNormalizeBridge.importRocksCheckpoint(
-                handle, checkpointDirectory, firstKeyGroup, lastKeyGroup, memoryLimit);
-    }
-
-    @Override
-    protected void destroyHandle(long handle) {
-        NativeChangelogNormalizeBridge.destroy(handle);
     }
 
     @Override

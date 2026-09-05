@@ -7,6 +7,8 @@ package tech.streamfusion.flink.window;
 import static org.apache.flink.runtime.state.KeyGroupRangeAssignment.DEFAULT_LOWER_BOUND_MAX_PARALLELISM;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import org.apache.flink.api.dag.Transformation;
 import org.apache.flink.configuration.CheckpointingOptions;
 import org.apache.flink.configuration.ReadableConfig;
@@ -30,11 +32,17 @@ import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatchTypeInfo;
 import tech.streamfusion.flink.arrow.StreamFusionArrowBoundaries;
+import tech.streamfusion.flink.calc.StreamFusionCalcPlan;
+import tech.streamfusion.flink.calc.StreamFusionCalcTranslator;
+import tech.streamfusion.flink.calc.StreamFusionInputProjection;
 import tech.streamfusion.flink.deduplicate.ArrowBatchKeySelector;
 import tech.streamfusion.flink.exchange.StreamFusionExchangeTranslator;
 import tech.streamfusion.flink.memory.StreamFusionTaskMemory;
 import tech.streamfusion.flink.operator.StreamFusionArrowNativeOperator;
 import tech.streamfusion.flink.state.StreamFusionStateBackendFactory;
+import tech.streamfusion.proto.plan.v1.Expression;
+import tech.streamfusion.proto.plan.v1.Input;
+import tech.streamfusion.proto.plan.v1.Operator;
 import tech.streamfusion.proto.plan.v1.WindowKind;
 
 /** Reflection entry point used by the planner extension for native aligned Window TVFs. */
@@ -108,6 +116,85 @@ public final class StreamFusionWindowTableFunctionTranslator {
                         plan,
                         "streamfusion-window-table-function",
                         strategy.getTimeAttributeIndex(),
+                        "numNullRowTimeRecordsDropped",
+                        false),
+                ArrowRowDataBatchTypeInfo.INSTANCE,
+                input.getParallelism(),
+                false);
+        transformation.declareManagedMemoryUseCaseAtOperatorScope(
+                ManagedMemoryUseCase.OPERATOR, StreamFusionTaskMemory.MANAGED_MEMORY_WEIGHT);
+        return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
+    }
+
+    /** Fuses a bounded input Calc chain directly below an aligned Window TVF. */
+    public static Transformation<RowData> translateInputCalcChain(
+            Transformation<RowData> input,
+            List<RowType> calcInputTypes,
+            List<RowType> calcOutputTypes,
+            List<List<?>> calcProjectionStages,
+            List<?> calcConditions,
+            RowType outputType,
+            TimeAttributeWindowingStrategy strategy,
+            ReadableConfig config) {
+        if (calcInputTypes.isEmpty()
+                || calcInputTypes.size() != calcOutputTypes.size()
+                || calcInputTypes.size() != calcProjectionStages.size()
+                || calcInputTypes.size() != calcConditions.size()) {
+            throw new IllegalArgumentException("A fused Window TVF input Calc chain must be non-empty and aligned");
+        }
+        RowType windowInputType = calcOutputTypes.get(calcOutputTypes.size() - 1);
+        if (strategy.getWindow() instanceof SessionWindowSpec
+                || unsupportedReason(windowInputType, outputType, strategy, config) != null) {
+            return null;
+        }
+        List<List<Expression>> nativeProjections = new ArrayList<>(calcProjectionStages.size());
+        List<Expression> nativeConditions = new ArrayList<>(calcConditions.size());
+        for (int stage = 0; stage < calcInputTypes.size(); stage++) {
+            RowType stageInput = calcInputTypes.get(stage);
+            RowType stageOutput = calcOutputTypes.get(stage);
+            List<?> projections = calcProjectionStages.get(stage);
+            List<Expression> expressions = new ArrayList<>(projections.size());
+            for (int index = 0; index < projections.size(); index++) {
+                expressions.add(StreamFusionCalcTranslator.operatorExpression(
+                        projections.get(index), stageInput, stageOutput.getTypeAt(index)));
+            }
+            nativeProjections.add(expressions);
+            nativeConditions.add(StreamFusionCalcTranslator.operatorCondition(calcConditions.get(stage), stageInput));
+        }
+
+        RowType planInputType = calcInputTypes.get(0);
+        Transformation<ArrowRowDataBatch> arrowInput;
+        if (StreamFusionArrowBoundaries.isArrow(input)) {
+            arrowInput = StreamFusionArrowBoundaries.toArrow(input, planInputType);
+        } else {
+            StreamFusionInputProjection.Projection projection = StreamFusionInputProjection.create(
+                    planInputType, nativeProjections.get(0), nativeConditions.get(0));
+            planInputType = projection.inputType();
+            nativeProjections.set(0, projection.projections());
+            nativeConditions.set(0, projection.condition());
+            arrowInput = StreamFusionArrowBoundaries.toArrow(
+                    input, planInputType, projection.fieldPaths(), projection.rowArities());
+        }
+
+        Operator calcs = StreamFusionCalcPlan.appendCalcOperators(
+                Operator.newBuilder().setInput(Input.newBuilder()).build(),
+                planInputType.getFieldCount(),
+                nativeProjections,
+                nativeConditions);
+        WindowParameters parameters = parameters(strategy.getWindow());
+        String shiftTimeZone = TimeWindowUtil.getShiftTimeZone(
+                        strategy.getTimeAttributeType(), TableConfigUtils.getLocalTimeZone(config))
+                .getId();
+        byte[] plan = StreamFusionWindowTableFunctionPlan.create(
+                calcs, windowInputType, strategy.getTimeAttributeIndex(), new int[0], false, shiftTimeZone, parameters);
+        OneInputTransformation<ArrowRowDataBatch, ArrowRowDataBatch> transformation = new OneInputTransformation<>(
+                arrowInput,
+                "streamfusion-calc-window-table-function[" + parameters.kind + "]",
+                new StreamFusionArrowNativeOperator(
+                        outputType,
+                        plan,
+                        "streamfusion-window-table-function",
+                        -1,
                         "numNullRowTimeRecordsDropped",
                         false),
                 ArrowRowDataBatchTypeInfo.INSTANCE,

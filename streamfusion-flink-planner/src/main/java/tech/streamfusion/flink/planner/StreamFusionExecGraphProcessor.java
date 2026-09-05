@@ -9,16 +9,14 @@
  */
 package tech.streamfusion.flink.planner;
 
-import java.lang.reflect.Field;
+import static tech.streamfusion.flink.planner.FlinkExecNodeAccess.*;
+
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.stream.Collectors;
-import org.apache.calcite.plan.RelOptUtil;
 import org.apache.calcite.rex.RexCall;
 import org.apache.calcite.rex.RexInputRef;
 import org.apache.calcite.rex.RexNode;
@@ -35,13 +33,12 @@ import org.apache.flink.table.planner.plan.nodes.exec.ExecNode;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeBase;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeGraph;
 import org.apache.flink.table.planner.plan.nodes.exec.InputProperty;
-import org.apache.flink.table.planner.plan.nodes.exec.StateMetadata;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecCalc;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecCorrelate;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecUnion;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecValues;
-import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecCalc;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecWindowTableFunction;
 import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecCorrelate;
-import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecExpand;
 import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecWindowTableFunction;
 import org.apache.flink.table.planner.plan.nodes.exec.processor.ExecNodeGraphProcessor;
 import org.apache.flink.table.planner.plan.nodes.exec.processor.ProcessorContext;
@@ -82,18 +79,13 @@ import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWindowDed
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWindowJoin;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWindowRank;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWindowTableFunction;
-import org.apache.flink.table.planner.plan.utils.RankProcessStrategy;
 import org.apache.flink.table.runtime.groupwindow.NamedWindowProperty;
-import org.apache.flink.table.runtime.operators.join.FlinkJoinType;
-import org.apache.flink.table.runtime.operators.join.stream.keyselector.AttributeBasedJoinKeyExtractor;
 import org.apache.flink.table.runtime.operators.join.stream.keyselector.AttributeBasedJoinKeyExtractor.ConditionAttributeRef;
 import org.apache.flink.table.runtime.operators.rank.ConstantRankRange;
 import org.apache.flink.table.runtime.operators.rank.RankRange;
 import org.apache.flink.table.runtime.operators.rank.RankType;
 import org.apache.flink.table.runtime.operators.rank.VariableRankRange;
 import org.apache.flink.table.types.logical.RowType;
-import org.apache.flink.table.types.logical.VarBinaryType;
-import org.apache.flink.util.TimeUtils;
 import tech.streamfusion.flink.planner.StreamFusionMatchRecognizePlanner.FixedMatchRecognize;
 import tech.streamfusion.flink.planner.StreamFusionMatchRecognizePlanner.ProcessingTimeMatchRecognize;
 
@@ -291,6 +283,11 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             }
         } else if (node instanceof StreamExecCorrelate) {
             String reason = unsupportedReason((StreamExecCorrelate) node, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
+        } else if (node instanceof BatchExecCorrelate) {
+            String reason = unsupportedReason((BatchExecCorrelate) node, context);
             if (reason != null) {
                 rejections.add(nodePath + "\n" + reason);
             }
@@ -494,6 +491,11 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             }
         } else if (node instanceof StreamExecWindowTableFunction) {
             String reason = unsupportedReason((StreamExecWindowTableFunction) node, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
+        } else if (node instanceof BatchExecWindowTableFunction) {
+            String reason = unsupportedReason((BatchExecWindowTableFunction) node, context);
             if (reason != null) {
                 rejections.add(nodePath + "\n" + reason);
             }
@@ -1234,6 +1236,19 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     .collect(Collectors.toList()));
             return replacement;
         }
+        if (node instanceof BatchExecWindowTableFunction) {
+            BatchExecWindowTableFunction window = (BatchExecWindowTableFunction) node;
+            StreamFusionBatchExecWindowTableFunction replacement = new StreamFusionBatchExecWindowTableFunction(
+                    window.getPersistedConfig(),
+                    windowStrategy(window),
+                    window.getInputProperties().get(0),
+                    (RowType) window.getOutputType(),
+                    "StreamFusionBatchWindowTableFunction");
+            replacement.setInputEdges(window.getInputEdges().stream()
+                    .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                    .collect(Collectors.toList()));
+            return replacement;
+        }
         if (node instanceof StreamExecCorrelate) {
             StreamExecCorrelate correlate = (StreamExecCorrelate) node;
             org.apache.calcite.rex.RexCall invocation =
@@ -1260,6 +1275,21 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     correlate.getInputProperties().get(0),
                     (RowType) correlate.getOutputType(),
                     "StreamFusionArrayUnnest");
+            replacement.setInputEdges(correlate.getInputEdges().stream()
+                    .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                    .collect(Collectors.toList()));
+            return replacement;
+        }
+        if (node instanceof BatchExecCorrelate) {
+            BatchExecCorrelate correlate = (BatchExecCorrelate) node;
+            StreamFusionBatchExecArrayUnnest replacement = new StreamFusionBatchExecArrayUnnest(
+                    correlate.getPersistedConfig(),
+                    (org.apache.flink.table.runtime.operators.join.FlinkJoinType)
+                            field(correlate, CommonExecCorrelate.class, "joinType"),
+                    (org.apache.calcite.rex.RexCall) field(correlate, CommonExecCorrelate.class, "invocation"),
+                    correlate.getInputProperties().get(0),
+                    (RowType) correlate.getOutputType(),
+                    "StreamFusionBatchArrayUnnest");
             replacement.setInputEdges(correlate.getInputEdges().stream()
                     .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
                     .collect(Collectors.toList()));
@@ -2176,6 +2206,20 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
     }
 
     private String unsupportedReason(StreamExecCorrelate correlate, ProcessorContext context) {
+        return unsupportedCorrelateReason(correlate, context);
+    }
+
+    private String unsupportedReason(BatchExecCorrelate correlate, ProcessorContext context) {
+        Object invocation = field(correlate, CommonExecCorrelate.class, "invocation");
+        if (invocation instanceof RexCall
+                && "$REPLICATE_ROWS$1"
+                        .equals(((RexCall) invocation).getOperator().getName())) {
+            return "bounded set-operation row replication has no StreamFusion physical implementation";
+        }
+        return unsupportedCorrelateReason(correlate, context);
+    }
+
+    private String unsupportedCorrelateReason(CommonExecCorrelate correlate, ProcessorContext context) {
         ExecEdge input = correlate.getInputEdges().get(0);
         Object joinType = field(correlate, CommonExecCorrelate.class, "joinType");
         Object invocation = field(correlate, CommonExecCorrelate.class, "invocation");
@@ -2315,6 +2359,22 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
     }
 
     private String unsupportedReason(StreamExecWindowTableFunction window, ProcessorContext context) {
+        return unsupportedWindowTableFunctionReason(window, context);
+    }
+
+    private String unsupportedReason(BatchExecWindowTableFunction window, ProcessorContext context) {
+        TimeAttributeWindowingStrategy strategy = windowStrategy(window);
+        if (strategy.isProctime()) {
+            return "processing-time Window TVFs are not supported by Flink in batch mode";
+        }
+        if (strategy.getWindow() instanceof org.apache.flink.table.planner.plan.logical.SessionWindowSpec) {
+            return "unaligned Window TVFs such as SESSION are not supported by Flink in batch mode";
+        }
+        return unsupportedWindowTableFunctionReason(window, context);
+    }
+
+    private String unsupportedWindowTableFunctionReason(
+            CommonExecWindowTableFunction window, ProcessorContext context) {
         ExecEdge input = window.getInputEdges().get(0);
         try {
             Class<?> translator = Class.forName(
@@ -2341,587 +2401,6 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
     }
 
     @SuppressWarnings("unchecked")
-    private static List<RexNode> projection(CommonExecCalc calc) {
-        return (List<RexNode>) field(calc, CommonExecCalc.class, "projection");
-    }
-
-    private static RexNode condition(CommonExecCalc calc) {
-        return (RexNode) field(calc, CommonExecCalc.class, "condition");
-    }
-
-    @SuppressWarnings("unchecked")
-    private static List<List<RexNode>> projects(StreamExecExpand expand) {
-        return (List<List<RexNode>>) field(expand, CommonExecExpand.class, "projects");
-    }
-
-    private static TimeAttributeWindowingStrategy windowStrategy(StreamExecWindowTableFunction window) {
-        return (TimeAttributeWindowingStrategy) field(window, CommonExecWindowTableFunction.class, "windowingStrategy");
-    }
-
-    private static RexNode watermarkExpression(StreamExecWatermarkAssigner watermark) {
-        return (RexNode) field(watermark, StreamExecWatermarkAssigner.class, "watermarkExpr");
-    }
-
-    private static int watermarkRowtimeFieldIndex(StreamExecWatermarkAssigner watermark) {
-        return (int) field(watermark, StreamExecWatermarkAssigner.class, "rowtimeFieldIndex");
-    }
-
-    private static int[] uniqueKeys(StreamExecDeduplicate deduplicate) {
-        return ((int[]) field(deduplicate, StreamExecDeduplicate.class, "uniqueKeys")).clone();
-    }
-
-    private static boolean booleanField(StreamExecDeduplicate deduplicate, String name) {
-        return (boolean) field(deduplicate, StreamExecDeduplicate.class, name);
-    }
-
-    @SuppressWarnings("unchecked")
-    private static List<StateMetadata> stateMetadata(StreamExecDeduplicate deduplicate) {
-        return (List<StateMetadata>) field(deduplicate, StreamExecDeduplicate.class, "stateMetadataList");
-    }
-
-    private static long stateTtl(StreamExecDeduplicate deduplicate) {
-        List<StateMetadata> metadata = stateMetadata(deduplicate);
-        if (metadata == null || metadata.isEmpty()) {
-            return deduplicate
-                    .getPersistedConfig()
-                    .get(ExecutionConfigOptions.IDLE_STATE_RETENTION)
-                    .toMillis();
-        }
-        return TimeUtils.parseDuration(metadata.get(0).getStateTtl()).toMillis();
-    }
-
-    private static int[] changelogNormalizeUniqueKeys(StreamExecChangelogNormalize normalize) {
-        return ((int[]) field(normalize, StreamExecChangelogNormalize.class, "uniqueKeys")).clone();
-    }
-
-    private static boolean changelogNormalizeGenerateUpdateBefore(StreamExecChangelogNormalize normalize) {
-        return (boolean) field(normalize, StreamExecChangelogNormalize.class, "generateUpdateBefore");
-    }
-
-    private static RexNode changelogNormalizeFilter(StreamExecChangelogNormalize normalize) {
-        return (RexNode) field(normalize, StreamExecChangelogNormalize.class, "filterCondition");
-    }
-
-    @SuppressWarnings("unchecked")
-    private static List<StateMetadata> changelogNormalizeStateMetadata(StreamExecChangelogNormalize normalize) {
-        return (List<StateMetadata>) field(normalize, StreamExecChangelogNormalize.class, "stateMetadataList");
-    }
-
-    private static int[] grouping(StreamExecGroupAggregate aggregate) {
-        return ((int[]) field(aggregate, StreamExecGroupAggregate.class, "grouping")).clone();
-    }
-
-    private static OverSpec overSpec(StreamExecOverAggregate aggregate) {
-        return (OverSpec) field(aggregate, StreamExecOverAggregate.class, "overSpec");
-    }
-
-    private static org.apache.calcite.rel.core.AggregateCall[] aggregateCalls(StreamExecGroupAggregate aggregate) {
-        return ((org.apache.calcite.rel.core.AggregateCall[])
-                        field(aggregate, StreamExecGroupAggregate.class, "aggCalls"))
-                .clone();
-    }
-
-    private static boolean[] aggregateCallNeedRetractions(StreamExecGroupAggregate aggregate) {
-        return ((boolean[]) field(aggregate, StreamExecGroupAggregate.class, "aggCallNeedRetractions")).clone();
-    }
-
-    private static boolean aggregateBooleanField(StreamExecGroupAggregate aggregate, String name) {
-        return (boolean) field(aggregate, StreamExecGroupAggregate.class, name);
-    }
-
-    @SuppressWarnings("unchecked")
-    private static List<StateMetadata> aggregateStateMetadata(StreamExecGroupAggregate aggregate) {
-        return (List<StateMetadata>) field(aggregate, StreamExecGroupAggregate.class, "stateMetadataList");
-    }
-
-    private static long aggregateStateTtl(StreamExecGroupAggregate aggregate) {
-        List<StateMetadata> metadata = aggregateStateMetadata(aggregate);
-        if (metadata == null || metadata.isEmpty()) {
-            return aggregate
-                    .getPersistedConfig()
-                    .get(ExecutionConfigOptions.IDLE_STATE_RETENTION)
-                    .toMillis();
-        }
-        return TimeUtils.parseDuration(metadata.get(0).getStateTtl()).toMillis();
-    }
-
-    private static int[] localGroupGrouping(StreamExecLocalGroupAggregate aggregate) {
-        return ((int[]) field(aggregate, StreamExecLocalGroupAggregate.class, "grouping")).clone();
-    }
-
-    private static org.apache.calcite.rel.core.AggregateCall[] localGroupAggregateCalls(
-            StreamExecLocalGroupAggregate aggregate) {
-        return ((org.apache.calcite.rel.core.AggregateCall[])
-                        field(aggregate, StreamExecLocalGroupAggregate.class, "aggCalls"))
-                .clone();
-    }
-
-    private static boolean[] localGroupCallNeedRetractions(StreamExecLocalGroupAggregate aggregate) {
-        return ((boolean[]) field(aggregate, StreamExecLocalGroupAggregate.class, "aggCallNeedRetractions")).clone();
-    }
-
-    private static boolean localGroupNeedRetraction(StreamExecLocalGroupAggregate aggregate) {
-        return (boolean) field(aggregate, StreamExecLocalGroupAggregate.class, "needRetraction");
-    }
-
-    private static int[] globalGroupGrouping(StreamExecGlobalGroupAggregate aggregate) {
-        return ((int[]) field(aggregate, StreamExecGlobalGroupAggregate.class, "grouping")).clone();
-    }
-
-    private static org.apache.calcite.rel.core.AggregateCall[] globalGroupAggregateCalls(
-            StreamExecGlobalGroupAggregate aggregate) {
-        return ((org.apache.calcite.rel.core.AggregateCall[])
-                        field(aggregate, StreamExecGlobalGroupAggregate.class, "aggCalls"))
-                .clone();
-    }
-
-    private static boolean[] globalGroupCallNeedRetractions(StreamExecGlobalGroupAggregate aggregate) {
-        return ((boolean[]) field(aggregate, StreamExecGlobalGroupAggregate.class, "aggCallNeedRetractions")).clone();
-    }
-
-    private static boolean globalGroupNeedRetraction(StreamExecGlobalGroupAggregate aggregate) {
-        return (boolean) field(aggregate, StreamExecGlobalGroupAggregate.class, "needRetraction");
-    }
-
-    private static boolean globalGroupGenerateUpdateBefore(StreamExecGlobalGroupAggregate aggregate) {
-        return (boolean) field(aggregate, StreamExecGlobalGroupAggregate.class, "generateUpdateBefore");
-    }
-
-    @SuppressWarnings("unchecked")
-    private static List<StateMetadata> globalGroupStateMetadata(StreamExecGlobalGroupAggregate aggregate) {
-        return (List<StateMetadata>) field(aggregate, StreamExecGlobalGroupAggregate.class, "stateMetadataList");
-    }
-
-    private static RowType globalGroupOriginalInputType(StreamExecGlobalGroupAggregate aggregate) {
-        return (RowType) field(aggregate, StreamExecGlobalGroupAggregate.class, "localAggInputRowType");
-    }
-
-    @SuppressWarnings("unchecked")
-    private static long globalGroupStateTtl(StreamExecGlobalGroupAggregate aggregate) {
-        List<StateMetadata> metadata = globalGroupStateMetadata(aggregate);
-        if (metadata == null || metadata.isEmpty()) {
-            return aggregate
-                    .getPersistedConfig()
-                    .get(ExecutionConfigOptions.IDLE_STATE_RETENTION)
-                    .toMillis();
-        }
-        return TimeUtils.parseDuration(metadata.get(0).getStateTtl()).toMillis();
-    }
-
-    private static org.apache.calcite.rel.core.AggregateCall[] incrementalOriginalCalls(
-            StreamExecIncrementalGroupAggregate aggregate) {
-        return ((org.apache.calcite.rel.core.AggregateCall[])
-                        field(aggregate, StreamExecIncrementalGroupAggregate.class, "partialOriginalAggCalls"))
-                .clone();
-    }
-
-    private static int[] incrementalFinalGrouping(StreamExecIncrementalGroupAggregate aggregate) {
-        return ((int[]) field(aggregate, StreamExecIncrementalGroupAggregate.class, "finalAggGrouping")).clone();
-    }
-
-    private static RowType incrementalPartialOriginalInputType(StreamExecIncrementalGroupAggregate aggregate) {
-        return (RowType) field(aggregate, StreamExecIncrementalGroupAggregate.class, "partialLocalAggInputType");
-    }
-
-    private static boolean[] incrementalCallNeedRetractions(StreamExecIncrementalGroupAggregate aggregate) {
-        return ((boolean[])
-                        field(aggregate, StreamExecIncrementalGroupAggregate.class, "partialAggCallNeedRetractions"))
-                .clone();
-    }
-
-    private static boolean incrementalNeedRetraction(StreamExecIncrementalGroupAggregate aggregate) {
-        return (boolean) field(aggregate, StreamExecIncrementalGroupAggregate.class, "partialAggNeedRetraction");
-    }
-
-    @SuppressWarnings("unchecked")
-    private static long incrementalStateTtl(StreamExecIncrementalGroupAggregate aggregate) {
-        List<StateMetadata> metadata =
-                (List<StateMetadata>) field(aggregate, StreamExecIncrementalGroupAggregate.class, "stateMetadataList");
-        if (metadata == null || metadata.isEmpty()) {
-            return aggregate
-                    .getPersistedConfig()
-                    .get(ExecutionConfigOptions.IDLE_STATE_RETENTION)
-                    .toMillis();
-        }
-        return TimeUtils.parseDuration(metadata.get(0).getStateTtl()).toMillis();
-    }
-
-    private static RowType nativeGroupAccumulatorType(RowType inputType, int[] grouping) {
-        List<RowType.RowField> fields = new ArrayList<>(grouping.length + 1);
-        for (int index : grouping) {
-            RowType.RowField field = inputType.getFields().get(index);
-            fields.add(new RowType.RowField(field.getName(), field.getType()));
-        }
-        fields.add(
-                new RowType.RowField("__streamfusion_accumulator", new VarBinaryType(false, VarBinaryType.MAX_LENGTH)));
-        return new RowType(false, fields);
-    }
-
-    private static RowType nativeGroupingAccumulatorType(RowType inputType, int[] grouping) {
-        List<RowType.RowField> fields = new ArrayList<>(grouping.length + 1);
-        for (int index : grouping) {
-            RowType.RowField field = inputType.getFields().get(index);
-            fields.add(new RowType.RowField(field.getName(), field.getType()));
-        }
-        fields.add(
-                new RowType.RowField("__streamfusion_accumulator", new VarBinaryType(false, VarBinaryType.MAX_LENGTH)));
-        return new RowType(false, fields);
-    }
-
-    private static RowType aggregateOutputType(
-            RowType inputType, int[] grouping, org.apache.calcite.rel.core.AggregateCall[] calls) {
-        List<RowType.RowField> fields = new ArrayList<>(grouping.length + calls.length);
-        for (int index : grouping) {
-            RowType.RowField field = inputType.getFields().get(index);
-            fields.add(new RowType.RowField(field.getName(), field.getType()));
-        }
-        for (int index = 0; index < calls.length; index++) {
-            fields.add(new RowType.RowField(
-                    "aggregate_" + index,
-                    org.apache.flink.table.planner.calcite.FlinkTypeFactory.toLogicalType(calls[index].getType())));
-        }
-        return new RowType(false, fields);
-    }
-
-    private static int[] windowGrouping(StreamExecWindowAggregate aggregate) {
-        return ((int[]) field(aggregate, StreamExecWindowAggregate.class, "grouping")).clone();
-    }
-
-    private static int[] windowDeduplicatePartitionKeys(StreamExecWindowDeduplicate deduplicate) {
-        return ((int[]) field(deduplicate, StreamExecWindowDeduplicate.class, "partitionKeys")).clone();
-    }
-
-    private static int windowDeduplicateOrderKey(StreamExecWindowDeduplicate deduplicate) {
-        return (int) field(deduplicate, StreamExecWindowDeduplicate.class, "orderKey");
-    }
-
-    private static boolean windowDeduplicateKeepLast(StreamExecWindowDeduplicate deduplicate) {
-        return (boolean) field(deduplicate, StreamExecWindowDeduplicate.class, "keepLastRow");
-    }
-
-    private static WindowingStrategy windowDeduplicateWindowing(StreamExecWindowDeduplicate deduplicate) {
-        return (WindowingStrategy) field(deduplicate, StreamExecWindowDeduplicate.class, "windowing");
-    }
-
-    private static RankType rankType(StreamExecRank rank) {
-        return (RankType) field(rank, StreamExecRank.class, "rankType");
-    }
-
-    private static int[] rankPartitionKeys(StreamExecRank rank) {
-        return ((PartitionSpec) field(rank, StreamExecRank.class, "partitionSpec")).getFieldIndices();
-    }
-
-    private static SortSpec rankSortSpec(StreamExecRank rank) {
-        return (SortSpec) field(rank, StreamExecRank.class, "sortSpec");
-    }
-
-    private static SortSpec temporalSortSpec(StreamExecTemporalSort sort) {
-        return (SortSpec) field(sort, StreamExecTemporalSort.class, "sortSpec");
-    }
-
-    private static SortSpec boundedSortSpec(StreamExecSort sort) {
-        return (SortSpec) field(sort, StreamExecSort.class, "sortSpec");
-    }
-
-    private static boolean temporalSortProcessingTime(StreamExecTemporalSort sort, SortSpec sortSpec) {
-        int timeIndex = sortSpec.getFieldSpec(0).getFieldIndex();
-        RowType inputType = (RowType) sort.getInputEdges().get(0).getOutputType();
-        return org.apache.flink.table.types.logical.utils.LogicalTypeChecks.isProctimeAttribute(
-                inputType.getTypeAt(timeIndex));
-    }
-
-    private static RankRange rankRange(StreamExecRank rank) {
-        return (RankRange) field(rank, StreamExecRank.class, "rankRange");
-    }
-
-    private static RankProcessStrategy rankStrategy(StreamExecRank rank) {
-        return (RankProcessStrategy) field(rank, StreamExecRank.class, "rankStrategy");
-    }
-
-    private static String rankStrategyName(StreamExecRank rank) {
-        RankProcessStrategy strategy = rankStrategy(rank);
-        if (strategy instanceof RankProcessStrategy.AppendFastStrategy) {
-            return "APPEND_FAST";
-        }
-        if (strategy instanceof RankProcessStrategy.UpdateFastStrategy) {
-            return "UPDATE_FAST";
-        }
-        if (strategy instanceof RankProcessStrategy.RetractStrategy) {
-            return "RETRACT";
-        }
-        return null;
-    }
-
-    private static int[] rankPrimaryKeys(StreamExecRank rank) {
-        RankProcessStrategy strategy = rankStrategy(rank);
-        return strategy instanceof RankProcessStrategy.UpdateFastStrategy
-                ? ((RankProcessStrategy.UpdateFastStrategy) strategy)
-                        .getPrimaryKeys()
-                        .clone()
-                : new int[0];
-    }
-
-    private static boolean rankOutputNumber(StreamExecRank rank) {
-        return (boolean) field(rank, StreamExecRank.class, "outputRankNumber");
-    }
-
-    private static boolean rankGenerateUpdateBefore(StreamExecRank rank) {
-        return (boolean) field(rank, StreamExecRank.class, "generateUpdateBefore");
-    }
-
-    @SuppressWarnings("unchecked")
-    private static long rankStateTtl(StreamExecRank rank) {
-        List<StateMetadata> metadata = (List<StateMetadata>) field(rank, StreamExecRank.class, "stateMetadataList");
-        if (metadata == null || metadata.isEmpty()) {
-            return rank.getPersistedConfig()
-                    .get(ExecutionConfigOptions.IDLE_STATE_RETENTION)
-                    .toMillis();
-        }
-        return TimeUtils.parseDuration(metadata.get(0).getStateTtl()).toMillis();
-    }
-
-    private static RankType windowRankType(StreamExecWindowRank rank) {
-        return (RankType) field(rank, StreamExecWindowRank.class, "rankType");
-    }
-
-    private static int[] windowRankPartitionKeys(StreamExecWindowRank rank) {
-        return ((PartitionSpec) field(rank, StreamExecWindowRank.class, "partitionSpec")).getFieldIndices();
-    }
-
-    private static SortSpec windowRankSortSpec(StreamExecWindowRank rank) {
-        return (SortSpec) field(rank, StreamExecWindowRank.class, "sortSpec");
-    }
-
-    private static RankRange windowRankRange(StreamExecWindowRank rank) {
-        return (RankRange) field(rank, StreamExecWindowRank.class, "rankRange");
-    }
-
-    private static boolean windowRankOutputNumber(StreamExecWindowRank rank) {
-        return (boolean) field(rank, StreamExecWindowRank.class, "outputRankNumber");
-    }
-
-    private static WindowingStrategy windowRankWindowing(StreamExecWindowRank rank) {
-        return (WindowingStrategy) field(rank, StreamExecWindowRank.class, "windowing");
-    }
-
-    private static JoinSpec windowJoinSpec(StreamExecWindowJoin join) {
-        return (JoinSpec) field(join, StreamExecWindowJoin.class, "joinSpec");
-    }
-
-    private static JoinSpec regularJoinSpec(StreamExecJoin join) {
-        return (JoinSpec) field(join, StreamExecJoin.class, "joinSpec");
-    }
-
-    @SuppressWarnings("unchecked")
-    private static List<FlinkJoinType> multiJoinTypes(StreamExecMultiJoin join) {
-        return (List<FlinkJoinType>) field(join, StreamExecMultiJoin.class, "joinTypes");
-    }
-
-    @SuppressWarnings("unchecked")
-    private static Map<Integer, List<ConditionAttributeRef>> multiJoinAttributeMap(StreamExecMultiJoin join) {
-        return (Map<Integer, List<ConditionAttributeRef>>) field(join, StreamExecMultiJoin.class, "joinAttributeMap");
-    }
-
-    @SuppressWarnings("unchecked")
-    private static List<List<int[]>> multiJoinUniqueKeys(StreamExecMultiJoin join) {
-        return (List<List<int[]>>) field(join, StreamExecMultiJoin.class, "inputUniqueKeys");
-    }
-
-    @SuppressWarnings("unchecked")
-    private static List<RexNode> multiJoinConditions(StreamExecMultiJoin join) {
-        return (List<RexNode>) field(join, StreamExecMultiJoin.class, "joinConditions");
-    }
-
-    private static JoinSpec binaryMultiJoinSpec(StreamExecMultiJoin join) {
-        if (join.getInputEdges().size() != 2) {
-            return null;
-        }
-        List<FlinkJoinType> joinTypes = multiJoinTypes(join);
-        List<RexNode> conditions = multiJoinConditions(join);
-        if (joinTypes.size() != 2 || conditions.size() != 2) {
-            return null;
-        }
-        List<RowType> inputTypes = join.getInputEdges().stream()
-                .map(edge -> (RowType) edge.getOutputType())
-                .collect(Collectors.toList());
-        AttributeBasedJoinKeyExtractor extractor =
-                new AttributeBasedJoinKeyExtractor(multiJoinAttributeMap(join), inputTypes);
-        int[] leftKeys = extractor.getCommonJoinKeyIndices(0);
-        int[] rightKeys = extractor.getCommonJoinKeyIndices(1);
-        if (leftKeys.length == 0 || leftKeys.length != rightKeys.length) {
-            return null;
-        }
-        boolean[] filterNulls = new boolean[leftKeys.length];
-        java.util.Arrays.fill(filterNulls, true);
-        return new JoinSpec(joinTypes.get(1), leftKeys, rightKeys, filterNulls, conditions.get(1));
-    }
-
-    private static boolean multiJoinEquiOnly(StreamExecMultiJoin join) {
-        List<RexNode> conditions = multiJoinConditions(join);
-        Map<Integer, List<ConditionAttributeRef>> attributes = multiJoinAttributeMap(join);
-        List<ExecEdge> inputs = join.getInputEdges();
-        if (conditions.size() != inputs.size()) {
-            return false;
-        }
-        for (int depth = 1; depth < conditions.size(); depth++) {
-            RexNode condition = conditions.get(depth);
-            List<RexNode> conjuncts = condition == null ? List.of() : RelOptUtil.conjunctions(condition);
-            Set<String> actual = new HashSet<>();
-            int leftArity = 0;
-            int[] offsets = new int[depth];
-            for (int input = 0; input < depth; input++) {
-                offsets[input] = leftArity;
-                leftArity += ((RowType) inputs.get(input).getOutputType()).getFieldCount();
-            }
-            for (RexNode conjunct : conjuncts) {
-                if (!(conjunct instanceof RexCall)) {
-                    return false;
-                }
-                RexCall call = (RexCall) conjunct;
-                if (call.getKind() != org.apache.calcite.sql.SqlKind.EQUALS
-                        || call.getOperands().size() != 2
-                        || !(call.getOperands().get(0) instanceof RexInputRef)
-                        || !(call.getOperands().get(1) instanceof RexInputRef)) {
-                    return false;
-                }
-                int first = ((RexInputRef) call.getOperands().get(0)).getIndex();
-                int second = ((RexInputRef) call.getOperands().get(1)).getIndex();
-                int left = Math.min(first, second);
-                int right = Math.max(first, second);
-                if (left >= leftArity || right < leftArity) {
-                    return false;
-                }
-                actual.add(left + ":" + (right - leftArity));
-            }
-            Set<String> expected = new HashSet<>();
-            for (ConditionAttributeRef attribute : attributes.getOrDefault(depth, List.of())) {
-                expected.add(
-                        (offsets[attribute.leftInputId] + attribute.leftFieldIndex) + ":" + attribute.rightFieldIndex);
-            }
-            if (!actual.equals(expected)) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    @SuppressWarnings("unchecked")
-    private static long[] multiJoinStateTtl(StreamExecMultiJoin join) {
-        int inputCount = join.getInputEdges().size();
-        List<StateMetadata> metadata =
-                (List<StateMetadata>) field(join, StreamExecMultiJoin.class, "stateMetadataList");
-        long[] ttl = new long[inputCount];
-        if (metadata == null || metadata.isEmpty()) {
-            java.util.Arrays.fill(
-                    ttl,
-                    join.getPersistedConfig()
-                            .get(ExecutionConfigOptions.IDLE_STATE_RETENTION)
-                            .toMillis());
-            return ttl;
-        }
-        boolean[] seen = new boolean[inputCount];
-        for (StateMetadata state : metadata) {
-            int index = state.getStateIndex();
-            if (index < 0 || index >= inputCount || seen[index]) {
-                throw new IllegalStateException("Multi-join state TTL indices must be unique and cover every input");
-            }
-            ttl[index] = TimeUtils.parseDuration(state.getStateTtl()).toMillis();
-            seen[index] = true;
-        }
-        for (boolean present : seen) {
-            if (!present) {
-                throw new IllegalStateException("Multi-join state TTL must cover every input");
-            }
-        }
-        return ttl;
-    }
-
-    private static JoinSpec temporalJoinSpec(StreamExecTemporalJoin join) {
-        return (JoinSpec) field(join, StreamExecTemporalJoin.class, "joinSpec");
-    }
-
-    private static boolean temporalJoinFunction(StreamExecTemporalJoin join) {
-        return (boolean) field(join, StreamExecTemporalJoin.class, "isTemporalFunctionJoin");
-    }
-
-    private static int temporalJoinLeftTimeIndex(StreamExecTemporalJoin join) {
-        return (int) field(join, StreamExecTemporalJoin.class, "leftTimeAttributeIndex");
-    }
-
-    private static int temporalJoinRightTimeIndex(StreamExecTemporalJoin join) {
-        return (int) field(join, StreamExecTemporalJoin.class, "rightTimeAttributeIndex");
-    }
-
-    private static IntervalJoinSpec intervalJoinSpec(StreamExecIntervalJoin join) {
-        return (IntervalJoinSpec) field(join, StreamExecIntervalJoin.class, "intervalJoinSpec");
-    }
-
-    @SuppressWarnings("unchecked")
-    private static List<int[]> regularJoinLeftUpsertKeys(StreamExecJoin join) {
-        return (List<int[]>) field(join, StreamExecJoin.class, "leftUpsertKeys");
-    }
-
-    @SuppressWarnings("unchecked")
-    private static List<int[]> regularJoinRightUpsertKeys(StreamExecJoin join) {
-        return (List<int[]>) field(join, StreamExecJoin.class, "rightUpsertKeys");
-    }
-
-    @SuppressWarnings("unchecked")
-    private static List<Long> regularJoinStateTtl(StreamExecJoin join) {
-        List<StateMetadata> metadata = (List<StateMetadata>) field(join, StreamExecJoin.class, "stateMetadataList");
-        if (metadata == null || metadata.isEmpty()) {
-            long fallback = join.getPersistedConfig()
-                    .get(ExecutionConfigOptions.IDLE_STATE_RETENTION)
-                    .toMillis();
-            return List.of(fallback, fallback);
-        }
-        if (metadata.size() != 2) {
-            throw new IllegalStateException("Regular join must define exactly two state TTL entries");
-        }
-        long[] ttl = new long[2];
-        boolean[] seen = new boolean[2];
-        for (StateMetadata state : metadata) {
-            int index = state.getStateIndex();
-            if (index < 0 || index >= 2 || seen[index]) {
-                throw new IllegalStateException("Regular join state TTL indices must be unique 0 and 1");
-            }
-            ttl[index] = TimeUtils.parseDuration(state.getStateTtl()).toMillis();
-            seen[index] = true;
-        }
-        if (!seen[0] || !seen[1]) {
-            throw new IllegalStateException("Regular join state TTL indices must contain 0 and 1");
-        }
-        return List.of(ttl[0], ttl[1]);
-    }
-
-    private static WindowingStrategy windowJoinLeftWindowing(StreamExecWindowJoin join) {
-        return (WindowingStrategy) field(join, StreamExecWindowJoin.class, "leftWindowing");
-    }
-
-    private static WindowingStrategy windowJoinRightWindowing(StreamExecWindowJoin join) {
-        return (WindowingStrategy) field(join, StreamExecWindowJoin.class, "rightWindowing");
-    }
-
-    private static org.apache.calcite.rel.core.AggregateCall[] windowAggregateCalls(
-            StreamExecWindowAggregate aggregate) {
-        return ((org.apache.calcite.rel.core.AggregateCall[])
-                        field(aggregate, StreamExecWindowAggregate.class, "aggCalls"))
-                .clone();
-    }
-
-    private static WindowingStrategy windowing(StreamExecWindowAggregate aggregate) {
-        return (WindowingStrategy) field(aggregate, StreamExecWindowAggregate.class, "windowing");
-    }
-
-    private static NamedWindowProperty[] windowProperties(StreamExecWindowAggregate aggregate) {
-        return ((NamedWindowProperty[]) field(aggregate, StreamExecWindowAggregate.class, "namedWindowProperties"))
-                .clone();
-    }
-
-    private static boolean windowNeedRetraction(StreamExecWindowAggregate aggregate) {
-        return (boolean) field(aggregate, StreamExecWindowAggregate.class, "needRetraction");
-    }
-
     private static TwoPhaseWindowAggregate twoPhaseWindowAggregate(StreamExecGlobalWindowAggregate global) {
         if (global.getInputEdges().size() != 1) {
             return null;
@@ -3547,16 +3026,6 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             this.outputCalc = outputCalc;
             this.outputProjection = outputProjection;
             this.outputCondition = outputCondition;
-        }
-    }
-
-    private static Object field(Object node, Class<?> declaringClass, String name) {
-        try {
-            Field field = declaringClass.getDeclaredField(name);
-            field.setAccessible(true);
-            return field.get(node);
-        } catch (NoSuchFieldException | IllegalAccessException e) {
-            throw new IllegalStateException("Could not read Flink exec node " + name, e);
         }
     }
 }

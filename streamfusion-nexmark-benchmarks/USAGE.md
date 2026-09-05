@@ -83,6 +83,10 @@ Use controlled SQL parity tests to validate byte-for-byte intermediate changelog
 payload. Flink's finite full-sort executor rejects periodic checkpoints for its sorted input, so
 this isolated benchmark disables the interval for both engines; dedicated operator tests cover
 aligned, unaligned, canonical cross-backend, and incremental RocksDB recovery.
+`batch-unnest` and `batch-window-tvf` select batch mode explicitly and exercise bounded
+Calc-to-UNNEST and Calc-to-TUMBLE plans. These operators are stateless, so the cases use the
+hashmap label and do not claim a RocksDB comparison. Each StreamFusion source batch must produce
+exactly one native Calc-family invocation after native-plan fusion.
 
 Build the generator against Flink 2.3 and run all supported cases with:
 

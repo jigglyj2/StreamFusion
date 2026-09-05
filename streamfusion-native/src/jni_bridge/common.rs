@@ -17,8 +17,47 @@ use arrow::record_batch::RecordBatchReader;
 use datafusion::execution::memory_pool::MemoryReservation;
 use datafusion::physical_plan::{collect, ExecutionPlan, SendableRecordBatchStream};
 use futures::StreamExt;
+use jni::jni_str;
+use jni::strings::JNIString;
+use jni::sys::{jint, jlong};
 
 use crate::execution_context::NativeExecutionContext;
+
+pub(super) fn non_negative(
+    value: jint,
+    operator: &str,
+    description: &str,
+) -> datafusion::error::Result<u32> {
+    u32::try_from(value).map_err(|_| {
+        datafusion::error::DataFusionError::Execution(format!(
+            "{operator} {description} must be non-negative"
+        ))
+    })
+}
+
+pub(super) unsafe fn processor_mut<'a, P>(
+    handle: jlong,
+    operator: &str,
+) -> datafusion::error::Result<&'a mut P> {
+    if handle == 0 {
+        return Err(datafusion::error::DataFusionError::Execution(format!(
+            "{operator} native handle is closed"
+        )));
+    }
+    unsafe { (handle as *mut P).as_mut() }.ok_or_else(|| {
+        datafusion::error::DataFusionError::Execution(format!(
+            "{operator} native handle is invalid"
+        ))
+    })
+}
+
+pub(super) fn throw(env: &mut jni::Env<'_>, error: impl std::fmt::Display) -> jni::errors::Error {
+    let _ = env.throw_new(
+        jni_str!("java/lang/IllegalStateException"),
+        JNIString::new(error.to_string()),
+    );
+    jni::errors::Error::JavaException
+}
 
 pub(super) unsafe fn import_input(
     context: &NativeExecutionContext,

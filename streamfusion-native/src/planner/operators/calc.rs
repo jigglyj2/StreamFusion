@@ -22,6 +22,8 @@ use datafusion::scalar::ScalarValue;
 
 use crate::{planner::expressions, proto};
 
+const INPUT_ROW_COLUMN: &str = "__streamfusion_input_row";
+
 pub(crate) fn create(
     calc: &proto::Calc,
     child: Arc<dyn ExecutionPlan>,
@@ -32,10 +34,14 @@ pub(crate) fn create(
         .iter()
         .enumerate()
         .map(|(index, expression)| {
-            Ok((
-                create_expression(expression, input_schema.as_ref())?,
-                format!("projection_{index}"),
-            ))
+            let name = if index + 1 == calc.projections.len()
+                && is_input_row_reference(expression, input_schema.as_ref())
+            {
+                INPUT_ROW_COLUMN.to_string()
+            } else {
+                format!("projection_{index}")
+            };
+            Ok((create_expression(expression, input_schema.as_ref())?, name))
         })
         .collect::<Result<Vec<_>>>()?;
     let child = match calc.condition.as_ref() {
@@ -59,6 +65,19 @@ pub(crate) fn create(
         None => child,
     };
     Ok(Arc::new(ProjectionExec::try_new(expressions, child)?))
+}
+
+fn is_input_row_reference(
+    expression: &proto::Expression,
+    schema: &arrow::datatypes::Schema,
+) -> bool {
+    let Some(proto::expression::Expression::InputReference(reference)) =
+        expression.expression.as_ref()
+    else {
+        return false;
+    };
+    let index = reference.index as usize;
+    index + 1 == schema.fields().len() && schema.field(index).name() == INPUT_ROW_COLUMN
 }
 
 /// Columns retained by FilterExec after evaluating its predicate.

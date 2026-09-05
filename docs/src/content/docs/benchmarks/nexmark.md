@@ -769,49 +769,45 @@ state-path allocations; all are charged to the operator's Flink managed-memory r
 focused admission-failure and release tests. Profiler timings were excluded from the throughput
 measurements. These are local diagnostic results, not portable performance guarantees.
 
-The initial stateful path also has an opt-in Q18-shaped microbenchmark that bypasses Kafka and
-feeds the same Flink `RowData` representation used at the production boundary. It compares the
-native keep-last operator with Flink's `RowTimeDeduplicateFunction`; benchmark measurements still
-compile the native runtime in release mode with the local CPU feature set.
+The earlier test-only RowData Q18 microbenchmark has been retired. It exercised a separate adapter
+instead of the production Arrow operator topology and could therefore give misleading results.
+Use the release production harness above for Q18 throughput and profiling comparisons.
 
-```shell
-mvn -pl streamfusion-flink -am \
-  -Dstreamfusion.q18.benchmark=true \
-  -Dstreamfusion.q18.engine=streamfusion \
-  -Dstreamfusion.q18.backend=hashmap \
-  -Dstreamfusion.q18.events=2000000 \
-  -Dstreamfusion.q18.iterations=3 \
-  -Dstreamfusion.q18.jfr=/tmp/streamfusion-q18.jfr \
-  -Dtest=StreamFusionDeduplicateQ18BenchmarkTest \
-  -Dsurefire.failIfNoSpecifiedTests=false test
-```
+## Bounded UNNEST and Window TVF targets
 
-Use `-Dstreamfusion.q18.engine=flink` for the baseline and
-`-Dstreamfusion.q18.backend=rocksdb` for either engine's RocksDB path. Every iteration creates a
-fresh backend, reports rows per second and a result checksum, and the final line reports the median.
-JFR profiling of the first implementation identified managed-memory
-accounting scans and redundant output-row copies; incremental accounting and ownership transfer
-removed those costs. Larger 4,096-row batches and projecting only Q18's key/order columns both
-regressed or failed to improve throughput, so the current implementation deliberately retains the
-simpler 1,024-row full-row boundary.
+The Kafka-free harness includes `batch-unnest` and `batch-window-tvf`. Both use Flink's bounded
+physical planner and the production RowData-to-Arrow and Arrow-to-RowData edges. The UNNEST case
+expands bid-derived arrays; the TVF case filters/projects bids and assigns ten-second event-time
+TUMBLE windows. They are stateless, so a RocksDB-labelled run would not exercise RocksDB and is not
+reported as a backend comparison.
 
-On the August 31, 2026 local release/native-CPU run, the comparable Flink baseline processed
-995,392 rows/s. StreamFusion measured 841,482 rows/s before the final ownership fix and 952,203
-rows/s after transferring the already-owned output `BinaryRowData` instead of copying it again,
-or about 95.7% of that Flink baseline. These are local diagnostic numbers rather than portable
-performance claims. The remaining prominent JFR allocation sites are Flink `MemorySegment` wraps
-and ownership copies at the reusable-`RowData` boundary; removing those copies would be unsafe
-unless the source contract guarantees non-reuse.
+On the September 5, 2026 local release/native-CPU run based on `f2b3779` plus the bounded-expansion
+working change, three alternating fresh-JVM forks per engine processed 500,000 deterministic events
+at parallelism one. `batch-unnest` emitted 1,380,000 rows with SHA-256
+`3db35c7af1d13c26f4d31c0123899905fc341f00139b20116eba1809a514f8c1`. Flink and StreamFusion
+median elapsed times were 8.543 s and 8.312 s, a 2.8% StreamFusion throughput gain; MADs were
+0.476 s and 0.011 s, with ranges of 7.931–9.019 s and 8.300–8.562 s.
 
-For native RocksDB, profiling found that the optional component copied Arrow-owned keys and values
-into temporary Rust objects before constructing the RocksDB batch, and that it retained RocksDB's
-default write-ahead log even though Flink state recovery is defined by checkpoints and input replay.
-The component now borrows the Arrow buffers through its versioned C ABI and disables WAL just as
-Flink's RocksDB keyed-state backend does. An attempted pre-`multi_get` duplicate-key index was
-removed after it reduced throughput on the mostly-unique Q18 stream.
+The first 500,000-event TVF measurement exposed two native boundaries for `Calc -> TUMBLE` and a
+median 8.5% StreamFusion deficit. Nesting the lower Calc below the native TVF cut invocations from
+two to one per source batch. The post-fusion 500,000-event medians were 6.789 s for Flink and
+7.092 s for StreamFusion, or 95.7% throughput parity; MADs were 0.121 s and 0.004 s. A longer
+one-million-event repeat produced medians of 9.771 s and 9.821 s, or 99.5% parity, with MADs of
+0.132 s and 0.312 s. Every one-million-event fork emitted 920,000 rows with SHA-256
+`68e3b5214edc34c1ca5d3d4491f5e6dc5c3905abc193d813d594e7769e07ad46`, reported full
+acceleration, and executed 62 native batches. The full ranges—9.640–11.534 s for Flink and
+9.509–14.719 s for StreamFusion—retain one local scheduling outlier rather than silently dropping
+it.
 
-On the same local release/native-CPU machine, three fresh-database RocksDB iterations over two
-million rows produced a median of 202,877 rows/s for StreamFusion and 175,865 rows/s for Flink,
-a 15.4% StreamFusion gain with identical checksums. A longer single five-million-row run, which
-crossed into compaction, measured 128,548 rows/s versus 87,293 rows/s respectively. As above, these
-numbers are diagnostic results for this machine, not portable performance guarantees.
+Separate mixed JVM/native CPU profiles used Java non-safepoint sampling, DWARF/frame-pointer native
+unwinding, JFR, collapsed stacks, per-engine flame graphs, and a differential flame graph. In the
+one-million-event capture, the complete fused StreamFusion operator was 5.91% of CPU samples and
+the Rust Window TVF frame itself was 0.07%; Flink's aligned Window TVF was 5.87%. Java-allocation
+captures at the same sampling interval recorded 3.28 GB for StreamFusion versus 3.75 GB for Flink,
+12.5% less sampled allocation volume. A native-allocation capture attributed 14.1 MB, 0.77% of
+process-native sampled bytes, beneath the complete StreamFusion operator; it found no repeated
+per-row native allocation loop. Required Arrow output buffers remain admitted through Flink managed
+memory. Profiler timings were excluded from the throughput results. Artifacts are retained under
+`streamfusion-nexmark-benchmarks/target/bounded-expansion-profiles/` and
+`streamfusion-nexmark-benchmarks/target/bounded-expansion-postfusion/profiles/`; these are local
+diagnostics, not portable performance guarantees.

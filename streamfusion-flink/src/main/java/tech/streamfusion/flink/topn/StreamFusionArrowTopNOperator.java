@@ -4,7 +4,6 @@
  */
 package tech.streamfusion.flink.topn;
 
-import java.nio.file.Path;
 import java.util.List;
 import org.apache.flink.metrics.Counter;
 import org.apache.flink.streaming.api.operators.BoundedOneInput;
@@ -17,7 +16,6 @@ import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.ArrowTopNCDataBridge;
 import tech.streamfusion.flink.metrics.FlinkMetricParity;
 import tech.streamfusion.flink.state.AbstractStreamFusionArrowKeyedStateOperator;
-import tech.streamfusion.nativebridge.NativeMemoryManager;
 import tech.streamfusion.nativebridge.NativeTopNBridge;
 
 /** Native Arrow Top-N: Java owns only Flink lifecycle, metrics, and checkpoint coordination. */
@@ -46,7 +44,7 @@ final class StreamFusionArrowTopNOperator extends AbstractStreamFusionArrowKeyed
             RowDataKeySelector partitionSelector,
             StreamFusionTopNStrategy strategy,
             long flinkCacheSize) {
-        super(plan, "top-n");
+        super(plan, "top-n", NativeTopNBridge.keyedStateBridge());
         this.outputType = outputType;
         this.preencodeKeys = requiresPreencodedKeys(inputType, partitionKeys);
         this.partitionSelector = partitionSelector;
@@ -132,50 +130,5 @@ final class StreamFusionArrowTopNOperator extends AbstractStreamFusionArrowKeyed
         invalidRetractions.inc(current[6] - observedStatistics[6]);
         invalidTopSize.inc(current[7] - observedStatistics[7]);
         observedStatistics = current;
-    }
-
-    @Override
-    protected long createMemoryHandle(
-            byte[] plan, int maxParallelism, int firstKeyGroup, int lastKeyGroup, NativeMemoryManager memoryManager) {
-        return NativeTopNBridge.create(plan, maxParallelism, firstKeyGroup, lastKeyGroup, memoryManager);
-    }
-
-    @Override
-    protected long createRocksDbHandle(
-            byte[] plan,
-            int maxParallelism,
-            int firstKeyGroup,
-            int lastKeyGroup,
-            Path databasePath,
-            long memoryLimit,
-            NativeMemoryManager memoryManager) {
-        return NativeTopNBridge.createRocksDb(
-                plan, maxParallelism, firstKeyGroup, lastKeyGroup, databasePath, memoryLimit, memoryManager);
-    }
-
-    @Override
-    protected byte[] snapshotKeyGroup(long handle, int keyGroup) {
-        return NativeTopNBridge.snapshot(handle, keyGroup);
-    }
-
-    @Override
-    protected void restoreKeyGroup(long handle, int keyGroup, byte[] state) {
-        NativeTopNBridge.restore(handle, keyGroup, state);
-    }
-
-    @Override
-    protected void checkpointRocks(long handle, Path checkpointDirectory) {
-        NativeTopNBridge.checkpointRocks(handle, checkpointDirectory);
-    }
-
-    @Override
-    protected void importRocksCheckpoint(
-            long handle, Path checkpointDirectory, int firstKeyGroup, int lastKeyGroup, long memoryLimit) {
-        NativeTopNBridge.importRocksCheckpoint(handle, checkpointDirectory, firstKeyGroup, lastKeyGroup, memoryLimit);
-    }
-
-    @Override
-    protected void destroyHandle(long handle) {
-        NativeTopNBridge.destroy(handle);
     }
 }

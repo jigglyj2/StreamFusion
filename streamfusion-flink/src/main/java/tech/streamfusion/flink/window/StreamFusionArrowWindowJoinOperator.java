@@ -4,7 +4,6 @@
  */
 package tech.streamfusion.flink.window;
 
-import java.nio.file.Path;
 import java.util.Collections;
 import java.util.List;
 import org.apache.flink.api.common.functions.DefaultOpenContext;
@@ -32,7 +31,6 @@ import tech.streamfusion.flink.exchange.ArrowExchangeInputBatch;
 import tech.streamfusion.flink.exchange.NativeExchangeFrame;
 import tech.streamfusion.flink.metrics.FlinkMetricParity;
 import tech.streamfusion.flink.state.AbstractStreamFusionArrowKeyedStateOperator;
-import tech.streamfusion.nativebridge.NativeMemoryManager;
 import tech.streamfusion.nativebridge.NativeWindowJoinBridge;
 
 /** Native two-input Window Join state with Arrow-native Flink-condition result materialization. */
@@ -74,7 +72,7 @@ final class StreamFusionArrowWindowJoinOperator extends AbstractStreamFusionArro
             boolean[] filterNulls,
             byte[] leftExchangePlan,
             byte[] rightExchangePlan) {
-        super(plan, "window join");
+        super(plan, "window join", NativeWindowJoinBridge.keyedStateBridge());
         this.leftType = leftType;
         this.rightType = rightType;
         this.outputType = outputType;
@@ -265,49 +263,6 @@ final class StreamFusionArrowWindowJoinOperator extends AbstractStreamFusionArro
             FunctionUtils.closeFunction(condition);
             condition = null;
         }
-    }
-
-    @Override
-    protected long createMemoryHandle(
-            byte[] plan, int maxParallelism, int first, int last, NativeMemoryManager manager) {
-        return NativeWindowJoinBridge.create(plan, maxParallelism, first, last, manager);
-    }
-
-    @Override
-    protected long createRocksDbHandle(
-            byte[] plan,
-            int maxParallelism,
-            int first,
-            int last,
-            Path database,
-            long limit,
-            NativeMemoryManager manager) {
-        return NativeWindowJoinBridge.createRocksDb(plan, maxParallelism, first, last, database, limit, manager);
-    }
-
-    @Override
-    protected byte[] snapshotKeyGroup(long handle, int group) {
-        return NativeWindowJoinBridge.snapshot(handle, group);
-    }
-
-    @Override
-    protected void restoreKeyGroup(long handle, int group, byte[] state) {
-        NativeWindowJoinBridge.restore(handle, group, state);
-    }
-
-    @Override
-    protected void checkpointRocks(long handle, Path checkpoint) {
-        NativeWindowJoinBridge.checkpointRocks(handle, checkpoint);
-    }
-
-    @Override
-    protected void importRocksCheckpoint(long handle, Path checkpoint, int first, int last, long limit) {
-        NativeWindowJoinBridge.importRocksCheckpoint(handle, checkpoint, first, last, limit);
-    }
-
-    @Override
-    protected void destroyHandle(long handle) {
-        NativeWindowJoinBridge.destroy(handle);
     }
 
     private static long restoredWatermark(ListState<Long> state) throws Exception {

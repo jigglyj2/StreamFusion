@@ -4,11 +4,8 @@
 use std::sync::Arc;
 
 use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
-use datafusion::error::DataFusionError;
 use jni::errors::ThrowRuntimeExAndDefault;
-use jni::jni_str;
 use jni::objects::{JByteArray, JClass, JLongArray, JObject, JString};
-use jni::strings::JNIString;
 use jni::sys::{jbyteArray, jint, jlong, jlongArray};
 use jni::EnvUnowned;
 
@@ -275,30 +272,15 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeMatchRecognizeB
 }
 
 fn non_negative(value: jint, description: &str) -> datafusion::error::Result<u32> {
-    u32::try_from(value).map_err(|_| {
-        DataFusionError::Execution(format!(
-            "match recognize {description} must be non-negative"
-        ))
-    })
+    super::common::non_negative(value, "match recognize", description)
 }
 
 unsafe fn processor<'a>(
     handle: jlong,
 ) -> datafusion::error::Result<&'a mut MatchRecognizeProcessor> {
-    if handle == 0 {
-        return Err(DataFusionError::Execution(
-            "match recognize native handle is closed".to_string(),
-        ));
-    }
-    unsafe { (handle as *mut MatchRecognizeProcessor).as_mut() }.ok_or_else(|| {
-        DataFusionError::Execution("match recognize native handle is invalid".to_string())
-    })
+    unsafe { super::common::processor_mut(handle, "match recognize") }
 }
 
 fn throw(env: &mut jni::Env<'_>, error: impl std::fmt::Display) -> jni::errors::Error {
-    let _ = env.throw_new(
-        jni_str!("java/lang/IllegalStateException"),
-        JNIString::new(error.to_string()),
-    );
-    jni::errors::Error::JavaException
+    super::common::throw(env, error)
 }
