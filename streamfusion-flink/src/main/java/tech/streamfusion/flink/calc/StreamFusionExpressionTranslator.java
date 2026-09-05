@@ -545,12 +545,34 @@ abstract class StreamFusionExpressionTranslator extends StreamFusionProjectionTr
         if (leftType.getTypeRoot() == rightType.getTypeRoot()) {
             return leftType;
         }
+        if (isExactNonDecimalNumeric(leftType.getTypeRoot()) && isExactNonDecimalNumeric(rightType.getTypeRoot())) {
+            org.apache.flink.table.types.logical.LogicalType wider =
+                    exactNumericRank(leftType.getTypeRoot()) >= exactNumericRank(rightType.getTypeRoot())
+                            ? leftType
+                            : rightType;
+            return wider.copy(leftType.isNullable() || rightType.isNullable());
+        }
         if ((leftType.getTypeRoot() == LogicalTypeRoot.DOUBLE && isExactNonDecimalNumeric(rightType.getTypeRoot()))
                 || (rightType.getTypeRoot() == LogicalTypeRoot.DOUBLE
                         && isExactNonDecimalNumeric(leftType.getTypeRoot()))) {
             return new DoubleType(leftType.isNullable() || rightType.isNullable());
         }
         return null;
+    }
+
+    private static int exactNumericRank(LogicalTypeRoot type) {
+        switch (type) {
+            case TINYINT:
+                return 0;
+            case SMALLINT:
+                return 1;
+            case INTEGER:
+                return 2;
+            case BIGINT:
+                return 3;
+            default:
+                throw new IllegalArgumentException("Not an exact non-decimal numeric type: " + type);
+        }
     }
 
     private static boolean isExactNonDecimalNumeric(LogicalTypeRoot type) {

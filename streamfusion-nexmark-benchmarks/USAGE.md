@@ -80,8 +80,11 @@ with `AFTER MATCH SKIP PAST LAST ROW`, exercising partial-match state and three 
 identity. It exercises Flink's complete UNION, grouped count, Calc, and `$REPLICATE_ROWS$1` physical
 rewrite without making rowtime scheduling part of the benchmark key. In batch mode, setting
 `-Dstreamfusion.nexmark.aggregate-phase=TWO_PHASE` forces Flink's local aggregate, hash exchange,
-and global aggregate topology. The integration target runs that topology at parallelism four on
-both memory and RocksDB and requires both native aggregate-phase counters to be non-zero.
+and global aggregate topology. The integration target runs `group-aggregate`, `global-aggregate`,
+`grouping-sets`, and `aggregate-modifiers` at parallelism four on both memory and RocksDB, compares
+the final materialized output, and requires both native aggregate-phase counters to be non-zero.
+The modifiers case includes Flink's two nested phase pairs around its DISTINCT-expansion Calc, so
+the check covers every planned aggregate stage rather than only the outer pair.
 `incremental-group-aggregate` enables Flink's split-DISTINCT optimization and covers the complete
 local aggregate, expand, incremental aggregate, and final aggregate pipeline. Wall-clock checkpoint
 flushes can change valid intermediate update boundaries from run to run, so standalone output

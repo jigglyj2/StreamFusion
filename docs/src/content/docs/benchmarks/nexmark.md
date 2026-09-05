@@ -120,6 +120,12 @@ independently; the one-phase test requires the local counter to remain zero. Thu
 collapsing a Flink two-phase plan nor inventing a local phase for a Flink one-phase plan can pass.
 The sliding-window case also runs at parallelism four on both state backends so each phase strategy
 crosses the native key-group exchange rather than exercising only an in-task path.
+The bounded group-aggregate matrix likewise forces `TWO_PHASE` at parallelism four for
+`group-aggregate`, `global-aggregate`, `grouping-sets`, and `aggregate-modifiers` on memory and
+RocksDB. It compares exact materialized output, requires an accelerated EXPLAIN, and requires both
+native phase counters. `aggregate-modifiers` covers Flink's DISTINCT expansion into two nested
+local -> exchange -> global pairs, including the conditional discriminator Calc between them, so
+the test guards every phase rather than merely the outer aggregate.
 `temporal-sort` orders the bounded bid stream by ascending event time and secondary price/auction
 keys. Its integration case compares both the changelog multiset and global arrival-order digest on
 memory and RocksDB, requires an accelerated EXPLAIN, and requires non-zero native sort batches.

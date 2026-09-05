@@ -171,14 +171,18 @@ completed bundle, while preserving Flink `HashMap` iteration order inside the bu
 aggregate-group/cache shape used by RisingWave and Arroyo's Arrow incremental aggregates while
 retaining Flink's immediate or mini-batch changelog contract as planned.
 
-The RowData Nexmark `group-aggregate`, `global-aggregate`, `grouping-sets`, and
-`incremental-group-aggregate` harnesses compare Flink and StreamFusion in separate JVMs for both
-state backends. The first three also have bounded-runtime parity coverage through the same
-Kafka-free RowData source/sink boundary. Benchmark builds use the Rust release profile and the
-build machine's native CPU feature set. The harness records elapsed time, input throughput, native
-calculation batches, native local-aggregate batches, and native stateful aggregate batches so a
-two-phase run proves that both stages executed and exchange fragmentation/JNI call amplification
-remain visible.
+The RowData Nexmark `aggregate-modifiers`, `group-aggregate`, `global-aggregate`, `grouping-sets`,
+and `incremental-group-aggregate` harnesses compare Flink and StreamFusion in separate JVMs for
+both state backends. A bounded matrix forces Flink's `TWO_PHASE` strategy at parallelism four for
+the first four queries, compares the final materialized rows and digest, requires an accelerated
+EXPLAIN, and requires independent native local- and global-aggregate activity. The
+`aggregate-modifiers` case is especially important: Flink's DISTINCT expansion produces two
+nested local -> exchange -> global aggregate pairs separated by a conditional Calc, and the test
+proves StreamFusion preserves and executes every planned phase instead of collapsing either pair.
+Benchmark builds use the Rust release profile and the build machine's native CPU feature set. The
+harness records elapsed time, input throughput, native calculation batches, native local-aggregate
+batches, and native stateful aggregate batches so exchange fragmentation and JNI call
+amplification remain visible.
 
 The September 4, 2026 split-DISTINCT measurement covers implementation commits `00d5bfe` and
 `c946c63`. Three alternating fresh-JVM forks processed one million deterministic events at

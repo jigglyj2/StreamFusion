@@ -69,6 +69,33 @@ class LocalRowDataNexmarkBenchmarkIT {
 
     @ParameterizedTest
     @ValueSource(strings = {"hashmap", "rocksdb"})
+    void boundedTwoPhaseGroupAggregatesPreserveEveryPlannedStage(String backend) throws Exception {
+        System.setProperty("streamfusion.nexmark.batch-mode", "true");
+        System.setProperty("streamfusion.nexmark.aggregate-phase", "TWO_PHASE");
+        for (String query : List.of("group-aggregate", "global-aggregate", "grouping-sets", "aggregate-modifiers")) {
+            LocalRowDataNexmarkBenchmark.RunResult flink =
+                    LocalRowDataNexmarkBenchmark.run(2_000, query, false, backend, 4);
+            LocalRowDataNexmarkBenchmark.RunResult streamFusion =
+                    LocalRowDataNexmarkBenchmark.run(2_000, query, true, backend, 4);
+
+            assertThat(streamFusion.completed()).as(backend + ":" + query).isTrue();
+            assertThat(streamFusion.materializedDebugRows())
+                    .as(backend + ":" + query)
+                    .containsExactlyElementsOf(flink.materializedDebugRows());
+            assertThat(streamFusion.materializedRows()).isEqualTo(flink.materializedRows());
+            assertThat(streamFusion.materializedSha256()).isEqualTo(flink.materializedSha256());
+            assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+            assertThat(streamFusion.nativeLocalGroupAggregateBatches())
+                    .as(backend + ":" + query + ":local")
+                    .isGreaterThan(0);
+            assertThat(streamFusion.nativeGroupAggregateBatches())
+                    .as(backend + ":" + query + ":global")
+                    .isGreaterThan(0);
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"hashmap", "rocksdb"})
     void boundedTwoPhaseWindowAggregatesPreserveBothNativeStages(String backend) throws Exception {
         System.setProperty("streamfusion.nexmark.batch-mode", "true");
         System.setProperty("streamfusion.nexmark.aggregate-phase", "TWO_PHASE");
