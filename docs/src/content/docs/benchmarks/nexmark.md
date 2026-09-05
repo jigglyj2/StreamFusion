@@ -88,7 +88,8 @@ mvn -pl streamfusion-nexmark-benchmarks -am \
 `LocalRowDataNexmarkBenchmark` also accepts an event count, comma-separated query list, and an
 engine selector (`flink`, `streamfusion`, or `both`) for standalone measurements. It reports
 end-to-end elapsed time, input-event throughput, native calc batches, native group-aggregate
-batches, native window-aggregate batches, native Window Join batches, native regular-join batches,
+batches, native local-group-aggregate batches, native window-aggregate batches, native Window Join
+batches, native regular-join batches,
 native multi-join batches, native interval-join batches, native temporal-join batches, native
 OVER-aggregate batches, native Temporal Sort batches, native bounded full-Sort batches, and row
 counts plus SHA-256 hashes for the full result changelog and

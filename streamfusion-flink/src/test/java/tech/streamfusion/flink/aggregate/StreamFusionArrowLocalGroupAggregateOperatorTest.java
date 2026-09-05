@@ -71,7 +71,7 @@ class StreamFusionArrowLocalGroupAggregateOperatorTest {
         RowDataKeySelector selector = KeySelectorUtil.getRowDataSelector(
                 getClass().getClassLoader(), new int[] {0}, InternalTypeInfo.of(INPUT_TYPE));
         StreamFusionArrowLocalGroupAggregateOperator operator = new StreamFusionArrowLocalGroupAggregateOperator(
-                plan(), INPUT_TYPE, OUTPUT_TYPE, new int[] {0}, false, selector, false);
+                plan(), INPUT_TYPE, OUTPUT_TYPE, new int[] {0}, false, selector, true);
 
         try (RootAllocator allocator = new RootAllocator(64L << 20);
                 ArrowRowDataBatch first = ArrowRowDataBatch.transpose(
@@ -91,6 +91,13 @@ class StreamFusionArrowLocalGroupAggregateOperatorTest {
                         new OneInputStreamOperatorTestHarness<>(operator, environment)) {
             harness.setup(ArrowRowDataBatchSerializer.INSTANCE);
             harness.open();
+
+            assertThat(metrics.get("memoryUsedSizeInBytes")).isInstanceOf(Gauge.class);
+            assertThat(metrics.get("numSpillFiles")).isInstanceOf(Gauge.class);
+            // Flink registers spillInBytes only for the final hash-aggregate phase, which owns
+            // the fallback sorter. Its local phase deliberately exposes only these two gauges.
+            assertThat(metrics.get("spillInBytes")).isNull();
+            assertThat(((Gauge<?>) metrics.get("numSpillFiles")).getValue()).isEqualTo(0L);
 
             ((Counter) metrics.get("numRecordsIn")).inc();
             harness.processElement(new StreamRecord<>(first));

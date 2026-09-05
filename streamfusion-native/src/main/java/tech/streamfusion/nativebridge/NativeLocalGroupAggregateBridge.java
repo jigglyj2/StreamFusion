@@ -4,8 +4,12 @@
  */
 package tech.streamfusion.nativebridge;
 
+import java.util.concurrent.atomic.AtomicLong;
+
 /** JNI lifecycle for the native local mini-batch aggregate. */
 public final class NativeLocalGroupAggregateBridge {
+    private static final AtomicLong EXECUTED_BATCHES = new AtomicLong();
+
     static {
         NativeLibraryLoader.load();
     }
@@ -17,11 +21,23 @@ public final class NativeLocalGroupAggregateBridge {
     }
 
     public static long process(long handle, long inputArray, long inputSchema, long outputArray, long outputSchema) {
-        return processArrowBatch(handle, inputArray, inputSchema, outputArray, outputSchema);
+        long rows = processArrowBatch(handle, inputArray, inputSchema, outputArray, outputSchema);
+        EXECUTED_BATCHES.incrementAndGet();
+        return rows;
     }
 
     public static long finishBundle(long handle, long outputArray, long outputSchema) {
-        return finishBundleNative(handle, outputArray, outputSchema);
+        long rows = finishBundleNative(handle, outputArray, outputSchema);
+        EXECUTED_BATCHES.incrementAndGet();
+        return rows;
+    }
+
+    public static long executedBatchCount() {
+        return EXECUTED_BATCHES.get();
+    }
+
+    public static void resetMetrics() {
+        EXECUTED_BATCHES.set(0);
     }
 
     public static long pendingElementCount(long handle) {

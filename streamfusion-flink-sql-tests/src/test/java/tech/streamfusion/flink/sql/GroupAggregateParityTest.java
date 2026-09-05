@@ -40,6 +40,8 @@ class GroupAggregateParityTest extends SqlParityTestSupport {
         assertThat(StreamFusionPlannerFactory.nativeGroupAggregateBatchCount())
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())
                 .isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativeLocalGroupAggregateBatchCount())
+                .isZero();
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 
@@ -50,6 +52,8 @@ class GroupAggregateParityTest extends SqlParityTestSupport {
 
         assertThat(streamFusion).isEqualTo(flink);
         assertThat(StreamFusionPlannerFactory.nativeGroupAggregateBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativeLocalGroupAggregateBatchCount())
+                .isGreaterThan(0);
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 
@@ -60,6 +64,8 @@ class GroupAggregateParityTest extends SqlParityTestSupport {
 
         assertThat(streamFusion).isEqualTo(flink);
         assertThat(StreamFusionPlannerFactory.nativeGroupAggregateBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativeLocalGroupAggregateBatchCount())
+                .isGreaterThan(0);
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 
@@ -145,6 +151,8 @@ class GroupAggregateParityTest extends SqlParityTestSupport {
 
         assertThat(streamFusion).isEqualTo(flink);
         assertThat(StreamFusionPlannerFactory.nativeGroupAggregateBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativeLocalGroupAggregateBatchCount())
+                .isGreaterThan(0);
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 

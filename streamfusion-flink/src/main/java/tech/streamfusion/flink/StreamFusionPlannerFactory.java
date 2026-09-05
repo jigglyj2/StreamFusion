@@ -27,6 +27,7 @@ import tech.streamfusion.nativebridge.NativeChangelogNormalizeBridge;
 import tech.streamfusion.nativebridge.NativeDeduplicateBridge;
 import tech.streamfusion.nativebridge.NativeGroupAggregateBridge;
 import tech.streamfusion.nativebridge.NativeIntervalJoinBridge;
+import tech.streamfusion.nativebridge.NativeLocalGroupAggregateBridge;
 import tech.streamfusion.nativebridge.NativeMatchRecognizeBridge;
 import tech.streamfusion.nativebridge.NativeMultiJoinBridge;
 import tech.streamfusion.nativebridge.NativeOverAggregateBridge;
@@ -103,6 +104,10 @@ public final class StreamFusionPlannerFactory implements PlannerFactory {
         return NativeGroupAggregateBridge.executedBatchCount();
     }
 
+    public static long nativeLocalGroupAggregateBatchCount() {
+        return NativeLocalGroupAggregateBridge.executedBatchCount();
+    }
+
     public static long nativeOverAggregateBatchCount() {
         return NativeOverAggregateBridge.executedBatchCount();
     }
@@ -170,6 +175,7 @@ public final class StreamFusionPlannerFactory implements PlannerFactory {
         NativeChangelogNormalizeBridge.resetMetrics();
         NativeDeduplicateBridge.resetMetrics();
         NativeGroupAggregateBridge.resetMetrics();
+        NativeLocalGroupAggregateBridge.resetMetrics();
         NativeOverAggregateBridge.resetMetrics();
         NativeWindowAggregateBridge.resetMetrics();
         NativeWindowDeduplicateBridge.resetMetrics();

@@ -188,10 +188,35 @@ class LocalRowDataNexmarkBenchmarkIT {
             assertThat(streamFusion.materializedSha256()).isEqualTo(flink.materializedSha256());
             assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
             assertThat(streamFusion.nativeGroupAggregateBatches()).isGreaterThan(0);
+            assertThat(streamFusion.nativeLocalGroupAggregateBatches()).isGreaterThan(0);
         } finally {
             System.clearProperty("streamfusion.nexmark.mini-batch");
             System.clearProperty("streamfusion.nexmark.mini-batch-size");
             System.clearProperty("streamfusion.nexmark.checkpoint-interval-ms");
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"hashmap", "rocksdb"})
+    void twoPhaseGroupAggregateExecutesBothNativeStagesOnBothStateBackends(String backend) throws Exception {
+        System.setProperty("streamfusion.nexmark.mini-batch", "true");
+        System.setProperty("streamfusion.nexmark.mini-batch-size", "32");
+        System.setProperty("streamfusion.nexmark.aggregate-phase", "TWO_PHASE");
+        try {
+            LocalRowDataNexmarkBenchmark.RunResult flink =
+                    LocalRowDataNexmarkBenchmark.run(2_000, "group-aggregate", false, backend, 1);
+            LocalRowDataNexmarkBenchmark.RunResult streamFusion =
+                    LocalRowDataNexmarkBenchmark.run(2_000, "group-aggregate", true, backend, 1);
+
+            assertThat(streamFusion.materializedDebugRows()).containsExactlyElementsOf(flink.materializedDebugRows());
+            assertThat(streamFusion.materializedSha256()).isEqualTo(flink.materializedSha256());
+            assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+            assertThat(streamFusion.nativeLocalGroupAggregateBatches()).isGreaterThan(0);
+            assertThat(streamFusion.nativeGroupAggregateBatches()).isGreaterThan(0);
+        } finally {
+            System.clearProperty("streamfusion.nexmark.mini-batch");
+            System.clearProperty("streamfusion.nexmark.mini-batch-size");
+            System.clearProperty("streamfusion.nexmark.aggregate-phase");
         }
     }
 

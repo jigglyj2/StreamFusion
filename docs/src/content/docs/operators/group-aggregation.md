@@ -176,8 +176,9 @@ The RowData Nexmark `group-aggregate`, `global-aggregate`, `grouping-sets`, and
 state backends. The first three also have bounded-runtime parity coverage through the same
 Kafka-free RowData source/sink boundary. Benchmark builds use the Rust release profile and the
 build machine's native CPU feature set. The harness records elapsed time, input throughput, native
-calculation batches, and native aggregate batches so exchange fragmentation and JNI call
-amplification remain visible.
+calculation batches, native local-aggregate batches, and native stateful aggregate batches so a
+two-phase run proves that both stages executed and exchange fragmentation/JNI call amplification
+remain visible.
 
 The September 4, 2026 split-DISTINCT measurement covers implementation commits `00d5bfe` and
 `c946c63`. Three alternating fresh-JVM forks processed one million deterministic events at
