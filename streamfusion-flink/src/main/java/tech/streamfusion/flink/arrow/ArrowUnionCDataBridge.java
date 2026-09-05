@@ -27,6 +27,7 @@ import org.apache.arrow.vector.IntVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.nativebridge.NativeExecutionContext;
+import tech.streamfusion.nativebridge.NativeMemoryManager;
 import tech.streamfusion.nativebridge.NativeUnionBridge;
 
 /** Ownership-safe Arrow C Data transfer for one native multi-input UNION ALL batch. */
@@ -34,13 +35,17 @@ public final class ArrowUnionCDataBridge {
     private ArrowUnionCDataBridge() {}
 
     public static NativeCalcResult executeWithSelection(
-            byte[] serializedPlan, List<ArrowRowDataBatch> inputs, RowType outputType, BufferAllocator allocator) {
+            byte[] serializedPlan,
+            List<ArrowRowDataBatch> inputs,
+            RowType outputType,
+            BufferAllocator allocator,
+            NativeMemoryManager memoryManager) {
         return executeWithSelection(
                 inputs,
                 outputType,
                 allocator,
-                (arrays, schemas, outputArray, outputSchema) ->
-                        NativeUnionBridge.executeArrow(serializedPlan, arrays, schemas, outputArray, outputSchema));
+                (arrays, schemas, outputArray, outputSchema) -> NativeUnionBridge.executeArrow(
+                        serializedPlan, arrays, schemas, outputArray, outputSchema, memoryManager));
     }
 
     public static NativeCalcResult executeWithSelection(

@@ -93,7 +93,12 @@ class StreamFusionWindowTableFunctionParityTest {
         try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
                 ArrowRowDataBatch input = ArrowRowDataBatch.transpose(rows, INPUT_TYPE, allocator)
                         .withEnvelope(kinds, hasTimestamps, timestamps);
-                NativeCalcResult result = ArrowCDataBridge.executeWithSelection(plan, input, OUTPUT_TYPE, allocator)) {
+                NativeCalcResult result = ArrowCDataBridge.executeWithSelection(
+                        plan,
+                        input,
+                        OUTPUT_TYPE,
+                        allocator,
+                        tech.streamfusion.flink.TestingNativeMemoryManager.create())) {
             ArrowRowDataBatch output = result.selectEnvelopeFrom(input).withoutTimestamps();
             List<String> formatted = format(output);
             formatted.add("watermark:20000");

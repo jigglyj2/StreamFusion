@@ -179,8 +179,11 @@ class StreamFusionTemporalJoinTypeParityTest {
                         .withEnvelope(new RowKind[] {row.getRowKind()}, new boolean[] {false}, new long[] {0});
                 ArrowExchangeBatch.EnvelopeBatch envelope =
                         ArrowExchangeBatch.withEnvelope(input, inputType, routingKeys)) {
-            List<NativeExchangeFrame> frames =
-                    ArrowExchangeCDataBridge.route(exchangePlan, envelope.batch(), allocator);
+            List<NativeExchangeFrame> frames = ArrowExchangeCDataBridge.route(
+                    exchangePlan,
+                    envelope.batch(),
+                    allocator,
+                    tech.streamfusion.flink.TestingNativeMemoryManager.create());
             assertThat(frames).hasSize(1);
             StreamRecord<NativeExchangeFrame> record = new StreamRecord<>(frames.get(0));
             if (side == 0) {

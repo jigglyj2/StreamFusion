@@ -36,7 +36,7 @@ class NativeManagedMemoryBridgeTest extends ArrowCDataBridgeTestSupport {
                 NativeCalcResult result = ArrowCDataBridge.executeWithSelection(context, input, rowType, allocator)) {
             assertThat(result.batch().size()).isEqualTo(2);
             assertThat(memory.peak()).isGreaterThan(plan.length);
-            assertThat(memory.reserved()).isEqualTo(plan.length);
+            assertThat(memory.reserved()).isGreaterThan(plan.length);
         }
 
         assertThat(memory.reserved()).isZero();
@@ -45,17 +45,22 @@ class NativeManagedMemoryBridgeTest extends ArrowCDataBridgeTestSupport {
     @Test
     void rejectsNativeScratchThatExceedsTheHostBudget() {
         byte[] plan = chainedSelectionPlan();
-        TrackingMemoryManager memory = new TrackingMemoryManager(plan.length + 4L);
+        TrackingMemoryManager memory = new TrackingMemoryManager(64L << 20);
         RowType rowType = RowType.of(new IntType(false));
         List<RowData> rows = List.of(GenericRowData.of(1), GenericRowData.of(2), GenericRowData.of(3));
 
         try (RootAllocator allocator = new RootAllocator(64L << 20);
                 NativeExecutionContext context = new NativeExecutionContext(plan, memory);
                 ArrowRowDataBatch input = ArrowRowDataBatch.transpose(rows, rowType, allocator)) {
+            try (NativeCalcResult ignored = ArrowCDataBridge.executeWithSelection(context, input, rowType, allocator)) {
+                // Warm the task-lifetime schema and physical-plan caches before constraining
+                // the remaining per-batch scratch allowance.
+            }
+            memory.setLimit(memory.reserved() + 4L);
             assertThatThrownBy(() -> ArrowCDataBridge.executeWithSelection(context, input, rowType, allocator))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("Resources exhausted")
-                    .hasMessageContaining("requested 12 bytes")
+                    .hasMessageContaining("denied 12 bytes")
                     .hasMessageContaining("native input-row ordinal");
         }
 
@@ -94,7 +99,7 @@ class NativeManagedMemoryBridgeTest extends ArrowCDataBridgeTestSupport {
     }
 
     private static final class TrackingMemoryManager implements NativeMemoryManager {
-        private final long limit;
+        private long limit;
         private long reserved;
         private long peak;
 
@@ -121,8 +126,15 @@ class NativeManagedMemoryBridgeTest extends ArrowCDataBridgeTestSupport {
         }
 
         @Override
-        public long limit() {
+        public synchronized long limit() {
             return limit;
+        }
+
+        private synchronized void setLimit(long limit) {
+            if (limit < reserved) {
+                throw new IllegalArgumentException("Limit cannot be smaller than the active reservation");
+            }
+            this.limit = limit;
         }
 
         private synchronized long reserved() {

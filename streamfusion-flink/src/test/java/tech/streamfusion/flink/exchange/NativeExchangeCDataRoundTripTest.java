@@ -15,9 +15,11 @@ import org.apache.flink.table.types.logical.IntType;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.types.RowKind;
 import org.junit.jupiter.api.Test;
+import tech.streamfusion.flink.TestingNativeMemoryManager;
 import tech.streamfusion.flink.arrow.ArrowExchangeCDataBridge;
 import tech.streamfusion.flink.arrow.ArrowExchangeInputCDataBridge;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
+import tech.streamfusion.nativebridge.NativeMemoryManager;
 
 class NativeExchangeCDataRoundTripTest {
     @Test
@@ -36,10 +38,12 @@ class NativeExchangeCDataRoundTripTest {
                                 new boolean[] {true, false},
                                 new long[] {100, 0});
                 ArrowExchangeBatch.EnvelopeBatch envelope = ArrowExchangeBatch.withEnvelope(input, rowType)) {
-            List<NativeExchangeFrame> frames = ArrowExchangeCDataBridge.route(plan, envelope.batch(), allocator);
+            NativeMemoryManager memoryManager = TestingNativeMemoryManager.create();
+            List<NativeExchangeFrame> frames =
+                    ArrowExchangeCDataBridge.route(plan, envelope.batch(), allocator, memoryManager);
             for (NativeExchangeFrame frame : frames) {
                 try (ArrowExchangeInputBatch decoded =
-                        ArrowExchangeInputCDataBridge.decode(plan, frame, rowType, allocator)) {
+                        ArrowExchangeInputCDataBridge.decode(plan, frame, rowType, allocator, memoryManager)) {
                     for (int row = 0; row < decoded.size(); row++) {
                         output.add(new ResultRow(
                                 decoded.rowView(row).getInt(0),

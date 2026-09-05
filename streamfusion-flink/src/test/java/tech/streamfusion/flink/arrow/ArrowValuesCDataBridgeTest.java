@@ -35,7 +35,11 @@ class ArrowValuesCDataBridgeTest {
         RowType outputType = RowType.of(new IntType(), new VarCharType());
 
         try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
-                ArrowRowDataBatch batch = ArrowValuesCDataBridge.execute(plan(false), outputType, allocator)) {
+                ArrowRowDataBatch batch = ArrowValuesCDataBridge.execute(
+                        plan(false),
+                        outputType,
+                        allocator,
+                        tech.streamfusion.flink.TestingNativeMemoryManager.create())) {
             assertThat(batch.size()).isEqualTo(2);
             assertThat(batch.rowView(0).getInt(0)).isEqualTo(7);
             assertThat(batch.rowView(0).getString(1).toString()).isEqualTo("seven");
@@ -49,7 +53,11 @@ class ArrowValuesCDataBridgeTest {
         RowType outputType = RowType.of(new IntType(), new VarCharType());
 
         try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
-                ArrowRowDataBatch batch = ArrowValuesCDataBridge.execute(plan(true), outputType, allocator)) {
+                ArrowRowDataBatch batch = ArrowValuesCDataBridge.execute(
+                        plan(true),
+                        outputType,
+                        allocator,
+                        tech.streamfusion.flink.TestingNativeMemoryManager.create())) {
             assertThat(batch.size()).isZero();
             assertThat(batch.root().getFieldVectors()).hasSize(2);
         }
@@ -69,7 +77,8 @@ class ArrowValuesCDataBridgeTest {
                 .toByteArray();
 
         try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
-                ArrowRowDataBatch batch = ArrowValuesCDataBridge.execute(plan, outputType, allocator)) {
+                ArrowRowDataBatch batch = ArrowValuesCDataBridge.execute(
+                        plan, outputType, allocator, tech.streamfusion.flink.TestingNativeMemoryManager.create())) {
             assertThat(batch.size()).isEqualTo(1);
             assertThat(batch.allocator()).isSameAs(allocator);
         }

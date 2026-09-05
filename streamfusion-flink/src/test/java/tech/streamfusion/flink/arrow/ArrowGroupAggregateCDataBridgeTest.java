@@ -14,6 +14,7 @@ import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.types.RowKind;
 import org.junit.jupiter.api.Test;
+import tech.streamfusion.flink.TestingNativeMemoryManager;
 import tech.streamfusion.nativebridge.NativeGroupAggregateBridge;
 import tech.streamfusion.nativebridge.NativeMemoryManager;
 import tech.streamfusion.proto.plan.v1.AggregateCall;
@@ -39,12 +40,13 @@ class ArrowGroupAggregateCDataBridgeTest {
 
     @Test
     void returnsFlinkPerRecordAggregateChangelogDirectlyFromArrow() {
-        long handle = NativeGroupAggregateBridge.create(plan(false), 128, 0, 127, NativeMemoryManager.unbounded());
+        NativeMemoryManager memoryManager = TestingNativeMemoryManager.create();
+        long handle = NativeGroupAggregateBridge.create(plan(false), 128, 0, 127, memoryManager);
         try (RootAllocator allocator = new RootAllocator(64L << 20);
                 ArrowRowDataBatch input = ArrowRowDataBatch.transpose(
                         List.of(row(7, 10L), row(7, 20L), row(7, null), row(8, 5L)), INPUT_TYPE, allocator);
-                ArrowRowDataBatch output =
-                        ArrowGroupAggregateCDataBridge.execute(handle, input, null, false, OUTPUT_TYPE, allocator)) {
+                ArrowRowDataBatch output = ArrowGroupAggregateCDataBridge.execute(
+                        handle, input, null, false, OUTPUT_TYPE, allocator, memoryManager)) {
             assertThat(output.size()).isEqualTo(6);
             assertThat(output.rowKind(0)).isEqualTo(RowKind.INSERT);
             assertThat(output.rowKind(1)).isEqualTo(RowKind.UPDATE_BEFORE);
@@ -64,18 +66,19 @@ class ArrowGroupAggregateCDataBridgeTest {
 
     @Test
     void consumesRetractionsAndDeletesAnEmptyGroup() {
-        long handle = NativeGroupAggregateBridge.create(plan(true), 128, 0, 127, NativeMemoryManager.unbounded());
+        NativeMemoryManager memoryManager = TestingNativeMemoryManager.create();
+        long handle = NativeGroupAggregateBridge.create(plan(true), 128, 0, 127, memoryManager);
         try (RootAllocator allocator = new RootAllocator(64L << 20);
                 ArrowRowDataBatch inserted = ArrowRowDataBatch.transpose(
                                 List.of(row(7, 10L), row(7, 20L)), INPUT_TYPE, allocator)
                         .withRowKinds(new RowKind[] {RowKind.INSERT, RowKind.INSERT});
-                ArrowRowDataBatch ignored =
-                        ArrowGroupAggregateCDataBridge.execute(handle, inserted, null, true, OUTPUT_TYPE, allocator);
+                ArrowRowDataBatch ignored = ArrowGroupAggregateCDataBridge.execute(
+                        handle, inserted, null, true, OUTPUT_TYPE, allocator, memoryManager);
                 ArrowRowDataBatch retracted = ArrowRowDataBatch.transpose(
                                 List.of(row(7, 20L), row(7, 10L)), INPUT_TYPE, allocator)
                         .withRowKinds(new RowKind[] {RowKind.DELETE, RowKind.DELETE});
-                ArrowRowDataBatch output =
-                        ArrowGroupAggregateCDataBridge.execute(handle, retracted, null, true, OUTPUT_TYPE, allocator)) {
+                ArrowRowDataBatch output = ArrowGroupAggregateCDataBridge.execute(
+                        handle, retracted, null, true, OUTPUT_TYPE, allocator, memoryManager)) {
             assertThat(output.size()).isEqualTo(3);
             assertThat(output.rowKind(0)).isEqualTo(RowKind.UPDATE_BEFORE);
             assertThat(output.rowKind(1)).isEqualTo(RowKind.UPDATE_AFTER);

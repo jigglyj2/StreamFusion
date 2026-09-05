@@ -21,9 +21,12 @@ public final class NativeValuesBridge {
 
     private NativeValuesBridge() {}
 
-    public static long executeArrow(byte[] serializedPlan, long outputArrayAddress, long outputSchemaAddress) {
-        try (NativeExecutionContext context =
-                new NativeExecutionContext(serializedPlan, NativeMemoryManager.unbounded())) {
+    public static long executeArrow(
+            byte[] serializedPlan,
+            long outputArrayAddress,
+            long outputSchemaAddress,
+            NativeMemoryManager memoryManager) {
+        try (NativeExecutionContext context = new NativeExecutionContext(serializedPlan, memoryManager)) {
             return executeArrow(context, outputArrayAddress, outputSchemaAddress);
         }
     }

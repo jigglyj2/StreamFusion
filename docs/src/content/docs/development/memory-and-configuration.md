@@ -36,12 +36,26 @@ closed before the Arrow allocator so outstanding DataFusion reservations return 
 Flink before imported Arrow buffers are checked and released. The operator exposes its
 current, peak, and assigned managed-memory bytes as Flink metrics.
 
+The context reserves a control envelope for the decoded plan, Tokio runtime, DataFusion
+session/task context, and registry entry before constructing them. Cached Arrow schemas
+and the lowered physical-plan tree have separate reservations that grow before those
+objects are retained. Production bridge overloads cannot select an unbounded manager:
+every JNI entry requires either the task-scoped context or an explicit
+`NativeMemoryManager`. Low-level tests use a bounded test broker.
+Operators that retain this context use a shared minimum Flink managed-memory weight,
+so the fixed control and physical-plan reservations remain viable when a task chain
+also contains a high-weight buffering operator such as bounded sort.
+
 Native RocksDB normally receives its cache and write-buffer lease from Flink's
 `STATE_BACKEND` managed-memory share, leaving the operator share for Arrow and execution scratch.
 When an embedded runner cannot expose that lease, the compatibility fallback gives RocksDB one
 quarter of the operator allowance and keeps the remainder available for batch input, output, and
 accounted native working memory. This is an internal division of Flink's existing allowance, not a
 second memory budget or deployment setting.
+RocksDB uses three quarters of that lease for a shared block cache, charges its
+write-buffer manager to that cache, and places index and filter blocks in the same
+cache. The remaining quarter is reserved headroom for RocksDB table-reader, iterator,
+and database metadata rather than being exposed as another native pool.
 
 This is modeled on Apache DataFusion Comet's unified off-heap path. Comet implements a
 DataFusion `MemoryPool` that calls a JVM `CometTaskMemoryManager` over JNI. That adapter

@@ -17,6 +17,9 @@ import tech.streamfusion.nativebridge.NativeExecutionContext;
 
 /** Owns task-scoped Arrow and native execution resources in close-safe order. */
 public final class StreamFusionTaskMemory implements AutoCloseable {
+    /** Minimum Flink operator-memory weight for a retained native DataFusion execution context. */
+    public static final int MANAGED_MEMORY_WEIGHT = 2;
+
     private final FlinkManagedMemory managedMemory;
     private final NativeExecutionContext executionContext;
 

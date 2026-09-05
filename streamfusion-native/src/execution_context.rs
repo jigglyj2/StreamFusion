@@ -26,6 +26,16 @@ use crate::planner::create_plan_from_decoded;
 use crate::planner::operators::reusable_input::ReusableInputExec;
 use crate::proto;
 
+// Rust, Tokio, and DataFusion allocate control structures outside Arrow's buffer allocator. Keep
+// a conservative task-lifetime envelope for those allocations in Flink's pool, then add explicit
+// reservations for cached schemas and the lowered physical tree before they are retained.
+const EXECUTION_CONTEXT_CONTROL_BYTES: usize = 256 * 1024;
+const DECODED_PLAN_MULTIPLIER: usize = 4;
+const CACHED_SCHEMA_BASE_BYTES: usize = 4 * 1024;
+const CACHED_SCHEMA_FIELD_BYTES: usize = 1024;
+const PHYSICAL_PLAN_BASE_BYTES: usize = 64 * 1024;
+const PHYSICAL_PLAN_MULTIPLIER: usize = 4;
+
 pub(crate) struct NativeExecutionContext {
     plan: proto::NativePlan,
     runtime: Arc<tokio::runtime::Runtime>,
@@ -33,7 +43,9 @@ pub(crate) struct NativeExecutionContext {
     memory_pool: Arc<dyn MemoryPool>,
     physical_plan: Mutex<Option<CachedPhysicalPlan>>,
     input_schemas: Mutex<Vec<SchemaRef>>,
-    _plan_reservation: MemoryReservation,
+    schema_reservation: Mutex<MemoryReservation>,
+    physical_plan_reservation: Mutex<MemoryReservation>,
+    _control_reservation: MemoryReservation,
 }
 
 struct CachedPhysicalPlan {
@@ -50,8 +62,22 @@ impl NativeExecutionContext {
     ) -> Result<Self> {
         let broker = Arc::new(JvmMemoryReservationBroker::new(java_vm, memory_manager));
         let memory_pool: Arc<dyn MemoryPool> = Arc::new(FlinkMemoryPool::new(broker, memory_limit));
-        let plan_reservation = MemoryConsumer::new("native protobuf plan").register(&memory_pool);
-        plan_reservation.try_grow(plan.encoded_len())?;
+        let control_bytes = plan
+            .encoded_len()
+            .checked_mul(DECODED_PLAN_MULTIPLIER)
+            .and_then(|bytes| bytes.checked_add(EXECUTION_CONTEXT_CONTROL_BYTES))
+            .ok_or_else(|| {
+                DataFusionError::ResourcesExhausted(
+                    "native execution-context reservation overflowed usize".to_string(),
+                )
+            })?;
+        let control_reservation =
+            MemoryConsumer::new("native execution context and decoded plan").register(&memory_pool);
+        control_reservation.try_grow(control_bytes)?;
+        let schema_reservation =
+            MemoryConsumer::new("native cached input schemas").register(&memory_pool);
+        let physical_plan_reservation =
+            MemoryConsumer::new("native lowered physical plan").register(&memory_pool);
         let runtime_env = RuntimeEnvBuilder::new()
             .with_memory_pool(Arc::clone(&memory_pool))
             .build()
@@ -70,7 +96,9 @@ impl NativeExecutionContext {
             memory_pool,
             physical_plan: Mutex::new(None),
             input_schemas: Mutex::new(Vec::new()),
-            _plan_reservation: plan_reservation,
+            schema_reservation: Mutex::new(schema_reservation),
+            physical_plan_reservation: Mutex::new(physical_plan_reservation),
+            _control_reservation: control_reservation,
         })
     }
 
@@ -108,6 +136,31 @@ impl NativeExecutionContext {
                 schemas.len()
             )));
         }
+        let schema_bytes = CACHED_SCHEMA_BASE_BYTES
+            .checked_add(
+                schema
+                    .fields()
+                    .len()
+                    .checked_mul(CACHED_SCHEMA_FIELD_BYTES)
+                    .ok_or_else(|| {
+                        DataFusionError::ResourcesExhausted(
+                            "native input-schema reservation overflowed usize".to_string(),
+                        )
+                    })?,
+            )
+            .ok_or_else(|| {
+                DataFusionError::ResourcesExhausted(
+                    "native input-schema reservation overflowed usize".to_string(),
+                )
+            })?;
+        self.schema_reservation
+            .lock()
+            .map_err(|_| {
+                DataFusionError::Internal(
+                    "native input-schema reservation lock poisoned".to_string(),
+                )
+            })?
+            .try_grow(schema_bytes)?;
         schemas.push(schema);
         Ok(())
     }
@@ -136,6 +189,30 @@ impl NativeExecutionContext {
             DataFusionError::Internal("native physical-plan cache lock poisoned".to_string())
         })?;
         if cached.is_none() {
+            let physical_plan_bytes = self
+                .plan
+                .encoded_len()
+                .checked_mul(PHYSICAL_PLAN_MULTIPLIER)
+                .and_then(|bytes| bytes.checked_add(PHYSICAL_PLAN_BASE_BYTES))
+                .and_then(|bytes| {
+                    batches
+                        .len()
+                        .checked_mul(CACHED_SCHEMA_BASE_BYTES)
+                        .and_then(|inputs| bytes.checked_add(inputs))
+                })
+                .ok_or_else(|| {
+                    DataFusionError::ResourcesExhausted(
+                        "native physical-plan reservation overflowed usize".to_string(),
+                    )
+                })?;
+            self.physical_plan_reservation
+                .lock()
+                .map_err(|_| {
+                    DataFusionError::Internal(
+                        "native physical-plan reservation lock poisoned".to_string(),
+                    )
+                })?
+                .try_grow(physical_plan_bytes)?;
             let inputs = batches
                 .iter()
                 .map(|batch| Arc::new(ReusableInputExec::new(batch.schema())))

@@ -20,11 +20,6 @@ public final class ArrowExchangeInputCDataBridge {
     private ArrowExchangeInputCDataBridge() {}
 
     public static ArrowExchangeInputBatch decode(
-            byte[] serializedPlan, NativeExchangeFrame frame, RowType rowType, BufferAllocator allocator) {
-        return decode(serializedPlan, frame, rowType, allocator, NativeMemoryManager.unbounded());
-    }
-
-    public static ArrowExchangeInputBatch decode(
             byte[] serializedPlan,
             NativeExchangeFrame frame,
             RowType rowType,

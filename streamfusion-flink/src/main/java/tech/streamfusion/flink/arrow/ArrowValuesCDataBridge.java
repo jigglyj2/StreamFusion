@@ -17,18 +17,20 @@ import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.nativebridge.NativeExecutionContext;
+import tech.streamfusion.nativebridge.NativeMemoryManager;
 import tech.streamfusion.nativebridge.NativeValuesBridge;
 
 /** Imports a source-free native VALUES result through Arrow C Data. */
 public final class ArrowValuesCDataBridge {
     private ArrowValuesCDataBridge() {}
 
-    public static ArrowRowDataBatch execute(byte[] serializedPlan, RowType outputType, BufferAllocator allocator) {
+    public static ArrowRowDataBatch execute(
+            byte[] serializedPlan, RowType outputType, BufferAllocator allocator, NativeMemoryManager memoryManager) {
         return execute(
                 outputType,
                 allocator,
                 (outputArray, outputSchema) ->
-                        NativeValuesBridge.executeArrow(serializedPlan, outputArray, outputSchema));
+                        NativeValuesBridge.executeArrow(serializedPlan, outputArray, outputSchema, memoryManager));
     }
 
     public static ArrowRowDataBatch execute(

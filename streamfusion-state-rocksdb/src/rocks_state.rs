@@ -82,6 +82,11 @@ impl RocksStateBackend {
         options.create_if_missing(true);
         let mut table_options = BlockBasedOptions::default();
         table_options.set_block_cache(&shared_memory.cache);
+        // Keep index and filter blocks inside the same Flink-reserved cache instead of letting
+        // RocksDB allocate an invisible second pool. Pinning L0 metadata avoids cache churn while
+        // still charging those bytes to the shared cache.
+        table_options.set_cache_index_and_filter_blocks(true);
+        table_options.set_pin_l0_filter_and_index_blocks_in_cache(true);
         options.set_block_based_table_factory(&table_options);
         options.set_write_buffer_manager(&shared_memory.write_buffers);
         options.set_write_buffer_size(memory_limit / 4);
@@ -229,9 +234,12 @@ fn shared_rocks_memory(memory_limit: usize) -> Result<Arc<SharedRocksMemory>> {
     // Match Flink's shared RocksDB design: one cache and one write-buffer manager cap memory
     // across all DB instances in the task manager instead of multiplying the budget per operator.
     // Charging memtables to the cache keeps their combined footprint within this single limit.
-    let cache = Cache::new_lru_cache(memory_limit);
+    // The Java lease reserves the full memory_limit from Flink. Keep one quarter as headroom for
+    // RocksDB DB/iterator/table-reader metadata that is not cache- or memtable-owned.
+    let cache_capacity = memory_limit - memory_limit / 4;
+    let cache = Cache::new_lru_cache(cache_capacity);
     let write_buffers = WriteBufferManager::new_write_buffer_manager_with_cache(
-        memory_limit / 2,
+        memory_limit / 4,
         false,
         cache.clone(),
     );

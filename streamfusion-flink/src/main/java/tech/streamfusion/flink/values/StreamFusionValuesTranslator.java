@@ -24,6 +24,7 @@ import tech.streamfusion.flink.arrow.ArrowRowDataBatchTypeInfo;
 import tech.streamfusion.flink.arrow.StreamFusionArrowBoundaries;
 import tech.streamfusion.flink.calc.StreamFusionCalcTranslator;
 import tech.streamfusion.flink.calc.StreamFusionTimestampRangeSupport;
+import tech.streamfusion.flink.memory.StreamFusionTaskMemory;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.Field;
 import tech.streamfusion.proto.plan.v1.NativePlan;
@@ -52,7 +53,11 @@ public final class StreamFusionValuesTranslator {
                 true);
         transformation.setDescription("StreamFusionValues");
         transformation.setMaxParallelism(1);
-        transformation.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
+        // The native execution context retains its decoded protocol and lowered DataFusion tree.
+        // Give VALUES enough relative weight to cover that fixed accounting envelope even when
+        // it is chained with Flink's weight-128 bounded sort.
+        transformation.declareManagedMemoryUseCaseAtOperatorScope(
+                ManagedMemoryUseCase.OPERATOR, StreamFusionTaskMemory.MANAGED_MEMORY_WEIGHT);
         return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
     }
 

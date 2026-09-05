@@ -19,6 +19,7 @@ import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatchTypeInfo;
 import tech.streamfusion.flink.arrow.StreamFusionArrowBoundaries;
+import tech.streamfusion.flink.memory.StreamFusionTaskMemory;
 import tech.streamfusion.flink.operator.StreamFusionArrowNativeOperator;
 import tech.streamfusion.flink.replicate.StreamFusionReplicateRowsTranslator;
 import tech.streamfusion.flink.unnest.StreamFusionArrayUnnestTranslator;
@@ -120,7 +121,8 @@ public final class StreamFusionCalcTranslator extends StreamFusionExpressionTran
                 ArrowRowDataBatchTypeInfo.INSTANCE,
                 input.getParallelism(),
                 false);
-        transformation.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
+        transformation.declareManagedMemoryUseCaseAtOperatorScope(
+                ManagedMemoryUseCase.OPERATOR, StreamFusionTaskMemory.MANAGED_MEMORY_WEIGHT);
         return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
     }
 
@@ -226,7 +228,8 @@ public final class StreamFusionCalcTranslator extends StreamFusionExpressionTran
                 ArrowRowDataBatchTypeInfo.INSTANCE,
                 input.getParallelism(),
                 false);
-        transformation.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
+        transformation.declareManagedMemoryUseCaseAtOperatorScope(
+                ManagedMemoryUseCase.OPERATOR, StreamFusionTaskMemory.MANAGED_MEMORY_WEIGHT);
         return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
     }
 
@@ -283,7 +286,8 @@ public final class StreamFusionCalcTranslator extends StreamFusionExpressionTran
                 ArrowRowDataBatchTypeInfo.INSTANCE,
                 input.getParallelism(),
                 false);
-        transformation.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
+        transformation.declareManagedMemoryUseCaseAtOperatorScope(
+                ManagedMemoryUseCase.OPERATOR, StreamFusionTaskMemory.MANAGED_MEMORY_WEIGHT);
         return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
     }
 

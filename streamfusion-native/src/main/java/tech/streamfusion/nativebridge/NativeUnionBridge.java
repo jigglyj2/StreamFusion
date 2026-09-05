@@ -32,9 +32,9 @@ public final class NativeUnionBridge {
             long[] inputArrayAddresses,
             long[] inputSchemaAddresses,
             long outputArrayAddress,
-            long outputSchemaAddress) {
-        try (NativeExecutionContext context =
-                new NativeExecutionContext(serializedPlan, NativeMemoryManager.unbounded())) {
+            long outputSchemaAddress,
+            NativeMemoryManager memoryManager) {
+        try (NativeExecutionContext context = new NativeExecutionContext(serializedPlan, memoryManager)) {
             return executeArrow(
                     context, inputArrayAddresses, inputSchemaAddresses, outputArrayAddress, outputSchemaAddress);
         }

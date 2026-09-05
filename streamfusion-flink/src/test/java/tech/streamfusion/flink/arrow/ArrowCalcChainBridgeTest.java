@@ -22,8 +22,8 @@ import org.apache.flink.table.types.logical.IntType;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.VarCharType;
 import org.junit.jupiter.api.Test;
+import tech.streamfusion.flink.TestingNativeMemoryManager;
 import tech.streamfusion.nativebridge.NativeExecutionContext;
-import tech.streamfusion.nativebridge.NativeMemoryManager;
 
 class ArrowCalcChainBridgeTest extends ArrowCDataBridgeTestSupport {
     @Test
@@ -31,7 +31,7 @@ class ArrowCalcChainBridgeTest extends ArrowCDataBridgeTestSupport {
         RowType rowType = RowType.of(new IntType(false));
         byte[] plan = selectionPlan();
         try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
-                NativeExecutionContext context = new NativeExecutionContext(plan, NativeMemoryManager.unbounded());
+                NativeExecutionContext context = new NativeExecutionContext(plan, TestingNativeMemoryManager.create());
                 ArrowRowDataBatch first = ArrowRowDataBatch.transpose(
                         List.of(GenericRowData.of(3), GenericRowData.of(1)), rowType, allocator);
                 ArrowRowDataBatch second = ArrowRowDataBatch.transpose(
@@ -53,7 +53,7 @@ class ArrowCalcChainBridgeTest extends ArrowCDataBridgeTestSupport {
         RowType rowType = RowType.of(new IntType(false));
         try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
                 NativeExecutionContext context =
-                        new NativeExecutionContext(selectionPlan(), NativeMemoryManager.unbounded());
+                        new NativeExecutionContext(selectionPlan(), TestingNativeMemoryManager.create());
                 ArrowRowDataBatch input = ArrowRowDataBatch.transpose(
                         List.of(GenericRowData.of(3), GenericRowData.of(1)), rowType, allocator)) {
             ArrowCDataBridge.ReusableExecution execution =
@@ -74,8 +74,8 @@ class ArrowCalcChainBridgeTest extends ArrowCDataBridgeTestSupport {
 
         try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
                 ArrowRowDataBatch input = ArrowRowDataBatch.transpose(rows, inputType, allocator);
-                NativeCalcResult result =
-                        ArrowCDataBridge.executeWithSelection(chainedSelectionPlan(), input, outputType, allocator)) {
+                NativeCalcResult result = ArrowCDataBridge.executeWithSelection(
+                        chainedSelectionPlan(), input, outputType, allocator, TestingNativeMemoryManager.create())) {
             assertThat(result.batch().size()).isEqualTo(2);
             assertThat(result.batch().rowView(0).getInt(0)).isEqualTo(12);
             assertThat(result.batch().rowView(1).getInt(0)).isEqualTo(13);
@@ -92,8 +92,8 @@ class ArrowCalcChainBridgeTest extends ArrowCDataBridgeTestSupport {
 
         try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
                 ArrowRowDataBatch input = ArrowRowDataBatch.transpose(rows, inputType, allocator);
-                NativeCalcResult result =
-                        ArrowCDataBridge.executeWithSelection(selectionPlan(), input, outputType, allocator)) {
+                NativeCalcResult result = ArrowCDataBridge.executeWithSelection(
+                        selectionPlan(), input, outputType, allocator, TestingNativeMemoryManager.create())) {
             assertThat(result.batch().size()).isEqualTo(2);
             assertThat(result.batch().rowView(0).getInt(0)).isEqualTo(3);
             assertThat(result.batch().rowView(1).getInt(0)).isEqualTo(4);
@@ -113,7 +113,8 @@ class ArrowCalcChainBridgeTest extends ArrowCDataBridgeTestSupport {
                 ArrowRowDataBatch original = ArrowRowDataBatch.transpose(rows, inputType, allocator);
                 VectorSchemaRoot rebasedRoot = ArrowBatchRebaser.rebase(original.root(), 1, 2, allocator);
                 ArrowRowDataBatch rebased = ArrowRowDataBatch.wrap(rebasedRoot, inputType);
-                ArrowRowDataBatch output = ArrowCDataBridge.execute(plan(0, 2), rebased, outputType, allocator)) {
+                ArrowRowDataBatch output = ArrowCDataBridge.execute(
+                        plan(0, 2), rebased, outputType, allocator, TestingNativeMemoryManager.create())) {
             assertThat(output.size()).isEqualTo(2);
             assertThat(output.rowView(0).getInt(0)).isEqualTo(2);
             assertThat(output.rowView(1).getInt(0)).isEqualTo(3);

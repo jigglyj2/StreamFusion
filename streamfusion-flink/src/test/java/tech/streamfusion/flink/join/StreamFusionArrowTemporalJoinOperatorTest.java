@@ -334,8 +334,11 @@ class StreamFusionArrowTemporalJoinOperatorTest {
         try (ArrowRowDataBatch input = ArrowRowDataBatch.transpose(List.of(row), INPUT_TYPE, allocator)
                         .withEnvelope(new RowKind[] {row.getRowKind()}, new boolean[] {false}, new long[] {0});
                 ArrowExchangeBatch.EnvelopeBatch envelope = ArrowExchangeBatch.withEnvelope(input, INPUT_TYPE)) {
-            List<NativeExchangeFrame> frames =
-                    ArrowExchangeCDataBridge.route(EXCHANGE_PLAN, envelope.batch(), allocator);
+            List<NativeExchangeFrame> frames = ArrowExchangeCDataBridge.route(
+                    EXCHANGE_PLAN,
+                    envelope.batch(),
+                    allocator,
+                    tech.streamfusion.flink.TestingNativeMemoryManager.create());
             assertThat(frames).hasSize(1);
             StreamRecord<NativeExchangeFrame> record = new StreamRecord<>(frames.get(0));
             if (side == 0) {

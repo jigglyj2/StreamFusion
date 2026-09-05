@@ -38,35 +38,4 @@ public interface NativeMemoryManager {
 
     /** Returns the maximum number of bytes governed by this manager. */
     long limit();
-
-    /** Unbounded manager used only by low-level bridge tests without a Flink task. */
-    static NativeMemoryManager unbounded() {
-        return UnboundedNativeMemoryManager.INSTANCE;
-    }
-
-    enum UnboundedNativeMemoryManager implements NativeMemoryManager {
-        INSTANCE;
-
-        @Override
-        public boolean tryReserve(long bytes) {
-            return bytes >= 0;
-        }
-
-        @Override
-        public void release(long bytes) {
-            if (bytes < 0) {
-                throw new IllegalArgumentException("Released native memory must be non-negative");
-            }
-        }
-
-        @Override
-        public long limit() {
-            return Long.MAX_VALUE;
-        }
-
-        @Override
-        public long available() {
-            return Long.MAX_VALUE;
-        }
-    }
 }

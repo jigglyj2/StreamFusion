@@ -23,17 +23,6 @@ import tech.streamfusion.nativebridge.NativeMemoryManager;
 public final class ArrowGroupAggregateCDataBridge {
     private ArrowGroupAggregateCDataBridge() {}
 
-    public static ArrowRowDataBatch execute(
-            long handle,
-            ArrowRowDataBatch input,
-            List<byte[]> preencodedKeys,
-            boolean inputChangelog,
-            RowType outputType,
-            BufferAllocator allocator) {
-        return execute(
-                handle, input, preencodedKeys, inputChangelog, outputType, allocator, NativeMemoryManager.unbounded());
-    }
-
     /** Flushes a native mini-batch without manufacturing an empty Java-side input batch. */
     public static ArrowRowDataBatch finishBundle(
             long handle, RowType outputType, BufferAllocator allocator, NativeMemoryManager memoryManager) {

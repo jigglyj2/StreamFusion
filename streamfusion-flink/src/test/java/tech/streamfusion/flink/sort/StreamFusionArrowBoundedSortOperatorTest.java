@@ -238,8 +238,11 @@ class StreamFusionArrowBoundedSortOperatorTest {
         try (ArrowRowDataBatch batch = ArrowRowDataBatch.transpose(List.of(rows), ROW_TYPE, allocator)
                         .withRowKinds(kinds);
                 ArrowExchangeBatch.EnvelopeBatch envelope = ArrowExchangeBatch.withEnvelope(batch, ROW_TYPE)) {
-            for (NativeExchangeFrame frame :
-                    ArrowExchangeCDataBridge.route(EXCHANGE_PLAN, envelope.batch(), allocator)) {
+            for (NativeExchangeFrame frame : ArrowExchangeCDataBridge.route(
+                    EXCHANGE_PLAN,
+                    envelope.batch(),
+                    allocator,
+                    tech.streamfusion.flink.TestingNativeMemoryManager.create())) {
                 harness.processElement(new StreamRecord<>(frame));
             }
         }

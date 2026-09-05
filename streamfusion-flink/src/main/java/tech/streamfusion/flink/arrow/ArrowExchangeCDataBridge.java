@@ -19,11 +19,6 @@ public final class ArrowExchangeCDataBridge {
     private ArrowExchangeCDataBridge() {}
 
     public static List<NativeExchangeFrame> route(
-            byte[] serializedPlan, ArrowRowDataBatch input, BufferAllocator allocator) {
-        return route(serializedPlan, input, allocator, NativeMemoryManager.unbounded());
-    }
-
-    public static List<NativeExchangeFrame> route(
             byte[] serializedPlan,
             ArrowRowDataBatch input,
             BufferAllocator allocator,

@@ -26,9 +26,9 @@ public final class NativeCalcBridge {
             long inputArrayAddress,
             long inputSchemaAddress,
             long outputArrayAddress,
-            long outputSchemaAddress) {
-        try (NativeExecutionContext context =
-                new NativeExecutionContext(serializedPlan, NativeMemoryManager.unbounded())) {
+            long outputSchemaAddress,
+            NativeMemoryManager memoryManager) {
+        try (NativeExecutionContext context = new NativeExecutionContext(serializedPlan, memoryManager)) {
             return executeArrow(
                     context, inputArrayAddress, inputSchemaAddress, outputArrayAddress, outputSchemaAddress);
         }

@@ -14,11 +14,11 @@ import org.apache.flink.table.types.logical.IntType;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.types.RowKind;
 import org.junit.jupiter.api.Test;
+import tech.streamfusion.flink.TestingNativeMemoryManager;
 import tech.streamfusion.flink.arrow.ArrowCDataBridge;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.NativeCalcResult;
 import tech.streamfusion.nativebridge.NativeExecutionContext;
-import tech.streamfusion.nativebridge.NativeMemoryManager;
 import tech.streamfusion.proto.plan.v1.EmptyType;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.InputReference;
@@ -44,7 +44,7 @@ class StreamFusionReplicateRowsStreamTest {
                                 .build())));
 
         try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
-                NativeExecutionContext context = new NativeExecutionContext(plan, NativeMemoryManager.unbounded());
+                NativeExecutionContext context = new NativeExecutionContext(plan, TestingNativeMemoryManager.create());
                 ArrowRowDataBatch input = ArrowRowDataBatch.transpose(
                                 List.of(GenericRowData.of(16_385L, 7)), inputType, allocator)
                         .withEnvelope(new RowKind[] {RowKind.DELETE}, new boolean[] {true}, new long[] {42L})) {

@@ -22,6 +22,7 @@ import org.apache.arrow.vector.types.pojo.Schema;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.nativebridge.NativeCalcBridge;
 import tech.streamfusion.nativebridge.NativeExecutionContext;
+import tech.streamfusion.nativebridge.NativeMemoryManager;
 
 /** Ownership-safe Arrow C Data transfer for one native execution batch. */
 public final class ArrowCDataBridge {
@@ -218,12 +219,16 @@ public final class ArrowCDataBridge {
     }
 
     public static ArrowRowDataBatch execute(
-            byte[] serializedPlan, ArrowRowDataBatch input, RowType outputType, BufferAllocator allocator) {
+            byte[] serializedPlan,
+            ArrowRowDataBatch input,
+            RowType outputType,
+            BufferAllocator allocator,
+            NativeMemoryManager memoryManager) {
         VectorSchemaRoot output = executeNative(
                 input,
                 allocator,
                 (inputArray, inputSchema, outputArray, outputSchema) -> NativeCalcBridge.executeArrow(
-                        serializedPlan, inputArray, inputSchema, outputArray, outputSchema));
+                        serializedPlan, inputArray, inputSchema, outputArray, outputSchema, memoryManager));
         return ArrowRowDataBatch.wrap(output, outputType, allocator);
     }
 
@@ -238,12 +243,16 @@ public final class ArrowCDataBridge {
     }
 
     public static NativeCalcResult executeWithSelection(
-            byte[] serializedPlan, ArrowRowDataBatch input, RowType outputType, BufferAllocator allocator) {
+            byte[] serializedPlan,
+            ArrowRowDataBatch input,
+            RowType outputType,
+            BufferAllocator allocator,
+            NativeMemoryManager memoryManager) {
         VectorSchemaRoot output = executeNative(
                 input,
                 allocator,
                 (inputArray, inputSchema, outputArray, outputSchema) -> NativeCalcBridge.executeArrow(
-                        serializedPlan, inputArray, inputSchema, outputArray, outputSchema));
+                        serializedPlan, inputArray, inputSchema, outputArray, outputSchema, memoryManager));
         return removeSelection(output, outputType, allocator);
     }
 

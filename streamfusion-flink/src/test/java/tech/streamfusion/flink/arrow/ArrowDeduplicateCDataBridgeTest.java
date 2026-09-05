@@ -18,8 +18,8 @@ import org.apache.flink.table.types.logical.TimestampKind;
 import org.apache.flink.table.types.logical.TimestampType;
 import org.apache.flink.types.RowKind;
 import org.junit.jupiter.api.Test;
+import tech.streamfusion.flink.TestingNativeMemoryManager;
 import tech.streamfusion.nativebridge.NativeDeduplicateBridge;
-import tech.streamfusion.nativebridge.NativeMemoryManager;
 import tech.streamfusion.proto.plan.v1.Deduplicate;
 import tech.streamfusion.proto.plan.v1.Input;
 import tech.streamfusion.proto.plan.v1.NativePlan;
@@ -34,7 +34,7 @@ class ArrowDeduplicateCDataBridgeTest {
 
     @Test
     void returnsArrowRowsAndNativeChangelogEnvelope() {
-        long handle = NativeDeduplicateBridge.create(plan(), 128, 0, 127, NativeMemoryManager.unbounded());
+        long handle = NativeDeduplicateBridge.create(plan(), 128, 0, 127, TestingNativeMemoryManager.create());
         try (RootAllocator allocator = new RootAllocator(64L << 20)) {
             List<RowData> rows = List.of(row(7, 9, 1_000), row(7, 9, 2_000), row(7, 9, 1_500));
             try (ArrowRowDataBatch input = ArrowRowDataBatch.transpose(rows, ROW_TYPE, allocator)

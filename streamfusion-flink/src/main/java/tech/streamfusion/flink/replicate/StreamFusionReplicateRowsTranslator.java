@@ -21,6 +21,7 @@ import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatchTypeInfo;
 import tech.streamfusion.flink.arrow.StreamFusionArrowBoundaries;
 import tech.streamfusion.flink.calc.StreamFusionCalcTranslator;
+import tech.streamfusion.flink.memory.StreamFusionTaskMemory;
 import tech.streamfusion.flink.operator.StreamFusionArrowNativeOperator;
 import tech.streamfusion.proto.plan.v1.Expression;
 
@@ -53,7 +54,8 @@ public final class StreamFusionReplicateRowsTranslator {
                 ArrowRowDataBatchTypeInfo.INSTANCE,
                 input.getParallelism(),
                 false);
-        transformation.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
+        transformation.declareManagedMemoryUseCaseAtOperatorScope(
+                ManagedMemoryUseCase.OPERATOR, StreamFusionTaskMemory.MANAGED_MEMORY_WEIGHT);
         return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
     }
 

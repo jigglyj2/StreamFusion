@@ -38,8 +38,12 @@ class ArrowExpandCDataBridgeTest {
 
         try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
                 ArrowRowDataBatch input = ArrowRowDataBatch.transpose(rows, inputType, allocator);
-                NativeCalcResult result =
-                        ArrowCDataBridge.executeWithSelection(expandPlan(), input, outputType, allocator)) {
+                NativeCalcResult result = ArrowCDataBridge.executeWithSelection(
+                        expandPlan(),
+                        input,
+                        outputType,
+                        allocator,
+                        tech.streamfusion.flink.TestingNativeMemoryManager.create())) {
             assertThat(result.batch().size()).isEqualTo(4);
             assertRow(result.batch().rowView(0), 4, 10);
             assertRow(result.batch().rowView(1), 4, 20);

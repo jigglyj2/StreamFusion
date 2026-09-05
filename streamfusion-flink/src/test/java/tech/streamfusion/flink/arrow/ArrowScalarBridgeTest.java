@@ -42,7 +42,12 @@ class ArrowScalarBridgeTest extends ArrowCDataBridgeTestSupport {
         try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
                 ArrowRowDataBatch input =
                         ArrowRowDataBatch.transpose(List.of(GenericRowData.of(1)), rowType, allocator);
-                ArrowRowDataBatch output = ArrowCDataBridge.execute(plan(0, 2), input, rowType, allocator)) {
+                ArrowRowDataBatch output = ArrowCDataBridge.execute(
+                        plan(0, 2),
+                        input,
+                        rowType,
+                        allocator,
+                        tech.streamfusion.flink.TestingNativeMemoryManager.create())) {
             assertThat(output.size()).isZero();
         }
     }
@@ -55,7 +60,11 @@ class ArrowScalarBridgeTest extends ArrowCDataBridgeTestSupport {
         try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
                 ArrowRowDataBatch input = ArrowRowDataBatch.transpose(rows, rowType, allocator);
                 ArrowRowDataBatch output = ArrowCDataBridge.execute(
-                        comparisonPlan(ComparisonOperator.COMPARISON_OPERATOR_EQUAL), input, rowType, allocator)) {
+                        comparisonPlan(ComparisonOperator.COMPARISON_OPERATOR_EQUAL),
+                        input,
+                        rowType,
+                        allocator,
+                        tech.streamfusion.flink.TestingNativeMemoryManager.create())) {
             assertThat(output.size()).isOne();
             assertThat(output.rowView(0).getInt(0)).isEqualTo(2);
         }
@@ -71,8 +80,12 @@ class ArrowScalarBridgeTest extends ArrowCDataBridgeTestSupport {
 
         try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
                 ArrowRowDataBatch input = ArrowRowDataBatch.transpose(rows, rowType, allocator);
-                ArrowRowDataBatch output =
-                        ArrowCDataBridge.execute(fixedBinaryComparisonPlan(), input, rowType, allocator)) {
+                ArrowRowDataBatch output = ArrowCDataBridge.execute(
+                        fixedBinaryComparisonPlan(),
+                        input,
+                        rowType,
+                        allocator,
+                        tech.streamfusion.flink.TestingNativeMemoryManager.create())) {
             assertThat(output.size()).isEqualTo(2);
             assertThat(output.rowView(0).getBinary(0)).containsExactly(0, 0, 1);
             assertThat(output.rowView(1).getBinary(0)).containsExactly(0x7f, 0xff, 0xff);
@@ -89,7 +102,12 @@ class ArrowScalarBridgeTest extends ArrowCDataBridgeTestSupport {
 
         try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
                 ArrowRowDataBatch input = ArrowRowDataBatch.transpose(rows, rowType, allocator);
-                ArrowRowDataBatch output = ArrowCDataBridge.execute(charComparisonPlan(), input, rowType, allocator)) {
+                ArrowRowDataBatch output = ArrowCDataBridge.execute(
+                        charComparisonPlan(),
+                        input,
+                        rowType,
+                        allocator,
+                        tech.streamfusion.flink.TestingNativeMemoryManager.create())) {
             assertThat(output.size()).isEqualTo(2);
             assertThat(output.rowView(0).getString(0).toString()).isEqualTo("m    ");
             assertThat(output.rowView(1).getString(0).toString()).isEqualTo("東京   ");
@@ -106,8 +124,12 @@ class ArrowScalarBridgeTest extends ArrowCDataBridgeTestSupport {
         try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
                 ArrowRowDataBatch input =
                         ArrowRowDataBatch.transpose(List.of(row(7, "seven", 725, "nested")), inputType, allocator);
-                ArrowRowDataBatch output =
-                        ArrowCDataBridge.execute(projectionPlan(3, 2, 1, 0), input, outputType, allocator)) {
+                ArrowRowDataBatch output = ArrowCDataBridge.execute(
+                        projectionPlan(3, 2, 1, 0),
+                        input,
+                        outputType,
+                        allocator,
+                        tech.streamfusion.flink.TestingNativeMemoryManager.create())) {
             assertThat(output.size()).isOne();
             RowData row = output.rowView(0);
             assertThat(row.getArray(0).getString(0).toString()).isEqualTo("nested");
@@ -124,7 +146,12 @@ class ArrowScalarBridgeTest extends ArrowCDataBridgeTestSupport {
 
         try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
                 ArrowRowDataBatch input = ArrowRowDataBatch.transpose(rows, rowType, allocator);
-                ArrowRowDataBatch output = ArrowCDataBridge.execute(nullCheckPlan(false), input, rowType, allocator)) {
+                ArrowRowDataBatch output = ArrowCDataBridge.execute(
+                        nullCheckPlan(false),
+                        input,
+                        rowType,
+                        allocator,
+                        tech.streamfusion.flink.TestingNativeMemoryManager.create())) {
             assertThat(output.size()).isOne();
             assertThat(output.rowView(0).isNullAt(0)).isTrue();
         }
@@ -139,7 +166,12 @@ class ArrowScalarBridgeTest extends ArrowCDataBridgeTestSupport {
 
         try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
                 ArrowRowDataBatch input = ArrowRowDataBatch.transpose(rows, rowType, allocator);
-                ArrowRowDataBatch output = ArrowCDataBridge.execute(timePlan(precision), input, rowType, allocator)) {
+                ArrowRowDataBatch output = ArrowCDataBridge.execute(
+                        timePlan(precision),
+                        input,
+                        rowType,
+                        allocator,
+                        tech.streamfusion.flink.TestingNativeMemoryManager.create())) {
             assertThat(output.size()).isEqualTo(2);
             assertThat(output.rowView(0).getInt(0)).isEqualTo(43_200_000);
             assertThat(output.rowView(1).getInt(0)).isEqualTo(86_399_000);
@@ -158,8 +190,12 @@ class ArrowScalarBridgeTest extends ArrowCDataBridgeTestSupport {
 
         try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
                 ArrowRowDataBatch input = ArrowRowDataBatch.transpose(rows, rowType, allocator);
-                ArrowRowDataBatch output =
-                        ArrowCDataBridge.execute(timestampPlan(precision, noon), input, rowType, allocator)) {
+                ArrowRowDataBatch output = ArrowCDataBridge.execute(
+                        timestampPlan(precision, noon),
+                        input,
+                        rowType,
+                        allocator,
+                        tech.streamfusion.flink.TestingNativeMemoryManager.create())) {
             assertThat(output.size()).isEqualTo(2);
             assertThat(output.rowView(0).getTimestamp(0, precision)).isEqualTo(noon);
             assertThat(output.rowView(1).getTimestamp(0, precision)).isEqualTo(evening);
@@ -174,7 +210,12 @@ class ArrowScalarBridgeTest extends ArrowCDataBridgeTestSupport {
         try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
                 ArrowRowDataBatch input = ArrowRowDataBatch.transpose(
                         List.of(GenericRowData.of(oneNanosecondBeforeEpoch)), rowType, allocator);
-                ArrowRowDataBatch output = ArrowCDataBridge.execute(projectionPlan(0), input, rowType, allocator)) {
+                ArrowRowDataBatch output = ArrowCDataBridge.execute(
+                        projectionPlan(0),
+                        input,
+                        rowType,
+                        allocator,
+                        tech.streamfusion.flink.TestingNativeMemoryManager.create())) {
             assertThat(output.rowView(0).getTimestamp(0, 9)).isEqualTo(oneNanosecondBeforeEpoch);
         }
     }
@@ -193,8 +234,12 @@ class ArrowScalarBridgeTest extends ArrowCDataBridgeTestSupport {
 
         try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
                 ArrowRowDataBatch input = ArrowRowDataBatch.transpose(rows, rowType, allocator);
-                ArrowRowDataBatch output =
-                        ArrowCDataBridge.execute(decimalPlan(precision, scale, literal), input, rowType, allocator)) {
+                ArrowRowDataBatch output = ArrowCDataBridge.execute(
+                        decimalPlan(precision, scale, literal),
+                        input,
+                        rowType,
+                        allocator,
+                        tech.streamfusion.flink.TestingNativeMemoryManager.create())) {
             assertThat(output.size()).isEqualTo(2);
             assertThat(output.rowView(0).getDecimal(0, precision, scale).toBigDecimal())
                     .isEqualByComparingTo(literal);
@@ -211,8 +256,12 @@ class ArrowScalarBridgeTest extends ArrowCDataBridgeTestSupport {
                         List.of(GenericRowData.of(-2.5F), GenericRowData.of(0.0F), GenericRowData.of(3.25F)),
                         rowType,
                         allocator);
-                ArrowRowDataBatch output =
-                        ArrowCDataBridge.execute(floatingPointArithmeticPlan(true), input, rowType, allocator)) {
+                ArrowRowDataBatch output = ArrowCDataBridge.execute(
+                        floatingPointArithmeticPlan(true),
+                        input,
+                        rowType,
+                        allocator,
+                        tech.streamfusion.flink.TestingNativeMemoryManager.create())) {
             assertThat(output.rowView(0).getFloat(0)).isEqualTo(-1.0F);
             assertThat(output.rowView(1).getFloat(0)).isEqualTo(1.5F);
             assertThat(output.rowView(2).getFloat(0)).isEqualTo(4.75F);
@@ -234,8 +283,12 @@ class ArrowScalarBridgeTest extends ArrowCDataBridgeTestSupport {
                                 GenericRowData.of(-0.0D)),
                         rowType,
                         allocator);
-                ArrowRowDataBatch output =
-                        ArrowCDataBridge.execute(floatingPointArithmeticPlan(false), input, rowType, allocator)) {
+                ArrowRowDataBatch output = ArrowCDataBridge.execute(
+                        floatingPointArithmeticPlan(false),
+                        input,
+                        rowType,
+                        allocator,
+                        tech.streamfusion.flink.TestingNativeMemoryManager.create())) {
             assertThat(output.rowView(0).getDouble(0)).isEqualTo(-1.0D);
             assertThat(output.rowView(1).getDouble(0)).isEqualTo(1.5D);
             assertThat(output.rowView(2).getDouble(0)).isEqualTo(4.75D);

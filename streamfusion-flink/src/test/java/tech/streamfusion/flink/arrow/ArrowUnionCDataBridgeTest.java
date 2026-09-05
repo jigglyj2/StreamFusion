@@ -40,7 +40,11 @@ class ArrowUnionCDataBridgeTest {
                 ArrowRowDataBatch left = ArrowRowDataBatch.transpose(leftRows, rowType, allocator);
                 ArrowRowDataBatch right = ArrowRowDataBatch.transpose(rightRows, rowType, allocator);
                 NativeCalcResult result = ArrowUnionCDataBridge.executeWithSelection(
-                        unionPlan(2), List.of(left, right), rowType, allocator)) {
+                        unionPlan(2),
+                        List.of(left, right),
+                        rowType,
+                        allocator,
+                        tech.streamfusion.flink.TestingNativeMemoryManager.create())) {
             assertThat(result.batch().size()).isEqualTo(3);
             assertThat(result.batch().rowView(0).getInt(0)).isEqualTo(1);
             assertThat(result.batch().rowView(1).getInt(0)).isEqualTo(2);
@@ -60,7 +64,11 @@ class ArrowUnionCDataBridgeTest {
                 ArrowRowDataBatch right =
                         ArrowRowDataBatch.transpose(List.of(GenericRowData.of(7)), rowType, allocator);
                 NativeCalcResult result = ArrowUnionCDataBridge.executeWithSelection(
-                        unionPlan(2), List.of(left, right), rowType, allocator)) {
+                        unionPlan(2),
+                        List.of(left, right),
+                        rowType,
+                        allocator,
+                        tech.streamfusion.flink.TestingNativeMemoryManager.create())) {
             assertThat(result.batch().size()).isOne();
             assertThat(result.batch().rowView(0).getInt(0)).isEqualTo(7);
             assertThat(result.inputRow(0)).isZero();
