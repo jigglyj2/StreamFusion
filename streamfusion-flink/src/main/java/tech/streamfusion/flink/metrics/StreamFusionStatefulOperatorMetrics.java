@@ -115,6 +115,11 @@ public final class StreamFusionStatefulOperatorMetrics {
         }
     }
 
+    public void processedWithoutStateCalls(long inputRows) {
+        processedBatches.inc();
+        processedRows.inc(inputRows);
+    }
+
     public void processedWithoutStateCalls(ArrowRowDataBatch input) {
         processedBatches.inc();
         processedRows.inc(input.size());

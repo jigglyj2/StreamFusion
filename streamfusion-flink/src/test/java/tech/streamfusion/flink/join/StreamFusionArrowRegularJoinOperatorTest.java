@@ -139,6 +139,73 @@ class StreamFusionArrowRegularJoinOperatorTest {
     }
 
     @Test
+    void boundedJoinExposesFlinkHashJoinMetricsAndLogicalTerminalIo() throws Exception {
+        InterceptingOperatorMetricGroup metrics = new InterceptingOperatorMetricGroup() {
+            @Override
+            public MetricGroup addGroup(String name) {
+                return this;
+            }
+
+            @Override
+            public MetricGroup addGroup(String key, String value) {
+                return this;
+            }
+        };
+        InterceptingTaskMetricGroup taskMetrics = new InterceptingTaskMetricGroup() {
+            @Override
+            public InternalOperatorMetricGroup getOrAddOperator(
+                    OperatorID id, String name, Map<String, String> additionalVariables) {
+                return metrics;
+            }
+        };
+        try (RootAllocator inputs = new RootAllocator(64L << 20);
+                MockEnvironment environment = new MockEnvironmentBuilder()
+                        .setTaskName("Bounded regular join metric parity")
+                        .setManagedMemorySize(64L << 20)
+                        .setInputSplitProvider(new MockInputSplitProvider())
+                        .setBufferSize(32 * 1024)
+                        .setMaxParallelism(MAX_PARALLELISM)
+                        .setParallelism(1)
+                        .setSubtaskIndex(0)
+                        .setMetricGroup(taskMetrics)
+                        .build();
+                MetricTwoInputHarness harness = new MetricTwoInputHarness(
+                        boundedOperator(), new NativeExchangeFrameKeySelector(MAX_PARALLELISM), environment)) {
+            harness.setStateBackend(new StreamFusionStateBackend(new HashMapStateBackend()));
+            harness.setup(ArrowRowDataBatchSerializer.INSTANCE);
+            harness.open();
+
+            assertThat(metrics.get("numRecordsIn")).isInstanceOf(Counter.class);
+            assertThat(metrics.get("numRecordsOut")).isInstanceOf(Counter.class);
+            assertThat(metrics.get("memoryUsedSizeInBytes")).isInstanceOf(Gauge.class);
+            assertThat(metrics.get("numSpillFiles")).isInstanceOf(Gauge.class);
+            assertThat(metrics.get("spillInBytes")).isInstanceOf(Gauge.class);
+            ((Counter) metrics.get("numRecordsIn")).inc();
+            process(harness, inputs, 0, row(7, "left", RowKind.INSERT));
+            ((Counter) metrics.get("numRecordsIn")).inc();
+            process(harness, inputs, 1, row(7, "right", RowKind.INSERT));
+            assertThat(takeOutputBatches(harness)).isZero();
+
+            harness.endInput1();
+            ((Counter) metrics.get("numRecordsOut")).inc();
+            harness.endInput2();
+            assertThat(takeOutputBatches(harness)).isOne();
+            assertThat(((Counter) metrics.get("numRecordsIn")).getCount()).isEqualTo(2L);
+            assertThat(((Counter) metrics.get("numRecordsOut")).getCount()).isEqualTo(1L);
+            assertThat(((Counter) metrics.get("processedBatches")).getCount()).isEqualTo(3L);
+            assertThat(((Counter) metrics.get("processedRows")).getCount()).isEqualTo(2L);
+            assertThat(((Counter) metrics.get("emittedRows")).getCount()).isEqualTo(1L);
+            assertThat(((Counter) metrics.get("emittedInserts")).getCount()).isEqualTo(1L);
+            assertThat(((Counter) metrics.get("stateReadBatches")).getCount()).isEqualTo(2L);
+            assertThat(((Counter) metrics.get("stateWriteBatches")).getCount()).isEqualTo(2L);
+            assertThat(((Gauge<?>) metrics.get("numSpillFiles")).getValue()).isEqualTo(0L);
+            assertThat(((Gauge<?>) metrics.get("spillInBytes")).getValue()).isEqualTo(0L);
+            assertThat(((Number) ((Gauge<?>) metrics.get("memoryUsedSizeInBytes")).getValue()).longValue())
+                    .isGreaterThanOrEqualTo(0L);
+        }
+    }
+
+    @Test
     void restoresJoinStateAcrossBothBackendsAndEveryCheckpointFormat() throws Exception {
         try (RootAllocator inputs = new RootAllocator(64L << 20)) {
             for (boolean sourceRocks : new boolean[] {false, true}) {
@@ -164,22 +231,58 @@ class StreamFusionArrowRegularJoinOperatorTest {
     }
 
     @Test
-    void rocksCheckpointsReuseSstsAndRestoreBothSides() throws Exception {
+    void streamingAndBoundedRocksCheckpointsReuseSstsAndRestoreBothSides() throws Exception {
         try (RootAllocator inputs = new RootAllocator(64L << 20)) {
-            OperatorSubtaskState second;
-            try (Harness source = harness(null, true)) {
-                process(source.operator, inputs, 0, row(7, "left", RowKind.INSERT));
-                OperatorSubtaskState first = source.operator.snapshot(20, 20);
-                IncrementalRemoteKeyedStateHandle firstHandle = incremental(first);
-                source.operator.notifyOfCompletedCheckpoint(20);
-                second = source.operator.snapshot(21, 21);
-                IncrementalRemoteKeyedStateHandle secondHandle = incremental(second);
-                assertThat(secondHandle.getSharedState()).hasSameSizeAs(firstHandle.getSharedState());
-                assertThat(secondHandle.getCheckpointedSize()).isLessThan(firstHandle.getCheckpointedSize());
+            for (boolean bounded : new boolean[] {false, true}) {
+                OperatorSubtaskState second;
+                try (Harness source = harness(null, true, bounded)) {
+                    process(source.operator, inputs, 0, row(7, "left", RowKind.INSERT));
+                    OperatorSubtaskState first = source.operator.snapshot(20, 20);
+                    IncrementalRemoteKeyedStateHandle firstHandle = incremental(first);
+                    source.operator.notifyOfCompletedCheckpoint(20);
+                    second = source.operator.snapshot(21, 21);
+                    IncrementalRemoteKeyedStateHandle secondHandle = incremental(second);
+                    assertThat(secondHandle.getSharedState()).hasSameSizeAs(firstHandle.getSharedState());
+                    assertThat(secondHandle.getCheckpointedSize()).isLessThan(firstHandle.getCheckpointedSize());
+                }
+                try (Harness restored = harness(second, true, bounded)) {
+                    process(restored.operator, inputs, 1, row(7, "right", RowKind.INSERT));
+                    if (bounded) {
+                        assertThat(takeOutputBatches(restored.operator)).isZero();
+                        restored.operator.endInput1();
+                        restored.operator.endInput2();
+                    }
+                    assertThat(takeOutputBatches(restored.operator)).isOne();
+                }
             }
-            try (Harness restored = harness(second, true)) {
-                process(restored.operator, inputs, 1, row(7, "right", RowKind.INSERT));
-                assertThat(takeOutputBatches(restored.operator)).isOne();
+        }
+    }
+
+    @Test
+    void boundedJoinRestoresTerminalResultsAcrossBothBackendsAndEveryCheckpointFormat() throws Exception {
+        try (RootAllocator inputs = new RootAllocator(64L << 20)) {
+            for (boolean sourceRocks : new boolean[] {false, true}) {
+                for (boolean targetRocks : new boolean[] {false, true}) {
+                    for (SnapshotKind kind : SnapshotKind.values()) {
+                        if (kind != SnapshotKind.CANONICAL && sourceRocks != targetRocks) {
+                            continue;
+                        }
+                        OperatorSubtaskState snapshot;
+                        try (Harness source = harness(null, sourceRocks, true)) {
+                            process(source.operator, inputs, 0, row(7, "left", RowKind.INSERT));
+                            assertThat(takeOutputBatches(source.operator)).isZero();
+                            snapshot = snapshot(source.operator, kind, 30);
+                        }
+                        try (Harness target = harness(snapshot, targetRocks, true)) {
+                            process(target.operator, inputs, 1, row(7, "right", RowKind.INSERT));
+                            assertThat(takeOutputBatches(target.operator)).isZero();
+                            target.operator.endInput1();
+                            assertThat(takeOutputBatches(target.operator)).isZero();
+                            target.operator.endInput2();
+                            assertThat(takeOutputBatches(target.operator)).isOne();
+                        }
+                    }
+                }
             }
         }
     }
@@ -212,10 +315,20 @@ class StreamFusionArrowRegularJoinOperatorTest {
     }
 
     private static Harness harness(OperatorSubtaskState state, boolean rocks) throws Exception {
+        return harness(state, rocks, false);
+    }
+
+    private static Harness harness(OperatorSubtaskState state, boolean rocks, boolean bounded) throws Exception {
         NativeExchangeFrameKeySelector frameSelector = new NativeExchangeFrameKeySelector(MAX_PARALLELISM);
         KeyedTwoInputStreamOperatorTestHarness<Integer, NativeExchangeFrame, NativeExchangeFrame, ArrowRowDataBatch>
                 harness = new KeyedTwoInputStreamOperatorTestHarness<>(
-                        operator(), frameSelector, frameSelector, Types.INT, MAX_PARALLELISM, 1, 0);
+                        bounded ? boundedOperator() : operator(),
+                        frameSelector,
+                        frameSelector,
+                        Types.INT,
+                        MAX_PARALLELISM,
+                        1,
+                        0);
         harness.setStateBackend(new StreamFusionStateBackend(
                 rocks ? new EmbeddedRocksDBStateBackend(true) : new HashMapStateBackend()));
         harness.setup(ArrowRowDataBatchSerializer.INSTANCE);
@@ -227,6 +340,14 @@ class StreamFusionArrowRegularJoinOperatorTest {
     }
 
     private static StreamFusionArrowRegularJoinOperator operator() {
+        return operator(false);
+    }
+
+    private static StreamFusionArrowRegularJoinOperator boundedOperator() {
+        return operator(true);
+    }
+
+    private static StreamFusionArrowRegularJoinOperator operator(boolean bounded) {
         RowDataKeySelector selector = KeySelectorUtil.getRowDataSelector(
                 StreamFusionArrowRegularJoinOperatorTest.class.getClassLoader(),
                 new int[] {0},
@@ -237,18 +358,28 @@ class StreamFusionArrowRegularJoinOperatorTest {
                 OUTPUT_TYPE,
                 new int[] {0},
                 new int[] {0},
-                StreamFusionRegularJoinPlan.create(
-                        INPUT_TYPE,
-                        INPUT_TYPE,
-                        new int[] {0},
-                        new int[] {0},
-                        new boolean[] {true},
-                        FlinkJoinType.INNER,
-                        null),
+                bounded
+                        ? StreamFusionRegularJoinPlan.createBounded(
+                                INPUT_TYPE,
+                                INPUT_TYPE,
+                                new int[] {0},
+                                new int[] {0},
+                                new boolean[] {true},
+                                FlinkJoinType.INNER,
+                                null)
+                        : StreamFusionRegularJoinPlan.create(
+                                INPUT_TYPE,
+                                INPUT_TYPE,
+                                new int[] {0},
+                                new int[] {0},
+                                new boolean[] {true},
+                                FlinkJoinType.INNER,
+                                null),
                 selector,
                 selector,
                 EXCHANGE_PLAN,
-                EXCHANGE_PLAN);
+                EXCHANGE_PLAN,
+                bounded);
     }
 
     private static GenericRowData row(long key, String payload, RowKind kind) {
@@ -364,6 +495,14 @@ class StreamFusionArrowRegularJoinOperatorTest {
         private void processElement2(StreamRecord<NativeExchangeFrame> element) throws Exception {
             twoInputOperator.setKeyContextElement2(element);
             twoInputOperator.processElement2(element);
+        }
+
+        private void endInput1() throws Exception {
+            twoInputOperator.endInput(1);
+        }
+
+        private void endInput2() throws Exception {
+            twoInputOperator.endInput(2);
         }
     }
 

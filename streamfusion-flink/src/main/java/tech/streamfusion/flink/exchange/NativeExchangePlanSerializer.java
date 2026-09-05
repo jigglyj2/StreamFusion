@@ -24,6 +24,16 @@ public final class NativeExchangePlanSerializer {
 
     public static byte[] hash(
             RowType rowType, int[] keys, int maxParallelism, int parallelism, boolean preserveKeyGroups) {
+        return hash(rowType, keys, maxParallelism, parallelism, preserveKeyGroups, false);
+    }
+
+    public static byte[] hash(
+            RowType rowType,
+            int[] keys,
+            int maxParallelism,
+            int parallelism,
+            boolean preserveKeyGroups,
+            boolean transportRoutingKey) {
         NativeExchangePlan.Builder plan = base(rowType)
                 .setDistribution(ExchangeDistribution.EXCHANGE_DISTRIBUTION_HASH)
                 .setMaxParallelism(maxParallelism)
@@ -36,6 +46,7 @@ public final class NativeExchangePlanSerializer {
             plan.setMetadataColumns(plan.getMetadataColumnsBuilder()
                     .setRoutingKeyIndex(
                             ArrowExchangeBatch.exchangeRowType(rowType).getFieldCount()));
+            plan.setTransportRoutingKey(transportRoutingKey);
         }
         return plan.build().toByteArray();
     }

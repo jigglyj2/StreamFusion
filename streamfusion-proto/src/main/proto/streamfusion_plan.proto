@@ -20,12 +20,14 @@ message NativeExchangePlan {
   ExchangeMetadataColumns metadata_columns = 7;
   uint32 parallelism = 8;
   bool preserve_key_groups = 9;
+  // Retain an opaque routing-key sidecar for a directly fused keyed consumer.
+  bool transport_routing_key = 10;
 }
 
 message ExchangeMetadataColumns {
   uint32 row_kind_index = 1;
   optional uint32 stream_record_timestamp_index = 2;
-  // Optional input-only BinaryRowData key sidecar. It is used for routing and is not transported.
+  // Optional BinaryRowData key sidecar used for routing. It is transported only when requested.
   optional uint32 routing_key_index = 3;
 }
 
@@ -232,6 +234,10 @@ message RegularJoin {
   // false. Keeping this expression in the physical plan lets Rust update outer/semi/anti
   // association counts from predicate-qualified matches without a Java row callback.
   optional Expression residual_condition = 9;
+  // Batch joins retain canonical keyed multisets for both inputs and emit only the final
+  // insert-only relation after both bounded inputs end. This avoids exposing streaming outer-join
+  // correction records while keeping memory/RocksDB state and savepoints backend-neutral.
+  bool bounded_final_output = 10;
 }
 
 enum RegularJoinType {

@@ -63,6 +63,13 @@ public final class StreamFusionBatchExecCalc extends CommonExecCalc implements B
     protected Transformation<RowData> translateToPlanInternal(PlannerBase planner, ExecNodeConfig config) {
         List<StreamFusionBatchExecCalc> chain = adjacentChain(this);
         ExecEdge inputEdge = chain.get(0).getInputEdges().get(0);
+        if (inputEdge.getSource() instanceof StreamFusionBatchExecHashJoin) {
+            return ((StreamFusionBatchExecHashJoin) inputEdge.getSource()).translateWithOutputCalcs(planner, chain);
+        }
+        if (inputEdge.getSource() instanceof StreamFusionBatchExecNestedLoopJoin) {
+            return ((StreamFusionBatchExecNestedLoopJoin) inputEdge.getSource())
+                    .translateWithOutputCalcs(planner, chain);
+        }
         List<StreamFusionBatchExecArrayUnnest> fusedUnnests =
                 inputEdge.getSource() instanceof StreamFusionBatchExecArrayUnnest
                         ? StreamFusionBatchExecArrayUnnest.adjacentChain(

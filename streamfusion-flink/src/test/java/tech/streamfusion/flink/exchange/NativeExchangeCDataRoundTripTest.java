@@ -10,7 +10,9 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import org.apache.arrow.memory.RootAllocator;
+import org.apache.flink.table.data.GenericArrayData;
 import org.apache.flink.table.data.GenericRowData;
+import org.apache.flink.table.types.logical.ArrayType;
 import org.apache.flink.table.types.logical.IntType;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.types.RowKind;
@@ -61,6 +63,31 @@ class NativeExchangeCDataRoundTripTest {
                 .containsExactly(
                         new ResultRow(1, RowKind.INSERT, true, 100L),
                         new ResultRow(42, RowKind.DELETE, false, Long.MIN_VALUE));
+    }
+
+    @Test
+    void hidesATransportedOpaqueComplexRoutingKeyFromAnOrdinaryReader() {
+        RowType rowType = RowType.of(new ArrayType(false, new IntType(false)));
+        byte[] plan = NativeExchangePlanSerializer.hash(rowType, new int[] {0}, 128, 4, false, true);
+        GenericRowData insert = GenericRowData.of(new GenericArrayData(new int[] {7, 9}));
+        insert.setRowKind(RowKind.INSERT);
+        try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+                ArrowRowDataBatch input = ArrowRowDataBatch.transpose(List.of(insert), rowType, allocator);
+                ArrowExchangeBatch.EnvelopeBatch envelope =
+                        ArrowExchangeBatch.withEnvelope(input, rowType, List.of(new byte[] {1, 2, 3, 4}))) {
+            NativeMemoryManager memoryManager = TestingNativeMemoryManager.create();
+            List<NativeExchangeFrame> frames =
+                    ArrowExchangeCDataBridge.route(plan, envelope.batch(), allocator, memoryManager);
+
+            assertThat(frames).hasSize(1);
+            try (ArrowExchangeInputBatch decoded =
+                    ArrowExchangeInputCDataBridge.decode(plan, frames.get(0), rowType, allocator, memoryManager)) {
+                assertThat(decoded.transportRoot().getFieldVectors()).hasSize(3);
+                assertThat(decoded.rowView(0).getArray(0).size()).isEqualTo(2);
+                assertThat(decoded.rowView(0).getArray(0).getInt(0)).isEqualTo(7);
+                assertThat(decoded.rowView(0).getArray(0).getInt(1)).isEqualTo(9);
+            }
+        }
     }
 
     private static final class ResultRow {

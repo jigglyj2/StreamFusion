@@ -147,6 +147,10 @@ fn validate(plan: &proto::NativeExchangePlan) -> Result<()> {
                 "exchange routing-key sidecar index {routing_key_index} must immediately follow the transport schema"
             )));
         }
+    } else if plan.transport_routing_key {
+        return Err(DataFusionError::Plan(
+            "exchange cannot transport a missing routing-key sidecar".to_string(),
+        ));
     }
     match distribution {
         proto::ExchangeDistribution::Hash => {
@@ -235,6 +239,7 @@ mod tests {
             max_parallelism: 128,
             parallelism: 4,
             preserve_key_groups: true,
+            transport_routing_key: false,
             transport: proto::ExchangeTransport::ArrowIpcStream.into(),
             metadata_columns: Some(proto::ExchangeMetadataColumns {
                 row_kind_index: 1,

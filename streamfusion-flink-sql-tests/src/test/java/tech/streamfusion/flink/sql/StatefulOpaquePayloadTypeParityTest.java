@@ -84,6 +84,16 @@ class StatefulOpaquePayloadTypeParityTest extends SqlParityTestSupport {
     }
 
     @Test
+    void boundedJoinUsesAnOpaqueAllOrderableTypeRowAsItsEqualityKeyByteForByte() throws Exception {
+        byte[] flink = executeBoundedJoin(false);
+        byte[] streamFusion = executeBoundedJoin(true);
+
+        assertThat(streamFusion).isEqualTo(flink);
+        assertThat(StreamFusionPlannerFactory.nativeRegularJoinBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
+    @Test
     void changelogNormalizeStatePreservesEveryFlinkLogicalPayloadTypeByteForByte() throws Exception {
         byte[] flink = executeChangelogNormalize(false);
         byte[] streamFusion = executeChangelogNormalize(true);
@@ -194,6 +204,49 @@ class StatefulOpaquePayloadTypeParityTest extends SqlParityTestSupport {
                 + "FULL OUTER JOIN TABLE(TUMBLE(TABLE window_all_type_right, DESCRIPTOR(ts), "
                 + "INTERVAL '5' SECOND)) r ON l.category = r.category "
                 + "AND l.window_start = r.window_start AND l.window_end = r.window_end"));
+    }
+
+    private static byte[] executeBoundedJoin(boolean streamFusionEnabled) throws Exception {
+        configure(streamFusionEnabled);
+        StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();
+        environment.setParallelism(1);
+        StreamTableEnvironment tables = StreamTableEnvironment.create(
+                environment, EnvironmentSettings.newInstance().inBatchMode().build());
+        tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+        createBoundedJoinInput(
+                tables,
+                environment,
+                "bounded_all_type_left",
+                List.of(
+                        Row.of("left-match", comparableKey("alpha", 1)),
+                        Row.of("left-only", comparableKey("beta", 2))));
+        createBoundedJoinInput(
+                tables,
+                environment,
+                "bounded_all_type_right",
+                List.of(
+                        Row.of("right-match", comparableKey("alpha", 1)),
+                        Row.of("right-only", comparableKey("gamma", 3))));
+        return collect(tables.executeSql("SELECT l.label, r.label, l.key_payload "
+                + "FROM bounded_all_type_left l JOIN bounded_all_type_right r "
+                + "ON l.key_payload = r.key_payload"));
+    }
+
+    private static void createBoundedJoinInput(
+            StreamTableEnvironment tables, StreamExecutionEnvironment environment, String name, List<Row> rows) {
+        tables.createTemporaryView(
+                name,
+                tables.fromDataStream(
+                        environment.fromCollection(
+                                rows,
+                                Types.ROW_NAMED(
+                                        new String[] {"label", "key_payload"},
+                                        Types.STRING,
+                                        comparableKeyTypeInformation())),
+                        Schema.newBuilder()
+                                .column("label", DataTypes.STRING().notNull())
+                                .column("key_payload", comparableKeyDataType())
+                                .build()));
     }
 
     private static byte[] executeChangelogNormalize(boolean streamFusionEnabled) throws Exception {
@@ -319,6 +372,50 @@ class StatefulOpaquePayloadTypeParityTest extends SqlParityTestSupport {
                 Types.ROW_NAMED(new String[] {"id", "label"}, Types.LONG, Types.STRING));
     }
 
+    private static TypeInformation<Row> comparableKeyTypeInformation() {
+        return Types.ROW_NAMED(
+                new String[] {
+                    "boolean_value",
+                    "tiny_value",
+                    "small_value",
+                    "integer_value",
+                    "big_value",
+                    "float_value",
+                    "double_value",
+                    "char_value",
+                    "varchar_value",
+                    "binary_value",
+                    "varbinary_value",
+                    "decimal_value",
+                    "date_value",
+                    "time_value",
+                    "timestamp_value",
+                    "timestamp_ltz_value",
+                    "year_month_value",
+                    "day_time_value",
+                    "row_value"
+                },
+                Types.BOOLEAN,
+                Types.BYTE,
+                Types.SHORT,
+                Types.INT,
+                Types.LONG,
+                Types.FLOAT,
+                Types.DOUBLE,
+                Types.STRING,
+                Types.STRING,
+                Types.PRIMITIVE_ARRAY(Types.BYTE),
+                Types.PRIMITIVE_ARRAY(Types.BYTE),
+                Types.BIG_DEC,
+                Types.LOCAL_DATE,
+                Types.LOCAL_TIME,
+                Types.LOCAL_DATE_TIME,
+                Types.INSTANT,
+                Types.GENERIC(Period.class),
+                Types.GENERIC(Duration.class),
+                Types.ROW_NAMED(new String[] {"id", "label"}, Types.LONG, Types.STRING));
+    }
+
     private static DataType payloadDataType() {
         return DataTypes.ROW(
                 DataTypes.FIELD("boolean_value", DataTypes.BOOLEAN()),
@@ -350,6 +447,33 @@ class StatefulOpaquePayloadTypeParityTest extends SqlParityTestSupport {
                                 DataTypes.FIELD("label", DataTypes.STRING()))));
     }
 
+    private static DataType comparableKeyDataType() {
+        return DataTypes.ROW(
+                DataTypes.FIELD("boolean_value", DataTypes.BOOLEAN()),
+                DataTypes.FIELD("tiny_value", DataTypes.TINYINT()),
+                DataTypes.FIELD("small_value", DataTypes.SMALLINT()),
+                DataTypes.FIELD("integer_value", DataTypes.INT()),
+                DataTypes.FIELD("big_value", DataTypes.BIGINT()),
+                DataTypes.FIELD("float_value", DataTypes.FLOAT()),
+                DataTypes.FIELD("double_value", DataTypes.DOUBLE()),
+                DataTypes.FIELD("char_value", DataTypes.CHAR(5)),
+                DataTypes.FIELD("varchar_value", DataTypes.VARCHAR(20)),
+                DataTypes.FIELD("binary_value", DataTypes.BINARY(3)),
+                DataTypes.FIELD("varbinary_value", DataTypes.VARBINARY(20)),
+                DataTypes.FIELD("decimal_value", DataTypes.DECIMAL(25, 2)),
+                DataTypes.FIELD("date_value", DataTypes.DATE()),
+                DataTypes.FIELD("time_value", DataTypes.TIME(3)),
+                DataTypes.FIELD("timestamp_value", DataTypes.TIMESTAMP(6)),
+                DataTypes.FIELD("timestamp_ltz_value", DataTypes.TIMESTAMP_LTZ(6)),
+                DataTypes.FIELD("year_month_value", DataTypes.INTERVAL(DataTypes.YEAR(), DataTypes.MONTH())),
+                DataTypes.FIELD("day_time_value", DataTypes.INTERVAL(DataTypes.DAY(), DataTypes.SECOND(3))),
+                DataTypes.FIELD(
+                        "row_value",
+                        DataTypes.ROW(
+                                DataTypes.FIELD("id", DataTypes.BIGINT()),
+                                DataTypes.FIELD("label", DataTypes.STRING()))));
+    }
+
     private static Row payload(String label, int value) {
         return Row.of(
                 value % 2 == 0,
@@ -374,6 +498,30 @@ class StatefulOpaquePayloadTypeParityTest extends SqlParityTestSupport {
                 linkedMap(label, value, "nullable", null),
                 linkedMap(label, value + 1),
                 Row.of((long) value, label));
+    }
+
+    private static Row comparableKey(String label, int value) {
+        Row payload = payload(label, value);
+        return Row.of(
+                payload.getField(0),
+                payload.getField(1),
+                payload.getField(2),
+                payload.getField(3),
+                payload.getField(4),
+                payload.getField(5),
+                payload.getField(6),
+                payload.getField(7),
+                payload.getField(8),
+                payload.getField(9),
+                payload.getField(10),
+                payload.getField(11),
+                payload.getField(12),
+                payload.getField(13),
+                payload.getField(14),
+                payload.getField(15),
+                payload.getField(16),
+                payload.getField(17),
+                payload.getField(21));
     }
 
     private static Map<String, Integer> linkedMap(Object... entries) {

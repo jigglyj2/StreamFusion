@@ -20,7 +20,10 @@ import org.apache.flink.table.planner.plan.logical.TimeAttributeWindowingStrateg
 import org.apache.flink.table.planner.plan.logical.WindowingStrategy;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecEdge;
 import org.apache.flink.table.planner.plan.nodes.exec.StateMetadata;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecAdaptiveJoin;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecHashAggregate;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecHashJoin;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecNestedLoopJoin;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecSort;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecSortAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecCalc;
@@ -155,6 +158,28 @@ final class FlinkExecNodeAccess {
 
     static boolean batchAggregateBooleanField(BatchExecHashAggregate aggregate, String name) {
         return (boolean) field(aggregate, BatchExecHashAggregate.class, name);
+    }
+
+    static JoinSpec batchHashJoinSpec(BatchExecHashJoin join) {
+        return (JoinSpec) field(join, BatchExecHashJoin.class, "joinSpec");
+    }
+
+    static JoinSpec batchAdaptiveJoinSpec(BatchExecAdaptiveJoin join) {
+        return (JoinSpec) field(join, BatchExecAdaptiveJoin.class, "joinSpec");
+    }
+
+    static JoinSpec batchNestedLoopJoinSpec(BatchExecNestedLoopJoin join) {
+        return new JoinSpec(
+                (org.apache.flink.table.runtime.operators.join.FlinkJoinType)
+                        field(join, BatchExecNestedLoopJoin.class, "joinType"),
+                new int[0],
+                new int[0],
+                new boolean[0],
+                (RexNode) field(join, BatchExecNestedLoopJoin.class, "condition"));
+    }
+
+    static boolean batchNestedLoopJoinSingleRow(BatchExecNestedLoopJoin join) {
+        return (boolean) field(join, BatchExecNestedLoopJoin.class, "singleRowJoin");
     }
 
     static int[] grouping(BatchExecSortAggregate aggregate) {

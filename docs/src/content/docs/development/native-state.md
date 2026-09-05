@@ -62,7 +62,8 @@ raw keyed state so they can move between the native memory and RocksDB implement
 The focused recovery matrix is shared by native group aggregation—including the stateful
 split-DISTINCT/retractable-extrema incremental stage—deduplication, SELECT DISTINCT,
 non-window Top-N, window aggregation, Window Deduplicate, Window Top-N, Window Join, and regular
-and interval streaming Join, plus Temporal Sort and bounded full Sort. Window, interval, and
+and interval streaming Join, bounded hash/adaptive/nested-loop Join, plus Temporal Sort and bounded
+full Sort. Window, interval, and
 temporal-sort cases include pending event-time and processing-time timers; two-input joins also
 preserve their independently advancing input-watermark frontiers. Interval Join keeps its live timer
 index in native memory and materializes dirty timer

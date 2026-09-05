@@ -138,6 +138,94 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeRegularJoinBrid
 }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeRegularJoinBridge_processBoundedFrame<
+    'caller,
+>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    handle: jlong,
+    side: jint,
+    key_group: jint,
+    exchange_plan: JByteArray<'caller>,
+    payload: JByteArray<'caller>,
+    payload_offset: jint,
+    payload_length: jint,
+    metadata_length: jint,
+) -> jlong {
+    unowned_env
+        .with_env(|env| -> jni::errors::Result<_> {
+            let array_length = payload.len(env)?;
+            let payload_offset = usize::try_from(payload_offset)
+                .map_err(|_| throw(env, "regular join exchange payload offset was negative"))?;
+            let payload_length = usize::try_from(payload_length)
+                .map_err(|_| throw(env, "regular join exchange payload length was negative"))?;
+            let metadata_length = usize::try_from(metadata_length)
+                .map_err(|_| throw(env, "regular join exchange metadata length was negative"))?;
+            if payload_offset > array_length
+                || payload_length > array_length - payload_offset
+                || metadata_length > payload_length
+            {
+                return Err(throw(
+                    env,
+                    "regular join exchange payload range exceeded its Java array",
+                ));
+            }
+            let exchange_plan = env.convert_byte_array(exchange_plan)?;
+            let mut payload_bytes = vec![0u8; payload_length];
+            let signed = unsafe {
+                std::slice::from_raw_parts_mut(
+                    payload_bytes.as_mut_ptr().cast::<jni::sys::jbyte>(),
+                    payload_length,
+                )
+            };
+            payload.get_region(env, payload_offset as i32, signed)?;
+            let rows = unsafe { processor(handle) }
+                .and_then(|value| {
+                    value.process_bounded_exchange_frame(
+                        usize::try_from(side).map_err(|_| {
+                            DataFusionError::Execution("regular join side is negative".to_string())
+                        })?,
+                        non_negative(key_group, "key group")?,
+                        &exchange_plan,
+                        payload_bytes,
+                        metadata_length,
+                    )
+                })
+                .map_err(|error| throw(env, error))?;
+            Ok(rows as jlong)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeRegularJoinBridge_finishBoundedOutput<
+    'caller,
+>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    handle: jlong,
+    output_array: jlong,
+    output_schema: jlong,
+) -> jlong {
+    unowned_env
+        .with_env(|env| -> jni::errors::Result<_> {
+            let rows = (|| -> datafusion::error::Result<_> {
+                unsafe {
+                    let output = processor(handle)?.finish_bounded_output()?;
+                    export_record_batch(
+                        output,
+                        output_array as *mut FFI_ArrowArray,
+                        output_schema as *mut FFI_ArrowSchema,
+                    )
+                }
+            })()
+            .map_err(|error| throw(env, error))?;
+            Ok(rows as jlong)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeRegularJoinBridge_nativeStatistics<
     'caller,
 >(

@@ -56,5 +56,18 @@ class NativeExchangePlanSerializerTest {
 
         assertThat(plan.getMetadataColumns().hasRoutingKeyIndex()).isTrue();
         assertThat(plan.getMetadataColumns().getRoutingKeyIndex()).isEqualTo(3);
+        assertThat(plan.getTransportRoutingKey()).isFalse();
+    }
+
+    @Test
+    void transportsTheOpaqueComplexKeyForADirectNativeConsumer() throws Exception {
+        RowType rowType = RowType.of(new ArrayType(new IntType()));
+
+        NativeExchangePlan plan = NativeExchangePlan.parseFrom(
+                NativeExchangePlanSerializer.hash(rowType, new int[] {0}, 128, 4, false, true));
+
+        assertThat(plan.getMetadataColumns().hasRoutingKeyIndex()).isTrue();
+        assertThat(plan.getTransportRoutingKey()).isTrue();
+        assertThat(plan.getPreserveKeyGroups()).isFalse();
     }
 }

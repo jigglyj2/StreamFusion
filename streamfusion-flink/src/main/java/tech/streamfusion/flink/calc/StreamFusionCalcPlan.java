@@ -137,6 +137,38 @@ public final class StreamFusionCalcPlan {
         return operator;
     }
 
+    /**
+     * Appends Calc stages to a changelog-producing operator.
+     *
+     * <p>Stateful native operators carry RowKind and the input ordinal as the two columns after
+     * their visible payload. Both are plan-internal metadata: SQL expressions cannot address
+     * them, but every Calc stage must preserve them so the single Arrow boundary at the end of a
+     * fused plan can reconstruct Flink's changelog exactly.
+     */
+    public static Operator appendChangelogCalcOperators(
+            Operator input, int inputFieldCount, List<List<Expression>> projectionStages, List<Expression> conditions) {
+        if (projectionStages.size() != conditions.size()) {
+            throw new IllegalArgumentException("Calc projections and conditions must have the same stage count");
+        }
+        Operator operator = input;
+        int stageInputFieldCount = inputFieldCount;
+        for (int stage = 0; stage < projectionStages.size(); stage++) {
+            List<Expression> projections = projectionStages.get(stage);
+            Calc.Builder calc = Calc.newBuilder().setInput(operator).addAllProjections(projections);
+            calc.addProjections(inputReference(
+                    stageInputFieldCount, logicalType(new org.apache.flink.table.types.logical.TinyIntType(false))));
+            calc.addProjections(inputReference(
+                    stageInputFieldCount + 1, logicalType(new org.apache.flink.table.types.logical.IntType(false))));
+            Expression condition = conditions.get(stage);
+            if (condition != null) {
+                calc.setCondition(condition);
+            }
+            operator = Operator.newBuilder().setCalc(calc).build();
+            stageInputFieldCount = projections.size();
+        }
+        return operator;
+    }
+
     static LogicalType logicalType(RowType inputType, int inputIndex) {
         return tech.streamfusion.flink.proto.FlinkLogicalTypeProto.serialize(inputType.getTypeAt(inputIndex));
     }

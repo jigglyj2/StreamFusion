@@ -69,6 +69,27 @@ public final class NativeRegularJoinBridge {
         return rows;
     }
 
+    public static long processBoundedExchangeFrame(
+            long handle,
+            int side,
+            int keyGroup,
+            byte[] exchangePlan,
+            byte[] payload,
+            int payloadOffset,
+            int payloadLength,
+            int metadataLength) {
+        long rows = processBoundedFrame(
+                handle, side, keyGroup, exchangePlan, payload, payloadOffset, payloadLength, metadataLength);
+        EXECUTED_BATCHES.incrementAndGet();
+        return rows;
+    }
+
+    public static long finish(long handle, long outputArray, long outputSchema) {
+        long rows = finishBoundedOutput(handle, outputArray, outputSchema);
+        EXECUTED_BATCHES.incrementAndGet();
+        return rows;
+    }
+
     public static long[] statistics(long handle) {
         return nativeStatistics(handle);
     }
@@ -117,6 +138,18 @@ public final class NativeRegularJoinBridge {
 
     private static native long processArrowBatch(
             long handle, int side, long inputArray, long inputSchema, long outputArray, long outputSchema);
+
+    private static native long processBoundedFrame(
+            long handle,
+            int side,
+            int keyGroup,
+            byte[] exchangePlan,
+            byte[] payload,
+            int payloadOffset,
+            int payloadLength,
+            int metadataLength);
+
+    private static native long finishBoundedOutput(long handle, long outputArray, long outputSchema);
 
     private static native long[] nativeStatistics(long handle);
 

@@ -200,6 +200,41 @@ impl BundleOutputEvents {
             column.push(value);
         }
     }
+
+    fn estimated_dynamic_bytes(&self) -> usize {
+        let grouping = self
+            .grouping_rows
+            .capacity()
+            .saturating_mul(std::mem::size_of::<Vec<u8>>())
+            .saturating_add(
+                self.grouping_rows
+                    .iter()
+                    .map(|row| row.capacity())
+                    .sum::<usize>(),
+            );
+        let values = self.values.iter().fold(
+            self.values
+                .capacity()
+                .saturating_mul(std::mem::size_of::<Vec<Option<AggregateValue>>>()),
+            |bytes, column| {
+                bytes
+                    .saturating_add(
+                        column
+                            .capacity()
+                            .saturating_mul(std::mem::size_of::<Option<AggregateValue>>()),
+                    )
+                    .saturating_add(column.iter().fold(0usize, |value_bytes, value| {
+                        value_bytes.saturating_add(match value {
+                            Some(AggregateValue::Bytes(bytes)) => bytes.capacity(),
+                            _ => 0,
+                        })
+                    }))
+            },
+        );
+        grouping
+            .saturating_add(self.row_kinds.capacity())
+            .saturating_add(values)
+    }
 }
 
 impl OutputEvents {
@@ -1083,7 +1118,8 @@ impl GroupAggregateProcessor {
             return self.bundle_output_batch(BundleOutputEvents::new(self.calls.len()));
         }
         let mut events = BundleOutputEvents::new(self.calls.len());
-        let mut snapshot_bytes = 0usize;
+        self.scratch_reservation
+            .resize(self.bounded_output_retained_bytes())?;
         while events.grouping_rows.len() < BOUNDED_OUTPUT_MAX_ROWS {
             if self.bounded_output_entry_index < self.bounded_output_entries.len() {
                 let value = &self.bounded_output_entries[self.bounded_output_entry_index].1;
@@ -1101,7 +1137,10 @@ impl GroupAggregateProcessor {
                 break;
             };
             let snapshot = self.state.snapshot_key_group(key_group)?;
-            snapshot_bytes = snapshot_bytes.saturating_add(snapshot.len());
+            self.scratch_reservation.resize(
+                self.bounded_output_retained_bytes()
+                    .saturating_add(snapshot.len().saturating_mul(2)),
+            )?;
             self.bounded_output_entries = decode_key_group_snapshot(key_group, &snapshot)?;
             self.bounded_output_key_group = if key_group < self.last_key_group {
                 Some(key_group + 1)
@@ -1128,13 +1167,38 @@ impl GroupAggregateProcessor {
             self.scratch_reservation.resize(0)?;
             return self.bundle_output_batch(events);
         }
-        self.scratch_reservation.resize(snapshot_bytes)?;
+        let retained_bytes = self.bounded_output_retained_bytes();
+        let event_bytes = events.estimated_dynamic_bytes();
+        let anticipated_output = event_bytes
+            .saturating_mul(2)
+            .saturating_add(events.grouping_rows.len().saturating_mul(64))
+            .saturating_add(4096);
+        self.scratch_reservation.resize(
+            retained_bytes
+                .saturating_add(event_bytes)
+                .saturating_add(anticipated_output),
+        )?;
         let output = self.bundle_output_batch(events)?;
         let output_bytes = output.get_array_memory_size();
-        self.scratch_reservation.resize(output_bytes)?;
+        self.scratch_reservation
+            .resize(retained_bytes.saturating_add(output_bytes))?;
         self.scratch_reservation.transfer_to_arrow(output_bytes)?;
-        self.scratch_reservation.resize(0)?;
+        self.scratch_reservation.resize(retained_bytes)?;
         Ok(output)
+    }
+
+    fn bounded_output_retained_bytes(&self) -> usize {
+        self.bounded_output_entries
+            .capacity()
+            .saturating_mul(std::mem::size_of::<(Vec<u8>, Vec<u8>)>())
+            .saturating_add(self.bounded_output_entries.iter().fold(
+                0usize,
+                |bytes, (key, value)| {
+                    bytes
+                        .saturating_add(key.capacity())
+                        .saturating_add(value.capacity())
+                },
+            ))
     }
 
     pub(crate) fn pending_element_count(&self) -> usize {

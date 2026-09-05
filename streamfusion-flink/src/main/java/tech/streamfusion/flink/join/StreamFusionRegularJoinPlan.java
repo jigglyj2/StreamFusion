@@ -4,6 +4,7 @@
  */
 package tech.streamfusion.flink.join;
 
+import java.util.List;
 import org.apache.flink.table.runtime.operators.join.FlinkJoinType;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.flink.calc.StreamFusionCalcTranslator;
@@ -27,10 +28,76 @@ final class StreamFusionRegularJoinPlan {
             boolean[] filterNulls,
             FlinkJoinType joinType,
             Object residualCondition) {
+        return create(leftType, rightType, leftKeys, rightKeys, filterNulls, joinType, residualCondition, false);
+    }
+
+    static byte[] createBounded(
+            RowType leftType,
+            RowType rightType,
+            int[] leftKeys,
+            int[] rightKeys,
+            boolean[] filterNulls,
+            FlinkJoinType joinType,
+            Object residualCondition) {
+        return create(leftType, rightType, leftKeys, rightKeys, filterNulls, joinType, residualCondition, true);
+    }
+
+    static byte[] createBoundedWithOutputCalcs(
+            RowType leftType,
+            RowType rightType,
+            int[] leftKeys,
+            int[] rightKeys,
+            boolean[] filterNulls,
+            FlinkJoinType joinType,
+            Object residualCondition,
+            List<RowType> calcInputTypes,
+            List<RowType> calcOutputTypes,
+            List<List<?>> calcProjections,
+            List<?> calcConditions) {
+        Operator join = createOperator(
+                leftType, rightType, leftKeys, rightKeys, filterNulls, joinType, residualCondition, true);
+        Operator root = StreamFusionCalcTranslator.appendChangelogCalcOperators(
+                join, calcInputTypes, calcOutputTypes, calcProjections, calcConditions);
+        if (root == null) {
+            return null;
+        }
+        return nativePlan(root);
+    }
+
+    private static byte[] create(
+            RowType leftType,
+            RowType rightType,
+            int[] leftKeys,
+            int[] rightKeys,
+            boolean[] filterNulls,
+            FlinkJoinType joinType,
+            Object residualCondition,
+            boolean boundedFinalOutput) {
+        return nativePlan(createOperator(
+                leftType,
+                rightType,
+                leftKeys,
+                rightKeys,
+                filterNulls,
+                joinType,
+                residualCondition,
+                boundedFinalOutput));
+    }
+
+    private static Operator createOperator(
+            RowType leftType,
+            RowType rightType,
+            int[] leftKeys,
+            int[] rightKeys,
+            boolean[] filterNulls,
+            FlinkJoinType joinType,
+            Object residualCondition,
+            boolean boundedFinalOutput) {
         RegularJoin.Builder join = RegularJoin.newBuilder()
                 .setLeftSchema(schema(leftType))
                 .setRightSchema(schema(rightType))
-                .setJoinType(joinType(joinType));
+                .setJoinType(joinType(joinType))
+                .setBoundedFinalOutput(boundedFinalOutput);
         if (residualCondition != null) {
             join.setResidualCondition(StreamFusionCalcTranslator.operatorCondition(
                     residualCondition, conditionInputType(leftType, rightType)));
@@ -44,9 +111,13 @@ final class StreamFusionRegularJoinPlan {
         for (boolean filter : filterNulls) {
             join.addFilterNulls(filter);
         }
+        return Operator.newBuilder().setRegularJoin(join).build();
+    }
+
+    private static byte[] nativePlan(Operator root) {
         return NativePlan.newBuilder()
                 .setProtocolVersion(1)
-                .setRoot(Operator.newBuilder().setRegularJoin(join))
+                .setRoot(root)
                 .build()
                 .toByteArray();
     }

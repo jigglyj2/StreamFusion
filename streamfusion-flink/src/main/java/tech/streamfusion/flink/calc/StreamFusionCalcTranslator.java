@@ -24,6 +24,7 @@ import tech.streamfusion.flink.operator.StreamFusionArrowNativeOperator;
 import tech.streamfusion.flink.replicate.StreamFusionReplicateRowsTranslator;
 import tech.streamfusion.flink.unnest.StreamFusionArrayUnnestTranslator;
 import tech.streamfusion.proto.plan.v1.Expression;
+import tech.streamfusion.proto.plan.v1.Operator;
 
 /** Reflection entry point called by the small Flink planner patch for eligible calc nodes. */
 public final class StreamFusionCalcTranslator extends StreamFusionExpressionTranslator {
@@ -49,6 +50,24 @@ public final class StreamFusionCalcTranslator extends StreamFusionExpressionTran
     public static tech.streamfusion.proto.plan.v1.LogicalType operatorLogicalType(
             org.apache.flink.table.types.logical.LogicalType type) {
         return StreamFusionCalcPlan.logicalType(type);
+    }
+
+    /** Builds a Calc tail for a native changelog operator without introducing another JNI edge. */
+    public static Operator appendChangelogCalcOperators(
+            Operator input,
+            List<RowType> inputTypes,
+            List<RowType> outputTypes,
+            List<List<?>> projectionStages,
+            List<?> conditions) {
+        if (inputTypes.isEmpty()) {
+            throw new IllegalArgumentException("A fused changelog Calc tail must not be empty");
+        }
+        NativeCalcStages stages = nativeCalcStages(inputTypes, outputTypes, projectionStages, conditions);
+        if (stages == null) {
+            return null;
+        }
+        return StreamFusionCalcPlan.appendChangelogCalcOperators(
+                input, inputTypes.get(0).getFieldCount(), stages.projections, stages.conditions);
     }
 
     public static Transformation<RowData> translate(

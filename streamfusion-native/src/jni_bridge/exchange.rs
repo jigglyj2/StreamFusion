@@ -2,6 +2,8 @@
 // Licensed under the Apache License, Version 2.0.
 
 use arrow::array::{Array, StructArray};
+use arrow::datatypes::{DataType, Field, Schema};
+use arrow::record_batch::RecordBatch;
 use std::mem::size_of;
 use std::sync::Arc;
 
@@ -179,12 +181,15 @@ unsafe fn route(
     // batches. Reserve that working set before asking Arrow to allocate it.
     let mut reservation = HostMemoryReservation::new(broker, "native exchange buffers");
     reservation.try_grow(batch.get_array_memory_size())?;
-    let transport_column_count = plan
+    let mut transport_column_count = plan
         .schema
         .as_ref()
         .ok_or_else(|| DataFusionError::Plan("exchange schema is required".to_string()))?
         .fields
         .len();
+    if plan.transport_routing_key {
+        transport_column_count = transport_column_count.saturating_add(1);
+    }
     let frames = frame_hash_exchange_batch_projected(
         batch,
         &keys,
@@ -236,18 +241,40 @@ unsafe fn decode(
         ));
     }
     let plan = decode_exchange_plan(plan_bytes)?;
-    let schema = crate::planner::arrow_schema(
+    let visible_schema = crate::planner::arrow_schema(
         plan.schema
             .as_ref()
             .ok_or_else(|| DataFusionError::Plan("exchange schema is required".to_string()))?,
     )?;
-    let batch =
-        crate::exchange::IpcBatchFrame::decode_contiguous(payload, metadata_length, schema)?;
+    let transport_schema = if plan.transport_routing_key {
+        let mut fields = visible_schema.fields().iter().cloned().collect::<Vec<_>>();
+        fields.push(Arc::new(Field::new(
+            "__streamfusion_key",
+            DataType::Binary,
+            false,
+        )));
+        Arc::new(Schema::new(fields))
+    } else {
+        visible_schema.clone()
+    };
+    let transport_batch = crate::exchange::IpcBatchFrame::decode_contiguous(
+        payload,
+        metadata_length,
+        transport_schema,
+    )?;
     reservation.resize(decoded_batch_accounted_bytes(
         plan_bytes.len(),
         payload_size,
-        &batch,
+        &transport_batch,
     )?)?;
+    let batch = if plan.transport_routing_key {
+        RecordBatch::try_new(
+            visible_schema,
+            transport_batch.columns()[..transport_batch.num_columns() - 1].to_vec(),
+        )?
+    } else {
+        transport_batch
+    };
     let rows = batch.num_rows();
     let output_data = StructArray::from(batch).to_data();
     let output_array = FFI_ArrowArray::new(&output_data);

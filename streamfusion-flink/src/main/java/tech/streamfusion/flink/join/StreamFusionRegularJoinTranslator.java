@@ -74,8 +74,9 @@ public final class StreamFusionRegularJoinTranslator {
                 joinSpec.getJoinType(),
                 joinSpec.getNonEquiCondition().orElse(null));
         StreamFusionStateBackendFactory.install(environment);
-        Transformation<RowData> keyedLeft = keyed(left, leftType, joinSpec.getLeftKeys(), config, environment);
-        Transformation<RowData> keyedRight = keyed(right, rightType, joinSpec.getRightKeys(), config, environment);
+        Transformation<RowData> keyedLeft = keyed(left, leftType, joinSpec.getLeftKeys(), config, environment, false);
+        Transformation<RowData> keyedRight =
+                keyed(right, rightType, joinSpec.getRightKeys(), config, environment, false);
         FramedInput framedLeft = framed(keyedLeft);
         FramedInput framedRight = framed(keyedRight);
         StreamFusionArrowRegularJoinOperator operator = new StreamFusionArrowRegularJoinOperator(
@@ -113,6 +114,156 @@ public final class StreamFusionRegularJoinTranslator {
         return tech.streamfusion.flink.arrow.StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
     }
 
+    /** Translates Flink's bounded hash join to the same canonical keyed state contract. */
+    public static Transformation<RowData> translateBatch(
+            Transformation<RowData> left,
+            Transformation<RowData> right,
+            RowType leftType,
+            RowType rightType,
+            RowType outputType,
+            JoinSpec joinSpec,
+            ReadableConfig config,
+            StreamExecutionEnvironment environment,
+            RowDataKeySelector leftSelector,
+            RowDataKeySelector rightSelector) {
+        return translateBatchInternal(
+                left,
+                right,
+                leftType,
+                rightType,
+                outputType,
+                outputType,
+                joinSpec,
+                config,
+                environment,
+                leftSelector,
+                rightSelector,
+                java.util.Collections.emptyList(),
+                java.util.Collections.emptyList(),
+                java.util.Collections.emptyList(),
+                java.util.Collections.emptyList());
+    }
+
+    /** Translates a bounded join and its adjacent output Calc chain as one native plan. */
+    public static Transformation<RowData> translateBatchWithOutputCalcs(
+            Transformation<RowData> left,
+            Transformation<RowData> right,
+            RowType leftType,
+            RowType rightType,
+            RowType joinOutputType,
+            RowType outputType,
+            JoinSpec joinSpec,
+            ReadableConfig config,
+            StreamExecutionEnvironment environment,
+            RowDataKeySelector leftSelector,
+            RowDataKeySelector rightSelector,
+            List<RowType> calcInputTypes,
+            List<RowType> calcOutputTypes,
+            List<List<?>> calcProjections,
+            List<?> calcConditions) {
+        return translateBatchInternal(
+                left,
+                right,
+                leftType,
+                rightType,
+                joinOutputType,
+                outputType,
+                joinSpec,
+                config,
+                environment,
+                leftSelector,
+                rightSelector,
+                calcInputTypes,
+                calcOutputTypes,
+                calcProjections,
+                calcConditions);
+    }
+
+    private static Transformation<RowData> translateBatchInternal(
+            Transformation<RowData> left,
+            Transformation<RowData> right,
+            RowType leftType,
+            RowType rightType,
+            RowType joinOutputType,
+            RowType outputType,
+            JoinSpec joinSpec,
+            ReadableConfig config,
+            StreamExecutionEnvironment environment,
+            RowDataKeySelector leftSelector,
+            RowDataKeySelector rightSelector,
+            List<RowType> calcInputTypes,
+            List<RowType> calcOutputTypes,
+            List<List<?>> calcProjections,
+            List<?> calcConditions) {
+        if (unsupportedBatchReason(leftType, rightType, joinOutputType, joinSpec) != null) {
+            return null;
+        }
+        byte[] plan = calcInputTypes.isEmpty()
+                ? StreamFusionRegularJoinPlan.createBounded(
+                        leftType,
+                        rightType,
+                        joinSpec.getLeftKeys(),
+                        joinSpec.getRightKeys(),
+                        joinSpec.getFilterNulls(),
+                        joinSpec.getJoinType(),
+                        joinSpec.getNonEquiCondition().orElse(null))
+                : StreamFusionRegularJoinPlan.createBoundedWithOutputCalcs(
+                        leftType,
+                        rightType,
+                        joinSpec.getLeftKeys(),
+                        joinSpec.getRightKeys(),
+                        joinSpec.getFilterNulls(),
+                        joinSpec.getJoinType(),
+                        joinSpec.getNonEquiCondition().orElse(null),
+                        calcInputTypes,
+                        calcOutputTypes,
+                        calcProjections,
+                        calcConditions);
+        if (plan == null) {
+            return null;
+        }
+        StreamFusionStateBackendFactory.install(environment);
+        Transformation<RowData> keyedLeft = keyed(left, leftType, joinSpec.getLeftKeys(), config, environment, true);
+        Transformation<RowData> keyedRight =
+                keyed(right, rightType, joinSpec.getRightKeys(), config, environment, true);
+        FramedInput framedLeft = framed(keyedLeft);
+        FramedInput framedRight = framed(keyedRight);
+        StreamFusionArrowRegularJoinOperator operator = new StreamFusionArrowRegularJoinOperator(
+                leftType,
+                rightType,
+                outputType,
+                joinSpec.getLeftKeys(),
+                joinSpec.getRightKeys(),
+                plan,
+                leftSelector,
+                rightSelector,
+                framedLeft.plan,
+                framedRight.plan,
+                true);
+        TwoInputTransformation<
+                        NativeExchangeFrame, NativeExchangeFrame, tech.streamfusion.flink.arrow.ArrowRowDataBatch>
+                transformation = new TwoInputTransformation<>(
+                        framedLeft.transformation,
+                        framedRight.transformation,
+                        "streamfusion-batch-hash-join[" + joinSpec.getJoinType() + "]",
+                        operator,
+                        ArrowRowDataBatchTypeInfo.INSTANCE,
+                        keyedLeft.getParallelism(),
+                        false);
+        transformation.setMaxParallelism(DEFAULT_LOWER_BOUND_MAX_PARALLELISM);
+        transformation.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 128);
+        NativeExchangeFrameKeySelector selector =
+                new NativeExchangeFrameKeySelector(DEFAULT_LOWER_BOUND_MAX_PARALLELISM);
+        transformation.setStateKeySelectors(selector, selector);
+        transformation.setStateKeyType(Types.INT);
+        return tech.streamfusion.flink.arrow.StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
+    }
+
+    public static String unsupportedBatchReason(
+            RowType leftType, RowType rightType, RowType outputType, JoinSpec joinSpec) {
+        return unsupportedContractReason(leftType, rightType, outputType, joinSpec);
+    }
+
     public static String unsupportedReason(
             RowType leftType,
             RowType rightType,
@@ -132,6 +283,22 @@ public final class StreamFusionRegularJoinTranslator {
         if (config.get(StateChangelogOptions.ENABLE_STATE_CHANGE_LOG)) {
             return "state: Flink changelog-state wrapping is not implemented by native regular join";
         }
+        String contractFailure = unsupportedContractReason(leftType, rightType, outputType, joinSpec);
+        if (contractFailure != null) {
+            return contractFailure;
+        }
+        if ((leftUpsertKeys != null && !leftUpsertKeys.isEmpty())
+                || (rightUpsertKeys != null && !rightUpsertKeys.isEmpty())) {
+            return "upsert state: native regular join unique-key compaction is not implemented yet";
+        }
+        if (leftStateTtlMillis != 0 || rightStateTtlMillis != 0) {
+            return "state TTL: native regular join expiration semantics are not implemented yet";
+        }
+        return null;
+    }
+
+    private static String unsupportedContractReason(
+            RowType leftType, RowType rightType, RowType outputType, JoinSpec joinSpec) {
         if (joinSpec.getNonEquiCondition().isPresent()) {
             String conditionFailure = tech.streamfusion.flink.calc.StreamFusionCalcTranslator.operatorConditionFailure(
                     joinSpec.getNonEquiCondition().get(),
@@ -140,13 +307,6 @@ public final class StreamFusionRegularJoinTranslator {
             if (conditionFailure != null) {
                 return conditionFailure;
             }
-        }
-        if ((leftUpsertKeys != null && !leftUpsertKeys.isEmpty())
-                || (rightUpsertKeys != null && !rightUpsertKeys.isEmpty())) {
-            return "upsert state: native regular join unique-key compaction is not implemented yet";
-        }
-        if (leftStateTtlMillis != 0 || rightStateTtlMillis != 0) {
-            return "state TTL: native regular join expiration semantics are not implemented yet";
         }
         if (joinSpec.getLeftKeys().length != joinSpec.getRightKeys().length
                 || joinSpec.getLeftKeys().length != joinSpec.getFilterNulls().length) {
@@ -232,7 +392,8 @@ public final class StreamFusionRegularJoinTranslator {
             RowType type,
             int[] keys,
             ReadableConfig config,
-            StreamExecutionEnvironment environment) {
+            StreamExecutionEnvironment environment,
+            boolean transportRoutingKey) {
         if ("StreamFusionExchangeReader".equals(input.getName())) {
             return input;
         }
@@ -245,7 +406,8 @@ public final class StreamFusionRegularJoinTranslator {
                 keys,
                 DEFAULT_LOWER_BOUND_MAX_PARALLELISM,
                 environment.getParallelism(),
-                config.get(CheckpointingOptions.ENABLE_UNALIGNED) || config.get(CheckpointingOptions.FORCE_UNALIGNED));
+                config.get(CheckpointingOptions.ENABLE_UNALIGNED) || config.get(CheckpointingOptions.FORCE_UNALIGNED),
+                transportRoutingKey);
     }
 
     @SuppressWarnings("unchecked")

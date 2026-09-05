@@ -12,6 +12,8 @@ import org.apache.flink.api.common.typeutils.base.LongSerializer;
 import org.apache.flink.runtime.state.StateInitializationContext;
 import org.apache.flink.runtime.state.StateSnapshotContext;
 import org.apache.flink.streaming.api.operators.BoundedMultiInput;
+import org.apache.flink.streaming.api.operators.OperatorAttributes;
+import org.apache.flink.streaming.api.operators.OperatorAttributesBuilder;
 import org.apache.flink.streaming.api.operators.TwoInputStreamOperator;
 import org.apache.flink.streaming.api.watermark.Watermark;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
@@ -23,6 +25,7 @@ import tech.streamfusion.flink.exchange.ArrowExchangeInputBatch;
 import tech.streamfusion.flink.exchange.NativeExchangeFrame;
 import tech.streamfusion.flink.metrics.FlinkMetricParity;
 import tech.streamfusion.flink.state.AbstractStreamFusionArrowKeyedStateOperator;
+import tech.streamfusion.nativebridge.NativeCalcBridge;
 import tech.streamfusion.nativebridge.NativeRegularJoinBridge;
 
 /** Native two-input regular streaming join over ordered Arrow-row multiset state. */
@@ -34,12 +37,15 @@ final class StreamFusionArrowRegularJoinOperator extends AbstractStreamFusionArr
     private final RowDataKeySelector[] keySelectors;
     private final boolean[] preencodeKeys;
     private final byte[][] exchangePlans;
+    private final boolean boundedFinalOutput;
 
     private transient long[] inputWatermarks = {Long.MIN_VALUE, Long.MIN_VALUE};
     private transient long emittedWatermark = Long.MIN_VALUE;
     private transient long[] observedStatistics;
     private transient ListState<Long> leftWatermarkState;
     private transient ListState<Long> rightWatermarkState;
+    private transient boolean[] inputEnded;
+    private transient boolean finished;
 
     StreamFusionArrowRegularJoinOperator(
             RowType leftType,
@@ -52,6 +58,32 @@ final class StreamFusionArrowRegularJoinOperator extends AbstractStreamFusionArr
             RowDataKeySelector rightSelector,
             byte[] leftExchangePlan,
             byte[] rightExchangePlan) {
+        this(
+                leftType,
+                rightType,
+                outputType,
+                leftKeys,
+                rightKeys,
+                plan,
+                leftSelector,
+                rightSelector,
+                leftExchangePlan,
+                rightExchangePlan,
+                false);
+    }
+
+    StreamFusionArrowRegularJoinOperator(
+            RowType leftType,
+            RowType rightType,
+            RowType outputType,
+            int[] leftKeys,
+            int[] rightKeys,
+            byte[] plan,
+            RowDataKeySelector leftSelector,
+            RowDataKeySelector rightSelector,
+            byte[] leftExchangePlan,
+            byte[] rightExchangePlan,
+            boolean boundedFinalOutput) {
         super(plan, "regular join", NativeRegularJoinBridge.keyedStateBridge());
         this.inputTypes = new RowType[] {leftType, rightType};
         this.outputType = outputType;
@@ -60,6 +92,7 @@ final class StreamFusionArrowRegularJoinOperator extends AbstractStreamFusionArr
                 new boolean[] {requiresPreencodedKeys(leftType, leftKeys), requiresPreencodedKeys(rightType, rightKeys)
                 };
         this.exchangePlans = new byte[][] {leftExchangePlan.clone(), rightExchangePlan.clone()};
+        this.boundedFinalOutput = boundedFinalOutput;
     }
 
     @Override
@@ -68,6 +101,11 @@ final class StreamFusionArrowRegularJoinOperator extends AbstractStreamFusionArr
         observedStatistics = NativeRegularJoinBridge.statistics(nativeHandle());
         getMetricGroup().addGroup("StreamFusion").gauge("pendingEventTimeTimers", () -> 0L);
         getMetricGroup().addGroup("StreamFusion").gauge("pendingProcessingTimeTimers", () -> 0L);
+        if (boundedFinalOutput) {
+            getMetricGroup().gauge("memoryUsedSizeInBytes", this::managedMemoryUsed);
+            getMetricGroup().gauge("numSpillFiles", () -> 0L);
+            getMetricGroup().gauge("spillInBytes", () -> 0L);
+        }
     }
 
     @Override
@@ -81,6 +119,19 @@ final class StreamFusionArrowRegularJoinOperator extends AbstractStreamFusionArr
     }
 
     private void processFrame(int side, NativeExchangeFrame frame) throws Exception {
+        if (boundedFinalOutput) {
+            try {
+                long inputRows = frame.processBoundedRegularJoinNative(nativeHandle(), side, exchangePlans[side]);
+                FlinkMetricParity.replacePhysicalRecords(
+                        getMetricGroup().getIOMetricGroup().getNumRecordsInCounter(), 1, inputRows);
+                recordProcessedWithoutStateCalls(inputRows);
+                updateNativeStatistics();
+                return;
+            } catch (Throwable failure) {
+                recordProcessingFailure();
+                throw failure;
+            }
+        }
         try (ArrowExchangeInputBatch input = tech.streamfusion.flink.arrow.ArrowExchangeInputCDataBridge.decode(
                 exchangePlans[side], frame, inputTypes[side], allocator(), memoryManager())) {
             try {
@@ -112,10 +163,11 @@ final class StreamFusionArrowRegularJoinOperator extends AbstractStreamFusionArr
 
     private void updateNativeStatistics() {
         long[] current = NativeRegularJoinBridge.statistics(nativeHandle());
-        if (current.length != 2 || observedStatistics.length != 2) {
+        if (current.length != 3 || observedStatistics.length != 3) {
             throw new IllegalStateException("Native regular join statistics have an incompatible shape");
         }
         recordNativeWindowStatistics(current[0] - observedStatistics[0], current[1] - observedStatistics[1], 0, 0, 0);
+        NativeCalcBridge.recordFusedBatches(current[2] - observedStatistics[2]);
         observedStatistics = current;
     }
 
@@ -141,12 +193,44 @@ final class StreamFusionArrowRegularJoinOperator extends AbstractStreamFusionArr
     }
 
     @Override
-    public void endInput(int inputId) {}
+    public void endInput(int inputId) throws Exception {
+        if (!boundedFinalOutput || finished) {
+            return;
+        }
+        if (inputId < 1 || inputId > 2) {
+            throw new IllegalArgumentException("Regular join input id must be 1 or 2");
+        }
+        inputEnded[inputId - 1] = true;
+        if (!inputEnded[0] || !inputEnded[1]) {
+            return;
+        }
+        finished = true;
+        try {
+            while (true) {
+                try (ArrowRowDataBatch result =
+                        ArrowRegularJoinCDataBridge.finish(nativeHandle(), outputType, allocator(), memoryManager())) {
+                    if (result.size() == 0) {
+                        break;
+                    }
+                    output.collect(new StreamRecord<>(result));
+                    FlinkMetricParity.replacePhysicalRecords(
+                            getMetricGroup().getIOMetricGroup().getNumRecordsOutCounter(), 1, result.size());
+                    recordProcessedWithoutStateCalls(0, result);
+                }
+            }
+            updateNativeStatistics();
+        } catch (Throwable failure) {
+            recordProcessingFailure();
+            throw failure;
+        }
+    }
 
     @Override
     protected void afterNativeStateInitialized(StateInitializationContext context) throws Exception {
         // Transient initializers do not run on Flink's task-side deserialized operator.
         inputWatermarks = new long[] {Long.MIN_VALUE, Long.MIN_VALUE};
+        inputEnded = new boolean[2];
+        finished = false;
         emittedWatermark = Long.MIN_VALUE;
         leftWatermarkState = context.getOperatorStateStore()
                 .getUnionListState(new ListStateDescriptor<>("left-watermark", LongSerializer.INSTANCE));
@@ -171,5 +255,16 @@ final class StreamFusionArrowRegularJoinOperator extends AbstractStreamFusionArr
             restored = Math.max(restored, candidate);
         }
         return restored;
+    }
+
+    @Override
+    public OperatorAttributes getOperatorAttributes() {
+        if (!boundedFinalOutput) {
+            return super.getOperatorAttributes();
+        }
+        return new OperatorAttributesBuilder()
+                .setOutputOnlyAfterEndOfStream(true)
+                .setInternalSorterSupported(true)
+                .build();
     }
 }

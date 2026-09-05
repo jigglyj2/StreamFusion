@@ -62,6 +62,7 @@ public final class StreamFusionBatchExecExchange extends CommonExecExchange impl
                             int[].class,
                             int.class,
                             int.class,
+                            boolean.class,
                             boolean.class);
                     return (Transformation<RowData>) hash.invoke(
                             null,
@@ -70,7 +71,8 @@ public final class StreamFusionBatchExecExchange extends CommonExecExchange impl
                             ((HashDistribution) distribution).getKeys(),
                             DEFAULT_LOWER_BOUND_MAX_PARALLELISM,
                             planner.getExecEnv().getParallelism(),
-                            false);
+                            false,
+                            true);
                 case SINGLETON:
                     Method singleton = translator.getMethod("singleton", Transformation.class, RowType.class);
                     return (Transformation<RowData>) singleton.invoke(null, input, (RowType) getOutputType());

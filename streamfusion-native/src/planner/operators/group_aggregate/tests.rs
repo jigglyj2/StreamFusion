@@ -398,8 +398,10 @@ fn bounded_aggregate_drains_terminal_rows_in_managed_batches() {
     processor.process_arrow(batch(keys, values, None)).unwrap();
 
     assert_eq!(processor.finish_bundle().unwrap().num_rows(), 16_384);
+    assert!(processor.scratch_reservation.size() > 0);
     assert_eq!(processor.finish_bundle().unwrap().num_rows(), 3_616);
     assert_eq!(processor.finish_bundle().unwrap().num_rows(), 0);
+    assert_eq!(processor.scratch_reservation.size(), 0);
 }
 
 #[test]

@@ -781,6 +781,43 @@ The earlier test-only RowData Q18 microbenchmark has been retired. It exercised 
 instead of the production Arrow operator topology and could therefore give misleading results.
 Use the release production harness above for Q18 throughput and profiling comparisons.
 
+## Bounded q20 join target
+
+Bounded q20 exercises the production `RowData -> Arrow -> native hash exchange -> native bounded
+join -> fused Calc -> Arrow-backed RowData` path. Its integration case runs on memory and RocksDB,
+compares the exact final multiset against Flink, requires an accelerated EXPLAIN, and requires both
+native regular-join and fused-Calc batch counters to be nonzero. The bounded join consumes IPC
+frames directly; complex keys retain their opaque Flink BinaryRow sidecar through that native edge,
+while primitive keys remain Rust encoded.
+
+On the September 5, 2026 local release/native-CPU run based on `89043f4` plus the bounded-join
+working change, each engine/backend received an excluded 100,000-event warmup followed by three
+alternating fresh-JVM forks over 500,000 deterministic events at parallelism one. The JVM used a
+2 GB fixed heap and 512 MiB of ordinary Flink managed memory. In memory, Flink and StreamFusion
+median elapsed times were 7.309 s and 7.788 s, equivalent to 68,413 and 64,200 events/s or 93.8%
+end-to-end throughput parity. Median absolute deviations were 0.071 s and 0.015 s, with ranges of
+7.049–7.380 s and 7.665–7.803 s. RocksDB medians were 7.191 s and 7.737 s, equivalent to 69,535
+and 64,625 events/s or 92.9% parity. Median absolute deviations were 0.055 s and 0.054 s, with
+ranges of 7.135–7.252 s and 7.683–8.123 s. Every fork emitted 90,255 rows with SHA-256
+`224695c393166d7de182f05ac38ac81adb9dcb06b39016eb2fda0322a1268def`; every StreamFusion fork
+reported full acceleration and 69 native join batches plus 68 fused Calc stages. The machine was a
+12th Gen Intel Core i7-12650H under x86-64 WSL2 with OpenJDK 24.0.2 and Rust 1.94.0.
+
+The first fused implementation still decoded each exchange frame into Arrow Java and immediately
+re-imported it into Rust, reaching about 88% memory and 87% RocksDB parity. Direct native frame
+ingestion removed that duplicate boundary and the associated empty-output transfer. Longer mixed
+JVM/native CPU profiles use Java non-safepoint sampling, DWARF/frame-pointer unwinding, JFR,
+collapsed stacks, per-engine flame graphs, and differential flame graphs. The complete join path
+accounted for 8.3%/8.4% of process CPU samples on memory/RocksDB, RowData-to-Arrow for 6.7%/5.3%,
+native exchange for 4.9%/5.4%, and the Arrow-backed output/sink path for 4.0%/3.8%. Exclusive Java
+allocation attribution placed only 0.2%/0.1% in the join and 1.6% in exchange; source conversion and
+the result sink dominated. Native allocation was concentrated in durable encoded rows and decoding
+keyed state for terminal output; IPC decode was about 0.2%, with no per-row JNI allocation loop.
+All retained state, decode scratch, IPC ownership, and output batches remain charged to Flink
+managed memory. Profiler timings were excluded from the benchmark result. Artifacts are retained
+under `streamfusion-nexmark-benchmarks/target/profiles/bounded-q20-join/`; these are local
+diagnostics, not portable performance guarantees.
+
 ## Bounded UNNEST and Window TVF targets
 
 The Kafka-free harness includes `batch-unnest` and `batch-window-tvf`. Both use Flink's bounded

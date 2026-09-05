@@ -5,8 +5,8 @@ sidebar:
   order: 9
 ---
 
-**Current status:** Partially accelerated for synchronous regular, multi-way, time-bounded, and
-temporal streaming joins.
+**Current status:** Partially accelerated for bounded hash/adaptive/nested-loop joins and for
+synchronous regular, multi-way, time-bounded, and temporal streaming joins.
 
 ## SQL example
 
@@ -23,10 +23,19 @@ StreamFusion currently accelerates Flink's synchronous regular streaming `INNER`
 combine its non-empty equi key with a generated residual predicate; the residual is evaluated over
 the concatenated left/right row with SQL three-valued Boolean semantics, including treating `NULL`
 as non-matching.
-Rows and join keys may use any Arrow-representable Flink scalar or nested logical type. The native
-operator accepts the complete insert/update-before/update-after/delete changelog, retains
+Stored rows may use any Arrow-representable Flink scalar or nested logical type, while join keys
+may use every such type that Flink accepts for SQL equality. The native operator accepts the
+complete insert/update-before/update-after/delete changelog, retains
 duplicates, applies Flink's per-key null filtering, and reproduces Flink's null-padding and
 association-count transitions.
+
+Flink `BatchExecHashJoin` and `BatchExecAdaptiveJoin` equality joins use the same native two-sided
+counted state with terminal output. `BatchExecNestedLoopJoin` uses one singleton key group and
+evaluates its complete predicate as a vectorized residual condition. Bounded `INNER`, `LEFT`,
+`RIGHT`, `FULL`, `SEMI`, and `ANTI` results are emitted as insert-only Arrow batches after both
+inputs end. Duplicate rows, null join semantics, residual predicates, and all four input row kinds
+are supported. Terminal output is capped at 16,384 rows per Arrow batch, including for one hot
+cross-product key.
 
 Flink `StreamExecIntervalJoin` plans are accelerated for constant row-time or processing-time
 bounds and `INNER`, `LEFT`, `RIGHT`, or `FULL` joins. Both sides retain timestamp-ordered
@@ -56,21 +65,22 @@ This preserves its full generated residual condition and covers Flink's physical
 Nexmark q4 and q9. Three-or-more-input multi-joins continue to use the recursive operator and still
 require every predicate to be represented by the attribute map.
 
-The containing plan falls back to Flink with an EXPLAIN reason when a regular join has no usable
-equi key, state TTL, mini-batch execution, asynchronous state, changelog-state wrapping, or a
+The containing plan falls back to Flink with an EXPLAIN reason when a streaming regular join has no
+usable equi key, state TTL, mini-batch execution, asynchronous state, changelog-state wrapping, or a
 planner-provided unique/upsert key. Interval joins additionally fall back for a residual non-equi
 condition, non-constant bounds, semi/anti join modes, mini-batching, asynchronous state, or
 changelog-state wrapping. Temporal joins fall back for right/full/semi/anti modes, asynchronous
 state, or changelog-state wrapping; Flink itself rejects processing-time temporal table joins, and
-only its temporal table-function form is accepted there. Lookup and bounded batch joins remain
-Flink-owned. These are explicit unimplemented shapes, not approximations of their semantics.
+only its temporal table-function form is accepted there. Lookup joins remain Flink-owned. A
+bounded nested-loop scalar-subquery join also remains on Flink because its single-row cardinality
+failure contract is not yet native. These are explicit unimplemented shapes, not approximations.
 Multi-way joins additionally fall back for residual predicates outside the attribute map,
 planner-provided unique/upsert keys, non-zero state TTL, mini-batching, asynchronous state, or
 changelog-state wrapping.
 
 ## Implementation
 
-The planner replaces an eligible `StreamExecJoin` with a distinct StreamFusion exec node and sends
+The planner replaces an eligible streaming or bounded join with a distinct StreamFusion exec node and sends
 a versioned protobuf join contract to Rust. Each input crosses a native Arrow exchange edge; the
 join itself receives Arrow batches and returns Arrow batches without a RowData loop or per-record
 JNI call.
@@ -84,6 +94,24 @@ watermark frontiers. Regular joins do not register timers. Interval joins use th
 timer service and materialize dirty timer groups into canonical keyed state at snapshot boundaries,
 avoiding repeated whole-group timer serialization during normal batch processing. Both variants
 coalesce and forward watermarks using Flink's two-input rule.
+
+Bounded hash/adaptive joins partition both sides by the planned Flink equality key. Bounded
+nested-loop joins discard Flink's broadcast/ANY exchange wrapper and install a native singleton
+exchange because the complete cross-product condition is evaluated in Rust. Neither path builds a
+second Java hash table or sorter. Both memory and direct RocksDB state perform one distinct batched
+read and one atomic batched write per incoming Arrow frame. Aligned, unaligned, and canonical
+cross-backend restoration use the same SFS1 key-group bytes as streaming regular joins, and
+ordinary RocksDB checkpoints retain incremental SST reuse.
+
+The exchange frame is decoded directly by the native bounded join, so it does not become an Arrow
+Java batch merely to cross JNI again. Primitive keys are encoded and assigned to Flink key groups
+in Rust. For ROW and other Flink-equality-comparable complex keys, the exchange retains its already
+computed opaque Flink `BinaryRowData` sidecar through this one native consumer edge; the same
+transport also supports ARRAY, MAP, and MULTISET keys when used through a lower-level Flink runtime
+contract that admits them. Rust consumes the bytes for equality and key-group ownership, and the
+sidecar is never exposed in SQL output or by an ordinary exchange reader.
+Aligned exchange can therefore continue coalescing key groups per destination, while unaligned
+exchange can retain one frame per key group without changing the state format.
 
 Regular-join residual predicates are encoded in the same versioned protobuf expression contract as
 Calc and lowered to a DataFusion physical expression. The operator collects every candidate pair
@@ -122,7 +150,13 @@ budget.
 
 Deterministic native transition tests cover every join type, residual acceptance and rejection,
 duplicates, retractions, null keys, residual restore after rescaling, and canonical residual-state
-migration from memory to RocksDB with batched I/O. Interval coverage additionally exercises every
+migration from memory to RocksDB with batched I/O. Bounded coverage additionally checks terminal
+insert-only results for all six join modes, pre-terminal retractions, null filtering, vectorized
+residuals, hot-key output chunking, memory accounting, key-group rescaling, every checkpoint mode,
+all four memory/RocksDB restore combinations, and direct exchange ingestion with an opaque ARRAY
+key. Generated bounded SQL parity tests cover all six join modes, duplicate keys, nested payloads,
+outer null padding, and a residual condition.
+Interval coverage additionally exercises every
 supported logical type as both a key and stored value, pending event-time and processing-time
 timers, aligned and unaligned checkpoints, canonical cross-backend savepoints, and incremental
 RocksDB restore. The generated SQL parity suite uses INNER and SEMI regular joins because their

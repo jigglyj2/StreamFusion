@@ -11,7 +11,8 @@ processor proves whole-plan eligibility and replaces eligible `StreamExecCalc` a
 `StreamExecUnion` nodes with distinct `StreamFusionExecCalc` and
 `StreamFusionExecUnion` nodes. It applies the same rule to eligible `BatchExecCalc`,
 `BatchExecValues`, `BatchExecUnion`, eligible `BatchExecCorrelate`, and eligible
-`BatchExecWindowTableFunction` nodes, producing distinct bounded StreamFusion nodes.
+`BatchExecWindowTableFunction`, `BatchExecHashJoin`, `BatchExecAdaptiveJoin`, and
+`BatchExecNestedLoopJoin` nodes, producing distinct bounded StreamFusion nodes.
 Streaming and bounded replacements share the same protobuf and native DataFusion operator tree;
 bounded execution is not a parallel JNI or RowData implementation. The original Flink nodes are neither modified nor
 given native execution branches; if eligibility fails, the original graph is returned

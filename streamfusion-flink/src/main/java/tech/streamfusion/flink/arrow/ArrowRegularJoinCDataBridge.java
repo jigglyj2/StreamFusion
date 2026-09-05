@@ -26,6 +26,28 @@ import tech.streamfusion.nativebridge.NativeRegularJoinBridge;
 public final class ArrowRegularJoinCDataBridge {
     private ArrowRegularJoinCDataBridge() {}
 
+    /** Drains one bounded native join result batch after both inputs have ended. */
+    public static ArrowRowDataBatch finish(
+            long handle, RowType outputType, BufferAllocator allocator, NativeMemoryManager memoryManager) {
+        try (ArrowArray outputArray = ArrowArray.allocateNew(allocator);
+                ArrowSchema outputSchema = ArrowSchema.allocateNew(allocator);
+                CDataDictionaryProvider dictionaries = new CDataDictionaryProvider()) {
+            try {
+                long count = NativeRegularJoinBridge.finish(
+                        handle, outputArray.memoryAddress(), outputSchema.memoryAddress());
+                if (count < 0 || count > Integer.MAX_VALUE) {
+                    throw new IllegalStateException("Native regular join returned invalid terminal row count " + count);
+                }
+                VectorSchemaRoot output =
+                        Data.importVectorSchemaRoot(allocator, outputArray, outputSchema, dictionaries);
+                output.setRowCount((int) count);
+                return removeMetadata(output, outputType, allocator);
+            } finally {
+                memoryManager.finishArrowTransfer();
+            }
+        }
+    }
+
     public static ArrowRowDataBatch execute(
             long handle,
             int side,

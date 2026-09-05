@@ -60,6 +60,14 @@ public final class NativeCalcBridge {
         EXECUTED_BATCHES.set(0);
     }
 
+    /** Records Calc stages executed inside another operator's fused native plan. */
+    public static void recordFusedBatches(long batches) {
+        if (batches < 0) {
+            throw new IllegalArgumentException("Fused Calc batch count must be non-negative");
+        }
+        EXECUTED_BATCHES.addAndGet(batches);
+    }
+
     private static native long executeArrowBatch(
             long executionContext,
             long inputArrayAddress,

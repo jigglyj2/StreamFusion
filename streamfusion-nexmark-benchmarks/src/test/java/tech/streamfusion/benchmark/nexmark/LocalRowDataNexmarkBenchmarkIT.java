@@ -67,6 +67,24 @@ class LocalRowDataNexmarkBenchmarkIT {
     }
 
     @ParameterizedTest
+    @ValueSource(strings = {"hashmap", "rocksdb"})
+    void boundedQ20JoinMatchesFlinkThroughTheRowDataNexmarkBoundary(String backend) throws Exception {
+        System.setProperty("streamfusion.nexmark.batch-mode", "true");
+        LocalRowDataNexmarkBenchmark.RunResult flink =
+                LocalRowDataNexmarkBenchmark.run(2_000, "q20", false, backend, 1);
+        LocalRowDataNexmarkBenchmark.RunResult streamFusion =
+                LocalRowDataNexmarkBenchmark.run(2_000, "q20", true, backend, 1);
+
+        assertThat(streamFusion.completed()).as(backend).isTrue();
+        assertThat(streamFusion.debugRows()).as(backend).containsExactlyElementsOf(flink.debugRows());
+        assertThat(streamFusion.outputRows()).as(backend).isEqualTo(flink.outputRows());
+        assertThat(streamFusion.outputSha256()).as(backend).isEqualTo(flink.outputSha256());
+        assertThat(StreamFusionPlanningDiagnostics.explain()).as(backend).contains("Accelerated: yes");
+        assertThat(streamFusion.nativeRegularJoinBatches()).as(backend).isGreaterThan(0);
+        assertThat(streamFusion.nativeCalcBatches()).as(backend).isGreaterThan(0);
+    }
+
+    @ParameterizedTest
     @ValueSource(strings = {"q0", "q1", "q2", "q22"})
     void runsWithFourCheckpointedRowDataPartitions(String query) throws Exception {
         LocalRowDataNexmarkBenchmark.RunResult flink = LocalRowDataNexmarkBenchmark.run(1_000, query, false);

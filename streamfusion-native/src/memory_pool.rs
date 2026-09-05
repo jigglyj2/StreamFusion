@@ -101,8 +101,20 @@ impl HostMemoryReservation {
         Ok(())
     }
 
-    #[cfg(test)]
-    fn size(&self) -> usize {
+    /// Total bytes this consumer could hold if it claimed every byte currently available from
+    /// the host broker. Brokers without an observable limit return `None`.
+    pub(crate) fn available_capacity(&self) -> Result<Option<usize>> {
+        self.broker
+            .available()
+            .map(|available| available.map(|available| self.size.saturating_add(available)))
+    }
+
+    /** Creates a DataFusion pool governed by the same Flink-side reservation broker. */
+    pub(crate) fn datafusion_pool(&self, limit: usize) -> Arc<dyn MemoryPool> {
+        Arc::new(FlinkMemoryPool::new(Arc::clone(&self.broker), limit))
+    }
+
+    pub(crate) fn size(&self) -> usize {
         self.size
     }
 }
@@ -378,6 +390,13 @@ pub(crate) mod tests_support {
         fn release(&self, bytes: usize) -> Result<()> {
             self.reserved.fetch_sub(bytes, Ordering::Relaxed);
             Ok(())
+        }
+
+        fn available(&self) -> Result<Option<usize>> {
+            Ok(Some(
+                self.limit
+                    .saturating_sub(self.reserved.load(Ordering::Relaxed)),
+            ))
         }
     }
     #[test]

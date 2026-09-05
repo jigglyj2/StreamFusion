@@ -34,10 +34,22 @@ public final class StreamFusionExchangeTranslator {
             int maxParallelism,
             int parallelism,
             boolean preserveKeyGroups) {
+        return hash(input, rowType, keys, maxParallelism, parallelism, preserveKeyGroups, false);
+    }
+
+    public static Transformation<RowData> hash(
+            Transformation<RowData> input,
+            RowType rowType,
+            int[] keys,
+            int maxParallelism,
+            int parallelism,
+            boolean preserveKeyGroups,
+            boolean transportRoutingKey) {
         if (parallelism <= 0) {
             throw new IllegalArgumentException("Native hash exchange parallelism must be positive");
         }
-        byte[] plan = NativeExchangePlanSerializer.hash(rowType, keys, maxParallelism, parallelism, preserveKeyGroups);
+        byte[] plan = NativeExchangePlanSerializer.hash(
+                rowType, keys, maxParallelism, parallelism, preserveKeyGroups, transportRoutingKey);
         return translate(input, rowType, keys, plan, new NativeExchangePartitioner(maxParallelism), false);
     }
 

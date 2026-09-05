@@ -9,6 +9,7 @@ import java.util.Arrays;
 import org.apache.flink.core.memory.DataOutputView;
 import tech.streamfusion.nativebridge.NativeExchangeBridge;
 import tech.streamfusion.nativebridge.NativeMemoryManager;
+import tech.streamfusion.nativebridge.NativeRegularJoinBridge;
 
 /** One schema-free Arrow IPC frame routed to a downstream Flink subtask. */
 public final class NativeExchangeFrame {
@@ -102,6 +103,19 @@ public final class NativeExchangeFrame {
                 outputArrayAddress,
                 outputSchemaAddress,
                 memoryManager);
+    }
+
+    /** Sends this schema-free IPC frame directly into a bounded native regular join. */
+    public long processBoundedRegularJoinNative(long handle, int side, byte[] exchangePlan) {
+        return NativeRegularJoinBridge.processBoundedExchangeFrame(
+                handle,
+                side,
+                keyGroup,
+                exchangePlan,
+                payload,
+                metadataOffset,
+                Math.addExact(metadataLength, bodyLength),
+                metadataLength);
     }
 
     void writePayloadTo(DataOutputView target) throws IOException {

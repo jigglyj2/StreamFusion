@@ -33,11 +33,14 @@ import org.apache.flink.table.planner.plan.nodes.exec.ExecNode;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeBase;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeGraph;
 import org.apache.flink.table.planner.plan.nodes.exec.InputProperty;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecAdaptiveJoin;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecCalc;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecCorrelate;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecExchange;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecExpand;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecHashAggregate;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecHashJoin;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecNestedLoopJoin;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecSort;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecSortAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecUnion;
@@ -287,6 +290,30 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             if (reason != null) {
                 rejections.add(nodePath + "\n" + reason);
             }
+        } else if (node instanceof BatchExecHashJoin) {
+            String reason = unsupportedReason((BatchExecHashJoin) node, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
+        } else if (node instanceof BatchExecAdaptiveJoin) {
+            String reason = unsupportedReason((BatchExecAdaptiveJoin) node, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
+        } else if (node instanceof BatchExecNestedLoopJoin) {
+            BatchExecNestedLoopJoin join = (BatchExecNestedLoopJoin) node;
+            String reason = unsupportedReason(join, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
+            for (int index = 0; index < join.getInputEdges().size(); index++) {
+                collectRejections(
+                        bypassBatchExchange(join.getInputEdges().get(index)).getSource(),
+                        context,
+                        nodePath + "/native-input[" + index + "]",
+                        rejections);
+            }
+            return;
         } else if (node instanceof BatchExecHashAggregate) {
             BatchGroupAggregatePair pair = batchGroupAggregatePair(node);
             String reason = pair == null
@@ -709,6 +736,49 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     (RowType) calc.getOutputType(),
                     "StreamFusionBatchCalc");
             replacement.setInputEdges(calc.getInputEdges().stream()
+                    .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                    .collect(Collectors.toList()));
+            return replacement;
+        }
+        if (node instanceof BatchExecHashJoin) {
+            BatchExecHashJoin join = (BatchExecHashJoin) node;
+            StreamFusionBatchExecHashJoin replacement = new StreamFusionBatchExecHashJoin(
+                    join.getPersistedConfig(),
+                    batchHashJoinSpec(join),
+                    join.getInputProperties().get(0),
+                    join.getInputProperties().get(1),
+                    (RowType) join.getOutputType(),
+                    "StreamFusionBatchHashJoin");
+            replacement.setInputEdges(join.getInputEdges().stream()
+                    .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                    .collect(Collectors.toList()));
+            return replacement;
+        }
+        if (node instanceof BatchExecAdaptiveJoin) {
+            BatchExecAdaptiveJoin join = (BatchExecAdaptiveJoin) node;
+            StreamFusionBatchExecHashJoin replacement = new StreamFusionBatchExecHashJoin(
+                    join.getPersistedConfig(),
+                    batchAdaptiveJoinSpec(join),
+                    join.getInputProperties().get(0),
+                    join.getInputProperties().get(1),
+                    (RowType) join.getOutputType(),
+                    "StreamFusionBatchHashJoin");
+            replacement.setInputEdges(join.getInputEdges().stream()
+                    .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                    .collect(Collectors.toList()));
+            return replacement;
+        }
+        if (node instanceof BatchExecNestedLoopJoin) {
+            BatchExecNestedLoopJoin join = (BatchExecNestedLoopJoin) node;
+            StreamFusionBatchExecNestedLoopJoin replacement = new StreamFusionBatchExecNestedLoopJoin(
+                    join.getPersistedConfig(),
+                    batchNestedLoopJoinSpec(join),
+                    join.getInputProperties().get(0),
+                    join.getInputProperties().get(1),
+                    (RowType) join.getOutputType(),
+                    "StreamFusionBatchNestedLoopJoin");
+            replacement.setInputEdges(join.getInputEdges().stream()
+                    .map(StreamFusionExecGraphProcessor::bypassBatchExchange)
                     .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
                     .collect(Collectors.toList()));
             return replacement;
@@ -1426,6 +1496,15 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                 .build();
     }
 
+    private static ExecEdge bypassBatchExchange(ExecEdge edge) {
+        ExecEdge current = edge;
+        while (current.getSource() instanceof BatchExecExchange
+                && current.getSource().getInputEdges().size() == 1) {
+            current = current.getSource().getInputEdges().get(0);
+        }
+        return current;
+    }
+
     private String unsupportedReason(StreamExecCalc calc, ProcessorContext context) {
         ExecEdge input = calc.getInputEdges().get(0);
         return unsupportedCalcReason(
@@ -1444,6 +1523,44 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                 projection(calc),
                 condition(calc),
                 context);
+    }
+
+    private String unsupportedReason(BatchExecHashJoin join, ProcessorContext context) {
+        return unsupportedBatchJoinReason(join, batchHashJoinSpec(join), context);
+    }
+
+    private String unsupportedReason(BatchExecAdaptiveJoin join, ProcessorContext context) {
+        return unsupportedBatchJoinReason(join, batchAdaptiveJoinSpec(join), context);
+    }
+
+    private String unsupportedReason(BatchExecNestedLoopJoin join, ProcessorContext context) {
+        if (batchNestedLoopJoinSingleRow(join)) {
+            return "single-row join: native bounded join does not yet enforce scalar-subquery cardinality";
+        }
+        return unsupportedBatchJoinReason(join, batchNestedLoopJoinSpec(join), context);
+    }
+
+    private String unsupportedBatchJoinReason(ExecNode<?> join, JoinSpec joinSpec, ProcessorContext context) {
+        ExecEdge left = join.getInputEdges().get(0);
+        ExecEdge right = join.getInputEdges().get(1);
+        try {
+            Class<?> translator = Class.forName(
+                    REGULAR_JOIN_TRANSLATOR_CLASS,
+                    true,
+                    context.getPlanner().getFlinkContext().getClassLoader());
+            Method method = translator.getMethod(
+                    "unsupportedBatchReason", RowType.class, RowType.class, RowType.class, JoinSpec.class);
+            return (String) method.invoke(
+                    null,
+                    (RowType) left.getOutputType(),
+                    (RowType) right.getOutputType(),
+                    (RowType) join.getOutputType(),
+                    joinSpec);
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException failure) {
+            throw new IllegalStateException("Could not inspect bounded native hash join support", failure);
+        } catch (InvocationTargetException failure) {
+            throw new IllegalStateException("Bounded native hash join support inspection failed", failure.getCause());
+        }
     }
 
     private String unsupportedReason(BatchExecHashAggregate aggregate, ProcessorContext context) {
