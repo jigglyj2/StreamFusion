@@ -236,7 +236,7 @@ fn expand_batch(
     Ok(RecordBatch::try_new(schema, columns)?)
 }
 
-fn to_window_time(epoch_millis: i64, shift_time_zone: Tz) -> Result<i64> {
+pub(super) fn to_window_time(epoch_millis: i64, shift_time_zone: Tz) -> Result<i64> {
     if shift_time_zone == chrono_tz::UTC || epoch_millis == i64::MAX {
         return Ok(epoch_millis);
     }
@@ -355,7 +355,7 @@ fn validate(window: &proto::WindowTableFunction) -> Result<()> {
     }
 }
 
-fn window_start(timestamp: i64, offset: i64, size: i64) -> i64 {
+pub(super) fn window_start(timestamp: i64, offset: i64, size: i64) -> i64 {
     let remainder = timestamp.wrapping_sub(offset) % size;
     if remainder < 0 {
         timestamp.wrapping_sub(remainder.wrapping_add(size))

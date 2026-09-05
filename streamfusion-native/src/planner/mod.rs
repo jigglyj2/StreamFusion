@@ -142,6 +142,9 @@ fn create_operator(
         Some(proto::operator::Operator::WindowAggregate(_)) => Err(DataFusionError::Plan(
             "WindowAggregate requires a persistent stateful execution handle".to_string(),
         )),
+        Some(proto::operator::Operator::LocalWindowAggregate(_)) => Err(DataFusionError::Plan(
+            "LocalWindowAggregate requires a persistent bundle execution handle".to_string(),
+        )),
         Some(proto::operator::Operator::WindowDeduplicate(_)) => Err(DataFusionError::Plan(
             "WindowDeduplicate requires a persistent stateful execution handle".to_string(),
         )),

@@ -63,6 +63,7 @@ import org.apache.flink.table.runtime.operators.join.stream.keyselector.Attribut
 import org.apache.flink.table.runtime.operators.join.stream.keyselector.AttributeBasedJoinKeyExtractor.ConditionAttributeRef;
 import org.apache.flink.table.runtime.operators.rank.RankRange;
 import org.apache.flink.table.runtime.operators.rank.RankType;
+import org.apache.flink.table.types.logical.BigIntType;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.VarBinaryType;
 import org.apache.flink.util.TimeUtils;
@@ -361,6 +362,19 @@ final class FlinkExecNodeAccess {
         }
         fields.add(
                 new RowType.RowField("__streamfusion_accumulator", new VarBinaryType(false, VarBinaryType.MAX_LENGTH)));
+        return new RowType(false, fields);
+    }
+
+    static RowType nativeWindowAccumulatorType(RowType inputType, int[] grouping) {
+        List<RowType.RowField> fields = new ArrayList<>(grouping.length + 3);
+        for (int index : grouping) {
+            RowType.RowField field = inputType.getFields().get(index);
+            fields.add(new RowType.RowField(field.getName(), field.getType()));
+        }
+        fields.add(
+                new RowType.RowField("__streamfusion_accumulator", new VarBinaryType(false, VarBinaryType.MAX_LENGTH)));
+        fields.add(new RowType.RowField("__streamfusion_window_start", new BigIntType(false)));
+        fields.add(new RowType.RowField("__streamfusion_slice_end", new BigIntType(false)));
         return new RowType(false, fields);
     }
 

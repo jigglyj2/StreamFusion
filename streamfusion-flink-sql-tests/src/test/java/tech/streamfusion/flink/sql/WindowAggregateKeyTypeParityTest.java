@@ -17,7 +17,9 @@ import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.EnvironmentSettings;
 import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
+import org.apache.flink.table.api.config.AggregatePhaseStrategy;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
+import org.apache.flink.table.api.config.OptimizerConfigOptions;
 import org.apache.flink.types.Row;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -33,6 +35,10 @@ class WindowAggregateKeyTypeParityTest extends SqlParityTestSupport {
 
         assertThat(streamFusion).isEqualTo(flink);
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        if (!legacy) {
+            assertThat(StreamFusionPlannerFactory.nativeLocalWindowAggregateBatchCount())
+                    .isGreaterThan(0);
+        }
     }
 
     @ParameterizedTest
@@ -43,6 +49,10 @@ class WindowAggregateKeyTypeParityTest extends SqlParityTestSupport {
 
         assertThat(streamFusion).isEqualTo(flink);
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        if (!legacy) {
+            assertThat(StreamFusionPlannerFactory.nativeLocalWindowAggregateBatchCount())
+                    .isGreaterThan(0);
+        }
     }
 
     private static byte[] executeScalars(boolean streamFusion, boolean legacy) throws Exception {
@@ -52,6 +62,9 @@ class WindowAggregateKeyTypeParityTest extends SqlParityTestSupport {
         StreamTableEnvironment tables = StreamTableEnvironment.create(
                 environment, EnvironmentSettings.newInstance().inStreamingMode().build());
         tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+        if (!legacy) {
+            forceTwoPhase(tables);
+        }
         LocalDateTime first = LocalDateTime.of(2026, 8, 29, 12, 0, 1);
         LocalDateTime second = LocalDateTime.of(2026, 8, 29, 12, 0, 2);
         tables.createTemporaryView(
@@ -168,6 +181,9 @@ class WindowAggregateKeyTypeParityTest extends SqlParityTestSupport {
         StreamTableEnvironment tables = StreamTableEnvironment.create(
                 environment, EnvironmentSettings.newInstance().inStreamingMode().build());
         tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+        if (!legacy) {
+            forceTwoPhase(tables);
+        }
         tables.createTemporaryView(
                 "nested_window_keys",
                 tables.fromDataStream(
@@ -214,5 +230,10 @@ class WindowAggregateKeyTypeParityTest extends SqlParityTestSupport {
             System.clearProperty(StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY);
             StreamFusionPlannerFactory.resetMetrics();
         }
+    }
+
+    private static void forceTwoPhase(StreamTableEnvironment tables) {
+        tables.getConfig()
+                .set(OptimizerConfigOptions.TABLE_OPTIMIZER_AGG_PHASE_STRATEGY, AggregatePhaseStrategy.TWO_PHASE);
     }
 }

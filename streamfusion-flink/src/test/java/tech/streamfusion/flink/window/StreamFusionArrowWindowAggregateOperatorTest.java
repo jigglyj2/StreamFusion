@@ -38,6 +38,7 @@ import org.apache.flink.streaming.api.watermark.Watermark;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.util.AbstractStreamOperatorTestHarness;
 import org.apache.flink.streaming.util.KeyedOneInputStreamOperatorTestHarness;
+import org.apache.flink.streaming.util.OneInputStreamOperatorTestHarness;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.TimestampData;
@@ -48,6 +49,7 @@ import org.apache.flink.table.types.logical.BigIntType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.TimestampType;
+import org.apache.flink.table.types.logical.VarBinaryType;
 import org.apache.flink.types.RowKind;
 import org.junit.jupiter.api.Test;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
@@ -59,6 +61,7 @@ import tech.streamfusion.proto.plan.v1.AggregateFunction;
 import tech.streamfusion.proto.plan.v1.EmptyType;
 import tech.streamfusion.proto.plan.v1.Field;
 import tech.streamfusion.proto.plan.v1.Input;
+import tech.streamfusion.proto.plan.v1.LocalWindowAggregate;
 import tech.streamfusion.proto.plan.v1.NativePlan;
 import tech.streamfusion.proto.plan.v1.Operator;
 import tech.streamfusion.proto.plan.v1.PrecisionType;
@@ -80,6 +83,65 @@ class StreamFusionArrowWindowAggregateOperatorTest {
                 new TimestampType(false, 3)
             },
             new String[] {"key", "count", "average_key", "window_start", "window_end"});
+
+    @Test
+    void localPhaseExposesLogicalIoAndManagedMemoryMetrics() throws Exception {
+        InterceptingOperatorMetricGroup metrics = new InterceptingOperatorMetricGroup() {
+            @Override
+            public MetricGroup addGroup(String name) {
+                return this;
+            }
+
+            @Override
+            public MetricGroup addGroup(String key, String value) {
+                return this;
+            }
+        };
+        InterceptingTaskMetricGroup taskMetrics = new InterceptingTaskMetricGroup() {
+            @Override
+            public InternalOperatorMetricGroup getOrAddOperator(
+                    OperatorID id, String name, Map<String, String> additionalVariables) {
+                return metrics;
+            }
+        };
+        RowType localOutputType = RowType.of(
+                new LogicalType[] {
+                    new BigIntType(false),
+                    new VarBinaryType(false, VarBinaryType.MAX_LENGTH),
+                    new BigIntType(false),
+                    new BigIntType(false)
+                },
+                new String[] {"key", "accumulator", "window_start", "slice_end"});
+        StreamFusionArrowLocalWindowAggregateOperator operator =
+                new StreamFusionArrowLocalWindowAggregateOperator(localPlan(), localOutputType, false);
+        try (RootAllocator inputs = new RootAllocator(64L << 20);
+                ArrowRowDataBatch input = ArrowRowDataBatch.transpose(List.of(row(7, 1_000)), INPUT_TYPE, inputs);
+                MockEnvironment environment = new MockEnvironmentBuilder()
+                        .setTaskName("Local window aggregate metric parity")
+                        .setManagedMemorySize(64L << 20)
+                        .setInputSplitProvider(new MockInputSplitProvider())
+                        .setBufferSize(32 * 1024)
+                        .setParallelism(1)
+                        .setSubtaskIndex(0)
+                        .setMetricGroup(taskMetrics)
+                        .build();
+                OneInputStreamOperatorTestHarness<ArrowRowDataBatch, ArrowRowDataBatch> harness =
+                        new OneInputStreamOperatorTestHarness<>(operator, environment)) {
+            harness.setup(ArrowRowDataBatchSerializer.INSTANCE);
+            harness.open();
+
+            assertThat(metrics.get("managedMemoryUsed")).isInstanceOf(Gauge.class);
+            assertThat(metrics.get("managedMemoryPeak")).isInstanceOf(Gauge.class);
+            assertThat(metrics.get("managedMemoryLimit")).isInstanceOf(Gauge.class);
+            ((Counter) metrics.get("numRecordsIn")).inc();
+            ((Counter) metrics.get("numRecordsOut")).inc();
+            harness.processElement(new StreamRecord<>(input));
+            assertCounter(metrics, "numRecordsIn", 1);
+            assertCounter(metrics, "numRecordsOut", 1);
+            assertThat(((Number) ((Gauge<?>) metrics.get("managedMemoryPeak")).getValue()).longValue())
+                    .isGreaterThan(0L);
+        }
+    }
 
     @Test
     void exposesFlinkWindowMetricsWithLogicalRecordAndNativeStateSemantics() throws Exception {
@@ -376,6 +438,46 @@ class StreamFusionArrowWindowAggregateOperatorTest {
 
     private static byte[] plan() {
         return plan(false);
+    }
+
+    private static byte[] localPlan() {
+        tech.streamfusion.proto.plan.v1.LogicalType bigint = tech.streamfusion.proto.plan.v1.LogicalType.newBuilder()
+                .setBigint(EmptyType.getDefaultInstance())
+                .build();
+        tech.streamfusion.proto.plan.v1.LogicalType binary = tech.streamfusion.proto.plan.v1.LogicalType.newBuilder()
+                .setBinary(EmptyType.getDefaultInstance())
+                .build();
+        tech.streamfusion.proto.plan.v1.LogicalType timestamp = tech.streamfusion.proto.plan.v1.LogicalType.newBuilder()
+                .setTimestamp(PrecisionType.newBuilder().setPrecision(3))
+                .build();
+        Schema inputSchema = Schema.newBuilder()
+                .addFields(Field.newBuilder().setName("key").setType(bigint))
+                .addFields(Field.newBuilder().setName("ts").setType(timestamp))
+                .build();
+        Schema outputSchema = Schema.newBuilder()
+                .addFields(Field.newBuilder().setName("key").setType(bigint))
+                .addFields(Field.newBuilder().setName("accumulator").setType(binary))
+                .addFields(Field.newBuilder().setName("window_start").setType(bigint))
+                .addFields(Field.newBuilder().setName("slice_end").setType(bigint))
+                .build();
+        LocalWindowAggregate aggregate = LocalWindowAggregate.newBuilder()
+                .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
+                .addGroupingIndices(0)
+                .addAggregateCalls(AggregateCall.newBuilder()
+                        .setFunction(AggregateFunction.AGGREGATE_FUNCTION_COUNT_STAR)
+                        .setOutputType(bigint))
+                .setTimeAttributeIndex(1)
+                .setKind(WindowKind.WINDOW_KIND_TUMBLE)
+                .setSizeMillis(10_000)
+                .setShiftTimeZone("UTC")
+                .setInputSchema(inputSchema)
+                .setOutputSchema(outputSchema)
+                .build();
+        return NativePlan.newBuilder()
+                .setProtocolVersion(1)
+                .setRoot(Operator.newBuilder().setLocalWindowAggregate(aggregate))
+                .build()
+                .toByteArray();
     }
 
     private static byte[] plan(boolean processingTime) {

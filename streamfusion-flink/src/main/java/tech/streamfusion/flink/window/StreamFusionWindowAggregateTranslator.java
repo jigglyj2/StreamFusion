@@ -44,6 +44,108 @@ public final class StreamFusionWindowAggregateTranslator {
 
     private StreamFusionWindowAggregateTranslator() {}
 
+    public static Transformation<RowData> translateLocal(
+            Transformation<RowData> input,
+            RowType inputType,
+            RowType internalOutputType,
+            int[] grouping,
+            AggregateCall[] calls,
+            WindowingStrategy strategy,
+            boolean needRetraction,
+            ReadableConfig config) {
+        if (strategy.isProctime()) {
+            return null;
+        }
+        int timeAttributeIndex = 0;
+        int attachedWindowStartIndex = -1;
+        int attachedWindowEndIndex = -1;
+        if (strategy instanceof TimeAttributeWindowingStrategy) {
+            timeAttributeIndex = ((TimeAttributeWindowingStrategy) strategy).getTimeAttributeIndex();
+        } else if (strategy instanceof WindowAttachedWindowingStrategy) {
+            WindowAttachedWindowingStrategy attached = (WindowAttachedWindowingStrategy) strategy;
+            attachedWindowStartIndex = attached.getWindowStart();
+            attachedWindowEndIndex = attached.getWindowEnd();
+        } else {
+            return null;
+        }
+        String shiftTimeZone = TimeWindowUtil.getShiftTimeZone(
+                        strategy.getTimeAttributeType(), TableConfigUtils.getLocalTimeZone(config))
+                .getId();
+        byte[] plan = StreamFusionWindowAggregatePlan.createLocal(
+                inputType,
+                internalOutputType,
+                grouping,
+                calls,
+                needRetraction,
+                needRetraction,
+                StreamFusionWindowTableFunctionTranslator.parameters(strategy.getWindow()),
+                timeAttributeIndex,
+                attachedWindowStartIndex,
+                attachedWindowEndIndex,
+                shiftTimeZone);
+        Transformation<ArrowRowDataBatch> arrowInput = StreamFusionArrowBoundaries.toArrow(input, inputType);
+        OneInputTransformation<ArrowRowDataBatch, ArrowRowDataBatch> transformation = new OneInputTransformation<>(
+                arrowInput,
+                "streamfusion-local-window-aggregate["
+                        + strategy.getWindow().getClass().getSimpleName() + "]",
+                new StreamFusionArrowLocalWindowAggregateOperator(plan, internalOutputType, needRetraction),
+                ArrowRowDataBatchTypeInfo.INSTANCE,
+                input.getParallelism(),
+                false);
+        transformation.declareManagedMemoryUseCaseAtOperatorScope(
+                ManagedMemoryUseCase.OPERATOR, STATEFUL_MANAGED_MEMORY_WEIGHT / 2);
+        return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
+    }
+
+    public static Transformation<RowData> translateGlobal(
+            Transformation<RowData> input,
+            RowType originalInputType,
+            RowType internalInputType,
+            RowType outputType,
+            int groupingCount,
+            AggregateCall[] calls,
+            WindowingStrategy strategy,
+            NamedWindowProperty[] properties,
+            boolean needRetraction,
+            ReadableConfig config,
+            StreamExecutionEnvironment environment,
+            RowDataKeySelector keySelector) {
+        StreamFusionStateBackendFactory.install(environment);
+        String shiftTimeZone = TimeWindowUtil.getShiftTimeZone(
+                        strategy.getTimeAttributeType(), TableConfigUtils.getLocalTimeZone(config))
+                .getId();
+        byte[] plan = StreamFusionWindowAggregatePlan.createGlobal(
+                originalInputType,
+                internalInputType,
+                outputType,
+                groupingCount,
+                calls,
+                needRetraction,
+                StreamFusionWindowTableFunctionTranslator.parameters(strategy.getWindow()),
+                strategy instanceof TimeAttributeWindowingStrategy,
+                shiftTimeZone,
+                properties);
+        int[] grouping = java.util.stream.IntStream.range(0, groupingCount).toArray();
+        Transformation<ArrowRowDataBatch> arrowInput = StreamFusionArrowBoundaries.toArrow(input, internalInputType);
+        OneInputTransformation<ArrowRowDataBatch, ArrowRowDataBatch> transformation = new OneInputTransformation<>(
+                arrowInput,
+                "streamfusion-global-window-aggregate["
+                        + strategy.getWindow().getClass().getSimpleName() + "]",
+                new StreamFusionArrowWindowAggregateOperator(
+                        internalInputType, outputType, grouping, plan, false, false, keySelector),
+                ArrowRowDataBatchTypeInfo.INSTANCE,
+                input.getParallelism(),
+                false);
+        if (input.getMaxParallelism() > 0) {
+            transformation.setMaxParallelism(input.getMaxParallelism());
+        }
+        transformation.declareManagedMemoryUseCaseAtOperatorScope(
+                ManagedMemoryUseCase.OPERATOR, STATEFUL_MANAGED_MEMORY_WEIGHT);
+        transformation.setStateKeySelector(new ArrowBatchKeySelector(keySelector));
+        transformation.setStateKeyType(keySelector.getProducedType());
+        return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
+    }
+
     public static Transformation<RowData> translate(
             Transformation<RowData> input,
             RowType inputType,

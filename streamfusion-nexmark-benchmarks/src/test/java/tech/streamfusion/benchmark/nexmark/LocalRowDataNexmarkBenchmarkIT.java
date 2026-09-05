@@ -344,6 +344,9 @@ class LocalRowDataNexmarkBenchmarkIT {
                     .containsExactlyElementsOf(flink.materializedDebugRows());
             assertThat(streamFusion.materializedSha256()).as(query).isEqualTo(flink.materializedSha256());
             assertThat(StreamFusionPlanningDiagnostics.explain()).as(query).contains("Accelerated: yes");
+            assertThat(streamFusion.nativeLocalWindowAggregateBatches())
+                    .as(query)
+                    .isGreaterThan(0);
             assertThat(streamFusion.nativeWindowAggregateBatches()).as(query).isGreaterThan(0);
             assertThat(streamFusion.nativeRegularJoinBatches()).as(query).isGreaterThan(0);
         }

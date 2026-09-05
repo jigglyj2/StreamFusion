@@ -79,6 +79,7 @@ fn assign_plan_node_ids(
         Some(GlobalGroupAggregate(node)) => assign_child(&mut node.input, next_id, assigned),
         Some(IncrementalGroupAggregate(node)) => assign_child(&mut node.input, next_id, assigned),
         Some(WindowAggregate(node)) => assign_child(&mut node.input, next_id, assigned),
+        Some(LocalWindowAggregate(node)) => assign_child(&mut node.input, next_id, assigned),
         Some(WindowDeduplicate(node)) => assign_child(&mut node.input, next_id, assigned),
         Some(WindowRank(node)) => assign_child(&mut node.input, next_id, assigned),
         Some(WindowTableFunction(node)) => assign_child(&mut node.input, next_id, assigned),

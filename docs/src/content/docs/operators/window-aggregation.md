@@ -20,7 +20,11 @@ GROUP BY window_start, window_end, bidder;
 
 StreamFusion accelerates direct time-attribute window aggregation for event time and processing
 time. It recognizes both Flink's one-phase node and its default local-aggregate, exchange,
-global-aggregate shape; the latter is collapsed so original Arrow rows reach one native operator.
+global-aggregate shape. For Flink's two-phase plan, StreamFusion preserves all three stages: a
+state-free native local aggregate emits one opaque canonical accumulator per key and base slice,
+the existing key-group exchange partitions those partials, and the native global aggregate merges
+them into keyed window state. Partial batches stay in Arrow and do not cross JNI between adjacent
+native stages.
 It also accelerates an aggregate over already attached `window_start` and `window_end` columns, as
 produced by a preceding window aggregate. Each attached pair is one exact namespace; it is not
 assigned to overlapping windows a second time. This covers the nested hopping aggregation in
@@ -56,6 +60,13 @@ input batch performs one batched index read, one batched window-state read, and 
 Time windows perform one batched state read and one atomic state/timer write per input batch. The
 hot input loop reuses Flink BinaryRow-key and assigned-window scratch buffers, while canonical
 state keys receive owned storage only when a new key/window is staged.
+
+The local half of a two-phase time window is deliberately state-free across Arrow batches. Its
+temporary hash table and output buffers are charged to the local stage's Flink managed-memory
+share. The global half is the sole owner of canonical keyed state and timers, so aligned and
+unaligned checkpointing, savepoint restoration, backend switching, and rescaling use exactly the
+same state format as one-phase execution. RocksDB still performs one batched read and one atomic
+batched write per incoming partial batch.
 
 A backend-neutral native timer service stores event-time and processing-time timers per key group.
 Its canonical bytes travel with raw keyed snapshots, so aligned and unaligned checkpoints,

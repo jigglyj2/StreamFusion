@@ -5,7 +5,9 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use ahash::RandomState;
-use arrow::array::{ArrayRef, Int8Array, TimestampMillisecondArray};
+use arrow::array::{
+    Array, ArrayRef, BinaryArray, Int64Array, Int8Array, TimestampMillisecondArray,
+};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, SortField};
@@ -304,18 +306,24 @@ impl WindowAggregateProcessor {
     ) -> Result<RecordBatch> {
         self.prepare_schema(batch.schema())?;
         self.current_processing_time = self.current_processing_time.max(processing_time);
-        let window_copies = match proto::WindowKind::try_from(self.plan.kind) {
-            Ok(proto::WindowKind::Hop) => self.plan.size_millis / self.plan.slide_or_step_millis,
-            Ok(proto::WindowKind::CountHop) => {
-                self.plan
-                    .size_millis
-                    .saturating_add(self.plan.slide_or_step_millis.saturating_sub(1))
-                    / self.plan.slide_or_step_millis
+        let window_copies = if self.plan.partial_accumulator_index.is_some() {
+            1
+        } else {
+            match proto::WindowKind::try_from(self.plan.kind) {
+                Ok(proto::WindowKind::Hop) => {
+                    self.plan.size_millis / self.plan.slide_or_step_millis
+                }
+                Ok(proto::WindowKind::CountHop) => {
+                    self.plan
+                        .size_millis
+                        .saturating_add(self.plan.slide_or_step_millis.saturating_sub(1))
+                        / self.plan.slide_or_step_millis
+                }
+                Ok(proto::WindowKind::Cumulate) => {
+                    self.plan.size_millis / self.plan.slide_or_step_millis
+                }
+                _ => 1,
             }
-            Ok(proto::WindowKind::Cumulate) => {
-                self.plan.size_millis / self.plan.slide_or_step_millis
-            }
-            _ => 1,
         };
         let base_reservation = batch
             .num_rows()
@@ -333,6 +341,9 @@ impl WindowAggregateProcessor {
     }
 
     fn process_arrow_accounted(&mut self, batch: &RecordBatch) -> Result<RecordBatch> {
+        if self.plan.partial_accumulator_index.is_some() {
+            return self.process_partial_batch(batch);
+        }
         if matches!(
             proto::WindowKind::try_from(self.plan.kind),
             Ok(proto::WindowKind::CountTumble | proto::WindowKind::CountHop)
@@ -456,6 +467,167 @@ impl WindowAggregateProcessor {
             entry
                 .accumulator
                 .apply(&self.calls, batch, row, accumulate)?;
+            let timer = TimerKey {
+                timestamp: self.timer_timestamp(end.saturating_sub(1))?,
+                key: entry.key.key.clone(),
+                namespace: window_namespace(start, end),
+            };
+            let domain = self.timer_domain();
+            if was_empty && entry.accumulator.row_count != 0 {
+                if self.timers.register(entry.key.key_group, domain, timer)? {
+                    self.timer_registrations = self.timer_registrations.saturating_add(1);
+                    dirty_timer_groups.insert(entry.key.key_group);
+                }
+            } else if entry.accumulator.row_count == 0
+                && self.timers.delete(entry.key.key_group, domain, &timer)?
+            {
+                self.timer_deletions = self.timer_deletions.saturating_add(1);
+                dirty_timer_groups.insert(entry.key.key_group);
+            }
+            entry.touched = true;
+        }
+        let mut mutations = staged
+            .into_iter()
+            .filter(|entry| entry.touched)
+            .map(|entry| StateMutation {
+                key: entry.key,
+                value: (entry.accumulator.row_count != 0)
+                    .then(|| encode_window_state(&entry.grouping_row, &entry.accumulator)),
+            })
+            .collect::<Vec<_>>();
+        self.append_timer_mutations(&mut mutations, dirty_timer_groups)?;
+        if !mutations.is_empty() {
+            self.state.write_batch(mutations)?;
+            self.state_write_batches = self.state_write_batches.saturating_add(1);
+        }
+        self.empty_output()
+    }
+
+    fn process_partial_batch(&mut self, batch: &RecordBatch) -> Result<RecordBatch> {
+        let accumulator_index =
+            self.plan
+                .partial_accumulator_index
+                .expect("partial window indices were validated") as usize;
+        let slice_end_index = self
+            .plan
+            .partial_slice_end_index
+            .expect("partial window indices were validated") as usize;
+        let window_start_index =
+            self.plan
+                .partial_window_start_index
+                .expect("partial window indices were validated") as usize;
+        let partials = batch
+            .column(accumulator_index)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .ok_or_else(|| {
+                DataFusionError::Execution(
+                    "global window partial accumulator must be Arrow Binary".to_string(),
+                )
+            })?;
+        let slice_ends = batch
+            .column(slice_end_index)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .ok_or_else(|| {
+                DataFusionError::Execution(
+                    "global window partial slice end must be Arrow Int64".to_string(),
+                )
+            })?;
+        let window_starts = batch
+            .column(window_start_index)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .ok_or_else(|| {
+                DataFusionError::Execution(
+                    "global window partial start must be Arrow Int64".to_string(),
+                )
+            })?;
+        let grouping_rows = self.encode_grouping_rows(batch)?;
+        let mut unique = HashMap::<StateKey, usize, RandomState>::with_capacity_and_hasher(
+            batch.num_rows(),
+            RandomState::new(),
+        );
+        let mut row_windows = Vec::new();
+        let mut group_key = Vec::new();
+        let mut assigned_windows = Vec::new();
+        for row in 0..batch.num_rows() {
+            if partials.is_null(row) || window_starts.is_null(row) || slice_ends.is_null(row) {
+                return Err(DataFusionError::Execution(
+                    "global window partial accumulator and slice end may not be null".to_string(),
+                ));
+            }
+            self.group_key_into(batch, row, &mut group_key)?;
+            let key_group = assign_key_group(&group_key, self.max_parallelism);
+            if self.plan.partial_windows_are_slices {
+                assign_windows_into(
+                    &self.window,
+                    slice_ends.value(row).wrapping_sub(1),
+                    &mut assigned_windows,
+                );
+            } else {
+                assigned_windows.clear();
+                assigned_windows.push((window_starts.value(row), slice_ends.value(row)));
+            }
+            for &(start, end) in &assigned_windows {
+                let deadline = self.timer_timestamp(end.saturating_sub(1))?;
+                if deadline <= self.current_event_time {
+                    self.late_records_dropped = self.late_records_dropped.saturating_add(1);
+                    continue;
+                }
+                let state_key = window_state_key(key_group, &group_key, start, end);
+                let next = unique.len();
+                let index = *unique.entry(state_key).or_insert(next);
+                row_windows.push((row, index, start, end));
+            }
+        }
+        let mut ordered_keys = (0..unique.len()).map(|_| None).collect::<Vec<_>>();
+        for (key, index) in unique.drain() {
+            ordered_keys[index] = Some(key);
+        }
+        let keys = ordered_keys
+            .into_iter()
+            .map(|key| key.expect("every partial window state index is populated"))
+            .collect::<Vec<_>>();
+        let refs = keys
+            .iter()
+            .map(|key| StateKeyRef {
+                key_group: key.key_group,
+                key: &key.key,
+            })
+            .collect::<Vec<_>>();
+        let existing = self.state.get_batch(&refs)?;
+        if !refs.is_empty() {
+            self.state_read_batches = self.state_read_batches.saturating_add(1);
+        }
+        let mut staged = keys
+            .into_iter()
+            .zip(existing)
+            .map(|(key, value)| {
+                let (grouping_row, accumulator) = match value {
+                    Some(value) => decode_window_state(value.as_ref(), &self.calls)?,
+                    None => (Vec::new(), AccumulatorState::new(&self.calls)),
+                };
+                Ok(StagedWindow {
+                    key,
+                    grouping_row,
+                    accumulator,
+                    touched: false,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut dirty_timer_groups = BTreeSet::new();
+        for (row, index, start, end) in row_windows {
+            let partial = decode_state(partials.value(row), &self.calls)?;
+            let entry = &mut staged[index];
+            let was_empty = entry.accumulator.row_count == 0;
+            if was_empty && partial.row_count <= 0 {
+                continue;
+            }
+            if was_empty {
+                entry.grouping_row = grouping_rows[row].clone();
+            }
+            entry.accumulator.merge(&self.calls, &partial)?;
             let timer = TimerKey {
                 timestamp: self.timer_timestamp(end.saturating_sub(1))?,
                 key: entry.key.key.clone(),
@@ -1239,23 +1411,55 @@ impl WindowAggregateProcessor {
                 })
                 .collect::<std::result::Result<Vec<_>, arrow::error::ArrowError>>()?;
         }
-        for call in &self.calls {
-            if let Some(index) = call.input_index {
-                let field = schema
+        if let Some(accumulator_index) = self.plan.partial_accumulator_index {
+            let slice_end_index = self
+                .plan
+                .partial_slice_end_index
+                .expect("partial indices were validated");
+            let window_start_index = self
+                .plan
+                .partial_window_start_index
+                .expect("partial indices were validated");
+            if schema
+                .fields()
+                .get(accumulator_index as usize)
+                .filter(|_| (accumulator_index as usize) < visible_count)
+                .is_none_or(|field| field.data_type() != &DataType::Binary)
+                || schema
                     .fields()
-                    .get(index)
-                    .filter(|_| index < visible_count)
-                    .ok_or_else(|| {
-                        DataFusionError::Plan(format!(
-                            "window aggregate input index {index} is outside the input row"
-                        ))
-                    })?;
-                if Some(field.data_type()) != call.input_type.as_ref() {
-                    return Err(DataFusionError::Plan(format!(
-                        "window aggregate input {index} expected {:?}, got {}",
-                        call.input_type,
-                        field.data_type()
-                    )));
+                    .get(slice_end_index as usize)
+                    .filter(|_| (slice_end_index as usize) < visible_count)
+                    .is_none_or(|field| field.data_type() != &DataType::Int64)
+                || schema
+                    .fields()
+                    .get(window_start_index as usize)
+                    .filter(|_| (window_start_index as usize) < visible_count)
+                    .is_none_or(|field| field.data_type() != &DataType::Int64)
+            {
+                return Err(DataFusionError::Plan(
+                    "global window partial input requires BINARY accumulator and BIGINT slice end"
+                        .to_string(),
+                ));
+            }
+        } else {
+            for call in &self.calls {
+                if let Some(index) = call.input_index {
+                    let field = schema
+                        .fields()
+                        .get(index)
+                        .filter(|_| index < visible_count)
+                        .ok_or_else(|| {
+                            DataFusionError::Plan(format!(
+                                "window aggregate input index {index} is outside the input row"
+                            ))
+                        })?;
+                    if Some(field.data_type()) != call.input_type.as_ref() {
+                        return Err(DataFusionError::Plan(format!(
+                            "window aggregate input {index} expected {:?}, got {}",
+                            call.input_type,
+                            field.data_type()
+                        )));
+                    }
                 }
             }
         }
@@ -1446,6 +1650,29 @@ fn validate_plan(plan: &proto::WindowAggregate, max_parallelism: u32) -> Result<
     if plan.attached_window_start_index.is_some() != plan.attached_window_end_index.is_some() {
         return Err(DataFusionError::Plan(
             "attached window aggregate requires both start and end indices".to_string(),
+        ));
+    }
+    if plan.partial_accumulator_index.is_some() != plan.partial_slice_end_index.is_some()
+        || plan.partial_accumulator_index.is_some() != plan.partial_window_start_index.is_some()
+    {
+        return Err(DataFusionError::Plan(
+            "global window partial input requires both accumulator and slice-end indices"
+                .to_string(),
+        ));
+    }
+    if plan.partial_accumulator_index.is_some()
+        && (plan.processing_time
+            || plan.attached_window_start_index.is_some()
+            || matches!(
+                kind,
+                proto::WindowKind::Session
+                    | proto::WindowKind::CountTumble
+                    | proto::WindowKind::CountHop
+            ))
+    {
+        return Err(DataFusionError::Plan(
+            "two-phase global window input is supported only for event-time slicing windows"
+                .to_string(),
         ));
     }
     match kind {
@@ -2039,6 +2266,10 @@ mod tests {
                         }),
                         attached_window_start_index: None,
                         attached_window_end_index: None,
+                        partial_accumulator_index: None,
+                        partial_slice_end_index: None,
+                        partial_window_start_index: None,
+                        partial_windows_are_slices: false,
                     },
                 ))),
             }),
@@ -2088,6 +2319,118 @@ mod tests {
             columns.push(Arc::new(Int8Array::from(kinds)));
         }
         RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap()
+    }
+
+    fn partial_plan() -> Vec<u8> {
+        let mut native =
+            proto::NativePlan::decode(plan(proto::WindowKind::Hop, 6_000, 2_000, false).as_slice())
+                .unwrap();
+        let aggregate = match native.root.as_mut().unwrap().operator.as_mut().unwrap() {
+            proto::operator::Operator::WindowAggregate(aggregate) => aggregate,
+            _ => unreachable!(),
+        };
+        aggregate.time_attribute_index = 0;
+        aggregate.partial_accumulator_index = Some(1);
+        aggregate.partial_window_start_index = Some(2);
+        aggregate.partial_slice_end_index = Some(3);
+        aggregate.partial_windows_are_slices = true;
+        aggregate.input_schema = Some(proto::Schema {
+            fields: vec![
+                field("key", logical_bigint(false)),
+                field(
+                    "accumulator",
+                    proto::LogicalType {
+                        nullable: false,
+                        r#type: Some(proto::logical_type::Type::Binary(proto::EmptyType {})),
+                    },
+                ),
+                field("window_start", logical_bigint(false)),
+                field("slice_end", logical_bigint(false)),
+            ],
+        });
+        native.encode_to_vec()
+    }
+
+    fn partial_batch() -> RecordBatch {
+        use super::super::group_aggregate::Accumulator;
+        let state = |count| {
+            encode_state(&AccumulatorState {
+                row_count: count,
+                accumulators: vec![Accumulator::Count(count)],
+            })
+        };
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("key", DataType::Int64, false),
+                Field::new("accumulator", DataType::Binary, false),
+                Field::new("window_start", DataType::Int64, false),
+                Field::new("slice_end", DataType::Int64, false),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(vec![1, 1])) as ArrayRef,
+                Arc::new(BinaryArray::from_iter_values([state(1), state(2)])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![0, 2_000])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![2_000, 4_000])) as ArrayRef,
+            ],
+        )
+        .unwrap()
+    }
+
+    fn partial_sum_plan() -> Vec<u8> {
+        let mut native = proto::NativePlan::decode(partial_plan().as_slice()).unwrap();
+        let aggregate = match native.root.as_mut().unwrap().operator.as_mut().unwrap() {
+            proto::operator::Operator::WindowAggregate(aggregate) => aggregate,
+            _ => unreachable!(),
+        };
+        aggregate.aggregate_calls.push(proto::AggregateCall {
+            function: proto::AggregateFunction::Sum as i32,
+            input_index: Some(0),
+            input_type: Some(logical_bigint(false)),
+            output_type: Some(logical_bigint(false)),
+            retractable: true,
+            filter_index: None,
+            distinct: false,
+            accumulator_type: None,
+        });
+        aggregate.output_schema = Some(proto::Schema {
+            fields: vec![
+                field("key", logical_bigint(false)),
+                field("count", logical_bigint(false)),
+                field("sum", logical_bigint(false)),
+                field("window_start", logical_timestamp(false)),
+                field("window_end", logical_timestamp(false)),
+            ],
+        });
+        native.encode_to_vec()
+    }
+
+    fn single_partial_sum_batch(row_count: i64, sum: i128) -> RecordBatch {
+        use super::super::group_aggregate::{Accumulator, AggregateValue};
+        let state = encode_state(&AccumulatorState {
+            row_count,
+            accumulators: vec![
+                Accumulator::Count(row_count),
+                Accumulator::Sum {
+                    value: Some(AggregateValue::Int(sum)),
+                    count: row_count,
+                },
+            ],
+        });
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("key", DataType::Int64, false),
+                Field::new("accumulator", DataType::Binary, false),
+                Field::new("window_start", DataType::Int64, false),
+                Field::new("slice_end", DataType::Int64, false),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+                Arc::new(BinaryArray::from_iter_values([state])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![2_000])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![4_000])) as ArrayRef,
+            ],
+        )
+        .unwrap()
     }
 
     fn attached_plan(input_changelog: bool) -> Vec<u8> {
@@ -2164,6 +2507,111 @@ mod tests {
         drop(output);
         drop(processor);
         assert_eq!(broker.reserved(), 0);
+    }
+
+    #[test]
+    fn global_partial_input_merges_slices_with_one_state_batch() {
+        let broker = Arc::new(TestBroker::new(16 << 20));
+        let mut processor = processor(&partial_plan(), broker);
+        assert_eq!(
+            processor
+                .process_arrow(partial_batch(), 0)
+                .unwrap()
+                .num_rows(),
+            0
+        );
+        assert_eq!(processor.state_read_batches, 1);
+        assert_eq!(processor.state_write_batches, 1);
+
+        let first = processor.advance_event_time(1_999).unwrap();
+        assert_eq!(first.num_rows(), 1);
+        assert_eq!(
+            first
+                .column(1)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .value(0),
+            1
+        );
+        let second = processor.advance_event_time(3_999).unwrap();
+        assert_eq!(second.num_rows(), 1);
+        assert_eq!(
+            second
+                .column(1)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .value(0),
+            3
+        );
+    }
+
+    #[test]
+    fn global_partial_input_merges_negative_accumulators_across_batches() {
+        let broker = Arc::new(TestBroker::new(16 << 20));
+        let mut processor = processor(&partial_sum_plan(), broker);
+        processor
+            .process_arrow(single_partial_sum_batch(1, 20), 0)
+            .unwrap();
+        processor
+            .process_arrow(single_partial_sum_batch(-1, -20), 0)
+            .unwrap();
+        processor
+            .process_arrow(single_partial_sum_batch(1, 5), 0)
+            .unwrap();
+
+        let output = processor.advance_event_time(7_999).unwrap();
+        assert_eq!(output.num_rows(), 3);
+        let sums = output
+            .column(2)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(sums.values(), &[5, 5, 5]);
+    }
+
+    #[test]
+    fn global_partial_state_moves_from_memory_to_rocksdb_canonically() {
+        let Ok(plugin_path) = std::env::var("STREAMFUSION_TEST_ROCKSDB_PLUGIN") else {
+            return;
+        };
+        let broker = Arc::new(TestBroker::new(1 << 30));
+        let bytes = partial_plan();
+        let mut memory = processor(&bytes, broker.clone());
+        memory.process_arrow(partial_batch(), 0).unwrap();
+        let snapshots = (0..128)
+            .map(|group| memory.snapshot_key_group(group).unwrap())
+            .collect::<Vec<_>>();
+        drop(memory);
+
+        let directory = tempfile::tempdir().unwrap();
+        let mut rocks = WindowAggregateProcessor::new_rocksdb(
+            &bytes,
+            128,
+            0,
+            127,
+            std::path::Path::new(&plugin_path),
+            directory.path(),
+            64 << 20,
+            HostMemoryReservation::new(broker, "global partial RocksDB scratch"),
+        )
+        .unwrap();
+        for (group, snapshot) in snapshots.iter().enumerate() {
+            rocks.restore_key_group(group as u32, snapshot).unwrap();
+            assert_eq!(rocks.snapshot_key_group(group as u32).unwrap(), *snapshot);
+        }
+        let output = rocks.advance_event_time(3_999).unwrap();
+        assert_eq!(output.num_rows(), 2);
+        let mut counts = output
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .values()
+            .to_vec();
+        counts.sort_unstable();
+        assert_eq!(counts, [1, 3]);
     }
 
     #[test]

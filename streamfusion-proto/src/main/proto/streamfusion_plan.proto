@@ -75,6 +75,7 @@ message Operator {
     BoundedSort bounded_sort = 26;
     ReplicateRows replicate_rows = 27;
     BoundedRank bounded_rank = 28;
+    LocalWindowAggregate local_window_aggregate = 29;
   }
 }
 
@@ -442,6 +443,33 @@ message WindowAggregate {
   // attached namespace and must not be assigned to overlapping windows again.
   optional uint32 attached_window_start_index = 15;
   optional uint32 attached_window_end_index = 16;
+  // The input is the native local-window contract: grouping columns, one opaque canonical
+  // accumulator plus BIGINT slice start/end bounds. The global stage expands each slice to its
+  // logical windows, merges all required keys in one backend batch, and retains timer/state ownership.
+  optional uint32 partial_accumulator_index = 17;
+  optional uint32 partial_slice_end_index = 18;
+  optional uint32 partial_window_start_index = 19;
+  bool partial_windows_are_slices = 20;
+}
+
+// State-free local half of Flink's two-stage slicing window aggregation. One incoming Arrow batch
+// produces at most one opaque accumulator per grouping key and base slice. The exchange and global
+// stage never expose or interpret the accumulator on the JVM.
+message LocalWindowAggregate {
+  Operator input = 1;
+  repeated uint32 grouping_indices = 2;
+  repeated AggregateCall aggregate_calls = 3;
+  bool input_changelog = 4;
+  uint32 time_attribute_index = 5;
+  WindowKind kind = 6;
+  int64 size_millis = 7;
+  int64 slide_or_step_millis = 8;
+  int64 offset_millis = 9;
+  Schema input_schema = 10;
+  Schema output_schema = 11;
+  string shift_time_zone = 12;
+  optional uint32 attached_window_start_index = 13;
+  optional uint32 attached_window_end_index = 14;
 }
 
 // Window-scoped first/last-row deduplication. Full rows use Arrow's schema-aware row encoding in

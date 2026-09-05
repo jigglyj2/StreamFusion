@@ -24,6 +24,7 @@ import tech.streamfusion.flink.proto.FlinkLogicalTypeProto;
 import tech.streamfusion.proto.plan.v1.AggregateFunction;
 import tech.streamfusion.proto.plan.v1.Field;
 import tech.streamfusion.proto.plan.v1.Input;
+import tech.streamfusion.proto.plan.v1.LocalWindowAggregate;
 import tech.streamfusion.proto.plan.v1.NativePlan;
 import tech.streamfusion.proto.plan.v1.Operator;
 import tech.streamfusion.proto.plan.v1.Schema;
@@ -67,6 +68,92 @@ final class StreamFusionWindowAggregatePlan {
         for (int index : grouping) {
             aggregate.addGroupingIndices(index);
         }
+        addCalls(aggregate, inputType, calls, needRetraction);
+        for (NamedWindowProperty property : properties) {
+            aggregate.addWindowProperties(property(property));
+        }
+        return nativePlan(Operator.newBuilder().setWindowAggregate(aggregate));
+    }
+
+    static byte[] createLocal(
+            RowType inputType,
+            RowType outputType,
+            int[] grouping,
+            AggregateCall[] calls,
+            boolean inputChangelog,
+            boolean needRetraction,
+            StreamFusionWindowTableFunctionTranslator.WindowParameters window,
+            int timeAttributeIndex,
+            int attachedWindowStartIndex,
+            int attachedWindowEndIndex,
+            String shiftTimeZone) {
+        LocalWindowAggregate.Builder aggregate = LocalWindowAggregate.newBuilder()
+                .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
+                .setInputChangelog(inputChangelog)
+                .setTimeAttributeIndex(timeAttributeIndex)
+                .setKind(window.kind)
+                .setSizeMillis(window.sizeMillis)
+                .setSlideOrStepMillis(window.slideOrStepMillis)
+                .setOffsetMillis(window.offsetMillis)
+                .setShiftTimeZone(shiftTimeZone)
+                .setInputSchema(schema(inputType))
+                .setOutputSchema(schema(outputType));
+        if (attachedWindowStartIndex >= 0) {
+            aggregate.setAttachedWindowStartIndex(attachedWindowStartIndex);
+            aggregate.setAttachedWindowEndIndex(attachedWindowEndIndex);
+        }
+        for (int index : grouping) {
+            aggregate.addGroupingIndices(index);
+        }
+        for (tech.streamfusion.proto.plan.v1.AggregateCall call : aggregateCalls(inputType, calls, needRetraction)) {
+            aggregate.addAggregateCalls(call);
+        }
+        return nativePlan(Operator.newBuilder().setLocalWindowAggregate(aggregate));
+    }
+
+    static byte[] createGlobal(
+            RowType originalInputType,
+            RowType internalInputType,
+            RowType outputType,
+            int groupingCount,
+            AggregateCall[] calls,
+            boolean needRetraction,
+            StreamFusionWindowTableFunctionTranslator.WindowParameters window,
+            boolean partialWindowsAreSlices,
+            String shiftTimeZone,
+            NamedWindowProperty[] properties) {
+        WindowAggregate.Builder aggregate = WindowAggregate.newBuilder()
+                .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
+                .setKind(window.kind)
+                .setSizeMillis(window.sizeMillis)
+                .setSlideOrStepMillis(window.slideOrStepMillis)
+                .setOffsetMillis(window.offsetMillis)
+                .setShiftTimeZone(shiftTimeZone)
+                .setInputSchema(schema(internalInputType))
+                .setOutputSchema(schema(outputType))
+                .setPartialAccumulatorIndex(groupingCount)
+                .setPartialWindowStartIndex(groupingCount + 1)
+                .setPartialSliceEndIndex(groupingCount + 2)
+                .setPartialWindowsAreSlices(partialWindowsAreSlices);
+        for (int index = 0; index < groupingCount; index++) {
+            aggregate.addGroupingIndices(index);
+        }
+        addCalls(aggregate, originalInputType, calls, needRetraction);
+        for (NamedWindowProperty property : properties) {
+            aggregate.addWindowProperties(property(property));
+        }
+        return nativePlan(Operator.newBuilder().setWindowAggregate(aggregate));
+    }
+
+    private static void addCalls(
+            WindowAggregate.Builder aggregate, RowType inputType, AggregateCall[] calls, boolean needRetraction) {
+        aggregate.addAllAggregateCalls(aggregateCalls(inputType, calls, needRetraction));
+    }
+
+    private static List<tech.streamfusion.proto.plan.v1.AggregateCall> aggregateCalls(
+            RowType inputType, AggregateCall[] calls, boolean needRetraction) {
+        java.util.ArrayList<tech.streamfusion.proto.plan.v1.AggregateCall> result =
+                new java.util.ArrayList<>(calls.length);
         for (AggregateCall call : calls) {
             tech.streamfusion.proto.plan.v1.AggregateCall.Builder nativeCall =
                     tech.streamfusion.proto.plan.v1.AggregateCall.newBuilder()
@@ -89,14 +176,15 @@ final class StreamFusionWindowAggregatePlan {
                 nativeCall.setAccumulatorType(StreamFusionCalcTranslator.operatorLogicalType(
                         averageAccumulatorType(inputType.getTypeAt(arguments.get(0)))));
             }
-            aggregate.addAggregateCalls(nativeCall);
+            result.add(nativeCall.build());
         }
-        for (NamedWindowProperty property : properties) {
-            aggregate.addWindowProperties(property(property));
-        }
+        return result;
+    }
+
+    private static byte[] nativePlan(Operator.Builder root) {
         return NativePlan.newBuilder()
                 .setProtocolVersion(1)
-                .setRoot(Operator.newBuilder().setWindowAggregate(aggregate))
+                .setRoot(root)
                 .build()
                 .toByteArray();
     }

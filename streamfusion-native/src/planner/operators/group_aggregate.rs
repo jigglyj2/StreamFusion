@@ -1621,6 +1621,38 @@ impl AccumulatorState {
             }))
     }
 
+    pub(super) fn has_delta(&self) -> bool {
+        self.row_count != 0
+            || self
+                .accumulators
+                .iter()
+                .any(|accumulator| match accumulator {
+                    Accumulator::Count(count) => *count != 0,
+                    Accumulator::DistinctCount { count, values } => {
+                        *count != 0 || !values.is_empty()
+                    }
+                    Accumulator::Sum { value, count } | Accumulator::Average { value, count } => {
+                        *count != 0 || value.as_ref().is_some_and(|value| !value.is_zero())
+                    }
+                    Accumulator::DistinctSum {
+                        value,
+                        count,
+                        values,
+                    }
+                    | Accumulator::DistinctAverage {
+                        value,
+                        count,
+                        values,
+                    } => {
+                        *count != 0
+                            || !values.is_empty()
+                            || value.as_ref().is_some_and(|value| !value.is_zero())
+                    }
+                    Accumulator::AppendExtremum(value) => value.is_some(),
+                    Accumulator::Extremum(values) => !values.is_empty(),
+                })
+    }
+
     pub(super) fn incremental_persistent_only(&self, calls: &[Call]) -> Self {
         let neutral = Self::new(calls);
         Self {
@@ -2228,6 +2260,18 @@ impl AccumulatorState {
             .zip(&self.accumulators)
             .map(|(call, accumulator)| accumulator_value(call, accumulator))
             .collect()
+    }
+}
+
+impl AggregateValue {
+    fn is_zero(&self) -> bool {
+        match self {
+            Self::Boolean(value) => !value,
+            Self::Int(value) => *value == 0,
+            Self::Float32(value) => f32::from_bits(*value) == 0.0,
+            Self::Float64(value) => f64::from_bits(*value) == 0.0,
+            Self::Bytes(value) => value.iter().all(|byte| *byte == 0),
+        }
     }
 }
 

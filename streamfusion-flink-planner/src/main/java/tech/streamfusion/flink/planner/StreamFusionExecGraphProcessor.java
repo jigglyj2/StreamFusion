@@ -457,7 +457,7 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             if (twoPhase == null) {
                 rejections.add(nodePath
                         + "\nglobal window aggregate: expected LocalWindowAggregate -> Exchange -> "
-                        + "GlobalWindowAggregate so the native operator can consume original rows");
+                        + "GlobalWindowAggregate so the native stages can preserve Flink's partial-merge contract");
                 return;
             }
             String reason = unsupportedReason(twoPhase, context);
@@ -1111,18 +1111,40 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             }
             StreamExecGlobalWindowAggregate global = twoPhase.global;
             StreamExecLocalWindowAggregate local = twoPhase.local;
-            StreamFusionExecWindowAggregate replacement = new StreamFusionExecWindowAggregate(
+            int[] grouping = localWindowGrouping(local);
+            boolean needRetraction = localWindowNeedRetraction(local);
+            RowType originalInputType = (RowType) twoPhase.inputEdge.getOutputType();
+            RowType internalType = nativeWindowAccumulatorType(originalInputType, grouping);
+            StreamFusionExecLocalWindowAggregate nativeLocal = new StreamFusionExecLocalWindowAggregate(
+                    local.getPersistedConfig(),
+                    grouping,
+                    localWindowAggregateCalls(local),
+                    localWindowing(local),
+                    needRetraction,
+                    local.getInputProperties().get(0),
+                    internalType);
+            nativeLocal.setInputEdges(
+                    List.of(copyEdge(twoPhase.inputEdge, convert(twoPhase.inputEdge.getSource()), nativeLocal)));
+
+            StreamFusionExecExchange exchange = new StreamFusionExecExchange(
+                    twoPhase.exchange.getPersistedConfig(),
+                    twoPhase.exchange.getInputProperties().get(0),
+                    internalType,
+                    "StreamFusionExchange");
+            exchange.setInputEdges(
+                    List.of(copyEdge(twoPhase.exchange.getInputEdges().get(0), nativeLocal, exchange)));
+
+            StreamFusionExecGlobalWindowAggregate replacement = new StreamFusionExecGlobalWindowAggregate(
                     global.getPersistedConfig(),
-                    localWindowGrouping(local),
+                    originalInputType,
+                    grouping.length,
                     localWindowAggregateCalls(local),
                     localWindowing(local),
                     globalWindowProperties(global),
-                    globalWindowNeedRetraction(global),
-                    local.getInputProperties().get(0),
-                    (RowType) global.getOutputType(),
-                    "StreamFusionWindowAggregate");
-            replacement.setInputEdges(
-                    List.of(copyEdge(twoPhase.inputEdge, convert(twoPhase.inputEdge.getSource()), replacement)));
+                    needRetraction,
+                    global.getInputProperties().get(0),
+                    (RowType) global.getOutputType());
+            replacement.setInputEdges(List.of(copyEdge(global.getInputEdges().get(0), exchange, replacement)));
             return replacement;
         }
         if (node instanceof StreamExecWindowAggregate) {
@@ -2658,7 +2680,7 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     localWindowAggregateCalls(aggregate.local),
                     localWindowing(aggregate.local),
                     globalWindowProperties(aggregate.global),
-                    globalWindowNeedRetraction(aggregate.global),
+                    localWindowNeedRetraction(aggregate.local),
                     aggregate.global.getPersistedConfig());
         } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
             throw new IllegalStateException("Could not inspect StreamFusion two-phase WindowAggregate support", e);
@@ -3088,6 +3110,7 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         }
         return new TwoPhaseWindowAggregate(
                 global,
+                (StreamExecExchange) exchange,
                 (StreamExecLocalWindowAggregate) local,
                 local.getInputEdges().get(0));
     }
@@ -3571,6 +3594,10 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         return (WindowingStrategy) field(aggregate, StreamExecLocalWindowAggregate.class, "windowing");
     }
 
+    private static boolean localWindowNeedRetraction(StreamExecLocalWindowAggregate aggregate) {
+        return (boolean) field(aggregate, StreamExecLocalWindowAggregate.class, "needRetraction");
+    }
+
     private static NamedWindowProperty[] globalWindowProperties(StreamExecGlobalWindowAggregate aggregate) {
         return ((NamedWindowProperty[])
                         field(aggregate, StreamExecGlobalWindowAggregate.class, "namedWindowProperties"))
@@ -3583,12 +3610,17 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
 
     private static final class TwoPhaseWindowAggregate {
         private final StreamExecGlobalWindowAggregate global;
+        private final StreamExecExchange exchange;
         private final StreamExecLocalWindowAggregate local;
         private final ExecEdge inputEdge;
 
         private TwoPhaseWindowAggregate(
-                StreamExecGlobalWindowAggregate global, StreamExecLocalWindowAggregate local, ExecEdge inputEdge) {
+                StreamExecGlobalWindowAggregate global,
+                StreamExecExchange exchange,
+                StreamExecLocalWindowAggregate local,
+                ExecEdge inputEdge) {
             this.global = global;
+            this.exchange = exchange;
             this.local = local;
             this.inputEdge = inputEdge;
         }

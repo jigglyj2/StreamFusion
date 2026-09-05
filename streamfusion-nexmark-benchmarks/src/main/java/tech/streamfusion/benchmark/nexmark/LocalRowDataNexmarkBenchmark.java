@@ -33,7 +33,7 @@ public final class LocalRowDataNexmarkBenchmark {
                         String runtimeMode =
                                 Boolean.getBoolean("streamfusion.nexmark.batch-mode") ? "batch" : "streaming";
                         System.out.printf(
-                                "%s engine=%s runtime_mode=%s state_backend=%s accelerated=%s input_events=%d elapsed_seconds=%.6f input_events_per_second=%.2f native_calc_batches=%d native_deduplicate_batches=%d native_local_group_aggregate_batches=%d native_group_aggregate_batches=%d native_top_n_batches=%d native_window_aggregate_batches=%d native_window_join_batches=%d native_regular_join_batches=%d native_multi_join_batches=%d native_interval_join_batches=%d native_temporal_join_batches=%d native_over_aggregate_batches=%d native_temporal_sort_batches=%d native_bounded_sort_batches=%d native_bounded_rank_batches=%d native_match_recognize_batches=%d output_rows=%d output_sha256=%s ordered_sha256=%s materialized_rows=%d materialized_sha256=%s%n",
+                                "%s engine=%s runtime_mode=%s state_backend=%s accelerated=%s input_events=%d elapsed_seconds=%.6f input_events_per_second=%.2f native_calc_batches=%d native_deduplicate_batches=%d native_local_group_aggregate_batches=%d native_group_aggregate_batches=%d native_top_n_batches=%d native_local_window_aggregate_batches=%d native_window_aggregate_batches=%d native_window_join_batches=%d native_regular_join_batches=%d native_multi_join_batches=%d native_interval_join_batches=%d native_temporal_join_batches=%d native_over_aggregate_batches=%d native_temporal_sort_batches=%d native_bounded_sort_batches=%d native_bounded_rank_batches=%d native_match_recognize_batches=%d output_rows=%d output_sha256=%s ordered_sha256=%s materialized_rows=%d materialized_sha256=%s%n",
                                 query,
                                 streamFusion ? "streamfusion" : "flink",
                                 runtimeMode,
@@ -47,6 +47,7 @@ public final class LocalRowDataNexmarkBenchmark {
                                 result.nativeLocalGroupAggregateBatches(),
                                 result.nativeGroupAggregateBatches(),
                                 result.nativeTopNBatches(),
+                                result.nativeLocalWindowAggregateBatches(),
                                 result.nativeWindowAggregateBatches(),
                                 result.nativeWindowJoinBatches(),
                                 result.nativeRegularJoinBatches(),
@@ -101,6 +102,7 @@ public final class LocalRowDataNexmarkBenchmark {
                 StreamFusionPlannerFactory.nativeLocalGroupAggregateBatchCount(),
                 StreamFusionPlannerFactory.nativeGroupAggregateBatchCount(),
                 StreamFusionPlannerFactory.nativeTopNBatchCount(),
+                StreamFusionPlannerFactory.nativeLocalWindowAggregateBatchCount(),
                 StreamFusionPlannerFactory.nativeWindowAggregateBatchCount(),
                 StreamFusionPlannerFactory.nativeWindowJoinBatchCount(),
                 StreamFusionPlannerFactory.nativeRegularJoinBatchCount(),
@@ -155,6 +157,7 @@ public final class LocalRowDataNexmarkBenchmark {
         private final long nativeLocalGroupAggregateBatches;
         private final long nativeGroupAggregateBatches;
         private final long nativeTopNBatches;
+        private final long nativeLocalWindowAggregateBatches;
         private final long nativeWindowAggregateBatches;
         private final long nativeWindowJoinBatches;
         private final long nativeRegularJoinBatches;
@@ -181,6 +184,7 @@ public final class LocalRowDataNexmarkBenchmark {
                 long nativeLocalGroupAggregateBatches,
                 long nativeGroupAggregateBatches,
                 long nativeTopNBatches,
+                long nativeLocalWindowAggregateBatches,
                 long nativeWindowAggregateBatches,
                 long nativeWindowJoinBatches,
                 long nativeRegularJoinBatches,
@@ -205,6 +209,7 @@ public final class LocalRowDataNexmarkBenchmark {
             this.nativeLocalGroupAggregateBatches = nativeLocalGroupAggregateBatches;
             this.nativeGroupAggregateBatches = nativeGroupAggregateBatches;
             this.nativeTopNBatches = nativeTopNBatches;
+            this.nativeLocalWindowAggregateBatches = nativeLocalWindowAggregateBatches;
             this.nativeWindowAggregateBatches = nativeWindowAggregateBatches;
             this.nativeWindowJoinBatches = nativeWindowJoinBatches;
             this.nativeRegularJoinBatches = nativeRegularJoinBatches;
@@ -251,6 +256,10 @@ public final class LocalRowDataNexmarkBenchmark {
 
         long nativeTopNBatches() {
             return nativeTopNBatches;
+        }
+
+        long nativeLocalWindowAggregateBatches() {
+            return nativeLocalWindowAggregateBatches;
         }
 
         long nativeWindowAggregateBatches() {

@@ -15,7 +15,9 @@ import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.EnvironmentSettings;
 import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
+import org.apache.flink.table.api.config.AggregatePhaseStrategy;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
+import org.apache.flink.table.api.config.OptimizerConfigOptions;
 import org.apache.flink.table.api.config.TableConfigOptions;
 import org.apache.flink.types.Row;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -42,6 +44,30 @@ class WindowAggregateParityTest extends SqlParityTestSupport {
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 
+    @org.junit.jupiter.api.Test
+    void flinkTwoPhaseWindowPlanKeepsNativeLocalExchangeAndGlobalStages() {
+        System.setProperty(
+                StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY, StreamFusionPlannerFactory.class.getName());
+        StreamTableEnvironment tables = StreamTableEnvironment.create(
+                StreamExecutionEnvironment.getExecutionEnvironment(),
+                EnvironmentSettings.newInstance().inStreamingMode().build());
+        tables.getConfig()
+                .set(OptimizerConfigOptions.TABLE_OPTIMIZER_AGG_PHASE_STRATEGY, AggregatePhaseStrategy.TWO_PHASE);
+        tables.executeSql("CREATE TABLE two_phase_window_input (category STRING, amount BIGINT, ts TIMESTAMP(3), "
+                + "WATERMARK FOR ts AS ts - INTERVAL '1' SECOND) "
+                + "WITH ('connector'='datagen', 'number-of-rows'='1')");
+
+        String plan = tables.explainSql("SELECT category, SUM(amount), window_start, window_end "
+                + "FROM TABLE(TUMBLE(TABLE two_phase_window_input, DESCRIPTOR(ts), INTERVAL '10' SECOND)) "
+                + "GROUP BY category, window_start, window_end");
+
+        assertThat(plan)
+                .contains("StreamFusionLocalWindowAggregate")
+                .contains("StreamFusionExchange")
+                .contains("StreamFusionGlobalWindowAggregate");
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
     @ParameterizedTest
     @ValueSource(
             strings = {
@@ -56,6 +82,14 @@ class WindowAggregateParityTest extends SqlParityTestSupport {
 
         assertThat(streamFusion).isEqualTo(flink);
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        if (!windowCall.startsWith("SESSION")) {
+            assertThat(StreamFusionPlannerFactory.nativeLocalWindowAggregateBatchCount())
+                    .as(windowCall)
+                    .isGreaterThan(0);
+            assertThat(StreamFusionPlannerFactory.nativeWindowAggregateBatchCount())
+                    .as(windowCall)
+                    .isGreaterThan(0);
+        }
     }
 
     @org.junit.jupiter.api.Test
@@ -83,6 +117,8 @@ class WindowAggregateParityTest extends SqlParityTestSupport {
         byte[] streamFusion = executeAttachedWindowAggregate(true);
 
         assertThat(streamFusion).isEqualTo(flink);
+        assertThat(StreamFusionPlannerFactory.nativeLocalWindowAggregateBatchCount())
+                .isGreaterThan(0);
         assertThat(StreamFusionPlannerFactory.nativeWindowAggregateBatchCount()).isGreaterThan(0);
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
@@ -100,6 +136,8 @@ class WindowAggregateParityTest extends SqlParityTestSupport {
         StreamTableEnvironment tables = StreamTableEnvironment.create(
                 environment, EnvironmentSettings.newInstance().inStreamingMode().build());
         tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+        tables.getConfig()
+                .set(OptimizerConfigOptions.TABLE_OPTIMIZER_AGG_PHASE_STRATEGY, AggregatePhaseStrategy.TWO_PHASE);
         tables.createTemporaryView(
                 "attached_window_input",
                 tables.fromDataStream(
@@ -216,6 +254,8 @@ class WindowAggregateParityTest extends SqlParityTestSupport {
         StreamTableEnvironment tables = StreamTableEnvironment.create(
                 environment, EnvironmentSettings.newInstance().inStreamingMode().build());
         tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+        tables.getConfig()
+                .set(OptimizerConfigOptions.TABLE_OPTIMIZER_AGG_PHASE_STRATEGY, AggregatePhaseStrategy.TWO_PHASE);
         tables.createTemporaryView(
                 "window_input",
                 tables.fromDataStream(

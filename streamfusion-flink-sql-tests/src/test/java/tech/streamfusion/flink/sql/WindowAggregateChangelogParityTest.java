@@ -15,7 +15,9 @@ import org.apache.flink.table.api.EnvironmentSettings;
 import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.api.Table;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
+import org.apache.flink.table.api.config.AggregatePhaseStrategy;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
+import org.apache.flink.table.api.config.OptimizerConfigOptions;
 import org.apache.flink.types.Row;
 import org.apache.flink.types.RowKind;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -38,6 +40,11 @@ class WindowAggregateChangelogParityTest extends SqlParityTestSupport {
 
         assertThat(streamFusion).isEqualTo(flink);
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        if (!windowCall.startsWith("SESSION")) {
+            assertThat(StreamFusionPlannerFactory.nativeLocalWindowAggregateBatchCount())
+                    .as(windowCall)
+                    .isGreaterThan(0);
+        }
     }
 
     private static byte[] execute(String windowCall, boolean streamFusion) throws Exception {
@@ -53,6 +60,8 @@ class WindowAggregateChangelogParityTest extends SqlParityTestSupport {
         StreamTableEnvironment tables = StreamTableEnvironment.create(
                 environment, EnvironmentSettings.newInstance().inStreamingMode().build());
         tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+        tables.getConfig()
+                .set(OptimizerConfigOptions.TABLE_OPTIMIZER_AGG_PHASE_STRATEGY, AggregatePhaseStrategy.TWO_PHASE);
         LocalDateTime firstTime = LocalDateTime.of(2026, 8, 29, 12, 0, 1);
         LocalDateTime secondTime = LocalDateTime.of(2026, 8, 29, 12, 0, 2);
         DataStream<Row> changes = environment.fromCollection(
