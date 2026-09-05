@@ -19,9 +19,27 @@ final class StreamFusionBoundedSortPlan {
     private StreamFusionBoundedSortPlan() {}
 
     static byte[] create(RowType inputType, SortSpec sortSpec) {
+        return create(inputType, sortSpec, null, null, false);
+    }
+
+    static byte[] createPartitioned(RowType inputType, SortSpec sortSpec) {
+        return create(inputType, sortSpec, null, null, true);
+    }
+
+    static byte[] create(RowType inputType, SortSpec sortSpec, Long limitStart, Long limitEnd, boolean local) {
         BoundedSort.Builder sort = BoundedSort.newBuilder()
                 .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
-                .setInputSchema(schema(inputType));
+                .setInputSchema(schema(inputType))
+                .setUseFirstOwnedKeyGroup(local);
+        if ((limitStart == null) != (limitEnd == null)) {
+            throw new IllegalArgumentException("Bounded sort limit bounds must be present together");
+        }
+        if (limitStart != null) {
+            sort.setLimitStart(limitStart)
+                    .setLimitEnd(limitEnd)
+                    .setPhysicalInputSemantics(true)
+                    .setSortLimitGlobal(!local);
+        }
         for (int index = 0; index < sortSpec.getFieldSize(); index++) {
             SortSpec.SortFieldSpec field = sortSpec.getFieldSpec(index);
             sort.addSortKeyIndices(field.getFieldIndex());

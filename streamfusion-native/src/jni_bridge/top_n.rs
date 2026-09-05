@@ -129,6 +129,34 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeTopNBridge_proc
 }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeTopNBridge_finishBoundedBatch<
+    'caller,
+>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    handle: jlong,
+    output_array_address: jlong,
+    output_schema_address: jlong,
+) -> jlong {
+    unowned_env
+        .with_env(|env| -> jni::errors::Result<_> {
+            let rows = (|| -> datafusion::error::Result<_> {
+                let output = unsafe { processor(handle) }?.finish_bounded()?;
+                unsafe {
+                    export_record_batch(
+                        output,
+                        output_array_address as *mut FFI_ArrowArray,
+                        output_schema_address as *mut FFI_ArrowSchema,
+                    )
+                }
+            })()
+            .map_err(|error| throw(env, error))?;
+            Ok(rows as jlong)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeTopNBridge_nativeStatistics<
     'caller,
 >(

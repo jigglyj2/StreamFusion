@@ -26,8 +26,10 @@ import tech.streamfusion.flink.exchange.NativeExchangeReaderOperator;
 import tech.streamfusion.flink.exchange.StreamFusionExchangeTranslator;
 import tech.streamfusion.flink.proto.FlinkLogicalTypeProto;
 import tech.streamfusion.flink.state.StreamFusionStateBackendFactory;
+import tech.streamfusion.proto.plan.v1.ExchangeDistribution;
+import tech.streamfusion.proto.plan.v1.NativeExchangePlan;
 
-/** Reflection entry point for native bounded global full sort. */
+/** Reflection entry point for native bounded global or hash-partitioned full sort. */
 public final class StreamFusionBoundedSortTranslator {
     private StreamFusionBoundedSortTranslator() {}
 
@@ -41,27 +43,30 @@ public final class StreamFusionBoundedSortTranslator {
             return null;
         }
         StreamFusionStateBackendFactory.install(environment);
-        Transformation<RowData> singleton = input;
+        Transformation<RowData> sortedInput = input;
         if (!"StreamFusionExchangeReader".equals(input.getName())) {
-            singleton = StreamFusionExchangeTranslator.singleton(input, inputType);
+            sortedInput = StreamFusionExchangeTranslator.singleton(input, inputType);
         }
-        FramedInput framed = framed(singleton);
-        byte[] plan = StreamFusionBoundedSortPlan.create(inputType, sortSpec);
+        FramedInput framed = framed(sortedInput);
+        boolean partitioned = framed.distribution == ExchangeDistribution.EXCHANGE_DISTRIBUTION_HASH;
+        byte[] plan = partitioned
+                ? StreamFusionBoundedSortPlan.createPartitioned(inputType, sortSpec)
+                : StreamFusionBoundedSortPlan.create(inputType, sortSpec);
         OneInputTransformation<NativeExchangeFrame, tech.streamfusion.flink.arrow.ArrowRowDataBatch> transformation =
                 new OneInputTransformation<>(
                         framed.transformation,
                         "streamfusion-bounded-sort",
                         new StreamFusionArrowBoundedSortOperator(inputType, plan, framed.plan),
                         ArrowRowDataBatchTypeInfo.INSTANCE,
-                        1,
+                        framed.parallelism,
                         false);
-        transformation.setParallelism(1);
-        transformation.setMaxParallelism(1);
+        transformation.setParallelism(framed.parallelism);
+        transformation.setMaxParallelism(framed.maxParallelism);
         // Flink's bounded StreamExecSort reserves its external-sort memory with weight 128. Keep
         // that physical-node weight so graph translation and the replacement expose the same
         // managed-memory contract.
         transformation.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 128);
-        transformation.setStateKeySelector(new NativeExchangeFrameKeySelector(1));
+        transformation.setStateKeySelector(new NativeExchangeFrameKeySelector(framed.maxParallelism));
         transformation.setStateKeyType(Types.INT);
         return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
     }
@@ -111,7 +116,7 @@ public final class StreamFusionBoundedSortTranslator {
     @SuppressWarnings("unchecked")
     private static FramedInput framed(Transformation<RowData> input) {
         if (!(input instanceof OneInputTransformation) || !"StreamFusionExchangeReader".equals(input.getName())) {
-            throw new IllegalStateException("Native bounded sort requires a framed singleton exchange");
+            throw new IllegalStateException("Native bounded sort requires a framed exchange");
         }
         OneInputTransformation<?, ?> reader = (OneInputTransformation<?, ?>) input;
         if (!(reader.getOperatorFactory() instanceof SimpleOperatorFactory)) {
@@ -125,18 +130,44 @@ public final class StreamFusionBoundedSortTranslator {
         if (!(frames.getOutputType() instanceof NativeExchangeFrameTypeInfo)) {
             throw new IllegalStateException("Native bounded sort exchange input is not frame encoded");
         }
+        byte[] plan = ((NativeExchangeReaderOperator) operator).serializedPlan();
+        NativeExchangePlan exchange;
+        try {
+            exchange = NativeExchangePlan.parseFrom(plan);
+        } catch (com.google.protobuf.InvalidProtocolBufferException failure) {
+            throw new IllegalStateException("Native bounded sort received a corrupt exchange contract", failure);
+        }
+        if (exchange.getDistribution() != ExchangeDistribution.EXCHANGE_DISTRIBUTION_HASH
+                && exchange.getDistribution() != ExchangeDistribution.EXCHANGE_DISTRIBUTION_SINGLETON) {
+            throw new IllegalStateException(
+                    "Native bounded sort requires hash or singleton distribution, got " + exchange.getDistribution());
+        }
         return new FramedInput(
                 (Transformation<NativeExchangeFrame>) frames,
-                ((NativeExchangeReaderOperator) operator).serializedPlan());
+                plan,
+                exchange.getDistribution(),
+                exchange.getMaxParallelism(),
+                exchange.getParallelism());
     }
 
     private static final class FramedInput {
         private final Transformation<NativeExchangeFrame> transformation;
         private final byte[] plan;
+        private final ExchangeDistribution distribution;
+        private final int maxParallelism;
+        private final int parallelism;
 
-        private FramedInput(Transformation<NativeExchangeFrame> transformation, byte[] plan) {
+        private FramedInput(
+                Transformation<NativeExchangeFrame> transformation,
+                byte[] plan,
+                ExchangeDistribution distribution,
+                int maxParallelism,
+                int parallelism) {
             this.transformation = transformation;
             this.plan = plan;
+            this.distribution = distribution;
+            this.maxParallelism = maxParallelism;
+            this.parallelism = parallelism;
         }
     }
 }

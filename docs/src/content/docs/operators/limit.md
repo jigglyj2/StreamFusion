@@ -5,7 +5,8 @@ sidebar:
   order: 13
 ---
 
-**Current status:** Accelerated for Flink streaming global constant `LIMIT` and `OFFSET`.
+**Current status:** Accelerated for Flink streaming global constant `LIMIT`/`OFFSET` and bounded
+local/global `BatchExecLimit`.
 
 ## SQL example
 
@@ -21,6 +22,12 @@ StreamFusion replaces Flink's `StreamExecLimit`, represented by an unordered, al
 `ROW_NUMBER` range. The range must have a constant upper bound and must not expose a rank column.
 Other unordered rank shapes fall back with an EXPLAIN reason. An ordered finite range is handled by
 [Top-N](../top-n/); a bounded full `ORDER BY` uses the native [ORDER BY](../order-by/) operator.
+
+For bounded SQL, StreamFusion also replaces Flink's local and global `BatchExecLimit` stages. That
+path selects a contiguous Arrow slice, preserves physical row order and every RowKind, and accepts
+every schema supported by the Arrow boundary. It is stateless and timer-free: the local stage
+applies Flink's local prefix and the global stage applies the requested offset/range after Flink's
+singleton exchange. Logical-record I/O counters are corrected for sliced and fully skipped batches.
 
 The payload may contain every Flink logical type supported by the Arrow boundary, including nested
 arrays, maps, multisets, and rows. Append, update, and retract changelogs use the strategy selected

@@ -7,6 +7,7 @@
 //     http://www.apache.org/licenses/LICENSE-2.0
 
 pub(super) mod array_unnest;
+pub(crate) mod bounded_rank;
 pub(crate) mod bounded_sort;
 pub(super) mod calc;
 pub(crate) mod changelog_normalize;

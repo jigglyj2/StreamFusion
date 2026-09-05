@@ -7,7 +7,8 @@ sidebar:
 
 **Current status:** Accelerated for bounded and finite-stream full sorts, streaming
 `ORDER BY ... LIMIT/OFFSET`, and time-ascending temporal sorts. Flink lowers these to
-`BatchExecSort` or `StreamExecSort`, `StreamExecSortLimit`, and `StreamExecTemporalSort`
+`BatchExecSort`, `BatchExecSortLimit`, or `StreamExecSort`, `StreamExecSortLimit`, and
+`StreamExecTemporalSort`
 respectively. A genuinely unbounded global full sort remains invalid in streaming SQL rather than
 being approximated.
 
@@ -33,6 +34,17 @@ Flink-comparable scalar, array, and row type, including decimal and temporal val
 floating-point NaN, and signed zero. Map, multiset, raw, symbol, and descriptor values remain valid
 opaque payload fields but fall back if used as order fields because Flink has no exact comparator
 contract for them. Ascending/descending direction and null placement are preserved per field.
+
+Bounded `ORDER BY ... LIMIT/OFFSET` replaces both local and global `BatchExecSortLimit`. It uses the
+same comparator/type surface and counted retraction semantics as bounded full sort, but prunes state
+to the local/global cutoff and emits only the requested range. The local phase intentionally ignores
+the global offset, matching Flink's two-phase selection contract.
+
+Partitioned bounded SQL `RANK` is also a two-phase Flink plan. StreamFusion retains its hash
+exchange and performs a proof-equivalent keyed bounded selection over the original Arrow rows; it
+does not retain the local reduction because every final key group is already owned after the
+exchange. Planner guards verify that the removed local and global partition/order/range contracts
+match. See [Top-N](../top-n/) for tie, RowKind, state, and metric details.
 
 INSERT and UPDATE_AFTER add one occurrence to a counted row multiset; UPDATE_BEFORE and DELETE
 remove one. The terminal output is therefore the same sorted INSERT-only relation Flink emits for
@@ -74,6 +86,11 @@ Arrow rows use the canonical key-group format. At end of input, unique rows are 
 ordered by the shared Flink comparator, and emitted in managed 16,384-row Arrow batches. The
 operator advertises Flink's internal-sort capability so the runtime does not insert a second
 `SortingDataInput` ahead of the native sorter.
+
+`BatchExecSortLimit` reuses that counted bounded-sort state and adds a bounded heap cutoff. The
+bounded-rank selector reuses the native Top-N state codec with a terminal-output protocol, including
+physical RowKinds and cutoff ties. Both make one backend batch read and one atomic mutation batch per
+incoming Arrow batch; direct RocksDB state never crosses JNI.
 
 Temporal sort has its own versioned protobuf node, persistent native processor, raw keyed state,
 and timer service. It stores the secondary keys

@@ -124,7 +124,7 @@ public final class NexmarkRowDataJob {
             }
             tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, parallelism);
             tables.getConfig().set(OptimizerConfigOptions.TABLE_OPTIMIZER_MULTI_JOIN_ENABLED, true);
-            if (query.equals("bounded-sort")) {
+            if (query.equals("bounded-sort") || query.equals("bounded-sort-limit") || query.equals("bounded-rank")) {
                 tables.getConfig().getConfiguration().setString("__table.exec.sort.non-temporal.enabled__", "true");
             }
 

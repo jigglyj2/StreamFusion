@@ -9,7 +9,7 @@ use arrow::array::{Array, ArrayRef, Int8Array, UInt32Array};
 use arrow::compute::take;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use arrow_row::{RowConverter, SortField};
+use arrow_row::{RowConverter, Rows, SortField};
 use datafusion::error::{DataFusionError, Result};
 use hashbrown::HashMap;
 
@@ -28,16 +28,33 @@ const UPDATE_BEFORE: i8 = 1;
 const UPDATE_AFTER: i8 = 2;
 const DELETE: i8 = 3;
 const STATE_KEY_PREFIX: u8 = 26;
+const PHYSICAL_STATE_KEY_PREFIX: u8 = 27;
 const INPUT_KIND_COLUMN: &str = "__streamfusion_input_row_kind";
 const OUTPUT_KIND_COLUMN: &str = "__streamfusion_row_kind";
 const OUTPUT_BATCH_ROWS: usize = 16_384;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PhysicalHeapRow {
+    sequence: u64,
+    kind: i8,
+    encoded: Vec<u8>,
+}
+
+fn physical_heap_bytes(rows: &[PhysicalHeapRow], capacity: usize) -> usize {
+    capacity
+        .saturating_mul(std::mem::size_of::<PhysicalHeapRow>())
+        .saturating_add(rows.iter().map(|row| row.encoded.capacity()).sum::<usize>())
+}
 
 struct PendingSort {
     unique: RecordBatch,
     order: Vec<usize>,
     counts: Vec<u64>,
+    kinds: Option<Vec<i8>>,
     order_position: usize,
     emitted_from_current: u64,
+    remaining_skip: u64,
+    remaining_take: Option<u64>,
 }
 
 impl PendingSort {
@@ -54,10 +71,13 @@ impl PendingSort {
                     .capacity()
                     .saturating_mul(std::mem::size_of::<u64>()),
             )
+            .saturating_add(self.kinds.as_ref().map_or(0, |kinds| {
+                kinds.capacity().saturating_mul(std::mem::size_of::<i8>())
+            }))
     }
 
     fn drained(&self) -> bool {
-        self.order_position >= self.order.len()
+        self.order_position >= self.order.len() || self.remaining_take == Some(0)
     }
 }
 
@@ -67,12 +87,20 @@ pub(crate) struct BoundedSortProcessor {
     input_schema: SchemaRef,
     output_schema: SchemaRef,
     state: Box<dyn KeyedState>,
+    first_key_group: u32,
+    last_key_group: u32,
+    write_key_group: u32,
     row_converter: RowConverter,
     prepared_schema: Option<SchemaRef>,
     input_kind_index: Option<usize>,
     scratch: HostMemoryReservation,
     pending: Option<PendingSort>,
     drained: bool,
+    next_sequence: u64,
+    physical_heap: Vec<PhysicalHeapRow>,
+    physical_heap_loaded: bool,
+    physical_state_distributed: bool,
+    physical_loaded_keys: Vec<StateKey>,
     state_read_batches: u64,
     state_write_batches: u64,
     rows_read: u64,
@@ -95,7 +123,13 @@ impl BoundedSortProcessor {
             last_key_group,
             reservation,
         )?);
-        Self::with_state(serialized_plan, state, scratch)
+        Self::with_state(
+            serialized_plan,
+            first_key_group,
+            last_key_group,
+            state,
+            scratch,
+        )
     }
 
     pub(crate) fn new_rocksdb(
@@ -114,11 +148,19 @@ impl BoundedSortProcessor {
             last_key_group,
             memory_limit,
         )?);
-        Self::with_state(serialized_plan, state, scratch)
+        Self::with_state(
+            serialized_plan,
+            first_key_group,
+            last_key_group,
+            state,
+            scratch,
+        )
     }
 
     fn with_state(
         serialized_plan: &[u8],
+        first_key_group: u32,
+        last_key_group: u32,
         state: Box<dyn KeyedState>,
         scratch: HostMemoryReservation,
     ) -> Result<Self> {
@@ -134,6 +176,16 @@ impl BoundedSortProcessor {
             }
         };
         validate_plan(&plan)?;
+        let write_key_group = if plan.use_first_owned_key_group {
+            first_key_group
+        } else {
+            0
+        };
+        if write_key_group < first_key_group || write_key_group > last_key_group {
+            return Err(DataFusionError::Plan(format!(
+                "bounded sort write key group {write_key_group} is outside owned range {first_key_group}..={last_key_group}"
+            )));
+        }
         let input_schema = arrow_schema(plan.input_schema.as_ref().expect("validated schema"))?;
         let row_converter = RowConverter::new(
             input_schema
@@ -153,12 +205,20 @@ impl BoundedSortProcessor {
             input_schema,
             output_schema: Arc::new(Schema::new(output_fields)),
             state,
+            first_key_group,
+            last_key_group,
+            write_key_group,
             row_converter,
             prepared_schema: None,
             input_kind_index: None,
             scratch,
             pending: None,
             drained: false,
+            next_sequence: 0,
+            physical_heap: Vec::new(),
+            physical_heap_loaded: false,
+            physical_state_distributed: false,
+            physical_loaded_keys: Vec::new(),
             state_read_batches: 0,
             state_write_batches: 0,
             rows_read: 0,
@@ -177,13 +237,25 @@ impl BoundedSortProcessor {
         }
         self.prepare_schema(batch.schema())?;
         let visible_count = self.input_schema.fields().len();
+        let heap_working = if self.plan.physical_input_semantics {
+            physical_heap_bytes(&self.physical_heap, self.physical_heap.capacity())
+                .saturating_mul(3)
+        } else {
+            0
+        };
         let base = batch
             .get_array_memory_size()
             .saturating_mul(2)
-            .saturating_add(batch.num_rows().saturating_mul(192));
+            .saturating_add(batch.num_rows().saturating_mul(192))
+            .saturating_add(heap_working);
         self.scratch.resize(base)?;
         let result = self.process_accounted(&batch, visible_count);
-        self.scratch.resize(0)?;
+        let retained = if self.plan.physical_input_semantics {
+            physical_heap_bytes(&self.physical_heap, self.physical_heap.capacity())
+        } else {
+            0
+        };
+        self.scratch.resize(retained)?;
         result
     }
 
@@ -198,6 +270,9 @@ impl BoundedSortProcessor {
             .ok_or_else(|| {
                 DataFusionError::Execution("bounded sort RowKinds are not Arrow Int8".to_string())
             })?;
+        if self.plan.physical_input_semantics {
+            return self.process_physical_batch(batch, kinds, &encoded);
+        }
         let mut unique = HashMap::<Vec<u8>, usize, RandomState>::with_capacity_and_hasher(
             batch.num_rows().max(1),
             RandomState::new(),
@@ -226,7 +301,10 @@ impl BoundedSortProcessor {
             .collect::<Vec<_>>();
         let refs = keys
             .iter()
-            .map(|key| StateKeyRef { key_group: 0, key })
+            .map(|key| StateKeyRef {
+                key_group: self.write_key_group,
+                key,
+            })
             .collect::<Vec<_>>();
         let existing = self.state.get_batch(&refs)?;
         self.state_read_batches = self.state_read_batches.saturating_add(1);
@@ -264,13 +342,278 @@ impl BoundedSortProcessor {
             .into_iter()
             .zip(counts)
             .map(|(key, count)| StateMutation {
-                key: StateKey { key_group: 0, key },
+                key: StateKey {
+                    key_group: self.write_key_group,
+                    key,
+                },
                 value: (count != 0).then(|| count.to_le_bytes().to_vec()),
             })
             .collect::<Vec<_>>();
         self.rows_written = self.rows_written.saturating_add(mutations.len() as u64);
         self.state.write_batch(mutations)?;
         self.state_write_batches = self.state_write_batches.saturating_add(1);
+        Ok(())
+    }
+
+    fn process_physical_batch(
+        &mut self,
+        batch: &RecordBatch,
+        kinds: &Int8Array,
+        encoded: &Rows,
+    ) -> Result<()> {
+        self.ensure_physical_heap()?;
+        if batch.num_rows() == 0 {
+            return Ok(());
+        }
+        let old_heap = std::mem::take(&mut self.physical_heap);
+        let old_len = old_heap.len();
+        let parser = self.row_converter.parser();
+        let columns = self.row_converter.convert_rows(
+            old_heap
+                .iter()
+                .map(|row| parser.parse(&row.encoded))
+                .chain((0..batch.num_rows()).map(|row| parser.parse(encoded.row(row).data()))),
+        )?;
+        let records = RecordBatch::try_new(Arc::clone(&self.input_schema), columns)?;
+        let mut heap = (0..old_len).collect::<Vec<_>>();
+        let limit_end = usize::try_from(self.plan.limit_end.expect("validated SortLimit end"))
+            .map_err(|_| {
+                DataFusionError::Execution(
+                    "bounded SortLimit end exceeds the native address space".to_string(),
+                )
+            })?;
+        let mut input_sequences = Vec::with_capacity(batch.num_rows());
+        for row in 0..batch.num_rows() {
+            let sequence = self.next_sequence;
+            self.next_sequence = self.next_sequence.checked_add(1).ok_or_else(|| {
+                DataFusionError::Execution("bounded sort input sequence overflow".to_string())
+            })?;
+            input_sequences.push(sequence);
+            let candidate = old_len + row;
+            if heap.len() < limit_end {
+                heap_push(
+                    &mut heap,
+                    candidate,
+                    &records,
+                    &self.plan,
+                    &mut self.comparator_calls,
+                )?;
+            } else if !heap.is_empty()
+                && compare_plan_rows(
+                    &records,
+                    heap[0],
+                    candidate,
+                    &self.plan,
+                    &mut self.comparator_calls,
+                )? == Ordering::Greater
+            {
+                heap_poll(&mut heap, &records, &self.plan, &mut self.comparator_calls)?;
+                heap_push(
+                    &mut heap,
+                    candidate,
+                    &records,
+                    &self.plan,
+                    &mut self.comparator_calls,
+                )?;
+            }
+        }
+
+        let mut next_heap = Vec::with_capacity(heap.len());
+        for index in heap {
+            if index < old_len {
+                next_heap.push(old_heap[index].clone());
+            } else {
+                let input_row = index - old_len;
+                let kind = kinds.value(input_row);
+                if !matches!(kind, INSERT | UPDATE_BEFORE | UPDATE_AFTER | DELETE) {
+                    return Err(DataFusionError::Execution(format!(
+                        "bounded SortLimit received invalid Flink RowKind {kind}"
+                    )));
+                }
+                next_heap.push(PhysicalHeapRow {
+                    sequence: input_sequences[input_row],
+                    kind,
+                    encoded: encoded.row(input_row).data().to_vec(),
+                });
+            }
+        }
+
+        let mut mutations = Vec::new();
+        if self.physical_state_distributed {
+            mutations.extend(
+                self.physical_loaded_keys
+                    .drain(..)
+                    .map(|key| StateMutation { key, value: None }),
+            );
+            mutations.extend(
+                next_heap
+                    .iter()
+                    .enumerate()
+                    .map(|(slot, row)| StateMutation {
+                        key: StateKey {
+                            key_group: self.write_key_group,
+                            key: physical_state_key(slot as u64),
+                        },
+                        value: Some(encode_physical_heap_row(row)),
+                    }),
+            );
+        } else {
+            for slot in 0..old_heap.len().max(next_heap.len()) {
+                let old = old_heap.get(slot);
+                let new = next_heap.get(slot);
+                if old == new {
+                    continue;
+                }
+                mutations.push(StateMutation {
+                    key: StateKey {
+                        key_group: self.write_key_group,
+                        key: physical_state_key(slot as u64),
+                    },
+                    value: new.map(encode_physical_heap_row),
+                });
+            }
+        }
+        if !mutations.is_empty() {
+            self.rows_written = self.rows_written.saturating_add(mutations.len() as u64);
+            self.state.write_batch(mutations)?;
+            self.state_write_batches = self.state_write_batches.saturating_add(1);
+        }
+        self.physical_loaded_keys = (0..next_heap.len())
+            .map(|slot| StateKey {
+                key_group: self.write_key_group,
+                key: physical_state_key(slot as u64),
+            })
+            .collect();
+        self.physical_state_distributed = false;
+        self.physical_heap = next_heap;
+        Ok(())
+    }
+
+    fn ensure_physical_heap(&mut self) -> Result<()> {
+        if self.physical_heap_loaded {
+            return Ok(());
+        }
+        let mut loaded = Vec::<(u32, u64, PhysicalHeapRow)>::new();
+        let mut nonempty_groups = 0usize;
+        for key_group in self.first_key_group..=self.last_key_group {
+            let snapshot = self.state.snapshot_key_group(key_group)?;
+            let mut group_rows = Vec::new();
+            for (key, value) in decode_key_group_snapshot(key_group, &snapshot)? {
+                let Some(slot) = decode_physical_slot(&key)? else {
+                    return Err(DataFusionError::Execution(
+                        "bounded SortLimit state contains an unknown namespace".to_string(),
+                    ));
+                };
+                self.physical_loaded_keys.push(StateKey {
+                    key_group,
+                    key: key.clone(),
+                });
+                group_rows.push((slot, decode_physical_heap_row(&value)?));
+            }
+            if !group_rows.is_empty() {
+                nonempty_groups += 1;
+                self.state_read_batches = self.state_read_batches.saturating_add(1);
+                self.rows_read = self.rows_read.saturating_add(group_rows.len() as u64);
+            }
+            group_rows.sort_by_key(|(slot, _)| *slot);
+            if group_rows
+                .iter()
+                .enumerate()
+                .any(|(expected, (slot, _))| *slot != expected as u64)
+            {
+                return Err(DataFusionError::Execution(
+                    "bounded SortLimit heap state has non-contiguous slots".to_string(),
+                ));
+            }
+            loaded.extend(
+                group_rows
+                    .into_iter()
+                    .map(|(slot, row)| (key_group, slot, row)),
+            );
+        }
+        self.next_sequence = loaded.iter().fold(self.next_sequence, |next, (_, _, row)| {
+            next.max(row.sequence.saturating_add(1))
+        });
+        if loaded.is_empty() {
+            self.physical_heap_loaded = true;
+            return Ok(());
+        }
+        if nonempty_groups == 1
+            && loaded
+                .iter()
+                .all(|(group, _, _)| *group == self.write_key_group)
+        {
+            self.physical_heap = loaded.into_iter().map(|(_, _, row)| row).collect();
+            self.scratch.try_grow(
+                physical_heap_bytes(&self.physical_heap, self.physical_heap.capacity())
+                    .saturating_mul(3),
+            )?;
+            self.physical_heap_loaded = true;
+            return Ok(());
+        }
+
+        loaded.sort_by_key(|(key_group, _, row)| (*key_group, row.sequence));
+        let candidates = loaded
+            .into_iter()
+            .map(|(_, _, row)| row)
+            .collect::<Vec<_>>();
+        let parser = self.row_converter.parser();
+        let columns = self.row_converter.convert_rows(
+            candidates
+                .iter()
+                .map(|row| parser.parse(row.encoded.as_slice())),
+        )?;
+        let records = RecordBatch::try_new(Arc::clone(&self.input_schema), columns)?;
+        let limit_end = usize::try_from(self.plan.limit_end.expect("validated SortLimit end"))
+            .map_err(|_| {
+                DataFusionError::Execution(
+                    "bounded SortLimit end exceeds the native address space".to_string(),
+                )
+            })?;
+        let mut heap = Vec::with_capacity(limit_end.min(candidates.len()));
+        for row in 0..candidates.len() {
+            if heap.len() < limit_end {
+                heap_push(
+                    &mut heap,
+                    row,
+                    &records,
+                    &self.plan,
+                    &mut self.comparator_calls,
+                )?;
+            } else if !heap.is_empty()
+                && compare_plan_rows(
+                    &records,
+                    heap[0],
+                    row,
+                    &self.plan,
+                    &mut self.comparator_calls,
+                )? == Ordering::Greater
+            {
+                heap_poll(&mut heap, &records, &self.plan, &mut self.comparator_calls)?;
+                heap_push(
+                    &mut heap,
+                    row,
+                    &records,
+                    &self.plan,
+                    &mut self.comparator_calls,
+                )?;
+            }
+        }
+        let mut candidates = candidates.into_iter().map(Some).collect::<Vec<_>>();
+        self.physical_heap = heap
+            .into_iter()
+            .map(|index| {
+                candidates[index]
+                    .take()
+                    .expect("physical heap index is unique")
+            })
+            .collect();
+        self.scratch.try_grow(
+            physical_heap_bytes(&self.physical_heap, self.physical_heap.capacity())
+                .saturating_mul(3),
+        )?;
+        self.physical_state_distributed = true;
+        self.physical_heap_loaded = true;
         Ok(())
     }
 
@@ -312,22 +655,30 @@ impl BoundedSortProcessor {
     }
 
     fn prepare_output(&mut self) -> Result<()> {
-        let snapshot = self.state.snapshot_key_group(0)?;
-        self.scratch.resize(snapshot.len().saturating_mul(2))?;
-        let entries = decode_key_group_snapshot(0, &snapshot)?;
-        let mut encoded_rows = Vec::with_capacity(entries.len());
-        let mut counts = Vec::with_capacity(entries.len());
-        for (mut key, value) in entries {
-            if key.first().copied() != Some(STATE_KEY_PREFIX) {
-                return Err(DataFusionError::Execution(
-                    "bounded sort state contains an unknown namespace".to_string(),
-                ));
-            }
-            key.remove(0);
-            encoded_rows.push(key);
-            counts.push(decode_count(&value)?);
+        if self.plan.physical_input_semantics {
+            return self.prepare_physical_output();
         }
-        drop(snapshot);
+        let mut rows = HashMap::<Vec<u8>, u64, RandomState>::with_hasher(RandomState::new());
+        let mut snapshot_bytes = 0usize;
+        for key_group in self.first_key_group..=self.last_key_group {
+            let snapshot = self.state.snapshot_key_group(key_group)?;
+            snapshot_bytes = snapshot_bytes.saturating_add(snapshot.len());
+            let entries = decode_key_group_snapshot(key_group, &snapshot)?;
+            for (key, value) in entries {
+                if key.first().copied() != Some(STATE_KEY_PREFIX) {
+                    return Err(DataFusionError::Execution(
+                        "bounded sort state contains an unknown namespace".to_string(),
+                    ));
+                }
+                let count = decode_count(&value)?;
+                let total = rows.entry(key[1..].to_vec()).or_default();
+                *total = total.checked_add(count).ok_or_else(|| {
+                    DataFusionError::Execution("bounded sort row count overflow".to_string())
+                })?;
+            }
+        }
+        self.scratch.resize(snapshot_bytes.saturating_mul(2))?;
+        let (encoded_rows, counts): (Vec<_>, Vec<_>) = rows.into_iter().unzip();
         if encoded_rows.is_empty() {
             return Ok(());
         }
@@ -363,8 +714,80 @@ impl BoundedSortProcessor {
             unique,
             order,
             counts,
+            kinds: None,
             order_position: 0,
             emitted_from_current: 0,
+            remaining_skip: self.plan.limit_start.unwrap_or(0),
+            remaining_take: self
+                .plan
+                .limit_end
+                .zip(self.plan.limit_start)
+                .map(|(end, start)| end - start),
+        };
+        self.scratch.resize(pending.retained_bytes())?;
+        self.pending = Some(pending);
+        Ok(())
+    }
+
+    fn prepare_physical_output(&mut self) -> Result<()> {
+        self.ensure_physical_heap()?;
+        self.scratch.resize(
+            physical_heap_bytes(&self.physical_heap, self.physical_heap.capacity())
+                .saturating_mul(3),
+        )?;
+        let rows = std::mem::take(&mut self.physical_heap);
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let parser = self.row_converter.parser();
+        let columns = self
+            .row_converter
+            .convert_rows(rows.iter().map(|row| parser.parse(&row.encoded)))?;
+        let records = RecordBatch::try_new(Arc::clone(&self.input_schema), columns)?;
+        let mut heap = (0..records.num_rows()).collect::<Vec<_>>();
+        if self.plan.sort_limit_global {
+            let mut compare_error = None;
+            heap.sort_by(|&left, &right| {
+                match compare_plan_rows(
+                    &records,
+                    left,
+                    right,
+                    &self.plan,
+                    &mut self.comparator_calls,
+                ) {
+                    Ok(ordering) => ordering,
+                    Err(error) => {
+                        compare_error = Some(error);
+                        Ordering::Equal
+                    }
+                }
+            });
+            if let Some(error) = compare_error {
+                return Err(error);
+            }
+        }
+        let kinds = rows.iter().map(|row| row.kind).collect::<Vec<_>>();
+        let counts = vec![1; records.num_rows()];
+        let pending = PendingSort {
+            unique: records,
+            order: heap,
+            counts,
+            kinds: Some(kinds),
+            order_position: 0,
+            emitted_from_current: 0,
+            remaining_skip: if self.plan.sort_limit_global {
+                self.plan.limit_start.unwrap_or(0)
+            } else {
+                0
+            },
+            remaining_take: if self.plan.sort_limit_global {
+                self.plan
+                    .limit_end
+                    .zip(self.plan.limit_start)
+                    .map(|(end, start)| end - start)
+            } else {
+                self.plan.limit_end
+            },
         };
         self.scratch.resize(pending.retained_bytes())?;
         self.pending = Some(pending);
@@ -379,7 +802,12 @@ impl BoundedSortProcessor {
             .iter()
             .map(|column| take(column.as_ref(), &indices, None))
             .collect::<Result<Vec<ArrayRef>, _>>()?;
-        output.push(Arc::new(Int8Array::from_value(INSERT, indices.len())));
+        if let Some(kinds) = &pending.kinds {
+            let kind_array = Int8Array::from(kinds.clone());
+            output.push(take(&kind_array, indices, None)?);
+        } else {
+            output.push(Arc::new(Int8Array::from_value(INSERT, indices.len())));
+        }
         Ok(RecordBatch::try_new(
             Arc::clone(&self.output_schema),
             output,
@@ -403,7 +831,15 @@ impl BoundedSortProcessor {
     }
 
     pub(crate) fn restore_key_group(&mut self, key_group: u32, bytes: &[u8]) -> Result<()> {
-        self.state.restore_key_group(key_group, bytes)
+        self.state.restore_key_group(key_group, bytes)?;
+        if self.plan.physical_input_semantics {
+            self.physical_heap.clear();
+            self.physical_loaded_keys.clear();
+            self.physical_heap_loaded = false;
+            self.physical_state_distributed = false;
+            self.next_sequence = 0;
+        }
+        Ok(())
     }
 
     pub(crate) fn checkpoint(&self, directory: &std::path::Path) -> Result<()> {
@@ -453,12 +889,29 @@ fn next_output_indices(pending: &mut PendingSort) -> Result<UInt32Array> {
                     "bounded sort output cursor exceeded its row count".to_string(),
                 )
             })?;
-        let take_count = available.min((OUTPUT_BATCH_ROWS - indices.len()) as u64);
+        let skipped = available.min(pending.remaining_skip);
+        pending.remaining_skip -= skipped;
+        pending.emitted_from_current += skipped;
+        let available = available - skipped;
+        if pending.emitted_from_current == count {
+            pending.order_position += 1;
+            pending.emitted_from_current = 0;
+            continue;
+        }
+        if pending.remaining_take == Some(0) {
+            break;
+        }
+        let take_count = available
+            .min((OUTPUT_BATCH_ROWS - indices.len()) as u64)
+            .min(pending.remaining_take.unwrap_or(u64::MAX));
         let index = u32::try_from(row).map_err(|_| {
             DataFusionError::Execution("bounded sort unique row count exceeds u32".to_string())
         })?;
         indices.extend(std::iter::repeat_n(index, take_count as usize));
         pending.emitted_from_current += take_count;
+        if let Some(remaining) = &mut pending.remaining_take {
+            *remaining -= take_count;
+        }
         if pending.emitted_from_current == count {
             pending.order_position += 1;
             pending.emitted_from_current = 0;
@@ -472,6 +925,126 @@ fn state_key(row: &[u8]) -> Vec<u8> {
     key.push(STATE_KEY_PREFIX);
     key.extend_from_slice(row);
     key
+}
+
+fn physical_state_key(slot: u64) -> Vec<u8> {
+    let mut key = Vec::with_capacity(9);
+    key.push(PHYSICAL_STATE_KEY_PREFIX);
+    key.extend_from_slice(&slot.to_le_bytes());
+    key
+}
+
+fn decode_physical_slot(key: &[u8]) -> Result<Option<u64>> {
+    if key.first().copied() != Some(PHYSICAL_STATE_KEY_PREFIX) {
+        return Ok(None);
+    }
+    let bytes: [u8; 8] = key[1..].try_into().map_err(|_| {
+        DataFusionError::Execution("bounded SortLimit heap key has an invalid length".to_string())
+    })?;
+    Ok(Some(u64::from_le_bytes(bytes)))
+}
+
+fn encode_physical_heap_row(row: &PhysicalHeapRow) -> Vec<u8> {
+    let mut value = Vec::with_capacity(10 + row.encoded.len());
+    value.push(1);
+    value.extend_from_slice(&row.sequence.to_le_bytes());
+    value.push(row.kind as u8);
+    value.extend_from_slice(&row.encoded);
+    value
+}
+
+fn decode_physical_heap_row(value: &[u8]) -> Result<PhysicalHeapRow> {
+    if value.len() < 10 || value[0] != 1 {
+        return Err(DataFusionError::Execution(
+            "bounded SortLimit heap row has an unsupported state version".to_string(),
+        ));
+    }
+    let sequence = u64::from_le_bytes(value[1..9].try_into().expect("checked heap row length"));
+    let kind = value[9] as i8;
+    if !matches!(kind, INSERT | UPDATE_BEFORE | UPDATE_AFTER | DELETE) {
+        return Err(DataFusionError::Execution(format!(
+            "bounded SortLimit state contains invalid Flink RowKind {kind}"
+        )));
+    }
+    Ok(PhysicalHeapRow {
+        sequence,
+        kind,
+        encoded: value[10..].to_vec(),
+    })
+}
+
+fn compare_plan_rows(
+    batch: &RecordBatch,
+    left: usize,
+    right: usize,
+    plan: &proto::BoundedSort,
+    comparator_calls: &mut u64,
+) -> Result<Ordering> {
+    *comparator_calls = comparator_calls.saturating_add(1);
+    compare_rows(
+        batch,
+        left,
+        batch,
+        right,
+        &plan.sort_key_indices,
+        &plan.sort_ascending,
+        &plan.sort_nulls_last,
+    )
+}
+
+fn heap_push(
+    heap: &mut Vec<usize>,
+    row: usize,
+    batch: &RecordBatch,
+    plan: &proto::BoundedSort,
+    comparator_calls: &mut u64,
+) -> Result<()> {
+    heap.push(row);
+    let mut child = heap.len() - 1;
+    while child > 0 {
+        let parent = (child - 1) >> 1;
+        if compare_plan_rows(batch, heap[parent], heap[child], plan, comparator_calls)?
+            != Ordering::Less
+        {
+            break;
+        }
+        heap.swap(parent, child);
+        child = parent;
+    }
+    Ok(())
+}
+
+fn heap_poll(
+    heap: &mut Vec<usize>,
+    batch: &RecordBatch,
+    plan: &proto::BoundedSort,
+    comparator_calls: &mut u64,
+) -> Result<()> {
+    let last = heap.pop().expect("nonempty SortLimit heap");
+    if heap.is_empty() {
+        return Ok(());
+    }
+    heap[0] = last;
+    let mut parent = 0;
+    let half = heap.len() >> 1;
+    while parent < half {
+        let mut child = (parent << 1) + 1;
+        let right = child + 1;
+        if right < heap.len()
+            && compare_plan_rows(batch, heap[child], heap[right], plan, comparator_calls)?
+                == Ordering::Less
+        {
+            child = right;
+        }
+        if compare_plan_rows(batch, heap[parent], heap[child], plan, comparator_calls)?
+            != Ordering::Less
+        {
+            break;
+        }
+        heap.swap(parent, child);
+        parent = child;
+    }
+    Ok(())
 }
 
 fn decode_count(bytes: &[u8]) -> Result<u64> {
@@ -506,6 +1079,25 @@ fn validate_plan(plan: &proto::BoundedSort) -> Result<()> {
     {
         return Err(DataFusionError::Plan(
             "bounded sort key index is outside the input schema".to_string(),
+        ));
+    }
+    match (plan.limit_start, plan.limit_end) {
+        (None, None) => {}
+        (Some(start), Some(end)) if start <= end => {}
+        (Some(_), Some(_)) => {
+            return Err(DataFusionError::Plan(
+                "bounded sort limit end precedes its start".to_string(),
+            ));
+        }
+        _ => {
+            return Err(DataFusionError::Plan(
+                "bounded sort limit start and end must be present together".to_string(),
+            ));
+        }
+    }
+    if plan.physical_input_semantics && plan.limit_end.is_none() {
+        return Err(DataFusionError::Plan(
+            "bounded physical-input sort requires a finite SortLimit range".to_string(),
         ));
     }
     Ok(())
@@ -551,6 +1143,139 @@ mod tests {
             .process_arrow(batch(&[2], &["b"], &[INSERT]))
             .unwrap();
         assert_eq!(integers(&restored.finish().unwrap()), vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn sort_limit_applies_offset_after_counting_duplicates() {
+        let mut processor = BoundedSortProcessor::new(
+            &limit_plan(2, 5, false),
+            0,
+            0,
+            HostMemoryReservation::new(
+                Arc::new(TestBroker::new(64 << 20)),
+                "bounded sort limit test",
+            ),
+        )
+        .unwrap();
+        processor
+            .process_arrow(batch(
+                &[1, 1, 2, 3, 4, 5],
+                &["a", "a", "b", "c", "d", "e"],
+                &[INSERT; 6],
+            ))
+            .unwrap();
+        assert_eq!(integers(&processor.finish().unwrap()), vec![2, 3, 4]);
+        assert_eq!(processor.finish().unwrap().num_rows(), 0);
+        assert_eq!(processor.statistics()[6], 3);
+    }
+
+    #[test]
+    fn local_sort_limit_merges_rescaled_owned_key_groups() {
+        let source_plan = limit_plan(0, 4, true);
+        let mut left = BoundedSortProcessor::new(
+            &source_plan,
+            0,
+            0,
+            HostMemoryReservation::new(
+                Arc::new(TestBroker::new(64 << 20)),
+                "bounded local sort left",
+            ),
+        )
+        .unwrap();
+        left.process_arrow(batch(&[5, 1], &["e", "a"], &[INSERT; 2]))
+            .unwrap();
+        let left_snapshot = left.snapshot_key_group(0).unwrap();
+
+        let mut right = BoundedSortProcessor::new(
+            &source_plan,
+            1,
+            1,
+            HostMemoryReservation::new(
+                Arc::new(TestBroker::new(64 << 20)),
+                "bounded local sort right",
+            ),
+        )
+        .unwrap();
+        right
+            .process_arrow(batch(&[4, 2], &["d", "b"], &[INSERT; 2]))
+            .unwrap();
+        let right_snapshot = right.snapshot_key_group(1).unwrap();
+
+        let mut restored = BoundedSortProcessor::new(
+            &source_plan,
+            0,
+            1,
+            HostMemoryReservation::new(
+                Arc::new(TestBroker::new(64 << 20)),
+                "bounded local sort rescaled",
+            ),
+        )
+        .unwrap();
+        restored.restore_key_group(0, &left_snapshot).unwrap();
+        restored.restore_key_group(1, &right_snapshot).unwrap();
+        restored
+            .process_arrow(batch(&[3], &["c"], &[INSERT]))
+            .unwrap();
+        assert_eq!(integers(&restored.finish().unwrap()), vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn physical_sort_limit_keeps_the_first_rows_at_an_equal_key_cutoff() {
+        let mut processor = BoundedSortProcessor::new(
+            &physical_limit_plan(0, 2, false),
+            0,
+            0,
+            HostMemoryReservation::new(
+                Arc::new(TestBroker::new(64 << 20)),
+                "bounded physical sort limit",
+            ),
+        )
+        .unwrap();
+        processor
+            .process_arrow(batch(
+                &[1, 1, 1, 1],
+                &["first", "second", "third", "fourth"],
+                &[INSERT, DELETE, UPDATE_BEFORE, UPDATE_AFTER],
+            ))
+            .unwrap();
+
+        let output = processor.finish().unwrap();
+        assert_eq!(strings(&output), vec!["first", "second"]);
+        assert_eq!(kinds(&output), vec![INSERT, DELETE]);
+    }
+
+    #[test]
+    fn physical_sort_limit_persists_only_the_bounded_heap_and_skips_unchanged_writes() {
+        let mut processor = BoundedSortProcessor::new(
+            &physical_limit_plan(0, 2, true),
+            0,
+            0,
+            HostMemoryReservation::new(
+                Arc::new(TestBroker::new(64 << 20)),
+                "bounded online physical heap",
+            ),
+        )
+        .unwrap();
+        processor
+            .process_arrow(batch(
+                &[1, 2, 3, 4, 5, 6],
+                &["a", "b", "c", "d", "e", "f"],
+                &[INSERT; 6],
+            ))
+            .unwrap();
+        assert_eq!(
+            decode_key_group_snapshot(0, &processor.snapshot_key_group(0).unwrap())
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(processor.statistics()[..4], [0, 1, 0, 2]);
+
+        processor
+            .process_arrow(batch(&[7, 8], &["g", "h"], &[INSERT; 2]))
+            .unwrap();
+        assert_eq!(processor.statistics()[..4], [0, 1, 0, 2]);
+        assert_eq!(integers(&processor.finish().unwrap()), vec![2, 1]);
     }
 
     #[test]
@@ -682,6 +1407,27 @@ mod tests {
     }
 
     fn plan() -> Vec<u8> {
+        limit_plan_values(None, None, false)
+    }
+
+    fn limit_plan(start: u64, end: u64, local: bool) -> Vec<u8> {
+        limit_plan_values(Some(start), Some(end), local)
+    }
+
+    fn physical_limit_plan(start: u64, end: u64, local: bool) -> Vec<u8> {
+        limit_plan_values_with_semantics(Some(start), Some(end), local, true)
+    }
+
+    fn limit_plan_values(start: Option<u64>, end: Option<u64>, local: bool) -> Vec<u8> {
+        limit_plan_values_with_semantics(start, end, local, false)
+    }
+
+    fn limit_plan_values_with_semantics(
+        start: Option<u64>,
+        end: Option<u64>,
+        local: bool,
+        physical_input_semantics: bool,
+    ) -> Vec<u8> {
         let schema = proto::Schema {
             fields: vec![
                 field(
@@ -705,6 +1451,11 @@ mod tests {
                         sort_key_indices: vec![0],
                         sort_ascending: vec![true],
                         sort_nulls_last: vec![false],
+                        limit_start: start,
+                        limit_end: end,
+                        use_first_owned_key_group: local,
+                        physical_input_semantics,
+                        sort_limit_global: !local,
                     },
                 ))),
             }),

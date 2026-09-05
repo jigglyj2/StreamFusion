@@ -74,7 +74,21 @@ message Operator {
     MatchRecognize match_recognize = 25;
     BoundedSort bounded_sort = 26;
     ReplicateRows replicate_rows = 27;
+    BoundedRank bounded_rank = 28;
   }
+}
+
+// RANK over an already sorted bounded input. The processor retains only the previous physical
+// Arrow row and rank counters between batches; it has no keyed/checkpointed Flink state.
+message BoundedRank {
+  Operator input = 1;
+  Schema input_schema = 2;
+  Schema output_schema = 3;
+  repeated uint32 partition_key_indices = 4;
+  repeated uint32 sort_key_indices = 5;
+  uint64 rank_start = 6;
+  uint64 rank_end = 7;
+  bool output_rank_number = 8;
 }
 
 // Bounded global full sort. Input changelog messages update a counted multiset of complete Arrow
@@ -86,6 +100,14 @@ message BoundedSort {
   repeated uint32 sort_key_indices = 3;
   repeated bool sort_ascending = 4;
   repeated bool sort_nulls_last = 5;
+  // Present together for SortLimit. The half-open range is applied after ordering.
+  optional uint64 limit_start = 6;
+  optional uint64 limit_end = 7;
+  // Local bounded stages write into their first owned key group so raw keyed state can rescale.
+  bool use_first_owned_key_group = 8;
+  // Batch SortLimit ranks physical changelog messages exactly as Flink's heap does.
+  bool physical_input_semantics = 9;
+  bool sort_limit_global = 10;
 }
 
 // A strict fixed-length MATCH_RECOGNIZE sequence. Each input row can start a candidate and can
@@ -271,6 +293,15 @@ message TopN {
   repeated bool sort_ascending = 13;
   repeated bool sort_nulls_last = 14;
   Schema output_schema = 15;
+  // Streaming Rank uses ROW_NUMBER. Bounded BatchExecRank selects complete comparator-equivalent
+  // buckets and therefore uses SQL RANK, including ties and gaps.
+  TopNRankType rank_type = 16;
+  // A bounded rank-selection plan suppresses streaming changelog differences and drains the
+  // final selected rows only after end-of-input.
+  bool bounded_final_output = 17;
+  // BatchExecRank ranks physical changelog messages; RowKind is payload metadata rather than a
+  // request to mutate a previously received row.
+  bool physical_input_semantics = 18;
 }
 
 enum TopNStrategy {
@@ -278,6 +309,12 @@ enum TopNStrategy {
   TOP_N_STRATEGY_APPEND_FAST = 1;
   TOP_N_STRATEGY_UPDATE_FAST = 2;
   TOP_N_STRATEGY_RETRACT = 3;
+}
+
+enum TopNRankType {
+  TOP_N_RANK_TYPE_UNSPECIFIED = 0;
+  TOP_N_RANK_TYPE_ROW_NUMBER = 1;
+  TOP_N_RANK_TYPE_RANK = 2;
 }
 
 // Two-input event-time Window Join state. Rust stores schema-aware Arrow rows and emits a nullable

@@ -14,6 +14,7 @@ import static tech.streamfusion.flink.planner.FlinkExecNodeAccess.*;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -40,9 +41,12 @@ import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecExchange;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecExpand;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecHashAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecHashJoin;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecLimit;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecNestedLoopJoin;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecRank;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecSort;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecSortAggregate;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecSortLimit;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecUnion;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecValues;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecWindowTableFunction;
@@ -141,6 +145,12 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             "tech.streamfusion.flink.sort.StreamFusionTemporalSortTranslator";
     private static final String BOUNDED_SORT_TRANSLATOR_CLASS =
             "tech.streamfusion.flink.sort.StreamFusionBoundedSortTranslator";
+    private static final String BOUNDED_SORT_LIMIT_TRANSLATOR_CLASS =
+            "tech.streamfusion.flink.sort.StreamFusionBoundedSortLimitTranslator";
+    private static final String BOUNDED_LIMIT_TRANSLATOR_CLASS =
+            "tech.streamfusion.flink.limit.StreamFusionBoundedLimitTranslator";
+    private static final String BOUNDED_RANK_TRANSLATOR_CLASS =
+            "tech.streamfusion.flink.rank.StreamFusionBoundedRankTranslator";
     private static final String NATIVE_PLAN_CLASS = "tech.streamfusion.proto.plan.v1.NativePlan";
     private static final String NATIVE_OPERATOR_CLASS = "tech.streamfusion.proto.plan.v1.Operator";
     private static final String NATIVE_PREFLIGHT_CLASS = "tech.streamfusion.nativebridge.NativeRuntimePreflight";
@@ -339,6 +349,36 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             }
             collectRejections(pair.inputEdge.getSource(), context, nodePath + "/native-input", rejections);
             return;
+        } else if (node instanceof BatchExecRank) {
+            BatchExecRank rank = (BatchExecRank) node;
+            BoundedRankPipeline pipeline = boundedRankPipeline(rank);
+            BatchExecSort inputSort = pipeline == null ? boundedRankInputSort(rank) : pipeline.inputSort;
+            String reason = unsupportedReason(rank, context);
+            if (reason == null && inputSort != null) {
+                reason = unsupportedReason(inputSort, context);
+            }
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
+            if (pipeline != null) {
+                collectRejections(pipeline.inputEdge.getSource(), context, nodePath + "/native-input", rejections);
+                return;
+            }
+            if (inputSort != null) {
+                collectRejections(
+                        inputSort.getInputEdges().get(0).getSource(), context, nodePath + "/native-input", rejections);
+                return;
+            }
+        } else if (node instanceof BatchExecLimit) {
+            String reason = unsupportedReason((BatchExecLimit) node, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
+        } else if (node instanceof BatchExecSortLimit) {
+            String reason = unsupportedReason((BatchExecSortLimit) node, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
         } else if (node instanceof BatchExecSort) {
             String reason = unsupportedReason((BatchExecSort) node, context);
             if (reason != null) {
@@ -799,6 +839,67 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     (RowType) aggregate.getOutputType(),
                     "StreamFusionBatchHashAggregate");
             replacement.setInputEdges(aggregate.getInputEdges().stream()
+                    .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                    .collect(Collectors.toList()));
+            return replacement;
+        }
+        if (node instanceof BatchExecRank) {
+            BatchExecRank rank = (BatchExecRank) node;
+            BoundedRankPipeline pipeline = boundedRankPipeline(rank);
+            if (pipeline != null) {
+                return convertBoundedRankPipeline(pipeline);
+            }
+            BatchExecSort inputSort = boundedRankInputSort(rank);
+            StreamFusionBatchExecRank replacement = new StreamFusionBatchExecRank(
+                    rank.getPersistedConfig(),
+                    boundedRankPartitionFields(rank),
+                    boundedRankSortFields(rank),
+                    boundedRankStart(rank),
+                    boundedRankEnd(rank),
+                    boundedRankOutputNumber(rank),
+                    inputSort == null ? null : boundedSortSpec(inputSort),
+                    inputSort == null
+                            ? rank.getInputProperties().get(0)
+                            : inputSort.getInputProperties().get(0),
+                    (RowType) rank.getOutputType(),
+                    "StreamFusionBatchRank");
+            if (inputSort == null) {
+                replacement.setInputEdges(rank.getInputEdges().stream()
+                        .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                        .collect(Collectors.toList()));
+            } else {
+                ExecEdge edge = inputSort.getInputEdges().get(0);
+                replacement.setInputEdges(List.of(copyEdge(edge, convert(edge.getSource()), replacement)));
+            }
+            return replacement;
+        }
+        if (node instanceof BatchExecLimit) {
+            BatchExecLimit limit = (BatchExecLimit) node;
+            StreamFusionBatchExecLimit replacement = new StreamFusionBatchExecLimit(
+                    limit.getPersistedConfig(),
+                    boundedLimitStart(limit),
+                    boundedLimitEnd(limit),
+                    boundedLimitGlobal(limit),
+                    limit.getInputProperties().get(0),
+                    (RowType) limit.getOutputType(),
+                    "StreamFusionBatchLimit[" + (boundedLimitGlobal(limit) ? "global" : "local") + "]");
+            replacement.setInputEdges(limit.getInputEdges().stream()
+                    .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                    .collect(Collectors.toList()));
+            return replacement;
+        }
+        if (node instanceof BatchExecSortLimit) {
+            BatchExecSortLimit sort = (BatchExecSortLimit) node;
+            StreamFusionBatchExecSortLimit replacement = new StreamFusionBatchExecSortLimit(
+                    sort.getPersistedConfig(),
+                    boundedSortLimitSpec(sort),
+                    boundedSortLimitStart(sort),
+                    boundedSortLimitEnd(sort),
+                    boundedSortLimitGlobal(sort),
+                    sort.getInputProperties().get(0),
+                    (RowType) sort.getOutputType(),
+                    "StreamFusionBatchSortLimit[" + (boundedSortLimitGlobal(sort) ? "global" : "local") + "]");
+            replacement.setInputEdges(sort.getInputEdges().stream()
                     .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
                     .collect(Collectors.toList()));
             return replacement;
@@ -2720,6 +2821,185 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         } catch (InvocationTargetException failure) {
             throw new IllegalStateException(
                     "StreamFusion batch bounded sort support inspection failed", failure.getCause());
+        }
+    }
+
+    private String unsupportedReason(BatchExecSortLimit sort, ProcessorContext context) {
+        try {
+            Class<?> translator = Class.forName(
+                    BOUNDED_SORT_LIMIT_TRANSLATOR_CLASS,
+                    true,
+                    context.getPlanner().getFlinkContext().getClassLoader());
+            Method method = translator.getMethod(
+                    "unsupportedReason", RowType.class, SortSpec.class, long.class, long.class, ReadableConfig.class);
+            return (String) method.invoke(
+                    null,
+                    (RowType) sort.getInputEdges().get(0).getOutputType(),
+                    boundedSortLimitSpec(sort),
+                    boundedSortLimitStart(sort),
+                    boundedSortLimitEnd(sort),
+                    sort.getPersistedConfig());
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException failure) {
+            throw new IllegalStateException("Could not inspect StreamFusion bounded SortLimit support", failure);
+        } catch (InvocationTargetException failure) {
+            throw new IllegalStateException(
+                    "StreamFusion bounded SortLimit support inspection failed", failure.getCause());
+        }
+    }
+
+    private String unsupportedReason(BatchExecLimit limit, ProcessorContext context) {
+        try {
+            Class<?> translator = Class.forName(
+                    BOUNDED_LIMIT_TRANSLATOR_CLASS,
+                    true,
+                    context.getPlanner().getFlinkContext().getClassLoader());
+            Method method = translator.getMethod("unsupportedReason", RowType.class, long.class, long.class);
+            return (String) method.invoke(
+                    null,
+                    (RowType) limit.getInputEdges().get(0).getOutputType(),
+                    boundedLimitStart(limit),
+                    boundedLimitEnd(limit));
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException failure) {
+            throw new IllegalStateException("Could not inspect StreamFusion bounded LIMIT support", failure);
+        } catch (InvocationTargetException failure) {
+            throw new IllegalStateException("StreamFusion bounded LIMIT support inspection failed", failure.getCause());
+        }
+    }
+
+    private String unsupportedReason(BatchExecRank rank, ProcessorContext context) {
+        try {
+            Class<?> translator = Class.forName(
+                    BOUNDED_RANK_TRANSLATOR_CLASS,
+                    true,
+                    context.getPlanner().getFlinkContext().getClassLoader());
+            Method method = translator.getMethod(
+                    "unsupportedReason",
+                    RowType.class,
+                    RowType.class,
+                    int[].class,
+                    int[].class,
+                    long.class,
+                    long.class,
+                    boolean.class);
+            return (String) method.invoke(
+                    null,
+                    (RowType) rank.getInputEdges().get(0).getOutputType(),
+                    (RowType) rank.getOutputType(),
+                    boundedRankPartitionFields(rank),
+                    boundedRankSortFields(rank),
+                    boundedRankStart(rank),
+                    boundedRankEnd(rank),
+                    boundedRankOutputNumber(rank));
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException failure) {
+            throw new IllegalStateException("Could not inspect StreamFusion bounded RANK support", failure);
+        } catch (InvocationTargetException failure) {
+            throw new IllegalStateException("StreamFusion bounded RANK support inspection failed", failure.getCause());
+        }
+    }
+
+    private static BatchExecSort boundedRankInputSort(BatchExecRank rank) {
+        if (rank.getInputEdges().size() != 1) {
+            return null;
+        }
+        ExecNode<?> source = bypassBatchExchange(rank.getInputEdges().get(0)).getSource();
+        return source instanceof BatchExecSort ? (BatchExecSort) source : null;
+    }
+
+    /**
+     * Flink implements a partitioned bounded batch rank as local sort/rank, hash exchange, and
+     * global rank. StreamFusion retains the hash exchange but performs one keyed bounded selection
+     * after it. Removing the local top-end reduction is exact and puts native state in the same key
+     * groups that own the final result.
+     */
+    private static BoundedRankPipeline boundedRankPipeline(BatchExecRank rank) {
+        BatchExecSort globalSort = boundedRankInputSort(rank);
+        if (globalSort == null || globalSort.getInputEdges().size() != 1) {
+            return null;
+        }
+        ExecNode<?> globalSortInput = globalSort.getInputEdges().get(0).getSource();
+        if (globalSortInput instanceof BatchExecExchange
+                && globalSortInput.getInputEdges().size() == 1) {
+            BatchExecExchange redistribution = (BatchExecExchange) globalSortInput;
+            if (!isKeyedBoundedRankExchange(redistribution)) {
+                return null;
+            }
+            ExecNode<?> redistributionInput =
+                    bypassBatchExchange(redistribution.getInputEdges().get(0)).getSource();
+            if (redistributionInput instanceof BatchExecRank) {
+                BatchExecRank localRank = (BatchExecRank) redistributionInput;
+                BatchExecSort localSort = boundedRankInputSort(localRank);
+                if (localSort == null
+                        || localSort.getInputEdges().size() != 1
+                        || boundedRankStart(localRank) != 1
+                        || boundedRankEnd(localRank) < boundedRankEnd(rank)
+                        || boundedRankOutputNumber(localRank)
+                        || !Arrays.equals(boundedRankPartitionFields(localRank), boundedRankPartitionFields(rank))
+                        || !Arrays.equals(boundedRankSortFields(localRank), boundedRankSortFields(rank))) {
+                    return null;
+                }
+                return new BoundedRankPipeline(
+                        rank,
+                        redistribution,
+                        localSort,
+                        localSort.getInputEdges().get(0));
+            }
+        }
+
+        if (rank.getInputEdges().get(0).getSource() instanceof BatchExecExchange) {
+            BatchExecExchange exchange =
+                    (BatchExecExchange) rank.getInputEdges().get(0).getSource();
+            if (exchange.getInputEdges().size() != 1 || !isKeyedBoundedRankExchange(exchange)) {
+                return null;
+            }
+            return new BoundedRankPipeline(
+                    rank, exchange, globalSort, globalSort.getInputEdges().get(0));
+        }
+        return null;
+    }
+
+    private static boolean isKeyedBoundedRankExchange(BatchExecExchange exchange) {
+        InputProperty.DistributionType type =
+                exchange.getInputProperties().get(0).getRequiredDistribution().getType();
+        return type == InputProperty.DistributionType.HASH || type == InputProperty.DistributionType.SINGLETON;
+    }
+
+    private ExecNode<?> convertBoundedRankPipeline(BoundedRankPipeline pipeline) {
+        BatchExecRank rank = pipeline.globalRank;
+        StreamFusionBatchExecExchange exchange = new StreamFusionBatchExecExchange(
+                pipeline.exchange.getPersistedConfig(),
+                pipeline.exchange.getInputProperties().get(0),
+                (RowType) pipeline.exchange.getOutputType(),
+                "StreamFusionBatchExchange");
+        exchange.setInputEdges(
+                List.of(copyEdge(pipeline.inputEdge, convert(pipeline.inputEdge.getSource()), exchange)));
+
+        StreamFusionBatchExecRank replacement = new StreamFusionBatchExecRank(
+                rank.getPersistedConfig(),
+                boundedRankPartitionFields(rank),
+                boundedRankSortFields(rank),
+                boundedRankStart(rank),
+                boundedRankEnd(rank),
+                boundedRankOutputNumber(rank),
+                boundedSortSpec(pipeline.inputSort),
+                rank.getInputProperties().get(0),
+                (RowType) rank.getOutputType(),
+                "StreamFusionBatchRank");
+        replacement.setInputEdges(List.of(copyEdge(rank.getInputEdges().get(0), exchange, replacement)));
+        return replacement;
+    }
+
+    private static final class BoundedRankPipeline {
+        private final BatchExecRank globalRank;
+        private final BatchExecExchange exchange;
+        private final BatchExecSort inputSort;
+        private final ExecEdge inputEdge;
+
+        private BoundedRankPipeline(
+                BatchExecRank globalRank, BatchExecExchange exchange, BatchExecSort inputSort, ExecEdge inputEdge) {
+            this.globalRank = globalRank;
+            this.exchange = exchange;
+            this.inputSort = inputSort;
+            this.inputEdge = inputEdge;
         }
     }
 

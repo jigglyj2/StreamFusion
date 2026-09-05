@@ -23,9 +23,12 @@ import org.apache.flink.table.planner.plan.nodes.exec.StateMetadata;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecAdaptiveJoin;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecHashAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecHashJoin;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecLimit;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecNestedLoopJoin;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecRank;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecSort;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecSortAggregate;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecSortLimit;
 import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecCalc;
 import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecExpand;
 import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecWindowTableFunction;
@@ -418,6 +421,54 @@ final class FlinkExecNodeAccess {
 
     static SortSpec boundedSortSpec(BatchExecSort sort) {
         return (SortSpec) field(sort, BatchExecSort.class, "sortSpec");
+    }
+
+    static SortSpec boundedSortLimitSpec(BatchExecSortLimit sort) {
+        return (SortSpec) field(sort, BatchExecSortLimit.class, "sortSpec");
+    }
+
+    static long boundedSortLimitStart(BatchExecSortLimit sort) {
+        return (long) field(sort, BatchExecSortLimit.class, "limitStart");
+    }
+
+    static long boundedSortLimitEnd(BatchExecSortLimit sort) {
+        return (long) field(sort, BatchExecSortLimit.class, "limitEnd");
+    }
+
+    static boolean boundedSortLimitGlobal(BatchExecSortLimit sort) {
+        return (boolean) field(sort, BatchExecSortLimit.class, "isGlobal");
+    }
+
+    static long boundedLimitStart(BatchExecLimit limit) {
+        return (long) field(limit, BatchExecLimit.class, "limitStart");
+    }
+
+    static long boundedLimitEnd(BatchExecLimit limit) {
+        return (long) field(limit, BatchExecLimit.class, "limitEnd");
+    }
+
+    static boolean boundedLimitGlobal(BatchExecLimit limit) {
+        return (boolean) field(limit, BatchExecLimit.class, "isGlobal");
+    }
+
+    static int[] boundedRankPartitionFields(BatchExecRank rank) {
+        return ((int[]) field(rank, BatchExecRank.class, "partitionFields")).clone();
+    }
+
+    static int[] boundedRankSortFields(BatchExecRank rank) {
+        return ((int[]) field(rank, BatchExecRank.class, "sortFields")).clone();
+    }
+
+    static long boundedRankStart(BatchExecRank rank) {
+        return (long) field(rank, BatchExecRank.class, "rankStart");
+    }
+
+    static long boundedRankEnd(BatchExecRank rank) {
+        return (long) field(rank, BatchExecRank.class, "rankEnd");
+    }
+
+    static boolean boundedRankOutputNumber(BatchExecRank rank) {
+        return (boolean) field(rank, BatchExecRank.class, "outputRankNumber");
     }
 
     static boolean temporalSortProcessingTime(StreamExecTemporalSort sort, SortSpec sortSpec) {

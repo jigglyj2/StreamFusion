@@ -73,6 +73,11 @@ public final class NativeTopNBridge {
         return nativeStatistics(handle);
     }
 
+    public static long finish(long handle, long outputArray, long outputSchema) {
+        EXECUTED_BATCHES.incrementAndGet();
+        return finishBoundedBatch(handle, outputArray, outputSchema);
+    }
+
     public static boolean appendLimitSaturated(long handle) {
         return isAppendLimitSaturated(handle);
     }
@@ -132,6 +137,8 @@ public final class NativeTopNBridge {
 
     private static native long processBatch(
             long handle, long nowMillis, long inputArray, long inputSchema, long outputArray, long outputSchema);
+
+    private static native long finishBoundedBatch(long handle, long outputArray, long outputSchema);
 
     private static native long[] nativeStatistics(long handle);
 

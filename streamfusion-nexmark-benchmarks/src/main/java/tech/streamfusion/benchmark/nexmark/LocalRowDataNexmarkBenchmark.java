@@ -33,7 +33,7 @@ public final class LocalRowDataNexmarkBenchmark {
                         String runtimeMode =
                                 Boolean.getBoolean("streamfusion.nexmark.batch-mode") ? "batch" : "streaming";
                         System.out.printf(
-                                "%s engine=%s runtime_mode=%s state_backend=%s accelerated=%s input_events=%d elapsed_seconds=%.6f input_events_per_second=%.2f native_calc_batches=%d native_deduplicate_batches=%d native_group_aggregate_batches=%d native_top_n_batches=%d native_window_aggregate_batches=%d native_window_join_batches=%d native_regular_join_batches=%d native_multi_join_batches=%d native_interval_join_batches=%d native_temporal_join_batches=%d native_over_aggregate_batches=%d native_temporal_sort_batches=%d native_bounded_sort_batches=%d native_match_recognize_batches=%d output_rows=%d output_sha256=%s ordered_sha256=%s materialized_rows=%d materialized_sha256=%s%n",
+                                "%s engine=%s runtime_mode=%s state_backend=%s accelerated=%s input_events=%d elapsed_seconds=%.6f input_events_per_second=%.2f native_calc_batches=%d native_deduplicate_batches=%d native_group_aggregate_batches=%d native_top_n_batches=%d native_window_aggregate_batches=%d native_window_join_batches=%d native_regular_join_batches=%d native_multi_join_batches=%d native_interval_join_batches=%d native_temporal_join_batches=%d native_over_aggregate_batches=%d native_temporal_sort_batches=%d native_bounded_sort_batches=%d native_bounded_rank_batches=%d native_match_recognize_batches=%d output_rows=%d output_sha256=%s ordered_sha256=%s materialized_rows=%d materialized_sha256=%s%n",
                                 query,
                                 streamFusion ? "streamfusion" : "flink",
                                 runtimeMode,
@@ -55,6 +55,7 @@ public final class LocalRowDataNexmarkBenchmark {
                                 result.nativeOverAggregateBatches(),
                                 result.nativeTemporalSortBatches(),
                                 result.nativeBoundedSortBatches(),
+                                result.nativeBoundedRankBatches(),
                                 result.nativeMatchRecognizeBatches(),
                                 result.outputRows(),
                                 result.outputSha256(),
@@ -107,6 +108,7 @@ public final class LocalRowDataNexmarkBenchmark {
                 StreamFusionPlannerFactory.nativeOverAggregateBatchCount(),
                 StreamFusionPlannerFactory.nativeTemporalSortBatchCount(),
                 StreamFusionPlannerFactory.nativeBoundedSortBatchCount(),
+                StreamFusionPlannerFactory.nativeBoundedRankBatchCount(),
                 StreamFusionPlannerFactory.nativeMatchRecognizeBatchCount(),
                 output.rowCount(),
                 output.sha256(),
@@ -159,6 +161,7 @@ public final class LocalRowDataNexmarkBenchmark {
         private final long nativeOverAggregateBatches;
         private final long nativeTemporalSortBatches;
         private final long nativeBoundedSortBatches;
+        private final long nativeBoundedRankBatches;
         private final long nativeMatchRecognizeBatches;
         private final long outputRows;
         private final String outputSha256;
@@ -183,6 +186,7 @@ public final class LocalRowDataNexmarkBenchmark {
                 long nativeOverAggregateBatches,
                 long nativeTemporalSortBatches,
                 long nativeBoundedSortBatches,
+                long nativeBoundedRankBatches,
                 long nativeMatchRecognizeBatches,
                 long outputRows,
                 String outputSha256,
@@ -205,6 +209,7 @@ public final class LocalRowDataNexmarkBenchmark {
             this.nativeOverAggregateBatches = nativeOverAggregateBatches;
             this.nativeTemporalSortBatches = nativeTemporalSortBatches;
             this.nativeBoundedSortBatches = nativeBoundedSortBatches;
+            this.nativeBoundedRankBatches = nativeBoundedRankBatches;
             this.nativeMatchRecognizeBatches = nativeMatchRecognizeBatches;
             this.outputRows = outputRows;
             this.outputSha256 = outputSha256;
@@ -273,6 +278,10 @@ public final class LocalRowDataNexmarkBenchmark {
 
         long nativeBoundedSortBatches() {
             return nativeBoundedSortBatches;
+        }
+
+        long nativeBoundedRankBatches() {
+            return nativeBoundedRankBatches;
         }
 
         long nativeMatchRecognizeBatches() {

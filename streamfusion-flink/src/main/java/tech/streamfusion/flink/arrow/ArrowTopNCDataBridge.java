@@ -72,6 +72,27 @@ public final class ArrowTopNCDataBridge {
         }
     }
 
+    /** Drains one bounded final Top-N/RANK output batch through Arrow C Data. */
+    public static ArrowRowDataBatch finish(
+            long handle, RowType outputType, BufferAllocator allocator, NativeMemoryManager memoryManager) {
+        try (ArrowArray outputArray = ArrowArray.allocateNew(allocator);
+                ArrowSchema outputSchema = ArrowSchema.allocateNew(allocator);
+                CDataDictionaryProvider dictionaries = new CDataDictionaryProvider()) {
+            try {
+                long count = NativeTopNBridge.finish(handle, outputArray.memoryAddress(), outputSchema.memoryAddress());
+                if (count < 0 || count > Integer.MAX_VALUE) {
+                    throw new IllegalStateException("Native bounded Top-N returned invalid row count " + count);
+                }
+                VectorSchemaRoot output =
+                        Data.importVectorSchemaRoot(allocator, outputArray, outputSchema, dictionaries);
+                output.setRowCount((int) count);
+                return removeRowKinds(output, outputType, allocator);
+            } finally {
+                memoryManager.finishArrowTransfer();
+            }
+        }
+    }
+
     private static ArrowRowDataBatch removeRowKinds(
             VectorSchemaRoot output, RowType outputType, BufferAllocator allocator) {
         int index = output.getFieldVectors().size() - 1;

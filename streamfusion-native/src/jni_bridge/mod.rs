@@ -6,6 +6,7 @@
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
 
+mod bounded_rank;
 mod bounded_sort;
 mod calc;
 mod changelog_normalize;

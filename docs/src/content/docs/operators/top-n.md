@@ -8,6 +8,8 @@ sidebar:
 **Current status:** Accelerated for Flink streaming `ROW_NUMBER` Top-N, including partitioned and
 global Top-N, constant ranges (including `OFFSET`), variable per-partition upper bounds, rank-number
 output, and Flink's append-fast, update-fast, and retract strategies.
+Bounded SQL `RANK` is also accelerated through Flink's
+local-sort/local-rank/hash-exchange/global-sort/global-rank plan.
 
 Flink's unordered global `StreamExecLimit` specialization uses the same physical node and native
 runtime. See [LIMIT](../limit/) for its counter-state and saturation behavior.
@@ -31,6 +33,15 @@ StreamFusion replaces `StreamExecRank` only when Flink selected `ROW_NUMBER` and
 variable rank range. Flink 2.3 does not implement streaming `RANK` or `DENSE_RANK` in this physical
 operator, so those shapes retain Flink's own planning error/fallback rather than being approximated.
 General OVER expressions remain separate operators.
+
+For bounded `RANK`, the planner retains Flink's hash or singleton exchange and replaces the paired
+local/global sort-rank stages with one keyed, tie-aware bounded selection. It only performs this
+rewrite when local and global partition/order keys match, the local range begins at one and covers
+the global cutoff, and the exchange establishes final key ownership. Otherwise the whole plan
+falls back. SQL rank gaps and all ties at the cutoff are preserved; `OFFSET`, an optional BIGINT rank
+column, duplicate rows, and INSERT, UPDATE_BEFORE, UPDATE_AFTER, and DELETE physical records are
+supported. Every Arrow-supported type is accepted as payload. Rank keys accept the same complete
+Flink-comparable type surface documented for [ORDER BY](../order-by/).
 
 Stored payloads remain Arrow columns, including nested arrays, maps, multisets, and rows. Rust
 implements Flink's comparison semantics for every logical family that Flink accepts in this
@@ -71,5 +82,11 @@ retract mode does not. StreamFusion's separate metric subgroup reports comparato
 loaded/committed/expired groups, invalid retractions, logical changelog counts, native state batches,
 managed-memory usage, and checkpoint/restore data. Standard input/output counters count logical
 rows rather than internal Arrow batches.
+
+Bounded rank uses the same raw keyed-state and canonical checkpoint implementation. Its terminal
+drain is emitted in managed Arrow batches. In addition to logical I/O it publishes the three Flink
+sort gauges (`memoryUsedSizeInBytes`, `numSpillFiles`, and `spillInBytes`) with actual managed-memory
+usage and zero spill values, plus additive loaded/committed group, comparator, invalid-retraction,
+emitted-row, native-invocation, backend, and checkpoint diagnostics.
 
 See the [Flink 2.3 Top-N documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/topn/).

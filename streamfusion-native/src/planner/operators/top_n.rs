@@ -8,8 +8,10 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 
 use ahash::RandomState;
-use arrow::array::{Array, ArrayRef, BinaryArray, Int16Array, Int32Array, Int64Array, Int8Array};
-use arrow::compute::interleave_record_batch;
+use arrow::array::{
+    Array, ArrayRef, BinaryArray, Int16Array, Int32Array, Int64Array, Int8Array, UInt32Array,
+};
+use arrow::compute::{interleave_record_batch, take};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_row::{RowConverter, Rows};
@@ -19,12 +21,13 @@ use hashbrown::HashMap;
 use self::compare::{compare_rows, equal_rows};
 #[cfg(test)]
 use self::state::{decode_state, encode_state, StoredState};
-use self::state::{decode_state_rows, encode_state_rows, row_converter};
+use self::state::{decode_state_rows, encode_state_rows_with_kinds, row_converter};
 use crate::exchange::{assign_key_group, encode_binary_row, KeyField};
 use crate::memory_pool::HostMemoryReservation;
 use crate::planner::arrow_schema;
 use crate::state::{
-    KeyedState, MemoryKeyedState, RocksPluginKeyedState, StateKey, StateKeyRef, StateMutation,
+    decode_key_group_snapshot, KeyedState, MemoryKeyedState, RocksPluginKeyedState, StateKey,
+    StateKeyRef, StateMutation,
 };
 use crate::{decode_plan, proto};
 
@@ -43,6 +46,8 @@ pub(crate) struct TopNProcessor {
     input_schema: SchemaRef,
     output_schema: SchemaRef,
     max_parallelism: u32,
+    first_key_group: u32,
+    last_key_group: u32,
     state: Box<dyn KeyedState>,
     scratch_reservation: HostMemoryReservation,
     prepared_input_schema: Option<SchemaRef>,
@@ -59,6 +64,8 @@ pub(crate) struct TopNProcessor {
     invalid_retractions: u64,
     invalid_top_sizes: u64,
     saturated_append_limit: bool,
+    bounded_output: Option<BoundedOutput>,
+    bounded_drained: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,6 +73,7 @@ struct CandidateRef {
     source: usize,
     row: usize,
     sequence: u64,
+    kind: i8,
 }
 
 struct GroupWork {
@@ -79,7 +87,38 @@ struct DecodedGroup {
     next_sequence: u64,
     rank_end: Option<i64>,
     sequences: Vec<u64>,
+    row_kinds: Vec<i8>,
     restored_row_offset: usize,
+}
+
+struct BoundedOutput {
+    rows: RecordBatch,
+    indices: Vec<u32>,
+    ranks: Vec<i64>,
+    kinds: Vec<i8>,
+    position: usize,
+}
+
+impl BoundedOutput {
+    fn retained_bytes(&self) -> usize {
+        self.rows
+            .get_array_memory_size()
+            .saturating_add(
+                self.indices
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<u32>()),
+            )
+            .saturating_add(
+                self.ranks
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<i64>()),
+            )
+            .saturating_add(
+                self.kinds
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<i8>()),
+            )
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -103,7 +142,14 @@ impl TopNProcessor {
             last_key_group,
             reservation,
         )?);
-        Self::with_state(serialized_plan, max_parallelism, state, scratch)
+        Self::with_state_with_range(
+            serialized_plan,
+            max_parallelism,
+            first_key_group,
+            last_key_group,
+            state,
+            scratch,
+        )
     }
 
     pub(crate) fn new_rocksdb(
@@ -123,12 +169,21 @@ impl TopNProcessor {
             last_key_group,
             memory_limit,
         )?);
-        Self::with_state(serialized_plan, max_parallelism, state, reservation)
+        Self::with_state_with_range(
+            serialized_plan,
+            max_parallelism,
+            first_key_group,
+            last_key_group,
+            state,
+            reservation,
+        )
     }
 
-    fn with_state(
+    fn with_state_with_range(
         serialized_plan: &[u8],
         max_parallelism: u32,
+        first_key_group: u32,
+        last_key_group: u32,
         state: Box<dyn KeyedState>,
         scratch_reservation: HostMemoryReservation,
     ) -> Result<Self> {
@@ -147,18 +202,21 @@ impl TopNProcessor {
         let input_schema = arrow_schema(plan.input_schema.as_ref().expect("validated"))?;
         let output_schema = arrow_schema(plan.output_schema.as_ref().expect("validated"))?;
         validate_output_schema(&plan, &input_schema, &output_schema)?;
+        let initial_row_converter = row_converter(&input_schema)?;
         Ok(Self {
             plan,
             input_schema,
             output_schema,
             max_parallelism,
+            first_key_group,
+            last_key_group,
             state,
             scratch_reservation,
             prepared_input_schema: None,
             key_fields: Vec::new(),
             preencoded_key_index: None,
             input_kind_index: None,
-            row_converter: None,
+            row_converter: Some(initial_row_converter),
             state_read_batches: 0,
             state_write_batches: 0,
             groups_read: 0,
@@ -168,6 +226,8 @@ impl TopNProcessor {
             invalid_retractions: 0,
             invalid_top_sizes: 0,
             saturated_append_limit: false,
+            bounded_output: None,
+            bounded_drained: false,
         })
     }
 
@@ -176,6 +236,11 @@ impl TopNProcessor {
         batch: RecordBatch,
         now_millis: i64,
     ) -> Result<RecordBatch> {
+        if self.bounded_output.is_some() || self.bounded_drained {
+            return Err(DataFusionError::Execution(
+                "bounded Top-N received input after terminal output started".to_string(),
+            ));
+        }
         self.prepare_schema(batch.schema())?;
         if self.saturated_append_limit {
             let kinds = batch
@@ -284,6 +349,7 @@ impl TopNProcessor {
                         next_sequence: 0,
                         rank_end: None,
                         sequences: Vec::new(),
+                        row_kinds: Vec::new(),
                         restored_row_offset: restored_rows.len(),
                     });
                 } else {
@@ -292,6 +358,9 @@ impl TopNProcessor {
                     decoded_groups.push(DecodedGroup {
                         next_sequence: decoded.next_sequence,
                         rank_end: decoded.rank_end,
+                        row_kinds: decoded
+                            .row_kinds
+                            .unwrap_or_else(|| vec![INSERT; decoded.sequences.len()]),
                         sequences: decoded.sequences,
                         restored_row_offset,
                     });
@@ -301,6 +370,7 @@ impl TopNProcessor {
                     next_sequence: 0,
                     rank_end: None,
                     sequences: Vec::new(),
+                    row_kinds: Vec::new(),
                     restored_row_offset: restored_rows.len(),
                 });
             }
@@ -330,6 +400,7 @@ impl TopNProcessor {
                         source: 1,
                         row: decoded.restored_row_offset + row,
                         sequence,
+                        kind: decoded.row_kinds[row],
                     })
                     .collect(),
             })
@@ -356,6 +427,7 @@ impl TopNProcessor {
                         source: 0,
                         row,
                         sequence: group.next_sequence,
+                        kind: INSERT,
                     };
                     group.next_sequence = next_sequence(group.next_sequence)?;
                     let rank = group.next_sequence;
@@ -376,17 +448,32 @@ impl TopNProcessor {
                 group,
                 &mut self.invalid_top_sizes,
             )?;
-            let before = selected(group, self.plan.rank_start, rank_end).to_vec();
             let candidate = CandidateRef {
                 source: 0,
                 row,
                 sequence: group.next_sequence,
+                kind: if self.plan.physical_input_semantics {
+                    let kind = kinds.value(row);
+                    if !matches!(kind, INSERT | UPDATE_BEFORE | UPDATE_AFTER | DELETE) {
+                        return Err(unknown_row_kind(kind));
+                    }
+                    kind
+                } else {
+                    INSERT
+                },
+            };
+            let before = if self.plan.bounded_final_output {
+                Vec::new()
+            } else {
+                selected(group, self.plan.rank_start, rank_end).to_vec()
             };
             match proto::TopNStrategy::try_from(self.plan.strategy)
                 .map_err(|_| DataFusionError::Plan("top-n strategy is unknown".to_string()))?
             {
                 proto::TopNStrategy::AppendFast => {
-                    require_insert(kinds.value(row), "append-fast")?;
+                    if !self.plan.physical_input_semantics {
+                        require_insert(kinds.value(row), "append-fast")?;
+                    }
                     group.next_sequence = next_sequence(group.next_sequence)?;
                     insert_sorted(
                         &self.plan,
@@ -458,12 +545,23 @@ impl TopNProcessor {
                 },
                 proto::TopNStrategy::Unspecified => unreachable!("validated Top-N strategy"),
             }
-            if self.plan.strategy != proto::TopNStrategy::Retract as i32 {
+            if self.plan.bounded_final_output && rank_type(&self.plan) == proto::TopNRankType::Rank
+            {
+                truncate_rank(
+                    &self.plan,
+                    &sources,
+                    &mut group.candidates,
+                    rank_end,
+                    &mut self.comparator_calls,
+                )?;
+            } else if self.plan.strategy != proto::TopNStrategy::Retract as i32 {
                 let retained = usize::try_from(rank_end.max(0)).unwrap_or(usize::MAX);
                 group.candidates.truncate(retained);
             }
-            let after = selected(group, self.plan.rank_start, rank_end);
-            emit_difference(&self.plan, &sources, &before, after, &mut output)?;
+            if !self.plan.bounded_final_output {
+                let after = selected(group, self.plan.rank_start, rank_end);
+                emit_difference(&self.plan, &sources, &before, after, &mut output)?;
+            }
         }
 
         let saturates_append_limit = is_non_expiring_append_limit(&self.plan)
@@ -483,16 +581,24 @@ impl TopNProcessor {
                 .iter()
                 .map(|candidate| candidate.sequence)
                 .collect::<Vec<_>>();
+            let row_kinds = self.plan.physical_input_semantics.then(|| {
+                group
+                    .candidates
+                    .iter()
+                    .map(|candidate| candidate.kind)
+                    .collect::<Vec<_>>()
+            });
             let preserve_empty = group.rank_end.is_some();
             mutations.push(StateMutation {
                 key: group.state_key,
                 value: (!sequences.is_empty() || preserve_empty)
                     .then(|| {
-                        encode_state_rows(
+                        encode_state_rows_with_kinds(
                             group.next_sequence,
                             group.rank_end,
                             now_millis,
                             &sequences,
+                            row_kinds.as_deref(),
                             group.candidates.iter().map(|candidate| {
                                 encoded_sources[candidate.source].row(candidate.row)
                             }),
@@ -523,6 +629,186 @@ impl TopNProcessor {
         ]
     }
 
+    pub(crate) fn finish_bounded(&mut self) -> Result<RecordBatch> {
+        if !self.plan.bounded_final_output {
+            return Err(DataFusionError::Plan(
+                "terminal Top-N output requires a bounded-final plan".to_string(),
+            ));
+        }
+        if self.bounded_drained {
+            return output_batch(&self.plan, &self.output_schema, &[], Vec::new());
+        }
+        if self.bounded_output.is_none() {
+            self.prepare_bounded_output()?;
+            if self.bounded_output.is_none() {
+                self.bounded_drained = true;
+                self.scratch_reservation.resize(0)?;
+                return output_batch(&self.plan, &self.output_schema, &[], Vec::new());
+            }
+        }
+
+        const OUTPUT_BATCH_ROWS: usize = 16_384;
+        let pending = self
+            .bounded_output
+            .as_mut()
+            .expect("bounded output prepared");
+        let end = pending
+            .position
+            .saturating_add(OUTPUT_BATCH_ROWS)
+            .min(pending.indices.len());
+        let selection = UInt32Array::from(pending.indices[pending.position..end].to_vec());
+        let mut columns = pending
+            .rows
+            .columns()
+            .iter()
+            .map(|column| take(column.as_ref(), &selection, None))
+            .collect::<arrow::error::Result<Vec<_>>>()?;
+        if self.plan.output_rank_number {
+            columns.push(Arc::new(Int64Array::from(
+                pending.ranks[pending.position..end].to_vec(),
+            )) as ArrayRef);
+        }
+        columns.push(Arc::new(Int8Array::from(
+            pending.kinds[pending.position..end].to_vec(),
+        )) as ArrayRef);
+        let mut fields = self
+            .output_schema
+            .fields()
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        fields.push(Arc::new(Field::new(
+            OUTPUT_KIND_COLUMN,
+            DataType::Int8,
+            false,
+        )));
+        let output = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)?;
+        pending.position = end;
+        let retained = pending.retained_bytes();
+        let output_bytes = output.get_array_memory_size();
+        let finished = end == pending.indices.len();
+        self.scratch_reservation
+            .resize(retained.saturating_add(output_bytes))?;
+        self.scratch_reservation.transfer_to_arrow(output_bytes)?;
+        if finished {
+            self.bounded_output = None;
+            self.bounded_drained = true;
+            self.scratch_reservation.resize(0)?;
+        }
+        Ok(output)
+    }
+
+    fn prepare_bounded_output(&mut self) -> Result<()> {
+        let converter = self.row_converter.as_ref().ok_or_else(|| {
+            DataFusionError::Execution("bounded Top-N received no input schema".to_string())
+        })?;
+        let mut encoded_rows = Vec::<Vec<u8>>::new();
+        let mut row_kinds = Vec::<i8>::new();
+        let mut groups = Vec::<(usize, usize)>::new();
+        let mut snapshot_bytes = 0usize;
+        for key_group in self.first_key_group..=self.last_key_group {
+            let snapshot = self.state.snapshot_key_group(key_group)?;
+            snapshot_bytes = snapshot_bytes.saturating_add(snapshot.len());
+            self.scratch_reservation
+                .resize(snapshot_bytes.saturating_mul(2))?;
+            for (key, value) in decode_key_group_snapshot(key_group, &snapshot)? {
+                if key.first().copied() != Some(STATE_KEY_PREFIX) {
+                    continue;
+                }
+                let decoded = decode_state_rows(&value)?;
+                if decoded.rows.is_empty() {
+                    continue;
+                }
+                let kinds = decoded.row_kinds.ok_or_else(|| {
+                    DataFusionError::Execution(
+                        "bounded Top-N state is missing physical RowKinds".to_string(),
+                    )
+                })?;
+                let offset = encoded_rows.len();
+                encoded_rows.extend(decoded.rows.into_iter().map(<[u8]>::to_vec));
+                row_kinds.extend(kinds);
+                groups.push((offset, encoded_rows.len() - offset));
+            }
+        }
+        if encoded_rows.is_empty() {
+            return Ok(());
+        }
+        let parser = converter.parser();
+        let columns = converter.convert_rows(encoded_rows.iter().map(|row| parser.parse(row)))?;
+        let rows = RecordBatch::try_new(Arc::clone(&self.input_schema), columns)?;
+        let mut group_order = (0..groups.len()).collect::<Vec<_>>();
+        let partition_ascending = vec![true; self.plan.partition_key_indices.len()];
+        let partition_nulls_last = vec![false; self.plan.partition_key_indices.len()];
+        let mut compare_error = None;
+        group_order.sort_by(|left, right| {
+            self.comparator_calls = self.comparator_calls.saturating_add(1);
+            let (left, _) = groups[*left];
+            let (right, _) = groups[*right];
+            match compare_rows(
+                &rows,
+                left,
+                &rows,
+                right,
+                &self.plan.partition_key_indices,
+                &partition_ascending,
+                &partition_nulls_last,
+            ) {
+                Ok(order) => order,
+                Err(error) => {
+                    compare_error = Some(error);
+                    Ordering::Equal
+                }
+            }
+        });
+        if let Some(error) = compare_error {
+            return Err(error);
+        }
+        let mut indices = Vec::new();
+        let mut ranks = Vec::new();
+        let mut kinds = Vec::new();
+        for group in group_order {
+            let (offset, count) = groups[group];
+            let mut rank = 1u64;
+            for index in 0..count {
+                let row = offset + index;
+                if index > 0 {
+                    self.comparator_calls = self.comparator_calls.saturating_add(1);
+                    if compare_rows(
+                        &rows,
+                        row - 1,
+                        &rows,
+                        row,
+                        &self.plan.sort_key_indices,
+                        &self.plan.sort_ascending,
+                        &self.plan.sort_nulls_last,
+                    )? != Ordering::Equal
+                    {
+                        rank = index as u64 + 1;
+                    }
+                }
+                if rank >= self.plan.rank_start && rank <= self.plan.rank_end.expect("validated") {
+                    indices.push(u32::try_from(row).map_err(|_| {
+                        DataFusionError::Execution(
+                            "bounded Top-N terminal output exceeds u32 rows".to_string(),
+                        )
+                    })?);
+                    ranks.push(rank as i64);
+                    kinds.push(row_kinds[row]);
+                }
+            }
+        }
+        let pending = BoundedOutput {
+            rows,
+            indices,
+            ranks,
+            kinds,
+            position: 0,
+        };
+        self.scratch_reservation.resize(pending.retained_bytes())?;
+        self.bounded_output = Some(pending);
+        Ok(())
+    }
+
     pub(crate) fn is_append_limit_saturated(&self) -> bool {
         self.saturated_append_limit
     }
@@ -533,6 +819,8 @@ impl TopNProcessor {
 
     pub(crate) fn restore_key_group(&mut self, key_group: u32, bytes: &[u8]) -> Result<()> {
         self.saturated_append_limit = false;
+        self.bounded_output = None;
+        self.bounded_drained = false;
         self.state.restore_key_group(key_group, bytes)
     }
 
@@ -805,6 +1093,38 @@ fn insert_sorted(
         }
     }
     candidates.insert(low, candidate);
+    Ok(())
+}
+
+fn rank_type(plan: &proto::TopN) -> proto::TopNRankType {
+    match proto::TopNRankType::try_from(plan.rank_type) {
+        Ok(proto::TopNRankType::Rank) => proto::TopNRankType::Rank,
+        _ => proto::TopNRankType::RowNumber,
+    }
+}
+
+fn truncate_rank(
+    plan: &proto::TopN,
+    sources: &[Arc<RecordBatch>],
+    candidates: &mut Vec<CandidateRef>,
+    rank_end: i64,
+    comparator_calls: &mut u64,
+) -> Result<()> {
+    let end = usize::try_from(rank_end.max(0)).unwrap_or(usize::MAX);
+    if candidates.len() <= end || end == 0 {
+        candidates.truncate(end);
+        return Ok(());
+    }
+    let cutoff = candidates[end - 1];
+    let mut retained = end;
+    while retained < candidates.len() {
+        *comparator_calls = comparator_calls.saturating_add(1);
+        if sort_key_order(plan, sources, cutoff, candidates[retained])? != Ordering::Equal {
+            break;
+        }
+        retained += 1;
+    }
+    candidates.truncate(retained);
     Ok(())
 }
 
@@ -1095,6 +1415,25 @@ fn validate_plan(plan: &proto::TopN, max_parallelism: u32) -> Result<()> {
             ));
         }
     }
+    let rank_type = proto::TopNRankType::try_from(plan.rank_type)
+        .map_err(|_| DataFusionError::Plan("top-n rank type is unknown".to_string()))?;
+    if rank_type == proto::TopNRankType::Rank
+        && (!plan.bounded_final_output
+            || !plan.physical_input_semantics
+            || plan.strategy != proto::TopNStrategy::AppendFast as i32
+            || plan.rank_end.is_none()
+            || plan.state_ttl_millis != 0)
+    {
+        return Err(DataFusionError::Plan(
+            "SQL RANK selection requires bounded physical append-state with a constant range"
+                .to_string(),
+        ));
+    }
+    if plan.bounded_final_output && rank_type != proto::TopNRankType::Rank {
+        return Err(DataFusionError::Plan(
+            "bounded Top-N final output currently requires SQL RANK semantics".to_string(),
+        ));
+    }
     if plan.sort_key_indices.is_empty()
         && (!plan.partition_key_indices.is_empty()
             || plan.output_rank_number
@@ -1267,6 +1606,9 @@ mod tests {
                     sort_ascending: vec![false],
                     sort_nulls_last: vec![true],
                     output_schema: Some(output),
+                    rank_type: proto::TopNRankType::RowNumber as i32,
+                    bounded_final_output: false,
+                    physical_input_semantics: false,
                 }))),
             }),
         }
@@ -1350,6 +1692,158 @@ mod tests {
         }
     }
 
+    fn bounded_rank_plan() -> Vec<u8> {
+        let mut native = proto::NativePlan::decode(plan().as_slice()).unwrap();
+        let Some(proto::operator::Operator::TopN(top_n)) =
+            native.root.as_mut().and_then(|root| root.operator.as_mut())
+        else {
+            unreachable!()
+        };
+        top_n.rank_start = 2;
+        top_n.rank_end = Some(3);
+        top_n.generate_update_before = false;
+        top_n.rank_type = proto::TopNRankType::Rank as i32;
+        top_n.bounded_final_output = true;
+        top_n.physical_input_semantics = true;
+        native.encode_to_vec()
+    }
+
+    #[test]
+    fn bounded_rank_retains_cutoff_ties_row_kinds_and_canonical_state() {
+        let broker = Arc::new(TestBroker::new(64 << 20));
+        let mut source = TopNProcessor::new(
+            &bounded_rank_plan(),
+            128,
+            0,
+            127,
+            HostMemoryReservation::new(broker.clone(), "bounded rank source"),
+        )
+        .unwrap();
+        let input = batch_with_kinds(
+            vec![2, 1, 1, 2, 1, 1, 2],
+            vec!["y", "b", "c", "z", "a", "b", "z"],
+            vec![
+                DELETE,
+                UPDATE_BEFORE,
+                INSERT,
+                UPDATE_AFTER,
+                DELETE,
+                UPDATE_AFTER,
+                INSERT,
+            ],
+        );
+        assert_eq!(source.process_arrow(input, 0).unwrap().num_rows(), 0);
+
+        let mut restored = TopNProcessor::new(
+            &bounded_rank_plan(),
+            128,
+            0,
+            127,
+            HostMemoryReservation::new(broker, "bounded rank restored"),
+        )
+        .unwrap();
+        for key_group in 0..128 {
+            let snapshot = source.snapshot_key_group(key_group).unwrap();
+            restored.restore_key_group(key_group, &snapshot).unwrap();
+        }
+        let output = restored.finish_bounded().unwrap();
+        assert_eq!(output_values(&output), vec!["b", "b", "y"]);
+        assert_eq!(
+            output
+                .column(2)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values(),
+            &[2, 2, 3]
+        );
+        assert_eq!(
+            output_kinds(&output),
+            vec![UPDATE_BEFORE, UPDATE_AFTER, DELETE]
+        );
+        assert_eq!(restored.finish_bounded().unwrap().num_rows(), 0);
+    }
+
+    #[test]
+    fn bounded_rank_canonical_state_moves_between_memory_and_rocksdb() {
+        let Ok(plugin_path) = std::env::var("STREAMFUSION_TEST_ROCKSDB_PLUGIN") else {
+            return;
+        };
+        let broker = Arc::new(TestBroker::new(1 << 30));
+        let mut memory = TopNProcessor::new(
+            &bounded_rank_plan(),
+            128,
+            0,
+            127,
+            HostMemoryReservation::new(broker.clone(), "bounded rank memory source"),
+        )
+        .unwrap();
+        memory
+            .process_arrow(
+                batch_with_kinds(
+                    vec![2, 1, 1, 2, 1, 1, 2],
+                    vec!["y", "b", "c", "z", "a", "b", "z"],
+                    vec![
+                        DELETE,
+                        UPDATE_BEFORE,
+                        INSERT,
+                        UPDATE_AFTER,
+                        DELETE,
+                        UPDATE_AFTER,
+                        INSERT,
+                    ],
+                ),
+                0,
+            )
+            .unwrap();
+        let snapshots = (0..128)
+            .map(|key_group| memory.snapshot_key_group(key_group).unwrap())
+            .collect::<Vec<_>>();
+
+        let directory = tempfile::tempdir().unwrap();
+        let mut rocks = TopNProcessor::new_rocksdb(
+            &bounded_rank_plan(),
+            128,
+            0,
+            127,
+            std::path::Path::new(&plugin_path),
+            directory.path(),
+            64 << 20,
+            HostMemoryReservation::new(broker.clone(), "bounded rank RocksDB scratch"),
+        )
+        .unwrap();
+        for (key_group, snapshot) in snapshots.iter().enumerate() {
+            rocks.restore_key_group(key_group as u32, snapshot).unwrap();
+            assert_eq!(
+                rocks.snapshot_key_group(key_group as u32).unwrap(),
+                *snapshot
+            );
+        }
+        let rocks_snapshots = (0..128)
+            .map(|key_group| rocks.snapshot_key_group(key_group).unwrap())
+            .collect::<Vec<_>>();
+
+        let mut restored = TopNProcessor::new(
+            &bounded_rank_plan(),
+            128,
+            0,
+            127,
+            HostMemoryReservation::new(broker, "bounded rank memory restore"),
+        )
+        .unwrap();
+        for (key_group, snapshot) in rocks_snapshots.iter().enumerate() {
+            restored
+                .restore_key_group(key_group as u32, snapshot)
+                .unwrap();
+        }
+        let output = restored.finish_bounded().unwrap();
+        assert_eq!(output_values(&output), vec!["b", "b", "y"]);
+        assert_eq!(
+            output_kinds(&output),
+            vec![UPDATE_BEFORE, UPDATE_AFTER, DELETE]
+        );
+    }
+
     fn limit_plan(strategy: proto::TopNStrategy) -> Vec<u8> {
         let schema = proto::Schema {
             fields: vec![
@@ -1396,6 +1890,9 @@ mod tests {
                     sort_ascending: vec![],
                     sort_nulls_last: vec![],
                     output_schema: Some(schema),
+                    rank_type: proto::TopNRankType::RowNumber as i32,
+                    bounded_final_output: false,
+                    physical_input_semantics: false,
                 }))),
             }),
         }

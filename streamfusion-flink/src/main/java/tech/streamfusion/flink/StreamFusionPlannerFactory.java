@@ -20,6 +20,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.table.delegation.Planner;
 import org.apache.flink.table.delegation.PlannerFactory;
+import tech.streamfusion.nativebridge.NativeBoundedRankBridge;
 import tech.streamfusion.nativebridge.NativeBoundedSortBridge;
 import tech.streamfusion.nativebridge.NativeCalcBridge;
 import tech.streamfusion.nativebridge.NativeChangelogNormalizeBridge;
@@ -150,6 +151,10 @@ public final class StreamFusionPlannerFactory implements PlannerFactory {
         return NativeBoundedSortBridge.executedBatchCount();
     }
 
+    public static long nativeBoundedRankBatchCount() {
+        return NativeBoundedRankBridge.executedBatchCount();
+    }
+
     public static long nativeTemporalJoinBatchCount() {
         return NativeTemporalJoinBridge.executedBatchCount();
     }
@@ -178,6 +183,7 @@ public final class StreamFusionPlannerFactory implements PlannerFactory {
         NativeTemporalJoinBridge.resetMetrics();
         NativeTemporalSortBridge.resetMetrics();
         NativeBoundedSortBridge.resetMetrics();
+        NativeBoundedRankBridge.resetMetrics();
         NativeUnionBridge.resetMetrics();
         NativeValuesBridge.resetMetrics();
         System.clearProperty(EXEC_GRAPH_PROCESSOR_PROPERTY);

@@ -97,6 +97,9 @@ final class NexmarkRowDataQueryCatalog {
                 "auction BIGINT, bidder BIGINT, price BIGINT, `dateTime` TIMESTAMP(3), "
                         + "window_start TIMESTAMP(3), window_end TIMESTAMP(3), window_time TIMESTAMP(3)");
         schemas.put("bounded-sort", BID_COLUMNS);
+        schemas.put("bounded-sort-limit", BID_COLUMNS);
+        schemas.put("bounded-limit", BID_COLUMNS);
+        schemas.put("bounded-rank", BID_COLUMNS + ", rank_number BIGINT");
         schemas.put("incremental-group-aggregate", schemas.get("aggregate-modifiers"));
         schemas.put(
                 "group-aggregate",

@@ -48,6 +48,10 @@ public final class StreamFusionBatchExecExchange extends CommonExecExchange impl
             Class<?> translator =
                     Class.forName(TRANSLATOR, true, planner.getFlinkContext().getClassLoader());
             switch (distribution.getType()) {
+                case UNKNOWN:
+                    // UNKNOWN is Flink's placeholder for local bounded operators and carries no
+                    // distribution requirement. Preserve the already-vectorized input directly.
+                    return input;
                 case KEEP_INPUT_AS_IS:
                     // The input edge already has the required distribution. Flink's bounded
                     // KeepInputAsIs exchange exists to retain that partitioning through a

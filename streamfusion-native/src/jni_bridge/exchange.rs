@@ -3,7 +3,6 @@
 
 use arrow::array::{Array, StructArray};
 use arrow::datatypes::{DataType, Field, Schema};
-use arrow::record_batch::RecordBatch;
 use std::mem::size_of;
 use std::sync::Arc;
 
@@ -267,14 +266,10 @@ unsafe fn decode(
         payload_size,
         &transport_batch,
     )?)?;
-    let batch = if plan.transport_routing_key {
-        RecordBatch::try_new(
-            visible_schema,
-            transport_batch.columns()[..transport_batch.num_columns() - 1].to_vec(),
-        )?
-    } else {
-        transport_batch
-    };
+    // Keep the optional opaque BinaryRow routing key through the fused exchange/consumer edge.
+    // Ordinary readers expose only the visible vectors, while keyed native consumers can reuse
+    // the exact bytes Flink hashed instead of reconstructing a complex key in Java or Rust.
+    let batch = transport_batch;
     let rows = batch.num_rows();
     let output_data = StructArray::from(batch).to_data();
     let output_array = FFI_ArrowArray::new(&output_data);

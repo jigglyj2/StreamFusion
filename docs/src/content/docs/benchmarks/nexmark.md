@@ -102,7 +102,8 @@ The `aggregate-modifiers`, `incremental-group-aggregate`,
 `over-aggregate-event-time`, `over-aggregate-processing-time`,
 `over-aggregate-bounded-rows`, `over-aggregate-bounded-range`, `select-distinct`,
 `set-intersect-all`, `top-n`,
-`limit`, `bounded-sort`, `legacy-window-aggregate`, `temporal-join`, and `temporal-sort` cases
+`limit`, `bounded-limit`, `bounded-sort`, `bounded-sort-limit`, `bounded-rank`,
+`legacy-window-aggregate`, `temporal-join`, and `temporal-sort` cases
 exercise both native state backends over the bounded bid stream; they are focused operator workloads
 rather than numbered Nexmark queries. `over-aggregate` deliberately casts the timestamp to a
 regular value to exercise ordered non-time state, while `over-aggregate-event-time` retains the
@@ -666,6 +667,40 @@ its expected write-batch and memtable traffic and still performs one `multi_get`
 differential flame graphs are retained under
 `streamfusion-nexmark-benchmarks/target/bounded-sort-profiles-postfix/`; profiler timings are
 excluded from throughput results. These are local diagnostics, not portable performance claims.
+
+## Bounded Limit, SortLimit, and partitioned Rank targets
+
+The bounded planner harness additionally includes `bounded-limit`, `bounded-sort-limit`, and
+`bounded-rank`. The last workload is a NEXMark Q18-shaped latest-bid selection expressed as SQL
+`RANK`: Flink plans local Sort/Rank, a bidder hash exchange, and global Sort/Rank. StreamFusion's
+EXPLAIN must show the retained native hash exchange and one bounded rank selector, with no remaining
+Flink Sort/Rank descendants. The integration test compares Flink and StreamFusion materialized
+results over all four source/keyed partitions on memory and RocksDB and requires non-zero native
+Top-N and bounded-rank batch counters. Generated SQL fixtures separately cover every supported
+ordering type, null placement, ties and rank gaps, LIMIT/OFFSET ranges, all four RowKinds, and
+canonical memory/RocksDB restore.
+
+On the September 5, 2026 local release/native-CPU run from the bounded-operator working tree, three
+alternating fresh-JVM forks per engine/backend processed one million deterministic events with a
+2 GiB heap and parallelism four. Every fork materialized 162,946 rows with SHA-256
+`80aee0004e60ec7af9a435c398407ea6c7ebab8ca4dd0cd872d1101cb251d43f`. In memory, Flink's median
+was 7.815 s (MAD 0.552 s, range 7.263–11.814 s) and StreamFusion's was 6.782 s (MAD 0.035 s, range
+6.747–7.892 s), a 15.2% end-to-end throughput gain. RocksDB medians were 6.596 s for Flink (MAD
+0.075 s, range 6.520–7.395 s) and 6.703 s for StreamFusion (MAD 0.083 s, range 6.619–6.953 s), or
+98.4% parity. StreamFusion executed 272 bounded-rank batches and no longer materialized Flink's
+263 MB upstream full-sort buffer.
+
+Longer five-million-event mixed CPU profiles produced the same result on both engines and backends.
+Inclusive native-rank CPU was 10.7% in memory and 11.8% on RocksDB; Arrow/native boundary work was
+14.8% and 15.2%. At two million events, sampled Java allocations fell from 8.150 GB to 5.416 GB in
+memory and from 8.249 GB to 5.460 GB on RocksDB, roughly 34% lower. Native allocation traffic was
+higher because durable Arrow/Rust row state and direct RocksDB buffers move out of the JVM; focused
+stacks found no per-row JNI or defensive whole-batch copy loop, and backend access remains one
+batched read plus one atomic mutation batch per input Arrow batch. CPU and allocation JFRs,
+collapsed stacks, and flame graphs are retained under
+`streamfusion-nexmark-benchmarks/target/profiles/bounded-rank-select-working/` and
+`streamfusion-nexmark-benchmarks/target/benchmarks/bounded-rank-select-working/`. Profiler timings
+are excluded from the medians above.
 
 ## INTERSECT ALL RowData target
 

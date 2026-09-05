@@ -62,8 +62,8 @@ raw keyed state so they can move between the native memory and RocksDB implement
 The focused recovery matrix is shared by native group aggregation—including the stateful
 split-DISTINCT/retractable-extrema incremental stage—deduplication, SELECT DISTINCT,
 non-window Top-N, window aggregation, Window Deduplicate, Window Top-N, Window Join, and regular
-and interval streaming Join, bounded hash/adaptive/nested-loop Join, plus Temporal Sort and bounded
-full Sort. Window, interval, and
+and interval streaming Join, bounded hash/adaptive/nested-loop Join, plus Temporal Sort, bounded
+full Sort, bounded SortLimit, and bounded partitioned Rank. Window, interval, and
 temporal-sort cases include pending event-time and processing-time timers; two-input joins also
 preserve their independently advancing input-watermark frontiers. Interval Join keeps its live timer
 index in native memory and materializes dirty timer
@@ -82,8 +82,10 @@ rewriting its complete timer group on every input batch:
 The exceptions to the rescaling row are Temporal Sort and bounded full Sort: SQL total ordering
 requires Flink's singleton distribution, so their transformations are fixed at
 parallelism/max-parallelism one. Their canonical formats are still backend-neutral. Both are
-covered by aligned, unaligned, same-backend, and cross-backend recovery tests; bounded Sort also
-tests incremental RocksDB SST reuse, while Temporal Sort additionally preserves pending timers.
+covered by aligned, unaligned, same-backend, and cross-backend recovery tests; bounded Sort and
+SortLimit also test incremental RocksDB SST reuse, while Temporal Sort additionally preserves
+pending timers. Bounded partitioned Rank retains Flink's hash exchange, supports rescaling, and uses
+the same canonical Top-N state format across memory and RocksDB.
 
 The operator processes a batch synchronously before the mailbox can snapshot it. Flink therefore
 owns in-flight channel data for unaligned checkpoints, while the native keyed snapshot contains the

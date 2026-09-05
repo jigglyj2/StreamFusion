@@ -49,6 +49,12 @@ final class StreamFusionExchangeSupport {
         if (distribution.getType() == InputProperty.DistributionType.KEEP_INPUT_AS_IS) {
             return unsupportedReason(rowType, ((KeepInputAsIsDistribution) distribution).getInputDistribution());
         }
+        if (distribution.getType() == InputProperty.DistributionType.UNKNOWN) {
+            // Flink uses UNKNOWN only as an algorithm-neutral placeholder on local bounded
+            // Rank/Limit/SortLimit stages. It imposes no repartitioning contract, so retaining the
+            // existing Arrow transformation is exact.
+            return null;
+        }
         if (distribution.getType() != InputProperty.DistributionType.HASH
                 && distribution.getType() != InputProperty.DistributionType.SINGLETON) {
             return "native exchange does not support " + distribution.getType() + " distribution";

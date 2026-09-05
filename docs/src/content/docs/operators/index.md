@@ -23,9 +23,9 @@ This matrix follows the query operations documented by Flink 2.3, including the 
 | [Set operations](set-operations/) | **Yes** (`UNION ALL` in streaming and bounded plans; remaining forms in streaming plans) | By physical rewrite | Arrow IPC at Flink multi-input gates; native aggregate/join state and row replication |
 | [Exchange](exchange/) | **Partial** (hash and singleton) | Yes | Native Flink-compatible key grouping with Flink-owned network transport |
 | [Table and collection expansion](table-expansion/) | **Partial** (streaming/bounded ARRAY, MAP, and MULTISET `UNNEST`) | Yes | DataFusion `UnnestExec` with Flink-compatible correlate semantics |
-| [ORDER BY](order-by/) | **Yes** (bounded full sort, streaming finite Top-N, and time-ascending temporal sort) | Yes | Native counted full sort, Top-N, or timer/state sort |
-| [LIMIT](limit/) | **Yes** (streaming constant `LIMIT`/`OFFSET`) | Yes | Native counter/Top-N state with memory or RocksDB backing |
-| [Top-N](top-n/) | **Yes** (streaming `ROW_NUMBER`) | Yes | Native Arrow ranking state with memory or RocksDB backing |
+| [ORDER BY](order-by/) | **Yes** (bounded full sort/SortLimit, streaming finite Top-N, and time-ascending temporal sort) | Yes | Native counted full sort, bounded heap, Top-N, or timer/state sort |
+| [LIMIT](limit/) | **Yes** (streaming and bounded constant `LIMIT`/`OFFSET`) | Yes | Arrow slicing or native counter/Top-N state |
+| [Top-N](top-n/) | **Yes** (streaming `ROW_NUMBER` and bounded partitioned `RANK`) | Yes | Native Arrow ranking state with memory or RocksDB backing |
 | [Window Top-N](window-top-n/) | **Yes** (event-time constant `ROW_NUMBER` range) | Yes | Native per-window state plus Flink's exact generated comparator |
 | [Deduplication](deduplication/) | **Partial** (all synchronous timer-free row/proc-time modes, including Q18) | Yes | Native batched raw keyed state |
 | [Window deduplication](window-deduplication/) | **Yes** (event-time first/last) | Yes | Native retractable per-window keyed state and timers |

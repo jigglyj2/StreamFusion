@@ -13,6 +13,7 @@ import tech.streamfusion.proto.plan.v1.NativePlan;
 import tech.streamfusion.proto.plan.v1.Operator;
 import tech.streamfusion.proto.plan.v1.Schema;
 import tech.streamfusion.proto.plan.v1.TopN;
+import tech.streamfusion.proto.plan.v1.TopNRankType;
 import tech.streamfusion.proto.plan.v1.TopNStrategy;
 
 /** Builds the versioned protobuf control contract for native non-window Top-N. */
@@ -38,6 +39,7 @@ final class StreamFusionTopNPlan {
                 .setOutputRankNumber(outputRankNumber)
                 .setGenerateUpdateBefore(generateUpdateBefore)
                 .setStrategy(toProto(strategy))
+                .setRankType(TopNRankType.TOP_N_RANK_TYPE_ROW_NUMBER)
                 .setInputSchema(schema(inputType))
                 .setOutputSchema(schema(outputType))
                 .setStateTtlMillis(stateTtlMillis);

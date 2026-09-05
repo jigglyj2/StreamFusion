@@ -482,6 +482,49 @@ class LocalRowDataNexmarkBenchmarkIT {
 
     @ParameterizedTest
     @ValueSource(strings = {"hashmap", "rocksdb"})
+    void boundedSortLimitMatchesFlinkOnBothConfiguredBackends(String backend) throws Exception {
+        System.setProperty("streamfusion.nexmark.batch-mode", "true");
+        LocalRowDataNexmarkBenchmark.RunResult flink =
+                LocalRowDataNexmarkBenchmark.run(2_000, "bounded-sort-limit", false, backend, 4);
+        LocalRowDataNexmarkBenchmark.RunResult streamFusion =
+                LocalRowDataNexmarkBenchmark.run(2_000, "bounded-sort-limit", true, backend, 4);
+
+        assertThat(streamFusion.debugRows()).containsExactlyElementsOf(flink.debugRows());
+        assertThat(streamFusion.outputSha256()).isEqualTo(flink.outputSha256());
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        assertThat(streamFusion.nativeBoundedSortBatches()).isGreaterThan(0);
+    }
+
+    @Test
+    void boundedLimitMatchesFlinkWithDeterministicInputOrder() throws Exception {
+        System.setProperty("streamfusion.nexmark.batch-mode", "true");
+        LocalRowDataNexmarkBenchmark.RunResult flink =
+                LocalRowDataNexmarkBenchmark.run(2_000, "bounded-limit", false, "hashmap", 1);
+        LocalRowDataNexmarkBenchmark.RunResult streamFusion =
+                LocalRowDataNexmarkBenchmark.run(2_000, "bounded-limit", true, "hashmap", 1);
+
+        assertThat(streamFusion.debugRows()).containsExactlyElementsOf(flink.debugRows());
+        assertThat(streamFusion.outputSha256()).isEqualTo(flink.outputSha256());
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"hashmap", "rocksdb"})
+    void boundedRankMatchesFlinkAcrossFourKeyedPartitions(String backend) throws Exception {
+        System.setProperty("streamfusion.nexmark.batch-mode", "true");
+        LocalRowDataNexmarkBenchmark.RunResult flink =
+                LocalRowDataNexmarkBenchmark.run(2_000, "bounded-rank", false, backend, 4);
+        LocalRowDataNexmarkBenchmark.RunResult streamFusion =
+                LocalRowDataNexmarkBenchmark.run(2_000, "bounded-rank", true, backend, 4);
+
+        assertThat(streamFusion.debugRows()).containsExactlyElementsOf(flink.debugRows());
+        assertThat(streamFusion.outputSha256()).isEqualTo(flink.outputSha256());
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        assertThat(streamFusion.nativeBoundedRankBatches()).isGreaterThan(0);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"hashmap", "rocksdb"})
     void temporalJoinMatchesFlinkOnBothNativeStateBackends(String backend) throws Exception {
         LocalRowDataNexmarkBenchmark.RunResult flink =
                 LocalRowDataNexmarkBenchmark.run(2_000, "temporal-join", false, backend, 4);

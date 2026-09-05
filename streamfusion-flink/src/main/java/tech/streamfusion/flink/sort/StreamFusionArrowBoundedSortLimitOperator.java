@@ -12,20 +12,15 @@ import org.apache.flink.streaming.api.operators.OperatorAttributesBuilder;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.flink.arrow.ArrowBoundedSortCDataBridge;
-import tech.streamfusion.flink.arrow.ArrowExchangeInputCDataBridge;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
-import tech.streamfusion.flink.exchange.ArrowExchangeInputBatch;
-import tech.streamfusion.flink.exchange.NativeExchangeFrame;
 import tech.streamfusion.flink.metrics.FlinkMetricParity;
 import tech.streamfusion.flink.state.AbstractStreamFusionArrowKeyedStateOperator;
 import tech.streamfusion.nativebridge.NativeBoundedSortBridge;
 
-/** Bounded native full sort; Java owns Flink lifecycle, metrics, and checkpoint coordination. */
-final class StreamFusionArrowBoundedSortOperator extends AbstractStreamFusionArrowKeyedStateOperator
-        implements OneInputStreamOperator<NativeExchangeFrame, ArrowRowDataBatch>, BoundedOneInput {
+/** Local or global bounded SortLimit over an Arrow stream. */
+final class StreamFusionArrowBoundedSortLimitOperator extends AbstractStreamFusionArrowKeyedStateOperator
+        implements OneInputStreamOperator<ArrowRowDataBatch, ArrowRowDataBatch>, BoundedOneInput {
     private final RowType outputType;
-    private final byte[] exchangePlan;
-    private final boolean fullSortMetrics;
 
     private transient long[] observedStatistics;
     private transient Counter rowsLoaded;
@@ -35,40 +30,26 @@ final class StreamFusionArrowBoundedSortOperator extends AbstractStreamFusionArr
     private transient Counter emittedRows;
     private transient boolean finished;
 
-    StreamFusionArrowBoundedSortOperator(RowType outputType, byte[] plan, byte[] exchangePlan) {
-        this(outputType, plan, exchangePlan, true);
-    }
-
-    StreamFusionArrowBoundedSortOperator(
-            RowType outputType, byte[] plan, byte[] exchangePlan, boolean fullSortMetrics) {
-        super(plan, "bounded sort", NativeBoundedSortBridge.keyedStateBridge());
+    StreamFusionArrowBoundedSortLimitOperator(RowType outputType, byte[] plan) {
+        super(plan, "bounded sort limit", NativeBoundedSortBridge.keyedStateBridge());
         this.outputType = outputType;
-        this.exchangePlan = exchangePlan.clone();
-        this.fullSortMetrics = fullSortMetrics;
     }
 
     @Override
     public void open() throws Exception {
         super.open();
         observedStatistics = NativeBoundedSortBridge.statistics(nativeHandle());
-        String prefix = fullSortMetrics ? "boundedSort" : "boundedSortLimit";
-        rowsLoaded = getMetricGroup().addGroup("StreamFusion").counter(prefix + "RowsLoaded");
-        rowsCommitted = getMetricGroup().addGroup("StreamFusion").counter(prefix + "RowsCommitted");
-        invalidRetractions = getMetricGroup().addGroup("StreamFusion").counter(prefix + "InvalidRetractions");
-        comparatorCalls = getMetricGroup().addGroup("StreamFusion").counter(prefix + "ComparatorCalls");
-        emittedRows = getMetricGroup().addGroup("StreamFusion").counter(prefix + "EmittedRows");
-        if (fullSortMetrics) {
-            getMetricGroup().gauge("memoryUsedSizeInBytes", this::managedMemoryUsed);
-            getMetricGroup().gauge("numSpillFiles", () -> 0L);
-            getMetricGroup().gauge("spillInBytes", () -> 0L);
-        }
+        rowsLoaded = getMetricGroup().addGroup("StreamFusion").counter("boundedSortLimitRowsLoaded");
+        rowsCommitted = getMetricGroup().addGroup("StreamFusion").counter("boundedSortLimitRowsCommitted");
+        invalidRetractions = getMetricGroup().addGroup("StreamFusion").counter("boundedSortLimitInvalidRetractions");
+        comparatorCalls = getMetricGroup().addGroup("StreamFusion").counter("boundedSortLimitComparatorCalls");
+        emittedRows = getMetricGroup().addGroup("StreamFusion").counter("boundedSortLimitEmittedRows");
     }
 
     @Override
-    public void processElement(StreamRecord<NativeExchangeFrame> element) throws Exception {
-        try (ArrowExchangeInputBatch decoded = ArrowExchangeInputCDataBridge.decode(
-                exchangePlan, element.getValue(), outputType, allocator(), memoryManager())) {
-            ArrowRowDataBatch input = decoded.arrowBatch();
+    public void processElement(StreamRecord<ArrowRowDataBatch> element) throws Exception {
+        ArrowRowDataBatch input = element.getValue();
+        try {
             ArrowBoundedSortCDataBridge.process(nativeHandle(), input, memoryManager());
             FlinkMetricParity.replacePhysicalRecords(
                     getMetricGroup().getIOMetricGroup().getNumRecordsInCounter(), 1, input.size());
@@ -106,10 +87,17 @@ final class StreamFusionArrowBoundedSortOperator extends AbstractStreamFusionArr
         updateStatistics();
     }
 
+    @Override
+    @SuppressWarnings("rawtypes")
+    public void setKeyContextElement1(StreamRecord record) {
+        // Native bounded state is explicitly key-group scoped. Flink still initializes its keyed
+        // backend from the transformation selector, but no per-batch current key is needed.
+    }
+
     private void updateStatistics() {
         long[] current = NativeBoundedSortBridge.statistics(nativeHandle());
         if (current.length != 7 || observedStatistics.length != 7) {
-            throw new IllegalStateException("Native bounded sort statistics have an incompatible shape");
+            throw new IllegalStateException("Native bounded sort-limit statistics have an incompatible shape");
         }
         recordNativeWindowStatistics(current[0] - observedStatistics[0], current[1] - observedStatistics[1], 0, 0, 0);
         rowsLoaded.inc(current[2] - observedStatistics[2]);
@@ -124,8 +112,6 @@ final class StreamFusionArrowBoundedSortOperator extends AbstractStreamFusionArr
     public OperatorAttributes getOperatorAttributes() {
         return new OperatorAttributesBuilder()
                 .setOutputOnlyAfterEndOfStream(true)
-                // The native operator owns the full sort. Without this attribute Flink inserts
-                // SortingDataInput for keyed batch operators and sorts every record a second time.
                 .setInternalSorterSupported(true)
                 .build();
     }
