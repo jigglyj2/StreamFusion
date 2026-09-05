@@ -30,6 +30,15 @@ class GroupingSetsParityTest extends SqlParityTestSupport {
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 
+    @ParameterizedTest(name = "bounded {0}")
+    @MethodSource("queries")
+    void boundedExpandFormsRunNativelyAndMatchFlinkByteForByte(String ignoredName, String sql) throws Exception {
+        assertParity(sql, false);
+
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        assertThat(StreamFusionPlannerFactory.nativeGroupAggregateBatchCount()).isGreaterThan(0);
+    }
+
     @ParameterizedTest(name = "{0}")
     @MethodSource("queries")
     void explainContainsNativeExpandAndAggregate(String ignoredName, String sql) {

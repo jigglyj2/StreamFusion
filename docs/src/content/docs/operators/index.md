@@ -15,7 +15,7 @@ This matrix follows the query operations documented by Flink 2.3, including the 
 | [VALUES](values/) | **Partial** (streaming and bounded scalar literals) | Yes | Source-free native Arrow batch |
 | [Windowing TVFs](window-tvf/) | **Yes** (streaming/bounded event-time `TUMBLE`, `HOP`, `CUMULATE`; streaming `SESSION`) | Yes | Native aligned assignment and keyed session merging |
 | [Watermark assignment](watermark-assignment/) | **Plan-compatible** | Flink-owned | Distinct StreamFusion node delegating Flink's exact timer and idleness runtime |
-| [Group aggregation](group-aggregation/) | **Partial** (timer-free keyed/global, grouping sets/`ROLLUP`/`CUBE`) | Yes | Native keyed state and Arrow aggregate kernels |
+| [Group aggregation](group-aggregation/) | **Partial** (timer-free streaming and bounded keyed/global, grouping sets/`ROLLUP`/`CUBE`) | Yes | Native keyed state and Arrow aggregate kernels |
 | [Window aggregation](window-aggregation/) | **Partial** (`TUMBLE`, `HOP`, `CUMULATE`, `SESSION`, legacy time/count windows) | Yes | Native keyed window state, timers, and Arrow aggregate kernels |
 | [OVER aggregation](over-aggregation/) | **Partial** (non-time unbounded plus processing/event-time bounded or unbounded `ROWS`/`RANGE`) | Yes | Native ordered state, timers, and aggregate kernels |
 | [Joins](joins/) | **Partial** (regular, multi-way, constant-bound interval, and temporal streaming joins) | By join type | Native keyed state and timers; future DataFusion batch joins |

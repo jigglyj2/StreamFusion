@@ -35,10 +35,16 @@ import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeGraph;
 import org.apache.flink.table.planner.plan.nodes.exec.InputProperty;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecCalc;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecCorrelate;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecExchange;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecExpand;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecHashAggregate;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecSort;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecSortAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecUnion;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecValues;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecWindowTableFunction;
 import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecCorrelate;
+import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecExpand;
 import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecWindowTableFunction;
 import org.apache.flink.table.planner.plan.nodes.exec.processor.ExecNodeGraphProcessor;
 import org.apache.flink.table.planner.plan.nodes.exec.processor.ProcessorContext;
@@ -281,6 +287,36 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             if (reason != null) {
                 rejections.add(nodePath + "\n" + reason);
             }
+        } else if (node instanceof BatchExecHashAggregate) {
+            BatchGroupAggregatePair pair = batchGroupAggregatePair(node);
+            String reason = pair == null
+                    ? unsupportedReason((BatchExecHashAggregate) node, context)
+                    : unsupportedReason(pair, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
+            if (pair != null) {
+                collectRejections(pair.inputEdge.getSource(), context, nodePath + "/native-input", rejections);
+                return;
+            }
+        } else if (node instanceof BatchExecSortAggregate) {
+            BatchGroupAggregatePair pair = batchGroupAggregatePair(node);
+            if (pair == null) {
+                rejections.add(
+                        nodePath + "\nbounded sort aggregate: expected a final merge paired with a local aggregate");
+                return;
+            }
+            String reason = unsupportedReason(pair, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
+            collectRejections(pair.inputEdge.getSource(), context, nodePath + "/native-input", rejections);
+            return;
+        } else if (node instanceof BatchExecSort) {
+            String reason = unsupportedReason((BatchExecSort) node, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
         } else if (node instanceof StreamExecCorrelate) {
             String reason = unsupportedReason((StreamExecCorrelate) node, context);
             if (reason != null) {
@@ -471,8 +507,21 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             if (reason != null) {
                 rejections.add(nodePath + "\n" + reason);
             }
+        } else if (node instanceof BatchExecExpand) {
+            String reason = unsupportedReason((BatchExecExpand) node, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
         } else if (node instanceof StreamExecExchange) {
             StreamExecExchange exchange = (StreamExecExchange) node;
+            String reason = StreamFusionExchangeSupport.unsupportedReason(
+                    (RowType) exchange.getOutputType(),
+                    exchange.getInputProperties().get(0).getRequiredDistribution());
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
+        } else if (node instanceof BatchExecExchange) {
+            BatchExecExchange exchange = (BatchExecExchange) node;
             String reason = StreamFusionExchangeSupport.unsupportedReason(
                     (RowType) exchange.getOutputType(),
                     exchange.getInputProperties().get(0).getRequiredDistribution());
@@ -660,6 +709,39 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     (RowType) calc.getOutputType(),
                     "StreamFusionBatchCalc");
             replacement.setInputEdges(calc.getInputEdges().stream()
+                    .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                    .collect(Collectors.toList()));
+            return replacement;
+        }
+        if (node instanceof BatchExecHashAggregate || node instanceof BatchExecSortAggregate) {
+            BatchGroupAggregatePair pair = batchGroupAggregatePair(node);
+            if (pair != null) {
+                return convertBatchGroupAggregatePair(pair);
+            }
+        }
+        if (node instanceof BatchExecHashAggregate) {
+            BatchExecHashAggregate aggregate = (BatchExecHashAggregate) node;
+            StreamFusionBatchExecHashAggregate replacement = new StreamFusionBatchExecHashAggregate(
+                    aggregate.getPersistedConfig(),
+                    grouping(aggregate),
+                    aggregateCalls(aggregate),
+                    aggregate.getInputProperties().get(0),
+                    (RowType) aggregate.getOutputType(),
+                    "StreamFusionBatchHashAggregate");
+            replacement.setInputEdges(aggregate.getInputEdges().stream()
+                    .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                    .collect(Collectors.toList()));
+            return replacement;
+        }
+        if (node instanceof BatchExecSort) {
+            BatchExecSort sort = (BatchExecSort) node;
+            StreamFusionBatchExecBoundedSort replacement = new StreamFusionBatchExecBoundedSort(
+                    sort.getPersistedConfig(),
+                    boundedSortSpec(sort),
+                    sort.getInputProperties().get(0),
+                    (RowType) sort.getOutputType(),
+                    "StreamFusionBatchBoundedSort");
+            replacement.setInputEdges(sort.getInputEdges().stream()
                     .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
                     .collect(Collectors.toList()));
             return replacement;
@@ -1210,6 +1292,18 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     .collect(Collectors.toList()));
             return replacement;
         }
+        if (node instanceof BatchExecExchange) {
+            BatchExecExchange exchange = (BatchExecExchange) node;
+            StreamFusionBatchExecExchange replacement = new StreamFusionBatchExecExchange(
+                    exchange.getPersistedConfig(),
+                    exchange.getInputProperties().get(0),
+                    (RowType) exchange.getOutputType(),
+                    "StreamFusionBatchExchange");
+            replacement.setInputEdges(exchange.getInputEdges().stream()
+                    .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                    .collect(Collectors.toList()));
+            return replacement;
+        }
         if (node instanceof StreamExecExpand) {
             StreamExecExpand expand = (StreamExecExpand) node;
             StreamFusionExecExpand replacement = new StreamFusionExecExpand(
@@ -1218,6 +1312,19 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     expand.getInputProperties().get(0),
                     (RowType) expand.getOutputType(),
                     "StreamFusionExpand");
+            replacement.setInputEdges(expand.getInputEdges().stream()
+                    .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                    .collect(Collectors.toList()));
+            return replacement;
+        }
+        if (node instanceof BatchExecExpand) {
+            BatchExecExpand expand = (BatchExecExpand) node;
+            StreamFusionBatchExecExpand replacement = new StreamFusionBatchExecExpand(
+                    expand.getPersistedConfig(),
+                    projects(expand),
+                    expand.getInputProperties().get(0),
+                    (RowType) expand.getOutputType(),
+                    "StreamFusionBatchExpand");
             replacement.setInputEdges(expand.getInputEdges().stream()
                     .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
                     .collect(Collectors.toList()));
@@ -1337,6 +1444,144 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                 projection(calc),
                 condition(calc),
                 context);
+    }
+
+    private String unsupportedReason(BatchExecHashAggregate aggregate, ProcessorContext context) {
+        if (auxiliaryGrouping(aggregate).length != 0) {
+            return "auxiliary grouping: bounded native hash aggregation does not yet encode auxiliary keys";
+        }
+        if (batchAggregateBooleanField(aggregate, "isMerge")) {
+            return "merge phase: bounded native hash aggregation currently requires a one-phase final plan";
+        }
+        if (!batchAggregateBooleanField(aggregate, "isFinal")) {
+            return "local phase: bounded native hash aggregation currently requires a one-phase final plan";
+        }
+        ExecEdge input = aggregate.getInputEdges().get(0);
+        RowType inputType = (RowType) input.getOutputType();
+        if (!aggregateInputType(aggregate).equals(inputType)) {
+            return "aggregate input schema: planned aggregate input "
+                    + aggregateInputType(aggregate)
+                    + " does not match edge input "
+                    + inputType;
+        }
+        try {
+            Class<?> translator = Class.forName(
+                    GROUP_AGGREGATE_TRANSLATOR_CLASS,
+                    true,
+                    context.getPlanner().getFlinkContext().getClassLoader());
+            Method method = translator.getMethod(
+                    "unsupportedBatchReason",
+                    RowType.class,
+                    RowType.class,
+                    int[].class,
+                    org.apache.calcite.rel.core.AggregateCall[].class,
+                    ReadableConfig.class);
+            return (String) method.invoke(
+                    null,
+                    inputType,
+                    (RowType) aggregate.getOutputType(),
+                    grouping(aggregate),
+                    aggregateCalls(aggregate),
+                    aggregate.getPersistedConfig());
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException failure) {
+            throw new IllegalStateException("Could not inspect bounded native hash aggregate support", failure);
+        } catch (InvocationTargetException failure) {
+            throw new IllegalStateException(
+                    "Bounded native hash aggregate support inspection failed", failure.getCause());
+        }
+    }
+
+    private String unsupportedReason(BatchGroupAggregatePair pair, ProcessorContext context) {
+        int[] localGrouping = batchGrouping(pair.local);
+        int[] finalGrouping = batchGrouping(pair.global);
+        if (batchAuxiliaryGrouping(pair.local).length != 0 || batchAuxiliaryGrouping(pair.global).length != 0) {
+            return "auxiliary grouping: bounded native two-phase aggregation does not yet encode auxiliary keys";
+        }
+        if (localGrouping.length != finalGrouping.length) {
+            return "grouping: bounded local and global aggregate key counts do not match";
+        }
+        if (batchAggregateCalls(pair.local).length != batchAggregateCalls(pair.global).length) {
+            return "aggregate: bounded local and global call counts do not match";
+        }
+        RowType inputType = (RowType) pair.inputEdge.getOutputType();
+        if (!batchAggregateInputType(pair.local).equals(inputType)) {
+            return "aggregate input schema: planned local input "
+                    + batchAggregateInputType(pair.local)
+                    + " does not match edge input "
+                    + inputType;
+        }
+        try {
+            Class<?> translator = Class.forName(
+                    GROUP_AGGREGATE_TRANSLATOR_CLASS,
+                    true,
+                    context.getPlanner().getFlinkContext().getClassLoader());
+            Method method = translator.getMethod(
+                    "unsupportedBatchReason",
+                    RowType.class,
+                    RowType.class,
+                    int[].class,
+                    org.apache.calcite.rel.core.AggregateCall[].class,
+                    ReadableConfig.class);
+            return (String) method.invoke(
+                    null,
+                    inputType,
+                    (RowType) pair.global.getOutputType(),
+                    localGrouping,
+                    batchAggregateCalls(pair.local),
+                    pair.global.getPersistedConfig());
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException failure) {
+            throw new IllegalStateException("Could not inspect bounded native two-phase aggregate support", failure);
+        } catch (InvocationTargetException failure) {
+            throw new IllegalStateException(
+                    "Bounded native two-phase aggregate support inspection failed", failure.getCause());
+        }
+    }
+
+    private ExecNode<?> convertBatchGroupAggregatePair(BatchGroupAggregatePair pair) {
+        int[] grouping = batchGrouping(pair.local);
+        org.apache.calcite.rel.core.AggregateCall[] calls = batchAggregateCalls(pair.local);
+        RowType originalInputType = (RowType) pair.inputEdge.getOutputType();
+        RowType internalType = nativeGroupAccumulatorType(originalInputType, grouping);
+
+        StreamFusionBatchExecLocalGroupAggregate local = new StreamFusionBatchExecLocalGroupAggregate(
+                pair.local.getPersistedConfig(),
+                grouping,
+                calls,
+                InputProperty.DEFAULT,
+                internalType,
+                pair.local instanceof BatchExecHashAggregate);
+        local.setInputEdges(List.of(copyEdge(pair.inputEdge, convert(pair.inputEdge.getSource()), local)));
+
+        int[] internalGrouping =
+                java.util.stream.IntStream.range(0, grouping.length).toArray();
+        InputProperty hashInput = InputProperty.builder()
+                .requiredDistribution(
+                        grouping.length == 0
+                                ? InputProperty.SINGLETON_DISTRIBUTION
+                                : InputProperty.hashDistribution(internalGrouping))
+                .build();
+        StreamFusionBatchExecExchange exchange = new StreamFusionBatchExecExchange(
+                pair.global.getPersistedConfig(), hashInput, internalType, "StreamFusionBatchAggregateExchange");
+        exchange.setInputEdges(List.of(ExecEdge.builder()
+                .source(local)
+                .target(exchange)
+                .shuffle(ExecEdge.FORWARD_SHUFFLE)
+                .build()));
+
+        StreamFusionBatchExecGlobalGroupAggregate global = new StreamFusionBatchExecGlobalGroupAggregate(
+                pair.global.getPersistedConfig(),
+                originalInputType,
+                grouping.length,
+                calls,
+                hashInput,
+                (RowType) pair.global.getOutputType(),
+                pair.global instanceof BatchExecHashAggregate);
+        global.setInputEdges(List.of(ExecEdge.builder()
+                .source(exchange)
+                .target(global)
+                .shuffle(ExecEdge.FORWARD_SHUFFLE)
+                .build()));
+        return global;
     }
 
     private String unsupportedCalcReason(
@@ -2251,6 +2496,14 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
     }
 
     private String unsupportedReason(StreamExecExpand expand, ProcessorContext context) {
+        return unsupportedExpandReason(expand, context);
+    }
+
+    private String unsupportedReason(BatchExecExpand expand, ProcessorContext context) {
+        return unsupportedExpandReason(expand, context);
+    }
+
+    private String unsupportedExpandReason(CommonExecExpand expand, ProcessorContext context) {
         ExecEdge input = expand.getInputEdges().get(0);
         try {
             Class<?> translator = Class.forName(
@@ -2329,6 +2582,27 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             throw new IllegalStateException("Could not inspect StreamFusion bounded sort support", failure);
         } catch (InvocationTargetException failure) {
             throw new IllegalStateException("StreamFusion bounded sort support inspection failed", failure.getCause());
+        }
+    }
+
+    private String unsupportedReason(BatchExecSort sort, ProcessorContext context) {
+        try {
+            Class<?> translator = Class.forName(
+                    BOUNDED_SORT_TRANSLATOR_CLASS,
+                    true,
+                    context.getPlanner().getFlinkContext().getClassLoader());
+            Method method =
+                    translator.getMethod("unsupportedReason", RowType.class, SortSpec.class, ReadableConfig.class);
+            return (String) method.invoke(
+                    null,
+                    (RowType) sort.getInputEdges().get(0).getOutputType(),
+                    boundedSortSpec(sort),
+                    sort.getPersistedConfig());
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException failure) {
+            throw new IllegalStateException("Could not inspect StreamFusion batch bounded sort support", failure);
+        } catch (InvocationTargetException failure) {
+            throw new IllegalStateException(
+                    "StreamFusion batch bounded sort support inspection failed", failure.getCause());
         }
     }
 
@@ -2440,6 +2714,75 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                 (StreamExecExchange) exchange,
                 (StreamExecLocalGroupAggregate) local,
                 local.getInputEdges().get(0));
+    }
+
+    private static BatchGroupAggregatePair batchGroupAggregatePair(ExecNode<?> global) {
+        if (!isBatchAggregate(global)
+                || !batchAggregateBoolean(global, "isMerge")
+                || !batchAggregateBoolean(global, "isFinal")
+                || global.getInputEdges().size() != 1) {
+            return null;
+        }
+        ExecEdge edge = global.getInputEdges().get(0);
+        ExecNode<?> cursor = edge.getSource();
+        while ((cursor instanceof BatchExecExchange || cursor instanceof BatchExecSort)
+                && cursor.getInputEdges().size() == 1) {
+            edge = cursor.getInputEdges().get(0);
+            cursor = edge.getSource();
+        }
+        if (!isBatchAggregate(cursor)
+                || batchAggregateBoolean(cursor, "isFinal")
+                || batchAggregateBoolean(cursor, "isMerge")
+                || cursor.getInputEdges().size() != 1) {
+            return null;
+        }
+        ExecEdge inputEdge = cursor.getInputEdges().get(0);
+        ExecNode<?> input = inputEdge.getSource();
+        while ((input instanceof BatchExecExchange || input instanceof BatchExecSort)
+                && input.getInputEdges().size() == 1) {
+            inputEdge = input.getInputEdges().get(0);
+            input = inputEdge.getSource();
+        }
+        return new BatchGroupAggregatePair((ExecNodeBase<?>) global, (ExecNodeBase<?>) cursor, inputEdge);
+    }
+
+    private static boolean isBatchAggregate(ExecNode<?> node) {
+        return node instanceof BatchExecHashAggregate || node instanceof BatchExecSortAggregate;
+    }
+
+    private static int[] batchGrouping(ExecNode<?> node) {
+        if (node instanceof BatchExecHashAggregate) {
+            return grouping((BatchExecHashAggregate) node);
+        }
+        return grouping((BatchExecSortAggregate) node);
+    }
+
+    private static int[] batchAuxiliaryGrouping(ExecNode<?> node) {
+        if (node instanceof BatchExecHashAggregate) {
+            return auxiliaryGrouping((BatchExecHashAggregate) node);
+        }
+        return auxiliaryGrouping((BatchExecSortAggregate) node);
+    }
+
+    private static org.apache.calcite.rel.core.AggregateCall[] batchAggregateCalls(ExecNode<?> node) {
+        if (node instanceof BatchExecHashAggregate) {
+            return aggregateCalls((BatchExecHashAggregate) node);
+        }
+        return aggregateCalls((BatchExecSortAggregate) node);
+    }
+
+    private static RowType batchAggregateInputType(ExecNode<?> node) {
+        if (node instanceof BatchExecHashAggregate) {
+            return aggregateInputType((BatchExecHashAggregate) node);
+        }
+        return aggregateInputType((BatchExecSortAggregate) node);
+    }
+
+    private static boolean batchAggregateBoolean(ExecNode<?> node, String fieldName) {
+        if (node instanceof BatchExecHashAggregate) {
+            return batchAggregateBooleanField((BatchExecHashAggregate) node, fieldName);
+        }
+        return batchAggregateBooleanField((BatchExecSortAggregate) node, fieldName);
     }
 
     private static IncrementalGroupAggregate incrementalGroupAggregate(StreamExecGlobalGroupAggregate global) {
@@ -2891,6 +3234,18 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                 ExecEdge inputEdge) {
             this.global = global;
             this.exchange = exchange;
+            this.local = local;
+            this.inputEdge = inputEdge;
+        }
+    }
+
+    private static final class BatchGroupAggregatePair {
+        private final ExecNodeBase<?> global;
+        private final ExecNodeBase<?> local;
+        private final ExecEdge inputEdge;
+
+        private BatchGroupAggregatePair(ExecNodeBase<?> global, ExecNodeBase<?> local, ExecEdge inputEdge) {
+            this.global = global;
             this.local = local;
             this.inputEdge = inputEdge;
         }

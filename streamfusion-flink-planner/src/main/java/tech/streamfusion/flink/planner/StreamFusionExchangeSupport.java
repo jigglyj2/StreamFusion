@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Set;
 import org.apache.flink.table.planner.plan.nodes.exec.InputProperty;
 import org.apache.flink.table.planner.plan.nodes.exec.InputProperty.HashDistribution;
+import org.apache.flink.table.planner.plan.nodes.exec.InputProperty.KeepInputAsIsDistribution;
 import org.apache.flink.table.types.logical.DistinctType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
@@ -45,6 +46,9 @@ final class StreamFusionExchangeSupport {
     private StreamFusionExchangeSupport() {}
 
     static String unsupportedReason(RowType rowType, InputProperty.RequiredDistribution distribution) {
+        if (distribution.getType() == InputProperty.DistributionType.KEEP_INPUT_AS_IS) {
+            return unsupportedReason(rowType, ((KeepInputAsIsDistribution) distribution).getInputDistribution());
+        }
         if (distribution.getType() != InputProperty.DistributionType.HASH
                 && distribution.getType() != InputProperty.DistributionType.SINGLETON) {
             return "native exchange does not support " + distribution.getType() + " distribution";

@@ -62,7 +62,9 @@ impl LocalGroupAggregateProcessor {
                 ));
             }
         };
-        if plan.mini_batch_size == 0 || plan.mini_batch_size > usize::MAX as u64 {
+        if (!plan.bounded_batch && plan.mini_batch_size == 0)
+            || plan.mini_batch_size > usize::MAX as u64
+        {
             return Err(DataFusionError::Plan(
                 "local group aggregate requires a positive mini-batch size that fits usize"
                     .to_string(),
@@ -152,7 +154,11 @@ impl LocalGroupAggregateProcessor {
         let grouping_rows = self.encode_grouping_rows(&batch)?;
         let mut output_keys = Vec::new();
         let mut output_accumulators = Vec::new();
-        let trigger = self.plan.mini_batch_size as usize;
+        let trigger = if self.plan.bounded_batch {
+            batch.num_rows().max(1)
+        } else {
+            self.plan.mini_batch_size as usize
+        };
         let mut offset = 0;
         while offset < batch.num_rows() {
             let length = (trigger - self.pending_elements).min(batch.num_rows() - offset);
@@ -453,6 +459,7 @@ mod tests {
                                 },
                             ],
                         }),
+                        bounded_batch: false,
                     },
                 ))),
             }),
@@ -464,6 +471,34 @@ mod tests {
         LocalGroupAggregateProcessor::new(
             &plan(size, changelog),
             HostMemoryReservation::new(Arc::new(TestBroker::new(1 << 20)), "local aggregate test"),
+        )
+        .unwrap()
+    }
+
+    fn bounded_processor() -> LocalGroupAggregateProcessor {
+        let native = proto::NativePlan::decode(plan(1, false).as_slice()).unwrap();
+        let mut aggregate = match native.root.unwrap().operator.unwrap() {
+            proto::operator::Operator::LocalGroupAggregate(aggregate) => *aggregate,
+            _ => unreachable!(),
+        };
+        aggregate.mini_batch_size = 0;
+        aggregate.bounded_batch = true;
+        let plan = proto::NativePlan {
+            protocol_version: crate::PLAN_PROTOCOL_VERSION,
+            root: Some(proto::Operator {
+                plan_node_id: 0,
+                operator: Some(proto::operator::Operator::LocalGroupAggregate(Box::new(
+                    aggregate,
+                ))),
+            }),
+        }
+        .encode_to_vec();
+        LocalGroupAggregateProcessor::new(
+            &plan,
+            HostMemoryReservation::new(
+                Arc::new(TestBroker::new(1 << 20)),
+                "bounded local aggregate test",
+            ),
         )
         .unwrap()
     }
@@ -522,6 +557,23 @@ mod tests {
         );
         assert_eq!(processor.pending_element_count(), 1);
         assert_eq!(processor.finish_bundle().unwrap().num_rows(), 1);
+    }
+
+    #[test]
+    fn bounded_mode_emits_one_opaque_partial_per_key_for_each_arrow_batch() {
+        let mut processor = bounded_processor();
+        let first = processor
+            .process_arrow(batch(vec![1, 1, 2], vec![10, 20, 5], None))
+            .unwrap();
+        assert_eq!(first.num_rows(), 2);
+        assert_eq!(processor.pending_element_count(), 0);
+        assert_eq!(processor.pending_key_count(), 0);
+
+        let second = processor
+            .process_arrow(batch(vec![1, 3], vec![7, 9], None))
+            .unwrap();
+        assert_eq!(second.num_rows(), 2);
+        assert_eq!(processor.finish_bundle().unwrap().num_rows(), 0);
     }
 
     #[test]

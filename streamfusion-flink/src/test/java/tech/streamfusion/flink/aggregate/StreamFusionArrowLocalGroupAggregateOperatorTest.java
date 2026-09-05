@@ -71,7 +71,7 @@ class StreamFusionArrowLocalGroupAggregateOperatorTest {
         RowDataKeySelector selector = KeySelectorUtil.getRowDataSelector(
                 getClass().getClassLoader(), new int[] {0}, InternalTypeInfo.of(INPUT_TYPE));
         StreamFusionArrowLocalGroupAggregateOperator operator = new StreamFusionArrowLocalGroupAggregateOperator(
-                plan(), INPUT_TYPE, OUTPUT_TYPE, new int[] {0}, false, selector);
+                plan(), INPUT_TYPE, OUTPUT_TYPE, new int[] {0}, false, selector, false);
 
         try (RootAllocator allocator = new RootAllocator(64L << 20);
                 ArrowRowDataBatch first = ArrowRowDataBatch.transpose(

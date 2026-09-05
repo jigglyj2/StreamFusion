@@ -223,6 +223,41 @@ fn mini_processor(size: u64, input_changelog: bool) -> GroupAggregateProcessor {
     .unwrap()
 }
 
+fn bounded_plan() -> Vec<u8> {
+    let native = proto::NativePlan::decode(plan(false, false).as_slice()).unwrap();
+    let mut aggregate = match native.root.unwrap().operator.unwrap() {
+        proto::operator::Operator::GroupAggregate(aggregate) => *aggregate,
+        _ => unreachable!(),
+    };
+    aggregate.bounded_final_output = true;
+    aggregate.input_schema = Some(group_schema());
+    aggregate.output_schema = Some(group_output_schema());
+    proto::NativePlan {
+        protocol_version: crate::PLAN_PROTOCOL_VERSION,
+        root: Some(proto::Operator {
+            plan_node_id: 0,
+            operator: Some(proto::operator::Operator::GroupAggregate(Box::new(
+                aggregate,
+            ))),
+        }),
+    }
+    .encode_to_vec()
+}
+
+fn bounded_processor() -> GroupAggregateProcessor {
+    GroupAggregateProcessor::new(
+        &bounded_plan(),
+        128,
+        0,
+        127,
+        HostMemoryReservation::new(
+            Arc::new(TestBroker::new(1 << 30)),
+            "test bounded group aggregate state",
+        ),
+    )
+    .unwrap()
+}
+
 fn processor_range(
     input_changelog: bool,
     update_before: bool,
@@ -298,6 +333,73 @@ fn mini_batch_uses_exact_count_boundaries_across_arrow_batches() {
             UPDATE_AFTER
         ]
     );
+}
+
+#[test]
+fn bounded_aggregate_updates_state_per_batch_and_emits_only_terminal_inserts() {
+    let mut processor = bounded_processor();
+    assert_eq!(
+        processor
+            .process_arrow(batch(vec![7, 7, 8], vec![Some(10), Some(20), None], None))
+            .unwrap()
+            .num_rows(),
+        0
+    );
+    assert_eq!(
+        processor
+            .process_arrow(batch(vec![7, 8], vec![Some(5), Some(3)], None))
+            .unwrap()
+            .num_rows(),
+        0
+    );
+    assert_eq!(processor.statistics(), [2, 2]);
+
+    assert_eq!(
+        output_rows(processor.finish_bundle().unwrap()),
+        vec![
+            (7, 3, Some(35), Some(5), Some(20), INSERT),
+            (8, 2, Some(3), Some(3), Some(3), INSERT),
+        ]
+    );
+    assert_eq!(processor.finish_bundle().unwrap().num_rows(), 0);
+}
+
+#[test]
+fn bounded_aggregate_restores_canonical_state_before_terminal_output() {
+    let mut source = bounded_processor();
+    source
+        .process_arrow(batch(vec![7, 8], vec![Some(10), Some(3)], None))
+        .unwrap();
+    let snapshots = (0..128)
+        .map(|group| source.snapshot_key_group(group).unwrap())
+        .collect::<Vec<_>>();
+    let mut restored = bounded_processor();
+    for (group, snapshot) in snapshots.iter().enumerate() {
+        restored.restore_key_group(group as u32, snapshot).unwrap();
+    }
+    restored
+        .process_arrow(batch(vec![7], vec![Some(5)], None))
+        .unwrap();
+
+    assert_eq!(
+        output_rows(restored.finish_bundle().unwrap()),
+        vec![
+            (7, 2, Some(15), Some(5), Some(10), INSERT),
+            (8, 1, Some(3), Some(3), Some(3), INSERT),
+        ]
+    );
+}
+
+#[test]
+fn bounded_aggregate_drains_terminal_rows_in_managed_batches() {
+    let mut processor = bounded_processor();
+    let keys = (0..20_000).map(i64::from).collect::<Vec<_>>();
+    let values = (0..20_000).map(|value| Some(i64::from(value))).collect();
+    processor.process_arrow(batch(keys, values, None)).unwrap();
+
+    assert_eq!(processor.finish_bundle().unwrap().num_rows(), 16_384);
+    assert_eq!(processor.finish_bundle().unwrap().num_rows(), 3_616);
+    assert_eq!(processor.finish_bundle().unwrap().num_rows(), 0);
 }
 
 #[test]
@@ -649,6 +751,8 @@ fn performs_one_distinct_multi_get_and_one_write_batch() {
     let mut processor = GroupAggregateProcessor::with_state(
         &plan(false, false),
         128,
+        0,
+        127,
         Box::new(state),
         HostMemoryReservation::new(broker, "test group aggregate scratch"),
     )

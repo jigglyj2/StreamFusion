@@ -5,8 +5,8 @@ sidebar:
   order: 6
 ---
 
-**Current status:** Partially accelerated for timer-free keyed and global streaming aggregates,
-including grouping sets, `ROLLUP`, and `CUBE`.
+**Current status:** Partially accelerated for timer-free keyed and global streaming aggregates and
+bounded hash aggregates, including grouping sets, `ROLLUP`, and `CUBE` in both runtime modes.
 
 ## SQL example
 
@@ -77,6 +77,16 @@ the observable changelog. Native `Expand` emits projection results in Flink's in
 order; projection-major union batches are not used because they would alter local and incremental
 bundle boundaries.
 
+Bounded `BatchExecHashAggregate` and the local/global hash- or sort-aggregate shapes use the same
+native accumulator kernels. A bounded local stage emits one opaque partial accumulator per touched
+key for each incoming Arrow batch. The framed Flink exchange transports that internal Arrow schema
+without Java interpretation; the receiving global stage decodes the frame inside the aggregate
+task, performs one distinct-key multi-get and one mutation batch, and emits final `INSERT` rows only
+after end of input. This also covers bounded grouping sets, `ROLLUP`, and `CUBE`: native Expand is
+retained below the local stage, while Flink's physical pre-aggregate sorts and exchanges are folded
+into the equivalent native local/exchange/global tree. Bounded SQL input is append-only by Flink's
+physical contract. Changelog retractions remain supported by the streaming aggregate path.
+
 State TTL, async state, Flink's changelog-state wrapper, multi-column `DISTINCT`,
 ordered or approximate aggregates, `IGNORE NULLS`, unsupported aggregate functions, and
 unsupported aggregate value types fall back with a specific EXPLAIN reason. Flink's internal
@@ -97,6 +107,10 @@ values.
 The aggregate uses the shared backend-neutral native keyed-state interface:
 
 - `HashMapStateBackend` stores opaque values in `ahash`/`hashbrown` maps split by key group.
+- Flink's bounded in-memory keyed backend, identified by Flink as `batch`, uses that same opaque
+  native memory implementation and canonical format. When the existing `state.backend` setting is
+  `rocksdb`, a bounded native aggregate honors it even though Flink presents its wrapper backend as
+  `batch`; no StreamFusion-only backend selector is required.
 - `EmbeddedRocksDBStateBackend` talks to the separately packaged RocksDB component through its
   versioned native ABI. The immediate path performs one distinct-key multi-get and one `WriteBatch`
   per Arrow input batch, including deletes. Mini-batch stages avoid empty backend calls and batch
@@ -116,7 +130,8 @@ Global aggregate recovery is independently tested for all four memory/RocksDB so
 backend pairs with canonical savepoints and with both aligned and unaligned checkpoints. Global
 state remains singleton state; keyed and grouping-set aggregates retain the normal Flink key-group
 rescaling contract. The two-phase global operator uses that identical snapshot/checkpoint path;
-canonical native global state is also round-tripped between the memory and RocksDB processors. The
+canonical native global state, including bounded final-output state, is also round-tripped between
+the memory and RocksDB processors. The
 local stage flushes before the checkpoint pre-barrier and has no persistent state of its own. The
 stateful incremental stage uses the same canonical raw-keyed snapshot and direct RocksDB ABI as
 the global stage. Native tests cover duplicate/retraction restoration after key-group rescaling,
@@ -158,9 +173,11 @@ retaining Flink's immediate or mini-batch changelog contract as planned.
 
 The RowData Nexmark `group-aggregate`, `global-aggregate`, `grouping-sets`, and
 `incremental-group-aggregate` harnesses compare Flink and StreamFusion in separate JVMs for both
-state backends. Benchmark builds use the Rust release profile and the build machine's native CPU
-feature set. The harness records elapsed time, input throughput, native calculation batches, and
-native aggregate batches so exchange fragmentation and JNI call amplification remain visible.
+state backends. The first three also have bounded-runtime parity coverage through the same
+Kafka-free RowData source/sink boundary. Benchmark builds use the Rust release profile and the
+build machine's native CPU feature set. The harness records elapsed time, input throughput, native
+calculation batches, and native aggregate batches so exchange fragmentation and JNI call
+amplification remain visible.
 
 The September 4, 2026 split-DISTINCT measurement covers implementation commits `00d5bfe` and
 `c946c63`. Three alternating fresh-JVM forks processed one million deterministic events at

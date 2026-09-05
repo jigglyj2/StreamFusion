@@ -20,6 +20,9 @@ import org.apache.flink.table.planner.plan.logical.TimeAttributeWindowingStrateg
 import org.apache.flink.table.planner.plan.logical.WindowingStrategy;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecEdge;
 import org.apache.flink.table.planner.plan.nodes.exec.StateMetadata;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecHashAggregate;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecSort;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecSortAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecCalc;
 import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecExpand;
 import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecWindowTableFunction;
@@ -30,7 +33,6 @@ import org.apache.flink.table.planner.plan.nodes.exec.spec.PartitionSpec;
 import org.apache.flink.table.planner.plan.nodes.exec.spec.SortSpec;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecChangelogNormalize;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecDeduplicate;
-import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecExpand;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecGlobalGroupAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecGroupAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecIncrementalGroupAggregate;
@@ -72,7 +74,7 @@ final class FlinkExecNodeAccess {
     }
 
     @SuppressWarnings("unchecked")
-    static List<List<RexNode>> projects(StreamExecExpand expand) {
+    static List<List<RexNode>> projects(CommonExecExpand expand) {
         return (List<List<RexNode>>) field(expand, CommonExecExpand.class, "projects");
     }
 
@@ -131,6 +133,50 @@ final class FlinkExecNodeAccess {
 
     static int[] grouping(StreamExecGroupAggregate aggregate) {
         return ((int[]) field(aggregate, StreamExecGroupAggregate.class, "grouping")).clone();
+    }
+
+    static int[] grouping(BatchExecHashAggregate aggregate) {
+        return ((int[]) field(aggregate, BatchExecHashAggregate.class, "grouping")).clone();
+    }
+
+    static int[] auxiliaryGrouping(BatchExecHashAggregate aggregate) {
+        return ((int[]) field(aggregate, BatchExecHashAggregate.class, "auxGrouping")).clone();
+    }
+
+    static org.apache.calcite.rel.core.AggregateCall[] aggregateCalls(BatchExecHashAggregate aggregate) {
+        return ((org.apache.calcite.rel.core.AggregateCall[])
+                        field(aggregate, BatchExecHashAggregate.class, "aggCalls"))
+                .clone();
+    }
+
+    static RowType aggregateInputType(BatchExecHashAggregate aggregate) {
+        return (RowType) field(aggregate, BatchExecHashAggregate.class, "aggInputRowType");
+    }
+
+    static boolean batchAggregateBooleanField(BatchExecHashAggregate aggregate, String name) {
+        return (boolean) field(aggregate, BatchExecHashAggregate.class, name);
+    }
+
+    static int[] grouping(BatchExecSortAggregate aggregate) {
+        return ((int[]) field(aggregate, BatchExecSortAggregate.class, "grouping")).clone();
+    }
+
+    static int[] auxiliaryGrouping(BatchExecSortAggregate aggregate) {
+        return ((int[]) field(aggregate, BatchExecSortAggregate.class, "auxGrouping")).clone();
+    }
+
+    static org.apache.calcite.rel.core.AggregateCall[] aggregateCalls(BatchExecSortAggregate aggregate) {
+        return ((org.apache.calcite.rel.core.AggregateCall[])
+                        field(aggregate, BatchExecSortAggregate.class, "aggCalls"))
+                .clone();
+    }
+
+    static RowType aggregateInputType(BatchExecSortAggregate aggregate) {
+        return (RowType) field(aggregate, BatchExecSortAggregate.class, "aggInputRowType");
+    }
+
+    static boolean batchAggregateBooleanField(BatchExecSortAggregate aggregate, String name) {
+        return (boolean) field(aggregate, BatchExecSortAggregate.class, name);
     }
 
     static OverSpec overSpec(StreamExecOverAggregate aggregate) {
@@ -343,6 +389,10 @@ final class FlinkExecNodeAccess {
 
     static SortSpec boundedSortSpec(StreamExecSort sort) {
         return (SortSpec) field(sort, StreamExecSort.class, "sortSpec");
+    }
+
+    static SortSpec boundedSortSpec(BatchExecSort sort) {
+        return (SortSpec) field(sort, BatchExecSort.class, "sortSpec");
     }
 
     static boolean temporalSortProcessingTime(StreamExecTemporalSort sort, SortSpec sortSpec) {

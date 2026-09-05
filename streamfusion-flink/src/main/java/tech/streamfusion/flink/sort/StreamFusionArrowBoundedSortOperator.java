@@ -49,6 +49,9 @@ final class StreamFusionArrowBoundedSortOperator extends AbstractStreamFusionArr
         invalidRetractions = getMetricGroup().addGroup("StreamFusion").counter("boundedSortInvalidRetractions");
         comparatorCalls = getMetricGroup().addGroup("StreamFusion").counter("boundedSortComparatorCalls");
         emittedRows = getMetricGroup().addGroup("StreamFusion").counter("boundedSortEmittedRows");
+        getMetricGroup().gauge("memoryUsedSizeInBytes", this::managedMemoryUsed);
+        getMetricGroup().gauge("numSpillFiles", () -> 0L);
+        getMetricGroup().gauge("spillInBytes", () -> 0L);
     }
 
     @Override

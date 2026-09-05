@@ -8,6 +8,7 @@ package tech.streamfusion.flink.aggregate;
 final class AggregateManagedMemoryWeights {
     static final int LOCAL = 2;
     static final int STATEFUL = 8;
+    static final int BATCH = 128;
 
     private AggregateManagedMemoryWeights() {}
 }

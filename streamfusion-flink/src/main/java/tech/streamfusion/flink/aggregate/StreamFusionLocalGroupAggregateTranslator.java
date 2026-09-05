@@ -36,12 +36,41 @@ public final class StreamFusionLocalGroupAggregateTranslator {
                 arrowInput,
                 "streamfusion-local-group-aggregate",
                 new StreamFusionArrowLocalGroupAggregateOperator(
-                        plan, inputType, internalOutputType, grouping, inputChangelog, keySelector),
+                        plan, inputType, internalOutputType, grouping, inputChangelog, keySelector, false),
                 ArrowRowDataBatchTypeInfo.INSTANCE,
                 input.getParallelism(),
                 false);
         transformation.declareManagedMemoryUseCaseAtOperatorScope(
                 ManagedMemoryUseCase.OPERATOR, AggregateManagedMemoryWeights.LOCAL);
+        return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
+    }
+
+    public static Transformation<RowData> translateBatch(
+            Transformation<RowData> input,
+            RowType inputType,
+            RowType internalOutputType,
+            int[] grouping,
+            AggregateCall[] calls,
+            RowDataKeySelector keySelector,
+            boolean hashAggregateMetrics) {
+        byte[] plan = StreamFusionGroupAggregatePlan.createBoundedLocal(inputType, internalOutputType, grouping, calls);
+        Transformation<ArrowRowDataBatch> arrowInput = StreamFusionArrowBoundaries.toArrow(input, inputType);
+        OneInputTransformation<ArrowRowDataBatch, ArrowRowDataBatch> transformation = new OneInputTransformation<>(
+                arrowInput,
+                "streamfusion-batch-local-group-aggregate",
+                new StreamFusionArrowLocalGroupAggregateOperator(
+                        plan,
+                        inputType,
+                        internalOutputType,
+                        grouping,
+                        false,
+                        keySelector,
+                        hashAggregateMetrics && grouping.length > 0),
+                ArrowRowDataBatchTypeInfo.INSTANCE,
+                input.getParallelism(),
+                false);
+        transformation.declareManagedMemoryUseCaseAtOperatorScope(
+                ManagedMemoryUseCase.OPERATOR, AggregateManagedMemoryWeights.BATCH);
         return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
     }
 }

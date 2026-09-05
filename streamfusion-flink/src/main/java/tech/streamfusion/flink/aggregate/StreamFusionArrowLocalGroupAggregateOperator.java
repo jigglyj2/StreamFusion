@@ -28,6 +28,7 @@ final class StreamFusionArrowLocalGroupAggregateOperator extends AbstractStreamO
     private final boolean inputChangelog;
     private final boolean preencodeKeys;
     private final RowDataKeySelector keySelector;
+    private final boolean hashAggregateMetrics;
 
     private transient FlinkManagedMemory managedMemory;
     private transient long nativeHandle;
@@ -38,12 +39,14 @@ final class StreamFusionArrowLocalGroupAggregateOperator extends AbstractStreamO
             RowType outputType,
             int[] grouping,
             boolean inputChangelog,
-            RowDataKeySelector keySelector) {
+            RowDataKeySelector keySelector,
+            boolean hashAggregateMetrics) {
         this.serializedPlan = serializedPlan.clone();
         this.outputType = outputType;
         this.inputChangelog = inputChangelog;
         this.preencodeKeys = FlinkBinaryRowKeyEncoder.requiresPreencoding(inputType, grouping);
         this.keySelector = keySelector;
+        this.hashAggregateMetrics = hashAggregateMetrics;
     }
 
     @Override
@@ -55,6 +58,10 @@ final class StreamFusionArrowLocalGroupAggregateOperator extends AbstractStreamO
                 getMetricGroup(),
                 "streamfusion-local-group-aggregate");
         nativeHandle = NativeLocalGroupAggregateBridge.create(serializedPlan, managedMemory);
+        if (hashAggregateMetrics) {
+            getMetricGroup().gauge("memoryUsedSizeInBytes", managedMemory::reserved);
+            getMetricGroup().gauge("numSpillFiles", () -> 0L);
+        }
         getRuntimeContext()
                 .getMetricGroup()
                 .gauge(

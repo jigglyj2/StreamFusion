@@ -14,6 +14,7 @@ import java.util.Comparator;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import org.apache.arrow.memory.BufferAllocator;
+import org.apache.flink.configuration.StateBackendOptions;
 import org.apache.flink.metrics.groups.OperatorMetricGroup;
 import org.apache.flink.runtime.checkpoint.CheckpointOptions;
 import org.apache.flink.runtime.execution.Environment;
@@ -70,7 +71,10 @@ final class NativeKeyedStateLifecycle implements Serializable {
                 environment, operatorConfig, metricGroup, "streamfusion-" + stateName.replace(' ', '-'));
         allocator = managedMemory.allocator();
         String backendType = keyedStateBackend.getBackendTypeIdentifier();
-        if ("rocksdb".equals(backendType)) {
+        boolean useRocksDb = "rocksdb".equals(backendType)
+                || ("batch".equals(backendType)
+                        && "rocksdb".equals(environment.getJobConfiguration().get(StateBackendOptions.STATE_BACKEND)));
+        if (useRocksDb) {
             Path spillDirectory =
                     environment.getIOManager().getSpillingDirectories()[0].toPath();
             rocksDbDirectory = Files.createTempDirectory(spillDirectory, "streamfusion-rocksdb-");
@@ -99,7 +103,10 @@ final class NativeKeyedStateLifecycle implements Serializable {
                 }
                 throw failure;
             }
-        } else if ("hashmap".equals(backendType)) {
+        } else if ("hashmap".equals(backendType) || "batch".equals(backendType)) {
+            // Flink's bounded runtime exposes its in-memory keyed backend as "batch". Native
+            // bounded operators still own opaque canonical key-group state, so it has the same
+            // direct-memory implementation and restore format as the hashmap backend.
             nativeHandle = bridge.createMemory(
                     serializedPlan,
                     maxParallelism,
@@ -107,15 +114,17 @@ final class NativeKeyedStateLifecycle implements Serializable {
                     keyGroupRange.getEndKeyGroup(),
                     managedMemory);
         } else {
-            throw new IllegalStateException(
-                    "Native " + stateName + " supports Flink hashmap and RocksDB state backends, got " + backendType);
+            throw new IllegalStateException("Native "
+                    + stateName
+                    + " supports Flink hashmap, batch-memory, and RocksDB state backends, got "
+                    + backendType);
         }
-        statefulMetrics = new StreamFusionStatefulOperatorMetrics(metricGroup, "rocksdb".equals(backendType));
+        statefulMetrics = new StreamFusionStatefulOperatorMetrics(metricGroup, useRocksDb);
         metricGroup.addGroup("StreamFusion").gauge("rocksDbSharedManagedMemoryReserved", () -> rocksDbManagedMemory);
         incrementalCheckpoints = new ConcurrentHashMap<>();
         if (keyedStateBackend instanceof StreamFusionKeyedStateBackend) {
             ((StreamFusionKeyedStateBackend<?>) keyedStateBackend)
-                    .registerNativeStateParticipant(participant, "rocksdb".equals(backendType));
+                    .registerNativeStateParticipant(participant, useRocksDb);
         }
         restoreRawState(context);
     }
@@ -157,6 +166,10 @@ final class NativeKeyedStateLifecycle implements Serializable {
 
     NativeMemoryManager memoryManager() {
         return managedMemory;
+    }
+
+    long managedMemoryUsed() {
+        return managedMemory.reserved();
     }
 
     StreamFusionStatefulOperatorMetrics metrics() {

@@ -25,7 +25,8 @@ use crate::memory_pool::HostMemoryReservation;
 use crate::planner::expressions::null_literal;
 use crate::planner::operators::select_distinct::{apply_count_change, CountChange};
 use crate::state::{
-    KeyedState, MemoryKeyedState, RocksPluginKeyedState, StateKey, StateKeyRef, StateMutation,
+    decode_key_group_snapshot, KeyedState, MemoryKeyedState, RocksPluginKeyedState, StateKey,
+    StateKeyRef, StateMutation,
 };
 use crate::{decode_plan, proto};
 
@@ -42,12 +43,16 @@ const UPDATE_AFTER: i8 = 2;
 const DELETE: i8 = 3;
 const STATE_MAGIC: &[u8; 4] = b"SFGA";
 const STATE_VERSION: u8 = 6;
+const BOUNDED_STATE_MAGIC: &[u8; 4] = b"SFBG";
+const BOUNDED_STATE_VERSION: u8 = 1;
+const BOUNDED_OUTPUT_MAX_ROWS: usize = 16_384;
 
 /// Persistent timer-free keyed aggregation handle shared by memory and RocksDB state.
 pub(crate) struct GroupAggregateProcessor {
     plan: proto::GroupAggregate,
     calls: Vec<Call>,
     max_parallelism: u32,
+    last_key_group: u32,
     state: Box<dyn KeyedState>,
     input_schema: Option<SchemaRef>,
     key_fields: Vec<(usize, KeyField)>,
@@ -64,6 +69,11 @@ pub(crate) struct GroupAggregateProcessor {
     partial_input: bool,
     state_read_batches: u64,
     state_write_batches: u64,
+    bounded_output_finished: bool,
+    bounded_output_key_group: Option<u32>,
+    bounded_output_entries: Vec<(Vec<u8>, Vec<u8>)>,
+    bounded_output_entry_index: usize,
+    bounded_output_had_rows: bool,
 }
 
 #[derive(Clone)]
@@ -226,7 +236,14 @@ impl GroupAggregateProcessor {
             last_key_group,
             state_reservation,
         )?);
-        Self::with_state(serialized_plan, max_parallelism, state, scratch_reservation)
+        Self::with_state(
+            serialized_plan,
+            max_parallelism,
+            first_key_group,
+            last_key_group,
+            state,
+            scratch_reservation,
+        )
     }
 
     pub(crate) fn new_rocksdb(
@@ -246,12 +263,21 @@ impl GroupAggregateProcessor {
             last_key_group,
             memory_limit,
         )?);
-        Self::with_state(serialized_plan, max_parallelism, state, scratch_reservation)
+        Self::with_state(
+            serialized_plan,
+            max_parallelism,
+            first_key_group,
+            last_key_group,
+            state,
+            scratch_reservation,
+        )
     }
 
     fn with_state(
         serialized_plan: &[u8],
         max_parallelism: u32,
+        first_key_group: u32,
+        last_key_group: u32,
         state: Box<dyn KeyedState>,
         scratch_reservation: HostMemoryReservation,
     ) -> Result<Self> {
@@ -273,6 +299,7 @@ impl GroupAggregateProcessor {
                         mini_batch_size: plan.mini_batch_size,
                         input_schema: plan.input_schema,
                         output_schema: plan.output_schema,
+                        bounded_final_output: plan.bounded_final_output,
                     },
                     true,
                 )
@@ -302,6 +329,7 @@ impl GroupAggregateProcessor {
             plan,
             calls,
             max_parallelism,
+            last_key_group,
             state,
             input_schema: None,
             key_fields: Vec::new(),
@@ -318,6 +346,11 @@ impl GroupAggregateProcessor {
             partial_input,
             state_read_batches: 0,
             state_write_batches: 0,
+            bounded_output_finished: false,
+            bounded_output_key_group: Some(first_key_group),
+            bounded_output_entries: Vec::new(),
+            bounded_output_entry_index: 0,
+            bounded_output_had_rows: false,
         })
     }
 
@@ -328,8 +361,12 @@ impl GroupAggregateProcessor {
             .num_rows()
             .saturating_mul(192usize.saturating_add(self.calls.len().saturating_mul(64)));
         self.scratch_reservation.resize(base_reservation)?;
-        let result = if self.partial_input {
+        let result = if self.partial_input && self.plan.bounded_final_output {
+            self.process_bounded_partial_accounted(batch, base_reservation)
+        } else if self.partial_input {
             self.process_partial_mini_accounted(batch, base_reservation)
+        } else if self.plan.bounded_final_output {
+            self.process_bounded_accounted(batch, base_reservation)
         } else if self.plan.mini_batch_size == 0 {
             self.process_arrow_accounted(batch, base_reservation)
         } else {
@@ -501,6 +538,210 @@ impl GroupAggregateProcessor {
         self.state.write_batch(mutations)?;
         self.state_write_batches = self.state_write_batches.saturating_add(1);
         self.output_batch(&batch, events)
+    }
+
+    fn process_bounded_accounted(
+        &mut self,
+        batch: RecordBatch,
+        base_reservation: usize,
+    ) -> Result<RecordBatch> {
+        if self.bounded_output_finished {
+            return Err(DataFusionError::Execution(
+                "bounded group aggregate received input after terminal output".to_string(),
+            ));
+        }
+        self.prepare_schema(batch.schema(), batch.num_columns())?;
+        let grouping_rows = self.encode_grouping_rows(&batch)?;
+        let mut unique = HashMap::<StateKey, usize, RandomState>::with_capacity_and_hasher(
+            batch.num_rows().max(1),
+            RandomState::new(),
+        );
+        let mut keys = Vec::new();
+        let mut first_rows = Vec::new();
+        let mut row_key_indices = Vec::with_capacity(batch.num_rows());
+        for row in 0..batch.num_rows() {
+            let key = self.state_key(&batch, row)?;
+            let next = keys.len();
+            let index = match unique.entry(key.clone()) {
+                hashbrown::hash_map::Entry::Occupied(entry) => *entry.get(),
+                hashbrown::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(next);
+                    keys.push(key);
+                    first_rows.push(row);
+                    next
+                }
+            };
+            row_key_indices.push(index);
+        }
+        if keys.is_empty() {
+            return self.bundle_output_batch(BundleOutputEvents::new(self.calls.len()));
+        }
+        let refs = keys
+            .iter()
+            .map(|key| StateKeyRef {
+                key_group: key.key_group,
+                key: &key.key,
+            })
+            .collect::<Vec<_>>();
+        let existing = self.state.get_batch(&refs)?;
+        self.state_read_batches = self.state_read_batches.saturating_add(1);
+        drop(refs);
+        let serialized_bytes = existing.iter().fold(0usize, |bytes, value| {
+            bytes.saturating_add(value.as_deref().map_or(0, <[u8]>::len))
+        });
+        self.scratch_reservation
+            .resize(base_reservation.saturating_add(serialized_bytes.saturating_mul(4)))?;
+        let mut staged = existing
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                value
+                    .as_deref()
+                    .map(|bytes| decode_bounded_state(bytes, &self.calls))
+                    .transpose()
+                    .map(|decoded| {
+                        decoded.unwrap_or_else(|| {
+                            (
+                                grouping_rows[first_rows[index]].clone(),
+                                AccumulatorState::new(&self.calls),
+                            )
+                        })
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        drop(existing);
+        for row in 0..batch.num_rows() {
+            let index = row_key_indices[row];
+            let accumulate = self.accumulates(&batch, row)?;
+            if staged[index].1.row_count == 0 && !accumulate {
+                continue;
+            }
+            staged[index]
+                .1
+                .apply(&self.calls, &batch, row, accumulate)?;
+        }
+        let mutations = keys
+            .into_iter()
+            .zip(staged)
+            .map(|(key, (grouping_row, state))| -> Result<StateMutation> {
+                Ok(StateMutation {
+                    key,
+                    value: (state.row_count != 0)
+                        .then(|| encode_bounded_state(&grouping_row, &state))
+                        .transpose()?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        self.state.write_batch(mutations)?;
+        self.state_write_batches = self.state_write_batches.saturating_add(1);
+        self.bundle_output_batch(BundleOutputEvents::new(self.calls.len()))
+    }
+
+    fn process_bounded_partial_accounted(
+        &mut self,
+        batch: RecordBatch,
+        base_reservation: usize,
+    ) -> Result<RecordBatch> {
+        if self.bounded_output_finished {
+            return Err(DataFusionError::Execution(
+                "bounded global group aggregate received input after terminal output".to_string(),
+            ));
+        }
+        self.prepare_schema(batch.schema(), batch.num_columns())?;
+        let grouping_rows = self.encode_grouping_rows(&batch)?;
+        let mut unique = HashMap::<StateKey, usize, RandomState>::with_capacity_and_hasher(
+            batch.num_rows().max(1),
+            RandomState::new(),
+        );
+        let mut keys = Vec::new();
+        let mut first_rows = Vec::new();
+        let mut row_key_indices = Vec::with_capacity(batch.num_rows());
+        for row in 0..batch.num_rows() {
+            let key = self.state_key(&batch, row)?;
+            let next = keys.len();
+            let index = match unique.entry(key.clone()) {
+                hashbrown::hash_map::Entry::Occupied(entry) => *entry.get(),
+                hashbrown::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(next);
+                    keys.push(key);
+                    first_rows.push(row);
+                    next
+                }
+            };
+            row_key_indices.push(index);
+        }
+        if keys.is_empty() {
+            return self.bundle_output_batch(BundleOutputEvents::new(self.calls.len()));
+        }
+        let refs = keys
+            .iter()
+            .map(|key| StateKeyRef {
+                key_group: key.key_group,
+                key: &key.key,
+            })
+            .collect::<Vec<_>>();
+        let existing = self.state.get_batch(&refs)?;
+        self.state_read_batches = self.state_read_batches.saturating_add(1);
+        drop(refs);
+        let serialized_bytes = existing.iter().fold(0usize, |bytes, value| {
+            bytes.saturating_add(value.as_deref().map_or(0, <[u8]>::len))
+        });
+        self.scratch_reservation
+            .resize(base_reservation.saturating_add(serialized_bytes.saturating_mul(4)))?;
+        let mut staged = existing
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                value
+                    .as_deref()
+                    .map(|bytes| decode_bounded_state(bytes, &self.calls))
+                    .transpose()
+                    .map(|decoded| {
+                        decoded.unwrap_or_else(|| {
+                            (
+                                grouping_rows[first_rows[index]].clone(),
+                                AccumulatorState::new(&self.calls),
+                            )
+                        })
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        drop(existing);
+        let accumulator_index = self
+            .visible_count
+            .expect("bounded partial schema was prepared")
+            - 1;
+        let accumulators = batch
+            .column(accumulator_index)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .expect("bounded partial accumulator type was validated");
+        for row in 0..batch.num_rows() {
+            if accumulators.is_null(row) {
+                return Err(DataFusionError::Execution(
+                    "local aggregate accumulator cannot be null".to_string(),
+                ));
+            }
+            let partial = decode_state(accumulators.value(row), &self.calls)?;
+            staged[row_key_indices[row]]
+                .1
+                .merge(&self.calls, &partial)?;
+        }
+        let mutations = keys
+            .into_iter()
+            .zip(staged)
+            .map(|(key, (grouping_row, state))| -> Result<StateMutation> {
+                Ok(StateMutation {
+                    key,
+                    value: (state.row_count != 0)
+                        .then(|| encode_bounded_state(&grouping_row, &state))
+                        .transpose()?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        self.state.write_batch(mutations)?;
+        self.state_write_batches = self.state_write_batches.saturating_add(1);
+        self.bundle_output_batch(BundleOutputEvents::new(self.calls.len()))
     }
 
     fn process_mini_batch_accounted(
@@ -823,9 +1064,71 @@ impl GroupAggregateProcessor {
     }
 
     pub(crate) fn finish_bundle(&mut self) -> Result<RecordBatch> {
+        if self.plan.bounded_final_output {
+            return self.finish_bounded_output();
+        }
         let mut events = BundleOutputEvents::new(self.calls.len());
         self.finish_pending(&mut events)?;
         self.bundle_reservation.resize(0)?;
+        let output = self.bundle_output_batch(events)?;
+        let output_bytes = output.get_array_memory_size();
+        self.scratch_reservation.resize(output_bytes)?;
+        self.scratch_reservation.transfer_to_arrow(output_bytes)?;
+        self.scratch_reservation.resize(0)?;
+        Ok(output)
+    }
+
+    fn finish_bounded_output(&mut self) -> Result<RecordBatch> {
+        if self.bounded_output_finished {
+            return self.bundle_output_batch(BundleOutputEvents::new(self.calls.len()));
+        }
+        let mut events = BundleOutputEvents::new(self.calls.len());
+        let mut snapshot_bytes = 0usize;
+        while events.grouping_rows.len() < BOUNDED_OUTPUT_MAX_ROWS {
+            if self.bounded_output_entry_index < self.bounded_output_entries.len() {
+                let value = &self.bounded_output_entries[self.bounded_output_entry_index].1;
+                self.bounded_output_entry_index += 1;
+                let (grouping_row, state) = decode_bounded_state(value, &self.calls)?;
+                if state.row_count != 0 {
+                    events.push(grouping_row, INSERT, state.values(&self.calls));
+                    self.bounded_output_had_rows = true;
+                }
+                continue;
+            }
+            self.bounded_output_entries.clear();
+            self.bounded_output_entry_index = 0;
+            let Some(key_group) = self.bounded_output_key_group else {
+                break;
+            };
+            let snapshot = self.state.snapshot_key_group(key_group)?;
+            snapshot_bytes = snapshot_bytes.saturating_add(snapshot.len());
+            self.bounded_output_entries = decode_key_group_snapshot(key_group, &snapshot)?;
+            self.bounded_output_key_group = if key_group < self.last_key_group {
+                Some(key_group + 1)
+            } else {
+                None
+            };
+            if self.bounded_output_entries.is_empty() {
+                continue;
+            }
+        }
+        let exhausted = self.bounded_output_key_group.is_none()
+            && self.bounded_output_entry_index == self.bounded_output_entries.len();
+        if events.grouping_rows.is_empty()
+            && exhausted
+            && !self.bounded_output_had_rows
+            && self.plan.grouping_indices.is_empty()
+        {
+            let state = AccumulatorState::new(&self.calls);
+            events.push(Vec::new(), INSERT, state.values(&self.calls));
+            self.bounded_output_had_rows = true;
+        } else if events.grouping_rows.is_empty() && exhausted {
+            self.bounded_output_finished = true;
+            self.bounded_output_entries.clear();
+            self.scratch_reservation.resize(0)?;
+            return self.bundle_output_batch(events);
+        }
+        self.scratch_reservation.resize(snapshot_bytes)?;
         let output = self.bundle_output_batch(events)?;
         let output_bytes = output.get_array_memory_size();
         self.scratch_reservation.resize(output_bytes)?;
@@ -2025,6 +2328,52 @@ fn aggregate_filter(call: &Call, batch: &RecordBatch, row: usize) -> Result<bool
             ))
         })?;
     Ok(!filter.is_null(row) && filter.value(row))
+}
+
+fn encode_bounded_state(grouping_row: &[u8], state: &AccumulatorState) -> Result<Vec<u8>> {
+    let accumulator = encode_state(state);
+    let grouping_len = u32::try_from(grouping_row.len()).map_err(|_| {
+        DataFusionError::Execution(
+            "bounded group aggregate grouping row exceeds the canonical u32 length".to_string(),
+        )
+    })?;
+    let mut bytes = Vec::with_capacity(
+        BOUNDED_STATE_MAGIC.len() + 1 + 4 + grouping_row.len() + accumulator.len(),
+    );
+    bytes.extend_from_slice(BOUNDED_STATE_MAGIC);
+    bytes.push(BOUNDED_STATE_VERSION);
+    bytes.extend_from_slice(&grouping_len.to_le_bytes());
+    bytes.extend_from_slice(grouping_row);
+    bytes.extend_from_slice(&accumulator);
+    Ok(bytes)
+}
+
+fn decode_bounded_state(bytes: &[u8], calls: &[Call]) -> Result<(Vec<u8>, AccumulatorState)> {
+    let header = BOUNDED_STATE_MAGIC.len() + 1 + 4;
+    if bytes.len() < header || &bytes[..4] != BOUNDED_STATE_MAGIC {
+        return Err(DataFusionError::Execution(
+            "invalid bounded group aggregate state magic".to_string(),
+        ));
+    }
+    if bytes[4] != BOUNDED_STATE_VERSION {
+        return Err(DataFusionError::Execution(format!(
+            "unsupported bounded group aggregate state version {}",
+            bytes[4]
+        )));
+    }
+    let grouping_len = u32::from_le_bytes(bytes[5..9].try_into().expect("fixed header")) as usize;
+    let grouping_end = header.checked_add(grouping_len).ok_or_else(|| {
+        DataFusionError::Execution("bounded group aggregate grouping length overflow".to_string())
+    })?;
+    if grouping_end > bytes.len() {
+        return Err(DataFusionError::Execution(
+            "truncated bounded group aggregate grouping row".to_string(),
+        ));
+    }
+    Ok((
+        bytes[header..grouping_end].to_vec(),
+        decode_state(&bytes[grouping_end..], calls)?,
+    ))
 }
 
 fn validate_plan(_plan: &proto::GroupAggregate, max_parallelism: u32) -> Result<()> {

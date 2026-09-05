@@ -326,6 +326,10 @@ message GroupAggregate {
   uint64 mini_batch_size = 6;
   Schema input_schema = 7;
   Schema output_schema = 8;
+  // Bounded hash aggregation updates backend-neutral keyed state for every input batch and
+  // emits the final INSERT-only result when bounded input ends. Its state values retain the
+  // opaque Arrow grouping row so terminal output never decodes Flink BinaryRow key bytes.
+  bool bounded_final_output = 9;
 }
 
 // First stage of Flink's count-triggered local/global group aggregation. It holds no persistent
@@ -338,6 +342,9 @@ message LocalGroupAggregate {
   uint64 mini_batch_size = 5;
   Schema input_schema = 6;
   Schema output_schema = 7;
+  // Bounded local aggregation drains one partial per key at every Arrow batch boundary. This
+  // bounds local memory and lets the paired global stage perform one batched merge per input.
+  bool bounded_batch = 8;
 }
 
 // Second stage of Flink's local/global group aggregation. It merges opaque local accumulator
@@ -350,6 +357,9 @@ message GlobalGroupAggregate {
   uint64 mini_batch_size = 5;
   Schema input_schema = 6;
   Schema output_schema = 7;
+  // Merge partials into canonical keyed state without intermediate changelog and emit final
+  // INSERT rows only when bounded input ends.
+  bool bounded_final_output = 8;
 }
 
 // Middle stage of Flink's local/incremental/global mini-batch aggregate. It merges opaque local

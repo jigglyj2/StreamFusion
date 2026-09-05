@@ -26,7 +26,9 @@ final class StreamFusionArrowGroupAggregateOperator extends AbstractStreamFusion
     private final RowDataKeySelector keySelector;
     private final long miniBatchSize;
     private final String operatorName;
+    private final boolean terminalOutputOnly;
     private transient long[] observedNativeStatistics;
+    private transient boolean terminalOutputEmitted;
 
     StreamFusionArrowGroupAggregateOperator(
             RowType inputType,
@@ -54,7 +56,8 @@ final class StreamFusionArrowGroupAggregateOperator extends AbstractStreamFusion
                 inputChangelog,
                 keySelector,
                 miniBatchSize,
-                grouping.length == outputType.getFieldCount() ? "select distinct" : "group aggregate");
+                grouping.length == outputType.getFieldCount() ? "select distinct" : "group aggregate",
+                false);
     }
 
     StreamFusionArrowGroupAggregateOperator(
@@ -66,6 +69,28 @@ final class StreamFusionArrowGroupAggregateOperator extends AbstractStreamFusion
             RowDataKeySelector keySelector,
             long miniBatchSize,
             String operatorName) {
+        this(
+                inputType,
+                outputType,
+                grouping,
+                serializedPlan,
+                inputChangelog,
+                keySelector,
+                miniBatchSize,
+                operatorName,
+                false);
+    }
+
+    StreamFusionArrowGroupAggregateOperator(
+            RowType inputType,
+            RowType outputType,
+            int[] grouping,
+            byte[] serializedPlan,
+            boolean inputChangelog,
+            RowDataKeySelector keySelector,
+            long miniBatchSize,
+            String operatorName,
+            boolean terminalOutputOnly) {
         super(serializedPlan, operatorName, NativeGroupAggregateBridge.keyedStateBridge());
         this.outputType = outputType;
         this.inputChangelog = inputChangelog;
@@ -73,6 +98,7 @@ final class StreamFusionArrowGroupAggregateOperator extends AbstractStreamFusion
         this.keySelector = keySelector;
         this.miniBatchSize = miniBatchSize;
         this.operatorName = operatorName;
+        this.terminalOutputOnly = terminalOutputOnly;
     }
 
     @Override
@@ -128,14 +154,18 @@ final class StreamFusionArrowGroupAggregateOperator extends AbstractStreamFusion
 
     @Override
     public void processWatermark(Watermark watermark) throws Exception {
-        flushBundle();
+        if (!terminalOutputOnly) {
+            flushBundle();
+        }
         recordWatermark();
         super.processWatermark(watermark);
     }
 
     @Override
     public void prepareSnapshotPreBarrier(long checkpointId) throws Exception {
-        flushBundle();
+        if (!terminalOutputOnly) {
+            flushBundle();
+        }
     }
 
     @Override
@@ -144,22 +174,36 @@ final class StreamFusionArrowGroupAggregateOperator extends AbstractStreamFusion
     }
 
     private void flushBundle() throws Exception {
-        if (miniBatchSize == 0 || NativeGroupAggregateBridge.pendingElementCount(nativeHandle()) == 0) {
+        if (terminalOutputOnly && terminalOutputEmitted) {
             return;
         }
-        try (ArrowRowDataBatch outputBatch =
-                ArrowGroupAggregateCDataBridge.finishBundle(nativeHandle(), outputType, allocator(), memoryManager())) {
-            int physicalOutputRecords = 0;
-            if (outputBatch.size() > 0) {
-                output.collect(new StreamRecord<>(outputBatch));
-                physicalOutputRecords = 1;
-            }
-            FlinkMetricParity.replacePhysicalRecords(
-                    getMetricGroup().getIOMetricGroup().getNumRecordsOutCounter(),
-                    physicalOutputRecords,
-                    outputBatch.size());
-            recordProcessedWithoutStateCalls(0, outputBatch);
+        if (!terminalOutputOnly
+                && (miniBatchSize == 0 || NativeGroupAggregateBridge.pendingElementCount(nativeHandle()) == 0)) {
+            return;
+        }
+        try {
+            do {
+                try (ArrowRowDataBatch outputBatch = ArrowGroupAggregateCDataBridge.finishBundle(
+                        nativeHandle(), outputType, allocator(), memoryManager())) {
+                    int physicalOutputRecords = 0;
+                    if (outputBatch.size() > 0) {
+                        output.collect(new StreamRecord<>(outputBatch));
+                        physicalOutputRecords = 1;
+                    }
+                    FlinkMetricParity.replacePhysicalRecords(
+                            getMetricGroup().getIOMetricGroup().getNumRecordsOutCounter(),
+                            physicalOutputRecords,
+                            outputBatch.size());
+                    recordProcessedWithoutStateCalls(0, outputBatch);
+                    if (!terminalOutputOnly || outputBatch.size() == 0) {
+                        break;
+                    }
+                }
+            } while (true);
             updateNativeStatistics();
+            if (terminalOutputOnly) {
+                terminalOutputEmitted = true;
+            }
         } catch (Throwable failure) {
             recordProcessingFailure();
             throw failure;

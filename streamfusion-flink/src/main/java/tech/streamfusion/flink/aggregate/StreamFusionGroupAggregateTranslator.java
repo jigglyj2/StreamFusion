@@ -8,12 +8,14 @@ import static org.apache.flink.runtime.state.KeyGroupRangeAssignment.DEFAULT_LOW
 
 import org.apache.calcite.rel.core.AggregateCall;
 import org.apache.calcite.sql.SqlKind;
+import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.api.dag.Transformation;
 import org.apache.flink.configuration.CheckpointingOptions;
 import org.apache.flink.configuration.ReadableConfig;
 import org.apache.flink.configuration.StateChangelogOptions;
 import org.apache.flink.core.memory.ManagedMemoryUseCase;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.api.operators.SimpleOperatorFactory;
 import org.apache.flink.streaming.api.transformations.OneInputTransformation;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
 import org.apache.flink.table.data.RowData;
@@ -26,6 +28,10 @@ import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatchTypeInfo;
 import tech.streamfusion.flink.arrow.StreamFusionArrowBoundaries;
 import tech.streamfusion.flink.deduplicate.ArrowBatchKeySelector;
+import tech.streamfusion.flink.exchange.NativeExchangeFrame;
+import tech.streamfusion.flink.exchange.NativeExchangeFrameKeySelector;
+import tech.streamfusion.flink.exchange.NativeExchangeFrameTypeInfo;
+import tech.streamfusion.flink.exchange.NativeExchangeReaderOperator;
 import tech.streamfusion.flink.exchange.StreamFusionExchangeTranslator;
 import tech.streamfusion.flink.state.StreamFusionStateBackendFactory;
 
@@ -148,6 +154,135 @@ public final class StreamFusionGroupAggregateTranslator {
         transformation.setStateKeySelector(new ArrowBatchKeySelector(keySelector));
         transformation.setStateKeyType(keySelector.getProducedType());
         return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
+    }
+
+    public static Transformation<RowData> translateBatch(
+            Transformation<RowData> input,
+            RowType inputType,
+            RowType outputType,
+            int[] grouping,
+            AggregateCall[] calls,
+            ReadableConfig config,
+            StreamExecutionEnvironment environment,
+            RowDataKeySelector keySelector) {
+        boolean[] retractable = new boolean[calls.length];
+        if (unsupportedBatchReason(inputType, outputType, grouping, calls, config) != null) {
+            return null;
+        }
+        StreamFusionStateBackendFactory.install(environment);
+        byte[] plan = StreamFusionGroupAggregatePlan.createBounded(
+                inputType, grouping, calls, retractable, false, outputType);
+        Transformation<RowData> partitionedInput = input;
+        if (!"StreamFusionExchangeReader".equals(input.getName())) {
+            partitionedInput = grouping.length == 0
+                    ? StreamFusionExchangeTranslator.singleton(input, inputType)
+                    : StreamFusionExchangeTranslator.hash(
+                            input,
+                            inputType,
+                            grouping,
+                            DEFAULT_LOWER_BOUND_MAX_PARALLELISM,
+                            environment.getParallelism(),
+                            false);
+        }
+        FramedInput framed = framed(partitionedInput);
+        OneInputTransformation<NativeExchangeFrame, ArrowRowDataBatch> transformation = new OneInputTransformation<>(
+                framed.transformation,
+                "streamfusion-batch-hash-aggregate",
+                new StreamFusionArrowFramedGroupAggregateOperator(
+                        inputType,
+                        outputType,
+                        grouping,
+                        plan,
+                        keySelector,
+                        framed.plan,
+                        "batch hash aggregate",
+                        grouping.length > 0),
+                ArrowRowDataBatchTypeInfo.INSTANCE,
+                partitionedInput.getParallelism(),
+                false);
+        transformation.setMaxParallelism(DEFAULT_LOWER_BOUND_MAX_PARALLELISM);
+        transformation.declareManagedMemoryUseCaseAtOperatorScope(
+                ManagedMemoryUseCase.OPERATOR, AggregateManagedMemoryWeights.BATCH);
+        transformation.setStateKeySelector(new NativeExchangeFrameKeySelector(DEFAULT_LOWER_BOUND_MAX_PARALLELISM));
+        transformation.setStateKeyType(Types.INT);
+        return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
+    }
+
+    public static Transformation<RowData> translateBatchGlobal(
+            Transformation<RowData> input,
+            RowType originalInputType,
+            RowType internalInputType,
+            RowType outputType,
+            int groupingCount,
+            AggregateCall[] calls,
+            ReadableConfig config,
+            StreamExecutionEnvironment environment,
+            RowDataKeySelector keySelector,
+            boolean hashAggregateMetrics) {
+        StreamFusionStateBackendFactory.install(environment);
+        int[] grouping = java.util.stream.IntStream.range(0, groupingCount).toArray();
+        byte[] plan = StreamFusionGroupAggregatePlan.createBoundedGlobal(
+                originalInputType, internalInputType, outputType, groupingCount, calls);
+        FramedInput framed = framed(input);
+        OneInputTransformation<NativeExchangeFrame, ArrowRowDataBatch> transformation = new OneInputTransformation<>(
+                framed.transformation,
+                "streamfusion-batch-global-group-aggregate",
+                new StreamFusionArrowFramedGroupAggregateOperator(
+                        internalInputType,
+                        outputType,
+                        grouping,
+                        plan,
+                        keySelector,
+                        framed.plan,
+                        "batch global group aggregate",
+                        hashAggregateMetrics && grouping.length > 0),
+                ArrowRowDataBatchTypeInfo.INSTANCE,
+                input.getParallelism(),
+                false);
+        transformation.setMaxParallelism(DEFAULT_LOWER_BOUND_MAX_PARALLELISM);
+        transformation.declareManagedMemoryUseCaseAtOperatorScope(
+                ManagedMemoryUseCase.OPERATOR, AggregateManagedMemoryWeights.BATCH);
+        transformation.setStateKeySelector(new NativeExchangeFrameKeySelector(DEFAULT_LOWER_BOUND_MAX_PARALLELISM));
+        transformation.setStateKeyType(Types.INT);
+        return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static FramedInput framed(Transformation<RowData> input) {
+        if (!(input instanceof OneInputTransformation) || !"StreamFusionExchangeReader".equals(input.getName())) {
+            throw new IllegalStateException("Native bounded aggregate requires a framed exchange");
+        }
+        OneInputTransformation<?, ?> reader = (OneInputTransformation<?, ?>) input;
+        if (!(reader.getOperatorFactory() instanceof SimpleOperatorFactory)) {
+            throw new IllegalStateException("Native bounded aggregate cannot inspect its exchange reader factory");
+        }
+        Object operator = ((SimpleOperatorFactory<?>) reader.getOperatorFactory()).getOperator();
+        if (!(operator instanceof NativeExchangeReaderOperator)) {
+            throw new IllegalStateException("Native bounded aggregate received an incompatible exchange reader");
+        }
+        Transformation<?> frames = reader.getInputs().get(0);
+        if (!(frames.getOutputType() instanceof NativeExchangeFrameTypeInfo)) {
+            throw new IllegalStateException("Native bounded aggregate exchange input is not frame encoded");
+        }
+        return new FramedInput(
+                (Transformation<NativeExchangeFrame>) frames,
+                ((NativeExchangeReaderOperator) operator).serializedPlan());
+    }
+
+    private static final class FramedInput {
+        private final Transformation<NativeExchangeFrame> transformation;
+        private final byte[] plan;
+
+        private FramedInput(Transformation<NativeExchangeFrame> transformation, byte[] plan) {
+            this.transformation = transformation;
+            this.plan = plan;
+        }
+    }
+
+    public static String unsupportedBatchReason(
+            RowType inputType, RowType outputType, int[] grouping, AggregateCall[] calls, ReadableConfig config) {
+        return unsupportedReason(
+                inputType, outputType, grouping, calls, new boolean[calls.length], false, false, 0L, config);
     }
 
     public static String unsupportedReason(

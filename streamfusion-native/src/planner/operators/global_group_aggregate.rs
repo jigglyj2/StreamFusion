@@ -179,7 +179,29 @@ mod tests {
                             ("count", bigint(false)),
                             ("sum", bigint(true)),
                         ])),
+                        bounded_final_output: false,
                     },
+                ))),
+            }),
+        }
+        .encode_to_vec()
+    }
+
+    fn bounded_plan() -> Vec<u8> {
+        let native = proto::NativePlan::decode(plan(2).as_slice()).unwrap();
+        let mut aggregate = match native.root.unwrap().operator.unwrap() {
+            proto::operator::Operator::GlobalGroupAggregate(aggregate) => *aggregate,
+            _ => unreachable!(),
+        };
+        aggregate.mini_batch_size = 0;
+        aggregate.generate_update_before = false;
+        aggregate.bounded_final_output = true;
+        proto::NativePlan {
+            protocol_version: crate::PLAN_PROTOCOL_VERSION,
+            root: Some(proto::Operator {
+                plan_node_id: 0,
+                operator: Some(proto::operator::Operator::GlobalGroupAggregate(Box::new(
+                    aggregate,
                 ))),
             }),
         }
@@ -243,6 +265,20 @@ mod tests {
         .unwrap()
     }
 
+    fn bounded_processor() -> GlobalGroupAggregateProcessor {
+        GlobalGroupAggregateProcessor::new(
+            &bounded_plan(),
+            128,
+            0,
+            127,
+            HostMemoryReservation::new(
+                Arc::new(TestBroker::new(1 << 20)),
+                "bounded global aggregate test",
+            ),
+        )
+        .unwrap()
+    }
+
     #[test]
     fn merges_local_deltas_at_receiving_bundle_boundaries_and_retracts() {
         let mut processor = processor();
@@ -295,6 +331,101 @@ mod tests {
             3
         );
         assert_eq!(processor.statistics(), [3, 3]);
+    }
+
+    #[test]
+    fn bounded_mode_batches_one_read_and_write_per_partial_arrow_batch() {
+        let mut processor = bounded_processor();
+        assert_eq!(
+            processor
+                .process_arrow(batch(vec![(1, partial(&[10, 20], true))]))
+                .unwrap()
+                .num_rows(),
+            0
+        );
+        assert_eq!(
+            processor
+                .process_arrow(batch(vec![
+                    (1, partial(&[5], true)),
+                    (2, partial(&[7], true)),
+                ]))
+                .unwrap()
+                .num_rows(),
+            0
+        );
+        assert_eq!(processor.statistics(), [2, 2]);
+
+        let output = processor.finish_bundle().unwrap();
+        assert_eq!(output.num_rows(), 2);
+        let keys = output
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let counts = output
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let sums = output
+            .column(2)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let mut rows = (0..output.num_rows())
+            .map(|row| (keys.value(row), counts.value(row), sums.value(row)))
+            .collect::<Vec<_>>();
+        rows.sort_unstable();
+        assert_eq!(rows, vec![(1, 3, 35), (2, 1, 7)]);
+        assert_eq!(processor.finish_bundle().unwrap().num_rows(), 0);
+    }
+
+    #[test]
+    fn bounded_canonical_state_moves_between_memory_and_rocksdb() {
+        let Ok(plugin_path) = std::env::var("STREAMFUSION_TEST_ROCKSDB_PLUGIN") else {
+            return;
+        };
+        let mut memory = bounded_processor();
+        memory
+            .process_arrow(batch(vec![
+                (1, partial(&[10, 20], true)),
+                (2, partial(&[7], true)),
+            ]))
+            .unwrap();
+        let snapshots = (0..128)
+            .map(|key_group| memory.snapshot_key_group(key_group).unwrap())
+            .collect::<Vec<_>>();
+
+        let directory = tempfile::tempdir().unwrap();
+        let mut rocks = GlobalGroupAggregateProcessor::new_rocksdb(
+            &bounded_plan(),
+            128,
+            0,
+            127,
+            std::path::Path::new(&plugin_path),
+            directory.path(),
+            64 << 20,
+            HostMemoryReservation::new(
+                Arc::new(TestBroker::new(256 << 20)),
+                "bounded global RocksDB test",
+            ),
+        )
+        .unwrap();
+        for (key_group, snapshot) in snapshots.iter().enumerate() {
+            rocks.restore_key_group(key_group as u32, snapshot).unwrap();
+            assert_eq!(
+                rocks.snapshot_key_group(key_group as u32).unwrap(),
+                *snapshot
+            );
+        }
+
+        let update = batch(vec![(1, partial(&[5], true))]);
+        memory.process_arrow(update.clone()).unwrap();
+        rocks.process_arrow(update).unwrap();
+        assert_eq!(
+            memory.finish_bundle().unwrap(),
+            rocks.finish_bundle().unwrap()
+        );
     }
 
     #[test]

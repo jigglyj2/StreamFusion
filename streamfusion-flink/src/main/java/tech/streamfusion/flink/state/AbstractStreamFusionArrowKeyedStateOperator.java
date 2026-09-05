@@ -60,6 +60,10 @@ public abstract class AbstractStreamFusionArrowKeyedStateOperator extends Abstra
         return lifecycle.memoryManager();
     }
 
+    protected final long managedMemoryUsed() {
+        return lifecycle.managedMemoryUsed();
+    }
+
     protected final void recordProcessed(ArrowRowDataBatch input, ArrowRowDataBatch output) {
         lifecycle.metrics().processed(input, output);
     }

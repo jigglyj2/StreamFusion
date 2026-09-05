@@ -5,10 +5,11 @@ sidebar:
   order: 12
 ---
 
-**Current status:** Accelerated for finite full sorts, streaming `ORDER BY ... LIMIT/OFFSET`, and
-time-ascending temporal sorts. Flink lowers these to `StreamExecSort`, `StreamExecSortLimit`, and
-`StreamExecTemporalSort` respectively. A genuinely unbounded global full sort remains invalid in
-streaming SQL rather than being approximated.
+**Current status:** Accelerated for bounded and finite-stream full sorts, streaming
+`ORDER BY ... LIMIT/OFFSET`, and time-ascending temporal sorts. Flink lowers these to
+`BatchExecSort` or `StreamExecSort`, `StreamExecSortLimit`, and `StreamExecTemporalSort`
+respectively. A genuinely unbounded global full sort remains invalid in streaming SQL rather than
+being approximated.
 
 ## SQL example
 
@@ -25,9 +26,9 @@ Finite streaming sort-limit accepts the same Flink-valid order-key types, null p
 ascending/descending directions, changelog strategies, state backends, and recovery contract as
 [Top-N](../top-n/).
 
-Bounded full sort is selected when Flink produces `StreamExecSort`, including the internal
-`__table.exec.sort.non-temporal.enabled__` bounded-stream mode used by the parity and Nexmark
-harnesses. It accepts every Arrow-supported payload type. Ordering fields accept every
+Bounded full sort is selected when Flink produces `BatchExecSort` or `StreamExecSort`, including
+the internal `__table.exec.sort.non-temporal.enabled__` bounded-stream mode used by the parity and
+Nexmark harnesses. It accepts every Arrow-supported payload type. Ordering fields accept every
 Flink-comparable scalar, array, and row type, including decimal and temporal values, nested nulls,
 floating-point NaN, and signed zero. Map, multiset, raw, symbol, and descriptor values remain valid
 opaque payload fields but fall back if used as order fields because Flink has no exact comparator
