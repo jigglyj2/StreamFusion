@@ -18,6 +18,7 @@ import org.apache.flink.table.api.config.ExecutionConfigOptions;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.planner.calcite.FlinkTypeFactory;
 import org.apache.flink.table.planner.plan.logical.TimeAttributeWindowingStrategy;
+import org.apache.flink.table.planner.plan.logical.WindowAttachedWindowingStrategy;
 import org.apache.flink.table.planner.plan.logical.WindowingStrategy;
 import org.apache.flink.table.planner.utils.TableConfigUtils;
 import org.apache.flink.table.runtime.groupwindow.NamedWindowProperty;
@@ -39,6 +40,8 @@ import tech.streamfusion.flink.state.StreamFusionStateBackendFactory;
 
 /** Reflection entry point for native TUMBLE, HOP, and CUMULATE SQL window aggregation. */
 public final class StreamFusionWindowAggregateTranslator {
+    private static final int STATEFUL_MANAGED_MEMORY_WEIGHT = 8;
+
     private StreamFusionWindowAggregateTranslator() {}
 
     public static Transformation<RowData> translate(
@@ -58,7 +61,16 @@ public final class StreamFusionWindowAggregateTranslator {
         if (reason != null) {
             return null;
         }
-        TimeAttributeWindowingStrategy timeStrategy = (TimeAttributeWindowingStrategy) strategy;
+        int timeAttributeIndex = 0;
+        int attachedWindowStartIndex = -1;
+        int attachedWindowEndIndex = -1;
+        if (strategy instanceof TimeAttributeWindowingStrategy) {
+            timeAttributeIndex = ((TimeAttributeWindowingStrategy) strategy).getTimeAttributeIndex();
+        } else {
+            WindowAttachedWindowingStrategy attached = (WindowAttachedWindowingStrategy) strategy;
+            attachedWindowStartIndex = attached.getWindowStart();
+            attachedWindowEndIndex = attached.getWindowEnd();
+        }
         StreamFusionStateBackendFactory.install(environment);
         byte[] plan = StreamFusionWindowAggregatePlan.create(
                 inputType,
@@ -68,7 +80,9 @@ public final class StreamFusionWindowAggregateTranslator {
                 needRetraction,
                 needRetraction,
                 StreamFusionWindowTableFunctionTranslator.parameters(strategy.getWindow()),
-                timeStrategy.getTimeAttributeIndex(),
+                timeAttributeIndex,
+                attachedWindowStartIndex,
+                attachedWindowEndIndex,
                 strategy.isProctime(),
                 TimeWindowUtil.getShiftTimeZone(
                                 strategy.getTimeAttributeType(), TableConfigUtils.getLocalTimeZone(config))
@@ -102,7 +116,8 @@ public final class StreamFusionWindowAggregateTranslator {
         if (partitionedInput.getMaxParallelism() > 0) {
             transformation.setMaxParallelism(partitionedInput.getMaxParallelism());
         }
-        transformation.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
+        transformation.declareManagedMemoryUseCaseAtOperatorScope(
+                ManagedMemoryUseCase.OPERATOR, STATEFUL_MANAGED_MEMORY_WEIGHT);
         transformation.setStateKeySelector(new ArrowBatchKeySelector(keySelector));
         transformation.setStateKeyType(keySelector.getProducedType());
         return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
@@ -117,8 +132,25 @@ public final class StreamFusionWindowAggregateTranslator {
             NamedWindowProperty[] properties,
             boolean needRetraction,
             ReadableConfig config) {
-        if (!(strategy instanceof TimeAttributeWindowingStrategy)) {
-            return "window strategy: only direct time-attribute window aggregation is native";
+        if (!(strategy instanceof TimeAttributeWindowingStrategy)
+                && !(strategy instanceof WindowAttachedWindowingStrategy)) {
+            return "window strategy: only direct or attached time windows are native";
+        }
+        if (strategy instanceof WindowAttachedWindowingStrategy) {
+            WindowAttachedWindowingStrategy attached = (WindowAttachedWindowingStrategy) strategy;
+            if (attached.getWindowStart() < 0) {
+                return "window strategy: attached aggregation requires both window-start and window-end columns";
+            }
+            if (attached.getWindowStart() >= inputType.getFieldCount()
+                    || attached.getWindowEnd() >= inputType.getFieldCount()) {
+                return "window strategy: attached window columns are outside the input row";
+            }
+            if (inputType.getTypeAt(attached.getWindowStart()).getTypeRoot()
+                            != org.apache.flink.table.types.logical.LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE
+                    || inputType.getTypeAt(attached.getWindowEnd()).getTypeRoot()
+                            != org.apache.flink.table.types.logical.LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE) {
+                return "window strategy: attached window columns must both be TIMESTAMP";
+            }
         }
         try {
             StreamFusionWindowTableFunctionTranslator.parameters(strategy.getWindow());

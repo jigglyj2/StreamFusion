@@ -37,6 +37,8 @@ import tech.streamfusion.proto.plan.v1.DoubleLiteral;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.FloatLiteral;
 import tech.streamfusion.proto.plan.v1.IntegerLiteral;
+import tech.streamfusion.proto.plan.v1.IntervalDayTimeLiteral;
+import tech.streamfusion.proto.plan.v1.IntervalYearMonthLiteral;
 import tech.streamfusion.proto.plan.v1.LongLiteral;
 import tech.streamfusion.proto.plan.v1.Lower;
 import tech.streamfusion.proto.plan.v1.NullLiteral;
@@ -508,6 +510,22 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
                         .setDateLiteral(DateLiteral.newBuilder().setEpochDay(epochDay))
                         .build();
             }
+        } else if (expectedType == LogicalTypeRoot.INTERVAL_YEAR_MONTH) {
+            Integer months = integerLiteral(expression);
+            if (months != null) {
+                return Expression.newBuilder()
+                        .setIntervalYearMonthLiteral(
+                                IntervalYearMonthLiteral.newBuilder().setMonths(months))
+                        .build();
+            }
+        } else if (expectedType == LogicalTypeRoot.INTERVAL_DAY_TIME) {
+            Long milliseconds = longLiteral(expression);
+            if (milliseconds != null) {
+                return Expression.newBuilder()
+                        .setIntervalDayTimeLiteral(
+                                IntervalDayTimeLiteral.newBuilder().setMilliseconds(milliseconds))
+                        .build();
+            }
         } else if (expectedType == LogicalTypeRoot.TINYINT) {
             Byte literal = literal(expression, Byte.class);
             if (literal != null) {
@@ -615,23 +633,33 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
     }
 
     private static Expression arithmeticOperand(Object operand, RowType inputType, LogicalTypeRoot expectedType) {
-        Expression translated = projectionExpression(operand, inputType, expectedType);
-        if (translated != null) {
-            return translated;
-        }
         org.apache.flink.table.types.logical.LogicalType operandType =
                 StreamFusionExpressionTranslator.expressionLogicalType(operand);
         if (operandType == null) {
             return null;
         }
-        translated = projectionExpression(operand, inputType, operandType);
+        LogicalTypeRoot operandRoot = operandType.getTypeRoot();
+        Expression translated;
+        if (operandRoot == LogicalTypeRoot.INTERVAL_DAY_TIME || operandRoot == LogicalTypeRoot.INTERVAL_YEAR_MONTH) {
+            // Preserve the interval's semantic type. Treating Flink's physical long/int
+            // representation as the temporal result type would make timestamp arithmetic invalid.
+            translated = projectionExpression(operand, inputType, operandType);
+        } else {
+            translated = projectionExpression(operand, inputType, expectedType);
+            if (translated != null) {
+                return translated;
+            }
+            translated = projectionExpression(operand, inputType, operandType);
+        }
         if (translated == null) {
             return null;
         }
-        if (operandType.getTypeRoot() == expectedType) {
+        if (operandRoot == expectedType
+                || operandRoot == LogicalTypeRoot.INTERVAL_DAY_TIME
+                || operandRoot == LogicalTypeRoot.INTERVAL_YEAR_MONTH) {
             return translated;
         }
-        CastKind castKind = StreamFusionCastSupport.kind(operandType.getTypeRoot(), expectedType);
+        CastKind castKind = StreamFusionCastSupport.kind(operandRoot, expectedType);
         return castKind == CastKind.CAST_KIND_UNSPECIFIED
                 ? null
                 : Expression.newBuilder()

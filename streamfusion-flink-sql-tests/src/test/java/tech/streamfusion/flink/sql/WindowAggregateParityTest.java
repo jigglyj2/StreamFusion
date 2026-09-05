@@ -77,6 +77,56 @@ class WindowAggregateParityTest extends SqlParityTestSupport {
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 
+    @org.junit.jupiter.api.Test
+    void aggregateOverAttachedWindowColumnsMatchesFlinkByteForByte() throws Exception {
+        byte[] flink = executeAttachedWindowAggregate(false);
+        byte[] streamFusion = executeAttachedWindowAggregate(true);
+
+        assertThat(streamFusion).isEqualTo(flink);
+        assertThat(StreamFusionPlannerFactory.nativeWindowAggregateBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
+    private static byte[] executeAttachedWindowAggregate(boolean streamFusionEnabled) throws Exception {
+        if (streamFusionEnabled) {
+            System.setProperty(
+                    StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY, StreamFusionPlannerFactory.class.getName());
+        } else {
+            System.clearProperty(StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY);
+            StreamFusionPlannerFactory.resetMetrics();
+        }
+        StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();
+        environment.setParallelism(1);
+        StreamTableEnvironment tables = StreamTableEnvironment.create(
+                environment, EnvironmentSettings.newInstance().inStreamingMode().build());
+        tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+        tables.createTemporaryView(
+                "attached_window_input",
+                tables.fromDataStream(
+                        environment.fromCollection(
+                                List.of(
+                                        Row.of("a", 3L, LocalDateTime.of(2026, 8, 29, 12, 0, 1)),
+                                        Row.of("a", 5L, LocalDateTime.of(2026, 8, 29, 12, 0, 2)),
+                                        Row.of("b", 7L, LocalDateTime.of(2026, 8, 29, 12, 0, 3))),
+                                Types.ROW_NAMED(
+                                        new String[] {"category", "amount", "ts"},
+                                        Types.STRING,
+                                        Types.LONG,
+                                        Types.LOCAL_DATE_TIME)),
+                        Schema.newBuilder()
+                                .column("category", DataTypes.STRING().notNull())
+                                .column("amount", DataTypes.BIGINT().notNull())
+                                .column("ts", DataTypes.TIMESTAMP(3))
+                                .watermark("ts", "ts - INTERVAL '1' SECOND")
+                                .build()));
+        return collect(tables.executeSql("SELECT MAX(total), starttime, endtime FROM ("
+                + "SELECT category, SUM(amount) AS total, window_start AS starttime, window_end AS endtime "
+                + "FROM TABLE(HOP(TABLE attached_window_input, DESCRIPTOR(ts), "
+                + "INTERVAL '2' SECOND, INTERVAL '6' SECOND)) "
+                + "GROUP BY category, window_start, window_end) grouped_windows "
+                + "GROUP BY starttime, endtime"));
+    }
+
     private static byte[] executeFilteredWindow(boolean streamFusionEnabled) throws Exception {
         if (streamFusionEnabled) {
             System.setProperty(

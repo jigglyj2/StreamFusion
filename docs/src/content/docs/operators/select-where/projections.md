@@ -130,6 +130,13 @@ DataFusion's standard cast rejects those values instead of matching Flink.
 Constant `TIME` values preserve their declared precision and millisecond-of-day value.
 Constant `TIMESTAMP WITHOUT TIME ZONE` values preserve their local calendar value and
 sub-millisecond nanoseconds without applying a session or JVM timezone.
+Timezone-free timestamp addition and subtraction with constant SQL year-month or day-time
+intervals are accelerated. Calcite's signed month or millisecond value is carried as an explicit
+semantic interval literal in protobuf and lowered to DataFusion interval arithmetic; it is never
+mistaken for Flink's physical `INT`/`BIGINT` interval storage. Generated parity cases cover seconds,
+days, calendar months, the pre-epoch boundary, and leap day. Dynamic interval columns and direct
+interval-valued Calc results remain on Flink until their Arrow semantic/physical representation is
+covered independently.
 Direct constant character literals are encoded as UTF-8 and accelerated. Character
 expressions that require a converting planner-inserted cast still fall back with the whole Calc.
 Planner-inserted casts that leave the complete logical type unchanged, including width,
@@ -170,7 +177,8 @@ Flink's overflow-to-null, precision-38 `HALF_UP` division, and final-scale `HALF
 The native decimal path uses fixed-width Arrow `i256` arithmetic for the common case and an exact
 arbitrary-precision fallback only when an intermediate cannot fit. Decimal remainder,
 integer remainder by zero or a non-literal divisor, floating-point remainder, non-decimal mixed-width arithmetic, non-finite
-floating-point literals, arithmetic on other types, converting casts, and unlisted functions currently
+floating-point literals, arithmetic on other types except the timestamp/constant-interval forms
+listed above, converting casts, and unlisted functions currently
 fall back to Flink, except for the lossless casts and functions listed above. The Calc also falls back if its
 filter is unsupported.
 

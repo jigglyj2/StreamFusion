@@ -43,6 +43,8 @@ final class StreamFusionWindowAggregatePlan {
             boolean needRetraction,
             StreamFusionWindowTableFunctionTranslator.WindowParameters window,
             int timeAttributeIndex,
+            int attachedWindowStartIndex,
+            int attachedWindowEndIndex,
             boolean processingTime,
             String shiftTimeZone,
             NamedWindowProperty[] properties) {
@@ -58,6 +60,10 @@ final class StreamFusionWindowAggregatePlan {
                 .setShiftTimeZone(shiftTimeZone)
                 .setInputSchema(schema(inputType))
                 .setOutputSchema(schema(outputType));
+        if (attachedWindowStartIndex >= 0) {
+            aggregate.setAttachedWindowStartIndex(attachedWindowStartIndex);
+            aggregate.setAttachedWindowEndIndex(attachedWindowEndIndex);
+        }
         for (int index : grouping) {
             aggregate.addGroupingIndices(index);
         }

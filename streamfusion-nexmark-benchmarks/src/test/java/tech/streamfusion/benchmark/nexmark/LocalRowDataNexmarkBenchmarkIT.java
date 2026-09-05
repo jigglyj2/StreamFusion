@@ -7,6 +7,7 @@ import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.ResourceLock;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -240,6 +241,39 @@ class LocalRowDataNexmarkBenchmarkIT {
                 assertThat(streamFusion.nativeTopNBatches()).as(query).isGreaterThan(0);
             }
         }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"hashmap", "rocksdb"})
+    void officialWindowCompositionQueriesMatchFlinkOnBothStateBackends(String backend) throws Exception {
+        for (String query : List.of("q5", "q7")) {
+            LocalRowDataNexmarkBenchmark.RunResult flink =
+                    LocalRowDataNexmarkBenchmark.run(2_000, query, false, backend, 1);
+            LocalRowDataNexmarkBenchmark.RunResult streamFusion =
+                    LocalRowDataNexmarkBenchmark.run(2_000, query, true, backend, 1);
+
+            assertThat(streamFusion.completed()).as(query).isTrue();
+            assertThat(streamFusion.debugRows()).as(query).containsExactlyElementsOf(flink.debugRows());
+            assertThat(streamFusion.outputRows()).as(query).isEqualTo(flink.outputRows());
+            assertThat(streamFusion.outputSha256()).as(query).isEqualTo(flink.outputSha256());
+            assertThat(streamFusion.materializedDebugRows())
+                    .as(query)
+                    .containsExactlyElementsOf(flink.materializedDebugRows());
+            assertThat(streamFusion.materializedSha256()).as(query).isEqualTo(flink.materializedSha256());
+            assertThat(StreamFusionPlanningDiagnostics.explain()).as(query).contains("Accelerated: yes");
+            assertThat(streamFusion.nativeWindowAggregateBatches()).as(query).isGreaterThan(0);
+            assertThat(streamFusion.nativeRegularJoinBatches()).as(query).isGreaterThan(0);
+        }
+    }
+
+    @Test
+    void q5NativeWindowStateFitsTheStandardManagedMemoryEnvelopeAtBenchmarkScale() throws Exception {
+        LocalRowDataNexmarkBenchmark.RunResult streamFusion =
+                LocalRowDataNexmarkBenchmark.run(250_000, "q5", true, "hashmap", 1);
+
+        assertThat(streamFusion.completed()).isTrue();
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        assertThat(streamFusion.nativeWindowAggregateBatches()).isGreaterThan(0);
     }
 
     @ParameterizedTest

@@ -633,6 +633,21 @@ abstract class StreamFusionExpressionTranslator extends StreamFusionProjectionTr
                 return LogicalTypeRoot.TIME_WITHOUT_TIME_ZONE;
             case "TIMESTAMP":
                 return LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE;
+            case "INTERVAL_YEAR":
+            case "INTERVAL_YEAR_MONTH":
+            case "INTERVAL_MONTH":
+                return LogicalTypeRoot.INTERVAL_YEAR_MONTH;
+            case "INTERVAL_DAY":
+            case "INTERVAL_DAY_HOUR":
+            case "INTERVAL_DAY_MINUTE":
+            case "INTERVAL_DAY_SECOND":
+            case "INTERVAL_HOUR":
+            case "INTERVAL_HOUR_MINUTE":
+            case "INTERVAL_HOUR_SECOND":
+            case "INTERVAL_MINUTE":
+            case "INTERVAL_MINUTE_SECOND":
+            case "INTERVAL_SECOND":
+                return LogicalTypeRoot.INTERVAL_DAY_TIME;
             default:
                 return null;
         }
@@ -684,6 +699,17 @@ abstract class StreamFusionExpressionTranslator extends StreamFusionProjectionTr
                 return new TimeType(nullable, precision);
             case TIMESTAMP_WITHOUT_TIME_ZONE:
                 return new TimestampType(nullable, precision);
+            case INTERVAL_YEAR_MONTH:
+                return new org.apache.flink.table.types.logical.YearMonthIntervalType(
+                        nullable,
+                        org.apache.flink.table.types.logical.YearMonthIntervalType.YearMonthResolution.YEAR_TO_MONTH,
+                        org.apache.flink.table.types.logical.YearMonthIntervalType.DEFAULT_PRECISION);
+            case INTERVAL_DAY_TIME:
+                return new org.apache.flink.table.types.logical.DayTimeIntervalType(
+                        nullable,
+                        org.apache.flink.table.types.logical.DayTimeIntervalType.DayTimeResolution.DAY_TO_SECOND,
+                        org.apache.flink.table.types.logical.DayTimeIntervalType.DEFAULT_DAY_PRECISION,
+                        org.apache.flink.table.types.logical.DayTimeIntervalType.DEFAULT_FRACTIONAL_PRECISION);
             default:
                 return null;
         }

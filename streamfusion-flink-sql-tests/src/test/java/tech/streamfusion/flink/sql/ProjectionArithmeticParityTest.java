@@ -213,6 +213,21 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
     }
 
     @Test
+    void nativeTimestampIntervalArithmeticMatchesFlinkByteForByte() throws Exception {
+        String sql = "SELECT ts, ts - INTERVAL '10' SECOND, ts + INTERVAL '2' DAY, "
+                + "ts + INTERVAL '1' MONTH FROM (VALUES "
+                + "(TIMESTAMP '1969-12-31 23:59:59.999'), "
+                + "(TIMESTAMP '2024-02-29 12:34:56.123'), "
+                + "(TIMESTAMP '2026-08-27 00:00:05.000')) AS input(ts) "
+                + "WHERE ts >= TIMESTAMP '1969-12-31 23:59:59.999' - INTERVAL '10' SECOND";
+        assertParity(sql, true);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isGreaterThan(0);
+    }
+
+    @Test
     void nativeCharacterLiteralProjectionsMatchFlinkByteForByte() throws Exception {
         String sql = "SELECT '', 'alpha', 'élan', '東京' " + "FROM (VALUES (1), (2)) AS input(id) WHERE id >= 1";
         assertParity(sql, true);

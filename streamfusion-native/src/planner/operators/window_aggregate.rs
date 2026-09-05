@@ -208,6 +208,26 @@ impl WindowAggregateProcessor {
             crate::planner::arrow_schema(plan.input_schema.as_ref().ok_or_else(|| {
                 DataFusionError::Plan("window aggregate input schema is missing".to_string())
             })?)?;
+        if let Some((start, end)) = plan
+            .attached_window_start_index
+            .zip(plan.attached_window_end_index)
+        {
+            for (label, index) in [("start", start), ("end", end)] {
+                let field = planned_input.fields().get(index as usize).ok_or_else(|| {
+                    DataFusionError::Plan(format!(
+                        "attached window {label} index {index} is outside the planned input"
+                    ))
+                })?;
+                if field.data_type()
+                    != &DataType::Timestamp(arrow::datatypes::TimeUnit::Millisecond, None)
+                {
+                    return Err(DataFusionError::Plan(format!(
+                        "attached window {label} input must be TIMESTAMP(3), got {}",
+                        field.data_type()
+                    )));
+                }
+            }
+        }
         let planned_output =
             crate::planner::arrow_schema(plan.output_schema.as_ref().ok_or_else(|| {
                 DataFusionError::Plan("window aggregate output schema is missing".to_string())
@@ -333,24 +353,45 @@ impl WindowAggregateProcessor {
         let mut row_windows = Vec::new();
         let mut group_key = Vec::new();
         let mut assigned_windows = Vec::new();
-        let timestamp_column = (!self.plan.processing_time)
+        let attached_columns = self
+            .plan
+            .attached_window_start_index
+            .zip(self.plan.attached_window_end_index)
+            .map(|(start, end)| (batch.column(start as usize), batch.column(end as usize)));
+        let timestamp_column = (!self.plan.processing_time && attached_columns.is_none())
             .then(|| batch.column(self.plan.time_attribute_index as usize));
         for row in 0..batch.num_rows() {
-            let timestamp = if self.plan.processing_time {
-                self.to_window_time(self.current_processing_time)?
-            } else {
-                let Some(timestamp) = timestamp_millis(
-                    timestamp_column.expect("event-time window has a timestamp column"),
-                    row,
-                )?
-                else {
-                    continue;
-                };
-                self.to_window_time(timestamp)?
-            };
             self.group_key_into(batch, row, &mut group_key)?;
             let key_group = assign_key_group(&group_key, self.max_parallelism);
-            assign_windows_into(&self.window, timestamp, &mut assigned_windows);
+            if let Some((start_column, end_column)) = attached_columns {
+                let Some(start) = timestamp_millis(start_column, row)? else {
+                    continue;
+                };
+                let Some(end) = timestamp_millis(end_column, row)? else {
+                    continue;
+                };
+                if end <= start {
+                    return Err(DataFusionError::Execution(format!(
+                        "attached window end {end} must be greater than start {start}"
+                    )));
+                }
+                assigned_windows.clear();
+                assigned_windows.push((start, end));
+            } else {
+                let timestamp = if self.plan.processing_time {
+                    self.to_window_time(self.current_processing_time)?
+                } else {
+                    let Some(timestamp) = timestamp_millis(
+                        timestamp_column.expect("event-time window has a timestamp column"),
+                        row,
+                    )?
+                    else {
+                        continue;
+                    };
+                    self.to_window_time(timestamp)?
+                };
+                assign_windows_into(&self.window, timestamp, &mut assigned_windows);
+            }
             for &(start, end) in &assigned_windows {
                 let deadline = self.timer_timestamp(end.saturating_sub(1))?;
                 let progress = if self.plan.processing_time {
@@ -1402,6 +1443,11 @@ fn validate_plan(plan: &proto::WindowAggregate, max_parallelism: u32) -> Result<
     }
     let kind = proto::WindowKind::try_from(plan.kind)
         .map_err(|_| DataFusionError::Plan(format!("unknown window kind {}", plan.kind)))?;
+    if plan.attached_window_start_index.is_some() != plan.attached_window_end_index.is_some() {
+        return Err(DataFusionError::Plan(
+            "attached window aggregate requires both start and end indices".to_string(),
+        ));
+    }
     match kind {
         proto::WindowKind::Tumble if plan.size_millis > 0 => {}
         proto::WindowKind::Hop
@@ -1990,6 +2036,8 @@ mod tests {
                                 ]
                             },
                         }),
+                        attached_window_start_index: None,
+                        attached_window_end_index: None,
                     },
                 ))),
             }),
@@ -2041,6 +2089,56 @@ mod tests {
         RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap()
     }
 
+    fn attached_plan(input_changelog: bool) -> Vec<u8> {
+        let mut native = proto::NativePlan::decode(
+            plan(proto::WindowKind::Hop, 10_000, 2_000, input_changelog).as_slice(),
+        )
+        .unwrap();
+        let aggregate = match native.root.as_mut().unwrap().operator.as_mut().unwrap() {
+            proto::operator::Operator::WindowAggregate(aggregate) => aggregate,
+            _ => unreachable!(),
+        };
+        aggregate.time_attribute_index = 0;
+        aggregate.attached_window_start_index = Some(1);
+        aggregate.attached_window_end_index = Some(2);
+        aggregate.input_schema = Some(proto::Schema {
+            fields: vec![
+                field("key", logical_bigint(false)),
+                field("window_start", logical_timestamp(false)),
+                field("window_end", logical_timestamp(false)),
+            ],
+        });
+        native.encode_to_vec()
+    }
+
+    fn attached_batch(
+        keys: Vec<i64>,
+        starts: Vec<i64>,
+        ends: Vec<i64>,
+        kinds: Option<Vec<i8>>,
+    ) -> RecordBatch {
+        let timestamp = DataType::Timestamp(arrow::datatypes::TimeUnit::Millisecond, None);
+        let mut fields = vec![
+            Field::new("key", DataType::Int64, false),
+            Field::new("window_start", timestamp.clone(), false),
+            Field::new("window_end", timestamp, false),
+        ];
+        let mut columns: Vec<ArrayRef> = vec![
+            Arc::new(Int64Array::from(keys)),
+            Arc::new(TimestampMillisecondArray::from(starts)),
+            Arc::new(TimestampMillisecondArray::from(ends)),
+        ];
+        if let Some(kinds) = kinds {
+            fields.push(Field::new(
+                "__streamfusion_input_row_kind",
+                DataType::Int8,
+                false,
+            ));
+            columns.push(Arc::new(Int8Array::from(kinds)));
+        }
+        RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap()
+    }
+
     #[test]
     fn tumble_emits_only_when_the_watermark_closes_the_window() {
         let broker = Arc::new(TestBroker::new(16 << 20));
@@ -2065,6 +2163,95 @@ mod tests {
         drop(output);
         drop(processor);
         assert_eq!(broker.reserved(), 0);
+    }
+
+    #[test]
+    fn attached_windows_retract_and_restore_canonically_without_reassignment() {
+        let broker = Arc::new(TestBroker::new(1 << 30));
+        let bytes = attached_plan(true);
+        let mut source = processor(&bytes, broker.clone());
+        source
+            .process_arrow(
+                attached_batch(
+                    vec![7, 7, 7],
+                    vec![0, 0, 0],
+                    vec![10_000, 10_000, 10_000],
+                    Some(vec![INSERT, INSERT, DELETE]),
+                ),
+                0,
+            )
+            .unwrap();
+        let snapshots = (0..128)
+            .map(|group| source.snapshot_key_group(group).unwrap())
+            .collect::<Vec<_>>();
+
+        let mut restored = processor(&bytes, broker.clone());
+        for (group, snapshot) in snapshots.iter().enumerate() {
+            restored.restore_key_group(group as u32, snapshot).unwrap();
+        }
+        let output = restored.advance_event_time(9_999).unwrap();
+        assert_eq!(output.num_rows(), 1);
+        assert_eq!(
+            output
+                .column(1)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .value(0),
+            1
+        );
+        assert_eq!(
+            output
+                .column(2)
+                .as_any()
+                .downcast_ref::<TimestampMillisecondArray>()
+                .unwrap()
+                .value(0),
+            0
+        );
+        assert_eq!(
+            output
+                .column(3)
+                .as_any()
+                .downcast_ref::<TimestampMillisecondArray>()
+                .unwrap()
+                .value(0),
+            10_000
+        );
+        // If the attached row had been assigned as an ordinary HOP input, four more
+        // windows would remain and fire at later watermarks.
+        assert_eq!(restored.advance_event_time(i64::MAX).unwrap().num_rows(), 0);
+
+        let Ok(plugin_path) = std::env::var("STREAMFUSION_TEST_ROCKSDB_PLUGIN") else {
+            return;
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let mut rocks = WindowAggregateProcessor::new_rocksdb(
+            &bytes,
+            128,
+            0,
+            127,
+            std::path::Path::new(&plugin_path),
+            directory.path(),
+            64 << 20,
+            HostMemoryReservation::new(broker, "attached window RocksDB scratch"),
+        )
+        .unwrap();
+        for (group, snapshot) in snapshots.iter().enumerate() {
+            rocks.restore_key_group(group as u32, snapshot).unwrap();
+            assert_eq!(rocks.snapshot_key_group(group as u32).unwrap(), *snapshot);
+        }
+        let output = rocks.advance_event_time(9_999).unwrap();
+        assert_eq!(output.num_rows(), 1);
+        assert_eq!(
+            output
+                .column(1)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .value(0),
+            1
+        );
     }
 
     #[test]

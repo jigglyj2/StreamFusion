@@ -925,6 +925,23 @@ pub(super) fn literal_scalar(expression: &proto::Expression) -> Result<Option<Sc
                 }
             }
         }
+        Some(proto::expression::Expression::IntervalYearMonthLiteral(literal)) => {
+            ScalarValue::IntervalYearMonth(Some(literal.months))
+        }
+        Some(proto::expression::Expression::IntervalDayTimeLiteral(literal)) => {
+            const MILLIS_PER_DAY: i64 = 86_400_000;
+            let days = literal.milliseconds.div_euclid(MILLIS_PER_DAY);
+            let millis = literal.milliseconds.rem_euclid(MILLIS_PER_DAY);
+            ScalarValue::new_interval_dt(
+                i32::try_from(days).map_err(|_| {
+                    DataFusionError::Plan(format!(
+                        "day-time interval {}ms exceeds Arrow's day range",
+                        literal.milliseconds
+                    ))
+                })?,
+                i32::try_from(millis).expect("a millisecond remainder is always within one day"),
+            )
+        }
         Some(proto::expression::Expression::DecimalLiteral(literal)) => {
             let unscaled = literal.unscaled_value.parse::<i128>().map_err(|error| {
                 DataFusionError::Plan(format!(

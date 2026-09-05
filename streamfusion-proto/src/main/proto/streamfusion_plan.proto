@@ -382,6 +382,11 @@ message WindowAggregate {
   Schema input_schema = 12;
   Schema output_schema = 13;
   string shift_time_zone = 14;
+  // Set together when the input already carries exact window bounds, as in a
+  // window aggregate over another window aggregate. Those rows belong to one
+  // attached namespace and must not be assigned to overlapping windows again.
+  optional uint32 attached_window_start_index = 15;
+  optional uint32 attached_window_end_index = 16;
 }
 
 // Window-scoped first/last-row deduplication. Full rows use Arrow's schema-aware row encoding in
@@ -648,6 +653,8 @@ message Expression {
     InetAton inet_aton = 113;
     ScalarExtremum scalar_extremum = 114;
     Element element = 115;
+    IntervalYearMonthLiteral interval_year_month_literal = 116;
+    IntervalDayTimeLiteral interval_day_time_literal = 117;
   }
 }
 
@@ -1149,6 +1156,16 @@ message TimestampLiteral {
   int64 epoch_millisecond = 1;
   int32 nano_of_millisecond = 2;
   uint32 precision = 3;
+}
+
+// Calcite normalizes year-month interval literals to a signed month count.
+message IntervalYearMonthLiteral {
+  int32 months = 1;
+}
+
+// Calcite and Flink normalize day-time interval literals to signed milliseconds.
+message IntervalDayTimeLiteral {
+  int64 milliseconds = 1;
 }
 
 message DecimalLiteral {

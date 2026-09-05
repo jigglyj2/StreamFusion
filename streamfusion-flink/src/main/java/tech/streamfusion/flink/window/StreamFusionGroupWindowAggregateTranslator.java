@@ -40,6 +40,8 @@ import tech.streamfusion.proto.plan.v1.WindowKind;
 
 /** Lowers legacy group-window syntax onto the canonical native window state machine. */
 public final class StreamFusionGroupWindowAggregateTranslator {
+    private static final int STATEFUL_MANAGED_MEMORY_WEIGHT = 8;
+
     private StreamFusionGroupWindowAggregateTranslator() {}
 
     public static Transformation<RowData> translate(
@@ -85,6 +87,8 @@ public final class StreamFusionGroupWindowAggregateTranslator {
                 needRetraction,
                 planned.parameters,
                 Math.max(0, window.timeAttribute().getFieldIndex()),
+                -1,
+                -1,
                 true,
                 "UTC",
                 properties);
@@ -113,7 +117,8 @@ public final class StreamFusionGroupWindowAggregateTranslator {
         if (partitionedInput.getMaxParallelism() > 0) {
             transformation.setMaxParallelism(partitionedInput.getMaxParallelism());
         }
-        transformation.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
+        transformation.declareManagedMemoryUseCaseAtOperatorScope(
+                ManagedMemoryUseCase.OPERATOR, STATEFUL_MANAGED_MEMORY_WEIGHT);
         transformation.setStateKeySelector(new ArrowBatchKeySelector(keySelector));
         transformation.setStateKeyType(keySelector.getProducedType());
         return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);

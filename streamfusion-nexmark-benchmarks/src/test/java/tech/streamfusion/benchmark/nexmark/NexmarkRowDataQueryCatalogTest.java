@@ -15,6 +15,8 @@ class NexmarkRowDataQueryCatalogTest {
                         "q2",
                         "q3",
                         "q4",
+                        "q5",
+                        "q7",
                         "q8",
                         "q9",
                         "q11",
@@ -55,7 +57,7 @@ class NexmarkRowDataQueryCatalogTest {
 
     @Test
     void rejectsAQueryWhoseOperatorTreeHasNoNativeImplementation() {
-        assertThatThrownBy(() -> NexmarkRowDataQueryCatalog.load("q5"))
+        assertThatThrownBy(() -> NexmarkRowDataQueryCatalog.load("q6"))
                 .isInstanceOf(java.io.IOException.class)
                 .hasMessageContaining("not fully accelerable");
     }

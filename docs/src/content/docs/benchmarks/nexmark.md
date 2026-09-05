@@ -55,11 +55,12 @@ operator benchmark and does not replace the Kafka-in/Kafka-out north-star benchm
 
 Current all-or-nothing coverage can fully accelerate q0 (pass-through), q1 (decimal currency
 conversion), q2 (selection), q3 (regular streaming join), q4 (residual join plus grouped
-aggregation), q8 (tumbling aggregates plus Window Join), q9 (residual join plus Top-1), q11
+aggregation), q5 (nested hopping aggregates plus residual join), q7 (tumbling maximum plus a
+timestamp-interval residual join), q8 (tumbling aggregates plus Window Join), q9 (residual join plus Top-1), q11
 (event-time session aggregation), q19 (Top-N), q20 (regular join), q22 (URL directory extraction),
 and q23 (two regular joins). A deterministic `interval-join` workload exercises
 Flink's constant-bound event-time interval physical operator.
-q5, q7, q13, q15, q16, and q17 still require an
+q13, q15, q16, and q17 still require an
 unsupported join shape or surrounding operator. q10
 uses unsupported `DATE_FORMAT`; q14 uses a Java UDF, mixed decimal
 arithmetic beyond the q1 conversion shape, and timestamp calendar extraction; q21 uses Java-regex
@@ -125,6 +126,48 @@ integration cases run at parallelism one on both native state backends, compare 
 final table with Flink, require accelerated EXPLAIN output, and require native regular-join plus
 group-aggregate or Top-N activity. Controlled generated regular-join SQL fixtures separately compare
 the complete byte changelog for residual INNER and SEMI shapes.
+Official q5 exercises three window-aggregate stages. The maximum-over-count branch consumes the
+first branch's attached start/end columns as exact namespaces, and the final residual join remains
+in the fused native tree. Official q7 carries Calcite's ten-second interval as a typed protobuf
+literal inside the join residual. Their integration cases compare complete raw and materialized
+results on memory and RocksDB, require accelerated EXPLAIN output, and require nonzero native
+window-aggregate and regular-join batches.
+
+On the September 4, 2026 local release/native-CPU run, q5 used an excluded 50,000-event warmup and
+three alternating fresh-JVM forks per engine/backend over 250,000 events at parallelism one, with a
+3GB heap and one-second exactly-once checkpoints. In memory, Flink and StreamFusion median elapsed
+times were 6.864s and 6.921s (99.2% throughput parity), with MADs of 0.013s and 0.032s and ranges of
+6.851–6.934s and 6.712–6.953s. RocksDB medians were 7.441s and 6.908s, a 7.7% StreamFusion gain;
+MADs were 0.112s and 0.037s and ranges were 7.286–7.553s and 6.871–7.009s. Every fork emitted the
+same five rows with SHA-256 `2abc9d4941381e8824e2ae1bcb08465adaa8aca4ae87254c7a8103c01a10275d`.
+
+Q7 used a larger excluded 250,000-event warmup before three alternating 500,000-event in-memory
+forks. Flink and StreamFusion medians were 7.548s and 8.065s, equivalent to 66,243 and 61,997
+events/s or 93.6% throughput parity. MADs were 0.024s and 0.083s and ranges were 7.455–7.572s and
+7.853–8.148s. The three RocksDB forks had medians of 11.242s for Flink and 8.997s for StreamFusion,
+a 25.0% native gain. Their ranges were 9.368–16.982s and 8.976–23.308s; the corresponding MADs
+were 1.874s and 0.021s, and the full ranges retain one storage/scheduling outlier per engine. All
+forks emitted the same row with SHA-256
+`0e9bdea3e9fba68cd92431e33df2085908404c745bd732a1c80cdf80a0fd0dde`, reported full acceleration,
+and executed nonzero native Calc, window-aggregate, and regular-join batches. Profiler timings were
+excluded from these results.
+
+The first benchmark-scale q5 native memory run exposed an undersized Flink managed-memory share:
+stateful window aggregates had inherited a stateless weight of one while the equivalent native
+deduplicate, grouped-aggregate, join, and Top-N stages use eight. Both modern and legacy window
+aggregate planners now request the established stateful weight, and an opt-in 250,000-event
+regression test covers the standard managed-memory envelope. Mixed JVM/native CPU and wall-clock
+profiles, Java allocation captures, native-allocation captures, collapsed stacks, per-engine flame
+graphs, and differential flame graphs cover q5 and q7 on both backends. StreamFusion Java
+allocation samples were 32–41% lower than Flink's. In CPU samples, q7's native window aggregate was
+0.27–0.33% and its regular join was 2.30% in memory and 5.55% on RocksDB; q5's native window
+aggregate was 4.33% and 8.51%. Native allocation samples under those stateful paths were dominated
+by canonical durable row/state encoding plus expected RocksDB buffers, with no per-record JNI or
+whole-batch copy loop. The direct RocksDB operators retain one `multi_get` and one atomic
+`WriteBatch` per incoming Arrow batch. Profiles are retained under
+`streamfusion-nexmark-benchmarks/target/profiles/q5-q7-attached-window/`. These measurements are
+local diagnostics, not portable performance guarantees.
+
 The bounded source adapter also replaces the upstream generator's process-random reusable payload
 and URL caches with stable, size-preserving values. Consequently, fresh JVM forks consume
 byte-identical events rather than relying on same-process parity.

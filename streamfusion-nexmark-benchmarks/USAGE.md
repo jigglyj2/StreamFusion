@@ -49,7 +49,7 @@ by default and a benchmark result sink serializes and hashes both the complete s
 changelog and its final materialized table. Primary-key sinks use ordered upsert materialization;
 keyless sinks retain multiset semantics. Checkpointing uses exactly-once mode and task restart is disabled so resource failures
 surface instead of contaminating a timing with retries. It currently runs the fully accelerable q0,
-q1, q2, q4, q8, q9, q11, q12, q22, q23, group-aggregate, legacy-window-aggregate, select-distinct, top-n, limit, bounded-sort, over-aggregate,
+q1, q2, q4, q5, q7, q8, q9, q11, q12, q22, q23, group-aggregate, legacy-window-aggregate, select-distinct, top-n, limit, bounded-sort, over-aggregate,
 over-aggregate-event-time, over-aggregate-processing-time, temporal-join, match-recognize,
 set-intersect-all, and incremental-group-aggregate queries through both unmodified Flink
 and StreamFusion. The focused
@@ -66,6 +66,9 @@ the bid stream with an event-time left temporal join and a residual condition.
 Official q4 and q9 exercise the binary multi-join physical form with the auction-expiry residual;
 the native planner lowers it to the regular join while retaining the complete condition. Their
 primary-keyed result tables are materialized as ordered upserts rather than full-row multisets.
+Official q5 exercises an aggregate over attached hopping-window bounds before its residual join;
+official q7 exercises timestamp subtraction by a typed ten-second interval in the join residual.
+Both retain independently observable native window stages inside the fused plan.
 `match-recognize` partitions bids by bidder and recognizes strict processing-time `A B C` sequences
 with `AFTER MATCH SKIP PAST LAST ROW`, exercising partial-match state and three direct measures.
 `set-intersect-all` intersects two filtered bid streams on the three-BIGINT auction/bidder/price
