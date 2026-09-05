@@ -34,6 +34,17 @@ class ComplexTypeLiteralParityTest extends SqlParityTestSupport {
         assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
     }
 
+    @ParameterizedTest(name = "bounded {0} typed null")
+    @MethodSource("complexNullCases")
+    void boundedNativeComplexTypedNullsMatchFlinkByteForByte(String ignoredName, String type) throws Exception {
+        String sql = "SELECT CAST(NULL AS " + type + ") " + "FROM (VALUES (1), (2)) AS input(id) WHERE id >= 1";
+
+        assertParity(sql, false);
+
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativeValuesBatchCount()).isGreaterThan(0);
+    }
+
     private static Stream<Arguments> complexNullCases() {
         return Stream.of(
                 Arguments.of("array", "ARRAY<INT>"),

@@ -56,7 +56,9 @@ public final class NexmarkRowDataJob {
         Path checkpointDirectory = Files.createTempDirectory("streamfusion-nexmark-checkpoints-");
         boolean completed = false;
         try {
-            TableEnvironment tables = TableEnvironment.create(EnvironmentSettings.inStreamingMode());
+            boolean batchMode = Boolean.getBoolean("streamfusion.nexmark.batch-mode");
+            TableEnvironment tables = TableEnvironment.create(
+                    batchMode ? EnvironmentSettings.inBatchMode() : EnvironmentSettings.inStreamingMode());
             // Keep the local comparison out of Flink's tiny embedded-cluster defaults. Both
             // engines receive the same realistic state/Arrow allowance, including RocksDB cache
             // memory.
@@ -89,7 +91,7 @@ public final class NexmarkRowDataJob {
             // checkpoints disabled for both engines in this one apples-to-apples workload. The
             // native operator's aligned/unaligned and cross-backend recovery is exercised by its
             // dedicated operator tests.
-            if (!query.equals("bounded-sort")) {
+            if (!batchMode && !query.equals("bounded-sort")) {
                 tables.getConfig()
                         .getConfiguration()
                         .setString(

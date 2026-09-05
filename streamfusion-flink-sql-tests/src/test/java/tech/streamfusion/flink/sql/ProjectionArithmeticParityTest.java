@@ -32,6 +32,23 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
     }
 
     @Test
+    void boundedValuesCalcRunsNativelyAndMatchesFlinkByteForByte() throws Exception {
+        String sql = "SELECT id + 10 AS shifted, UPPER(label) AS label "
+                + "FROM (VALUES (1, 'a'), (2, 'Beta'), (3, CAST(NULL AS STRING))) AS input(id, label) "
+                + "WHERE id >= 2";
+
+        assertParity(sql, false);
+
+        assertThat(StreamFusionPlannerFactory.nativeValuesBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isGreaterThan(0);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
+    @Test
     void boundedIdentityCalcRunsNativelyAndMatchesFlinkByteForByte() throws Exception {
         assertParity(IDENTITY_CALC_SQL, true);
 

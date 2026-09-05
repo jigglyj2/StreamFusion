@@ -6,7 +6,8 @@ sidebar:
 ---
 
 **Current status:** `UNION ALL`, `UNION DISTINCT`, `INTERSECT [ALL]`, and `EXCEPT [ALL]`
-are accelerated for complete eligible streaming plans.
+are accelerated for complete eligible streaming plans. `UNION ALL` is also accelerated in
+complete eligible bounded plans.
 
 ## SQL example
 
@@ -62,7 +63,10 @@ connector- or UDF-dependent alternatives remain on Flink.
 
 ## Implementation
 
-The planner replaces `StreamExecUnion` with the distinct `StreamFusionExecUnion` node.
+The planner replaces `StreamExecUnion` with the distinct `StreamFusionExecUnion` node and
+`BatchExecUnion` with the distinct `StreamFusionBatchExecUnion` node. Both use the same
+schema-negotiated multi-input Arrow transport rather than maintaining a separate row-oriented
+batch implementation.
 Its Flink runtime is a non-keyed multiple-input operator: Flink still schedules and
 multiplexes the inputs, aligns checkpoint barriers, combines watermarks, and tracks input
 idleness. A multiple-input gate is an unavoidable Flink network boundary, so each native
@@ -74,7 +78,14 @@ merge kernel, or copy the decoded column buffers merely to implement union seman
 The frame carries the input batches' Flink `RowKind` and record-timestamp envelope as
 metadata vectors. Decoding restores that envelope without reconstructing payload rows.
 Flink's multiple-input operator provides the control-event ordering, combined watermark,
-barrier alignment, idleness, and end-of-input behavior.
+barrier alignment, idleness, and end-of-input behavior. Standard input and output counters are
+corrected from the physical Arrow-frame count to Flink logical records on every forwarded batch;
+`UNION ALL` adds no operator-specific metric surface beyond Flink's standard task/operator I/O
+metrics.
+
+The bounded coverage in this milestone is deliberately limited to `UNION ALL`; bounded
+DISTINCT, INTERSECT, and EXCEPT physical rewrites remain on Flink until every node in those
+batch plans has an exact StreamFusion implementation.
 
 Intersection and difference deliberately reuse the same native keyed state as the Flink physical
 rewrite rather than adding a second set-specific state format. Memory and RocksDB therefore share

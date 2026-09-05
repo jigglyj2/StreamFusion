@@ -9,10 +9,10 @@ This matrix follows the query operations documented by Flink 2.3, including the 
 
 | Operator | Accelerated today? | Future acceleration target | Intended implementation |
 | --- | --- | --- | --- |
-| [SELECT & WHERE](select-where/) | **Partial** | Yes | DataFusion projections and filters |
+| [SELECT & WHERE](select-where/) | **Partial** (streaming and bounded Calc) | Yes | DataFusion projections and filters |
 | [SELECT DISTINCT](select-distinct/) | **Yes** (timer-free streaming) | Yes | Native counted keyed state |
 | [WITH](with/) | **No** | Not directly | Inlined by Flink; accelerate resulting operators |
-| [VALUES](values/) | **Partial** (scalar literals) | Yes | Source-free native Arrow batch |
+| [VALUES](values/) | **Partial** (streaming and bounded scalar literals) | Yes | Source-free native Arrow batch |
 | [Windowing TVFs](window-tvf/) | **Yes** (`TUMBLE`, `HOP`, `CUMULATE`, `SESSION`) | Yes | Native aligned assignment and keyed session merging |
 | [Watermark assignment](watermark-assignment/) | **Plan-compatible** | Flink-owned | Distinct StreamFusion node delegating Flink's exact timer and idleness runtime |
 | [Group aggregation](group-aggregation/) | **Partial** (timer-free keyed/global, grouping sets/`ROLLUP`/`CUBE`) | Yes | Native keyed state and Arrow aggregate kernels |
@@ -20,7 +20,7 @@ This matrix follows the query operations documented by Flink 2.3, including the 
 | [OVER aggregation](over-aggregation/) | **Partial** (non-time unbounded plus processing/event-time bounded or unbounded `ROWS`/`RANGE`) | Yes | Native ordered state, timers, and aggregate kernels |
 | [Joins](joins/) | **Partial** (regular, multi-way, constant-bound interval, and temporal streaming joins) | By join type | Native keyed state and timers; future DataFusion batch joins |
 | [Window joins](window-join/) | **Yes** (event-time attached windows) | Yes | Native two-sided window state plus Flink join conditions |
-| [Set operations](set-operations/) | **Yes** (`UNION`, `INTERSECT`, `EXCEPT`, including `ALL`) | By physical rewrite | Arrow IPC at Flink multi-input gates; native aggregate/join state and row replication |
+| [Set operations](set-operations/) | **Yes** (`UNION ALL` in streaming and bounded plans; remaining forms in streaming plans) | By physical rewrite | Arrow IPC at Flink multi-input gates; native aggregate/join state and row replication |
 | [Exchange](exchange/) | **Partial** (hash and singleton) | Yes | Native Flink-compatible key grouping with Flink-owned network transport |
 | [Table and collection expansion](table-expansion/) | **Partial** (scalar array `UNNEST`) | Yes | DataFusion `UnnestExec` with Flink-compatible correlate semantics |
 | [ORDER BY](order-by/) | **Yes** (bounded full sort, streaming finite Top-N, and time-ascending temporal sort) | Yes | Native counted full sort, Top-N, or timer/state sort |

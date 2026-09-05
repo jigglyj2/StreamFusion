@@ -15,11 +15,13 @@ import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeBase;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeConfig;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeContext;
 import org.apache.flink.table.planner.plan.nodes.exec.InputProperty;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecNode;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecNode;
 import org.apache.flink.table.types.logical.RowType;
 
 /** Ends a connected StreamFusion Arrow region immediately before a Flink sink. */
-final class StreamFusionExecSinkBoundary extends ExecNodeBase<RowData> implements StreamExecNode<RowData> {
+final class StreamFusionExecSinkBoundary extends ExecNodeBase<RowData>
+        implements StreamExecNode<RowData>, BatchExecNode<RowData> {
     private static final String TRANSLATOR_CLASS = "tech.streamfusion.flink.arrow.StreamFusionArrowBoundaryTranslator";
 
     StreamFusionExecSinkBoundary(ReadableConfig persistedConfig, InputProperty inputProperty, RowType outputType) {

@@ -29,22 +29,112 @@ class StreamFusionUnionOperatorTest {
                 ArrowRowDataBatch first = batch(allocator, rowType, 10, RowKind.INSERT, 100);
                 ArrowRowDataBatch second = batch(allocator, rowType, 20, RowKind.UPDATE_AFTER, 200);
                 ArrowRowDataBatch third = batch(allocator, rowType, 30, RowKind.DELETE, 300);
-                MultiInputStreamOperatorTestHarness<ArrowRowDataBatch> harness =
-                        new MultiInputStreamOperatorTestHarness<>(new StreamFusionUnionOperatorFactory(2))) {
+                MetricHarness harness = new MetricHarness()) {
             harness.setup(ArrowRowDataBatchSerializer.INSTANCE);
             harness.open();
+            harness.operator()
+                    .getMetricGroup()
+                    .getIOMetricGroup()
+                    .getNumRecordsInCounter()
+                    .inc();
+            harness.operator()
+                    .getMetricGroup()
+                    .getIOMetricGroup()
+                    .getNumRecordsOutCounter()
+                    .inc();
             harness.processElement(0, new StreamRecord<>(first));
+            harness.operator()
+                    .getMetricGroup()
+                    .getIOMetricGroup()
+                    .getNumRecordsInCounter()
+                    .inc();
+            harness.operator()
+                    .getMetricGroup()
+                    .getIOMetricGroup()
+                    .getNumRecordsOutCounter()
+                    .inc();
             harness.processElement(1, new StreamRecord<>(second));
+            harness.operator()
+                    .getMetricGroup()
+                    .getIOMetricGroup()
+                    .getNumRecordsInCounter()
+                    .inc();
+            harness.operator()
+                    .getMetricGroup()
+                    .getIOMetricGroup()
+                    .getNumRecordsOutCounter()
+                    .inc();
             harness.processElement(0, new StreamRecord<>(third));
             harness.processWatermark(0, new Watermark(50));
 
             assertThat(summaries(harness.getOutput())).containsExactly("+I:10@100", "+U:20@200", "-D:30@300");
+            assertThat(harness.operator()
+                            .getMetricGroup()
+                            .getIOMetricGroup()
+                            .getNumRecordsInCounter()
+                            .getCount())
+                    .isEqualTo(3);
+            assertThat(harness.operator()
+                            .getMetricGroup()
+                            .getIOMetricGroup()
+                            .getNumRecordsOutCounter()
+                            .getCount())
+                    .isEqualTo(3);
             assertThat(harness.getOutput()).noneMatch(Watermark.class::isInstance);
 
             harness.processWatermark(1, new Watermark(60));
             assertThat(harness.getOutput())
                     .filteredOn(Watermark.class::isInstance)
                     .containsExactly(new Watermark(50));
+        }
+    }
+
+    @Test
+    void countsLogicalRowsRatherThanArrowBatches() throws Exception {
+        RowType rowType = RowType.of(new IntType(false));
+        try (RootAllocator allocator = new RootAllocator();
+                ArrowRowDataBatch batch = ArrowRowDataBatch.transpose(
+                        List.of(GenericRowData.of(10), GenericRowData.of(20), GenericRowData.of(30)),
+                        rowType,
+                        allocator);
+                MetricHarness harness = new MetricHarness()) {
+            harness.setup(ArrowRowDataBatchSerializer.INSTANCE);
+            harness.open();
+
+            harness.operator()
+                    .getMetricGroup()
+                    .getIOMetricGroup()
+                    .getNumRecordsInCounter()
+                    .inc();
+            harness.operator()
+                    .getMetricGroup()
+                    .getIOMetricGroup()
+                    .getNumRecordsOutCounter()
+                    .inc();
+            harness.processElement(0, new StreamRecord<>(batch));
+
+            assertThat(harness.operator()
+                            .getMetricGroup()
+                            .getIOMetricGroup()
+                            .getNumRecordsInCounter()
+                            .getCount())
+                    .isEqualTo(3);
+            assertThat(harness.operator()
+                            .getMetricGroup()
+                            .getIOMetricGroup()
+                            .getNumRecordsOutCounter()
+                            .getCount())
+                    .isEqualTo(3);
+        }
+    }
+
+    private static final class MetricHarness extends MultiInputStreamOperatorTestHarness<ArrowRowDataBatch> {
+        private MetricHarness() throws Exception {
+            super(new StreamFusionUnionOperatorFactory(2));
+        }
+
+        private StreamFusionArrowUnionOperator operator() {
+            return (StreamFusionArrowUnionOperator) getCastedOperator();
         }
     }
 

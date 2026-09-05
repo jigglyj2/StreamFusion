@@ -47,6 +47,15 @@ class ValuesParityTest extends SqlParityTestSupport {
     }
 
     @Test
+    void boundedScalarValuesCoverEverySupportedScalarTypeByteForByte() throws Exception {
+        assertParity(ALL_SCALAR_TYPES, false);
+
+        assertThat(StreamFusionPlannerFactory.nativeValuesBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativeUnionBatchCount()).isGreaterThan(0);
+    }
+
+    @Test
     void complexValuesFallBackAndMatchFlinkByteForByte() throws Exception {
         assertParity(COMPLEX_VALUES, true);
 

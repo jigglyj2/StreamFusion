@@ -36,6 +36,9 @@ import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeBase;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeGraph;
 import org.apache.flink.table.planner.plan.nodes.exec.InputProperty;
 import org.apache.flink.table.planner.plan.nodes.exec.StateMetadata;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecCalc;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecUnion;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecValues;
 import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecCalc;
 import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecCorrelate;
 import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecExpand;
@@ -255,6 +258,11 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             if (reason != null) {
                 rejections.add(nodePath + "\n" + reason);
             }
+        } else if (node instanceof BatchExecValues) {
+            String reason = unsupportedReason((BatchExecValues) node, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
         } else if (node.getInputEdges().isEmpty()) {
             return;
         } else if (node instanceof StreamExecCalc) {
@@ -275,6 +283,11 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             if (folded != null) {
                 collectRejections(folded.inputEdge.getSource(), context, nodePath + "/native-input", rejections);
                 return;
+            }
+        } else if (node instanceof BatchExecCalc) {
+            String reason = unsupportedReason((BatchExecCalc) node, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
             }
         } else if (node instanceof StreamExecCorrelate) {
             String reason = unsupportedReason((StreamExecCorrelate) node, context);
@@ -474,6 +487,11 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             if (reason != null) {
                 rejections.add(nodePath + "\n" + reason);
             }
+        } else if (node instanceof BatchExecUnion) {
+            String reason = unsupportedReason((BatchExecUnion) node, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
         } else if (node instanceof StreamExecWindowTableFunction) {
             String reason = unsupportedReason((StreamExecWindowTableFunction) node, context);
             if (reason != null) {
@@ -493,7 +511,10 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
 
     private static boolean isSinkBoundary(ExecNode<?> node) {
         String nodeName = node.getClass().getSimpleName();
-        return nodeName.equals("StreamExecSink") || nodeName.equals("StreamExecLegacySink");
+        return nodeName.equals("StreamExecSink")
+                || nodeName.equals("StreamExecLegacySink")
+                || nodeName.equals("BatchExecSink")
+                || nodeName.equals("BatchExecLegacySink");
     }
 
     ExecNode<?> convert(ExecNode<?> node) {
@@ -517,6 +538,14 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     values.getTuples(),
                     (RowType) values.getOutputType(),
                     "StreamFusionValues");
+        }
+        if (node instanceof BatchExecValues) {
+            BatchExecValues values = (BatchExecValues) node;
+            return new StreamFusionBatchExecValues(
+                    values.getPersistedConfig(),
+                    values.getTuples(),
+                    (RowType) values.getOutputType(),
+                    "StreamFusionBatchValues");
         }
         if (node instanceof StreamExecCalc) {
             StreamExecCalc calc = (StreamExecCalc) node;
@@ -614,6 +643,20 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     calc.getInputProperties().get(0),
                     (RowType) calc.getOutputType(),
                     "StreamFusionCalc");
+            replacement.setInputEdges(calc.getInputEdges().stream()
+                    .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                    .collect(Collectors.toList()));
+            return replacement;
+        }
+        if (node instanceof BatchExecCalc) {
+            BatchExecCalc calc = (BatchExecCalc) node;
+            StreamFusionBatchExecCalc replacement = new StreamFusionBatchExecCalc(
+                    calc.getPersistedConfig(),
+                    projection(calc),
+                    condition(calc),
+                    calc.getInputProperties().get(0),
+                    (RowType) calc.getOutputType(),
+                    "StreamFusionBatchCalc");
             replacement.setInputEdges(calc.getInputEdges().stream()
                     .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
                     .collect(Collectors.toList()));
@@ -1141,6 +1184,18 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     .collect(Collectors.toList()));
             return replacement;
         }
+        if (node instanceof BatchExecUnion) {
+            BatchExecUnion union = (BatchExecUnion) node;
+            StreamFusionBatchExecUnion replacement = new StreamFusionBatchExecUnion(
+                    union.getPersistedConfig(),
+                    union.getInputProperties(),
+                    (RowType) union.getOutputType(),
+                    "StreamFusionBatchUnionAll");
+            replacement.setInputEdges(union.getInputEdges().stream()
+                    .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                    .collect(Collectors.toList()));
+            return replacement;
+        }
         if (node instanceof StreamExecExchange) {
             StreamExecExchange exchange = (StreamExecExchange) node;
             StreamFusionExecExchange replacement = new StreamFusionExecExchange(
@@ -1235,6 +1290,16 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
     }
 
     private String unsupportedReason(StreamExecCalc calc, ProcessorContext context) {
+        ExecEdge input = calc.getInputEdges().get(0);
+        return unsupportedCalcReason(
+                (RowType) input.getOutputType(),
+                (RowType) calc.getOutputType(),
+                projection(calc),
+                condition(calc),
+                context);
+    }
+
+    private String unsupportedReason(BatchExecCalc calc, ProcessorContext context) {
         ExecEdge input = calc.getInputEdges().get(0);
         return unsupportedCalcReason(
                 (RowType) input.getOutputType(),
@@ -2159,13 +2224,21 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
     }
 
     private String unsupportedReason(StreamExecValues values, ProcessorContext context) {
+        return unsupportedValuesReason((RowType) values.getOutputType(), values.getTuples(), context);
+    }
+
+    private String unsupportedReason(BatchExecValues values, ProcessorContext context) {
+        return unsupportedValuesReason((RowType) values.getOutputType(), values.getTuples(), context);
+    }
+
+    private String unsupportedValuesReason(RowType outputType, List<?> tuples, ProcessorContext context) {
         try {
             Class<?> translator = Class.forName(
                     VALUES_TRANSLATOR_CLASS,
                     true,
                     context.getPlanner().getFlinkContext().getClassLoader());
             Method method = translator.getMethod("unsupportedReason", RowType.class, List.class);
-            return (String) method.invoke(null, (RowType) values.getOutputType(), values.getTuples());
+            return (String) method.invoke(null, outputType, tuples);
         } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
             throw new IllegalStateException("Could not inspect StreamFusion VALUES support", e);
         } catch (InvocationTargetException e) {
@@ -2216,6 +2289,14 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
     }
 
     private String unsupportedReason(StreamExecUnion union, ProcessorContext context) {
+        return unsupportedUnionReason((RowType) union.getOutputType(), context);
+    }
+
+    private String unsupportedReason(BatchExecUnion union, ProcessorContext context) {
+        return unsupportedUnionReason((RowType) union.getOutputType(), context);
+    }
+
+    private String unsupportedUnionReason(RowType outputType, ProcessorContext context) {
         if (context == null) {
             return null;
         }
@@ -2225,7 +2306,7 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     true,
                     context.getPlanner().getFlinkContext().getClassLoader());
             Method method = translator.getMethod("unsupportedReason", RowType.class);
-            return (String) method.invoke(null, (RowType) union.getOutputType());
+            return (String) method.invoke(null, outputType);
         } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
             throw new IllegalStateException("Could not inspect StreamFusion UNION ALL support", e);
         } catch (InvocationTargetException e) {
@@ -2260,11 +2341,11 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
     }
 
     @SuppressWarnings("unchecked")
-    private static List<RexNode> projection(StreamExecCalc calc) {
+    private static List<RexNode> projection(CommonExecCalc calc) {
         return (List<RexNode>) field(calc, CommonExecCalc.class, "projection");
     }
 
-    private static RexNode condition(StreamExecCalc calc) {
+    private static RexNode condition(CommonExecCalc calc) {
         return (RexNode) field(calc, CommonExecCalc.class, "condition");
     }
 

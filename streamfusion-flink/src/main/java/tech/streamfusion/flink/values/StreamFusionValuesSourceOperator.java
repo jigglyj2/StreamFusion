@@ -18,6 +18,7 @@ import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.ArrowValuesCDataBridge;
 import tech.streamfusion.flink.memory.StreamFusionTaskMemory;
+import tech.streamfusion.flink.metrics.FlinkMetricParity;
 
 /** Bounded native VALUES source with task-scoped Flink managed memory. */
 @SuppressWarnings("deprecation")
@@ -54,6 +55,8 @@ final class StreamFusionValuesSourceOperator
             synchronized (lockingObject) {
                 collector.collect(new StreamRecord<>(batch));
             }
+            FlinkMetricParity.replacePhysicalRecords(
+                    getMetricGroup().getIOMetricGroup().getNumRecordsOutCounter(), 1, batch.size());
         }
     }
 

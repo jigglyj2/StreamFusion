@@ -93,6 +93,9 @@ OVER-aggregate batches, native Temporal Sort batches, native bounded full-Sort b
 counts plus SHA-256 hashes for the full result changelog and
 final materialized multiset. An additional ordered SHA-256 retains sink arrival order for operators
 whose ordering is semantic.
+Set `-Dstreamfusion.nexmark.batch-mode=true` to run the finite RowData source through Flink's
+bounded SQL planner. The harness disables periodic checkpoints in that mode. This is an execution-
+mode control applied identically to both engines; it does not create a StreamFusion-only runtime.
 The `aggregate-modifiers`, `incremental-group-aggregate`,
 `group-aggregate`, `global-aggregate`, `grouping-sets`, `interval-join`, `over-aggregate`,
 `over-aggregate-event-time`, `over-aggregate-processing-time`,
@@ -132,6 +135,29 @@ in the fused native tree. Official q7 carries Calcite's ten-second interval as a
 literal inside the join residual. Their integration cases compare complete raw and materialized
 results on memory and RocksDB, require accelerated EXPLAIN output, and require nonzero native
 window-aggregate and regular-join batches.
+
+On the September 4, 2026 local bounded q1 run based on `5737f54` plus the bounded
+VALUES/UNION/CALC working change, an excluded 100,000-event warmup preceded three alternating
+fresh-JVM forks per engine over two million events at parallelism four with a 3GB heap. Flink and
+StreamFusion median elapsed times were 12.971s and 13.530s, equivalent to 154,193 and 147,819
+events/s or 95.9% throughput parity. Median absolute deviations were 0.236s and 0.079s, with
+elapsed ranges of 12.732–13.207s and 13.195–13.609s. Every fork emitted 1,840,000 rows with final
+multiset SHA-256 `2dc67c3298d35ddb49512cfd8467e86b6e1ec6d2cc550f78a006e0d5fc96b913`;
+every StreamFusion fork reported a fully accelerated bounded plan and executed 124 native Calc
+batches. q1 is stateless, so a RocksDB-labelled repeat would exercise no RocksDB state and is not
+reported as a distinct backend result.
+
+Separate two-million-event mixed JVM/native CPU, Java-allocation, and native-allocation profiles
+used Java non-safepoint sampling, native DWARF/frame-pointer unwinding, JFR, collapsed stacks,
+per-engine flame graphs, and differential flame graphs. Profiler timings were excluded from the
+measurements above. The native DataFusion Calc accounted for 0.22% of CPU samples and Arrow C/JNI
+transport for 1.25%; the required RowData-to-Arrow source boundary and Arrow-backed output access
+accounted for 13.8% and 11.5% respectively. Sampled Java allocation volume was 0.11% lower than
+Flink's. Native profiles attributed the additional StreamFusion bytes to the computed decimal and
+filter output buffers, not to a defensive whole-batch handoff copy. Those buffers and the reusable
+DataFusion plan are admitted through the existing Flink task managed-memory pool. Profiles are
+retained under `streamfusion-nexmark-benchmarks/target/profiles/batch-q1/`; these are local
+diagnostic results, not portable performance guarantees.
 
 On the September 4, 2026 local release/native-CPU run, q5 used an excluded 50,000-event warmup and
 three alternating fresh-JVM forks per engine/backend over 250,000 events at parallelism one, with a

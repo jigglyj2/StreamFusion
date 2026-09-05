@@ -9,10 +9,14 @@ Like Comet, StreamFusion performs this selection with a physical-plan rule and d
 accelerator nodes. Flink first builds its normal exec graph. The StreamFusion graph
 processor proves whole-plan eligibility and replaces eligible `StreamExecCalc` and
 `StreamExecUnion` nodes with distinct `StreamFusionExecCalc` and
-`StreamFusionExecUnion` nodes. The original Flink nodes are neither modified nor
+`StreamFusionExecUnion` nodes. It applies the same rule to eligible `BatchExecCalc`,
+`BatchExecValues`, and `BatchExecUnion` nodes, producing distinct bounded StreamFusion nodes.
+Streaming and bounded replacements share the same protobuf and native DataFusion operator tree;
+bounded execution is not a parallel JNI or RowData implementation. The original Flink nodes are neither modified nor
 given native execution branches; if eligibility fails, the original graph is returned
 unchanged. At translation time, the outermost `StreamFusionExecCalc` collects every
-adjacent StreamFusion Calc below it, preserves their input-to-output order, and creates
+adjacent StreamFusion Calc below it; the bounded Calc node applies the identical rule. Each
+preserves input-to-output order and creates
 one Flink runtime operator for the connected chain. A non-StreamFusion node ends the
 chain and therefore defines a native-plan boundary.
 
@@ -23,9 +27,9 @@ errors, an absent native resource, or an incompatible binary reject the complete
 with a `runtime-preflight` EXPLAIN reason. Capability-inspection reflection failures are
 also treated as inconclusive support and fall back before graph mutation.
 
-Streaming `UNION ALL` is a deliberate exception to native compute lowering, but not to
+`UNION ALL` in either runtime mode is a deliberate exception to native compute lowering, but not to
 physical coverage. Flink keeps control of watermarks, barriers, scheduling, and input
-interleaving in a `StreamFusionExecUnion` multiple-input operator. Because Flink
+interleaving in a StreamFusion multiple-input operator. Because Flink
 multiple-input gates are network boundaries, each branch writes the existing versioned
 Arrow IPC exchange frame and the union decodes it through Flink-managed memory before
 forwarding the Arrow batch. Raw process-local Arrow owners never reach a network

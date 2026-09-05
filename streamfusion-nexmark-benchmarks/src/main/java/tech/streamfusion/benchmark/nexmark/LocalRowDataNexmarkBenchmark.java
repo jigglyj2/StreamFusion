@@ -30,10 +30,13 @@ public final class LocalRowDataNexmarkBenchmark {
                     for (String backend : backends) {
                         RunResult result = run(events, query, streamFusion, backend, parallelism);
                         String explain = streamFusion ? StreamFusionPlanningDiagnostics.explain() : "";
+                        String runtimeMode =
+                                Boolean.getBoolean("streamfusion.nexmark.batch-mode") ? "batch" : "streaming";
                         System.out.printf(
-                                "%s engine=%s state_backend=%s accelerated=%s input_events=%d elapsed_seconds=%.6f input_events_per_second=%.2f native_calc_batches=%d native_deduplicate_batches=%d native_group_aggregate_batches=%d native_top_n_batches=%d native_window_aggregate_batches=%d native_window_join_batches=%d native_regular_join_batches=%d native_multi_join_batches=%d native_interval_join_batches=%d native_temporal_join_batches=%d native_over_aggregate_batches=%d native_temporal_sort_batches=%d native_bounded_sort_batches=%d native_match_recognize_batches=%d output_rows=%d output_sha256=%s ordered_sha256=%s materialized_rows=%d materialized_sha256=%s%n",
+                                "%s engine=%s runtime_mode=%s state_backend=%s accelerated=%s input_events=%d elapsed_seconds=%.6f input_events_per_second=%.2f native_calc_batches=%d native_deduplicate_batches=%d native_group_aggregate_batches=%d native_top_n_batches=%d native_window_aggregate_batches=%d native_window_join_batches=%d native_regular_join_batches=%d native_multi_join_batches=%d native_interval_join_batches=%d native_temporal_join_batches=%d native_over_aggregate_batches=%d native_temporal_sort_batches=%d native_bounded_sort_batches=%d native_match_recognize_batches=%d output_rows=%d output_sha256=%s ordered_sha256=%s materialized_rows=%d materialized_sha256=%s%n",
                                 query,
                                 streamFusion ? "streamfusion" : "flink",
+                                runtimeMode,
                                 backend,
                                 streamFusion && explain.contains("Accelerated: yes"),
                                 events,

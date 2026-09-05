@@ -7,7 +7,8 @@ sidebar:
 
 **Current status:** Partially accelerated.
 
-StreamFusion plans an eligible Calc as sequential DataFusion operators over Arrow
+StreamFusion replaces both `StreamExecCalc` and `BatchExecCalc` with distinct accelerator
+nodes and plans an eligible Calc as sequential DataFusion operators over Arrow
 batches: an optional `FilterExec`, followed by `ProjectionExec`. The entire Calc falls
 back to Flink if either stage contains an unsupported expression or type.
 
@@ -25,7 +26,9 @@ requires one recorded decision: native execution, explicit fallback, canonical C
 non-Calc planner/runtime handling. Upgrading Flink or adding a public scalar therefore fails the
 focused catalog test until its behavior and documentation are reviewed.
 
-Java serializes the Calc chain as a recursive protobuf operator tree. The JVM/native boundary uses Arrow C Data, and
+Streaming and bounded Calc use the same Java expression serializer, versioned protobuf,
+DataFusion physical operators, managed-memory pool, and Arrow boundary. There is no second
+row-oriented batch implementation. Java serializes the Calc chain as a recursive protobuf operator tree. The JVM/native boundary uses Arrow C Data, and
 the native result is exposed to Flink as reusable Arrow-backed `ColumnarRowData` views.
 
 See the [Flink 2.3 SELECT & WHERE documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/select/).

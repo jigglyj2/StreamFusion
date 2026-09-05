@@ -127,6 +127,11 @@ instead of allowing either implementation to allocate state outside Flink's budg
 standard Flink `-Dtaskmanager.memory.managed.consumer-weights=OPERATOR:90,STATE_BACKEND:10,PYTHON:30`
 property overrides the harness default. The default favors Arrow operator scratch because the
 bounded workloads have a small RocksDB working set; it is applied identically to both engines.
+Set `-Dstreamfusion.nexmark.batch-mode=true` to plan the finite RowData source through Flink's
+bounded SQL exec graph. Periodic checkpointing is disabled in this mode because a completed batch
+plan has no in-flight state to recover. This switch is intended for stateless and later bounded
+operator milestones; state-backend comparisons remain streaming-mode tests unless the bounded
+operator itself owns state.
 The optional
 `-Dstreamfusion.nexmark.debug-rows=true` and `-Dstreamfusion.nexmark.debug-plan=true` switches print
 the collected rows and optimized SQL plan for diagnosis and should remain off for measurements.
