@@ -82,7 +82,8 @@ class NativeExchangeCDataRoundTripTest {
             assertThat(frames).hasSize(1);
             try (ArrowExchangeInputBatch decoded =
                     ArrowExchangeInputCDataBridge.decode(plan, frames.get(0), rowType, allocator, memoryManager)) {
-                assertThat(decoded.transportRoot().getFieldVectors()).hasSize(3);
+                assertThat(decoded.transportRoot().getFieldVectors()).hasSize(4);
+                assertThat(decoded.arrowBatch().root().getFieldVectors()).hasSize(1);
                 assertThat(decoded.rowView(0).getArray(0).size()).isEqualTo(2);
                 assertThat(decoded.rowView(0).getArray(0).getInt(0)).isEqualTo(7);
                 assertThat(decoded.rowView(0).getArray(0).getInt(1)).isEqualTo(9);
