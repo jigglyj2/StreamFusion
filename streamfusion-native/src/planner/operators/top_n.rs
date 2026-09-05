@@ -914,6 +914,49 @@ fn emit_difference(
         }
         return Ok(());
     }
+    // Flink selects FastTop1Function for both append-fast and update-fast Top-1. Unlike the
+    // general no-rank-number Top-N helper, replacement of the current winner is represented as
+    // an optional UPDATE_BEFORE followed by UPDATE_AFTER. This distinction is observable by
+    // upsert-aware downstream operators and sinks even though DELETE + INSERT has the same
+    // materialized multiset.
+    if plan.rank_start == 1
+        && plan.rank_end == Some(1)
+        && plan.strategy != proto::TopNStrategy::Retract as i32
+    {
+        let old = before.first().copied();
+        let next = after.first().copied();
+        if same_output(sources, old, next)? {
+            return Ok(());
+        }
+        match (old, next) {
+            (Some(old), Some(next)) => {
+                if plan.generate_update_before {
+                    output.push(OutputEvent {
+                        candidate: old,
+                        rank: 0,
+                        kind: UPDATE_BEFORE,
+                    });
+                }
+                output.push(OutputEvent {
+                    candidate: next,
+                    rank: 0,
+                    kind: UPDATE_AFTER,
+                });
+            }
+            (None, Some(next)) => output.push(OutputEvent {
+                candidate: next,
+                rank: 0,
+                kind: INSERT,
+            }),
+            (Some(old), None) => output.push(OutputEvent {
+                candidate: old,
+                rank: 0,
+                kind: DELETE,
+            }),
+            (None, None) => {}
+        }
+        return Ok(());
+    }
     for old in before {
         match after.iter().find(|next| next.sequence == old.sequence) {
             None => output.push(OutputEvent {
@@ -1250,6 +1293,59 @@ mod tests {
             ],
         )
         .unwrap()
+    }
+
+    fn top_one_plan(generate_update_before: bool) -> Vec<u8> {
+        let bytes = plan();
+        let mut native = proto::NativePlan::decode(bytes.as_slice()).unwrap();
+        let Some(proto::operator::Operator::TopN(top_n)) =
+            native.root.as_mut().and_then(|root| root.operator.as_mut())
+        else {
+            unreachable!()
+        };
+        top_n.rank_end = Some(1);
+        top_n.output_rank_number = false;
+        top_n.generate_update_before = generate_update_before;
+        top_n.output_schema = top_n.input_schema.clone();
+        native.encode_to_vec()
+    }
+
+    fn output_kinds(batch: &RecordBatch) -> Vec<i8> {
+        batch
+            .column(batch.num_columns() - 1)
+            .as_any()
+            .downcast_ref::<Int8Array>()
+            .unwrap()
+            .values()
+            .to_vec()
+    }
+
+    #[test]
+    fn append_fast_top_one_uses_flinks_update_changelog() {
+        for (generate_update_before, expected) in [
+            (false, vec![INSERT, UPDATE_AFTER]),
+            (true, vec![INSERT, UPDATE_BEFORE, UPDATE_AFTER]),
+        ] {
+            let broker = Arc::new(TestBroker::new(64 << 20));
+            let mut processor = TopNProcessor::new(
+                &top_one_plan(generate_update_before),
+                128,
+                0,
+                127,
+                HostMemoryReservation::new(broker, "fast top-one changelog"),
+            )
+            .unwrap();
+            let first = processor
+                .process_arrow(batch(vec![1], vec!["a"]), 1)
+                .unwrap();
+            let replacement = processor
+                .process_arrow(batch(vec![1], vec!["z"]), 2)
+                .unwrap();
+            assert_eq!(
+                [output_kinds(&first), output_kinds(&replacement)].concat(),
+                expected
+            );
+        }
     }
 
     fn limit_plan(strategy: proto::TopNStrategy) -> Vec<u8> {

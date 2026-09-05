@@ -26,6 +26,7 @@ final class BenchmarkResultStore {
             String runId,
             byte[] changelogRow,
             byte[] materializedRow,
+            byte[] materializationKey,
             boolean accumulate,
             String debug,
             String materializedDebug) {
@@ -33,7 +34,8 @@ final class BenchmarkResultStore {
         if (rows == null) {
             throw new IllegalStateException("Unknown benchmark result run: " + runId);
         }
-        rows.add(new RecordedRow(changelogRow, materializedRow, accumulate, debug, materializedDebug));
+        rows.add(new RecordedRow(
+                changelogRow, materializedRow, materializationKey, accumulate, debug, materializedDebug));
     }
 
     static Result finish(String runId) {
@@ -42,6 +44,7 @@ final class BenchmarkResultStore {
             throw new IllegalStateException("Unknown benchmark result run: " + runId);
         }
         List<RecordedRow> rows = new ArrayList<>(collected);
+        TreeMap<byte[], MaterializedRow> materialized = materialize(rows);
         String orderedSha256;
         try {
             MessageDigest orderedDigest = MessageDigest.getInstance("SHA-256");
@@ -63,15 +66,6 @@ final class BenchmarkResultStore {
                 debugRows.add(row.debug);
             }
             debugRows.sort(String::compareTo);
-            TreeMap<byte[], MaterializedRow> materialized = new TreeMap<>(Arrays::compareUnsigned);
-            for (RecordedRow row : rows) {
-                MaterializedRow value = materialized.computeIfAbsent(
-                        row.materializedBytes, ignored -> new MaterializedRow(row.materializedDebug));
-                value.count += row.accumulate ? 1 : -1;
-                if (value.count == 0) {
-                    materialized.remove(row.materializedBytes);
-                }
-            }
             MessageDigest materializedDigest = MessageDigest.getInstance("SHA-256");
             List<String> materializedDebugRows = new ArrayList<>();
             long materializedCount = 0;
@@ -80,7 +74,7 @@ final class BenchmarkResultStore {
                     throw new IllegalStateException("Benchmark changelog retracts a row that is not present");
                 }
                 for (int occurrence = 0; occurrence < entry.getValue().count; occurrence++) {
-                    byte[] bytes = entry.getKey();
+                    byte[] bytes = entry.getValue().bytes;
                     materializedDigest.update((byte) (bytes.length >>> 24));
                     materializedDigest.update((byte) (bytes.length >>> 16));
                     materializedDigest.update((byte) (bytes.length >>> 8));
@@ -101,6 +95,30 @@ final class BenchmarkResultStore {
         } catch (NoSuchAlgorithmException impossible) {
             throw new IllegalStateException("SHA-256 is unavailable", impossible);
         }
+    }
+
+    private static TreeMap<byte[], MaterializedRow> materialize(List<RecordedRow> rows) {
+        TreeMap<byte[], MaterializedRow> materialized = new TreeMap<>(Arrays::compareUnsigned);
+        for (RecordedRow row : rows) {
+            if (row.materializationKey != null) {
+                if (row.accumulate) {
+                    materialized.put(
+                            row.materializationKey,
+                            new MaterializedRow(row.materializedBytes, row.materializedDebug, 1));
+                } else if (materialized.remove(row.materializationKey) == null) {
+                    throw new IllegalStateException("Benchmark changelog retracts a key that is not present");
+                }
+                continue;
+            }
+            MaterializedRow value = materialized.computeIfAbsent(
+                    row.materializedBytes,
+                    ignored -> new MaterializedRow(row.materializedBytes, row.materializedDebug, 0));
+            value.count += row.accumulate ? 1 : -1;
+            if (value.count == 0) {
+                materialized.remove(row.materializedBytes);
+            }
+        }
+        return materialized;
     }
 
     private static String hex(byte[] bytes) {
@@ -180,14 +198,21 @@ final class BenchmarkResultStore {
     private static final class RecordedRow {
         private final byte[] bytes;
         private final byte[] materializedBytes;
+        private final byte[] materializationKey;
         private final boolean accumulate;
         private final String debug;
         private final String materializedDebug;
 
         private RecordedRow(
-                byte[] bytes, byte[] materializedBytes, boolean accumulate, String debug, String materializedDebug) {
+                byte[] bytes,
+                byte[] materializedBytes,
+                byte[] materializationKey,
+                boolean accumulate,
+                String debug,
+                String materializedDebug) {
             this.bytes = bytes;
             this.materializedBytes = materializedBytes;
+            this.materializationKey = materializationKey;
             this.accumulate = accumulate;
             this.debug = debug;
             this.materializedDebug = materializedDebug;
@@ -195,11 +220,14 @@ final class BenchmarkResultStore {
     }
 
     private static final class MaterializedRow {
+        private final byte[] bytes;
         private final String debug;
         private int count;
 
-        private MaterializedRow(String debug) {
+        private MaterializedRow(byte[] bytes, String debug, int count) {
+            this.bytes = bytes;
             this.debug = debug;
+            this.count = count;
         }
     }
 }

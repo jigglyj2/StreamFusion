@@ -51,6 +51,31 @@ class BenchmarkResultStoreTest {
                 runId,
                 changelog,
                 materialized,
+                null,
+                accumulate,
+                (accumulate ? "+I[" : "-D[") + value + "]",
+                "+I[" + value + "]");
+    }
+
+    @Test
+    void materializesUpdateAfterAsAnUpsertWhenAPrimaryKeyIsPresent() {
+        BenchmarkResultStore.begin("keyed-upsert");
+        addKeyed("keyed-upsert", true, "auction-1", "old");
+        addKeyed("keyed-upsert", true, "auction-1", "winner");
+
+        BenchmarkResultStore.Result result = BenchmarkResultStore.finish("keyed-upsert");
+
+        assertThat(result.rowCount()).isEqualTo(2);
+        assertThat(result.materializedRowCount()).isEqualTo(1);
+        assertThat(result.materializedDebugRows()).containsExactly("+I[winner]");
+    }
+
+    private static void addKeyed(String runId, boolean accumulate, String key, String value) {
+        BenchmarkResultStore.add(
+                runId,
+                ((accumulate ? "+" : "-") + value).getBytes(StandardCharsets.UTF_8),
+                value.getBytes(StandardCharsets.UTF_8),
+                key.getBytes(StandardCharsets.UTF_8),
                 accumulate,
                 (accumulate ? "+I[" : "-D[") + value + "]",
                 "+I[" + value + "]");

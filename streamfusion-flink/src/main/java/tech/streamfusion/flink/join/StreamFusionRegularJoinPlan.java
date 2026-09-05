@@ -6,6 +6,7 @@ package tech.streamfusion.flink.join;
 
 import org.apache.flink.table.runtime.operators.join.FlinkJoinType;
 import org.apache.flink.table.types.logical.RowType;
+import tech.streamfusion.flink.calc.StreamFusionCalcTranslator;
 import tech.streamfusion.flink.proto.FlinkLogicalTypeProto;
 import tech.streamfusion.proto.plan.v1.Field;
 import tech.streamfusion.proto.plan.v1.NativePlan;
@@ -24,11 +25,16 @@ final class StreamFusionRegularJoinPlan {
             int[] leftKeys,
             int[] rightKeys,
             boolean[] filterNulls,
-            FlinkJoinType joinType) {
+            FlinkJoinType joinType,
+            Object residualCondition) {
         RegularJoin.Builder join = RegularJoin.newBuilder()
                 .setLeftSchema(schema(leftType))
                 .setRightSchema(schema(rightType))
                 .setJoinType(joinType(joinType));
+        if (residualCondition != null) {
+            join.setResidualCondition(StreamFusionCalcTranslator.operatorCondition(
+                    residualCondition, conditionInputType(leftType, rightType)));
+        }
         for (int key : leftKeys) {
             join.addLeftKeyIndices(key);
         }
@@ -43,6 +49,17 @@ final class StreamFusionRegularJoinPlan {
                 .setRoot(Operator.newBuilder().setRegularJoin(join))
                 .build()
                 .toByteArray();
+    }
+
+    static RowType conditionInputType(RowType leftType, RowType rightType) {
+        java.util.List<org.apache.flink.table.types.logical.LogicalType> types =
+                new java.util.ArrayList<>(leftType.getFieldCount() + rightType.getFieldCount());
+        types.addAll(leftType.getChildren());
+        types.addAll(rightType.getChildren());
+        String[] names = java.util.stream.IntStream.range(0, types.size())
+                .mapToObj(index -> "join_field_" + index)
+                .toArray(String[]::new);
+        return RowType.of(types.toArray(new org.apache.flink.table.types.logical.LogicalType[0]), names);
     }
 
     private static RegularJoinType joinType(FlinkJoinType type) {

@@ -226,6 +226,10 @@ message RegularJoin {
   RegularJoinType join_type = 6;
   uint64 left_state_ttl_millis = 7;
   uint64 right_state_ttl_millis = 8;
+  // Evaluated against the concatenated left/right row after equality-key matching. SQL NULL is
+  // false. Keeping this expression in the physical plan lets Rust update outer/semi/anti
+  // association counts from predicate-qualified matches without a Java row callback.
+  optional Expression residual_condition = 9;
 }
 
 enum RegularJoinType {

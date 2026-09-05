@@ -17,8 +17,10 @@ public final class BenchmarkResultDynamicTableSinkFactory implements DynamicTabl
     public DynamicTableSink createDynamicTableSink(Context context) {
         FactoryUtil.TableFactoryHelper helper = FactoryUtil.createTableFactoryHelper(this, context);
         helper.validate();
+        var resolvedSchema = context.getCatalogTable().getResolvedSchema();
         return new BenchmarkResultDynamicTableSink(
-                context.getCatalogTable().getResolvedSchema().toPhysicalRowDataType(),
+                resolvedSchema.toPhysicalRowDataType(),
+                resolvedSchema.getPrimaryKeyIndexes(),
                 helper.getOptions().get(RUN_ID));
     }
 

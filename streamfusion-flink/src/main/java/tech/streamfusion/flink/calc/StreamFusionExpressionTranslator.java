@@ -291,19 +291,26 @@ abstract class StreamFusionExpressionTranslator extends StreamFusionProjectionTr
                         .build();
             }
         }
-        if (("AND".equals(kind) || "OR".equals(kind)) && operands.size() == 2) {
-            Expression left = conditionExpression(operands.get(0), inputType);
-            Expression right = conditionExpression(operands.get(1), inputType);
-            if (left != null && right != null) {
-                return Expression.newBuilder()
-                        .setBooleanBinary(BooleanBinary.newBuilder()
-                                .setLeft(left)
-                                .setRight(right)
-                                .setOperator(
-                                        "AND".equals(kind)
-                                                ? BooleanOperator.BOOLEAN_OPERATOR_AND
-                                                : BooleanOperator.BOOLEAN_OPERATOR_OR))
-                        .build();
+        if (("AND".equals(kind) || "OR".equals(kind)) && operands.size() >= 2) {
+            Expression combined = conditionExpression(operands.get(0), inputType);
+            for (int index = 1; combined != null && index < operands.size(); index++) {
+                Expression next = conditionExpression(operands.get(index), inputType);
+                if (next == null) {
+                    combined = null;
+                } else {
+                    combined = Expression.newBuilder()
+                            .setBooleanBinary(BooleanBinary.newBuilder()
+                                    .setLeft(combined)
+                                    .setRight(next)
+                                    .setOperator(
+                                            "AND".equals(kind)
+                                                    ? BooleanOperator.BOOLEAN_OPERATOR_AND
+                                                    : BooleanOperator.BOOLEAN_OPERATOR_OR))
+                            .build();
+                }
+            }
+            if (combined != null) {
+                return combined;
             }
         }
         if ("NOT".equals(kind) && operands.size() == 1) {

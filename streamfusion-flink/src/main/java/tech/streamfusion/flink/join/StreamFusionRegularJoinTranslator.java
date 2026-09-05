@@ -71,7 +71,8 @@ public final class StreamFusionRegularJoinTranslator {
                 joinSpec.getLeftKeys(),
                 joinSpec.getRightKeys(),
                 joinSpec.getFilterNulls(),
-                joinSpec.getJoinType());
+                joinSpec.getJoinType(),
+                joinSpec.getNonEquiCondition().orElse(null));
         StreamFusionStateBackendFactory.install(environment);
         Transformation<RowData> keyedLeft = keyed(left, leftType, joinSpec.getLeftKeys(), config, environment);
         Transformation<RowData> keyedRight = keyed(right, rightType, joinSpec.getRightKeys(), config, environment);
@@ -101,7 +102,11 @@ public final class StreamFusionRegularJoinTranslator {
         int maxParallelism =
                 keyedLeft.getMaxParallelism() > 0 ? keyedLeft.getMaxParallelism() : DEFAULT_LOWER_BOUND_MAX_PARALLELISM;
         transformation.setMaxParallelism(maxParallelism);
-        transformation.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
+        // A regular join owns two unbounded keyed multisets plus residual-condition and output
+        // scratch. Give it the same relative share as the interval join; a unary Calc-sized share
+        // can reject a perfectly healthy wide-row join while most of the task's configured
+        // OPERATOR pool remains assigned to stateless stages.
+        transformation.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 8);
         NativeExchangeFrameKeySelector selector = new NativeExchangeFrameKeySelector(maxParallelism);
         transformation.setStateKeySelectors(selector, selector);
         transformation.setStateKeyType(Types.INT);
@@ -128,7 +133,13 @@ public final class StreamFusionRegularJoinTranslator {
             return "state: Flink changelog-state wrapping is not implemented by native regular join";
         }
         if (joinSpec.getNonEquiCondition().isPresent()) {
-            return "join condition: native regular join condition feedback is not implemented yet";
+            String conditionFailure = tech.streamfusion.flink.calc.StreamFusionCalcTranslator.operatorConditionFailure(
+                    joinSpec.getNonEquiCondition().get(),
+                    StreamFusionRegularJoinPlan.conditionInputType(leftType, rightType),
+                    "join condition");
+            if (conditionFailure != null) {
+                return conditionFailure;
+            }
         }
         if ((leftUpsertKeys != null && !leftUpsertKeys.isEmpty())
                 || (rightUpsertKeys != null && !rightUpsertKeys.isEmpty())) {

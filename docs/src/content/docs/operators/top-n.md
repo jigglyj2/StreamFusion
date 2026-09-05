@@ -55,7 +55,10 @@ keep deterministic `(ORDER BY, remaining primary key)` ordering and retain enoug
 the visible range after a retraction. StreamFusion preserves Flink's comparator contract in Rust
 and its backend-neutral key-group state contract instead of adopting RisingWave's table-specific
 low/middle/high caches. Arroyo currently provides windowed Top-N operators, but no corresponding
-unbounded non-window SQL Top-N implementation.
+unbounded non-window SQL Top-N implementation. The transformation requests a stateful relative
+weight of eight from Flink's existing `OPERATOR` managed-memory pool, preventing wide-row state
+from being constrained to the share intended for a stateless unary stage without introducing a
+separate StreamFusion memory budget.
 
 Both backends use canonical key-group savepoints and support 1-to-N-to-1 rescaling, aligned and
 unaligned checkpoints, and cross-backend restoration. RocksDB regular checkpoints are incremental

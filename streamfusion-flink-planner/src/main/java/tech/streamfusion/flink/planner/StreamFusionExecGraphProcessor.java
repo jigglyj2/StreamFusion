@@ -82,6 +82,7 @@ import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWindowTab
 import org.apache.flink.table.planner.plan.utils.RankProcessStrategy;
 import org.apache.flink.table.runtime.groupwindow.NamedWindowProperty;
 import org.apache.flink.table.runtime.operators.join.FlinkJoinType;
+import org.apache.flink.table.runtime.operators.join.stream.keyselector.AttributeBasedJoinKeyExtractor;
 import org.apache.flink.table.runtime.operators.join.stream.keyselector.AttributeBasedJoinKeyExtractor.ConditionAttributeRef;
 import org.apache.flink.table.runtime.operators.rank.ConstantRankRange;
 import org.apache.flink.table.runtime.operators.rank.RankRange;
@@ -332,7 +333,11 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                 rejections.add(nodePath + "\n" + reason);
             }
         } else if (node instanceof StreamExecMultiJoin) {
-            String reason = unsupportedReason((StreamExecMultiJoin) node, context);
+            StreamExecMultiJoin multiJoin = (StreamExecMultiJoin) node;
+            JoinSpec binaryJoin = binaryMultiJoinSpec(multiJoin);
+            String reason = binaryJoin == null
+                    ? unsupportedReason(multiJoin, context)
+                    : unsupportedReason(binaryJoin, multiJoin, context);
             if (reason != null) {
                 rejections.add(nodePath + "\n" + reason);
             }
@@ -900,6 +905,26 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         }
         if (node instanceof StreamExecMultiJoin) {
             StreamExecMultiJoin join = (StreamExecMultiJoin) node;
+            JoinSpec binaryJoin = binaryMultiJoinSpec(join);
+            if (binaryJoin != null) {
+                List<List<int[]>> uniqueKeys = multiJoinUniqueKeys(join);
+                long[] ttl = multiJoinStateTtl(join);
+                StreamFusionExecRegularJoin replacement = new StreamFusionExecRegularJoin(
+                        join.getPersistedConfig(),
+                        binaryJoin,
+                        uniqueKeys.get(0),
+                        uniqueKeys.get(1),
+                        ttl[0],
+                        ttl[1],
+                        join.getInputProperties().get(0),
+                        join.getInputProperties().get(1),
+                        (RowType) join.getOutputType(),
+                        "StreamFusionRegularJoin[MultiJoin]");
+                replacement.setInputEdges(join.getInputEdges().stream()
+                        .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                        .collect(Collectors.toList()));
+                return replacement;
+            }
             StreamFusionExecMultiJoin replacement = new StreamFusionExecMultiJoin(
                     join.getPersistedConfig(),
                     multiJoinTypes(join),
@@ -1479,10 +1504,51 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         }
     }
 
+    private String unsupportedReason(JoinSpec joinSpec, StreamExecMultiJoin join, ProcessorContext context) {
+        List<ExecEdge> inputs = join.getInputEdges();
+        List<List<int[]>> uniqueKeys = multiJoinUniqueKeys(join);
+        long[] ttl = multiJoinStateTtl(join);
+        return unsupportedReason(
+                (RowType) inputs.get(0).getOutputType(),
+                (RowType) inputs.get(1).getOutputType(),
+                (RowType) join.getOutputType(),
+                joinSpec,
+                uniqueKeys.get(0),
+                uniqueKeys.get(1),
+                ttl[0],
+                ttl[1],
+                join.getPersistedConfig(),
+                context);
+    }
+
     private String unsupportedReason(StreamExecJoin join, ProcessorContext context) {
         ExecEdge left = join.getInputEdges().get(0);
         ExecEdge right = join.getInputEdges().get(1);
         List<Long> ttl = regularJoinStateTtl(join);
+        return unsupportedReason(
+                (RowType) left.getOutputType(),
+                (RowType) right.getOutputType(),
+                (RowType) join.getOutputType(),
+                regularJoinSpec(join),
+                regularJoinLeftUpsertKeys(join),
+                regularJoinRightUpsertKeys(join),
+                ttl.get(0),
+                ttl.get(1),
+                join.getPersistedConfig(),
+                context);
+    }
+
+    private String unsupportedReason(
+            RowType leftType,
+            RowType rightType,
+            RowType outputType,
+            JoinSpec joinSpec,
+            List<int[]> leftUpsertKeys,
+            List<int[]> rightUpsertKeys,
+            long leftTtl,
+            long rightTtl,
+            ReadableConfig config,
+            ProcessorContext context) {
         try {
             Class<?> translator = Class.forName(
                     REGULAR_JOIN_TRANSLATOR_CLASS,
@@ -1501,15 +1567,15 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     ReadableConfig.class);
             return (String) method.invoke(
                     null,
-                    (RowType) left.getOutputType(),
-                    (RowType) right.getOutputType(),
-                    (RowType) join.getOutputType(),
-                    regularJoinSpec(join),
-                    regularJoinLeftUpsertKeys(join),
-                    regularJoinRightUpsertKeys(join),
-                    ttl.get(0),
-                    ttl.get(1),
-                    join.getPersistedConfig());
+                    leftType,
+                    rightType,
+                    outputType,
+                    joinSpec,
+                    leftUpsertKeys,
+                    rightUpsertKeys,
+                    leftTtl,
+                    rightTtl,
+                    config);
         } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
             throw new IllegalStateException("Could not inspect StreamFusion regular join support", e);
         } catch (InvocationTargetException e) {
@@ -2517,6 +2583,30 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
     @SuppressWarnings("unchecked")
     private static List<RexNode> multiJoinConditions(StreamExecMultiJoin join) {
         return (List<RexNode>) field(join, StreamExecMultiJoin.class, "joinConditions");
+    }
+
+    private static JoinSpec binaryMultiJoinSpec(StreamExecMultiJoin join) {
+        if (join.getInputEdges().size() != 2) {
+            return null;
+        }
+        List<FlinkJoinType> joinTypes = multiJoinTypes(join);
+        List<RexNode> conditions = multiJoinConditions(join);
+        if (joinTypes.size() != 2 || conditions.size() != 2) {
+            return null;
+        }
+        List<RowType> inputTypes = join.getInputEdges().stream()
+                .map(edge -> (RowType) edge.getOutputType())
+                .collect(Collectors.toList());
+        AttributeBasedJoinKeyExtractor extractor =
+                new AttributeBasedJoinKeyExtractor(multiJoinAttributeMap(join), inputTypes);
+        int[] leftKeys = extractor.getCommonJoinKeyIndices(0);
+        int[] rightKeys = extractor.getCommonJoinKeyIndices(1);
+        if (leftKeys.length == 0 || leftKeys.length != rightKeys.length) {
+            return null;
+        }
+        boolean[] filterNulls = new boolean[leftKeys.length];
+        java.util.Arrays.fill(filterNulls, true);
+        return new JoinSpec(joinTypes.get(1), leftKeys, rightKeys, filterNulls, conditions.get(1));
     }
 
     private static boolean multiJoinEquiOnly(StreamExecMultiJoin join) {

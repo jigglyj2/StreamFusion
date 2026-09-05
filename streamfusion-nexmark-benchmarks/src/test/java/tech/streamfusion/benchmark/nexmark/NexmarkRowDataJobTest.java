@@ -31,7 +31,7 @@ class NexmarkRowDataJobTest {
 
     @Test
     void rejectsQueriesWithoutCompleteNativeCoverage() {
-        assertThatThrownBy(() -> NexmarkRowDataJob.sinkDdl("q4"))
+        assertThatThrownBy(() -> NexmarkRowDataJob.sinkDdl("q5"))
                 .isInstanceOf(java.io.IOException.class)
                 .hasMessageContaining("not fully accelerable");
     }

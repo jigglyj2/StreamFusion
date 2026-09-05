@@ -19,7 +19,10 @@ JOIN person AS p ON b.bidder = p.id;
 ## Acceleration and fallback
 
 StreamFusion currently accelerates Flink's synchronous regular streaming `INNER`, `LEFT`,
-`RIGHT`, `FULL`, `SEMI`, and `ANTI` equi-joins when both sides use non-unique multiset state.
+`RIGHT`, `FULL`, `SEMI`, and `ANTI` joins when both sides use non-unique multiset state. A join may
+combine its non-empty equi key with a generated residual predicate; the residual is evaluated over
+the concatenated left/right row with SQL three-valued Boolean semantics, including treating `NULL`
+as non-matching.
 Rows and join keys may use any Arrow-representable Flink scalar or nested logical type. The native
 operator accepts the complete insert/update-before/update-after/delete changelog, retains
 duplicates, applies Flink's per-key null filtering, and reproduces Flink's null-padding and
@@ -48,16 +51,19 @@ kinds, SQL-null join semantics, and the null-padding retraction/insertion transi
 left joins. Stored payloads and predicate fields accept every Arrow-representable Flink scalar and
 nested logical type.
 
-The containing plan falls back to Flink with an EXPLAIN reason when a regular join has a non-equi
-condition, state TTL, mini-batch execution, asynchronous state, changelog-state wrapping, or a
+A two-input `StreamExecMultiJoin` with a common equi key is lowered to the regular native join.
+This preserves its full generated residual condition and covers Flink's physical form for official
+Nexmark q4 and q9. Three-or-more-input multi-joins continue to use the recursive operator and still
+require every predicate to be represented by the attribute map.
+
+The containing plan falls back to Flink with an EXPLAIN reason when a regular join has no usable
+equi key, state TTL, mini-batch execution, asynchronous state, changelog-state wrapping, or a
 planner-provided unique/upsert key. Interval joins additionally fall back for a residual non-equi
 condition, non-constant bounds, semi/anti join modes, mini-batching, asynchronous state, or
 changelog-state wrapping. Temporal joins fall back for right/full/semi/anti modes, asynchronous
 state, or changelog-state wrapping; Flink itself rejects processing-time temporal table joins, and
 only its temporal table-function form is accepted there. Lookup and bounded batch joins remain
-Flink-owned. These are explicit unimplemented shapes, not approximations of their semantics. In
-particular, the current Flink plans for official Nexmark q4 and q9 use an expiry-column residual
-condition on a regular join; they do not satisfy the constant-bound interval-join contract.
+Flink-owned. These are explicit unimplemented shapes, not approximations of their semantics.
 Multi-way joins additionally fall back for residual predicates outside the attribute map,
 planner-provided unique/upsert keys, non-zero state TTL, mini-batching, asynchronous state, or
 changelog-state wrapping.
@@ -78,6 +84,16 @@ watermark frontiers. Regular joins do not register timers. Interval joins use th
 timer service and materialize dirty timer groups into canonical keyed state at snapshot boundaries,
 avoiding repeated whole-group timer serialization during normal batch processing. Both variants
 coalesce and forward watermarks using Flink's two-input rule.
+
+Regular-join residual predicates are encoded in the same versioned protobuf expression contract as
+Calc and lowered to a DataFusion physical expression. The operator collects every candidate pair
+for one input Arrow batch, decodes those pairs into one Arrow batch, and evaluates the predicate
+once vectorially while retaining Flink's per-record state-transition order. Association counts and
+outer/semi/anti transitions count only accepted candidates. Predicate scratch, state, and exported
+Arrow output are all charged to the operator's Flink managed-memory reservation.
+The regular and interval join transformations each request a stateful relative weight of eight
+from Flink's existing `OPERATOR` pool; this is a share of the configured task memory, not a separate
+StreamFusion memory setting.
 
 Temporal joins use that same backend-neutral keyed-state and timer interface. Each incoming Arrow
 batch performs one distinct batched state read and one atomic batched write. Right-side event-time
@@ -104,8 +120,9 @@ performing a second identity gather. Source-edge Arrow allowances scale with the
 vector tree, so complete logical-type payloads remain admitted without creating a separate memory
 budget.
 
-Deterministic native transition tests cover every join type, duplicates, retractions, null keys,
-rescaling, and memory-to-RocksDB restoration. Interval coverage additionally exercises every
+Deterministic native transition tests cover every join type, residual acceptance and rejection,
+duplicates, retractions, null keys, residual restore after rescaling, and canonical residual-state
+migration from memory to RocksDB with batched I/O. Interval coverage additionally exercises every
 supported logical type as both a key and stored value, pending event-time and processing-time
 timers, aligned and unaligned checkpoints, canonical cross-backend savepoints, and incremental
 RocksDB restore. The generated SQL parity suite uses INNER and SEMI regular joins because their
@@ -125,5 +142,11 @@ RocksDB SST reuse; and one-to-two-subtask key-group redistribution. Generated SQ
 accelerated EXPLAIN and non-zero native batch count for both inner and left shapes; the left SQL
 fixture uses disjoint right inputs so its complete changelog is deterministic despite independent
 bounded-source scheduling.
+
+Official Nexmark q4 and q9 integration cases compare the final keyed table against Flink on both
+state backends, require accelerated EXPLAIN output, and require non-zero native regular-join plus
+aggregate or Top-N batch counters. The result collector retains separate raw sorted and
+arrival-order changelog hashes; its primary-key-aware materialization applies upserts before sorting
+so a legal `UPDATE_AFTER` is not miscounted as another table row.
 
 See the [Flink 2.3 Joins documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/joins/).

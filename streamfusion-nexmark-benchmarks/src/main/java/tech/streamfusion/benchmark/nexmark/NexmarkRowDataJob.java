@@ -193,6 +193,15 @@ public final class NexmarkRowDataJob {
             case "q3":
                 columns = "name STRING, city STRING, state STRING, id BIGINT";
                 break;
+            case "q4":
+                columns = "category BIGINT, final BIGINT, PRIMARY KEY (category) NOT ENFORCED";
+                break;
+            case "q9":
+                columns = "id BIGINT, itemName STRING, description STRING, initialBid BIGINT, reserve BIGINT, "
+                        + "`dateTime` TIMESTAMP(3), expires TIMESTAMP(3), seller BIGINT, category BIGINT, "
+                        + "auction_extra STRING, auction BIGINT, bidder BIGINT, price BIGINT, "
+                        + "bid_dateTime TIMESTAMP(3), bid_extra STRING, PRIMARY KEY (id) NOT ENFORCED";
+                break;
             case "interval-join":
                 columns = "auction BIGINT, bidder BIGINT, price BIGINT, bid_time TIMESTAMP(3)";
                 break;

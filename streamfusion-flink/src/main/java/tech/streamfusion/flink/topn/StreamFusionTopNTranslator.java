@@ -110,7 +110,10 @@ public final class StreamFusionTopNTranslator {
         if (partitionedInput.getMaxParallelism() > 0) {
             transformation.setMaxParallelism(partitionedInput.getMaxParallelism());
         }
-        transformation.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
+        // Top-N owns unbounded per-partition candidate state even when the visible range is one
+        // row. A stateless unary-operator share can reject wide append-fast inputs long before the
+        // configured task OPERATOR pool is exhausted.
+        transformation.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 8);
         transformation.setStateKeySelector(new ArrowBatchKeySelector(partitionSelector));
         transformation.setStateKeyType(partitionSelector.getProducedType());
         return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);

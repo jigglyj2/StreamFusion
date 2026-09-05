@@ -34,6 +34,16 @@ public final class StreamFusionCalcTranslator extends StreamFusionExpressionTran
         return projectionExpression(expression, inputType, expectedType);
     }
 
+    /** Reuses Calc's nullable-boolean/SQL-UNKNOWN contract for an operator predicate. */
+    public static Expression operatorCondition(Object expression, RowType inputType) {
+        return conditionExpression(expression, inputType);
+    }
+
+    /** Returns Calc's precise fallback reason for a predicate embedded in another operator. */
+    public static String operatorConditionFailure(Object expression, RowType inputType, String path) {
+        return expressionFailure(expression, inputType, null, true, path);
+    }
+
     /** Reuses Calc's parity-checked Flink-to-protobuf type mapping. */
     public static tech.streamfusion.proto.plan.v1.LogicalType operatorLogicalType(
             org.apache.flink.table.types.logical.LogicalType type) {

@@ -49,6 +49,35 @@ class RegularJoinParityTest extends SqlParityTestSupport {
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 
+    @Test
+    void residualConditionFiltersInnerJoinCandidatesNatively() throws Exception {
+        String query = "SELECT l.id, l.payload, l.attributes, r.payload, r.amount "
+                + "FROM regular_join_left l JOIN regular_join_right r "
+                + "ON l.id = r.id AND l.payload.code = 1 "
+                + "AND r.amount > CAST(l.payload.code AS DECIMAL(10, 2))";
+
+        byte[] flink = execute(query, false);
+        byte[] streamFusion = execute(query, true);
+
+        assertThat(streamFusion).isEqualTo(flink);
+        assertThat(StreamFusionPlannerFactory.nativeRegularJoinBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
+    @Test
+    void residualConditionControlsSemiJoinMembershipNatively() throws Exception {
+        String query = "SELECT l.id, l.payload, l.attributes FROM regular_join_left l WHERE "
+                + "EXISTS (SELECT 1 FROM regular_join_right r WHERE l.id = r.id "
+                + "AND l.payload.code = 1 AND r.amount IS NOT NULL)";
+
+        byte[] flink = execute(query, false);
+        byte[] streamFusion = execute(query, true);
+
+        assertThat(streamFusion).isEqualTo(flink);
+        assertThat(StreamFusionPlannerFactory.nativeRegularJoinBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
     private static byte[] execute(String query, boolean enabled) throws Exception {
         configure(enabled);
         StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();

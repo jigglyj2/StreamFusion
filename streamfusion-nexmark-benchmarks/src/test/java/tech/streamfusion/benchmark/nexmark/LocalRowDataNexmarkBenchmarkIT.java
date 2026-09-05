@@ -219,6 +219,31 @@ class LocalRowDataNexmarkBenchmarkIT {
 
     @ParameterizedTest
     @ValueSource(strings = {"hashmap", "rocksdb"})
+    void residualJoinNexmarkQueriesMatchFlinkOnBothStateBackends(String backend) throws Exception {
+        for (String query : List.of("q4", "q9")) {
+            LocalRowDataNexmarkBenchmark.RunResult flink =
+                    LocalRowDataNexmarkBenchmark.run(2_000, query, false, backend, 1);
+            LocalRowDataNexmarkBenchmark.RunResult streamFusion =
+                    LocalRowDataNexmarkBenchmark.run(2_000, query, true, backend, 1);
+
+            assertThat(streamFusion.completed()).as(query).isTrue();
+            assertThat(streamFusion.materializedDebugRows())
+                    .as(query)
+                    .containsExactlyElementsOf(flink.materializedDebugRows());
+            assertThat(streamFusion.materializedRows()).as(query).isEqualTo(flink.materializedRows());
+            assertThat(streamFusion.materializedSha256()).as(query).isEqualTo(flink.materializedSha256());
+            assertThat(StreamFusionPlanningDiagnostics.explain()).as(query).contains("Accelerated: yes");
+            assertThat(streamFusion.nativeRegularJoinBatches()).as(query).isGreaterThan(0);
+            if (query.equals("q4")) {
+                assertThat(streamFusion.nativeGroupAggregateBatches()).as(query).isGreaterThan(0);
+            } else {
+                assertThat(streamFusion.nativeTopNBatches()).as(query).isGreaterThan(0);
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"hashmap", "rocksdb"})
     void intervalJoinQueriesMatchFlinkOnBothStateBackends(String backend) throws Exception {
         String query = "interval-join";
         LocalRowDataNexmarkBenchmark.RunResult flink =

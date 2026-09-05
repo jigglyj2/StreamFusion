@@ -42,7 +42,9 @@ splits emit Flink internal `RowData`, and a black-hole table sink consumes `RowD
 plan. Both source and query run at parallelism four, and checkpointing uses `EXACTLY_ONCE`. This
 variant isolates planner and native-operator throughput from broker and JSON costs. The benchmark
 result sink serializes and hashes both the complete sorted changelog and its final materialized
-multiset rather than discarding it. The raw hash detects changes to every emitted update. The
+table rather than discarding it. For sinks with a declared primary key, updates are applied as
+ordered upserts; keyless sinks retain multiset semantics. The raw hash detects changes to every
+emitted update. The
 materialized hash is also reported because processing-time checkpoint triggers may flush a
 mini-batch at different input boundaries in otherwise equivalent runs, producing different valid
 intermediate updates but the same final table. Controlled SQL parity tests remain the authority for
@@ -52,12 +54,12 @@ generator position, so Flink and StreamFusion receive identical events. This rem
 operator benchmark and does not replace the Kafka-in/Kafka-out north-star benchmark.
 
 Current all-or-nothing coverage can fully accelerate q0 (pass-through), q1 (decimal currency
-conversion), q2 (selection), q3 (regular streaming join), q8 (tumbling aggregates plus Window
-Join), q11 (event-time session aggregation), q19 (Top-N), q20 (regular join), q22 (URL directory
-extraction), and q23 (two regular joins). A deterministic `interval-join` workload exercises
+conversion), q2 (selection), q3 (regular streaming join), q4 (residual join plus grouped
+aggregation), q8 (tumbling aggregates plus Window Join), q9 (residual join plus Top-1), q11
+(event-time session aggregation), q19 (Top-N), q20 (regular join), q22 (URL directory extraction),
+and q23 (two regular joins). A deterministic `interval-join` workload exercises
 Flink's constant-bound event-time interval physical operator.
-Official q4 and q9 are still planned as regular joins with an expiry-column residual condition,
-not constant-bound interval joins. q4, q5, q7, q9, q13, q15, q16, and q17 still require an
+q5, q7, q13, q15, q16, and q17 still require an
 unsupported join shape or surrounding operator. q10
 uses unsupported `DATE_FORMAT`; q14 uses a Java UDF, mixed decimal
 arithmetic beyond the q1 conversion shape, and timestamp calendar extraction; q21 uses Java-regex
@@ -117,6 +119,12 @@ without conflating set execution with rowtime-attribute scheduling.
 bid stream using an event-time left temporal join plus a residual predicate. Its integration case
 compares the complete raw and materialized changelogs on both state backends, requires an
 accelerated EXPLAIN, and requires non-zero native temporal-join batches.
+Official q4 and q9 exercise Flink's binary `StreamExecMultiJoin` physical form. StreamFusion lowers
+that node to its regular native join, preserving the expiry-column residual predicate. Their
+integration cases run at parallelism one on both native state backends, compare the primary-keyed
+final table with Flink, require accelerated EXPLAIN output, and require native regular-join plus
+group-aggregate or Top-N activity. Controlled generated regular-join SQL fixtures separately compare
+the complete byte changelog for residual INNER and SEMI shapes.
 The bounded source adapter also replaces the upstream generator's process-random reusable payload
 and URL caches with stable, size-preserving values. Consequently, fresh JVM forks consume
 byte-identical events rather than relying on same-process parity.
@@ -477,6 +485,50 @@ in-memory state was 0.08% and RocksDB was 0.81%. The wider source boundary retai
 adaptive target and receives two shares of Flink's existing managed-memory budget so reusable and
 in-flight exported buffers are both admitted. An 8,192-row experiment was rejected because it
 doubled native invocations. These are local diagnostic results, not portable performance claims.
+
+Official q4 and q9 residual-join measurements were run on September 4, 2026 from the working tree
+based on `7543e04`. Release/native-CPU binaries, a 2 GiB heap, parallelism four, one-second
+exactly-once checkpoints, alternating engine order, and separate JVMs were used throughout. Three
+250,000-event q4 forks produced in-memory medians of 39,339 events/s for Flink and 39,559 events/s
+for StreamFusion, a 0.6% native gain. Elapsed medians were 6.355 s and 6.320 s, MADs were 0.019 s
+and 0.022 s, and ranges were 6.336–6.374 s and 6.298–6.374 s. RocksDB medians were 29,433 and
+33,442 events/s, a 13.6% native gain; elapsed medians were 8.494 s and 7.476 s, MADs were 0.191 s
+and 0.149 s, and ranges were 7.332–8.685 s and 6.449–7.625 s.
+
+At 250,000 events, q9's in-memory medians were 38,564 events/s for Flink and 36,079 events/s for
+StreamFusion, or 93.6% parity; one native fork stretched the elapsed range to 6.800–9.712 s versus
+6.298–6.679 s for Flink. Because startup and checkpoint scheduling dominated that short run, the
+same alternating comparison was repeated at 500,000 events. Flink's elapsed median was 14.872 s
+(MAD 1.490 s, range 12.326–16.362 s) and StreamFusion's was 9.521 s (MAD 0.837 s, range
+8.684–22.642 s), a 56.2% median native throughput gain while retaining the native storage outlier.
+At 250,000 events on RocksDB, elapsed medians were 8.804 s for Flink and 7.306 s for StreamFusion,
+a 20.5% native gain; MADs were 0.068 s and 0.199 s, with ranges of 8.736–12.210 s and
+7.107–14.263 s. The wide ranges are reported rather than discarded.
+
+Each same-size q4 or q9 comparison agreed on its primary-keyed final-table digest. Raw changelogs
+can differ because independently scheduled bounded inputs may produce different legal intermediate
+updates; controlled generated residual INNER and SEMI fixtures retain byte-for-byte changelog and
+metric parity coverage. Every StreamFusion fork reported non-zero regular-join and surrounding
+aggregate or Top-N batch counters, and EXPLAIN reported whole-plan acceleration.
+
+Post-optimization mixed JVM/native CPU profiles cover q4 and q9 on both engines and backends. The
+native regular-join path accounts for about 0.6% of q4 and 2.0–2.3% of q9 CPU samples; residual
+DataFusion evaluation itself is about 0.06% after replacing per-record expression calls with one
+candidate-pair evaluation per incoming Arrow batch. Direct native RocksDB is 1.5–1.9% of the
+StreamFusion profiles versus 10.0–10.4% in Flink's profiles. The remaining visible costs are
+source/result materialization, Arrow-row conversion, exchange, checkpoint scheduling, and GC.
+
+Separate 250,000-event JVM-allocation profiles measured 2.03 GiB for StreamFusion versus 3.31 GiB
+for Flink on in-memory q4 and 1.99 versus 3.61 GiB on RocksDB. Q9 measured 2.98 versus 4.69 GiB in
+memory and 3.00 versus 5.26 GiB on RocksDB. Native-allocation profiles show q9's join volume in
+required Arrow-row output/state conversion and, on RocksDB, the single batched key/value and write-
+batch construction; repeated residual evaluation is not visible. Both the memory and direct
+RocksDB paths issue one distinct batch fetch and at most one atomic batch write per incoming Arrow
+batch. Profiling also found and fixed decoded exchange accounting that charged one shared IPC
+payload once per sliced column. JFRs, collapsed stacks, flame graphs, and differential graphs are
+retained under `streamfusion-nexmark-benchmarks/target/profiles/residual-join-q4-q9-final/` and
+`residual-join-q4-q9-final-alloc/`. Profiler timings were excluded from throughput results. These
+are local diagnostics, not portable performance claims.
 
 On the September 3, 2026 local constant-bound `interval-join` run based on `c351db1` plus the
 interval-join working change, three alternating separate-JVM release/native-CPU forks processed two

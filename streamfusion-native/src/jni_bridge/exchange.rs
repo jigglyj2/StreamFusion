@@ -140,6 +140,7 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeExchangeBridge_
                 decode(
                     &plan_bytes,
                     payload_bytes,
+                    payload_size,
                     usize::try_from(metadata_length).map_err(|_| {
                         let _ = env.throw_new(
                             jni_str!("java/lang/IllegalArgumentException"),
@@ -223,6 +224,7 @@ unsafe fn route(
 unsafe fn decode(
     plan_bytes: &[u8],
     payload: Vec<u8>,
+    payload_size: usize,
     metadata_length: usize,
     output_array_address: *mut FFI_ArrowArray,
     output_schema_address: *mut FFI_ArrowSchema,
@@ -241,16 +243,11 @@ unsafe fn decode(
     )?;
     let batch =
         crate::exchange::IpcBatchFrame::decode_contiguous(payload, metadata_length, schema)?;
-    reservation.resize(
-        plan_bytes
-            .len()
-            .checked_add(batch.get_array_memory_size())
-            .ok_or_else(|| {
-                DataFusionError::ResourcesExhausted(
-                    "native exchange decoded batch accounting overflowed usize".to_string(),
-                )
-            })?,
-    )?;
+    reservation.resize(decoded_batch_accounted_bytes(
+        plan_bytes.len(),
+        payload_size,
+        &batch,
+    )?)?;
     let rows = batch.num_rows();
     let output_data = StructArray::from(batch).to_data();
     let output_array = FFI_ArrowArray::new(&output_data);
@@ -260,6 +257,39 @@ unsafe fn decode(
         std::ptr::write(output_schema_address, output_schema);
     }
     Ok(rows)
+}
+
+fn decoded_batch_accounted_bytes(
+    plan_bytes: usize,
+    payload_bytes: usize,
+    batch: &arrow::record_batch::RecordBatch,
+) -> Result<usize> {
+    // IPC decoding creates zero-copy slices of one contiguous payload allocation. Arrow's
+    // get_array_memory_size intentionally counts the complete backing allocation once for every
+    // slice, which can overstate a wide batch by tens of times and cause false managed-memory
+    // rejection. Account the payload allocation once, plus the recursively reported Array object
+    // overhead that the decoder allocated around it.
+    let array_overhead = batch.columns().iter().try_fold(0usize, |bytes, column| {
+        bytes
+            .checked_add(
+                column
+                    .get_array_memory_size()
+                    .saturating_sub(column.get_buffer_memory_size()),
+            )
+            .ok_or_else(|| {
+                DataFusionError::ResourcesExhausted(
+                    "native exchange decoded array accounting overflowed usize".to_string(),
+                )
+            })
+    })?;
+    plan_bytes
+        .checked_add(payload_bytes)
+        .and_then(|bytes| bytes.checked_add(array_overhead))
+        .ok_or_else(|| {
+            DataFusionError::ResourcesExhausted(
+                "native exchange decoded batch accounting overflowed usize".to_string(),
+            )
+        })
 }
 
 #[cfg(test)]
@@ -314,7 +344,7 @@ fn write_u32(bytes: &mut Vec<u8>, value: usize, label: &str) -> Result<()> {
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::{ArrayRef, Int32Array};
+    use arrow::array::{ArrayRef, Int32Array, StringArray};
     use arrow::record_batch::RecordBatch;
 
     use super::*;
@@ -348,5 +378,36 @@ mod tests {
             encoded.len(),
             second + 12 + second_metadata_len + second_body_len
         );
+    }
+
+    #[test]
+    fn accounts_a_shared_ipc_payload_once_for_wide_decoded_batches() {
+        let values = (0..2_048)
+            .map(|index| format!("payload-{index:08}"))
+            .collect::<Vec<_>>();
+        let columns = (0..24)
+            .map(|index| {
+                (
+                    format!("column-{index}"),
+                    Arc::new(StringArray::from(values.clone())) as ArrayRef,
+                )
+            })
+            .collect::<Vec<_>>();
+        let batch = RecordBatch::try_from_iter(columns).unwrap();
+        let frame = crate::exchange::IpcBatchFrame::encode(&batch).unwrap();
+        let payload_size = frame.metadata.len() + frame.body.len();
+        let mut payload = frame.metadata;
+        payload.extend_from_slice(&frame.body);
+        let decoded = crate::exchange::IpcBatchFrame::decode_contiguous(
+            payload,
+            payload_size - frame.body.len(),
+            batch.schema(),
+        )
+        .unwrap();
+
+        let accounted = decoded_batch_accounted_bytes(128, payload_size, &decoded).unwrap();
+
+        assert!(accounted < payload_size + 16 * 1024);
+        assert!(decoded.get_array_memory_size() > accounted * 10);
     }
 }
