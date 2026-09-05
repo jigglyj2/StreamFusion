@@ -9,11 +9,16 @@
  */
 package tech.streamfusion.flink.planner;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
 
 /** Per-planning-thread acceleration outcome consumed by the EXPLAIN wrapper. */
 public final class StreamFusionPlanningDiagnostics {
+    private static final String AUDIT_FILE_PROPERTY = "tech.streamfusion.flink.acceleration-audit-file";
     private static final ThreadLocal<Report> CURRENT = new ThreadLocal<>();
 
     private StreamFusionPlanningDiagnostics() {}
@@ -27,6 +32,7 @@ public final class StreamFusionPlanningDiagnostics {
     }
 
     static void accelerate() {
+        appendAudit("accelerated\n");
         CURRENT.get().accelerated = true;
     }
 
@@ -43,6 +49,18 @@ public final class StreamFusionPlanningDiagnostics {
             explanation.append("\nFallback: ").append(rejection);
         }
         return explanation.toString();
+    }
+
+    private static void appendAudit(String outcome) {
+        String auditFile = System.getProperty(AUDIT_FILE_PROPERTY);
+        if (auditFile == null || auditFile.isBlank()) {
+            return;
+        }
+        try {
+            Files.writeString(Path.of(auditFile), outcome, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+        } catch (IOException failure) {
+            throw new IllegalStateException("Could not write the StreamFusion acceleration audit", failure);
+        }
     }
 
     private static final class Report {

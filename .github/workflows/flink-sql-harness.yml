@@ -14,7 +14,7 @@ concurrency:
 jobs:
   flink-sql-harness:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 120
     steps:
       - name: Check out StreamFusion
         uses: actions/checkout@v4
@@ -82,6 +82,16 @@ jobs:
         run: >-
           mvn --batch-mode --threads 1C -Dexec.skip=true
           -pl streamfusion-flink-sql-tests -am test
+
+      - name: Add StreamFusion to the upstream Flink SQL test classpath
+        working-directory: flink
+        run: >-
+          git apply --check ../dev/flink/2.3.0-streamfusion-sql-suite.patch
+          && git apply ../dev/flink/2.3.0-streamfusion-sql-suite.patch
+
+      - name: Run Flink's streaming SQL suite on StreamFusion MiniClusters
+        timeout-minutes: 60
+        run: dev/integration/run-flink-sql-suite.sh "$PWD/flink"
 
       - name: Download the Flink runner distribution
         shell: bash

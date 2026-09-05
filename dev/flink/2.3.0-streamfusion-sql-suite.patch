@@ -1,0 +1,45 @@
+diff --git a/flink-table/flink-table-planner/pom.xml b/flink-table/flink-table-planner/pom.xml
+index 11a2f307277..e01b8608793 100644
+--- a/flink-table/flink-table-planner/pom.xml
++++ b/flink-table/flink-table-planner/pom.xml
+@@ -495 +495,40 @@ under the License.
++
++	<!-- Applied only by StreamFusion's downstream compatibility workflow. -->
++	<profiles>
++		<profile>
++			<id>streamfusion-sql-suite</id>
++			<dependencies>
++				<dependency>
++					<groupId>tech.streamfusion</groupId>
++					<artifactId>streamfusion-flink</artifactId>
++					<version>${streamfusion.version}</version>
++					<scope>test</scope>
++				</dependency>
++				<dependency>
++					<groupId>tech.streamfusion</groupId>
++					<artifactId>streamfusion-flink-planner</artifactId>
++					<version>${streamfusion.version}</version>
++					<scope>test</scope>
++				</dependency>
++			</dependencies>
++			<build>
++				<plugins>
++					<plugin>
++						<groupId>org.apache.maven.plugins</groupId>
++						<artifactId>maven-surefire-plugin</artifactId>
++						<executions>
++							<execution>
++								<id>integration-tests</id>
++								<configuration>
++									<includes>
++										<include>**/runtime/stream/**/*ITCase.*</include>
++									</includes>
++								</configuration>
++							</execution>
++						</executions>
++					</plugin>
++				</plugins>
++			</build>
++		</profile>
++	</profiles>
+ </project>

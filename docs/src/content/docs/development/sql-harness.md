@@ -15,7 +15,14 @@ The harness requires the small StreamFusion planner-factory patch to be applied 
 mvn -pl streamfusion-flink-sql-tests -am test
 ```
 
-GitHub Actions checks out the matching Flink release, applies the patch, installs the required planner artifacts, and runs the harness on every push and pull request.
+GitHub Actions checks out the matching Flink release, applies the patch, installs the required planner artifacts, and runs the harness on every push and pull request. It then adds the built StreamFusion runtime and planner extension to Flink's own `flink-table-planner` test classpath and runs every upstream `runtime/stream/**/*ITCase` through Flink's MiniCluster test infrastructure. The CI step records planner outcomes and fails if the upstream suite did not exercise at least one accelerated plan, preventing an accidentally all-fallback run from appearing green.
+
+To reproduce the upstream portion after installing StreamFusion artifacts and applying
+`dev/flink/2.3.0-streamfusion-sql-suite.patch` to the matching Flink checkout:
+
+```shell
+dev/integration/run-flink-sql-suite.sh /path/to/flink
+```
 
 ## Correctness policy
 
