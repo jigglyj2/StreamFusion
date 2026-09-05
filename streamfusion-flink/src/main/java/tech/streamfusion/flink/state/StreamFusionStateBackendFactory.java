@@ -43,6 +43,14 @@ public final class StreamFusionStateBackendFactory implements StateBackendFactor
         configuration.set(StateBackendOptions.STATE_BACKEND, FACTORY_NAME);
     }
 
+    static boolean isConfiguredForRocksDb(ReadableConfig configuration) {
+        String configured = configuration.get(StateBackendOptions.STATE_BACKEND);
+        if (FACTORY_NAME.equals(configured)) {
+            configured = configuration.get(DELEGATE_BACKEND);
+        }
+        return StateBackendLoader.ROCKSDB_STATE_BACKEND_NAME.equals(configured);
+    }
+
     @Override
     public StreamFusionStateBackend createFromConfig(ReadableConfig config, ClassLoader classLoader)
             throws IllegalConfigurationException, IOException {

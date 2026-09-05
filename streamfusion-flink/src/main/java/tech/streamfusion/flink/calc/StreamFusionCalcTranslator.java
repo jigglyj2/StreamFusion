@@ -417,16 +417,37 @@ public final class StreamFusionCalcTranslator extends StreamFusionExpressionTran
             Object projection = projections.get(outputIndex);
             org.apache.flink.table.types.logical.LogicalType expectedType = outputType.getTypeAt(outputIndex);
             int directInput = inputIndex(projection);
-            if (directInput >= 0
-                    && (directInput >= inputType.getFieldCount()
-                            || !isSupportedProjectionType(
-                                    inputType.getTypeAt(directInput).getTypeRoot())
-                            || !sameTypeIgnoringNullability(inputType.getTypeAt(directInput), expectedType))) {
+            if (directInput >= inputType.getFieldCount()) {
                 return "projection["
                         + outputIndex
                         + "]/input["
                         + directInput
-                        + "]: input and output types must match except for nullability";
+                        + "]: input reference is outside the "
+                        + inputType.getFieldCount()
+                        + "-column row";
+            }
+            if (directInput >= 0
+                    && !isSupportedProjectionType(
+                            inputType.getTypeAt(directInput).getTypeRoot())) {
+                return "projection["
+                        + outputIndex
+                        + "]/input["
+                        + directInput
+                        + "]: direct projection does not support "
+                        + inputType.getTypeAt(directInput);
+            }
+            if (directInput >= 0
+                    && !StreamFusionLogicalTypeSupport.sameTypeIgnoringNullability(
+                            inputType.getTypeAt(directInput), expectedType)) {
+                return "projection["
+                        + outputIndex
+                        + "]/input["
+                        + directInput
+                        + "]: input type "
+                        + inputType.getTypeAt(directInput)
+                        + " and output type "
+                        + expectedType
+                        + " must match except for nullability";
             }
             if (projectionExpression(projection, inputType, expectedType) == null) {
                 return expressionFailure(projection, inputType, expectedType, false, "projection[" + outputIndex + "]");
@@ -441,11 +462,5 @@ public final class StreamFusionCalcTranslator extends StreamFusionExpressionTran
                     "condition");
         }
         return null;
-    }
-
-    private static boolean sameTypeIgnoringNullability(
-            org.apache.flink.table.types.logical.LogicalType input,
-            org.apache.flink.table.types.logical.LogicalType output) {
-        return input.copy(true).equals(output.copy(true));
     }
 }

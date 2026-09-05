@@ -165,6 +165,34 @@ public final class StreamFusionGroupAggregateTranslator {
             ReadableConfig config,
             StreamExecutionEnvironment environment,
             RowDataKeySelector keySelector) {
+        return translateBatch(
+                input, inputType, outputType, grouping, calls, config, environment, keySelector, true, "hash");
+    }
+
+    public static Transformation<RowData> translateBatchSort(
+            Transformation<RowData> input,
+            RowType inputType,
+            RowType outputType,
+            int[] grouping,
+            AggregateCall[] calls,
+            ReadableConfig config,
+            StreamExecutionEnvironment environment,
+            RowDataKeySelector keySelector) {
+        return translateBatch(
+                input, inputType, outputType, grouping, calls, config, environment, keySelector, false, "sort");
+    }
+
+    private static Transformation<RowData> translateBatch(
+            Transformation<RowData> input,
+            RowType inputType,
+            RowType outputType,
+            int[] grouping,
+            AggregateCall[] calls,
+            ReadableConfig config,
+            StreamExecutionEnvironment environment,
+            RowDataKeySelector keySelector,
+            boolean hashAggregateMetrics,
+            String strategy) {
         boolean[] retractable = new boolean[calls.length];
         if (unsupportedBatchReason(inputType, outputType, grouping, calls, config) != null) {
             return null;
@@ -187,7 +215,7 @@ public final class StreamFusionGroupAggregateTranslator {
         FramedInput framed = framed(partitionedInput);
         OneInputTransformation<NativeExchangeFrame, ArrowRowDataBatch> transformation = new OneInputTransformation<>(
                 framed.transformation,
-                "streamfusion-batch-hash-aggregate",
+                "streamfusion-batch-" + strategy + "-aggregate",
                 new StreamFusionArrowFramedGroupAggregateOperator(
                         inputType,
                         outputType,
@@ -195,8 +223,8 @@ public final class StreamFusionGroupAggregateTranslator {
                         plan,
                         keySelector,
                         framed.plan,
-                        "batch hash aggregate",
-                        grouping.length > 0),
+                        "batch " + strategy + " aggregate",
+                        hashAggregateMetrics && grouping.length > 0),
                 ArrowRowDataBatchTypeInfo.INSTANCE,
                 partitionedInput.getParallelism(),
                 false);

@@ -370,16 +370,18 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         } else if (node instanceof BatchExecSortAggregate) {
             BatchGroupAggregatePair pair = batchGroupAggregatePair(node);
             if (pair == null) {
-                rejections.add(
-                        nodePath + "\nbounded sort aggregate: expected a final merge paired with a local aggregate");
+                String reason = unsupportedReason((BatchExecSortAggregate) node, context);
+                if (reason != null) {
+                    rejections.add(nodePath + "\n" + reason);
+                }
+            } else {
+                String reason = unsupportedReason(pair, context);
+                if (reason != null) {
+                    rejections.add(nodePath + "\n" + reason);
+                }
+                collectRejections(pair.inputEdge.getSource(), context, nodePath + "/native-input", rejections);
                 return;
             }
-            String reason = unsupportedReason(pair, context);
-            if (reason != null) {
-                rejections.add(nodePath + "\n" + reason);
-            }
-            collectRejections(pair.inputEdge.getSource(), context, nodePath + "/native-input", rejections);
-            return;
         } else if (node instanceof BatchExecRank) {
             BatchExecRank rank = (BatchExecRank) node;
             BoundedRankPipeline pipeline = boundedRankPipeline(rank);
@@ -904,6 +906,20 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     aggregate.getInputProperties().get(0),
                     (RowType) aggregate.getOutputType(),
                     "StreamFusionBatchHashAggregate");
+            replacement.setInputEdges(aggregate.getInputEdges().stream()
+                    .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                    .collect(Collectors.toList()));
+            return replacement;
+        }
+        if (node instanceof BatchExecSortAggregate) {
+            BatchExecSortAggregate aggregate = (BatchExecSortAggregate) node;
+            StreamFusionBatchExecSortAggregate replacement = new StreamFusionBatchExecSortAggregate(
+                    aggregate.getPersistedConfig(),
+                    grouping(aggregate),
+                    aggregateCalls(aggregate),
+                    aggregate.getInputProperties().get(0),
+                    (RowType) aggregate.getOutputType(),
+                    "StreamFusionBatchSortAggregate");
             replacement.setInputEdges(aggregate.getInputEdges().stream()
                     .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
                     .collect(Collectors.toList()));
@@ -1648,6 +1664,22 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         }
         if (node instanceof BatchExecCorrelate) {
             BatchExecCorrelate correlate = (BatchExecCorrelate) node;
+            org.apache.calcite.rex.RexCall invocation =
+                    (org.apache.calcite.rex.RexCall) field(correlate, CommonExecCorrelate.class, "invocation");
+            if ("$REPLICATE_ROWS$1".equals(invocation.getOperator().getName())) {
+                StreamFusionBatchExecReplicateRows replacement = new StreamFusionBatchExecReplicateRows(
+                        correlate.getPersistedConfig(),
+                        (org.apache.flink.table.runtime.operators.join.FlinkJoinType)
+                                field(correlate, CommonExecCorrelate.class, "joinType"),
+                        invocation,
+                        correlate.getInputProperties().get(0),
+                        (RowType) correlate.getOutputType(),
+                        "StreamFusionBatchReplicateRows");
+                replacement.setInputEdges(correlate.getInputEdges().stream()
+                        .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
+                        .collect(Collectors.toList()));
+                return replacement;
+            }
             StreamFusionBatchExecArrayUnnest replacement = new StreamFusionBatchExecArrayUnnest(
                     correlate.getPersistedConfig(),
                     (org.apache.flink.table.runtime.operators.join.FlinkJoinType)
@@ -1757,20 +1789,28 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
     }
 
     private String unsupportedReason(BatchExecHashAggregate aggregate, ProcessorContext context) {
-        if (auxiliaryGrouping(aggregate).length != 0) {
-            return "auxiliary grouping: bounded native hash aggregation does not yet encode auxiliary keys";
+        return unsupportedBatchOnePhaseAggregateReason(aggregate, context);
+    }
+
+    private String unsupportedReason(BatchExecSortAggregate aggregate, ProcessorContext context) {
+        return unsupportedBatchOnePhaseAggregateReason(aggregate, context);
+    }
+
+    private String unsupportedBatchOnePhaseAggregateReason(ExecNodeBase<?> aggregate, ProcessorContext context) {
+        if (batchAuxiliaryGrouping(aggregate).length != 0) {
+            return "auxiliary grouping: bounded native one-phase aggregation does not yet encode auxiliary keys";
         }
-        if (batchAggregateBooleanField(aggregate, "isMerge")) {
-            return "merge phase: bounded native hash aggregation currently requires a one-phase final plan";
+        if (batchAggregateBoolean(aggregate, "isMerge")) {
+            return "merge phase: bounded native one-phase aggregation requires a non-merge final plan";
         }
-        if (!batchAggregateBooleanField(aggregate, "isFinal")) {
-            return "local phase: bounded native hash aggregation currently requires a one-phase final plan";
+        if (!batchAggregateBoolean(aggregate, "isFinal")) {
+            return "local phase: bounded native one-phase aggregation requires a final plan";
         }
         ExecEdge input = aggregate.getInputEdges().get(0);
         RowType inputType = (RowType) input.getOutputType();
-        if (!aggregateInputType(aggregate).equals(inputType)) {
+        if (!batchAggregateInputType(aggregate).equals(inputType)) {
             return "aggregate input schema: planned aggregate input "
-                    + aggregateInputType(aggregate)
+                    + batchAggregateInputType(aggregate)
                     + " does not match edge input "
                     + inputType;
         }
@@ -1790,14 +1830,14 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     null,
                     inputType,
                     (RowType) aggregate.getOutputType(),
-                    grouping(aggregate),
-                    aggregateCalls(aggregate),
+                    batchGrouping(aggregate),
+                    batchAggregateCalls(aggregate),
                     aggregate.getPersistedConfig());
         } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException failure) {
-            throw new IllegalStateException("Could not inspect bounded native hash aggregate support", failure);
+            throw new IllegalStateException("Could not inspect bounded native one-phase aggregate support", failure);
         } catch (InvocationTargetException failure) {
             throw new IllegalStateException(
-                    "Bounded native hash aggregate support inspection failed", failure.getCause());
+                    "Bounded native one-phase aggregate support inspection failed", failure.getCause());
         }
     }
 
@@ -2916,12 +2956,6 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
     }
 
     private String unsupportedReason(BatchExecCorrelate correlate, ProcessorContext context) {
-        Object invocation = field(correlate, CommonExecCorrelate.class, "invocation");
-        if (invocation instanceof RexCall
-                && "$REPLICATE_ROWS$1"
-                        .equals(((RexCall) invocation).getOperator().getName())) {
-            return "bounded set-operation row replication has no StreamFusion physical implementation";
-        }
         return unsupportedCorrelateReason(correlate, context);
     }
 

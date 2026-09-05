@@ -215,6 +215,28 @@ class LocalRowDataNexmarkBenchmarkIT {
 
     @ParameterizedTest
     @ValueSource(strings = {"hashmap", "rocksdb"})
+    void boundedIntersectAllPreservesBothAggregatePhasesOnBothStateBackends(String backend) throws Exception {
+        System.setProperty("streamfusion.nexmark.batch-mode", "true");
+        System.setProperty("streamfusion.nexmark.aggregate-phase", "TWO_PHASE");
+        LocalRowDataNexmarkBenchmark.RunResult flink =
+                LocalRowDataNexmarkBenchmark.run(2_000, "set-intersect-all", false, backend, 4);
+        LocalRowDataNexmarkBenchmark.RunResult streamFusion =
+                LocalRowDataNexmarkBenchmark.run(2_000, "set-intersect-all", true, backend, 4);
+
+        assertThat(streamFusion.completed()).isTrue();
+        assertThat(streamFusion.materializedDebugRows()).containsExactlyElementsOf(flink.materializedDebugRows());
+        assertThat(streamFusion.materializedRows()).isEqualTo(flink.materializedRows());
+        assertThat(streamFusion.materializedSha256()).isEqualTo(flink.materializedSha256());
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        // A non-zero count on each independently instrumented node prevents the planner from
+        // silently collapsing Flink's forced local/exchange/global aggregate into one phase.
+        assertThat(streamFusion.nativeLocalGroupAggregateBatches()).isGreaterThan(0);
+        assertThat(streamFusion.nativeGroupAggregateBatches()).isGreaterThan(0);
+        assertThat(streamFusion.nativeCalcBatches()).isGreaterThan(0);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"hashmap", "rocksdb"})
     void everySynchronousDeduplicateModeMatchesFlinkOnBothStateBackends(String backend) throws Exception {
         for (String query :
                 List.of("q18", "deduplicate-processing-time-keep-first", "deduplicate-processing-time-keep-last")) {

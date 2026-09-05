@@ -6,8 +6,7 @@ sidebar:
 ---
 
 **Current status:** `UNION ALL`, `UNION DISTINCT`, `INTERSECT [ALL]`, and `EXCEPT [ALL]`
-are accelerated for complete eligible streaming plans. `UNION ALL` is also accelerated in
-complete eligible bounded plans.
+are accelerated for complete eligible streaming and bounded plans.
 
 ## SQL example
 
@@ -53,13 +52,22 @@ value, so INSERT, UPDATE_BEFORE, UPDATE_AFTER, and DELETE envelopes are retained
 payload rows to Java. The following Calc is nested in the same protobuf/DataFusion plan rather
 than crossing the JVM boundary between stages.
 
-Set keys and replicated values support the complete Arrow-representable Flink type matrix used by
-native distinct aggregation and regular join, including decimals, temporal and interval values,
-arrays, maps, multisets, rows, and their nullable nested forms. Unsupported RAW/symbolic types,
-nanosecond timestamps outside Arrow's full domain, state TTL, async state, or another unsupported
-node in either branch trigger whole-plan Flink fallback with the precise EXPLAIN reason. `IN` and
-`EXISTS` are accelerated when Flink lowers them to an otherwise eligible regular semi/anti join;
-connector- or UDF-dependent alternatives remain on Flink.
+Bounded `INTERSECT ALL` and `EXCEPT ALL` retain Flink's local aggregate, hash exchange, global
+aggregate, Calc, and row-replication shape. StreamFusion does not collapse Flink's two-phase
+aggregate into one stateful stage. Both native aggregate phases remain independently observable,
+and the bounded replicator reuses the same managed, pull-based Arrow C Stream runtime as the
+streaming correlate. Bounded `INTERSECT DISTINCT` and `EXCEPT DISTINCT` retain Flink's semi/anti
+join followed by distinct aggregation.
+
+Streaming set keys and replicated values support the complete Arrow-representable Flink type matrix
+used by native distinct aggregation and regular join, including decimals, temporal and interval
+values, arrays, maps, multisets, rows, and their nullable nested forms. Bounded set operations
+support every type for which Flink can plan its required batch grouping/sort; Flink itself rejects
+MAP and MULTISET grouping keys as non-orderable before StreamFusion physical planning. Unsupported
+RAW/symbolic types, nanosecond timestamps outside Arrow's full domain, state TTL, async state, or
+another unsupported node in either branch trigger whole-plan Flink fallback with the precise
+EXPLAIN reason. `IN` and `EXISTS` are accelerated when Flink lowers them to an otherwise eligible
+regular semi/anti join; connector- or UDF-dependent alternatives remain on Flink.
 
 ## Implementation
 
@@ -83,15 +91,14 @@ corrected from the physical Arrow-frame count to Flink logical records on every 
 `UNION ALL` adds no operator-specific metric surface beyond Flink's standard task/operator I/O
 metrics.
 
-The bounded coverage in this milestone is deliberately limited to `UNION ALL`; bounded
-DISTINCT, INTERSECT, and EXCEPT physical rewrites remain on Flink until every node in those
-batch plans has an exact StreamFusion implementation.
-
 Intersection and difference deliberately reuse the same native keyed state as the Flink physical
 rewrite rather than adding a second set-specific state format. Memory and RocksDB therefore share
 the canonical key-group savepoint bytes, rescaling behavior, aligned/unaligned checkpoint support,
 and incremental RocksDB checkpoint files already documented for group aggregation and regular
-join. The stateless row replicator has no savepoint payload of its own. Its output allocation and
-selection vector are charged to Flink managed memory.
+join. Flink identifies a bounded task's shell keyed backend as `batch`; StreamFusion retains and
+consults the originally configured delegate backend so selecting RocksDB still opens native RocksDB
+for the bounded global phase rather than silently substituting native memory state. The stateless
+row replicator has no savepoint payload of its own. Its output allocation and selection vector are
+charged to Flink managed memory.
 
 See the [Flink 2.3 Set operations documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/set-ops/).

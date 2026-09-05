@@ -78,7 +78,10 @@ join and is reported by that activity counter.
 with `AFTER MATCH SKIP PAST LAST ROW`, exercising partial-match state and three direct measures.
 `set-intersect-all` intersects two filtered bid streams on the three-BIGINT auction/bidder/price
 identity. It exercises Flink's complete UNION, grouped count, Calc, and `$REPLICATE_ROWS$1` physical
-rewrite without making rowtime scheduling part of the benchmark key.
+rewrite without making rowtime scheduling part of the benchmark key. In batch mode, setting
+`-Dstreamfusion.nexmark.aggregate-phase=TWO_PHASE` forces Flink's local aggregate, hash exchange,
+and global aggregate topology. The integration target runs that topology at parallelism four on
+both memory and RocksDB and requires both native aggregate-phase counters to be non-zero.
 `incremental-group-aggregate` enables Flink's split-DISTINCT optimization and covers the complete
 local aggregate, expand, incremental aggregate, and final aggregate pipeline. Wall-clock checkpoint
 flushes can change valid intermediate update boundaries from run to run, so standalone output

@@ -14,7 +14,6 @@ import java.util.Comparator;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import org.apache.arrow.memory.BufferAllocator;
-import org.apache.flink.configuration.StateBackendOptions;
 import org.apache.flink.metrics.groups.OperatorMetricGroup;
 import org.apache.flink.runtime.checkpoint.CheckpointOptions;
 import org.apache.flink.runtime.execution.Environment;
@@ -73,7 +72,7 @@ final class NativeKeyedStateLifecycle implements Serializable {
         String backendType = keyedStateBackend.getBackendTypeIdentifier();
         boolean useRocksDb = "rocksdb".equals(backendType)
                 || ("batch".equals(backendType)
-                        && "rocksdb".equals(environment.getJobConfiguration().get(StateBackendOptions.STATE_BACKEND)));
+                        && StreamFusionStateBackendFactory.isConfiguredForRocksDb(environment.getJobConfiguration()));
         if (useRocksDb) {
             Path spillDirectory =
                     environment.getIOManager().getSpillingDirectories()[0].toPath();

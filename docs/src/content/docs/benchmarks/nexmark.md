@@ -765,6 +765,15 @@ native grouped-count and Calc/replication batches. Generated SQL parity tests se
 complete changelog for DISTINCT and ALL forms of INTERSECT and EXCEPT, including retractions, nulls,
 and every Arrow-representable Flink equality-key type.
 
+The bounded harness can additionally force `TWO_PHASE` aggregation at parallelism four. Its parity
+test requires separate native local-aggregate and global-aggregate activity, retaining Flink's
+local -> hash exchange -> global topology through the set-operation rewrite on both memory and
+RocksDB. This test also guards the bounded backend boundary: Flink reports the task-local shell
+backend as `batch`, while StreamFusion consults the retained delegate choice before opening native
+memory or native RocksDB state. A mixed CPU profile of the corrected RocksDB run shows the
+`RocksPluginKeyedState` batch API on the global phase; profiler timings are diagnostics and are not
+mixed into the throughput measurements below.
+
 On the September 4, 2026 local release/native-CPU run based on `1caf1b2` plus the set-operation
 working change, three alternating fresh-JVM forks per engine/backend processed one million
 deterministic events at parallelism one, with a 3GB heap and one-second exactly-once checkpoints.

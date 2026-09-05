@@ -8,12 +8,26 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.StateBackendOptions;
+import org.apache.flink.runtime.state.StateBackendLoader;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class StreamFusionStateBackendFactoryTest {
+    @Test
+    void retainsTheRequestedRocksBackendForBoundedNativeState() {
+        Configuration configuration = new Configuration();
+        configuration.set(StateBackendOptions.STATE_BACKEND, StateBackendLoader.ROCKSDB_STATE_BACKEND_NAME);
+
+        StreamFusionStateBackendFactory.install(configuration);
+
+        assertThat(StreamFusionStateBackendFactory.isConfiguredForRocksDb(configuration))
+                .isTrue();
+        assertThat(configuration.get(StateBackendOptions.STATE_BACKEND))
+                .isEqualTo(StreamFusionStateBackendFactory.class.getName());
+    }
+
     @Test
     void recognizesOnlyPlannerOwnedNativeOperatorIdentifiers() {
         assertThat(StreamFusionStateBackend.isNativeOperator("streamfusion-incremental-group-aggregate_deadbeef_(1/1)"))

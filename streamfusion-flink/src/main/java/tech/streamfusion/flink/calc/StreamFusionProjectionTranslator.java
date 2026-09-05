@@ -425,17 +425,11 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
                 StreamFusionExpressionTranslator.expressionLogicalType(operands.get(0));
         org.apache.flink.table.types.logical.LogicalType targetType =
                 StreamFusionExpressionTranslator.expressionLogicalType(expression);
-        if (!sameTypeIgnoringNullability(sourceType, targetType)
-                || !sameTypeIgnoringNullability(targetType, expectedType)) {
+        if (!StreamFusionLogicalTypeSupport.sameTypeIgnoringNullability(sourceType, targetType)
+                || !StreamFusionLogicalTypeSupport.sameTypeIgnoringNullability(targetType, expectedType)) {
             return null;
         }
         return projectionExpression(operands.get(0), inputType, expectedType);
-    }
-
-    private static boolean sameTypeIgnoringNullability(
-            org.apache.flink.table.types.logical.LogicalType left,
-            org.apache.flink.table.types.logical.LogicalType right) {
-        return left != null && right != null && left.copy(true).equals(right.copy(true));
     }
 
     protected static boolean supportsLocaleIndependentCaseMapping() {
@@ -889,6 +883,8 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
                 || type == LogicalTypeRoot.TIME_WITHOUT_TIME_ZONE
                 || type == LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE
                 || type == LogicalTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE
+                || type == LogicalTypeRoot.INTERVAL_YEAR_MONTH
+                || type == LogicalTypeRoot.INTERVAL_DAY_TIME
                 || type == LogicalTypeRoot.ARRAY
                 || type == LogicalTypeRoot.MAP
                 || type == LogicalTypeRoot.ROW;

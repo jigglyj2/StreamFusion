@@ -32,6 +32,21 @@ class SetOperationsParityTest extends SqlParityTestSupport {
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 
+    @ParameterizedTest(name = "bounded {0}")
+    @MethodSource("boundedSetOperationTypes")
+    void everyFlinkBoundedSetKeyTypeMatchesByteForByte(
+            String description, TypeInformation<?> type, DataType dataType, Object first, Object second)
+            throws Exception {
+        assertBatchDataStreamParity(
+                "SELECT metric FROM bounded_set_type_input "
+                        + "INTERSECT ALL SELECT metric FROM bounded_set_type_input",
+                type,
+                dataType,
+                List.of(Row.of(first), Row.of(first), Row.of(second), Row.of((Object) null)),
+                "bounded_set_type_input");
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
     @Test
     void intersectAllReplicatesNestedArrowValues() throws Exception {
         String row =
@@ -78,7 +93,33 @@ class SetOperationsParityTest extends SqlParityTestSupport {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"INTERSECT", "INTERSECT ALL", "EXCEPT", "EXCEPT ALL"})
+    void boundedSetOperationMatchesFlinkForNullsAndDuplicates(String operation) throws Exception {
+        String sql = "SELECT v FROM (VALUES (1), (1), (2), (CAST(NULL AS INT))) AS left_input(v) "
+                + operation
+                + " SELECT v FROM (VALUES (1), (3), (CAST(NULL AS INT)), (CAST(NULL AS INT))) "
+                + "AS right_input(v)";
+
+        assertParity(sql, false);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        assertThat(tech.streamfusion.flink.StreamFusionPlannerFactory.nativeGroupAggregateBatchCount())
+                .isGreaterThan(0);
+        if (operation.endsWith("ALL")) {
+            assertThat(tech.streamfusion.flink.StreamFusionPlannerFactory.nativeCalcBatchCount())
+                    .isGreaterThan(0);
+        } else {
+            assertThat(tech.streamfusion.flink.StreamFusionPlannerFactory.nativeRegularJoinBatchCount())
+                    .isGreaterThan(0);
+        }
+    }
+
     static java.util.stream.Stream<Arguments> setOperationTypes() {
         return SelectDistinctParityTest.distinctTypes();
+    }
+
+    static java.util.stream.Stream<Arguments> boundedSetOperationTypes() {
+        return SelectDistinctParityTest.distinctTypes().filter(arguments -> !List.of("MAP", "MULTISET")
+                .contains(arguments.get()[0]));
     }
 }
