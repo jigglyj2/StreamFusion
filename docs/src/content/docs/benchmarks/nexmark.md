@@ -774,6 +774,31 @@ memory or native RocksDB state. A mixed CPU profile of the corrected RocksDB run
 `RocksPluginKeyedState` batch API on the global phase; profiler timings are diagnostics and are not
 mixed into the throughput measurements below.
 
+On the September 5, 2026 local release/native-CPU run from `47dfd98`, three alternating fresh-JVM
+forks per engine/backend processed one million deterministic events with a 2 GiB heap and
+parallelism four. Every fork materialized 194,421 rows with SHA-256
+`5ba67103f15f3a1db3e051fdc18526b0c3e69144bb54973008b69484518f2640`; StreamFusion executed
+128 local-aggregate batches, 556 global-aggregate calls including terminal drains, and 248 Calc
+batches. In memory, Flink's median was 7.474 s (MAD 0.133 s, range 7.232–7.607 s) and
+StreamFusion's was 7.585 s (MAD 0.182 s, range 7.403–7.892 s), or 98.5% throughput parity. On
+genuine native RocksDB, Flink's median was 7.421 s (MAD 0.002 s, range 7.419–7.602 s) and
+StreamFusion's was 9.712 s (MAD 0.188 s, range 8.300–9.900 s), 23.6% lower throughput. Earlier
+25–52 s StreamFusion observations were discarded after wall profiling identified host scheduling
+outliers; the stable rerun above is still below the performance gate and is reported rather than
+presented as parity.
+
+The two-million-event mixed CPU profile attributed 13.1% of StreamFusion samples to the native
+RocksDB state adapter, including 8.5% below `get_batch` and 3.4% below `write_batch`; the aggregate
+path as a whole accounted for 20.2%. One-million-event allocation profiles sampled 5,145 Java
+allocations for StreamFusion versus 9,449 for Flink, while sampled native allocation traffic was
+3.389 GiB versus 2.217 GiB. StreamFusion's RocksDB adapter accounted for 0.444 GiB of that native
+traffic, including 0.121 GiB on reads and 0.266 GiB on writes. This identifies ownership-preserving
+state values and mutation buffers at the stable Arrow ABI as the next general optimization, rather
+than weakening two-phase execution or substituting memory state. CPU, wall, Java-allocation, and
+native-allocation JFRs and collapsed stacks are retained under
+`streamfusion-nexmark-benchmarks/target/profiles/bounded-set-intersect-all-two-phase-real-rocks/`
+and `streamfusion-nexmark-benchmarks/target/profiles/bounded-set-intersect-all-two-phase-alloc/`.
+
 On the September 4, 2026 local release/native-CPU run based on `1caf1b2` plus the set-operation
 working change, three alternating fresh-JVM forks per engine/backend processed one million
 deterministic events at parallelism one, with a 3GB heap and one-second exactly-once checkpoints.
