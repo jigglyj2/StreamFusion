@@ -49,7 +49,9 @@ by default and a benchmark result sink serializes and hashes both the complete s
 changelog and its final materialized table. Primary-key sinks use ordered upsert materialization;
 keyless sinks retain multiset semantics. Checkpointing uses exactly-once mode and task restart is disabled so resource failures
 surface instead of contaminating a timing with retries. It currently runs the fully accelerable q0,
-q1, q2, q4, q5, q7, q8, q9, q11, q12, q22, q23, group-aggregate, legacy-window-aggregate, select-distinct, top-n, limit, bounded-sort, over-aggregate,
+q1, q2, q4, q5, q7, q8, q9, q11, q12, q22, q23, group-aggregate,
+legacy-window-aggregate, select-distinct, top-n, limit, bounded-sort,
+bounded-sort-merge-join, over-aggregate,
 over-aggregate-event-time, over-aggregate-processing-time, temporal-join, match-recognize,
 set-intersect-all, and incremental-group-aggregate queries through both unmodified Flink
 and StreamFusion. The focused
@@ -86,6 +88,9 @@ Use controlled SQL parity tests to validate byte-for-byte intermediate changelog
 payload. Flink's finite full-sort executor rejects periodic checkpoints for its sorted input, so
 this isolated benchmark disables the interval for both engines; dedicated operator tests cover
 aligned, unaligned, canonical cross-backend, and incremental RocksDB recovery.
+`bounded-sort-merge-join` forces Flink's bounded sort-merge physical join for a four-key bid-stream
+self join. It runs in batch mode on both backend labels, checks exact final-multiset parity, and
+requires the StreamFusion plan and native regular-join/Calc activity counters to be non-zero.
 `batch-unnest` and `batch-window-tvf` select batch mode explicitly and exercise bounded
 Calc-to-UNNEST and Calc-to-TUMBLE plans. These operators are stateless, so the cases use the
 hashmap label and do not claim a RocksDB comparison. Each StreamFusion source batch must produce

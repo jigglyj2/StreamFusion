@@ -29,6 +29,7 @@ import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecRank;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecSort;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecSortAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecSortLimit;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecSortMergeJoin;
 import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecCalc;
 import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecExpand;
 import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecWindowTableFunction;
@@ -170,6 +171,16 @@ final class FlinkExecNodeAccess {
 
     static JoinSpec batchAdaptiveJoinSpec(BatchExecAdaptiveJoin join) {
         return (JoinSpec) field(join, BatchExecAdaptiveJoin.class, "joinSpec");
+    }
+
+    static JoinSpec batchSortMergeJoinSpec(BatchExecSortMergeJoin join) {
+        return new JoinSpec(
+                (org.apache.flink.table.runtime.operators.join.FlinkJoinType)
+                        field(join, BatchExecSortMergeJoin.class, "joinType"),
+                ((int[]) field(join, BatchExecSortMergeJoin.class, "leftKeys")).clone(),
+                ((int[]) field(join, BatchExecSortMergeJoin.class, "rightKeys")).clone(),
+                ((boolean[]) field(join, BatchExecSortMergeJoin.class, "filterNulls")).clone(),
+                (RexNode) field(join, BatchExecSortMergeJoin.class, "nonEquiCondition"));
     }
 
     static JoinSpec batchNestedLoopJoinSpec(BatchExecNestedLoopJoin join) {

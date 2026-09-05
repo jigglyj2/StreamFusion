@@ -100,6 +100,7 @@ final class NexmarkRowDataQueryCatalog {
         schemas.put("bounded-sort-limit", BID_COLUMNS);
         schemas.put("bounded-limit", BID_COLUMNS);
         schemas.put("bounded-rank", BID_COLUMNS + ", rank_number BIGINT");
+        schemas.put("bounded-sort-merge-join", FULL_BID_COLUMNS);
         schemas.put("incremental-group-aggregate", schemas.get("aggregate-modifiers"));
         schemas.put(
                 "group-aggregate",

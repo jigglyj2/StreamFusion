@@ -5,7 +5,7 @@ sidebar:
   order: 9
 ---
 
-**Current status:** Partially accelerated for bounded hash/adaptive/nested-loop joins and for
+**Current status:** Partially accelerated for bounded hash/adaptive/sort-merge/nested-loop joins and for
 synchronous regular, multi-way, time-bounded, and temporal streaming joins.
 
 ## SQL example
@@ -29,8 +29,9 @@ complete insert/update-before/update-after/delete changelog, retains
 duplicates, applies Flink's per-key null filtering, and reproduces Flink's null-padding and
 association-count transitions.
 
-Flink `BatchExecHashJoin` and `BatchExecAdaptiveJoin` equality joins use the same native two-sided
-counted state with terminal output. `BatchExecNestedLoopJoin` uses one singleton key group and
+Flink `BatchExecHashJoin`, `BatchExecAdaptiveJoin`, and `BatchExecSortMergeJoin` equality joins use
+the same native two-sided counted state with terminal output while retaining distinct physical-node
+identities for planning and metrics. `BatchExecNestedLoopJoin` uses one singleton key group and
 evaluates its complete predicate as a vectorized residual condition. Bounded `INNER`, `LEFT`,
 `RIGHT`, `FULL`, `SEMI`, and `ANTI` results are emitted as insert-only Arrow batches after both
 inputs end. Duplicate rows, null join semantics, residual predicates, and all four input row kinds
@@ -100,8 +101,11 @@ timer service and materialize dirty timer groups into canonical keyed state at s
 avoiding repeated whole-group timer serialization during normal batch processing. Both variants
 coalesce and forward watermarks using Flink's two-input rule.
 
-Bounded hash/adaptive joins partition both sides by the planned Flink equality key. Bounded
-nested-loop joins discard Flink's broadcast/ANY exchange wrapper and install a native singleton
+Bounded hash/adaptive/sort-merge joins partition both sides by the planned Flink equality key. The
+native sort-merge replacement deliberately uses the counted-state join algorithm rather than
+sorting both inputs: SQL does not promise join output order, and a downstream Flink sort still
+enforces any explicit `ORDER BY`. Its output changelog and null/residual semantics remain identical.
+Bounded nested-loop joins discard Flink's broadcast/ANY exchange wrapper and install a native singleton
 exchange because the complete cross-product condition is evaluated in Rust. Neither path builds a
 second Java hash table or sorter. Both memory and direct RocksDB state perform one distinct batched
 read and one atomic batched write per incoming Arrow frame. Aligned, unaligned, and canonical
@@ -124,6 +128,10 @@ for one input Arrow batch, decodes those pairs into one Arrow batch, and evaluat
 once vectorially while retaining Flink's per-record state-transition order. Association counts and
 outer/semi/anti transitions count only accepted candidates. Predicate scratch, state, and exported
 Arrow output are all charged to the operator's Flink managed-memory reservation.
+ROW, ARRAY, MAP, and MULTISET values are accepted as opaque equality keys and stored payloads, but
+comparisons over those nested values inside a residual expression remain Flink-owned. The planner
+rejects the complete plan with that precise reason rather than approximating nested comparison
+semantics in Rust.
 The regular and interval join transformations each request a stateful relative weight of eight
 from Flink's existing `OPERATOR` pool; this is a share of the configured task memory, not a separate
 StreamFusion memory setting.

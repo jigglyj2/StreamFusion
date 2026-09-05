@@ -24,6 +24,7 @@ import org.apache.flink.table.api.EnvironmentSettings;
 import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
+import org.apache.flink.table.api.config.OptimizerConfigOptions;
 import org.apache.flink.table.connector.ChangelogMode;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.types.Row;
@@ -89,7 +90,21 @@ class StatefulOpaquePayloadTypeParityTest extends SqlParityTestSupport {
         byte[] streamFusion = executeBoundedJoin(true);
 
         assertThat(streamFusion).isEqualTo(flink);
-        assertThat(StreamFusionPlannerFactory.nativeRegularJoinBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativeRegularJoinBatchCount())
+                .as(StreamFusionPlanningDiagnostics.explain())
+                .isGreaterThan(0);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
+    @Test
+    void boundedSortMergeJoinUsesTheNativeAllTypeJoinContractByteForByte() throws Exception {
+        byte[] flink = executeSortMergeJoin(false);
+        byte[] streamFusion = executeSortMergeJoin(true);
+
+        assertThat(streamFusion).isEqualTo(flink);
+        assertThat(StreamFusionPlannerFactory.nativeRegularJoinBatchCount())
+                .as(StreamFusionPlanningDiagnostics.explain())
+                .isGreaterThan(0);
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 
@@ -230,6 +245,37 @@ class StatefulOpaquePayloadTypeParityTest extends SqlParityTestSupport {
         return collect(tables.executeSql("SELECT l.label, r.label, l.key_payload "
                 + "FROM bounded_all_type_left l JOIN bounded_all_type_right r "
                 + "ON l.key_payload = r.key_payload"));
+    }
+
+    private static byte[] executeSortMergeJoin(boolean streamFusionEnabled) throws Exception {
+        configure(streamFusionEnabled);
+        StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();
+        environment.setParallelism(1);
+        StreamTableEnvironment tables = StreamTableEnvironment.create(
+                environment, EnvironmentSettings.newInstance().inBatchMode().build());
+        tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+        tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_DISABLED_OPERATORS, "HashJoin,NestedLoopJoin");
+        tables.getConfig()
+                .set(
+                        OptimizerConfigOptions.TABLE_OPTIMIZER_ADAPTIVE_BROADCAST_JOIN_STRATEGY,
+                        OptimizerConfigOptions.AdaptiveBroadcastJoinStrategy.NONE);
+        tables.getConfig()
+                .set(
+                        OptimizerConfigOptions.TABLE_OPTIMIZER_ADAPTIVE_SKEWED_JOIN_OPTIMIZATION_STRATEGY,
+                        OptimizerConfigOptions.AdaptiveSkewedJoinOptimizationStrategy.NONE);
+        return collect(tables.executeSql("SELECT l.label, r.label FROM "
+                + "(VALUES (1, 'alpha', CAST(12.34 AS DECIMAL(20, 2)), "
+                + "TIMESTAMP '2026-09-01 12:00:01', 'left-match'), "
+                + "(2, 'beta', CAST(23.45 AS DECIMAL(20, 2)), "
+                + "TIMESTAMP '2026-09-01 12:00:02', 'left-only')) "
+                + "AS l(id, name, amount, event_time, label) JOIN "
+                + "(VALUES (1, 'alpha', CAST(12.34 AS DECIMAL(20, 2)), "
+                + "TIMESTAMP '2026-09-01 12:00:01', 'right-match'), "
+                + "(3, 'gamma', CAST(34.56 AS DECIMAL(20, 2)), "
+                + "TIMESTAMP '2026-09-01 12:00:03', 'right-only')) "
+                + "AS r(id, name, amount, event_time, label) "
+                + "ON l.id = r.id AND l.name = r.name AND l.amount = r.amount "
+                + "AND l.event_time = r.event_time"));
     }
 
     private static void createBoundedJoinInput(

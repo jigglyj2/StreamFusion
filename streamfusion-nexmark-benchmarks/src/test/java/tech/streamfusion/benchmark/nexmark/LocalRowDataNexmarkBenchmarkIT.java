@@ -523,6 +523,23 @@ class LocalRowDataNexmarkBenchmarkIT {
         assertThat(streamFusion.nativeBoundedSortBatches()).isGreaterThan(0);
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"hashmap", "rocksdb"})
+    void boundedSortMergeJoinMatchesFlinkOnBothConfiguredBackends(String backend) throws Exception {
+        System.setProperty("streamfusion.nexmark.batch-mode", "true");
+        LocalRowDataNexmarkBenchmark.RunResult flink =
+                LocalRowDataNexmarkBenchmark.run(2_000, "bounded-sort-merge-join", false, backend, 4);
+        LocalRowDataNexmarkBenchmark.RunResult streamFusion =
+                LocalRowDataNexmarkBenchmark.run(2_000, "bounded-sort-merge-join", true, backend, 4);
+
+        assertThat(streamFusion.completed()).isTrue();
+        assertThat(streamFusion.debugRows()).containsExactlyElementsOf(flink.debugRows());
+        assertThat(streamFusion.outputRows()).isEqualTo(flink.outputRows());
+        assertThat(streamFusion.outputSha256()).isEqualTo(flink.outputSha256());
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        assertThat(streamFusion.nativeRegularJoinBatches()).isGreaterThan(0);
+    }
+
     @Test
     void boundedLimitMatchesFlinkWithDeterministicInputOrder() throws Exception {
         System.setProperty("streamfusion.nexmark.batch-mode", "true");

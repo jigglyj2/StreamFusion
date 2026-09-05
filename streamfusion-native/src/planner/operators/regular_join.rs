@@ -4,7 +4,9 @@
 use std::sync::Arc;
 
 use ahash::RandomState;
-use arrow::array::{Array, BinaryArray, BooleanArray, Int32Array, Int8Array, UInt32Array};
+use arrow::array::{
+    Array, ArrayRef, BinaryArray, BooleanArray, Int32Array, Int8Array, UInt32Array,
+};
 use arrow::compute::{take, SortOptions};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -84,28 +86,12 @@ struct BoundedJoinCursor {
     pair_index: usize,
     remainder_index: usize,
     phase: BoundedOutputPhase,
+    estimated_dynamic_bytes: usize,
 }
 
 impl BoundedJoinCursor {
     fn estimated_dynamic_bytes(&self) -> usize {
-        self.state
-            .left
-            .iter()
-            .chain(&self.state.right)
-            .fold(0usize, |bytes, row| {
-                bytes.saturating_add(row.row.capacity())
-            })
-            .saturating_add(
-                self.state
-                    .left
-                    .capacity()
-                    .saturating_add(self.state.right.capacity())
-                    .saturating_mul(std::mem::size_of::<StoredRow>()),
-            )
-            .saturating_add(self.left_matchable.capacity())
-            .saturating_add(self.right_matchable.capacity())
-            .saturating_add(self.left_matched.capacity())
-            .saturating_add(self.right_matched.capacity())
+        self.estimated_dynamic_bytes
     }
 }
 
@@ -120,6 +106,9 @@ pub(crate) struct RegularJoinProcessor {
     residual_condition: Option<Arc<dyn PhysicalExpr>>,
     output_schema: SchemaRef,
     fused_output_calcs: Option<FusedCalcPipeline>,
+    fused_output_projection: Option<(Vec<usize>, SchemaRef)>,
+    fused_calc_stage_count: usize,
+    bounded_row_required: [bool; 2],
     row_converters: [RowConverter; 2],
     input_schemas: [Option<SchemaRef>; 2],
     key_fields: [Vec<(usize, KeyField)>; 2],
@@ -135,6 +124,7 @@ pub(crate) struct RegularJoinProcessor {
     last_key_group: u32,
     bounded_output_key_group: Option<u32>,
     bounded_output_entries: Vec<(Vec<u8>, Vec<u8>)>,
+    bounded_output_entries_bytes: usize,
     bounded_output_entry_index: usize,
     bounded_cursor: Option<BoundedJoinCursor>,
     bounded_output_finished: bool,
@@ -281,7 +271,12 @@ impl RegularJoinProcessor {
         let output_schema = Arc::new(Schema::new(output_fields));
         let exchange_frame_reservation =
             scratch_reservation.sibling("native regular join exchange frame decode");
-        let fused_output_calcs = if output_calcs.is_empty() {
+        let fused_calc_stage_count = output_calcs.len();
+        let fused_output_projection = plan
+            .bounded_final_output
+            .then(|| pure_projection(&output_calcs, &output_schema))
+            .flatten();
+        let fused_output_calcs = if output_calcs.is_empty() || fused_output_projection.is_some() {
             None
         } else {
             Some(FusedCalcPipeline::new(
@@ -290,6 +285,13 @@ impl RegularJoinProcessor {
                 scratch_reservation.sibling("native regular join fused Calc plan"),
             )?)
         };
+        let bounded_row_required = bounded_row_requirements(
+            &plan,
+            join_type,
+            &visible_schemas,
+            fused_output_projection.as_ref(),
+            residual_condition.is_some(),
+        );
         Ok(Self {
             plan,
             join_type,
@@ -300,6 +302,9 @@ impl RegularJoinProcessor {
             residual_condition,
             output_schema,
             fused_output_calcs,
+            fused_output_projection,
+            fused_calc_stage_count,
+            bounded_row_required,
             row_converters,
             input_schemas: [None, None],
             key_fields: [Vec::new(), Vec::new()],
@@ -315,6 +320,7 @@ impl RegularJoinProcessor {
             last_key_group,
             bounded_output_key_group: Some(first_key_group),
             bounded_output_entries: Vec::new(),
+            bounded_output_entries_bytes: 0,
             bounded_output_entry_index: 0,
             bounded_cursor: None,
             bounded_output_finished: false,
@@ -340,13 +346,16 @@ impl RegularJoinProcessor {
             .sum::<usize>();
         let base = input_bytes.saturating_add(batch.num_rows().saturating_mul(256));
         self.scratch_reservation.resize(base)?;
-        let encoded = self.row_converters[side].convert_columns(&batch.columns()[..visible_count]);
-        let result = match encoded {
-            Ok(encoded) if self.plan.bounded_final_output => {
-                self.process_bounded_accounted(side, &batch, &encoded, None)
+        let result = if self.plan.bounded_final_output && !self.bounded_row_required[side] {
+            self.process_bounded_accounted(side, &batch, None, None)
+        } else {
+            match self.row_converters[side].convert_columns(&batch.columns()[..visible_count]) {
+                Ok(encoded) if self.plan.bounded_final_output => {
+                    self.process_bounded_accounted(side, &batch, Some(&encoded), None)
+                }
+                Ok(encoded) => self.process_accounted(side, &batch, &encoded, base),
+                Err(error) => Err(error.into()),
             }
-            Ok(encoded) => self.process_accounted(side, &batch, &encoded, base),
-            Err(error) => Err(error.into()),
         };
         match result {
             Ok(output) => {
@@ -479,10 +488,16 @@ impl RegularJoinProcessor {
             .sum::<usize>();
         let base = input_bytes.saturating_add(batch.num_rows().saturating_mul(256));
         self.scratch_reservation.resize(base)?;
-        let result = self.row_converters[side]
-            .convert_columns(&batch.columns()[..visible_count])
-            .map_err(DataFusionError::from)
-            .and_then(|encoded| self.process_bounded_accounted(side, &batch, &encoded, key_group));
+        let result = if self.bounded_row_required[side] {
+            self.row_converters[side]
+                .convert_columns(&batch.columns()[..visible_count])
+                .map_err(DataFusionError::from)
+                .and_then(|encoded| {
+                    self.process_bounded_accounted(side, &batch, Some(&encoded), key_group)
+                })
+        } else {
+            self.process_bounded_accounted(side, &batch, None, key_group)
+        };
         match result {
             Ok(output) => {
                 if output.num_rows() != 0 {
@@ -630,7 +645,7 @@ impl RegularJoinProcessor {
         &mut self,
         side: usize,
         batch: &RecordBatch,
-        encoded: &Rows,
+        encoded: Option<&Rows>,
         key_group_override: Option<u32>,
     ) -> Result<RecordBatch> {
         let kinds = batch
@@ -712,7 +727,7 @@ impl RegularJoinProcessor {
             } else {
                 &mut state.value.right
             };
-            let row_bytes = encoded.row(row).data();
+            let row_bytes = encoded.map_or(&[][..], |rows| rows.row(row).data());
             match kinds.value(row) {
                 INSERT | UPDATE_AFTER => rows.push(StoredRow {
                     row: row_bytes.to_vec(),
@@ -832,7 +847,12 @@ impl RegularJoinProcessor {
             if raw.num_rows() == 0 {
                 return self.empty_output();
             }
-            let output = if let Some(calcs) = &self.fused_output_calcs {
+            let output = if self.fused_output_projection.is_some() {
+                self.fused_calc_batches = self
+                    .fused_calc_batches
+                    .saturating_add(self.fused_calc_stage_count as u64);
+                raw
+            } else if let Some(calcs) = &self.fused_output_calcs {
                 self.fused_calc_batches = self
                     .fused_calc_batches
                     .saturating_add(calcs.stage_count() as u64);
@@ -848,6 +868,7 @@ impl RegularJoinProcessor {
             }
             if self.bounded_output_finished {
                 self.bounded_output_entries.clear();
+                self.bounded_output_entries_bytes = 0;
                 self.bounded_cursor = None;
             }
             let retained = self.bounded_retained_bytes();
@@ -863,6 +884,7 @@ impl RegularJoinProcessor {
     fn next_bounded_output_batch(&mut self) -> Result<RecordBatch> {
         if self.bounded_output_finished {
             self.bounded_output_entries.clear();
+            self.bounded_output_entries_bytes = 0;
             self.bounded_cursor = None;
             self.scratch_reservation.resize(0)?;
             return Ok(RecordBatch::new_empty(Arc::clone(&self.output_schema)));
@@ -871,11 +893,12 @@ impl RegularJoinProcessor {
         // A fused tail shares this operator's host-memory broker, so it can safely consume a
         // larger batch. A bare join retains the conservative edge size needed by arbitrary
         // downstream Flink operators.
-        let max_rows = if self.fused_output_calcs.is_some() {
-            BOUNDED_FUSED_OUTPUT_MAX_ROWS
-        } else {
-            BOUNDED_EDGE_OUTPUT_MAX_ROWS
-        };
+        let max_rows =
+            if self.fused_output_calcs.is_some() || self.fused_output_projection.is_some() {
+                BOUNDED_FUSED_OUTPUT_MAX_ROWS
+            } else {
+                BOUNDED_EDGE_OUTPUT_MAX_ROWS
+            };
         // Account the Arrow array headers and selection vectors even when the encoded payloads
         // themselves are tiny. Payload bytes are added before every row clone below.
         let mut output_estimate = 4096usize;
@@ -898,6 +921,7 @@ impl RegularJoinProcessor {
         }
         if output.is_empty() && self.bounded_output_finished {
             self.bounded_output_entries.clear();
+            self.bounded_output_entries_bytes = 0;
             self.scratch_reservation.resize(0)?;
             return Ok(RecordBatch::new_empty(Arc::clone(&self.output_schema)));
         }
@@ -929,15 +953,36 @@ impl RegularJoinProcessor {
                     self.bounded_matchable(0, &state.left, state.left_matchable)?;
                 let right_matchable =
                     self.bounded_matchable(1, &state.right, state.right_matchable)?;
+                let left_matched = vec![false; state.left.len()];
+                let right_matched = vec![false; state.right.len()];
+                let estimated_dynamic_bytes = state
+                    .left
+                    .iter()
+                    .chain(&state.right)
+                    .fold(0usize, |bytes, row| {
+                        bytes.saturating_add(row.row.capacity())
+                    })
+                    .saturating_add(
+                        state
+                            .left
+                            .capacity()
+                            .saturating_add(state.right.capacity())
+                            .saturating_mul(std::mem::size_of::<StoredRow>()),
+                    )
+                    .saturating_add(left_matchable.capacity())
+                    .saturating_add(right_matchable.capacity())
+                    .saturating_add(left_matched.capacity())
+                    .saturating_add(right_matched.capacity());
                 self.bounded_cursor = Some(BoundedJoinCursor {
-                    left_matched: vec![false; state.left.len()],
-                    right_matched: vec![false; state.right.len()],
+                    left_matched,
+                    right_matched,
                     left_matchable,
                     right_matchable,
                     state,
                     pair_index: 0,
                     remainder_index: 0,
                     phase: BoundedOutputPhase::Pairs,
+                    estimated_dynamic_bytes,
                 });
                 self.scratch_reservation.resize(
                     self.bounded_retained_bytes()
@@ -946,6 +991,7 @@ impl RegularJoinProcessor {
                 return Ok(true);
             }
             self.bounded_output_entries.clear();
+            self.bounded_output_entries_bytes = 0;
             self.bounded_output_entry_index = 0;
             let Some(key_group) = self.bounded_output_key_group else {
                 return Ok(false);
@@ -957,6 +1003,18 @@ impl RegularJoinProcessor {
                     .saturating_add(pending_output_bytes),
             )?;
             self.bounded_output_entries = decode_key_group_snapshot(key_group, &snapshot)?;
+            self.bounded_output_entries_bytes = self
+                .bounded_output_entries
+                .capacity()
+                .saturating_mul(std::mem::size_of::<(Vec<u8>, Vec<u8>)>())
+                .saturating_add(self.bounded_output_entries.iter().fold(
+                    0usize,
+                    |bytes, (key, value)| {
+                        bytes
+                            .saturating_add(key.capacity())
+                            .saturating_add(value.capacity())
+                    },
+                ));
             self.bounded_output_key_group = if key_group < self.last_key_group {
                 Some(key_group + 1)
             } else {
@@ -1261,19 +1319,7 @@ impl RegularJoinProcessor {
     }
 
     fn bounded_retained_bytes(&self) -> usize {
-        let entries = self
-            .bounded_output_entries
-            .capacity()
-            .saturating_mul(std::mem::size_of::<(Vec<u8>, Vec<u8>)>())
-            .saturating_add(self.bounded_output_entries.iter().fold(
-                0usize,
-                |bytes, (key, value)| {
-                    bytes
-                        .saturating_add(key.capacity())
-                        .saturating_add(value.capacity())
-                },
-            ));
-        entries.saturating_add(
+        self.bounded_output_entries_bytes.saturating_add(
             self.bounded_cursor
                 .as_ref()
                 .map_or(0, BoundedJoinCursor::estimated_dynamic_bytes),
@@ -1420,34 +1466,90 @@ impl RegularJoinProcessor {
             self.join_type,
             proto::RegularJoinType::Semi | proto::RegularJoinType::Anti
         );
-        let mut columns = Vec::new();
+        let raw_field_count = self.output_schema.fields().len();
+        let projected_indices = self
+            .fused_output_projection
+            .as_ref()
+            .map(|(indices, _)| indices.as_slice());
+        let needs_index =
+            |index: usize| projected_indices.map_or(true, |indices| indices.contains(&index));
+        let mut columns = vec![None::<ArrayRef>; raw_field_count];
+        let mut field_offset = 0usize;
         for side in 0..if left_only { 1 } else { 2 } {
+            let side_field_count = self.visible_schemas[side].fields().len();
+            if !(field_offset..field_offset + side_field_count).any(&needs_index) {
+                field_offset += side_field_count;
+                continue;
+            }
             let parser = self.row_converters[side].parser();
             let decoded = self.row_converters[side]
                 .convert_rows(encoded[side].iter().map(|row| parser.parse(row)))?;
-            if selections[side]
+            let decoded = if selections[side]
                 .iter()
                 .enumerate()
                 .all(|(index, selected)| *selected == Some(index as u32))
             {
-                columns.extend(decoded);
+                decoded
             } else {
                 let selection = UInt32Array::from(selections[side].clone());
-                for column in decoded {
-                    columns.push(take(column.as_ref(), &selection, None)?);
+                decoded
+                    .into_iter()
+                    .map(|column| take(column.as_ref(), &selection, None))
+                    .collect::<std::result::Result<Vec<_>, _>>()?
+            };
+            for (index, column) in decoded.into_iter().enumerate() {
+                if needs_index(field_offset + index) {
+                    columns[field_offset + index] = Some(column);
                 }
             }
+            field_offset += side_field_count;
         }
-        columns.push(Arc::new(Int8Array::from(kinds)));
-        columns.push(Arc::new(Int32Array::from(ordinals)));
-        Ok(RecordBatch::try_new(self.output_schema.clone(), columns)?)
+        let kind_index = raw_field_count - 2;
+        let ordinal_index = raw_field_count - 1;
+        if needs_index(kind_index) {
+            columns[kind_index] = Some(Arc::new(Int8Array::from(kinds)));
+        }
+        if needs_index(ordinal_index) {
+            columns[ordinal_index] = Some(Arc::new(Int32Array::from(ordinals)));
+        }
+        let (schema, columns) = if let Some((indices, schema)) = &self.fused_output_projection {
+            let projected = indices
+                .iter()
+                .map(|&index| {
+                    columns[index].clone().ok_or_else(|| {
+                        DataFusionError::Internal(format!(
+                            "bounded regular join projection column {index} was not decoded"
+                        ))
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            (Arc::clone(schema), projected)
+        } else {
+            let decoded = columns
+                .into_iter()
+                .enumerate()
+                .map(|(index, column)| {
+                    column.ok_or_else(|| {
+                        DataFusionError::Internal(format!(
+                            "regular join output column {index} was not decoded"
+                        ))
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            (Arc::clone(&self.output_schema), decoded)
+        };
+        Ok(RecordBatch::try_new(schema, columns)?)
     }
 
     fn empty_output(&self) -> Result<RecordBatch> {
-        Ok(self.fused_output_calcs.as_ref().map_or_else(
-            || RecordBatch::new_empty(self.output_schema.clone()),
-            FusedCalcPipeline::empty_output,
-        ))
+        Ok(if let Some((_, schema)) = &self.fused_output_projection {
+            RecordBatch::new_empty(Arc::clone(schema))
+        } else {
+            self.fused_output_calcs.as_ref().map_or_else(
+                || RecordBatch::new_empty(self.output_schema.clone()),
+                FusedCalcPipeline::empty_output,
+            )
+        })
     }
 
     fn finish_output(&mut self, output: RecordBatch, base: usize) -> Result<RecordBatch> {
@@ -1484,6 +1586,88 @@ fn split_regular_join_and_calc_tail(
             }
         }
     }
+}
+
+/// Recognizes the common bounded-join tail that only selects/reorders input columns. Applying
+/// that projection while decoding the stored Arrow rows avoids materializing an unused join side
+/// and is equivalent to DataFusion's ProjectionExec for this exact expression subset.
+fn pure_projection(
+    stages: &[proto::Calc],
+    input_schema: &SchemaRef,
+) -> Option<(Vec<usize>, SchemaRef)> {
+    let [calc] = stages else {
+        return None;
+    };
+    if calc.condition.is_some() {
+        return None;
+    }
+    let indices = calc
+        .projections
+        .iter()
+        .map(|expression| {
+            let proto::expression::Expression::InputReference(reference) =
+                expression.expression.as_ref()?
+            else {
+                return None;
+            };
+            let index = reference.index as usize;
+            (index < input_schema.fields().len()).then_some(index)
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let fields = indices
+        .iter()
+        .enumerate()
+        .map(|(output_index, &input_index)| {
+            let input = input_schema.field(input_index);
+            let name = if output_index + 1 == indices.len()
+                && input_index + 1 == input_schema.fields().len()
+                && input.name() == "__streamfusion_input_row"
+            {
+                "__streamfusion_input_row".to_string()
+            } else {
+                format!("projection_{output_index}")
+            };
+            Field::new(name, input.data_type().clone(), input.is_nullable())
+        })
+        .collect::<Vec<_>>();
+    Some((indices, Arc::new(Schema::new(fields))))
+}
+
+fn bounded_row_requirements(
+    plan: &proto::RegularJoin,
+    join_type: proto::RegularJoinType,
+    visible_schemas: &[SchemaRef; 2],
+    projection: Option<&(Vec<usize>, SchemaRef)>,
+    has_residual: bool,
+) -> [bool; 2] {
+    if !plan.bounded_final_output || has_residual {
+        return [true, true];
+    }
+    let left_fields = visible_schemas[0].fields().len();
+    let right_fields = visible_schemas[1].fields().len();
+    let left_only = matches!(
+        join_type,
+        proto::RegularJoinType::Semi | proto::RegularJoinType::Anti
+    );
+    [0usize, 1usize].map(|side| {
+        let (start, count, raw_output_uses_side) = if side == 0 {
+            (0, left_fields, true)
+        } else {
+            (left_fields, right_fields, !left_only)
+        };
+        let output_uses_side = projection.map_or(raw_output_uses_side, |(indices, _)| {
+            indices
+                .iter()
+                .any(|&index| index >= start && index < start + count)
+        });
+        let keys = if side == 0 {
+            &plan.left_key_indices
+        } else {
+            &plan.right_key_indices
+        };
+        let row_identity_is_the_key = (0..count).all(|index| keys.contains(&(index as u32)));
+        output_uses_side || !row_identity_is_the_key
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2287,6 +2471,51 @@ mod tests {
     }
 
     #[test]
+    fn bounded_join_pushes_a_pure_calc_projection_into_terminal_row_decode() {
+        let broker = Arc::new(TestBroker::new(64 << 20));
+        let mut processor = RegularJoinProcessor::new(
+            &bounded_plan_with_left_projection(),
+            128,
+            0,
+            127,
+            HostMemoryReservation::new(broker.clone(), "bounded projected Calc join"),
+        )
+        .unwrap();
+        assert_eq!(processor.bounded_row_required, [true, false]);
+        processor
+            .process_arrow(0, batch(&[1], &["left"], &[INSERT]))
+            .unwrap();
+        processor
+            .process_arrow(
+                1,
+                batch(
+                    &[1, 1, 1],
+                    &["left", "left", "left"],
+                    &[INSERT, INSERT, DELETE],
+                ),
+            )
+            .unwrap();
+
+        let output = processor.finish_bounded_output().unwrap();
+        assert_eq!(output.num_rows(), 1);
+        assert_eq!(output.num_columns(), 4);
+        assert_eq!(
+            output
+                .column(1)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .value(0),
+            "left"
+        );
+        assert_eq!(kinds(&output), vec![INSERT]);
+        assert_eq!(processor.statistics()[2], 1);
+        drop(output);
+        drop(processor);
+        assert_eq!(broker.reserved(), 0);
+    }
+
+    #[test]
     fn streaming_join_fuses_the_adjacent_calc_tail_in_one_native_plan() {
         let broker = Arc::new(TestBroker::new(64 << 20));
         let mut processor = RegularJoinProcessor::new(
@@ -2695,6 +2924,31 @@ mod tests {
             operator: Some(proto::operator::Operator::Calc(Box::new(proto::Calc {
                 input: Some(Box::new(join)),
                 projections: (0..6).map(input_reference).collect(),
+                condition: None,
+            }))),
+        });
+        native.encode_to_vec()
+    }
+
+    fn bounded_plan_with_left_projection() -> Vec<u8> {
+        let mut native = proto::NativePlan::decode(
+            bounded_plan(proto::RegularJoinType::Inner, true, None).as_slice(),
+        )
+        .unwrap();
+        let Some(proto::operator::Operator::RegularJoin(join)) =
+            native.root.as_mut().unwrap().operator.as_mut()
+        else {
+            unreachable!()
+        };
+        join.left_key_indices = vec![0, 1];
+        join.right_key_indices = vec![0, 1];
+        join.filter_nulls = vec![true, true];
+        let join = native.root.take().unwrap();
+        native.root = Some(proto::Operator {
+            plan_node_id: 2,
+            operator: Some(proto::operator::Operator::Calc(Box::new(proto::Calc {
+                input: Some(Box::new(join)),
+                projections: [0, 1, 4, 5].into_iter().map(input_reference).collect(),
                 condition: None,
             }))),
         });

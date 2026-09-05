@@ -854,6 +854,48 @@ managed memory. Profiler timings were excluded from the benchmark result. Artifa
 under `streamfusion-nexmark-benchmarks/target/profiles/bounded-q20-join/`; these are local
 diagnostics, not portable performance guarantees.
 
+## Bounded sort-merge join target
+
+`bounded-sort-merge-join` forces Flink's bounded sort-merge physical join for a high-output
+bid-stream self join on auction, bidder, price, and event time. StreamFusion retains the physical
+sort-merge identity in EXPLAIN and metrics while using the shared counted-state equality-join
+implementation: SQL does not promise join output order, and a later explicit sort remains a
+separate native operator. The integration test compares the exact 465,326-row final multiset on
+memory and RocksDB, requires a fully accelerated plan, and requires non-zero native join and Calc
+batch counters. Generated SQL parity tests separately cover all six join modes, duplicate keys,
+outer null padding, residual predicates, nested payloads, and terminal insert-only output.
+
+On the September 5, 2026 local release/native-CPU run based on `2056bde` plus the bounded
+sort-merge working change, each engine/backend received an excluded 100,000-event warmup followed
+by three fresh-JVM forks over 500,000 deterministic events at parallelism one. The JVM used a 2 GB
+fixed heap and 512 MiB of ordinary Flink managed memory. In memory, Flink and StreamFusion median
+elapsed times were 9.603 s and 13.325 s, equivalent to 52,068 and 37,523 events/s or 72.1%
+end-to-end throughput parity. Median absolute deviations were 0.213 s and 0.013 s, with ranges of
+9.390–9.836 s and 13.301–13.339 s. RocksDB medians were 9.357 s and 13.219 s, equivalent to
+53,438 and 37,824 events/s or 70.8% parity. Median absolute deviations were 0.054 s and 0.073 s,
+with ranges of 9.294–9.410 s and 13.125–13.292 s. Every fork emitted multiset SHA-256
+`0dd54f569859d7f4059a85a89fce46f99bd9b0db08cc3a4db6feb90a0ca6da69`; every StreamFusion fork
+reported full acceleration, 92 native join batches, and 91 native Calc batches. The machine was a
+12th Gen Intel Core i7-12650H under x86-64 WSL2 with OpenJDK 24.0.2 and Rust 1.94.0.
+
+The initial native implementation reached about 59% parity because every emitted row rescanned
+all retained entries to recompute managed-memory usage. Caching that accounting reduced median
+StreamFusion time by about 18%. The terminal decoder now also applies a single pure output
+projection directly, avoids decoding an unused join side, and stores multiplicity rather than a
+duplicate payload when every column from that unused side is already present in the equality key.
+These changes preserve the production Arrow topology and remain covered by retraction and duplicate
+tests. They reduce avoidable state and allocation work, but the measured result is still short of
+performance parity. Mixed JVM/native profiles attribute the remaining gap primarily to the
+RowData-to-Arrow input edge, native exchange, terminal Arrow decoding, and the Arrow-backed result
+sink on this high-output one-to-one workload. A genuinely vectorized retained-Arrow sort/merge
+algorithm is the next architectural optimization to evaluate; it is not claimed as implemented.
+The retained coarse native-allocation capture sampled every 8 MiB and identified Arrow row
+conversion, exchange-frame buffers, counted-state vectors/hash tables, and terminal output growth
+as the material operator-path allocation sites; every one is covered by the operator's managed
+memory reservations. Profiler timings were excluded from the throughput result. Local CPU, Java
+allocation, native-allocation, collapsed-stack, and flame-graph artifacts are under
+`streamfusion-nexmark-benchmarks/target/profiles/bounded-sort-merge-join/`.
+
 ## Bounded UNNEST and Window TVF targets
 
 The Kafka-free harness includes `batch-unnest` and `batch-window-tvf`. Both use Flink's bounded

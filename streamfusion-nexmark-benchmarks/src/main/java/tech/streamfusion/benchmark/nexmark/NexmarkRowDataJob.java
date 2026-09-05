@@ -127,6 +127,17 @@ public final class NexmarkRowDataJob {
             if (query.equals("bounded-sort") || query.equals("bounded-sort-limit") || query.equals("bounded-rank")) {
                 tables.getConfig().getConfiguration().setString("__table.exec.sort.non-temporal.enabled__", "true");
             }
+            if (query.equals("bounded-sort-merge-join")) {
+                tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_DISABLED_OPERATORS, "HashJoin,NestedLoopJoin");
+                tables.getConfig()
+                        .set(
+                                OptimizerConfigOptions.TABLE_OPTIMIZER_ADAPTIVE_BROADCAST_JOIN_STRATEGY,
+                                OptimizerConfigOptions.AdaptiveBroadcastJoinStrategy.NONE);
+                tables.getConfig()
+                        .set(
+                                OptimizerConfigOptions.TABLE_OPTIMIZER_ADAPTIVE_SKEWED_JOIN_OPTIMIZATION_STRATEGY,
+                                OptimizerConfigOptions.AdaptiveSkewedJoinOptimizationStrategy.NONE);
+            }
 
             tables.executeSql(sourceDdl(eventCount));
             NexmarkSqlJob.createViews(tables);

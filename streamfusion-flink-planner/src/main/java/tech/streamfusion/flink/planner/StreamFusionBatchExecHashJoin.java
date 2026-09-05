@@ -26,8 +26,8 @@ import org.apache.flink.table.runtime.keyselector.RowDataKeySelector;
 import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
 import org.apache.flink.table.types.logical.RowType;
 
-/** Distinct StreamFusion physical node for a bounded hash join. */
-public final class StreamFusionBatchExecHashJoin extends ExecNodeBase<RowData> implements BatchExecNode<RowData> {
+/** StreamFusion physical node for a bounded equality join. */
+public class StreamFusionBatchExecHashJoin extends ExecNodeBase<RowData> implements BatchExecNode<RowData> {
     private static final String TRANSLATOR = "tech.streamfusion.flink.join.StreamFusionRegularJoinTranslator";
 
     private final JoinSpec joinSpec;
@@ -39,9 +39,20 @@ public final class StreamFusionBatchExecHashJoin extends ExecNodeBase<RowData> i
             InputProperty rightInput,
             RowType outputType,
             String description) {
+        this(config, joinSpec, leftInput, rightInput, outputType, description, "streamfusion-batch-exec-hash-join_1");
+    }
+
+    protected StreamFusionBatchExecHashJoin(
+            ReadableConfig config,
+            JoinSpec joinSpec,
+            InputProperty leftInput,
+            InputProperty rightInput,
+            RowType outputType,
+            String description,
+            String contextName) {
         super(
                 ExecNodeContext.newNodeId(),
-                new ExecNodeContext("streamfusion-batch-exec-hash-join_1"),
+                new ExecNodeContext(contextName),
                 config,
                 List.of(leftInput, rightInput),
                 outputType,
@@ -149,13 +160,13 @@ public final class StreamFusionBatchExecHashJoin extends ExecNodeBase<RowData> i
                         conditions);
             }
             if (result == null) {
-                throw new IllegalStateException("A selected StreamFusion bounded hash join failed translation");
+                throw new IllegalStateException("A selected StreamFusion bounded join failed translation");
             }
             return result;
         } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException failure) {
-            throw new IllegalStateException("Could not invoke the native bounded hash join", failure);
+            throw new IllegalStateException("Could not invoke the native bounded join", failure);
         } catch (InvocationTargetException failure) {
-            throw new IllegalStateException("Native bounded hash join translation failed", failure.getCause());
+            throw new IllegalStateException("Native bounded join translation failed", failure.getCause());
         }
     }
 }

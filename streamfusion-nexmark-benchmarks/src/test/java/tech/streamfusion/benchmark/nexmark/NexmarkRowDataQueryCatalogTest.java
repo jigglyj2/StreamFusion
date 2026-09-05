@@ -33,6 +33,7 @@ class NexmarkRowDataQueryCatalogTest {
                         "bounded-sort-limit",
                         "bounded-limit",
                         "bounded-rank",
+                        "bounded-sort-merge-join",
                         "incremental-group-aggregate",
                         "group-aggregate",
                         "global-aggregate",

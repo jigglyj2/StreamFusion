@@ -41,7 +41,7 @@ public final class ArrowRegularJoinCDataBridge {
                 VectorSchemaRoot output =
                         Data.importVectorSchemaRoot(allocator, outputArray, outputSchema, dictionaries);
                 output.setRowCount((int) count);
-                return removeMetadata(output, outputType, allocator);
+                return removeMetadata(output, outputType, allocator, true);
             } finally {
                 memoryManager.finishArrowTransfer();
             }
@@ -85,7 +85,7 @@ public final class ArrowRegularJoinCDataBridge {
                 VectorSchemaRoot output =
                         Data.importVectorSchemaRoot(allocator, outputArray, outputSchema, dictionaries);
                 output.setRowCount((int) count);
-                return removeMetadata(output, outputType, allocator);
+                return removeMetadata(output, outputType, allocator, false);
             } finally {
                 memoryManager.finishArrowTransfer();
                 if (keys != null) {
@@ -134,7 +134,7 @@ public final class ArrowRegularJoinCDataBridge {
                 VectorSchemaRoot output =
                         Data.importVectorSchemaRoot(allocator, outputArray, outputSchema, dictionaries);
                 output.setRowCount((int) count);
-                return removeMetadata(output, outputType, allocator);
+                return removeMetadata(output, outputType, allocator, false);
             } finally {
                 memoryManager.finishArrowTransfer();
                 if (keys != null) {
@@ -145,7 +145,7 @@ public final class ArrowRegularJoinCDataBridge {
     }
 
     private static ArrowRowDataBatch removeMetadata(
-            VectorSchemaRoot output, RowType outputType, BufferAllocator allocator) {
+            VectorSchemaRoot output, RowType outputType, BufferAllocator allocator, boolean insertOnly) {
         int ordinalIndex = output.getFieldVectors().size() - 1;
         int rowKindIndex = ordinalIndex - 1;
         if (rowKindIndex < 0
@@ -158,10 +158,13 @@ public final class ArrowRegularJoinCDataBridge {
             output.close();
             throw new IllegalStateException("Native regular join output arity does not match the Flink row type");
         }
-        RowKind[] kinds = new RowKind[output.getRowCount()];
         TinyIntVector kindVector = (TinyIntVector) output.getVector(rowKindIndex);
-        for (int row = 0; row < output.getRowCount(); row++) {
-            kinds[row] = RowKind.fromByteValue(kindVector.get(row));
+        RowKind[] kinds = null;
+        if (!insertOnly) {
+            kinds = new RowKind[output.getRowCount()];
+            for (int row = 0; row < output.getRowCount(); row++) {
+                kinds[row] = RowKind.fromByteValue(kindVector.get(row));
+            }
         }
         FieldVector ordinal = output.getVector(ordinalIndex);
         VectorSchemaRoot withoutOrdinal = output.removeVector(ordinalIndex);
@@ -169,9 +172,11 @@ public final class ArrowRegularJoinCDataBridge {
         FieldVector kind = withoutOrdinal.getVector(rowKindIndex);
         VectorSchemaRoot visible = withoutOrdinal.removeVector(rowKindIndex);
         kind.close();
-        return ArrowRowDataBatch.wrap(visible, outputType, allocator)
-                .withRowKinds(kinds)
-                .withoutTimestamps();
+        ArrowRowDataBatch batch = ArrowRowDataBatch.wrap(visible, outputType, allocator);
+        if (kinds != null) {
+            batch.withRowKinds(kinds);
+        }
+        return batch.withoutTimestamps();
     }
 
     private static TinyIntVector inputKinds(ArrowRowDataBatch input) {
