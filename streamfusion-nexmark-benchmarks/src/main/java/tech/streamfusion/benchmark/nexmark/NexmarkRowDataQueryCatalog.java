@@ -114,6 +114,14 @@ final class NexmarkRowDataQueryCatalog {
                 "bidder BIGINT, bid_count BIGINT, spend BIGINT, average_price BIGINT, "
                         + "minimum_price BIGINT, maximum_price BIGINT, starttime TIMESTAMP(3), endtime TIMESTAMP(3)");
         schemas.put(
+                "legacy-window-aggregate-hop",
+                "bidder BIGINT, bid_count BIGINT, spend BIGINT, average_price BIGINT, "
+                        + "minimum_channel STRING, maximum_url STRING, starttime TIMESTAMP(3), endtime TIMESTAMP(3)");
+        schemas.put(
+                "legacy-window-aggregate-variable",
+                "bidder BIGINT, bid_count BIGINT, minimum_channel STRING, maximum_url STRING, "
+                        + "starttime TIMESTAMP(3), endtime TIMESTAMP(3)");
+        schemas.put(
                 "match-recognize", "bidder BIGINT, first_auction BIGINT, second_auction BIGINT, third_auction BIGINT");
         schemas.put("interval-join", "auction BIGINT, bidder BIGINT, price BIGINT, bid_time TIMESTAMP(3)");
         schemas.put(

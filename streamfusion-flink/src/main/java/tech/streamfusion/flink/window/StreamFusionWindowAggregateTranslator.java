@@ -7,12 +7,14 @@ package tech.streamfusion.flink.window;
 import static org.apache.flink.runtime.state.KeyGroupRangeAssignment.DEFAULT_LOWER_BOUND_MAX_PARALLELISM;
 
 import org.apache.calcite.rel.core.AggregateCall;
+import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.api.dag.Transformation;
 import org.apache.flink.configuration.CheckpointingOptions;
 import org.apache.flink.configuration.ReadableConfig;
 import org.apache.flink.configuration.StateChangelogOptions;
 import org.apache.flink.core.memory.ManagedMemoryUseCase;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.api.operators.SimpleOperatorFactory;
 import org.apache.flink.streaming.api.transformations.OneInputTransformation;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
 import org.apache.flink.table.data.RowData;
@@ -35,12 +37,17 @@ import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatchTypeInfo;
 import tech.streamfusion.flink.arrow.StreamFusionArrowBoundaries;
 import tech.streamfusion.flink.deduplicate.ArrowBatchKeySelector;
+import tech.streamfusion.flink.exchange.NativeExchangeFrame;
+import tech.streamfusion.flink.exchange.NativeExchangeFrameKeySelector;
+import tech.streamfusion.flink.exchange.NativeExchangeFrameTypeInfo;
+import tech.streamfusion.flink.exchange.NativeExchangeReaderOperator;
 import tech.streamfusion.flink.exchange.StreamFusionExchangeTranslator;
 import tech.streamfusion.flink.state.StreamFusionStateBackendFactory;
 
 /** Reflection entry point for native TUMBLE, HOP, and CUMULATE SQL window aggregation. */
 public final class StreamFusionWindowAggregateTranslator {
     private static final int STATEFUL_MANAGED_MEMORY_WEIGHT = 8;
+    private static final int BATCH_MANAGED_MEMORY_WEIGHT = 128;
 
     private StreamFusionWindowAggregateTranslator() {}
 
@@ -53,6 +60,48 @@ public final class StreamFusionWindowAggregateTranslator {
             WindowingStrategy strategy,
             boolean needRetraction,
             ReadableConfig config) {
+        return translateLocal(
+                input,
+                inputType,
+                internalOutputType,
+                grouping,
+                calls,
+                strategy,
+                needRetraction,
+                config,
+                STATEFUL_MANAGED_MEMORY_WEIGHT / 2);
+    }
+
+    static Transformation<RowData> translateBatchLocal(
+            Transformation<RowData> input,
+            RowType inputType,
+            RowType internalOutputType,
+            int[] grouping,
+            AggregateCall[] calls,
+            WindowingStrategy strategy,
+            ReadableConfig config) {
+        return translateLocal(
+                input,
+                inputType,
+                internalOutputType,
+                grouping,
+                calls,
+                strategy,
+                false,
+                config,
+                BATCH_MANAGED_MEMORY_WEIGHT);
+    }
+
+    private static Transformation<RowData> translateLocal(
+            Transformation<RowData> input,
+            RowType inputType,
+            RowType internalOutputType,
+            int[] grouping,
+            AggregateCall[] calls,
+            WindowingStrategy strategy,
+            boolean needRetraction,
+            ReadableConfig config,
+            int managedMemoryWeight) {
         if (strategy.isProctime()) {
             return null;
         }
@@ -92,8 +141,7 @@ public final class StreamFusionWindowAggregateTranslator {
                 ArrowRowDataBatchTypeInfo.INSTANCE,
                 input.getParallelism(),
                 false);
-        transformation.declareManagedMemoryUseCaseAtOperatorScope(
-                ManagedMemoryUseCase.OPERATOR, STATEFUL_MANAGED_MEMORY_WEIGHT / 2);
+        transformation.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, managedMemoryWeight);
         return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
     }
 
@@ -110,6 +158,115 @@ public final class StreamFusionWindowAggregateTranslator {
             ReadableConfig config,
             StreamExecutionEnvironment environment,
             RowDataKeySelector keySelector) {
+        return translateGlobal(
+                input,
+                originalInputType,
+                internalInputType,
+                outputType,
+                groupingCount,
+                calls,
+                strategy,
+                properties,
+                needRetraction,
+                config,
+                environment,
+                keySelector,
+                STATEFUL_MANAGED_MEMORY_WEIGHT);
+    }
+
+    static Transformation<RowData> translateBatchGlobal(
+            Transformation<RowData> input,
+            RowType originalInputType,
+            RowType internalInputType,
+            RowType outputType,
+            int groupingCount,
+            AggregateCall[] calls,
+            WindowingStrategy strategy,
+            NamedWindowProperty[] properties,
+            ReadableConfig config,
+            StreamExecutionEnvironment environment,
+            RowDataKeySelector keySelector) {
+        StreamFusionStateBackendFactory.install(environment);
+        String shiftTimeZone = TimeWindowUtil.getShiftTimeZone(
+                        strategy.getTimeAttributeType(), TableConfigUtils.getLocalTimeZone(config))
+                .getId();
+        byte[] aggregatePlan = StreamFusionWindowAggregatePlan.createGlobal(
+                originalInputType,
+                internalInputType,
+                outputType,
+                groupingCount,
+                calls,
+                false,
+                StreamFusionWindowTableFunctionTranslator.parameters(strategy.getWindow()),
+                strategy instanceof TimeAttributeWindowingStrategy,
+                shiftTimeZone,
+                properties);
+        int[] grouping = java.util.stream.IntStream.range(0, groupingCount).toArray();
+        FramedInput framed = framed(input);
+        OneInputTransformation<NativeExchangeFrame, ArrowRowDataBatch> transformation = new OneInputTransformation<>(
+                framed.transformation,
+                "streamfusion-batch-global-window-aggregate["
+                        + strategy.getWindow().getClass().getSimpleName() + "]",
+                new StreamFusionArrowFramedWindowAggregateOperator(
+                        internalInputType, outputType, grouping, aggregatePlan, keySelector, framed.plan),
+                ArrowRowDataBatchTypeInfo.INSTANCE,
+                input.getParallelism(),
+                false);
+        transformation.setMaxParallelism(DEFAULT_LOWER_BOUND_MAX_PARALLELISM);
+        transformation.declareManagedMemoryUseCaseAtOperatorScope(
+                ManagedMemoryUseCase.OPERATOR, BATCH_MANAGED_MEMORY_WEIGHT);
+        transformation.setStateKeySelector(new NativeExchangeFrameKeySelector(DEFAULT_LOWER_BOUND_MAX_PARALLELISM));
+        transformation.setStateKeyType(Types.INT);
+        return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static FramedInput framed(Transformation<RowData> input) {
+        if (!(input instanceof OneInputTransformation) || !"StreamFusionExchangeReader".equals(input.getName())) {
+            throw new IllegalStateException("Native bounded window aggregate requires a framed exchange");
+        }
+        OneInputTransformation<?, ?> reader = (OneInputTransformation<?, ?>) input;
+        if (!(reader.getOperatorFactory() instanceof SimpleOperatorFactory)) {
+            throw new IllegalStateException(
+                    "Native bounded window aggregate cannot inspect its exchange reader factory");
+        }
+        Object operator = ((SimpleOperatorFactory<?>) reader.getOperatorFactory()).getOperator();
+        if (!(operator instanceof NativeExchangeReaderOperator)) {
+            throw new IllegalStateException("Native bounded window aggregate received an incompatible exchange reader");
+        }
+        Transformation<?> frames = reader.getInputs().get(0);
+        if (!(frames.getOutputType() instanceof NativeExchangeFrameTypeInfo)) {
+            throw new IllegalStateException("Native bounded window aggregate exchange input is not frame encoded");
+        }
+        return new FramedInput(
+                (Transformation<NativeExchangeFrame>) frames,
+                ((NativeExchangeReaderOperator) operator).serializedPlan());
+    }
+
+    private static final class FramedInput {
+        private final Transformation<NativeExchangeFrame> transformation;
+        private final byte[] plan;
+
+        private FramedInput(Transformation<NativeExchangeFrame> transformation, byte[] plan) {
+            this.transformation = transformation;
+            this.plan = plan;
+        }
+    }
+
+    private static Transformation<RowData> translateGlobal(
+            Transformation<RowData> input,
+            RowType originalInputType,
+            RowType internalInputType,
+            RowType outputType,
+            int groupingCount,
+            AggregateCall[] calls,
+            WindowingStrategy strategy,
+            NamedWindowProperty[] properties,
+            boolean needRetraction,
+            ReadableConfig config,
+            StreamExecutionEnvironment environment,
+            RowDataKeySelector keySelector,
+            int managedMemoryWeight) {
         StreamFusionStateBackendFactory.install(environment);
         String shiftTimeZone = TimeWindowUtil.getShiftTimeZone(
                         strategy.getTimeAttributeType(), TableConfigUtils.getLocalTimeZone(config))
@@ -139,8 +296,7 @@ public final class StreamFusionWindowAggregateTranslator {
         if (input.getMaxParallelism() > 0) {
             transformation.setMaxParallelism(input.getMaxParallelism());
         }
-        transformation.declareManagedMemoryUseCaseAtOperatorScope(
-                ManagedMemoryUseCase.OPERATOR, STATEFUL_MANAGED_MEMORY_WEIGHT);
+        transformation.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, managedMemoryWeight);
         transformation.setStateKeySelector(new ArrowBatchKeySelector(keySelector));
         transformation.setStateKeyType(keySelector.getProducedType());
         return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);

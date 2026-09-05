@@ -104,7 +104,8 @@ The `aggregate-modifiers`, `incremental-group-aggregate`,
 `over-aggregate-bounded-rows`, `over-aggregate-bounded-range`, `select-distinct`,
 `set-intersect-all`, `top-n`,
 `limit`, `bounded-limit`, `bounded-sort`, `bounded-sort-limit`, `bounded-rank`,
-`legacy-window-aggregate`, `temporal-join`, and `temporal-sort` cases
+`legacy-window-aggregate`, `legacy-window-aggregate-hop`,
+`legacy-window-aggregate-variable`, `temporal-join`, and `temporal-sort` cases
 exercise both native state backends over the bounded bid stream; they are focused operator workloads
 rather than numbered Nexmark queries. `over-aggregate` deliberately casts the timestamp to a
 regular value to exercise ordered non-time state, while `over-aggregate-event-time` retains the
@@ -112,6 +113,12 @@ rowtime attribute and exercises watermark-driven native timers and late-record h
 processing-time case retains Nexmark's bid filter and nested-row projection below its synthetic
 `PROCTIME()` field. The bounded cases exercise a 100-row processing-time suffix and an inclusive
 ten-second event-time range respectively.
+The three legacy-window cases force Flink's bounded `TWO_PHASE` strategy and cover fixed-width
+tumbling accumulators, variable-width `MIN`/`MAX`, and pane-based sliding-window merge. Their parity
+test requires the native local and global window counters independently, so collapsing the plan to
+a one-phase implementation cannot pass unnoticed. The sliding-window case also runs at parallelism
+four on both state backends so the parity check crosses the native key-group exchange rather than
+only its singleton form.
 `temporal-sort` orders the bounded bid stream by ascending event time and secondary price/auction
 keys. Its integration case compares both the changelog multiset and global arrival-order digest on
 memory and RocksDB, requires an accelerated EXPLAIN, and requires non-zero native sort batches.
@@ -235,6 +242,34 @@ list per input row. Reusing those two buffers across each Arrow batch reduced th
 shares to 0.0001% and less than 0.0001% of sampled native allocation volume. Owned canonical
 state keys, accumulators, output Arrow buffers, and RocksDB allocations remain charged through
 the operator's Flink managed-memory reservations.
+
+On the September 5, 2026 local bounded two-phase window run based on `cded933` plus the bounded
+window working change, an excluded 50,000-event warmup preceded three alternating fresh-JVM forks
+per engine/backend over 250,000 events at parallelism one with a 2 GiB heap. The release native
+libraries used `target-cpu=native`, frame pointers, and profiling symbols on a 16-vCPU WSL2 host
+backed by an Intel i7-12650H and OpenJDK 24.0.2. For the pane-based
+`legacy-window-aggregate-hop` case, in-memory Flink and StreamFusion medians were 5.581 s and
+5.591 s (99.8% throughput parity); median absolute deviations were 0.046 s and 0.011 s, with
+ranges of 5.416–5.626 s and 5.575–5.602 s. RocksDB-labelled medians were 5.523 s and 5.522 s,
+with median absolute deviations of 0.016 s and 0.014 s and ranges of 5.507–5.709 s and
+5.508–5.623 s. Bounded Flink does not persist this finite aggregate in its configured state
+backend; the second comparison verifies that StreamFusion's selected native global phase uses the
+direct RocksDB backend without changing end-to-end time materially. Every fork produced 24,565
+rows with multiset SHA-256
+`127b7cbb6647c6ce9f7fa80041ca87545ac99705e3740da55116acf3d1257f35`; each StreamFusion fork
+reported full acceleration and 16 native local plus 16 native global window batches.
+
+Separate 500,000-event mixed JVM/native async-profiler runs captured CPU, wall, Java allocation,
+live-object, lock, and native-allocation events with DWARF native unwinding. Profiler timings were
+excluded from the results above. Inclusive native local/global window processing represented 8.2%
+of CPU samples in memory and 8.5% with direct RocksDB; native-plan lowering was 1.3% and 1.1%, and
+the complete Arrow C Data/JNI transport paths were 11.0% in each profile. Sampled Java allocation
+events were 47% lower than Flink in memory and 38% lower in the RocksDB-labelled case. Total sampled
+native allocation volume was 7.2% and 7.7% lower; 19.3% and 18.8% of the StreamFusion native volume
+was attributed to the two window stages, dominated by the local accumulator batch and final output
+construction rather than per-row state JNI or RocksDB calls. JFR recordings, CPU flame graphs,
+collapsed stacks, allocation flame graphs, and differential flame graphs are retained under
+`streamfusion-nexmark-benchmarks/target/profiles/batch-two-phase-window/`.
 
 On the September 4, 2026 local q23 multi-join run based on `980201e` plus the multi-join working
 change, three alternating fresh-JVM release/native-CPU forks processed 500,000 deterministic events

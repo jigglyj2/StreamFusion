@@ -41,6 +41,7 @@ import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecExchange;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecExpand;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecHashAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecHashJoin;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecHashWindowAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecLimit;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecNestedLoopJoin;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecRank;
@@ -48,6 +49,7 @@ import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecSort;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecSortAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecSortLimit;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecSortMergeJoin;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecSortWindowAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecUnion;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecValues;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecWindowTableFunction;
@@ -329,6 +331,20 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                         nodePath + "/native-input[" + index + "]",
                         rejections);
             }
+            return;
+        } else if (node instanceof BatchExecHashWindowAggregate || node instanceof BatchExecSortWindowAggregate) {
+            BatchWindowAggregatePair pair = batchWindowAggregatePair(node);
+            if (pair == null) {
+                rejections.add(
+                        nodePath
+                                + "\nbounded window aggregate: expected LocalWindowAggregate -> Exchange -> final merge WindowAggregate");
+                return;
+            }
+            String reason = unsupportedReason(pair, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
+            collectRejections(pair.inputEdge.getSource(), context, nodePath + "/native-input", rejections);
             return;
         } else if (node instanceof BatchExecHashAggregate) {
             BatchGroupAggregatePair pair = batchGroupAggregatePair(node);
@@ -848,6 +864,13 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             if (pair != null) {
                 return convertBatchGroupAggregatePair(pair);
             }
+        }
+        if (node instanceof BatchExecHashWindowAggregate || node instanceof BatchExecSortWindowAggregate) {
+            BatchWindowAggregatePair pair = batchWindowAggregatePair(node);
+            if (pair == null) {
+                throw new IllegalStateException("Selected malformed bounded two-phase window aggregate");
+            }
+            return convertBatchWindowAggregatePair(pair);
         }
         if (node instanceof BatchExecHashAggregate) {
             BatchExecHashAggregate aggregate = (BatchExecHashAggregate) node;
@@ -1801,6 +1824,63 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         }
     }
 
+    private String unsupportedReason(BatchWindowAggregatePair pair, ProcessorContext context) {
+        int[] localGrouping = batchWindowGrouping(pair.local);
+        int[] finalGrouping = batchWindowGrouping(pair.global);
+        if (batchWindowAuxiliaryGrouping(pair.local).length != 0
+                || batchWindowAuxiliaryGrouping(pair.global).length != 0) {
+            return "auxiliary grouping: bounded native two-phase window aggregation does not yet encode auxiliary keys";
+        }
+        if (localGrouping.length != finalGrouping.length) {
+            return "grouping: bounded local and global window aggregate key counts do not match";
+        }
+        if (batchWindowAggregateCalls(pair.local).length != batchWindowAggregateCalls(pair.global).length) {
+            return "aggregate: bounded local and global window aggregate call counts do not match";
+        }
+        if (!batchWindow(pair.local).toString().equals(batchWindow(pair.global).toString())) {
+            return "window: bounded local and global window definitions do not match";
+        }
+        if (batchWindowBoolean(pair.local, "inputTimeIsDate") || batchWindowBoolean(pair.global, "inputTimeIsDate")) {
+            return "window time type: bounded native window aggregation currently requires TIMESTAMP";
+        }
+        RowType inputType = (RowType) pair.inputEdge.getOutputType();
+        if (!batchWindowInputType(pair.local).equals(inputType)) {
+            return "aggregate input schema: planned local window input "
+                    + batchWindowInputType(pair.local)
+                    + " does not match edge input "
+                    + inputType;
+        }
+        try {
+            Class<?> translator = Class.forName(
+                    GROUP_WINDOW_AGGREGATE_TRANSLATOR_CLASS,
+                    true,
+                    context.getPlanner().getFlinkContext().getClassLoader());
+            Method method = translator.getMethod(
+                    "unsupportedBatchReason",
+                    RowType.class,
+                    RowType.class,
+                    int[].class,
+                    org.apache.calcite.rel.core.AggregateCall[].class,
+                    LogicalWindow.class,
+                    NamedWindowProperty[].class,
+                    ReadableConfig.class);
+            return (String) method.invoke(
+                    null,
+                    inputType,
+                    (RowType) pair.global.getOutputType(),
+                    localGrouping,
+                    batchWindowAggregateCalls(pair.local),
+                    batchWindow(pair.local),
+                    batchWindowProperties(pair.global),
+                    pair.global.getPersistedConfig());
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException failure) {
+            throw new IllegalStateException("Could not inspect bounded native two-phase window aggregation", failure);
+        } catch (InvocationTargetException failure) {
+            throw new IllegalStateException(
+                    "Bounded native two-phase window aggregation support inspection failed", failure.getCause());
+        }
+    }
+
     private ExecNode<?> convertBatchGroupAggregatePair(BatchGroupAggregatePair pair) {
         int[] grouping = batchGrouping(pair.local);
         org.apache.calcite.rel.core.AggregateCall[] calls = batchAggregateCalls(pair.local);
@@ -1840,6 +1920,54 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                 hashInput,
                 (RowType) pair.global.getOutputType(),
                 pair.global instanceof BatchExecHashAggregate);
+        global.setInputEdges(List.of(ExecEdge.builder()
+                .source(exchange)
+                .target(global)
+                .shuffle(ExecEdge.FORWARD_SHUFFLE)
+                .build()));
+        return global;
+    }
+
+    private ExecNode<?> convertBatchWindowAggregatePair(BatchWindowAggregatePair pair) {
+        int[] grouping = batchWindowGrouping(pair.local);
+        org.apache.calcite.rel.core.AggregateCall[] calls = batchWindowAggregateCalls(pair.local);
+        RowType originalInputType = (RowType) pair.inputEdge.getOutputType();
+        RowType internalType = nativeWindowAccumulatorType(originalInputType, grouping);
+
+        StreamFusionBatchExecLocalWindowAggregate local = new StreamFusionBatchExecLocalWindowAggregate(
+                pair.local.getPersistedConfig(),
+                grouping,
+                calls,
+                batchWindow(pair.local),
+                InputProperty.DEFAULT,
+                internalType);
+        local.setInputEdges(List.of(copyEdge(pair.inputEdge, convert(pair.inputEdge.getSource()), local)));
+
+        int[] internalGrouping =
+                java.util.stream.IntStream.range(0, grouping.length).toArray();
+        InputProperty hashInput = InputProperty.builder()
+                .requiredDistribution(
+                        grouping.length == 0
+                                ? InputProperty.SINGLETON_DISTRIBUTION
+                                : InputProperty.hashDistribution(internalGrouping))
+                .build();
+        StreamFusionBatchExecExchange exchange = new StreamFusionBatchExecExchange(
+                pair.global.getPersistedConfig(), hashInput, internalType, "StreamFusionBatchWindowAggregateExchange");
+        exchange.setInputEdges(List.of(ExecEdge.builder()
+                .source(local)
+                .target(exchange)
+                .shuffle(ExecEdge.FORWARD_SHUFFLE)
+                .build()));
+
+        StreamFusionBatchExecGlobalWindowAggregate global = new StreamFusionBatchExecGlobalWindowAggregate(
+                pair.global.getPersistedConfig(),
+                originalInputType,
+                grouping.length,
+                calls,
+                batchWindow(pair.global),
+                batchWindowProperties(pair.global),
+                hashInput,
+                (RowType) pair.global.getOutputType());
         global.setInputEdges(List.of(ExecEdge.builder()
                 .source(exchange)
                 .target(global)
@@ -3190,6 +3318,40 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         return new BatchGroupAggregatePair((ExecNodeBase<?>) global, (ExecNodeBase<?>) cursor, inputEdge);
     }
 
+    private static BatchWindowAggregatePair batchWindowAggregatePair(ExecNode<?> global) {
+        if (!isBatchWindowAggregate(global)
+                || !batchWindowBoolean(global, "isMerge")
+                || !batchWindowBoolean(global, "isFinal")
+                || global.getInputEdges().size() != 1) {
+            return null;
+        }
+        ExecEdge edge = global.getInputEdges().get(0);
+        ExecNode<?> cursor = edge.getSource();
+        while ((cursor instanceof BatchExecExchange || cursor instanceof BatchExecSort)
+                && cursor.getInputEdges().size() == 1) {
+            edge = cursor.getInputEdges().get(0);
+            cursor = edge.getSource();
+        }
+        if (!isBatchWindowAggregate(cursor)
+                || batchWindowBoolean(cursor, "isFinal")
+                || batchWindowBoolean(cursor, "isMerge")
+                || cursor.getInputEdges().size() != 1) {
+            return null;
+        }
+        ExecEdge inputEdge = cursor.getInputEdges().get(0);
+        ExecNode<?> input = inputEdge.getSource();
+        while ((input instanceof BatchExecExchange || input instanceof BatchExecSort)
+                && input.getInputEdges().size() == 1) {
+            inputEdge = input.getInputEdges().get(0);
+            input = inputEdge.getSource();
+        }
+        return new BatchWindowAggregatePair((ExecNodeBase<?>) global, (ExecNodeBase<?>) cursor, inputEdge);
+    }
+
+    private static boolean isBatchWindowAggregate(ExecNode<?> node) {
+        return node instanceof BatchExecHashWindowAggregate || node instanceof BatchExecSortWindowAggregate;
+    }
+
     private static boolean isBatchAggregate(ExecNode<?> node) {
         return node instanceof BatchExecHashAggregate || node instanceof BatchExecSortAggregate;
     }
@@ -3698,6 +3860,18 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         private final ExecEdge inputEdge;
 
         private BatchGroupAggregatePair(ExecNodeBase<?> global, ExecNodeBase<?> local, ExecEdge inputEdge) {
+            this.global = global;
+            this.local = local;
+            this.inputEdge = inputEdge;
+        }
+    }
+
+    private static final class BatchWindowAggregatePair {
+        private final ExecNodeBase<?> global;
+        private final ExecNodeBase<?> local;
+        private final ExecEdge inputEdge;
+
+        private BatchWindowAggregatePair(ExecNodeBase<?> global, ExecNodeBase<?> local, ExecEdge inputEdge) {
             this.global = global;
             this.local = local;
             this.inputEdge = inputEdge;

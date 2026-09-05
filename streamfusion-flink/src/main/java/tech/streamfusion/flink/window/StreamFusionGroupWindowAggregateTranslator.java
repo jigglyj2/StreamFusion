@@ -44,6 +44,74 @@ public final class StreamFusionGroupWindowAggregateTranslator {
 
     private StreamFusionGroupWindowAggregateTranslator() {}
 
+    public static Transformation<RowData> translateBatchLocal(
+            Transformation<RowData> input,
+            RowType inputType,
+            RowType internalOutputType,
+            int[] grouping,
+            AggregateCall[] calls,
+            LogicalWindow window,
+            ReadableConfig config) {
+        LegacyWindow planned = plan(window, grouping, config);
+        if (planned.reason != null || planned.timeStrategy == null) {
+            return null;
+        }
+        return StreamFusionWindowAggregateTranslator.translateBatchLocal(
+                input, inputType, internalOutputType, grouping, calls, planned.timeStrategy, config);
+    }
+
+    public static Transformation<RowData> translateBatchGlobal(
+            Transformation<RowData> input,
+            RowType originalInputType,
+            RowType internalInputType,
+            RowType outputType,
+            int groupingCount,
+            AggregateCall[] calls,
+            LogicalWindow window,
+            NamedWindowProperty[] properties,
+            ReadableConfig config,
+            StreamExecutionEnvironment environment,
+            RowDataKeySelector keySelector) {
+        int[] grouping = java.util.stream.IntStream.range(0, groupingCount).toArray();
+        LegacyWindow planned = plan(window, grouping, config);
+        if (planned.reason != null || planned.timeStrategy == null) {
+            return null;
+        }
+        return StreamFusionWindowAggregateTranslator.translateBatchGlobal(
+                input,
+                originalInputType,
+                internalInputType,
+                outputType,
+                groupingCount,
+                calls,
+                planned.timeStrategy,
+                properties,
+                config,
+                environment,
+                keySelector);
+    }
+
+    public static String unsupportedBatchReason(
+            RowType inputType,
+            RowType outputType,
+            int[] grouping,
+            AggregateCall[] calls,
+            LogicalWindow window,
+            NamedWindowProperty[] properties,
+            ReadableConfig config) {
+        LegacyWindow planned = plan(window, grouping, config);
+        if (planned.reason != null) {
+            return planned.reason;
+        }
+        if (planned.timeStrategy == null) {
+            return "bounded two-phase window aggregate: row-count windows are not yet native";
+        }
+        if (planned.timeStrategy.getWindow() instanceof SessionWindowSpec) {
+            return "bounded two-phase window aggregate: SESSION is not a slicing local/global window";
+        }
+        return unsupportedReason(inputType, outputType, grouping, calls, window, properties, false, config);
+    }
+
     public static Transformation<RowData> translate(
             Transformation<RowData> input,
             RowType inputType,

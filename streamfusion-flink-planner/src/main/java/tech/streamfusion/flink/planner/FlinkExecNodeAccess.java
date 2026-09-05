@@ -16,6 +16,7 @@ import org.apache.calcite.rex.RexCall;
 import org.apache.calcite.rex.RexInputRef;
 import org.apache.calcite.rex.RexNode;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
+import org.apache.flink.table.planner.plan.logical.LogicalWindow;
 import org.apache.flink.table.planner.plan.logical.TimeAttributeWindowingStrategy;
 import org.apache.flink.table.planner.plan.logical.WindowingStrategy;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecEdge;
@@ -23,6 +24,7 @@ import org.apache.flink.table.planner.plan.nodes.exec.StateMetadata;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecAdaptiveJoin;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecHashAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecHashJoin;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecHashWindowAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecLimit;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecNestedLoopJoin;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecRank;
@@ -30,6 +32,7 @@ import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecSort;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecSortAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecSortLimit;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecSortMergeJoin;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecSortWindowAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecCalc;
 import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecExpand;
 import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecWindowTableFunction;
@@ -217,6 +220,46 @@ final class FlinkExecNodeAccess {
 
     static boolean batchAggregateBooleanField(BatchExecSortAggregate aggregate, String name) {
         return (boolean) field(aggregate, BatchExecSortAggregate.class, name);
+    }
+
+    static int[] batchWindowGrouping(Object aggregate) {
+        return ((int[]) field(aggregate, batchWindowClass(aggregate), "grouping")).clone();
+    }
+
+    static int[] batchWindowAuxiliaryGrouping(Object aggregate) {
+        return ((int[]) field(aggregate, batchWindowClass(aggregate), "auxGrouping")).clone();
+    }
+
+    static org.apache.calcite.rel.core.AggregateCall[] batchWindowAggregateCalls(Object aggregate) {
+        return ((org.apache.calcite.rel.core.AggregateCall[]) field(aggregate, batchWindowClass(aggregate), "aggCalls"))
+                .clone();
+    }
+
+    static LogicalWindow batchWindow(Object aggregate) {
+        return (LogicalWindow) field(aggregate, batchWindowClass(aggregate), "window");
+    }
+
+    static NamedWindowProperty[] batchWindowProperties(Object aggregate) {
+        return ((NamedWindowProperty[]) field(aggregate, batchWindowClass(aggregate), "namedWindowProperties")).clone();
+    }
+
+    static RowType batchWindowInputType(Object aggregate) {
+        return (RowType) field(aggregate, batchWindowClass(aggregate), "aggInputRowType");
+    }
+
+    static boolean batchWindowBoolean(Object aggregate, String name) {
+        return (boolean) field(aggregate, batchWindowClass(aggregate), name);
+    }
+
+    private static Class<?> batchWindowClass(Object aggregate) {
+        if (aggregate instanceof BatchExecHashWindowAggregate) {
+            return BatchExecHashWindowAggregate.class;
+        }
+        if (aggregate instanceof BatchExecSortWindowAggregate) {
+            return BatchExecSortWindowAggregate.class;
+        }
+        throw new IllegalArgumentException(
+                "Not a bounded window aggregate: " + aggregate.getClass().getName());
     }
 
     static OverSpec overSpec(StreamExecOverAggregate aggregate) {
