@@ -36,7 +36,7 @@ class MapConstructorParityTest extends SqlParityTestSupport {
 
     @Test
     void duplicateMapKeysFallBackToPreserveLastValueWins() throws Exception {
-        assertDataStreamParity(
+        assertFallbackDataStreamParity(
                 "SELECT MAP['a', metric, 'a', metric + 1] FROM int_input",
                 Types.INT,
                 DataTypes.INT(),

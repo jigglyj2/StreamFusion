@@ -247,8 +247,8 @@ impl NativeExecutionContext {
         result
     }
 
-    pub(crate) fn metric_value(&self, name: &str) -> Result<usize> {
-        fn sum(plan: &Arc<dyn ExecutionPlan>, name: &str) -> usize {
+    pub(crate) fn metric_value(&self, plan_node_id: u64, name: &str) -> Result<usize> {
+        fn sum_all(plan: &Arc<dyn ExecutionPlan>, name: &str) -> usize {
             let current = plan
                 .metrics()
                 .and_then(|metrics| metrics.sum_by_name(name))
@@ -257,18 +257,62 @@ impl NativeExecutionContext {
             current.saturating_add(
                 plan.children()
                     .into_iter()
-                    .map(|child| sum(child, name))
+                    .map(|child| sum_all(child, name))
                     .sum(),
             )
+        }
+
+        fn sum_stage(plan: &Arc<dyn ExecutionPlan>, name: &str) -> usize {
+            if plan
+                .downcast_ref::<crate::planner::operators::identified::IdentifiedExec>()
+                .is_some()
+            {
+                return 0;
+            }
+            let current = plan
+                .metrics()
+                .and_then(|metrics| metrics.sum_by_name(name))
+                .map(|value| value.as_usize())
+                .unwrap_or(0);
+            current.saturating_add(
+                plan.children()
+                    .into_iter()
+                    .map(|child| sum_stage(child, name))
+                    .sum(),
+            )
+        }
+
+        fn identified_metric(
+            plan: &Arc<dyn ExecutionPlan>,
+            plan_node_id: u64,
+            name: &str,
+        ) -> Option<usize> {
+            if let Some(identified) =
+                plan.downcast_ref::<crate::planner::operators::identified::IdentifiedExec>()
+            {
+                if identified.plan_node_id() == plan_node_id {
+                    return Some(sum_stage(identified.input(), name));
+                }
+            }
+            plan.children()
+                .into_iter()
+                .find_map(|child| identified_metric(child, plan_node_id, name))
         }
 
         let cached = self.physical_plan.lock().map_err(|_| {
             DataFusionError::Internal("native physical-plan cache lock poisoned".to_string())
         })?;
-        Ok(cached
-            .as_ref()
-            .map(|cached| sum(&cached.plan, name))
-            .unwrap_or(0))
+        let Some(cached) = cached.as_ref() else {
+            return Ok(0);
+        };
+        if plan_node_id == 0 {
+            return Ok(sum_all(&cached.plan, name));
+        }
+        identified_metric(&cached.plan, plan_node_id, name).ok_or_else(|| {
+            DataFusionError::Execution(format!(
+                "native metric requested unknown plan node {plan_node_id}"
+            ))
+        })
     }
 }
 

@@ -50,7 +50,7 @@ class SetOperationParityTest extends SqlParityTestSupport {
     @Test
     void sourceOnlyNanosecondTimestampUnionFallsBackBeforeArrowConversion() throws Exception {
         String branch = "SELECT metric FROM timestamp_union_input";
-        assertDataStreamParity(
+        assertFallbackDataStreamParity(
                 branch + " UNION ALL " + branch,
                 Types.SQL_TIMESTAMP,
                 List.of(Row.of(Timestamp.valueOf("9999-12-30 22:11:22.987654321"))),

@@ -40,7 +40,7 @@ class AdditionalLogarithmParityTest extends SqlParityTestSupport {
 
     @Test
     void binaryLogarithmFallsBackWithSemanticReason() throws Exception {
-        assertDataStreamParity(
+        assertFallbackDataStreamParity(
                 "SELECT LOG2(metric) FROM binary_logarithm_input",
                 Types.DOUBLE,
                 logarithmInputs(),

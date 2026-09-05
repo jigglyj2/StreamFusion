@@ -60,7 +60,7 @@ class PowerParityTest extends SqlParityTestSupport {
 
     @Test
     void negativePowerFallsBackWithSemanticReason() throws Exception {
-        assertDataStreamParity(
+        assertFallbackDataStreamParity(
                 "SELECT POWER(metric, CAST(-1.0 AS DOUBLE)) FROM negative_power_input",
                 Types.DOUBLE,
                 Arrays.asList(

@@ -62,7 +62,7 @@ fn create_operator(
     operator: &proto::Operator,
     external_inputs: &[Arc<dyn ExecutionPlan>],
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    match operator.operator.as_ref() {
+    let plan = match operator.operator.as_ref() {
         Some(proto::operator::Operator::Input(input)) => {
             operators::input::create(input, external_inputs)
         }
@@ -184,5 +184,9 @@ fn create_operator(
         None => Err(DataFusionError::Plan(
             "StreamFusion operator is empty".to_string(),
         )),
-    }
+    }?;
+    Ok(operators::identified::IdentifiedExec::wrap(
+        operator.plan_node_id,
+        plan,
+    ))
 }

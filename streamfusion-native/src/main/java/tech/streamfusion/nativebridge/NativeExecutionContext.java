@@ -18,6 +18,7 @@ public final class NativeExecutionContext implements AutoCloseable {
     }
 
     private long handle;
+    private final long rootPlanNodeId;
 
     public NativeExecutionContext(byte[] serializedPlan, NativeMemoryManager memoryManager) {
         Objects.requireNonNull(serializedPlan, "serializedPlan");
@@ -26,6 +27,7 @@ public final class NativeExecutionContext implements AutoCloseable {
             throw new IllegalArgumentException("Native memory limit must be positive");
         }
         byte[] identifiedPlan = NativePlanNodeIdentity.assign(serializedPlan);
+        rootPlanNodeId = NativePlanNodeIdentity.rootId(identifiedPlan);
         if (!memoryManager.tryReserve(identifiedPlan.length)) {
             throw new IllegalStateException(
                     "Flink denied " + identifiedPlan.length + " bytes for the native plan JNI copy");
@@ -48,8 +50,16 @@ public final class NativeExecutionContext implements AutoCloseable {
     }
 
     public long metricValue(String name) {
+        return metricValue(rootPlanNodeId, name);
+    }
+
+    /** Returns one physical operator's native metric without including child operators. */
+    public long metricValue(long planNodeId, String name) {
         Objects.requireNonNull(name, "name");
-        return readMetricValue(handle(), name);
+        if (planNodeId <= 0) {
+            throw new IllegalArgumentException("Native plan node id must be positive");
+        }
+        return readMetricValue(handle(), planNodeId, name);
     }
 
     @Override
@@ -65,5 +75,5 @@ public final class NativeExecutionContext implements AutoCloseable {
 
     private static native void closeExecutionContext(long handle);
 
-    private static native long readMetricValue(long handle, String name);
+    private static native long readMetricValue(long handle, long planNodeId, String name);
 }

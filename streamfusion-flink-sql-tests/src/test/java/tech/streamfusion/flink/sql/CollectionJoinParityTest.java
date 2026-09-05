@@ -40,7 +40,7 @@ class CollectionJoinParityTest extends SqlParityTestSupport {
 
     @Test
     void dynamicArrayJoinDelimiterFallsBackWithSemanticReason() throws Exception {
-        assertDataStreamParity(
+        assertFallbackDataStreamParity(
                 "SELECT ARRAY_JOIN(metric, metric[1]) FROM array_input",
                 Types.OBJECT_ARRAY(Types.STRING),
                 DataTypes.ARRAY(DataTypes.STRING()),

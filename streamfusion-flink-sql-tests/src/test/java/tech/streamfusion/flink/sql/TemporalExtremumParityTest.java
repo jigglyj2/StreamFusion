@@ -41,7 +41,7 @@ class TemporalExtremumParityTest extends SqlParityTestSupport {
 
     @Test
     void nanosecondTimestampExtremaFallBackAcrossFlinksCompleteCalendarRange() throws Exception {
-        assertParity(timestampQuery(9), true);
+        assertParity(timestampQuery(9), true, false);
 
         assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
         assertThat(StreamFusionPlanningDiagnostics.explain())

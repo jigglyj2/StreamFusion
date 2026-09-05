@@ -47,6 +47,20 @@ class StreamFusionArrowArchitectureTest {
     }
 
     @Test
+    void networkExchangeUsesArrowIpcRatherThanAProprietaryRowEncoding() throws IOException {
+        String frame =
+                Files.readString(Path.of("src/main/java/tech/streamfusion/flink/exchange/NativeExchangeFrame.java"));
+        String serializer = Files.readString(
+                Path.of("src/main/java/tech/streamfusion/flink/exchange/NativeExchangeFrameSerializer.java"));
+        String plan = Files.readString(
+                Path.of("src/main/java/tech/streamfusion/flink/exchange/NativeExchangePlanSerializer.java"));
+
+        assertThat(frame).contains("Arrow IPC frame").doesNotContain("RowData");
+        assertThat(serializer).contains("Arrow IPC frame").doesNotContain("RowDataSerializer");
+        assertThat(plan).contains("EXCHANGE_TRANSPORT_ARROW_IPC_STREAM");
+    }
+
+    @Test
     void topNIsOneArrowBatchCallWithoutJavaStateOrRowAlgorithms() throws IOException {
         String operator = Files.readString(
                 Path.of("src/main/java/tech/streamfusion/flink/topn/StreamFusionArrowTopNOperator.java"));

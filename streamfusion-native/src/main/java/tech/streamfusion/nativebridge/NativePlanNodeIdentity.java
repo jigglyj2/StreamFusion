@@ -31,6 +31,15 @@ final class NativePlanNodeIdentity {
         }
     }
 
+    static long rootId(byte[] serializedPlan) {
+        try {
+            NativePlan plan = NativePlan.parseFrom(serializedPlan);
+            return plan.hasRoot() ? plan.getRoot().getPlanNodeId() : 0;
+        } catch (InvalidProtocolBufferException failure) {
+            throw new IllegalArgumentException("Invalid StreamFusion native plan", failure);
+        }
+    }
+
     private static void assign(Operator.Builder operator, AtomicLong nextId) {
         if (operator.getPlanNodeId() == 0) {
             operator.setPlanNodeId(nextId.getAndIncrement());

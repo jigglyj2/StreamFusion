@@ -30,7 +30,7 @@ class MapUnionFallbackTest extends SqlParityTestSupport {
         Map<Integer, Integer> second = new LinkedHashMap<>();
         second.put(2, 200);
 
-        assertDataStreamParity(
+        assertFallbackDataStreamParity(
                 "SELECT CARDINALITY(MAP_UNION(metric, MAP[3, 30])) FROM map_input",
                 Types.MAP(Types.INT, Types.INT),
                 DataTypes.MAP(DataTypes.INT(), DataTypes.INT()),

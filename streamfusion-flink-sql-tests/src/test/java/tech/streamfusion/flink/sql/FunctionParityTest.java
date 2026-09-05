@@ -426,7 +426,7 @@ class FunctionParityTest extends SqlParityTestSupport {
 
     @Test
     void negativeSubstringStartFallsBackToFlink() throws Exception {
-        assertDataStreamParity(
+        assertFallbackDataStreamParity(
                 "SELECT SUBSTRING(metric FROM -2 FOR 2) FROM substring_fallback_input",
                 Types.STRING,
                 Arrays.asList(Row.of("abcdef"), Row.of("你好世界"), Row.of((Object) null)),

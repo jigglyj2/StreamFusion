@@ -22,7 +22,8 @@ class ScalarExtremumFallbackTest extends SqlParityTestSupport {
                 "SELECT GREATEST(a / z, b / z), LEAST(a / z, b / z) FROM "
                         + "(VALUES (CAST(0 AS DOUBLE), CAST(1 AS DOUBLE), CAST(0 AS DOUBLE)), "
                         + "(CAST(-1 AS DOUBLE), CAST(0 AS DOUBLE), CAST(0 AS DOUBLE))) input(a, b, z)",
-                true);
+                true,
+                false);
 
         assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
         assertThat(StreamFusionPlanningDiagnostics.explain())

@@ -63,7 +63,7 @@ class CollectionExtremumParityTest extends SqlParityTestSupport {
 
     @Test
     void floatingPointArrayExtremaFallBackBecauseNanOrderingDiffers() throws Exception {
-        assertDataStreamParity(
+        assertFallbackDataStreamParity(
                 "SELECT ARRAY_MIN(metric), ARRAY_MAX(metric) FROM double_array_input",
                 Types.OBJECT_ARRAY(Types.DOUBLE),
                 DataTypes.ARRAY(DataTypes.DOUBLE()),

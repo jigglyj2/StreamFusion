@@ -14,7 +14,7 @@ concurrency:
 jobs:
   flink-sql-harness:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
     steps:
       - name: Check out StreamFusion
         uses: actions/checkout@v4
@@ -51,11 +51,15 @@ jobs:
           -pl flink-table/flink-table-api-java-uber,flink-table/flink-table-planner
           -am
 
-      - name: Build native library for JVM tests
+      - name: Build native libraries for JVM tests
         shell: bash
-        run: >-
-          CARGO_TARGET_DIR="$PWD/streamfusion-native/target/rust"
-          cargo build --manifest-path streamfusion-native/Cargo.toml --release --locked
+        run: |
+          RUSTFLAGS="-C target-cpu=native -C force-frame-pointers=yes -C debuginfo=1" \
+            CARGO_TARGET_DIR="$PWD/streamfusion-state-rocksdb/target/rust" \
+            cargo build --manifest-path streamfusion-state-rocksdb/Cargo.toml --release --locked
+          RUSTFLAGS="-C target-cpu=native -C force-frame-pointers=yes -C debuginfo=1" \
+            CARGO_TARGET_DIR="$PWD/streamfusion-native/target/rust" \
+            cargo build --manifest-path streamfusion-native/Cargo.toml --release --locked
 
       - name: Prepare Maven reactor artifacts
         run: >-
@@ -67,14 +71,17 @@ jobs:
 
       - name: Run Rust unit tests
         shell: bash
-        run: >-
-          CARGO_TARGET_DIR="$PWD/streamfusion-native/target/rust"
-          cargo test --manifest-path streamfusion-native/Cargo.toml --locked
+        run: |
+          CARGO_TARGET_DIR="$PWD/streamfusion-state-rocksdb/target/rust" \
+            cargo test --manifest-path streamfusion-state-rocksdb/Cargo.toml --locked
+          STREAMFUSION_TEST_ROCKSDB_PLUGIN="$PWD/streamfusion-state-rocksdb/target/rust/release/libstreamfusion_state_rocksdb.so" \
+            CARGO_TARGET_DIR="$PWD/streamfusion-native/target/rust" \
+            cargo test --manifest-path streamfusion-native/Cargo.toml --locked
 
       - name: Run Java unit tests
         run: >-
           mvn --batch-mode --threads 1C -Dexec.skip=true
-          -pl streamfusion-proto,streamfusion-native,streamfusion-flink,streamfusion-nexmark-benchmarks
+          -pl streamfusion-proto,streamfusion-native,streamfusion-flink,streamfusion-flink-planner,streamfusion-nexmark-benchmarks
           test
 
       - name: Run StreamFusion SQL parity harness
@@ -89,8 +96,8 @@ jobs:
           git apply --check ../dev/flink/2.3.0-streamfusion-sql-suite.patch
           && git apply ../dev/flink/2.3.0-streamfusion-sql-suite.patch
 
-      - name: Run Flink's streaming SQL suite on StreamFusion MiniClusters
-        timeout-minutes: 60
+      - name: Run Flink's streaming and batch SQL suites on StreamFusion MiniClusters
+        timeout-minutes: 120
         run: dev/integration/run-flink-sql-suite.sh "$PWD/flink"
 
       - name: Download the Flink runner distribution

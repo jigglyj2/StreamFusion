@@ -59,7 +59,7 @@ class CollectionSortParityTest extends SqlParityTestSupport {
 
     @Test
     void floatingPointArraySortFallsBackBecauseNanOrderingIsNotApproved() throws Exception {
-        assertDataStreamParity(
+        assertFallbackDataStreamParity(
                 "SELECT ARRAY_SORT(metric) FROM double_array_input",
                 Types.OBJECT_ARRAY(Types.DOUBLE),
                 DataTypes.ARRAY(DataTypes.DOUBLE()),

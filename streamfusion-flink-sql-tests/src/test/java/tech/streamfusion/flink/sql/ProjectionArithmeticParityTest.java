@@ -61,7 +61,7 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
     @MethodSource("nativeProjectionCases")
     void nativeInputReferenceProjectionsMatchFlinkByteForByte(
             String ignoredName, String sql, boolean nativeExecutionExpected) throws Exception {
-        assertParity(sql, true);
+        assertParity(sql, true, nativeExecutionExpected);
 
         if (nativeExecutionExpected) {
             assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
@@ -72,7 +72,7 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
         return Stream.of(
                 Arguments.of("multi-column-reordered-types", MULTI_COLUMN_PROJECTION_SQL, true),
                 Arguments.of("filter-on-unprojected-int", FILTER_ON_UNPROJECTED_COLUMN_SQL, true),
-                Arguments.of("casts-force-whole-plan-fallback", SCALAR_TYPE_PROJECTION_SQL, false));
+                Arguments.of("all-scalar-types", SCALAR_TYPE_PROJECTION_SQL, true));
     }
 
     @Test
@@ -484,7 +484,7 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
         String sql = "SELECT metric + 1.5E0, metric * -1.0E0 FROM (VALUES "
                 + "(CAST('NaN' AS DOUBLE)), (CAST('Infinity' AS DOUBLE)), "
                 + "(CAST('-Infinity' AS DOUBLE)), (-0.0E0)) AS input(metric)";
-        assertParity(sql, true);
+        assertParity(sql, true, false);
 
         assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
     }

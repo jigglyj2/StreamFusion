@@ -349,7 +349,27 @@ impl RegularJoinProcessor {
             Err(error) => Err(error.into()),
         };
         match result {
-            Ok(output) => self.finish_output(output, base),
+            Ok(output) => {
+                let output = if !self.plan.bounded_final_output {
+                    if let Some(calcs) = &self.fused_output_calcs {
+                        self.fused_calc_batches = self
+                            .fused_calc_batches
+                            .saturating_add(calcs.stage_count() as u64);
+                        match calcs.execute(output) {
+                            Ok(output) => output,
+                            Err(error) => {
+                                self.scratch_reservation.resize(0)?;
+                                return Err(error);
+                            }
+                        }
+                    } else {
+                        output
+                    }
+                } else {
+                    output
+                };
+                self.finish_output(output, base)
+            }
             Err(error) => {
                 self.scratch_reservation.resize(0)?;
                 Err(error)
@@ -2267,6 +2287,36 @@ mod tests {
     }
 
     #[test]
+    fn streaming_join_fuses_the_adjacent_calc_tail_in_one_native_plan() {
+        let broker = Arc::new(TestBroker::new(64 << 20));
+        let mut processor = RegularJoinProcessor::new(
+            &streaming_plan_with_identity_calc(proto::RegularJoinType::Inner),
+            128,
+            0,
+            127,
+            HostMemoryReservation::new(broker.clone(), "streaming fused Calc join"),
+        )
+        .unwrap();
+        assert_eq!(
+            processor
+                .process_arrow(0, batch(&[1], &["left"], &[INSERT]))
+                .unwrap()
+                .num_rows(),
+            0
+        );
+        let output = processor
+            .process_arrow(1, batch(&[1], &["right"], &[INSERT]))
+            .unwrap();
+        assert_eq!(output.num_rows(), 1);
+        assert_eq!(output.num_columns(), 6);
+        assert_eq!(kinds(&output), vec![INSERT]);
+        assert_eq!(processor.statistics()[2], 2);
+        drop(output);
+        drop(processor);
+        assert_eq!(broker.reserved(), 0);
+    }
+
+    #[test]
     fn bounded_join_ingests_exchange_frames_without_exporting_empty_arrow_batches() {
         let broker = Arc::new(TestBroker::new(64 << 20));
         let mut processor = RegularJoinProcessor::new(
@@ -2639,6 +2689,20 @@ mod tests {
     fn bounded_plan_with_identity_calc(join_type: proto::RegularJoinType) -> Vec<u8> {
         let mut native =
             proto::NativePlan::decode(bounded_plan(join_type, true, None).as_slice()).unwrap();
+        let join = native.root.take().unwrap();
+        native.root = Some(proto::Operator {
+            plan_node_id: 2,
+            operator: Some(proto::operator::Operator::Calc(Box::new(proto::Calc {
+                input: Some(Box::new(join)),
+                projections: (0..6).map(input_reference).collect(),
+                condition: None,
+            }))),
+        });
+        native.encode_to_vec()
+    }
+
+    fn streaming_plan_with_identity_calc(join_type: proto::RegularJoinType) -> Vec<u8> {
+        let mut native = proto::NativePlan::decode(plan(join_type).as_slice()).unwrap();
         let join = native.root.take().unwrap();
         native.root = Some(proto::Operator {
             plan_node_id: 2,

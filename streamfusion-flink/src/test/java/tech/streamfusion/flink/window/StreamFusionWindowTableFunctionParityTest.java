@@ -31,8 +31,14 @@ import org.junit.jupiter.api.Test;
 import tech.streamfusion.flink.arrow.ArrowCDataBridge;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.NativeCalcResult;
+import tech.streamfusion.flink.proto.FlinkLogicalTypeProto;
 import tech.streamfusion.nativebridge.NativeExecutionContext;
 import tech.streamfusion.nativebridge.NativeMemoryManager;
+import tech.streamfusion.proto.plan.v1.Calc;
+import tech.streamfusion.proto.plan.v1.Expression;
+import tech.streamfusion.proto.plan.v1.InputReference;
+import tech.streamfusion.proto.plan.v1.NativePlan;
+import tech.streamfusion.proto.plan.v1.Operator;
 import tech.streamfusion.proto.plan.v1.WindowKind;
 
 class StreamFusionWindowTableFunctionParityTest {
@@ -71,6 +77,50 @@ class StreamFusionWindowTableFunctionParityTest {
             assertThat(runStreamFusion(testCase))
                     .as(testCase.kind.name())
                     .containsExactlyElementsOf(runFlink(testCase.assigner));
+        }
+    }
+
+    @Test
+    void attributesNativeMetricsToTheMatchingProtobufPlanNode() throws Exception {
+        byte[] windowBytes = StreamFusionWindowTableFunctionPlan.create(
+                INPUT_TYPE,
+                1,
+                new int[0],
+                false,
+                "UTC",
+                new StreamFusionWindowTableFunctionTranslator.WindowParameters(
+                        WindowKind.WINDOW_KIND_TUMBLE, 5_000, 0, 0));
+        NativePlan windowPlan = NativePlan.parseFrom(windowBytes);
+        Operator window = windowPlan.getRoot().toBuilder()
+                .setPlanNodeId(12)
+                .setWindowTableFunction(windowPlan.getRoot().getWindowTableFunction().toBuilder()
+                        .setInput(windowPlan.getRoot().getWindowTableFunction().getInput().toBuilder()
+                                .setPlanNodeId(13)))
+                .build();
+        Calc.Builder calc = Calc.newBuilder().setInput(window);
+        for (int index = 0; index <= OUTPUT_TYPE.getFieldCount(); index++) {
+            calc.addProjections(Expression.newBuilder()
+                    .setInputReference(InputReference.newBuilder()
+                            .setIndex(index)
+                            .setType(FlinkLogicalTypeProto.serialize(
+                                    index == OUTPUT_TYPE.getFieldCount()
+                                            ? new IntType(false)
+                                            : OUTPUT_TYPE.getTypeAt(index)))));
+        }
+        byte[] plan = windowPlan.toBuilder()
+                .setRoot(Operator.newBuilder().setPlanNodeId(11).setCalc(calc))
+                .build()
+                .toByteArray();
+        NativeMemoryManager memoryManager = tech.streamfusion.flink.TestingNativeMemoryManager.create();
+        try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+                NativeExecutionContext context = new NativeExecutionContext(plan, memoryManager);
+                ArrowRowDataBatch input =
+                        ArrowRowDataBatch.transpose(List.of(GenericRowData.of(1, null)), INPUT_TYPE, allocator);
+                NativeCalcResult ignored = new ArrowCDataBridge.ReusableExecution(context, OUTPUT_TYPE, allocator)
+                        .executeWithSelection(input)) {
+            assertThat(context.metricValue(11, "numNullRowTimeRecordsDropped")).isZero();
+            assertThat(context.metricValue(12, "numNullRowTimeRecordsDropped")).isEqualTo(1);
+            assertThat(context.metricValue(13, "numNullRowTimeRecordsDropped")).isZero();
         }
     }
 

@@ -33,6 +33,9 @@ class RegularJoinParityTest extends SqlParityTestSupport {
 
         assertThat(streamFusion).isEqualTo(flink);
         assertThat(StreamFusionPlannerFactory.nativeRegularJoinBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+                .as("the output Calc should execute inside the persistent regular-join handle")
+                .isGreaterThan(0);
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 

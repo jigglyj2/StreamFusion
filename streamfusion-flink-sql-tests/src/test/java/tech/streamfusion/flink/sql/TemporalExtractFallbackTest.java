@@ -23,7 +23,8 @@ class TemporalExtractFallbackTest extends SqlParityTestSupport {
                         + "(VALUES (TIMESTAMP '1969-12-31 23:59:59.123'), "
                         + "(TIMESTAMP '2024-02-29 12:34:56.987'), "
                         + "(CAST(NULL AS TIMESTAMP(3)))) input(timestamp_value)",
-                true);
+                true,
+                false);
 
         assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
         assertThat(StreamFusionPlanningDiagnostics.explain())
@@ -38,7 +39,8 @@ class TemporalExtractFallbackTest extends SqlParityTestSupport {
                 "SELECT EXTRACT(CENTURY FROM date_value) FROM "
                         + "(VALUES (DATE '0001-01-01'), (DATE '2000-02-29'), "
                         + "(DATE '9999-12-31'), (CAST(NULL AS DATE))) input(date_value)",
-                true);
+                true,
+                false);
 
         assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
         assertThat(StreamFusionPlanningDiagnostics.explain())

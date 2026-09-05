@@ -42,6 +42,7 @@ import org.apache.flink.util.CloseableIterator;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.extension.ExtendWith;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
+import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 
 @ExtendWith(SharedMiniClusterExtension.class)
 abstract class SqlParityTestSupport {
@@ -87,11 +88,20 @@ abstract class SqlParityTestSupport {
     }
 
     protected static void assertParity(String sql, boolean streaming) throws Exception {
+        assertParity(sql, streaming, true);
+    }
+
+    protected static void assertParity(String sql, boolean streaming, boolean accelerationExpected) throws Exception {
         byte[] flinkResult = execute(sql, streaming, false);
         byte[] streamFusionResult = execute(sql, streaming, true);
 
         assertThat(StreamFusionPlannerFactory.createdPlannerCount()).isEqualTo(1);
         assertThat(StreamFusionPlannerFactory.translatedPlanCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlanningDiagnostics.explain())
+                .withFailMessage(
+                        "Unexpected StreamFusion acceleration outcome for SQL:%n%s%n%s",
+                        sql, StreamFusionPlanningDiagnostics.explain())
+                .contains(accelerationExpected ? "Accelerated: yes" : "Accelerated: no");
         assertThat(streamFusionResult).isEqualTo(flinkResult);
     }
 
@@ -117,7 +127,18 @@ abstract class SqlParityTestSupport {
     protected static void assertBatchDataStreamParity(
             String sql, TypeInformation<?> type, DataType logicalType, List<Row> rows, String tableName)
             throws Exception {
-        assertDataStreamParity(sql, type, logicalType, rows, tableName, false);
+        assertDataStreamParity(sql, type, logicalType, rows, tableName, false, true);
+    }
+
+    protected static void assertFallbackDataStreamParity(
+            String sql, TypeInformation<?> type, DataType logicalType, List<Row> rows, String tableName)
+            throws Exception {
+        assertDataStreamParity(sql, type, logicalType, rows, tableName, true, false);
+    }
+
+    protected static void assertFallbackDataStreamParity(
+            String sql, TypeInformation<?> type, List<Row> rows, String tableName) throws Exception {
+        assertFallbackDataStreamParity(sql, type, null, rows, tableName);
     }
 
     private static void assertDataStreamParity(
@@ -128,11 +149,28 @@ abstract class SqlParityTestSupport {
             String tableName,
             boolean streaming)
             throws Exception {
+        assertDataStreamParity(sql, type, logicalType, rows, tableName, streaming, true);
+    }
+
+    private static void assertDataStreamParity(
+            String sql,
+            TypeInformation<?> type,
+            DataType logicalType,
+            List<Row> rows,
+            String tableName,
+            boolean streaming,
+            boolean accelerationExpected)
+            throws Exception {
         byte[] flinkResult = executeDataStream(sql, type, logicalType, rows, tableName, false, streaming);
         byte[] streamFusionResult = executeDataStream(sql, type, logicalType, rows, tableName, true, streaming);
 
         assertThat(StreamFusionPlannerFactory.createdPlannerCount()).isEqualTo(1);
         assertThat(StreamFusionPlannerFactory.translatedPlanCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlanningDiagnostics.explain())
+                .withFailMessage(
+                        "Unexpected StreamFusion acceleration outcome for SQL:%n%s%n%s",
+                        sql, StreamFusionPlanningDiagnostics.explain())
+                .contains(accelerationExpected ? "Accelerated: yes" : "Accelerated: no");
         assertThat(streamFusionResult).isEqualTo(flinkResult);
     }
 

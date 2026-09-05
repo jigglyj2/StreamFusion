@@ -84,7 +84,7 @@ class SearchParityTest extends SqlParityTestSupport {
 
     @Test
     void fixedBinaryPointSearchFallsBackToFlink() throws Exception {
-        assertDataStreamParity(
+        assertFallbackDataStreamParity(
                 "SELECT metric FROM fixed_binary_fallback_input WHERE metric IN (X'0000', X'80FF')",
                 Types.PRIMITIVE_ARRAY(Types.BYTE),
                 DataTypes.BINARY(2),
@@ -107,17 +107,15 @@ class SearchParityTest extends SqlParityTestSupport {
         assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
     }
 
-    @ParameterizedTest(name = "null-aware fallback {0}")
+    @ParameterizedTest(name = "null-aware search {0}")
     @ValueSource(
             strings = {
                 "metric NOT IN (1, 3, NULL)",
                 "NOT (metric IN (1, 3, NULL))",
                 "(metric IN (1, 3, NULL)) IS NOT FALSE"
             })
-    void nullAwareNegatedOrTruthTestSearchUsesFlink(String predicate) throws Exception {
+    void nullAwareNegatedOrTruthTestSearchMatchesFlinkByteForByte(String predicate) throws Exception {
         assertIntegerDataStreamParity("SELECT metric FROM integer_input WHERE " + predicate);
-
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
     }
 
     @ParameterizedTest(name = "VARBINARY {0}")
@@ -143,7 +141,7 @@ class SearchParityTest extends SqlParityTestSupport {
 
     @Test
     void varbinaryPointSearchFallsBackAndMatchesFlinkByteForByte() throws Exception {
-        assertDataStreamParity(
+        assertFallbackDataStreamParity(
                 "SELECT metric FROM varbinary_input WHERE metric IN (X'00', X'03', X'80')",
                 Types.PRIMITIVE_ARRAY(Types.BYTE),
                 Arrays.asList(Row.of(new byte[] {0x00}), Row.of(new byte[] {0x03}), Row.of(new byte[] {(byte) 0x80})),

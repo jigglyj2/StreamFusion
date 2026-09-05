@@ -42,7 +42,7 @@ class CollectionSplitParityTest extends SqlParityTestSupport {
 
     @Test
     void emptyDelimiterFallsBackBecauseFlinkSplitsCharacters() throws Exception {
-        assertDataStreamParity(
+        assertFallbackDataStreamParity(
                 "SELECT SPLIT(metric, '') FROM string_input",
                 Types.STRING,
                 DataTypes.STRING(),

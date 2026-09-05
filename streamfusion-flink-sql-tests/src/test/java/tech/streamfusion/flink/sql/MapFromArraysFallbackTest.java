@@ -22,7 +22,7 @@ import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 class MapFromArraysFallbackTest extends SqlParityTestSupport {
     @Test
     void mapFromArraysFallsBackForFlinkGeneratedConsumerParity() throws Exception {
-        assertDataStreamParity(
+        assertFallbackDataStreamParity(
                 "SELECT CARDINALITY(MAP_FROM_ARRAYS(metric, ARRAY['first', 'second'])) FROM array_input",
                 Types.OBJECT_ARRAY(Types.INT),
                 DataTypes.ARRAY(DataTypes.INT()),

@@ -52,10 +52,95 @@ public final class StreamFusionRegularJoinTranslator {
             StreamExecutionEnvironment environment,
             RowDataKeySelector leftSelector,
             RowDataKeySelector rightSelector) {
-        String reason = unsupportedReason(
+        return translateStreamingInternal(
+                left,
+                right,
                 leftType,
                 rightType,
                 outputType,
+                outputType,
+                joinSpec,
+                leftUpsertKeys,
+                rightUpsertKeys,
+                leftStateTtlMillis,
+                rightStateTtlMillis,
+                config,
+                environment,
+                leftSelector,
+                rightSelector,
+                java.util.Collections.emptyList(),
+                java.util.Collections.emptyList(),
+                java.util.Collections.emptyList(),
+                java.util.Collections.emptyList());
+    }
+
+    /** Translates a streaming regular join and adjacent output Calcs as one native handle. */
+    public static Transformation<RowData> translateWithOutputCalcs(
+            Transformation<RowData> left,
+            Transformation<RowData> right,
+            RowType leftType,
+            RowType rightType,
+            RowType joinOutputType,
+            RowType outputType,
+            JoinSpec joinSpec,
+            List<int[]> leftUpsertKeys,
+            List<int[]> rightUpsertKeys,
+            long leftStateTtlMillis,
+            long rightStateTtlMillis,
+            ReadableConfig config,
+            StreamExecutionEnvironment environment,
+            RowDataKeySelector leftSelector,
+            RowDataKeySelector rightSelector,
+            List<RowType> calcInputTypes,
+            List<RowType> calcOutputTypes,
+            List<List<?>> calcProjections,
+            List<?> calcConditions) {
+        return translateStreamingInternal(
+                left,
+                right,
+                leftType,
+                rightType,
+                joinOutputType,
+                outputType,
+                joinSpec,
+                leftUpsertKeys,
+                rightUpsertKeys,
+                leftStateTtlMillis,
+                rightStateTtlMillis,
+                config,
+                environment,
+                leftSelector,
+                rightSelector,
+                calcInputTypes,
+                calcOutputTypes,
+                calcProjections,
+                calcConditions);
+    }
+
+    private static Transformation<RowData> translateStreamingInternal(
+            Transformation<RowData> left,
+            Transformation<RowData> right,
+            RowType leftType,
+            RowType rightType,
+            RowType joinOutputType,
+            RowType outputType,
+            JoinSpec joinSpec,
+            List<int[]> leftUpsertKeys,
+            List<int[]> rightUpsertKeys,
+            long leftStateTtlMillis,
+            long rightStateTtlMillis,
+            ReadableConfig config,
+            StreamExecutionEnvironment environment,
+            RowDataKeySelector leftSelector,
+            RowDataKeySelector rightSelector,
+            List<RowType> calcInputTypes,
+            List<RowType> calcOutputTypes,
+            List<List<?>> calcProjections,
+            List<?> calcConditions) {
+        String reason = unsupportedReason(
+                leftType,
+                rightType,
+                joinOutputType,
                 joinSpec,
                 leftUpsertKeys,
                 rightUpsertKeys,
@@ -65,14 +150,30 @@ public final class StreamFusionRegularJoinTranslator {
         if (reason != null) {
             return null;
         }
-        byte[] plan = StreamFusionRegularJoinPlan.create(
-                leftType,
-                rightType,
-                joinSpec.getLeftKeys(),
-                joinSpec.getRightKeys(),
-                joinSpec.getFilterNulls(),
-                joinSpec.getJoinType(),
-                joinSpec.getNonEquiCondition().orElse(null));
+        byte[] plan = calcInputTypes.isEmpty()
+                ? StreamFusionRegularJoinPlan.create(
+                        leftType,
+                        rightType,
+                        joinSpec.getLeftKeys(),
+                        joinSpec.getRightKeys(),
+                        joinSpec.getFilterNulls(),
+                        joinSpec.getJoinType(),
+                        joinSpec.getNonEquiCondition().orElse(null))
+                : StreamFusionRegularJoinPlan.createWithOutputCalcs(
+                        leftType,
+                        rightType,
+                        joinSpec.getLeftKeys(),
+                        joinSpec.getRightKeys(),
+                        joinSpec.getFilterNulls(),
+                        joinSpec.getJoinType(),
+                        joinSpec.getNonEquiCondition().orElse(null),
+                        calcInputTypes,
+                        calcOutputTypes,
+                        calcProjections,
+                        calcConditions);
+        if (plan == null) {
+            return null;
+        }
         StreamFusionStateBackendFactory.install(environment);
         Transformation<RowData> keyedLeft = keyed(left, leftType, joinSpec.getLeftKeys(), config, environment, false);
         Transformation<RowData> keyedRight =

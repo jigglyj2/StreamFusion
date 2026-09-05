@@ -77,7 +77,12 @@ Every intermediate StreamFusion operator (that is, every operator other than a s
 sink) must satisfy all of the following before its functionality is considered accelerated:
 
 1. Accept Arrow batches as input and emit Arrow batches as output. Do not introduce a
-   RowData-shaped internal data path.
+   RowData-shaped internal data path. A Flink network exchange is the only transport exception:
+   its writer may emit and its reader may consume a transport frame, but the bytes carried over
+   the wire must be a standard Arrow IPC stream/message plus explicitly versioned StreamFusion
+   routing metadata. Decode the frame exactly once at the receiving native-plan edge; do not use
+   a proprietary row encoding or expose the frame as the logical input/output of operators beyond
+   that exchange edge.
 2. Account for every native allocation, including DataFusion and custom Rust state, through
    Flink's managed/off-heap memory accounting and allocator budget.
 3. Expose the same metric surface and semantics as the corresponding Flink operator,

@@ -35,7 +35,7 @@ class ComparisonParityTest extends SqlParityTestSupport {
     void nativeIntegerComparisonsMatchFlinkByteForByte(
             String ignoredName, String predicate, boolean nativeExecutionExpected) throws Exception {
         String sql = "SELECT id FROM (VALUES (1), (2), (3), (4), (5)) AS input(id) WHERE " + predicate;
-        assertParity(sql, true);
+        assertParity(sql, true, nativeExecutionExpected || ignoredName.contains("constant-folded"));
 
         if (nativeExecutionExpected) {
             assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
@@ -89,7 +89,7 @@ class ComparisonParityTest extends SqlParityTestSupport {
                 + valueType
                 + "), 30)) AS input(id, payload) WHERE "
                 + predicate;
-        assertParity(sql, true);
+        assertParity(sql, true, nativeExecutionExpected);
 
         if (nativeExecutionExpected) {
             assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
@@ -98,9 +98,9 @@ class ComparisonParityTest extends SqlParityTestSupport {
 
     private static Stream<Arguments> nativeNarrowIntegerComparisonCases() {
         return Stream.of(
-                Arguments.of("TINYINT coerced input falls back", "TINYINT", "id >= 0", false),
+                Arguments.of("TINYINT coerced input", "TINYINT", "id >= 0", true),
                 Arguments.of("TINYINT native comparison", "TINYINT", "0 < id", true),
-                Arguments.of("SMALLINT coerced input falls back", "SMALLINT", "id >= 0", false),
+                Arguments.of("SMALLINT coerced input", "SMALLINT", "id >= 0", true),
                 Arguments.of("SMALLINT native comparison", "SMALLINT", "0 < id", true));
     }
 
@@ -117,7 +117,7 @@ class ComparisonParityTest extends SqlParityTestSupport {
                 + valueType
                 + "), 30)) AS input(metric, payload) WHERE "
                 + predicate;
-        assertParity(sql, true);
+        assertParity(sql, true, nativeExecutionExpected);
 
         if (nativeExecutionExpected) {
             assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
@@ -126,9 +126,9 @@ class ComparisonParityTest extends SqlParityTestSupport {
 
     private static Stream<Arguments> nativeFloatingPointComparisonCases() {
         return Stream.of(
-                Arguments.of("FLOAT coerced input falls back", "FLOAT", "metric >= 0.5", false),
+                Arguments.of("FLOAT coerced literal", "FLOAT", "metric >= 0.5", true),
                 Arguments.of("FLOAT native comparison", "FLOAT", "CAST(0.5 AS FLOAT) < metric", true),
-                Arguments.of("DOUBLE coerced input falls back", "DOUBLE", "metric >= 0.5", false),
+                Arguments.of("DOUBLE coerced literal", "DOUBLE", "metric >= 0.5", true),
                 Arguments.of("DOUBLE native comparison", "DOUBLE", "CAST(0.5 AS DOUBLE) < metric", true));
     }
 
@@ -418,7 +418,7 @@ class ComparisonParityTest extends SqlParityTestSupport {
     @MethodSource("nativeTimestampDataStreamRangeCases")
     void nanosecondTimestampDataStreamRangesFallBackAndMatchFlinkByteForByte(String ignoredName, String predicate)
             throws Exception {
-        assertDataStreamParity(
+        assertFallbackDataStreamParity(
                 "SELECT metric FROM timestamp_input WHERE " + predicate,
                 Types.SQL_TIMESTAMP,
                 Arrays.asList(

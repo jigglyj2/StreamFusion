@@ -62,6 +62,9 @@ public final class StreamFusionExecCalc extends CommonExecCalc implements Stream
     protected Transformation<RowData> translateToPlanInternal(PlannerBase planner, ExecNodeConfig config) {
         List<StreamFusionExecCalc> chain = adjacentChain(this);
         ExecEdge inputEdge = chain.get(0).getInputEdges().get(0);
+        if (inputEdge.getSource() instanceof StreamFusionExecRegularJoin) {
+            return ((StreamFusionExecRegularJoin) inputEdge.getSource()).translateWithOutputCalcs(planner, chain);
+        }
         List<StreamFusionExecArrayUnnest> fusedUnnests = inputEdge.getSource() instanceof StreamFusionExecArrayUnnest
                 ? StreamFusionExecArrayUnnest.adjacentChain((StreamFusionExecArrayUnnest) inputEdge.getSource())
                 : Collections.emptyList();
@@ -196,5 +199,13 @@ public final class StreamFusionExecCalc extends CommonExecCalc implements Stream
             }
             current = (StreamFusionExecCalc) inputEdge.getSource();
         }
+    }
+
+    List<RexNode> streamFusionProjection() {
+        return streamFusionProjection;
+    }
+
+    @Nullable RexNode streamFusionCondition() {
+        return streamFusionCondition;
     }
 }

@@ -80,7 +80,7 @@ class ComputedMapUnnestParityTest extends SqlParityTestSupport {
 
     @Test
     void mapEntriesUnnestFallsBackForFlinkNullableEntryRowTyping() throws Exception {
-        assertDataStreamParity(
+        assertFallbackDataStreamParity(
                 "SELECT map_key, map_value FROM map_entries_unnest_fallback_input "
                         + "CROSS JOIN UNNEST(MAP_ENTRIES(metric)) AS expanded(map_key, map_value)",
                 Types.MAP(Types.STRING, Types.INT),

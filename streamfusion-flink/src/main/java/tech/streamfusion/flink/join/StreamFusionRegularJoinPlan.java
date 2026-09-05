@@ -64,6 +64,25 @@ final class StreamFusionRegularJoinPlan {
         return nativePlan(root);
     }
 
+    static byte[] createWithOutputCalcs(
+            RowType leftType,
+            RowType rightType,
+            int[] leftKeys,
+            int[] rightKeys,
+            boolean[] filterNulls,
+            FlinkJoinType joinType,
+            Object residualCondition,
+            List<RowType> calcInputTypes,
+            List<RowType> calcOutputTypes,
+            List<List<?>> calcProjections,
+            List<?> calcConditions) {
+        Operator join = createOperator(
+                leftType, rightType, leftKeys, rightKeys, filterNulls, joinType, residualCondition, false);
+        Operator root = StreamFusionCalcTranslator.appendChangelogCalcOperators(
+                join, calcInputTypes, calcOutputTypes, calcProjections, calcConditions);
+        return root == null ? null : nativePlan(root);
+    }
+
     private static byte[] create(
             RowType leftType,
             RowType rightType,

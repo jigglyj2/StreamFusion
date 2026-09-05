@@ -26,7 +26,7 @@ import tech.streamfusion.flink.StreamFusionPlannerFactory;
 class RoundParityTest extends SqlParityTestSupport {
     @Test
     void floatingRoundFallsBackWithSemanticReason() throws Exception {
-        assertDataStreamParity(
+        assertFallbackDataStreamParity(
                 "SELECT ROUND(metric, 2) FROM round_input",
                 Types.DOUBLE,
                 Arrays.asList(

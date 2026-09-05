@@ -83,7 +83,12 @@ changelog-state wrapping.
 The planner replaces an eligible streaming or bounded join with a distinct StreamFusion exec node and sends
 a versioned protobuf join contract to Rust. Each input crosses a native Arrow exchange edge; the
 join itself receives Arrow batches and returns Arrow batches without a RowData loop or per-record
-JNI call.
+JNI call. A regular streaming join followed by one or more eligible Calc nodes is lowered as one
+persistent native join handle with a reusable DataFusion Calc tail. Those stages exchange the
+join's Arrow `RecordBatch` directly in Rust, so the fused edge adds neither a Java operator nor an
+additional JNI round trip. The same path is used by bounded hash and nested-loop joins. Other
+stateful operator families currently retain their own native handles and therefore do not yet
+claim cross-operator fusion.
 
 Rust stores an ordered multiset for both input sides under a Flink-compatible key group. One input
 batch performs one distinct batched state read and one atomic batched write. The same opaque state

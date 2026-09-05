@@ -27,7 +27,7 @@ import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 class OverlayFallbackTest extends SqlParityTestSupport {
     @Test
     void overlayFallsBackWithUtf16BoundaryReason() throws Exception {
-        assertDataStreamParity(
+        assertFallbackDataStreamParity(
                 "SELECT OVERLAY(metric PLACING 'x' FROM 2 FOR 1) FROM overlay_input",
                 Types.STRING,
                 Arrays.asList(Row.of("abc"), Row.of("😀x"), Row.of(""), Row.of((Object) null)),

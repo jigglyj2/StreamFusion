@@ -16,6 +16,7 @@ pub(super) mod expand;
 pub(crate) mod fused_calc;
 pub(crate) mod global_group_aggregate;
 pub(crate) mod group_aggregate;
+pub(crate) mod identified;
 pub(crate) mod incremental_group_aggregate;
 pub(super) mod input;
 pub(crate) mod interval_join;

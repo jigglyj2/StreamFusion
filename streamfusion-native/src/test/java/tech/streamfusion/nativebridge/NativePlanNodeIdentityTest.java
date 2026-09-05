@@ -33,6 +33,7 @@ class NativePlanNodeIdentityTest {
 
         assertThat(identified.getRoot().getPlanNodeId()).isEqualTo(41);
         assertThat(identified.getRoot().getCalc().getInput().getPlanNodeId()).isEqualTo(42);
+        assertThat(NativePlanNodeIdentity.rootId(identified.toByteArray())).isEqualTo(41);
         assertThat(NativePlanNodeIdentity.assign(original.toByteArray()))
                 .containsExactly(NativePlanNodeIdentity.assign(original.toByteArray()));
     }

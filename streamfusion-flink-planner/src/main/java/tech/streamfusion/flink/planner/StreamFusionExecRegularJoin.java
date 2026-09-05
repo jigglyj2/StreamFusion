@@ -6,7 +6,9 @@ package tech.streamfusion.flink.planner;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.List;
+import org.apache.calcite.rex.RexNode;
 import org.apache.flink.api.dag.Transformation;
 import org.apache.flink.configuration.ReadableConfig;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -62,6 +64,15 @@ public final class StreamFusionExecRegularJoin extends ExecNodeBase<RowData> imp
     @SuppressWarnings("unchecked")
     @Override
     protected Transformation<RowData> translateToPlanInternal(PlannerBase planner, ExecNodeConfig config) {
+        return translateInternal(planner, null);
+    }
+
+    Transformation<RowData> translateWithOutputCalcs(PlannerBase planner, List<StreamFusionExecCalc> calcs) {
+        return translateInternal(planner, calcs);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Transformation<RowData> translateInternal(PlannerBase planner, List<StreamFusionExecCalc> outputCalcs) {
         ExecEdge leftEdge = getInputEdges().get(0);
         ExecEdge rightEdge = getInputEdges().get(1);
         Transformation<RowData> left = (Transformation<RowData>) leftEdge.translateToPlan(planner);
@@ -75,38 +86,95 @@ public final class StreamFusionExecRegularJoin extends ExecNodeBase<RowData> imp
         try {
             Class<?> translator = Class.forName(
                     TRANSLATOR_CLASS, true, planner.getFlinkContext().getClassLoader());
-            Method method = translator.getMethod(
-                    "translate",
-                    Transformation.class,
-                    Transformation.class,
-                    RowType.class,
-                    RowType.class,
-                    RowType.class,
-                    JoinSpec.class,
-                    List.class,
-                    List.class,
-                    long.class,
-                    long.class,
-                    ReadableConfig.class,
-                    StreamExecutionEnvironment.class,
-                    RowDataKeySelector.class,
-                    RowDataKeySelector.class);
-            Transformation<RowData> result = (Transformation<RowData>) method.invoke(
-                    null,
-                    left,
-                    right,
-                    leftType,
-                    rightType,
-                    (RowType) getOutputType(),
-                    joinSpec,
-                    leftUpsertKeys,
-                    rightUpsertKeys,
-                    leftStateTtlMillis,
-                    rightStateTtlMillis,
-                    getPersistedConfig(),
-                    planner.getExecEnv(),
-                    leftSelector,
-                    rightSelector);
+            Method method;
+            Transformation<RowData> result;
+            if (outputCalcs == null) {
+                method = translator.getMethod(
+                        "translate",
+                        Transformation.class,
+                        Transformation.class,
+                        RowType.class,
+                        RowType.class,
+                        RowType.class,
+                        JoinSpec.class,
+                        List.class,
+                        List.class,
+                        long.class,
+                        long.class,
+                        ReadableConfig.class,
+                        StreamExecutionEnvironment.class,
+                        RowDataKeySelector.class,
+                        RowDataKeySelector.class);
+                result = (Transformation<RowData>) method.invoke(
+                        null,
+                        left,
+                        right,
+                        leftType,
+                        rightType,
+                        (RowType) getOutputType(),
+                        joinSpec,
+                        leftUpsertKeys,
+                        rightUpsertKeys,
+                        leftStateTtlMillis,
+                        rightStateTtlMillis,
+                        getPersistedConfig(),
+                        planner.getExecEnv(),
+                        leftSelector,
+                        rightSelector);
+            } else {
+                List<RowType> calcInputTypes = new ArrayList<>(outputCalcs.size());
+                List<RowType> calcOutputTypes = new ArrayList<>(outputCalcs.size());
+                List<List<RexNode>> projections = new ArrayList<>(outputCalcs.size());
+                List<RexNode> conditions = new ArrayList<>(outputCalcs.size());
+                for (StreamFusionExecCalc calc : outputCalcs) {
+                    calcInputTypes.add((RowType) calc.getInputEdges().get(0).getOutputType());
+                    calcOutputTypes.add((RowType) calc.getOutputType());
+                    projections.add(calc.streamFusionProjection());
+                    conditions.add(calc.streamFusionCondition());
+                }
+                method = translator.getMethod(
+                        "translateWithOutputCalcs",
+                        Transformation.class,
+                        Transformation.class,
+                        RowType.class,
+                        RowType.class,
+                        RowType.class,
+                        RowType.class,
+                        JoinSpec.class,
+                        List.class,
+                        List.class,
+                        long.class,
+                        long.class,
+                        ReadableConfig.class,
+                        StreamExecutionEnvironment.class,
+                        RowDataKeySelector.class,
+                        RowDataKeySelector.class,
+                        List.class,
+                        List.class,
+                        List.class,
+                        List.class);
+                result = (Transformation<RowData>) method.invoke(
+                        null,
+                        left,
+                        right,
+                        leftType,
+                        rightType,
+                        (RowType) getOutputType(),
+                        calcOutputTypes.get(calcOutputTypes.size() - 1),
+                        joinSpec,
+                        leftUpsertKeys,
+                        rightUpsertKeys,
+                        leftStateTtlMillis,
+                        rightStateTtlMillis,
+                        getPersistedConfig(),
+                        planner.getExecEnv(),
+                        leftSelector,
+                        rightSelector,
+                        calcInputTypes,
+                        calcOutputTypes,
+                        projections,
+                        conditions);
+            }
             if (result == null) {
                 throw new IllegalStateException("A selected StreamFusion regular join failed translation");
             }

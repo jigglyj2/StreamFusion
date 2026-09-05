@@ -86,13 +86,14 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeExecutionContex
     mut unowned_env: EnvUnowned<'caller>,
     _class: JClass<'caller>,
     handle: jlong,
+    plan_node_id: jlong,
     name: JString<'caller>,
 ) -> jlong {
     unowned_env
         .with_env(|env| -> jni::errors::Result<_> {
             let name = name.try_to_string(env)?;
             execution_context::get(handle)
-                .and_then(|context| context.metric_value(&name))
+                .and_then(|context| context.metric_value(plan_node_id as u64, &name))
                 .map(|value| value as jlong)
                 .map_err(|error| {
                     let _ = env.throw_new(

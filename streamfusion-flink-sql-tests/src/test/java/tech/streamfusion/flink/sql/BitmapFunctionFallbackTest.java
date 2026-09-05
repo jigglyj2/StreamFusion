@@ -22,7 +22,7 @@ import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 class BitmapFunctionFallbackTest extends SqlParityTestSupport {
     @Test
     void bitmapLogicalTypeStaysOnFlinkWithSerializationReason() throws Exception {
-        assertDataStreamParity(
+        assertFallbackDataStreamParity(
                 "SELECT BITMAP_CARDINALITY(BITMAP_BUILD(metric)) FROM bitmap_input",
                 Types.OBJECT_ARRAY(Types.INT),
                 DataTypes.ARRAY(DataTypes.INT()),

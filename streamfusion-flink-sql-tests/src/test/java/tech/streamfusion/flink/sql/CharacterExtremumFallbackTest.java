@@ -22,7 +22,7 @@ import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 class CharacterExtremumFallbackTest extends SqlParityTestSupport {
     @Test
     void fixedWidthCharacterInputFallsBackWithPaddingReason() throws Exception {
-        assertDataStreamParity(
+        assertFallbackDataStreamParity(
                 "SELECT GREATEST(metric, CAST('b' AS CHAR(4))), "
                         + "LEAST(metric, CAST('b' AS CHAR(4))) FROM character_input",
                 Types.STRING,

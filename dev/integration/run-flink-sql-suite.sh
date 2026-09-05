@@ -18,22 +18,29 @@ if [[ ! -x "$flink_source_home/mvnw" ]]; then
   exit 1
 fi
 
-audit_file="$flink_source_home/target/streamfusion-acceleration-audit.log"
-mkdir -p "$(dirname "$audit_file")"
-rm -f "$audit_file"
-export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:-} -Dtech.streamfusion.flink.planner.factory=tech.streamfusion.flink.StreamFusionPlannerFactory -Dtech.streamfusion.flink.acceleration-audit-file=$audit_file"
+audit_dir="$flink_source_home/target/streamfusion-sql-suite"
+mkdir -p "$audit_dir"
 
-(
-  cd "$flink_source_home"
-  ./mvnw --batch-mode \
-    -pl flink-table/flink-table-planner \
-    -Pstreamfusion-sql-suite \
-    -Dstreamfusion.version="$streamfusion_version" \
-    -DfailIfNoTests=true \
-    test-compile surefire:test@integration-tests
-)
+run_suite() {
+  local suite=$1
+  local audit_file="$audit_dir/${suite}-acceleration-audit.log"
+  rm -f "$audit_file"
+  (
+    cd "$flink_source_home"
+    JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:-} -Dtech.streamfusion.flink.planner.factory=tech.streamfusion.flink.StreamFusionPlannerFactory -Dtech.streamfusion.flink.acceleration-audit-file=$audit_file" \
+      ./mvnw --batch-mode \
+        -pl flink-table/flink-table-planner \
+        -Pstreamfusion-sql-suite \
+        -Dstreamfusion.version="$streamfusion_version" \
+        -Dstreamfusion.sql.includes="**/runtime/${suite}/**/*ITCase.*" \
+        -DfailIfNoTests=true \
+        test-compile surefire:test@integration-tests
+  )
+  if [[ ! -s "$audit_file" ]] || ! grep -q '^accelerated$' "$audit_file"; then
+    echo "Flink's ${suite} SQL suite did not exercise an accelerated StreamFusion plan" >&2
+    exit 1
+  fi
+}
 
-if [[ ! -s "$audit_file" ]] || ! grep -q '^accelerated$' "$audit_file"; then
-  echo "Flink's streaming SQL suite did not exercise an accelerated StreamFusion plan" >&2
-  exit 1
-fi
+run_suite stream
+run_suite batch

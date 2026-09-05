@@ -57,7 +57,7 @@ class ValuesParityTest extends SqlParityTestSupport {
 
     @Test
     void complexValuesFallBackAndMatchFlinkByteForByte() throws Exception {
-        assertParity(COMPLEX_VALUES, true);
+        assertParity(COMPLEX_VALUES, true, false);
 
         assertThat(StreamFusionPlannerFactory.nativeValuesBatchCount()).isZero();
     }

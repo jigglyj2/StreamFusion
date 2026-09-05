@@ -72,4 +72,10 @@ Flink's separate state-backend consumer fraction. Fused plans carry stable proto
 `plan_node_id` values for every internal stage, assigned on the Java side and validated by
 Rust. These identities are the metric-tree correlation keys used when a native tree reports
 stage metrics, following Comet's `CometMetricNode`/plan-ID model; they are not derived from
-batch order or DataFusion display text.
+batch order or DataFusion display text. Every lowered DataFusion stage is wrapped in a transparent
+identity boundary. A metric read for one ID includes the DataFusion nodes implementing that stage
+and stops at nested identity boundaries, so a parent's value cannot double count its children.
+Java samples cumulative native values after the output stream for the incoming batch has been
+drained, then applies only the delta to the corresponding Flink counter. This mirrors Comet's
+[`CometMetricNode` metric-tree propagation](https://github.com/apache/datafusion-comet/blob/4897161704b7b8b7dfa909f4bf897c6508b11117/spark/src/main/scala/org/apache/spark/sql/comet/CometMetricNode.scala#L192-L205),
+adapted to Flink's metric groups and operator lifecycle.

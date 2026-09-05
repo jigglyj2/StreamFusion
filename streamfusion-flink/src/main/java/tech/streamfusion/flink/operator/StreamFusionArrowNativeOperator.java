@@ -80,11 +80,6 @@ public final class StreamFusionArrowNativeOperator extends AbstractStreamOperato
         if (nullMetric != null && nullMetricFieldIndex >= 0) {
             nullMetric.inc(input.root().getVector(nullMetricFieldIndex).getNullCount());
         }
-        if (nullMetric != null && nullMetricFieldIndex < 0) {
-            long current = nativeExecution.metricValue(nullMetricName);
-            nullMetric.inc(current - lastNativeNullMetric);
-            lastNativeNullMetric = current;
-        }
         try (ArrowCDataBridge.NativeOutputStream stream = nativeExecution.executeStream(input)) {
             if (input.hasTrivialEnvelope()) {
                 while (true) {
@@ -108,8 +103,18 @@ public final class StreamFusionArrowNativeOperator extends AbstractStreamOperato
                 }
             }
         }
+        propagateNativeMetrics();
         FlinkMetricParity.replacePhysicalRecords(
                 getMetricGroup().getIOMetricGroup().getNumRecordsInCounter(), 1, input.size());
+    }
+
+    private void propagateNativeMetrics() {
+        if (nullMetric == null || nullMetricFieldIndex >= 0) {
+            return;
+        }
+        long current = nativeExecution.metricValue(nullMetricName);
+        nullMetric.inc(current - lastNativeNullMetric);
+        lastNativeNullMetric = current;
     }
 
     private void emitOutput(ArrowRowDataBatch outputBatch) {

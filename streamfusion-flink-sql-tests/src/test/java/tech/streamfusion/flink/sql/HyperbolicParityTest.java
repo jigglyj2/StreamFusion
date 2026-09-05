@@ -50,7 +50,7 @@ class HyperbolicParityTest extends SqlParityTestSupport {
 
     @Test
     void hyperbolicCosineFallsBackWithSemanticReason() throws Exception {
-        assertDataStreamParity(
+        assertFallbackDataStreamParity(
                 "SELECT COSH(metric) FROM hyperbolic_cosh_input", Types.DOUBLE, INPUTS, "hyperbolic_cosh_input");
 
         assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();

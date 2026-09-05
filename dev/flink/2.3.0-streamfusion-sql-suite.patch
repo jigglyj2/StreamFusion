@@ -32,7 +32,7 @@ index 11a2f307277..e01b8608793 100644
 +								<id>integration-tests</id>
 +								<configuration>
 +									<includes>
-+										<include>**/runtime/stream/**/*ITCase.*</include>
++										<include>${streamfusion.sql.includes}</include>
 +									</includes>
 +								</configuration>
 +							</execution>

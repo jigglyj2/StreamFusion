@@ -22,7 +22,7 @@ import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 class StringPaddingFallbackTest extends SqlParityTestSupport {
     @Test
     void paddingFallsBackForFlinkUtf16Semantics() throws Exception {
-        assertDataStreamParity(
+        assertFallbackDataStreamParity(
                 "SELECT LPAD(metric, 5, 'xy'), RPAD(metric, 5, 'xy') FROM string_input",
                 Types.STRING,
                 DataTypes.STRING(),

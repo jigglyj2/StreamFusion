@@ -39,7 +39,7 @@ class ComputedArrayUnnestParityTest extends SqlParityTestSupport {
 
     @Test
     void unsupportedComputedArrayExpressionFallsBackWithReason() throws Exception {
-        assertDataStreamParity(
+        assertFallbackDataStreamParity(
                 "SELECT item FROM computed_array_fallback_input "
                         + "CROSS JOIN UNNEST(ARRAY[LPAD(metric, 3, 'x')]) AS expanded(item)",
                 Types.STRING,
