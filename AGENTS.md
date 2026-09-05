@@ -71,6 +71,54 @@ batches; changelog filters select Arrow ranges; and exchange adds/removes only i
 vectors around Arrow IPC. Add a topology/source guard test whenever operator plumbing changes
 so a RowData-shaped internal operator or operator-local transpose cannot regress silently.
 
+## Intermediate Operator Checklist
+
+Every intermediate StreamFusion operator (that is, every operator other than a source or
+sink) must satisfy all of the following before its functionality is considered accelerated:
+
+1. Accept Arrow batches as input and emit Arrow batches as output. Do not introduce a
+   RowData-shaped internal data path.
+2. Account for every native allocation, including DataFusion and custom Rust state, through
+   Flink's managed/off-heap memory accounting and allocator budget.
+3. Expose the same metric surface and semantics as the corresponding Flink operator,
+   including operator-specific metrics and logical-record I/O counters.
+4. Be directly composable with adjacent native intermediate operators inside one fused
+   execution-plan tree. Invoking it inline must not send an Arrow batch through JNI or Java
+   between operators.
+5. If stateful, batch state access: load or access all required RocksDB keys at the beginning
+   of each incoming batch, perform the batch computation, and flush all dirty state at the
+   end of that batch. Do not perform per-row RocksDB round trips.
+6. Use vectorized execution wherever possible and DataFusion operators, expressions, and
+   kernels wherever they preserve Flink semantics.
+7. If stateful, support both the RocksDB and in-memory state backends and preserve correctness
+   under aligned and unaligned checkpoints, including restore and rescaling where applicable.
+8. If any operator feature or semantic subset is too complex or its Flink parity is uncertain,
+   reject acceleration for that case during planning, report the precise fallback reason, and
+   run the complete plan with the normal Flink operator. Defer that subset rather than
+   approximating its behavior.
+9. Fully document supported semantics, limitations, metrics, memory behavior, state/backend
+   behavior, and fallback conditions. Update the canonical `docs/` pages in the same change
+   whenever any of these change.
+
+## Source and Sink Operator Checklist
+
+Every StreamFusion source or sink implementation must satisfy all of the following:
+
+1. Minimize the surface area replaced by native code and focus acceleration on the critical
+   data path. Keep Flink's existing control-plane behavior wherever it does not need to move
+   native. For example, an Iceberg sink may write data files natively while retaining Flink's
+   commit coordination, and a Kafka source may read and decode data natively while retaining
+   broker coordination and transaction handling in Java.
+2. Expose the same metric surface, types, units, scopes, lifecycle, and update semantics as the
+   corresponding Flink source or sink.
+3. Respect every relevant configuration supported by the existing Flink source or sink. Map
+   each setting to equivalent native behavior where native code owns that concern; if exact
+   semantics cannot be preserved, retain the Flink implementation and report the fallback
+   reason rather than silently ignoring the setting or using a native default.
+4. Import the applicable upstream Flink SQL tests for the source or sink, run them against
+   StreamFusion acceleration, and make them part of normal CI. Add StreamFusion-owned parity
+   coverage for behavior that upstream tests do not exercise.
+
 Build the native physical-plan and expression tree on the Java planner side and encode
 it as a versioned Protocol Buffers contract for Rust to decode and lower to DataFusion,
 following Comet's operator protobuf model. Protobuf is the control/plan format; Arrow C
