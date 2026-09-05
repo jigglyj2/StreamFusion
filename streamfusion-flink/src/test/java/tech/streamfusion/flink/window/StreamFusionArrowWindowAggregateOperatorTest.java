@@ -252,6 +252,79 @@ class StreamFusionArrowWindowAggregateOperatorTest {
     }
 
     @Test
+    void boundedOnePhaseEmitsOnlyAtEndOfInputOnBothBackends() throws Exception {
+        try (RootAllocator inputs = new RootAllocator(64L << 20)) {
+            for (boolean rocks : new boolean[] {false, true}) {
+                try (Harness bounded = boundedHarness(null, rocks)) {
+                    process(bounded.harness, inputs, row(7, 1_000));
+                    bounded.harness.processWatermark(new Watermark(9_999));
+                    assertThat(takeOutputCount(bounded.harness)).isZero();
+
+                    process(bounded.harness, inputs, row(7, 2_000));
+                    bounded.harness.endInput();
+                    assertThat(takeOutputCount(bounded.harness)).isEqualTo(1);
+                }
+            }
+        }
+    }
+
+    @Test
+    void boundedOnePhaseDrainsTerminalOutputInMultipleArrowBatches() throws Exception {
+        try (RootAllocator inputs = new RootAllocator(64L << 20);
+                Harness bounded = boundedHarness(null, false)) {
+            List<RowData> rows = new ArrayList<>();
+            for (long key = 0; key < 4_097; key++) {
+                rows.add(row(key, 1_000));
+            }
+            try (ArrowRowDataBatch batch = ArrowRowDataBatch.transpose(rows, INPUT_TYPE, inputs)) {
+                bounded.harness.processElement(new StreamRecord<>(batch));
+            }
+
+            bounded.harness.endInput();
+            assertThat(bounded.harness.getOutput().stream()
+                            .filter(StreamRecord.class::isInstance)
+                            .count())
+                    .isEqualTo(2);
+            assertThat(takeOutputCount(bounded.harness)).isEqualTo(4_097);
+        }
+    }
+
+    @Test
+    void boundedOnePhaseDrainsProcessingTimeWindowsAtEndOfInput() throws Exception {
+        try (RootAllocator inputs = new RootAllocator(64L << 20);
+                Harness bounded = boundedHarness(null, false, true)) {
+            process(bounded.harness, inputs, row(7, 1_000));
+            bounded.harness.endInput();
+            assertThat(takeOutputCount(bounded.harness)).isEqualTo(1);
+        }
+    }
+
+    @Test
+    void boundedOnePhaseRestoresAcrossCheckpointFormatsAndBackends() throws Exception {
+        try (RootAllocator inputs = new RootAllocator(64L << 20)) {
+            for (boolean sourceRocks : new boolean[] {false, true}) {
+                for (boolean targetRocks : new boolean[] {false, true}) {
+                    for (SnapshotKind kind : SnapshotKind.values()) {
+                        if (kind != SnapshotKind.CANONICAL && sourceRocks != targetRocks) {
+                            continue;
+                        }
+                        OperatorSubtaskState checkpoint;
+                        try (Harness source = boundedHarness(null, sourceRocks)) {
+                            process(source.harness, inputs, row(7, 1_000));
+                            checkpoint = snapshot(source.harness, kind);
+                        }
+                        try (Harness target = boundedHarness(checkpoint, targetRocks)) {
+                            process(target.harness, inputs, row(7, 2_000));
+                            target.harness.endInput();
+                            assertThat(takeOutputCount(target.harness)).isEqualTo(1);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
     void rocksWindowCheckpointsReuseSstsAndRestorePendingTimers() throws Exception {
         try (RootAllocator inputs = new RootAllocator(64L << 20)) {
             OperatorSubtaskState second;
@@ -382,6 +455,37 @@ class StreamFusionArrowWindowAggregateOperatorTest {
 
     private static Harness harness(OperatorSubtaskState state, boolean rocks) throws Exception {
         return harness(1, 0, state, rocks);
+    }
+
+    private static Harness boundedHarness(OperatorSubtaskState state, boolean rocks) throws Exception {
+        return boundedHarness(state, rocks, false);
+    }
+
+    private static Harness boundedHarness(OperatorSubtaskState state, boolean rocks, boolean processingTime)
+            throws Exception {
+        RowDataKeySelector selector = selector();
+        StreamFusionArrowBoundedWindowAggregateOperator operator = new StreamFusionArrowBoundedWindowAggregateOperator(
+                INPUT_TYPE, OUTPUT_TYPE, new int[] {0}, plan(processingTime), processingTime, selector);
+        MockEnvironment environment = new MockEnvironmentBuilder()
+                .setTaskName("Bounded window aggregate")
+                .setManagedMemorySize(64L << 20)
+                .setInputSplitProvider(new MockInputSplitProvider())
+                .setBufferSize(32 * 1024)
+                .setMaxParallelism(MAX_PARALLELISM)
+                .setParallelism(1)
+                .setSubtaskIndex(0)
+                .build();
+        KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> harness =
+                new KeyedOneInputStreamOperatorTestHarness<>(
+                        operator, new ArrowBatchKeySelector(selector), selector.getProducedType(), environment);
+        harness.setStateBackend(new StreamFusionStateBackend(
+                rocks ? new EmbeddedRocksDBStateBackend(true) : new HashMapStateBackend()));
+        harness.setup(ArrowRowDataBatchSerializer.INSTANCE);
+        if (state != null) {
+            harness.initializeState(state);
+        }
+        harness.open();
+        return new Harness(harness);
     }
 
     private static Harness harness(int parallelism, int subtask, OperatorSubtaskState state, boolean rocks)

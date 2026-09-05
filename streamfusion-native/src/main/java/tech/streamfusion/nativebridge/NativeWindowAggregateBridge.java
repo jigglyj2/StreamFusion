@@ -79,6 +79,10 @@ public final class NativeWindowAggregateBridge {
         return nextProcessingTimer(handle);
     }
 
+    public static long nextEventTimeTimer(long handle) {
+        return nextEventTimer(handle);
+    }
+
     public static long lateRecordCount(long handle) {
         return lateRecordsDropped(handle);
     }
@@ -147,6 +151,8 @@ public final class NativeWindowAggregateBridge {
             long handle, int processingTime, long timestamp, long outputArray, long outputSchema);
 
     private static native long nextProcessingTimer(long handle);
+
+    private static native long nextEventTimer(long handle);
 
     private static native long lateRecordsDropped(long handle);
 

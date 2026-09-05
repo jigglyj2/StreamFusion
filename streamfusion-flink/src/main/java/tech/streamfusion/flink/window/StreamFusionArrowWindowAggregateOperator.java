@@ -142,13 +142,22 @@ final class StreamFusionArrowWindowAggregateOperator extends AbstractStreamFusio
     }
 
     private void emitTimerOutput(boolean processing, long timestamp) throws Exception {
-        try (ArrowRowDataBatch result = ArrowWindowAggregateCDataBridge.advance(
-                nativeHandle(), processing, timestamp, outputType, allocator(), memoryManager())) {
-            emitBatch(result, false, 0);
-            recordTimerOutput(result, processing);
-        }
+        do {
+            try (ArrowRowDataBatch result = ArrowWindowAggregateCDataBridge.advance(
+                    nativeHandle(), processing, timestamp, outputType, allocator(), memoryManager())) {
+                emitBatch(result, false, 0);
+                recordTimerOutput(result, processing);
+            }
+        } while (hasDueTimer(processing, timestamp));
         updateLateMetric();
         updateNativeStatistics();
+    }
+
+    private boolean hasDueTimer(boolean processing, long timestamp) {
+        long next = processing
+                ? NativeWindowAggregateBridge.nextProcessingTimeTimer(nativeHandle())
+                : NativeWindowAggregateBridge.nextEventTimeTimer(nativeHandle());
+        return next != Long.MAX_VALUE && next <= timestamp;
     }
 
     private void emitBatch(ArrowRowDataBatch result, boolean hasInputBatch, int inputRows) {

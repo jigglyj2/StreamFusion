@@ -43,6 +43,7 @@ const SESSION_STATE_MAGIC: &[u8; 4] = b"SFWS";
 const SESSION_INDEX_MAGIC: &[u8; 4] = b"SFWI";
 const COUNT_INDEX_MAGIC: &[u8; 4] = b"SFWC";
 const TIMER_STATE_KEY: &[u8] = b"\0streamfusion-window-timers";
+const MAX_TIMERS_PER_OUTPUT: usize = 4_096;
 
 /// Persistent native SQL window aggregation shared by the memory and direct RocksDB backends.
 pub(crate) struct WindowAggregateProcessor {
@@ -1025,7 +1026,7 @@ impl WindowAggregateProcessor {
     }
 
     pub(crate) fn advance_event_time(&mut self, watermark: i64) -> Result<RecordBatch> {
-        if watermark <= self.current_event_time {
+        if watermark < self.current_event_time {
             return self.empty_output();
         }
         self.current_event_time = watermark;
@@ -1034,7 +1035,7 @@ impl WindowAggregateProcessor {
     }
 
     pub(crate) fn advance_processing_time(&mut self, timestamp: i64) -> Result<RecordBatch> {
-        if timestamp <= self.current_processing_time {
+        if timestamp < self.current_processing_time {
             return self.empty_output();
         }
         self.current_processing_time = timestamp;
@@ -1043,7 +1044,9 @@ impl WindowAggregateProcessor {
     }
 
     fn fire(&mut self, domain: TimerDomain, progress: i64) -> Result<RecordBatch> {
-        let fired = self.timers.advance(domain, progress)?;
+        let fired = self
+            .timers
+            .advance_limited(domain, progress, MAX_TIMERS_PER_OUTPUT)?;
         self.timers_fired = self.timers_fired.saturating_add(fired.len() as u64);
         if fired.is_empty() {
             return self.empty_output();
@@ -1144,6 +1147,10 @@ impl WindowAggregateProcessor {
 
     pub(crate) fn next_processing_timer(&self) -> Option<i64> {
         self.timers.next_timestamp(TimerDomain::ProcessingTime)
+    }
+
+    pub(crate) fn next_event_timer(&self) -> Option<i64> {
+        self.timers.next_timestamp(TimerDomain::EventTime)
     }
 
     pub(crate) fn late_records_dropped(&self) -> u64 {
@@ -2505,6 +2512,36 @@ mod tests {
         counts.sort_unstable();
         assert_eq!(counts, [1, 2]);
         drop(output);
+        drop(processor);
+        assert_eq!(broker.reserved(), 0);
+    }
+
+    #[test]
+    fn terminal_windows_drain_in_managed_output_batches() {
+        let broker = Arc::new(TestBroker::new(16 << 20));
+        let bytes = plan(proto::WindowKind::Tumble, 10_000, 0, false);
+        let mut processor = processor(&bytes, broker.clone());
+        let rows = MAX_TIMERS_PER_OUTPUT + 137;
+        let keys = (0..rows).map(|key| key as i64).collect::<Vec<_>>();
+        assert_eq!(
+            processor
+                .process_arrow(batch(keys, vec![1_000; rows], None), 0)
+                .unwrap()
+                .num_rows(),
+            0
+        );
+
+        let first = processor.advance_event_time(i64::MAX).unwrap();
+        assert_eq!(first.num_rows(), MAX_TIMERS_PER_OUTPUT);
+        drop(first);
+        let second = processor.advance_event_time(i64::MAX).unwrap();
+        assert_eq!(second.num_rows(), 137);
+        drop(second);
+        assert_eq!(
+            processor.advance_event_time(i64::MAX).unwrap().num_rows(),
+            0
+        );
+
         drop(processor);
         assert_eq!(broker.reserved(), 0);
     }

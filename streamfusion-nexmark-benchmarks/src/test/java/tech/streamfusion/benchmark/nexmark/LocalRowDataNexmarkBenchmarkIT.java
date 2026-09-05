@@ -102,6 +102,41 @@ class LocalRowDataNexmarkBenchmarkIT {
 
     @ParameterizedTest
     @ValueSource(strings = {"hashmap", "rocksdb"})
+    void boundedOnePhaseWindowAggregatesMatchFlinkWithoutInventingALocalStage(String backend) throws Exception {
+        System.setProperty("streamfusion.nexmark.batch-mode", "true");
+        System.setProperty("streamfusion.nexmark.aggregate-phase", "ONE_PHASE");
+        for (String query :
+                List.of("legacy-window-aggregate", "legacy-window-aggregate-hop", "legacy-window-aggregate-variable")) {
+            LocalRowDataNexmarkBenchmark.RunResult flink =
+                    LocalRowDataNexmarkBenchmark.run(2_000, query, false, backend, 1);
+            LocalRowDataNexmarkBenchmark.RunResult streamFusion =
+                    LocalRowDataNexmarkBenchmark.run(2_000, query, true, backend, 1);
+
+            assertThat(streamFusion.completed()).as(backend + ":" + query).isTrue();
+            assertThat(streamFusion.debugRows()).as(backend + ":" + query).containsExactlyElementsOf(flink.debugRows());
+            assertThat(streamFusion.outputRows()).isEqualTo(flink.outputRows());
+            assertThat(streamFusion.outputSha256()).isEqualTo(flink.outputSha256());
+            assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+            assertThat(streamFusion.nativeLocalWindowAggregateBatches()).isZero();
+            assertThat(streamFusion.nativeWindowAggregateBatches()).isGreaterThan(0);
+            assertThat(streamFusion.nativeBoundedSortBatches()).isZero();
+        }
+
+        LocalRowDataNexmarkBenchmark.RunResult distributedFlink =
+                LocalRowDataNexmarkBenchmark.run(2_000, "legacy-window-aggregate-hop", false, backend, 4);
+        LocalRowDataNexmarkBenchmark.RunResult distributedStreamFusion =
+                LocalRowDataNexmarkBenchmark.run(2_000, "legacy-window-aggregate-hop", true, backend, 4);
+        assertThat(distributedStreamFusion.completed()).isTrue();
+        assertThat(distributedStreamFusion.outputRows()).isEqualTo(distributedFlink.outputRows());
+        assertThat(distributedStreamFusion.outputSha256()).isEqualTo(distributedFlink.outputSha256());
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        assertThat(distributedStreamFusion.nativeLocalWindowAggregateBatches()).isZero();
+        assertThat(distributedStreamFusion.nativeWindowAggregateBatches()).isGreaterThan(0);
+        assertThat(distributedStreamFusion.nativeBoundedSortBatches()).isZero();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"hashmap", "rocksdb"})
     void boundedQ20JoinMatchesFlinkThroughTheRowDataNexmarkBoundary(String backend) throws Exception {
         System.setProperty("streamfusion.nexmark.batch-mode", "true");
         LocalRowDataNexmarkBenchmark.RunResult flink =

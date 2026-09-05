@@ -190,6 +190,23 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeWindowAggregate
 }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeWindowAggregateBridge_nextEventTimer<
+    'caller,
+>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    handle: jlong,
+) -> jlong {
+    unowned_env
+        .with_env(|env| -> jni::errors::Result<_> {
+            unsafe { processor(handle) }
+                .map(|processor| processor.next_event_timer().unwrap_or(i64::MAX))
+                .map_err(|error| throw(env, error))
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeWindowAggregateBridge_lateRecordsDropped<
     'caller,
 >(

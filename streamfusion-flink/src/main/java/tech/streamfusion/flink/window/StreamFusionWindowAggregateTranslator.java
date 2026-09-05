@@ -208,7 +208,7 @@ public final class StreamFusionWindowAggregateTranslator {
                 "streamfusion-batch-global-window-aggregate["
                         + strategy.getWindow().getClass().getSimpleName() + "]",
                 new StreamFusionArrowFramedWindowAggregateOperator(
-                        internalInputType, outputType, grouping, aggregatePlan, keySelector, framed.plan),
+                        internalInputType, outputType, grouping, aggregatePlan, false, keySelector, framed.plan),
                 ArrowRowDataBatchTypeInfo.INSTANCE,
                 input.getParallelism(),
                 false);
@@ -221,7 +221,7 @@ public final class StreamFusionWindowAggregateTranslator {
     }
 
     @SuppressWarnings("unchecked")
-    private static FramedInput framed(Transformation<RowData> input) {
+    static FramedInput framed(Transformation<RowData> input) {
         if (!(input instanceof OneInputTransformation) || !"StreamFusionExchangeReader".equals(input.getName())) {
             throw new IllegalStateException("Native bounded window aggregate requires a framed exchange");
         }
@@ -243,9 +243,9 @@ public final class StreamFusionWindowAggregateTranslator {
                 ((NativeExchangeReaderOperator) operator).serializedPlan());
     }
 
-    private static final class FramedInput {
-        private final Transformation<NativeExchangeFrame> transformation;
-        private final byte[] plan;
+    static final class FramedInput {
+        final Transformation<NativeExchangeFrame> transformation;
+        final byte[] plan;
 
         private FramedInput(Transformation<NativeExchangeFrame> transformation, byte[] plan) {
             this.transformation = transformation;

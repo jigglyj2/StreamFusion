@@ -8,6 +8,7 @@ import static org.apache.flink.runtime.state.KeyGroupRangeAssignment.DEFAULT_LOW
 
 import java.time.Duration;
 import org.apache.calcite.rel.core.AggregateCall;
+import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.api.dag.Transformation;
 import org.apache.flink.configuration.CheckpointingOptions;
 import org.apache.flink.configuration.ReadableConfig;
@@ -25,8 +26,10 @@ import org.apache.flink.table.planner.plan.logical.TimeAttributeWindowingStrateg
 import org.apache.flink.table.planner.plan.logical.TumblingGroupWindow;
 import org.apache.flink.table.planner.plan.logical.TumblingWindowSpec;
 import org.apache.flink.table.planner.plan.utils.WindowEmitStrategy;
+import org.apache.flink.table.planner.utils.TableConfigUtils;
 import org.apache.flink.table.runtime.groupwindow.NamedWindowProperty;
 import org.apache.flink.table.runtime.keyselector.RowDataKeySelector;
+import org.apache.flink.table.runtime.util.TimeWindowUtil;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.utils.LogicalTypeChecks;
@@ -34,6 +37,8 @@ import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatchTypeInfo;
 import tech.streamfusion.flink.arrow.StreamFusionArrowBoundaries;
 import tech.streamfusion.flink.deduplicate.ArrowBatchKeySelector;
+import tech.streamfusion.flink.exchange.NativeExchangeFrame;
+import tech.streamfusion.flink.exchange.NativeExchangeFrameKeySelector;
 import tech.streamfusion.flink.exchange.StreamFusionExchangeTranslator;
 import tech.streamfusion.flink.state.StreamFusionStateBackendFactory;
 import tech.streamfusion.proto.plan.v1.WindowKind;
@@ -41,6 +46,7 @@ import tech.streamfusion.proto.plan.v1.WindowKind;
 /** Lowers legacy group-window syntax onto the canonical native window state machine. */
 public final class StreamFusionGroupWindowAggregateTranslator {
     private static final int STATEFUL_MANAGED_MEMORY_WEIGHT = 8;
+    private static final int BATCH_MANAGED_MEMORY_WEIGHT = 128;
 
     private StreamFusionGroupWindowAggregateTranslator() {}
 
@@ -110,6 +116,101 @@ public final class StreamFusionGroupWindowAggregateTranslator {
             return "bounded two-phase window aggregate: SESSION is not a slicing local/global window";
         }
         return unsupportedReason(inputType, outputType, grouping, calls, window, properties, false, config);
+    }
+
+    public static String unsupportedBatchOnePhaseReason(
+            RowType inputType,
+            RowType outputType,
+            int[] grouping,
+            AggregateCall[] calls,
+            LogicalWindow window,
+            NamedWindowProperty[] properties,
+            ReadableConfig config) {
+        return unsupportedReason(inputType, outputType, grouping, calls, window, properties, false, config);
+    }
+
+    public static Transformation<RowData> translateBatchOnePhase(
+            Transformation<RowData> input,
+            RowType inputType,
+            RowType outputType,
+            int[] grouping,
+            AggregateCall[] calls,
+            LogicalWindow window,
+            NamedWindowProperty[] properties,
+            ReadableConfig config,
+            StreamExecutionEnvironment environment,
+            RowDataKeySelector keySelector) {
+        LegacyWindow planned = plan(window, grouping, config);
+        if (planned.reason != null) {
+            return null;
+        }
+        StreamFusionWindowTableFunctionTranslator.WindowParameters parameters = planned.countWindow
+                ? planned.parameters
+                : StreamFusionWindowTableFunctionTranslator.parameters(planned.timeStrategy.getWindow());
+        int timeAttributeIndex = Math.max(0, window.timeAttribute().getFieldIndex());
+        boolean processingTime = planned.countWindow || planned.timeStrategy.isProctime();
+        String shiftTimeZone = planned.countWindow
+                ? "UTC"
+                : TimeWindowUtil.getShiftTimeZone(
+                                planned.timeStrategy.getTimeAttributeType(), TableConfigUtils.getLocalTimeZone(config))
+                        .getId();
+        byte[] nativePlan = StreamFusionWindowAggregatePlan.create(
+                inputType,
+                outputType,
+                grouping,
+                calls,
+                false,
+                false,
+                parameters,
+                timeAttributeIndex,
+                -1,
+                -1,
+                processingTime,
+                shiftTimeZone,
+                properties);
+        StreamFusionStateBackendFactory.install(environment);
+        if ("StreamFusionExchangeReader".equals(input.getName())) {
+            StreamFusionWindowAggregateTranslator.FramedInput framed =
+                    StreamFusionWindowAggregateTranslator.framed(input);
+            OneInputTransformation<NativeExchangeFrame, ArrowRowDataBatch> transformation =
+                    new OneInputTransformation<>(
+                            framed.transformation,
+                            "streamfusion-batch-window-aggregate[" + parameters.kind + "]",
+                            new StreamFusionArrowFramedWindowAggregateOperator(
+                                    inputType,
+                                    outputType,
+                                    grouping,
+                                    nativePlan,
+                                    processingTime,
+                                    keySelector,
+                                    framed.plan),
+                            ArrowRowDataBatchTypeInfo.INSTANCE,
+                            input.getParallelism(),
+                            false);
+            transformation.setMaxParallelism(DEFAULT_LOWER_BOUND_MAX_PARALLELISM);
+            transformation.declareManagedMemoryUseCaseAtOperatorScope(
+                    ManagedMemoryUseCase.OPERATOR, BATCH_MANAGED_MEMORY_WEIGHT);
+            transformation.setStateKeySelector(new NativeExchangeFrameKeySelector(DEFAULT_LOWER_BOUND_MAX_PARALLELISM));
+            transformation.setStateKeyType(Types.INT);
+            return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
+        }
+
+        Transformation<ArrowRowDataBatch> arrowInput = StreamFusionArrowBoundaries.toArrow(input, inputType);
+        OneInputTransformation<ArrowRowDataBatch, ArrowRowDataBatch> transformation = new OneInputTransformation<>(
+                arrowInput,
+                "streamfusion-batch-window-aggregate[" + parameters.kind + "]",
+                new StreamFusionArrowBoundedWindowAggregateOperator(
+                        inputType, outputType, grouping, nativePlan, processingTime, keySelector),
+                ArrowRowDataBatchTypeInfo.INSTANCE,
+                input.getParallelism(),
+                false);
+        transformation.setMaxParallelism(
+                input.getMaxParallelism() > 0 ? input.getMaxParallelism() : DEFAULT_LOWER_BOUND_MAX_PARALLELISM);
+        transformation.declareManagedMemoryUseCaseAtOperatorScope(
+                ManagedMemoryUseCase.OPERATOR, BATCH_MANAGED_MEMORY_WEIGHT);
+        transformation.setStateKeySelector(new ArrowBatchKeySelector(keySelector));
+        transformation.setStateKeyType(keySelector.getProducedType());
+        return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
     }
 
     public static Transformation<RowData> translate(

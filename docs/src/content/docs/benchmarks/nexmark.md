@@ -113,12 +113,13 @@ rowtime attribute and exercises watermark-driven native timers and late-record h
 processing-time case retains Nexmark's bid filter and nested-row projection below its synthetic
 `PROCTIME()` field. The bounded cases exercise a 100-row processing-time suffix and an inclusive
 ten-second event-time range respectively.
-The three legacy-window cases force Flink's bounded `TWO_PHASE` strategy and cover fixed-width
-tumbling accumulators, variable-width `MIN`/`MAX`, and pane-based sliding-window merge. Their parity
-test requires the native local and global window counters independently, so collapsing the plan to
-a one-phase implementation cannot pass unnoticed. The sliding-window case also runs at parallelism
-four on both state backends so the parity check crosses the native key-group exchange rather than
-only its singleton form.
+The three legacy-window cases are tested with both Flink's bounded `ONE_PHASE` and `TWO_PHASE`
+strategies and cover fixed-width tumbling accumulators, variable-width `MIN`/`MAX`, and pane-based
+sliding-window merge. The two-phase parity test requires the native local and global counters
+independently; the one-phase test requires the local counter to remain zero. Thus neither silently
+collapsing a Flink two-phase plan nor inventing a local phase for a Flink one-phase plan can pass.
+The sliding-window case also runs at parallelism four on both state backends so each phase strategy
+crosses the native key-group exchange rather than exercising only an in-task path.
 `temporal-sort` orders the bounded bid stream by ascending event time and secondary price/auction
 keys. Its integration case compares both the changelog multiset and global arrival-order digest on
 memory and RocksDB, requires an accelerated EXPLAIN, and requires non-zero native sort batches.
@@ -270,6 +271,23 @@ was attributed to the two window stages, dominated by the local accumulator batc
 construction rather than per-row state JNI or RocksDB calls. JFR recordings, CPU flame graphs,
 collapsed stacks, allocation flame graphs, and differential flame graphs are retained under
 `streamfusion-nexmark-benchmarks/target/profiles/batch-two-phase-window/`.
+
+The forced one-phase hop case was measured separately on September 5, 2026 after removing Flink's
+now-unnecessary bounded input sort from the replacement graph. Three alternating fresh-JVM forks
+per engine/backend processed 250,000 events at parallelism one with the same 2 GiB release/native
+CPU setup. In memory, Flink and StreamFusion medians were 5.257 s and 5.738 s (91.6% throughput
+parity); RocksDB-labelled medians were 5.260 s and 5.763 s (91.3% parity). Every fork emitted
+24,565 rows with SHA-256 `127b7cbb6647c6ce9f7fa80041ca87545ac99705e3740da55116acf3d1257f35`,
+reported acceleration, executed the native final window stage without a local stage, and executed
+zero native bounded-sort batches. Before the graph fix, the redundant sort left StreamFusion at
+about 86% parity. Mixed JVM/native 500,000-event profiles found the native window call at 5.9–6.0%
+of whole-process CPU and no RocksDB-specific hot path; fresh-JVM JIT compilation dominated these
+short captures. A two-million-event stress fork then exposed an unbounded terminal Arrow result;
+timer firing now drains at most 4,096 namespaces per output batch, and the same 199,645-row result
+completes under the managed-memory grant on both backends. CPU JFRs, collapsed stacks, per-engine
+flame graphs, and differential graphs are retained under
+`streamfusion-nexmark-benchmarks/target/legacy-window-one-phase-profiles/`. Profiler timings are
+excluded from the three-fork medians. These are local diagnostics, not portable performance claims.
 
 On the September 4, 2026 local q23 multi-join run based on `980201e` plus the multi-join working
 change, three alternating fresh-JVM release/native-CPU forks processed 500,000 deterministic events

@@ -238,7 +238,7 @@ class StreamFusionArrowFramedWindowAggregateOperatorTest {
                 new int[] {0},
                 InternalTypeInfo.of(PARTIAL_TYPE));
         return new StreamFusionArrowFramedWindowAggregateOperator(
-                PARTIAL_TYPE, OUTPUT_TYPE, new int[] {0}, globalPlan(), selector, exchangePlan);
+                PARTIAL_TYPE, OUTPUT_TYPE, new int[] {0}, globalPlan(), false, selector, exchangePlan);
     }
 
     private static byte[] exchangePlan(int parallelism) {

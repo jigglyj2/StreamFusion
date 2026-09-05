@@ -15,43 +15,37 @@ import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.table.runtime.keyselector.RowDataKeySelector;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.types.RowKind;
-import tech.streamfusion.flink.arrow.ArrowExchangeInputCDataBridge;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.ArrowWindowAggregateCDataBridge;
-import tech.streamfusion.flink.exchange.ArrowExchangeInputBatch;
-import tech.streamfusion.flink.exchange.NativeExchangeFrame;
 import tech.streamfusion.flink.metrics.FlinkMetricParity;
 import tech.streamfusion.flink.state.AbstractStreamFusionArrowKeyedStateOperator;
 import tech.streamfusion.nativebridge.NativeWindowAggregateBridge;
 
-/** Bounded one- or two-phase window aggregation that decodes its framed input in the consuming task. */
-final class StreamFusionArrowFramedWindowAggregateOperator extends AbstractStreamFusionArrowKeyedStateOperator
-        implements OneInputStreamOperator<NativeExchangeFrame, ArrowRowDataBatch>, BoundedOneInput {
+/** Bounded one-phase window aggregation over an in-task Arrow input. */
+final class StreamFusionArrowBoundedWindowAggregateOperator extends AbstractStreamFusionArrowKeyedStateOperator
+        implements OneInputStreamOperator<ArrowRowDataBatch, ArrowRowDataBatch>, BoundedOneInput {
     private final RowType inputType;
     private final RowType outputType;
     private final boolean preencodeKeys;
     private final boolean processingTime;
     private final RowDataKeySelector keySelector;
-    private final byte[] exchangePlan;
 
     private transient long[] observedNativeStatistics;
     private transient boolean finished;
 
-    StreamFusionArrowFramedWindowAggregateOperator(
+    StreamFusionArrowBoundedWindowAggregateOperator(
             RowType inputType,
             RowType outputType,
             int[] grouping,
-            byte[] aggregatePlan,
+            byte[] plan,
             boolean processingTime,
-            RowDataKeySelector keySelector,
-            byte[] exchangePlan) {
-        super(aggregatePlan, "batch global window aggregate", NativeWindowAggregateBridge.keyedStateBridge());
+            RowDataKeySelector keySelector) {
+        super(plan, "bounded window aggregate", NativeWindowAggregateBridge.keyedStateBridge());
         this.inputType = inputType;
         this.outputType = outputType;
         this.preencodeKeys = requiresPreencodedKeys(inputType, grouping);
         this.processingTime = processingTime;
         this.keySelector = keySelector;
-        this.exchangePlan = exchangePlan.clone();
     }
 
     @Override
@@ -65,17 +59,15 @@ final class StreamFusionArrowFramedWindowAggregateOperator extends AbstractStrea
     }
 
     @Override
-    public void processElement(StreamRecord<NativeExchangeFrame> element) throws Exception {
-        try (ArrowExchangeInputBatch decoded = ArrowExchangeInputCDataBridge.decode(
-                exchangePlan, element.getValue(), inputType, allocator(), memoryManager())) {
-            ArrowRowDataBatch input = decoded.arrowBatch();
+    public void processElement(StreamRecord<ArrowRowDataBatch> element) throws Exception {
+        ArrowRowDataBatch input = element.getValue();
+        try {
             for (int row = 0; row < input.size(); row++) {
                 if (input.rowKind(row) != RowKind.INSERT) {
-                    throw new IllegalStateException(
-                            "Native bounded append-only window aggregate got " + input.rowKind(row));
+                    throw new IllegalStateException("Native bounded window aggregate got " + input.rowKind(row));
                 }
             }
-            List<byte[]> keys = preencodeKeys ? preencodeKeys(input, keySelector, "batch window aggregate") : null;
+            List<byte[]> keys = preencodeKeys ? preencodeKeys(input, keySelector, "bounded window aggregate") : null;
             try (ArrowRowDataBatch result = ArrowWindowAggregateCDataBridge.process(
                     nativeHandle(), input, keys, false, 0L, outputType, allocator(), memoryManager())) {
                 emit(result, true, input.size());
@@ -90,8 +82,7 @@ final class StreamFusionArrowFramedWindowAggregateOperator extends AbstractStrea
 
     @Override
     public void processWatermark(Watermark watermark) throws Exception {
-        // Flink's bounded hash/sort window executors emit only at end of input. Intermediate
-        // watermarks are control records, not firing triggers for this physical operator.
+        // Flink's bounded hash/sort window executors emit only after end of input.
         super.processWatermark(watermark);
     }
 
@@ -101,25 +92,20 @@ final class StreamFusionArrowFramedWindowAggregateOperator extends AbstractStrea
             return;
         }
         finished = true;
-        emitTimerOutput(Long.MAX_VALUE);
-    }
-
-    private void emitTimerOutput(long timestamp) throws Exception {
         do {
             try (ArrowRowDataBatch result = ArrowWindowAggregateCDataBridge.advance(
-                    nativeHandle(), processingTime, timestamp, outputType, allocator(), memoryManager())) {
+                    nativeHandle(), processingTime, Long.MAX_VALUE, outputType, allocator(), memoryManager())) {
                 emit(result, false, 0);
                 recordTimerOutput(result, processingTime);
             }
-        } while (hasDueTimer(timestamp));
+        } while (nextTimer() != Long.MAX_VALUE);
         updateNativeStatistics();
     }
 
-    private boolean hasDueTimer(long timestamp) {
-        long next = processingTime
+    private long nextTimer() {
+        return processingTime
                 ? NativeWindowAggregateBridge.nextProcessingTimeTimer(nativeHandle())
                 : NativeWindowAggregateBridge.nextEventTimeTimer(nativeHandle());
-        return next != Long.MAX_VALUE && next <= timestamp;
     }
 
     private void emit(ArrowRowDataBatch result, boolean hasInputBatch, int inputRows) {

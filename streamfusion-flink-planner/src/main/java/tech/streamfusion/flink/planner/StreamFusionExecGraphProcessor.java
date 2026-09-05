@@ -335,9 +335,18 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         } else if (node instanceof BatchExecHashWindowAggregate || node instanceof BatchExecSortWindowAggregate) {
             BatchWindowAggregatePair pair = batchWindowAggregatePair(node);
             if (pair == null) {
-                rejections.add(
-                        nodePath
-                                + "\nbounded window aggregate: expected LocalWindowAggregate -> Exchange -> final merge WindowAggregate");
+                ExecEdge inputEdge = batchOnePhaseWindowInputEdge(node);
+                if (inputEdge == null) {
+                    rejections.add(nodePath
+                            + "\nbounded window aggregate: expected a one-phase final aggregate or "
+                            + "LocalWindowAggregate -> Exchange -> final merge WindowAggregate");
+                    return;
+                }
+                String reason = unsupportedBatchOnePhaseWindowReason((ExecNodeBase<?>) node, inputEdge, context);
+                if (reason != null) {
+                    rejections.add(nodePath + "\n" + reason);
+                }
+                collectRejections(inputEdge.getSource(), context, nodePath + "/native-input", rejections);
                 return;
             }
             String reason = unsupportedReason(pair, context);
@@ -868,7 +877,21 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         if (node instanceof BatchExecHashWindowAggregate || node instanceof BatchExecSortWindowAggregate) {
             BatchWindowAggregatePair pair = batchWindowAggregatePair(node);
             if (pair == null) {
-                throw new IllegalStateException("Selected malformed bounded two-phase window aggregate");
+                ExecEdge inputEdge = batchOnePhaseWindowInputEdge(node);
+                if (inputEdge == null) {
+                    throw new IllegalStateException("Selected malformed bounded window aggregate");
+                }
+                ExecNodeBase<?> aggregate = (ExecNodeBase<?>) node;
+                StreamFusionBatchExecWindowAggregate replacement = new StreamFusionBatchExecWindowAggregate(
+                        aggregate.getPersistedConfig(),
+                        batchWindowGrouping(aggregate),
+                        batchWindowAggregateCalls(aggregate),
+                        batchWindow(aggregate),
+                        batchWindowProperties(aggregate),
+                        aggregate.getInputProperties().get(0),
+                        (RowType) aggregate.getOutputType());
+                replacement.setInputEdges(List.of(copyEdge(inputEdge, convert(inputEdge.getSource()), replacement)));
+                return replacement;
             }
             return convertBatchWindowAggregatePair(pair);
         }
@@ -1878,6 +1901,52 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         } catch (InvocationTargetException failure) {
             throw new IllegalStateException(
                     "Bounded native two-phase window aggregation support inspection failed", failure.getCause());
+        }
+    }
+
+    private String unsupportedBatchOnePhaseWindowReason(
+            ExecNodeBase<?> aggregate, ExecEdge inputEdge, ProcessorContext context) {
+        if (batchWindowAuxiliaryGrouping(aggregate).length != 0) {
+            return "auxiliary grouping: bounded native window aggregation does not yet encode auxiliary keys";
+        }
+        if (batchWindowBoolean(aggregate, "inputTimeIsDate")) {
+            return "window time type: bounded native window aggregation currently requires TIMESTAMP";
+        }
+        RowType inputType = (RowType) inputEdge.getOutputType();
+        if (!batchWindowInputType(aggregate).equals(inputType)) {
+            return "aggregate input schema: planned bounded window input "
+                    + batchWindowInputType(aggregate)
+                    + " does not match edge input "
+                    + inputType;
+        }
+        try {
+            Class<?> translator = Class.forName(
+                    GROUP_WINDOW_AGGREGATE_TRANSLATOR_CLASS,
+                    true,
+                    context.getPlanner().getFlinkContext().getClassLoader());
+            Method method = translator.getMethod(
+                    "unsupportedBatchOnePhaseReason",
+                    RowType.class,
+                    RowType.class,
+                    int[].class,
+                    org.apache.calcite.rel.core.AggregateCall[].class,
+                    LogicalWindow.class,
+                    NamedWindowProperty[].class,
+                    ReadableConfig.class);
+            return (String) method.invoke(
+                    null,
+                    inputType,
+                    (RowType) aggregate.getOutputType(),
+                    batchWindowGrouping(aggregate),
+                    batchWindowAggregateCalls(aggregate),
+                    batchWindow(aggregate),
+                    batchWindowProperties(aggregate),
+                    aggregate.getPersistedConfig());
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException failure) {
+            throw new IllegalStateException("Could not inspect bounded native one-phase window aggregation", failure);
+        } catch (InvocationTargetException failure) {
+            throw new IllegalStateException(
+                    "Bounded native one-phase window aggregation support inspection failed", failure.getCause());
         }
     }
 
@@ -3346,6 +3415,32 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             input = inputEdge.getSource();
         }
         return new BatchWindowAggregatePair((ExecNodeBase<?>) global, (ExecNodeBase<?>) cursor, inputEdge);
+    }
+
+    private static ExecEdge batchOnePhaseWindowInputEdge(ExecNode<?> aggregate) {
+        if (!isBatchWindowAggregate(aggregate)
+                || !batchWindowBoolean(aggregate, "isFinal")
+                || batchWindowBoolean(aggregate, "isMerge")
+                || aggregate.getInputEdges().size() != 1) {
+            return null;
+        }
+        ExecEdge edge = aggregate.getInputEdges().get(0);
+        ExecNode<?> input = edge.getSource();
+        if ((input instanceof BatchExecExchange || input instanceof StreamFusionBatchExecExchange)
+                && input.getInputEdges().size() == 1) {
+            ExecEdge exchangeInput = input.getInputEdges().get(0);
+            ExecNode<?> exchangeChild = exchangeInput.getSource();
+            if (exchangeChild instanceof BatchExecSort || exchangeChild instanceof StreamFusionBatchExecBoundedSort) {
+                edge = exchangeInput;
+                input = exchangeChild;
+            }
+        }
+        while ((input instanceof BatchExecSort || input instanceof StreamFusionBatchExecBoundedSort)
+                && input.getInputEdges().size() == 1) {
+            edge = input.getInputEdges().get(0);
+            input = edge.getSource();
+        }
+        return edge;
     }
 
     private static boolean isBatchWindowAggregate(ExecNode<?> node) {
