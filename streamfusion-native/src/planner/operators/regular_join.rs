@@ -1318,6 +1318,7 @@ mod tests {
         proto::NativePlan {
             protocol_version: crate::PLAN_PROTOCOL_VERSION,
             root: Some(proto::Operator {
+                plan_node_id: 0,
                 operator: Some(proto::operator::Operator::RegularJoin(proto::RegularJoin {
                     left_key_indices: vec![0],
                     right_key_indices: vec![0],

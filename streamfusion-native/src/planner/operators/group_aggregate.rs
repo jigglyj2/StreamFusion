@@ -3369,9 +3369,11 @@ mod tests {
         proto::NativePlan {
             protocol_version: crate::PLAN_PROTOCOL_VERSION,
             root: Some(proto::Operator {
+                plan_node_id: 0,
                 operator: Some(proto::operator::Operator::GroupAggregate(Box::new(
                     proto::GroupAggregate {
                         input: Some(Box::new(proto::Operator {
+                            plan_node_id: 0,
                             operator: Some(proto::operator::Operator::Input(proto::Input {
                                 schema: None,
                                 input_index: 0,
@@ -3398,9 +3400,11 @@ mod tests {
         proto::NativePlan {
             protocol_version: crate::PLAN_PROTOCOL_VERSION,
             root: Some(proto::Operator {
+                plan_node_id: 0,
                 operator: Some(proto::operator::Operator::GroupAggregate(Box::new(
                     proto::GroupAggregate {
                         input: Some(Box::new(proto::Operator {
+                            plan_node_id: 0,
                             operator: Some(proto::operator::Operator::Input(proto::Input {
                                 schema: None,
                                 input_index: 0,
@@ -3432,6 +3436,7 @@ mod tests {
         proto::NativePlan {
             protocol_version: crate::PLAN_PROTOCOL_VERSION,
             root: Some(proto::Operator {
+                plan_node_id: 0,
                 operator: Some(proto::operator::Operator::GroupAggregate(Box::new(
                     proto::GroupAggregate {
                         input: None,
@@ -3480,6 +3485,7 @@ mod tests {
         let plan = proto::NativePlan {
             protocol_version: crate::PLAN_PROTOCOL_VERSION,
             root: Some(proto::Operator {
+                plan_node_id: 0,
                 operator: Some(proto::operator::Operator::GroupAggregate(Box::new(
                     aggregate,
                 ))),
@@ -3843,6 +3849,7 @@ mod tests {
     fn count_accepts_nonnumeric_inputs_and_ignores_nulls() {
         let aggregate = proto::GroupAggregate {
             input: Some(Box::new(proto::Operator {
+                plan_node_id: 0,
                 operator: Some(proto::operator::Operator::Input(proto::Input {
                     schema: None,
                     input_index: 0,
@@ -3866,6 +3873,7 @@ mod tests {
         let bytes = proto::NativePlan {
             protocol_version: crate::PLAN_PROTOCOL_VERSION,
             root: Some(proto::Operator {
+                plan_node_id: 0,
                 operator: Some(proto::operator::Operator::GroupAggregate(Box::new(
                     aggregate,
                 ))),

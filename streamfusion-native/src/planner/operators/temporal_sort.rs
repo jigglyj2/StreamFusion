@@ -1036,6 +1036,7 @@ mod tests {
         proto::NativePlan {
             protocol_version: crate::PLAN_PROTOCOL_VERSION,
             root: Some(proto::Operator {
+                plan_node_id: 0,
                 operator: Some(proto::operator::Operator::TemporalSort(Box::new(
                     proto::TemporalSort {
                         input: None,

@@ -1247,8 +1247,10 @@ mod tests {
         proto::NativePlan {
             protocol_version: 1,
             root: Some(proto::Operator {
+                plan_node_id: 0,
                 operator: Some(proto::operator::Operator::TopN(Box::new(proto::TopN {
                     input: Some(Box::new(proto::Operator {
+                        plan_node_id: 0,
                         operator: Some(proto::operator::Operator::Input(proto::Input::default())),
                     })),
                     partition_key_indices: vec![0],
@@ -1374,8 +1376,10 @@ mod tests {
         proto::NativePlan {
             protocol_version: 1,
             root: Some(proto::Operator {
+                plan_node_id: 0,
                 operator: Some(proto::operator::Operator::TopN(Box::new(proto::TopN {
                     input: Some(Box::new(proto::Operator {
+                        plan_node_id: 0,
                         operator: Some(proto::operator::Operator::Input(proto::Input::default())),
                     })),
                     partition_key_indices: vec![],

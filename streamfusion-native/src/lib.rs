@@ -8,6 +8,7 @@
 
 use datafusion::error::{DataFusionError, Result};
 use prost::Message;
+use std::collections::HashSet;
 
 pub mod exchange;
 mod execution_context;
@@ -23,7 +24,7 @@ pub mod proto {
 pub const PLAN_PROTOCOL_VERSION: u32 = 1;
 
 pub fn decode_plan(bytes: &[u8]) -> Result<proto::NativePlan> {
-    let plan = proto::NativePlan::decode(bytes)
+    let mut plan = proto::NativePlan::decode(bytes)
         .map_err(|error| DataFusionError::Plan(format!("invalid StreamFusion plan: {error}")))?;
     if plan.protocol_version != PLAN_PROTOCOL_VERSION {
         return Err(DataFusionError::Plan(format!(
@@ -31,7 +32,79 @@ pub fn decode_plan(bytes: &[u8]) -> Result<proto::NativePlan> {
             plan.protocol_version, PLAN_PROTOCOL_VERSION
         )));
     }
+    if let Some(root) = plan.root.as_mut() {
+        let mut next_id = 1;
+        let mut assigned = HashSet::new();
+        assign_plan_node_ids(root, &mut next_id, &mut assigned)?;
+    }
     Ok(plan)
+}
+
+fn assign_plan_node_ids(
+    operator: &mut proto::Operator,
+    next_id: &mut u64,
+    assigned: &mut HashSet<u64>,
+) -> Result<()> {
+    if operator.plan_node_id == 0 {
+        while assigned.contains(next_id) {
+            *next_id = next_id.checked_add(1).ok_or_else(|| {
+                DataFusionError::Plan("native plan-node identity overflowed u64".to_string())
+            })?;
+        }
+        operator.plan_node_id = *next_id;
+    }
+    if !assigned.insert(operator.plan_node_id) {
+        return Err(DataFusionError::Plan(format!(
+            "duplicate native plan-node identity {}",
+            operator.plan_node_id
+        )));
+    }
+    *next_id = (*next_id)
+        .max(operator.plan_node_id)
+        .checked_add(1)
+        .ok_or_else(|| {
+            DataFusionError::Plan("native plan-node identity overflowed u64".to_string())
+        })?;
+
+    use proto::operator::Operator::*;
+    match operator.operator.as_mut() {
+        Some(BoundedSort(node)) => assign_child(&mut node.input, next_id, assigned),
+        Some(TemporalSort(node)) => assign_child(&mut node.input, next_id, assigned),
+        Some(OverAggregate(node)) => assign_child(&mut node.input, next_id, assigned),
+        Some(TopN(node)) => assign_child(&mut node.input, next_id, assigned),
+        Some(Deduplicate(node)) => assign_child(&mut node.input, next_id, assigned),
+        Some(ChangelogNormalize(node)) => assign_child(&mut node.input, next_id, assigned),
+        Some(GroupAggregate(node)) => assign_child(&mut node.input, next_id, assigned),
+        Some(LocalGroupAggregate(node)) => assign_child(&mut node.input, next_id, assigned),
+        Some(GlobalGroupAggregate(node)) => assign_child(&mut node.input, next_id, assigned),
+        Some(IncrementalGroupAggregate(node)) => assign_child(&mut node.input, next_id, assigned),
+        Some(WindowAggregate(node)) => assign_child(&mut node.input, next_id, assigned),
+        Some(WindowDeduplicate(node)) => assign_child(&mut node.input, next_id, assigned),
+        Some(WindowRank(node)) => assign_child(&mut node.input, next_id, assigned),
+        Some(WindowTableFunction(node)) => assign_child(&mut node.input, next_id, assigned),
+        Some(Expand(node)) => assign_child(&mut node.input, next_id, assigned),
+        Some(Calc(node)) => assign_child(&mut node.input, next_id, assigned),
+        Some(ArrayUnnest(node)) => assign_child(&mut node.input, next_id, assigned),
+        Some(ReplicateRows(node)) => assign_child(&mut node.input, next_id, assigned),
+        Some(Union(node)) => {
+            for input in &mut node.inputs {
+                assign_plan_node_ids(input, next_id, assigned)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn assign_child(
+    child: &mut Option<Box<proto::Operator>>,
+    next_id: &mut u64,
+    assigned: &mut HashSet<u64>,
+) -> Result<()> {
+    match child.as_deref_mut() {
+        Some(child) => assign_plan_node_ids(child, next_id, assigned),
+        None => Ok(()),
+    }
 }
 
 #[cfg(test)]
@@ -54,8 +127,10 @@ mod tests {
         proto::NativePlan {
             protocol_version: PLAN_PROTOCOL_VERSION,
             root: Some(proto::Operator {
+                plan_node_id: 0,
                 operator: Some(proto::operator::Operator::Calc(Box::new(proto::Calc {
                     input: Some(Box::new(proto::Operator {
+                        plan_node_id: 0,
                         operator: Some(proto::operator::Operator::Input(proto::Input {
                             schema: Some(proto::Schema {
                                 fields: vec![proto::Field {
@@ -88,6 +163,7 @@ mod tests {
             r#type: Some(proto::logical_type::Type::Integer(proto::EmptyType {})),
         };
         plan.root = Some(proto::Operator {
+            plan_node_id: 0,
             operator: Some(proto::operator::Operator::Calc(Box::new(proto::Calc {
                 input: Some(Box::new(inner)),
                 projections: vec![proto::Expression {
@@ -108,9 +184,11 @@ mod tests {
         proto::NativePlan {
             protocol_version: PLAN_PROTOCOL_VERSION,
             root: Some(proto::Operator {
+                plan_node_id: 0,
                 operator: Some(proto::operator::Operator::Union(proto::Union {
                     inputs: (0..input_count)
                         .map(|input_index| proto::Operator {
+                            plan_node_id: 0,
                             operator: Some(proto::operator::Operator::Input(proto::Input {
                                 schema: None,
                                 input_index,
@@ -120,6 +198,42 @@ mod tests {
                 })),
             }),
         }
+    }
+
+    #[test]
+    fn assigns_stable_ids_to_legacy_plan_nodes() {
+        let decoded = decode_plan(&chained_identity_plan().encode_to_vec()).unwrap();
+        let root = decoded.root.unwrap();
+        let root_id = root.plan_node_id;
+        let proto::operator::Operator::Calc(outer) = root.operator.unwrap() else {
+            panic!("expected outer calc");
+        };
+        let inner = outer.input.unwrap();
+        let inner_id = inner.plan_node_id;
+        let proto::operator::Operator::Calc(inner_calc) = inner.operator.unwrap() else {
+            panic!("expected inner calc");
+        };
+
+        assert_eq!(root_id, 1);
+        assert_eq!(inner_id, 2);
+        assert_eq!(inner_calc.input.unwrap().plan_node_id, 3);
+    }
+
+    #[test]
+    fn rejects_duplicate_explicit_plan_node_ids() {
+        let mut plan = chained_identity_plan();
+        let root = plan.root.as_mut().unwrap();
+        root.plan_node_id = 7;
+        let proto::operator::Operator::Calc(outer) = root.operator.as_mut().unwrap() else {
+            panic!("expected outer calc");
+        };
+        outer.input.as_mut().unwrap().plan_node_id = 7;
+
+        let error = decode_plan(&plan.encode_to_vec()).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("duplicate native plan-node identity 7"));
     }
 
     fn q1_decimal_plan() -> proto::NativePlan {
@@ -154,8 +268,10 @@ mod tests {
         proto::NativePlan {
             protocol_version: PLAN_PROTOCOL_VERSION,
             root: Some(proto::Operator {
+                plan_node_id: 0,
                 operator: Some(proto::operator::Operator::Calc(Box::new(proto::Calc {
                     input: Some(Box::new(proto::Operator {
+                        plan_node_id: 0,
                         operator: Some(proto::operator::Operator::Input(proto::Input {
                             schema: Some(proto::Schema {
                                 fields: vec![proto::Field {

@@ -1069,9 +1069,11 @@ mod tests {
         proto::NativePlan {
             protocol_version: crate::PLAN_PROTOCOL_VERSION,
             root: Some(proto::Operator {
+                plan_node_id: 0,
                 operator: Some(proto::operator::Operator::Deduplicate(Box::new(
                     proto::Deduplicate {
                         input: Some(Box::new(proto::Operator {
+                            plan_node_id: 0,
                             operator: Some(proto::operator::Operator::Input(proto::Input {
                                 schema: None,
                                 input_index: 0,

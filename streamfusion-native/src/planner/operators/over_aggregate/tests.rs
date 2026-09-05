@@ -459,9 +459,11 @@ fn plan_with_offset(
     proto::NativePlan {
         protocol_version: crate::PLAN_PROTOCOL_VERSION,
         root: Some(proto::Operator {
+            plan_node_id: 0,
             operator: Some(proto::operator::Operator::OverAggregate(Box::new(
                 proto::OverAggregate {
                     input: Some(Box::new(proto::Operator {
+                        plan_node_id: 0,
                         operator: Some(proto::operator::Operator::Input(proto::Input {
                             schema: Some(input.clone()),
                             input_index: 0,

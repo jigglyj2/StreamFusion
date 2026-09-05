@@ -42,6 +42,8 @@ enum ExchangeTransport {
 }
 
 message Operator {
+  // Stable Java-planner identity used to map native metrics back to this physical stage.
+  uint64 plan_node_id = 100;
   oneof operator {
     Input input = 1;
     Calc calc = 2;

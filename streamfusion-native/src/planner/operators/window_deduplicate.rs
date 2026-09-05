@@ -926,6 +926,7 @@ mod tests {
         proto::NativePlan {
             protocol_version: crate::PLAN_PROTOCOL_VERSION,
             root: Some(proto::Operator {
+                plan_node_id: 0,
                 operator: Some(proto::operator::Operator::WindowDeduplicate(Box::new(
                     proto::WindowDeduplicate {
                         input: None,

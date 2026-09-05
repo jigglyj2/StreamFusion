@@ -25,7 +25,16 @@ public final class NativeExecutionContext implements AutoCloseable {
         if (memoryManager.limit() <= 0) {
             throw new IllegalArgumentException("Native memory limit must be positive");
         }
-        handle = createExecutionContext(serializedPlan, memoryManager, memoryManager.limit());
+        byte[] identifiedPlan = NativePlanNodeIdentity.assign(serializedPlan);
+        if (!memoryManager.tryReserve(identifiedPlan.length)) {
+            throw new IllegalStateException(
+                    "Flink denied " + identifiedPlan.length + " bytes for the native plan JNI copy");
+        }
+        try {
+            handle = createExecutionContext(identifiedPlan, memoryManager, memoryManager.limit());
+        } finally {
+            memoryManager.release(identifiedPlan.length);
+        }
         if (handle == 0) {
             throw new IllegalStateException("Native execution context returned a null handle");
         }

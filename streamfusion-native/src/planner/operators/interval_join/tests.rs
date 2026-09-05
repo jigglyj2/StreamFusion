@@ -134,6 +134,7 @@ fn plan(join_type: proto::RegularJoinType, event_time: bool) -> Vec<u8> {
     proto::NativePlan {
         protocol_version: crate::PLAN_PROTOCOL_VERSION,
         root: Some(proto::Operator {
+            plan_node_id: 0,
             operator: Some(proto::operator::Operator::IntervalJoin(
                 proto::IntervalJoin {
                     left_key_indices: vec![0],

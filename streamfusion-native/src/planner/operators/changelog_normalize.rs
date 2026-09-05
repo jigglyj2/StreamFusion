@@ -779,6 +779,7 @@ mod tests {
     fn plan(generate_update_before: bool, ttl: u64) -> Vec<u8> {
         native_plan(proto::ChangelogNormalize {
             input: Some(Box::new(proto::Operator {
+                plan_node_id: 0,
                 operator: Some(proto::operator::Operator::Input(proto::Input::default())),
             })),
             key_indices: vec![0],
@@ -792,6 +793,7 @@ mod tests {
     fn plan_with_filter() -> Vec<u8> {
         native_plan(proto::ChangelogNormalize {
             input: Some(Box::new(proto::Operator {
+                plan_node_id: 0,
                 operator: Some(proto::operator::Operator::Input(proto::Input::default())),
             })),
             key_indices: vec![0],
@@ -806,6 +808,7 @@ mod tests {
         proto::NativePlan {
             protocol_version: crate::PLAN_PROTOCOL_VERSION,
             root: Some(proto::Operator {
+                plan_node_id: 0,
                 operator: Some(proto::operator::Operator::ChangelogNormalize(Box::new(
                     normalize,
                 ))),

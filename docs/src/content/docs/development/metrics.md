@@ -67,7 +67,8 @@ Checkpoint byte counters describe StreamFusion's native payload. Duration counte
 native snapshot/restore work and incremental upload completion, not the whole distributed Flink
 checkpoint. Existing managed-memory gauges expose used, peak, and assigned operator bytes;
 `rocksDbSharedManagedMemoryReserved` exposes the process-shared native database lease charged to
-Flink's separate state-backend consumer fraction. As fused plans
-gain more stateful DataFusion operators, native plan-node metrics will be mapped back to their
-corresponding Java physical nodes using stable protobuf identities, following Comet's metric-tree
-model.
+Flink's separate state-backend consumer fraction. Fused plans carry stable protobuf
+`plan_node_id` values for every internal stage, assigned on the Java side and validated by
+Rust. These identities are the metric-tree correlation keys used when a native tree reports
+stage metrics, following Comet's `CometMetricNode`/plan-ID model; they are not derived from
+batch order or DataFusion display text.

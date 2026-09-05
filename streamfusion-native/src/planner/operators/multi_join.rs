@@ -1205,6 +1205,7 @@ mod tests {
         proto::NativePlan {
             protocol_version: crate::PLAN_PROTOCOL_VERSION,
             root: Some(proto::Operator {
+                plan_node_id: 0,
                 operator: Some(proto::operator::Operator::MultiJoin(proto::MultiJoin {
                     inputs: vec![input(), input(), input()],
                     join_types: join_types.into_iter().map(|kind| kind as i32).collect(),
