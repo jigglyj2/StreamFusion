@@ -16,6 +16,13 @@ adjacent StreamFusion Calc below it, preserves their input-to-output order, and 
 one Flink runtime operator for the connected chain. A non-StreamFusion node ends the
 chain and therefore defines a native-plan boundary.
 
+Before replacing any node, the graph processor checks the planner classloader for the
+protocol and runtime entry points and verifies that the packaged native library can be
+loaded on the current OS, architecture, and CPU baseline. Missing classes, linkage
+errors, an absent native resource, or an incompatible binary reject the complete plan
+with a `runtime-preflight` EXPLAIN reason. Capability-inspection reflection failures are
+also treated as inconclusive support and fall back before graph mutation.
+
 Streaming `UNION ALL` is a deliberate exception to native compute lowering, but not to
 physical coverage. Flink keeps control of watermarks, barriers, scheduling, and input
 interleaving in a `StreamFusionExecUnion` multiple-input operator. Because Flink
@@ -64,6 +71,13 @@ vectorized model. Each physical operator consumes a batch and completes before i
 parent consumes the output: a chain of three calc nodes remains calc → calc → calc.
 The stages use ordinary DataFusion execution operators and remain separately visible
 for metrics, diagnostics, and parity tests.
+
+Every protobuf `Operator` carries a stable `plan_node_id`, matching Comet's
+`setPlanId(op.id)` pattern. Java assigns deterministic pre-order identities before JNI,
+preserves an explicit planner identity when one is present, and Rust validates uniqueness
+while assigning IDs for older callers that omitted them. This keeps a durable mapping
+key across protobuf lowering and fused execution instead of identifying only the outer
+JNI invocation.
 
 Metric compatibility is part of operator compatibility, not optional instrumentation.
 Every accelerated node retains the metric contract of its Flink counterpart, including

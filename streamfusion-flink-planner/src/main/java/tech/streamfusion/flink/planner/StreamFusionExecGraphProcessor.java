@@ -137,6 +137,9 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             "tech.streamfusion.flink.sort.StreamFusionTemporalSortTranslator";
     private static final String BOUNDED_SORT_TRANSLATOR_CLASS =
             "tech.streamfusion.flink.sort.StreamFusionBoundedSortTranslator";
+    private static final String NATIVE_PLAN_CLASS = "tech.streamfusion.proto.plan.v1.NativePlan";
+    private static final String NATIVE_OPERATOR_CLASS = "tech.streamfusion.proto.plan.v1.Operator";
+    private static final String NATIVE_PREFLIGHT_CLASS = "tech.streamfusion.nativebridge.NativeRuntimePreflight";
     private transient ReadableConfig activeTableConfig;
 
     @Override
@@ -147,8 +150,15 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         activeTableConfig = context == null ? null : context.getPlanner().getTableConfig();
         try {
             List<String> rejections = new ArrayList<>();
+            String runtimeRejection = runtimePreflightRejection(context);
+            if (runtimeRejection != null) {
+                rejections.add("runtime-preflight\n" + runtimeRejection);
+            }
             for (int index = 0; index < graph.getRootNodes().size(); index++) {
-                collectRejections(graph.getRootNodes().get(index), context, "root[" + index + "]", rejections);
+                if (runtimeRejection == null) {
+                    collectRejectionsSafely(
+                            graph.getRootNodes().get(index), context, "root[" + index + "]", rejections);
+                }
             }
             if (!rejections.isEmpty()) {
                 rejections.forEach(rejection -> {
@@ -158,13 +168,69 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                 });
                 return graph;
             }
-            StreamFusionPlanningDiagnostics.accelerate();
-            List<ExecNode<?>> roots =
-                    graph.getRootNodes().stream().map(this::convertRoot).collect(Collectors.toList());
-            return new ExecNodeGraph(graph.getFlinkVersion(), roots);
+            try {
+                List<ExecNode<?>> roots =
+                        graph.getRootNodes().stream().map(this::convertRoot).collect(Collectors.toList());
+                StreamFusionPlanningDiagnostics.accelerate();
+                return new ExecNodeGraph(graph.getFlinkVersion(), roots);
+            } catch (RuntimeException | LinkageError failure) {
+                StreamFusionPlanningDiagnostics.reject(
+                        "replacement-preflight",
+                        "StreamFusion could not construct the complete replacement graph: "
+                                + failureDescription(failure));
+                return graph;
+            }
         } finally {
             activeTableConfig = null;
         }
+    }
+
+    private static String runtimePreflightRejection(ProcessorContext context) {
+        if (context == null) {
+            return null;
+        }
+        return runtimePreflightRejection(context.getPlanner().getFlinkContext().getClassLoader());
+    }
+
+    static String runtimePreflightRejection(ClassLoader classLoader) {
+        try {
+            Class.forName(NATIVE_PLAN_CLASS, true, classLoader);
+            Class.forName(NATIVE_OPERATOR_CLASS, true, classLoader);
+            Class.forName(NATIVE_PREFLIGHT_CLASS, true, classLoader)
+                    .getMethod("verify")
+                    .invoke(null);
+            return null;
+        } catch (ClassNotFoundException
+                | NoSuchMethodException
+                | IllegalAccessException
+                | InvocationTargetException
+                | RuntimeException
+                | LinkageError failure) {
+            return "StreamFusion runtime classes are not consistently visible from Flink's planner classloader: "
+                    + failureDescription(failure);
+        }
+    }
+
+    private void collectRejectionsSafely(
+            ExecNode<?> node, ProcessorContext context, String path, List<String> rejections) {
+        try {
+            collectRejections(node, context, path, rejections);
+        } catch (LinkageError failure) {
+            rejections.add(path + "\nStreamFusion capability inspection could not load its runtime classes: "
+                    + failureDescription(failure));
+        } catch (RuntimeException failure) {
+            rejections.add(
+                    path + "\nStreamFusion capability inspection was inconclusive: " + failureDescription(failure));
+        }
+    }
+
+    private static String failureDescription(Throwable failure) {
+        Throwable root = failure;
+        while (root.getCause() != null && root.getCause() != root) {
+            root = root.getCause();
+        }
+        String message = root.getMessage();
+        return root.getClass().getName() + (message == null || message.isBlank() ? "" : ": " + message);
     }
 
     private ExecNode<?> convertRoot(ExecNode<?> root) {
