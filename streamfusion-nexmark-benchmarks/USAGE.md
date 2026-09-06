@@ -51,7 +51,7 @@ keyless sinks retain multiset semantics. Checkpointing uses exactly-once mode an
 surface instead of contaminating a timing with retries. It currently runs the fully accelerable q0,
 q1, q2, q4, q5, q7, q8, q9, q11, q12, q22, q23, group-aggregate,
 legacy-window-aggregate, select-distinct, top-n, limit, bounded-sort,
-bounded-sort-merge-join, over-aggregate,
+bounded-sort-merge-join, over-aggregate, batch-over-aggregate-bounded-range,
 over-aggregate-event-time, over-aggregate-processing-time, temporal-join, match-recognize,
 set-intersect-all, and incremental-group-aggregate queries through both unmodified Flink
 and StreamFusion. The focused
@@ -63,6 +63,13 @@ OVER aggregation; they are not official numbered Nexmark queries. `over-aggregat
 retains the bid rowtime attribute so watermarks drive native event timers, while `over-aggregate`
 casts the same value to a regular timestamp for the non-time path. The processing-time case retains
 the bid filter and nested-row projection below its synthetic `PROCTIME()` order field.
+`batch-over-aggregate-bounded-range` selects Flink's bounded OVER executor, partitions by auction,
+and computes a price RANGE. StreamFusion absorbs the required Flink batch sort into the terminal
+native OVER stage, buffers rows in the selected memory or direct native RocksDB backend, and emits
+the final Arrow result only at end-of-input. The integration case checks exact final-multiset parity
+and requires native OVER activity with no separate native bounded-sort stage. Dedicated operator
+tests cover DELETE retractions, aligned and unaligned snapshots, canonical cross-backend restore,
+and incremental RocksDB SST reuse.
 `temporal-join` derives a versioned auction table with row-time deduplication, then probes it from
 the bid stream with an event-time left temporal join and a residual condition.
 Official q4 and q9 exercise the binary multi-join physical form with the auction-expiry residual;
@@ -146,10 +153,11 @@ standard Flink `-Dtaskmanager.memory.managed.consumer-weights=OPERATOR:90,STATE_
 property overrides the harness default. The default favors Arrow operator scratch because the
 bounded workloads have a small RocksDB working set; it is applied identically to both engines.
 Set `-Dstreamfusion.nexmark.batch-mode=true` to plan the finite RowData source through Flink's
-bounded SQL exec graph. Periodic checkpointing is disabled in this mode because a completed batch
-plan has no in-flight state to recover. This switch is intended for stateless and later bounded
-operator milestones; state-backend comparisons remain streaming-mode tests unless the bounded
-operator itself owns state.
+bounded SQL exec graph. The harness disables periodic checkpointing in this mode because Flink's
+finite batch operators generally do not participate in periodic streaming checkpoints. Stateful
+bounded replacements still use the selected native backend; their aligned, unaligned, canonical,
+rescaling, and incremental-checkpoint behavior is exercised by focused recovery tests rather than
+by the timed batch harness.
 The optional
 `-Dstreamfusion.nexmark.debug-rows=true` and `-Dstreamfusion.nexmark.debug-plan=true` switches print
 the collected rows and optimized SQL plan for diagnosis and should remain off for measurements.

@@ -7,8 +7,9 @@ sidebar:
 
 **Current status:** Partially accelerated. Streaming non-time `ROWS` and `RANGE` frames from
 `UNBOUNDED PRECEDING` through `CURRENT ROW` run natively. Processing-time and event-time frames
-also accept a constant bounded `PRECEDING` boundary. All forms require one ascending order key and
-supported aggregates.
+also accept a constant bounded `PRECEDING` boundary. Flink's bounded `BatchExecOverAggregate` is
+accelerated for a single ascending integral or timestamp `RANGE` key from a constant or
+unbounded `PRECEDING` boundary through `CURRENT ROW`. All forms require supported aggregates.
 
 **Future acceleration target:** Yes.
 
@@ -59,9 +60,9 @@ including pending-timer redistribution during scale-out and scale-in recovery. D
 are materialized into keyed state only at canonical or native RocksDB checkpoint boundaries; the
 runtime does not rewrite an ever-growing timer snapshot on every input batch. Event-time OVER
 keeps one active earliest-pending timer per partition and advances that partition through the
-current watermark when it fires. The third canonical state-codec version uses variable-width
-sequence and aggregate encodings; restore coverage retains compatibility with the first two
-fixed-width versions.
+current watermark when it fires. The fourth canonical state-codec version adds an explicit
+nullable-RANGE marker to the third version's variable-width sequence and aggregate encodings;
+restore coverage retains compatibility with all three earlier versions.
 
 The non-time operator publishes Flink's `numOfIdsNotFound` and `numOfSortKeysNotFound` counters;
 the event-time operator publishes `numLateRecordsDropped`. Both publish the standard logical-record
@@ -69,10 +70,28 @@ I/O metrics. StreamFusion state, checkpoint, recovery, allocation, pending event
 processing-time timer, and native batch diagnostics remain in the explicitly named StreamFusion
 metric subgroup.
 
+For bounded SQL, the planner absorbs Flink's required `BatchExecSort` into the terminal native
+OVER operator. Incoming Arrow batches are retained in keyed state, retractions remove the exact
+stored row, and the globally sorted final RANGE result is emitted in bounded Arrow chunks only
+after end-of-input. This preserves one Arrow/network decode at the native-plan edge rather than
+materializing an intermediate Java sort. Memory and direct native RocksDB use the same key-grouped
+state contract. Dedicated tests cover DELETE retractions, aligned and unaligned snapshots,
+canonical memory-to-RocksDB and RocksDB-to-memory restore, rescaling-safe key-group snapshots, and
+incremental RocksDB checkpoints that reuse unchanged SST files. Each input batch performs one
+batched state fetch and at most one atomic state write. The replacement also exposes Flink's
+absorbed-sort gauges `memoryUsedSizeInBytes`, `numSpillFiles`, and `spillInBytes`; the current
+non-spilling implementation reports zero spill files and bytes while native memory remains charged
+to Flink managed memory.
+
 If a query selects, filters on, or otherwise observes the synthetic processing-time field, the plan
 still falls back explicitly because removing that value would change semantics. Following frames,
 non-constant frame boundaries, descending or multiple order keys, aggregate functions beyond the set
 above, mini-batch mode, async state, changelog-state wrapping, and state TTL also fall back.
+The bounded batch path additionally falls back for multiple window groups, `AVG`, `DISTINCT`, and
+aggregate `FILTER`. Nullable RANGE keys remain their own peer group under either Flink null
+placement. Bounded batch `ROWS` deliberately falls back because
+Flink's batch quicksort does not define a byte-stable order among tied sort keys; using source
+arrival order natively can therefore change row-by-row results even when both orders satisfy SQL.
 These are not documented as accelerated until their end-to-end parity and recovery suites pass.
 
 ## Implementation
@@ -81,6 +100,10 @@ The Java planner keeps the Flink node available for fallback and sends a version
 to a dedicated Rust physical operator. Arrow batches cross the JVM boundary only at the native
 plan edge. The operator uses ordered native keyed state and Arrow aggregate kernels because
 DataFusion alone does not provide Flink's incremental changelog and peer behavior.
+
+For the bounded batch form, the required sort and OVER node become one native terminal stage.
+Transport is still standard Arrow IPC plus key-group metadata, decoded once at that edge; no
+RowData transpose or JVM/native round trip is inserted between sorting, state, and aggregation.
 
 ## Local performance evidence
 
@@ -161,5 +184,31 @@ operator-isolation topology. Java allocation volume fell from 4.55 GB to 2.70 GB
 30.06 GB to 2.71 GB on RocksDB. Native allocation samples show retained event rows and timers, all
 of which remain governed by Flink managed-memory admission and release. Profiler-instrumented
 timings were excluded from throughput results.
+
+The bounded `batch-over-aggregate-bounded-range` workload partitions bids by auction, orders by
+price, and computes `SUM(price)` over an inclusive one-million-unit RANGE. On
+the September 5, 2026 local release/native-CPU run, three alternating fresh-JVM forks per
+engine/backend processed 100,000 deterministic events at parallelism four. Every fork materialized
+92,000 rows with SHA-256
+`83376620c809f0059c990accb0ac1a30d2c78f2afee3231d30320b3e957239ed`. In memory, Flink and
+StreamFusion medians were 18,507 and 18,185 events/s, or 98.3% throughput parity; elapsed ranges
+were 5.394–5.459s and 5.420–5.574s. RocksDB-labelled Flink and direct-native-RocksDB StreamFusion
+medians were 18,066 and 17,552 events/s, or 97.2% parity; elapsed ranges were 5.443–5.599s and
+5.682–5.745s. A one-million-event correctness smoke produced 920,000 rows with matching SHA-256
+`3ff8a11edb7cd6277a78c224fe19329f161947cb9e698161b187a429f1a7e2c6`. The integration test also
+requires non-zero native OVER activity and zero separate bounded-sort activity, proving that the
+Flink-required sort was absorbed.
+
+Separate one-million-event mixed JVM/native CPU profiles attributed 6.24% of samples to the full
+native OVER call tree in memory and 5.66% on RocksDB. State codec work was 1.69% and 1.37%, native
+checkpoint work was at most 0.29%, and direct RocksDB work was 0.29%; no dominant native leaf
+justified an operator-specific shortcut. At 500,000 events, Java allocation sampling recorded
+2,787/2,820 StreamFusion samples versus 3,745/3,756 for Flink on memory/RocksDB, roughly 25% fewer.
+Native allocation profiles attributed 25.55%/28.14% of native traffic to retained OVER rows and
+their codec/output buffers; direct state decode was 1.56%/1.19%, and the broad RocksDB allocation
+match was 0.18%. These allocations are covered by the operator's state, scratch, and exported-Arrow
+managed-memory reservations. CPU and allocation artifacts are retained under
+`streamfusion-nexmark-benchmarks/target/profiles/bounded-batch-over-range/` and
+`bounded-batch-over-range-alloc/`; profiler timings were excluded from throughput results.
 
 See the [Flink 2.3 OVER aggregation documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/over-agg/).

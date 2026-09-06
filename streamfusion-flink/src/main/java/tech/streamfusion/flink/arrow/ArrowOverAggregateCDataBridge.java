@@ -127,6 +127,27 @@ public final class ArrowOverAggregateCDataBridge {
         }
     }
 
+    public static ArrowRowDataBatch finish(
+            long handle, RowType outputType, BufferAllocator allocator, NativeMemoryManager memoryManager) {
+        try (ArrowArray outputArray = ArrowArray.allocateNew(allocator);
+                ArrowSchema outputSchema = ArrowSchema.allocateNew(allocator);
+                CDataDictionaryProvider dictionaries = new CDataDictionaryProvider()) {
+            try {
+                long rows = NativeOverAggregateBridge.finish(
+                        handle, outputArray.memoryAddress(), outputSchema.memoryAddress());
+                if (rows < 0 || rows > Integer.MAX_VALUE) {
+                    throw new IllegalStateException("Native bounded OVER returned invalid row count " + rows);
+                }
+                VectorSchemaRoot output =
+                        Data.importVectorSchemaRoot(allocator, outputArray, outputSchema, dictionaries);
+                output.setRowCount((int) rows);
+                return removeTimerEnvelope(output, outputType, allocator);
+            } finally {
+                memoryManager.finishArrowTransfer();
+            }
+        }
+    }
+
     private static ArrowRowDataBatch removeEnvelope(
             VectorSchemaRoot output, ArrowRowDataBatch input, RowType outputType, BufferAllocator allocator) {
         int ordinalIndex = output.getFieldVectors().size() - 1;

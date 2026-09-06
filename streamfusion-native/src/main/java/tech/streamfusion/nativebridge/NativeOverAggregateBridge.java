@@ -80,6 +80,10 @@ public final class NativeOverAggregateBridge {
         return statistics0(handle);
     }
 
+    public static long finish(long handle, long outputArrayAddress, long outputSchemaAddress) {
+        return finish0(handle, outputArrayAddress, outputSchemaAddress);
+    }
+
     public static long advanceEventTime(
             long handle, long watermark, long outputArrayAddress, long outputSchemaAddress) {
         return advanceEventTime0(handle, watermark, outputArrayAddress, outputSchemaAddress);
@@ -154,6 +158,8 @@ public final class NativeOverAggregateBridge {
             String databasePath,
             NativeMemoryManager memoryManager,
             long memoryLimit);
+
+    private static native long finish0(long handle, long outputArrayAddress, long outputSchemaAddress);
 
     private static native long processArrowBatch(
             long handle,

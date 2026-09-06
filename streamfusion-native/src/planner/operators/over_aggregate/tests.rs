@@ -104,6 +104,94 @@ fn processing_time_rows_and_range_are_incremental_in_arrival_order() {
 }
 
 #[test]
+fn bounded_range_buffers_unsorted_input_and_emits_final_order_at_end() {
+    let broker = Arc::new(TestBroker::new(64 << 20));
+    let mut processor = OverAggregateProcessor::new(
+        &bounded_plan(false, Some(1)),
+        128,
+        0,
+        127,
+        HostMemoryReservation::new(broker.clone(), "bounded OVER test"),
+    )
+    .unwrap();
+
+    let pending = processor
+        .process_arrow(batch(
+            &["a", "a", "a"],
+            &[2, 1, 3],
+            &[20, 10, 5],
+            &[INSERT; 3],
+        ))
+        .unwrap();
+    assert_eq!(pending.num_rows(), 0);
+    let snapshots = (0..128)
+        .map(|group| processor.snapshot_key_group(group).unwrap())
+        .collect::<Vec<_>>();
+    drop(processor);
+
+    let mut restored = OverAggregateProcessor::new(
+        &bounded_plan(false, Some(1)),
+        128,
+        0,
+        127,
+        HostMemoryReservation::new(broker.clone(), "restored bounded OVER test"),
+    )
+    .unwrap();
+    for (group, snapshot) in snapshots.iter().enumerate() {
+        restored.restore_key_group(group as u32, snapshot).unwrap();
+    }
+    let output = restored.finish().unwrap();
+    assert_eq!(kinds(&output), vec![INSERT, INSERT, INSERT]);
+    assert_eq!(sums(&output), vec![10, 30, 25]);
+    assert_eq!(restored.finish().unwrap().num_rows(), 0);
+    drop(restored);
+    assert_eq!(broker.reserved(), 0);
+}
+
+#[test]
+fn bounded_range_keeps_null_order_keys_in_their_own_peer_group() {
+    for (nulls_last, expected) in [
+        (false, vec![300, 300, 10, 30]),
+        (true, vec![10, 30, 300, 300]),
+    ] {
+        let broker = Arc::new(TestBroker::new(64 << 20));
+        let mut plan = proto::NativePlan::decode(bounded_plan(false, Some(1)).as_slice()).unwrap();
+        let proto::operator::Operator::OverAggregate(aggregate) = plan
+            .root
+            .as_mut()
+            .and_then(|root| root.operator.as_mut())
+            .expect("OVER root")
+        else {
+            panic!("expected OVER root");
+        };
+        aggregate.sort_nulls_last = nulls_last;
+        let mut processor = OverAggregateProcessor::new(
+            &plan.encode_to_vec(),
+            128,
+            0,
+            127,
+            HostMemoryReservation::new(broker.clone(), "nullable bounded OVER test"),
+        )
+        .unwrap();
+
+        processor
+            .process_arrow(nullable_batch(
+                &["a", "a", "a", "a"],
+                &[Some(1), None, Some(2), None],
+                &[10, 100, 20, 200],
+                &[INSERT; 4],
+            ))
+            .unwrap();
+        let output = processor.finish().unwrap();
+        assert_eq!(kinds(&output), vec![INSERT; 4]);
+        assert_eq!(sums(&output), expected);
+        drop(output);
+        drop(processor);
+        assert_eq!(broker.reserved(), 0);
+    }
+}
+
+#[test]
 fn append_only_processing_time_uses_bounded_accumulator_state_and_restores_legacy_rows() {
     let legacy_broker = Arc::new(TestBroker::new(64 << 20));
     let mut legacy = processor_with_time(
@@ -484,11 +572,35 @@ fn plan_with_offset(
                     state_ttl_millis: 0,
                     sort_ascending: true,
                     sort_nulls_last: false,
+                    bounded_final_output: false,
                 },
             ))),
         }),
     }
     .encode_to_vec()
+}
+
+fn bounded_plan(rows_frame: bool, preceding_offset: Option<u64>) -> Vec<u8> {
+    let mut decoded = proto::NativePlan::decode(
+        plan_with_offset(
+            rows_frame,
+            proto::OverTimeAttribute::NonTime,
+            true,
+            preceding_offset,
+        )
+        .as_slice(),
+    )
+    .unwrap();
+    let proto::operator::Operator::OverAggregate(aggregate) = decoded
+        .root
+        .as_mut()
+        .and_then(|root| root.operator.as_mut())
+        .expect("OVER root")
+    else {
+        panic!("expected OVER root");
+    };
+    aggregate.bounded_final_output = true;
+    decoded.encode_to_vec()
 }
 
 fn call(function: proto::AggregateFunction, input_index: Option<u32>) -> proto::AggregateCall {
@@ -544,6 +656,33 @@ fn timestamp() -> proto::LogicalType {
 }
 
 fn batch(keys: &[&str], order: &[i64], values: &[i64], row_kinds: &[i8]) -> RecordBatch {
+    RecordBatch::try_from_iter(vec![
+        (
+            "key",
+            Arc::new(StringArray::from(keys.to_vec())) as ArrayRef,
+        ),
+        (
+            "order",
+            Arc::new(Int64Array::from(order.to_vec())) as ArrayRef,
+        ),
+        (
+            "value",
+            Arc::new(Int64Array::from(values.to_vec())) as ArrayRef,
+        ),
+        (
+            "__streamfusion_input_row_kind",
+            Arc::new(Int8Array::from(row_kinds.to_vec())) as ArrayRef,
+        ),
+    ])
+    .unwrap()
+}
+
+fn nullable_batch(
+    keys: &[&str],
+    order: &[Option<i64>],
+    values: &[i64],
+    row_kinds: &[i8],
+) -> RecordBatch {
     RecordBatch::try_from_iter(vec![
         (
             "key",

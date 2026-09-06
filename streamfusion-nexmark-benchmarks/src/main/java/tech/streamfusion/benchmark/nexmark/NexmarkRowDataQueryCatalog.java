@@ -96,6 +96,7 @@ final class NexmarkRowDataQueryCatalog {
                 "batch-window-tvf",
                 "auction BIGINT, bidder BIGINT, price BIGINT, `dateTime` TIMESTAMP(3), "
                         + "window_start TIMESTAMP(3), window_end TIMESTAMP(3), window_time TIMESTAMP(3)");
+        schemas.put("batch-over-aggregate-bounded-range", OVER_COLUMNS);
         schemas.put("bounded-sort", BID_COLUMNS);
         schemas.put("bounded-sort-limit", BID_COLUMNS);
         schemas.put("bounded-limit", BID_COLUMNS);

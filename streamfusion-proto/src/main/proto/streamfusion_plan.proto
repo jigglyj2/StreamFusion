@@ -211,6 +211,10 @@ message OverAggregate {
   uint64 state_ttl_millis = 11;
   bool sort_ascending = 12;
   bool sort_nulls_last = 13;
+  // BatchExecOverAggregate receives finite hash-partitioned input behind Flink's required sort.
+  // When set, the native operator absorbs that sort, buffers canonical keyed rows, and emits the
+  // final ordered OVER result only after bounded input completion.
+  bool bounded_final_output = 14;
 }
 
 enum OverTimeAttribute {

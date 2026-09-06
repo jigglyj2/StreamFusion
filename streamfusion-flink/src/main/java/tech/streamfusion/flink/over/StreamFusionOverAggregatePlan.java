@@ -28,6 +28,20 @@ final class StreamFusionOverAggregatePlan {
     private StreamFusionOverAggregatePlan() {}
 
     static byte[] create(RowType inputType, RowType outputType, OverSpec spec, long stateTtl, boolean processingTime) {
+        return create(inputType, outputType, spec, stateTtl, processingTime, false);
+    }
+
+    static byte[] createBounded(RowType inputType, RowType outputType, OverSpec spec) {
+        return create(inputType, outputType, spec, 0L, false, true);
+    }
+
+    private static byte[] create(
+            RowType inputType,
+            RowType outputType,
+            OverSpec spec,
+            long stateTtl,
+            boolean processingTime,
+            boolean boundedFinalOutput) {
         OverSpec.GroupSpec group = spec.getGroups().get(0);
         LogicalType orderType =
                 processingTime ? null : inputType.getTypeAt(group.getSort().getFieldIndices()[0]);
@@ -36,15 +50,18 @@ final class StreamFusionOverAggregatePlan {
                 .setOrderKeyIndex(group.getSort().getFieldIndices()[0])
                 .setRowsFrame(group.isRows())
                 .setTimeAttribute(
-                        processingTime
-                                ? OverTimeAttribute.OVER_TIME_ATTRIBUTE_PROCESSING_TIME
-                                : timeAttribute(orderType))
+                        boundedFinalOutput
+                                ? OverTimeAttribute.OVER_TIME_ATTRIBUTE_NON_TIME
+                                : processingTime
+                                        ? OverTimeAttribute.OVER_TIME_ATTRIBUTE_PROCESSING_TIME
+                                        : timeAttribute(orderType))
                 .setInputSchema(schema(inputType))
                 .setOutputSchema(schema(outputType))
-                .setInputChangelog(!processingTime)
+                .setInputChangelog(boundedFinalOutput || !processingTime)
                 .setStateTtlMillis(stateTtl)
                 .setSortAscending(group.getSort().getAscendingOrders()[0])
-                .setSortNullsLast(group.getSort().getNullsIsLast()[0]);
+                .setSortNullsLast(group.getSort().getNullsIsLast()[0])
+                .setBoundedFinalOutput(boundedFinalOutput);
         if (!group.getLowerBound().isUnbounded()) {
             long boundary = (long) OverAggregateUtil.getBoundary(spec, group.getLowerBound());
             long precedingOffset = Math.addExact(Math.negateExact(boundary), group.isRows() ? 1L : 0L);

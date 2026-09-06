@@ -8,7 +8,9 @@ use datafusion::error::{DataFusionError, Result};
 use super::AggregateValue;
 
 const MAGIC: &[u8; 4] = b"SFOA";
-const VERSION: u8 = 3;
+const VERSION: u8 = 4;
+const RANGE_NULL_VERSION: u8 = 4;
+const COMPACT_VERSION: u8 = 3;
 const EVENT_TIMESTAMP_VERSION: u8 = 2;
 const FIRST_VERSION: u8 = 1;
 
@@ -16,6 +18,7 @@ const FIRST_VERSION: u8 = 1;
 pub(super) struct StoredRow {
     pub(super) id: i64,
     pub(super) event_timestamp: i64,
+    pub(super) range_null: bool,
     pub(super) payload: Vec<u8>,
     pub(super) contributions: Vec<Option<AggregateValue>>,
     pub(super) output: Vec<Option<AggregateValue>>,
@@ -48,6 +51,7 @@ pub(super) fn encode_state(state: &OverState) -> Vec<u8> {
         for row in rows {
             put_var_u64(&mut bytes, row.id.wrapping_sub(i64::MIN) as u64);
             bytes.extend_from_slice(&row.event_timestamp.to_le_bytes());
+            bytes.push(u8::from(row.range_null));
             put_bytes(&mut bytes, &row.payload);
             put_values_without_count(&mut bytes, &row.contributions);
             bytes.push(u8::from(!row.output.is_empty()));
@@ -73,7 +77,7 @@ pub(super) fn decode_state(bytes: &[u8], call_count: usize) -> Result<OverState>
         let row_count = cursor.u32()? as usize;
         let mut rows = Vec::with_capacity(row_count);
         for _ in 0..row_count {
-            let id = if version >= VERSION {
+            let id = if version >= COMPACT_VERSION {
                 i64::MIN.wrapping_add(cursor.var_u64()? as i64)
             } else {
                 cursor.i64()?
@@ -83,8 +87,9 @@ pub(super) fn decode_state(bytes: &[u8], call_count: usize) -> Result<OverState>
             } else {
                 i64::MIN
             };
+            let range_null = version >= RANGE_NULL_VERSION && cursor.u8()? != 0;
             let payload = cursor.bytes()?.to_vec();
-            let (contributions, output) = if version >= VERSION {
+            let (contributions, output) = if version >= COMPACT_VERSION {
                 let contributions = cursor.compact_values_exact(call_count)?;
                 let output = match cursor.u8()? {
                     0 => Vec::new(),
@@ -103,6 +108,7 @@ pub(super) fn decode_state(bytes: &[u8], call_count: usize) -> Result<OverState>
             rows.push(StoredRow {
                 id,
                 event_timestamp,
+                range_null,
                 payload,
                 contributions,
                 output,
@@ -345,6 +351,29 @@ mod tests {
         bytes
     }
 
+    fn encode_third_version(state: &OverState) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(MAGIC);
+        bytes.push(COMPACT_VERSION);
+        bytes.extend_from_slice(&state.next_id.to_le_bytes());
+        put_u32(&mut bytes, state.rows.len());
+        for (order, rows) in &state.rows {
+            put_bytes(&mut bytes, order);
+            put_u32(&mut bytes, rows.len());
+            for row in rows {
+                put_var_u64(&mut bytes, row.id.wrapping_sub(i64::MIN) as u64);
+                bytes.extend_from_slice(&row.event_timestamp.to_le_bytes());
+                put_bytes(&mut bytes, &row.payload);
+                put_values_without_count(&mut bytes, &row.contributions);
+                bytes.push(u8::from(!row.output.is_empty()));
+                if !row.output.is_empty() {
+                    put_values_without_count(&mut bytes, &row.output);
+                }
+            }
+        }
+        bytes
+    }
+
     #[test]
     fn canonical_state_round_trips_values_and_rejects_trailing_bytes() {
         let state = OverState {
@@ -354,6 +383,7 @@ mod tests {
                 vec![StoredRow {
                     id: 7,
                     event_timestamp: 11,
+                    range_null: true,
                     payload: vec![3, 4],
                     contributions: vec![
                         Some(AggregateValue::Int(i128::MIN)),
@@ -382,6 +412,7 @@ mod tests {
                 vec![StoredRow {
                     id: 7,
                     event_timestamp: 11,
+                    range_null: false,
                     payload: vec![3, 4],
                     contributions: vec![Some(AggregateValue::Int(5))],
                     output: vec![Some(AggregateValue::Int(5))],
@@ -408,6 +439,7 @@ mod tests {
                 vec![StoredRow {
                     id: i64::MIN + 1,
                     event_timestamp: 11,
+                    range_null: false,
                     payload: vec![3, 4],
                     contributions: vec![Some(AggregateValue::Int(5))],
                     output: Vec::new(),
@@ -416,6 +448,28 @@ mod tests {
         };
         assert_eq!(
             decode_state(&encode_second_version(&state), 1).unwrap(),
+            state
+        );
+    }
+
+    #[test]
+    fn restores_third_version_compact_rows_without_a_range_null_marker() {
+        let state = OverState {
+            next_id: i64::MIN + 2,
+            rows: BTreeMap::from([(
+                vec![1, 2],
+                vec![StoredRow {
+                    id: i64::MIN + 1,
+                    event_timestamp: 11,
+                    range_null: false,
+                    payload: vec![3, 4],
+                    contributions: vec![Some(AggregateValue::Int(5))],
+                    output: Vec::new(),
+                }],
+            )]),
+        };
+        assert_eq!(
+            decode_state(&encode_third_version(&state), 1).unwrap(),
             state
         );
     }

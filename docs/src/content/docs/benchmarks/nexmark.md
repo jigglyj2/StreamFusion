@@ -101,7 +101,8 @@ mode control applied identically to both engines; it does not create a StreamFus
 The `aggregate-modifiers`, `incremental-group-aggregate`,
 `group-aggregate`, `global-aggregate`, `grouping-sets`, `interval-join`, `over-aggregate`,
 `over-aggregate-event-time`, `over-aggregate-processing-time`,
-`over-aggregate-bounded-rows`, `over-aggregate-bounded-range`, `select-distinct`,
+`over-aggregate-bounded-rows`, `over-aggregate-bounded-range`,
+`batch-over-aggregate-bounded-range`, `select-distinct`,
 `set-intersect-all`, `top-n`,
 `limit`, `bounded-limit`, `bounded-sort`, `bounded-sort-limit`, `bounded-rank`,
 `legacy-window-aggregate`, `legacy-window-aggregate-hop`,
@@ -761,6 +762,36 @@ collapsed stacks, and flame graphs are retained under
 `streamfusion-nexmark-benchmarks/target/profiles/bounded-rank-select-working/` and
 `streamfusion-nexmark-benchmarks/target/benchmarks/bounded-rank-select-working/`. Profiler timings
 are excluded from the medians above.
+
+## Bounded batch OVER target
+
+`batch-over-aggregate-bounded-range` selects Flink's `BatchExecOverAggregate` at parallelism four.
+It partitions bids by auction, orders by price, and computes `SUM(price)`
+over `RANGE BETWEEN 1000000 PRECEDING AND CURRENT ROW`. StreamFusion absorbs Flink's required
+bounded sort into the keyed native terminal operator, so the integration test requires non-zero
+native OVER activity and zero separate bounded-sort activity. It runs on both the managed-memory
+and direct native RocksDB backends and compares the complete final multiset with Flink. Focused
+operator tests independently cover retractions, aligned and unaligned snapshots, canonical
+cross-backend restore, and unchanged-SST reuse by incremental RocksDB checkpoints. Batch `ROWS`
+continues to fall back because Flink's quicksort does not define a byte-stable tie order.
+
+On the September 5, 2026 local release/native-CPU run, three alternating fresh-JVM forks per
+engine/backend processed 100,000 deterministic events. Every run materialized 92,000 rows with
+SHA-256 `83376620c809f0059c990accb0ac1a30d2c78f2afee3231d30320b3e957239ed`. Memory medians were
+18,507 events/s for Flink and 18,185 for StreamFusion (98.3% parity), with elapsed ranges of
+5.394–5.459s and 5.420–5.574s. RocksDB medians were 18,066 and 17,552 events/s (97.2% parity),
+with ranges of 5.443–5.599s and 5.682–5.745s. An additional one-million-event smoke matched all
+920,000 rows and SHA-256
+`3ff8a11edb7cd6277a78c224fe19329f161947cb9e698161b187a429f1a7e2c6` on both backend labels.
+
+The separate one-million-event mixed CPU captures place the complete native OVER path at 6.24% of
+memory and 5.66% of RocksDB samples, state codec work at 1.69%/1.37%, checkpoint work at no more
+than 0.29%, and direct RocksDB at 0.29%. Java allocation sampling over 500,000 events was about 25%
+lower for StreamFusion; native samples reflect the expected retained keyed rows and output codec,
+all charged to Flink managed memory, without a visible per-row JNI or RocksDB loop. JFRs, collapsed
+stacks, flame graphs, and differential flame graphs are retained under
+`streamfusion-nexmark-benchmarks/target/profiles/bounded-batch-over-range/` and
+`bounded-batch-over-range-alloc/`. Profiler timings are excluded from throughput results.
 
 ## INTERSECT ALL RowData target
 

@@ -44,6 +44,7 @@ import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecHashJoin;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecHashWindowAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecLimit;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecNestedLoopJoin;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecOverAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecRank;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecSort;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecSortAggregate;
@@ -382,6 +383,23 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                 collectRejections(pair.inputEdge.getSource(), context, nodePath + "/native-input", rejections);
                 return;
             }
+        } else if (node instanceof BatchExecOverAggregate) {
+            BatchExecOverAggregate aggregate = (BatchExecOverAggregate) node;
+            BatchExecSort inputSort = boundedOverInputSort(aggregate);
+            if (inputSort == null) {
+                rejections.add(nodePath + "\nbounded OVER: expected Flink's required BatchExecSort input");
+                return;
+            }
+            String reason = unsupportedReason(aggregate, context);
+            if (reason == null) {
+                reason = unsupportedReason(inputSort, context);
+            }
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
+            ExecEdge nativeInput = inputSort.getInputEdges().get(0);
+            collectRejections(nativeInput.getSource(), context, nodePath + "/native-input", rejections);
+            return;
         } else if (node instanceof BatchExecRank) {
             BatchExecRank rank = (BatchExecRank) node;
             BoundedRankPipeline pipeline = boundedRankPipeline(rank);
@@ -923,6 +941,22 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             replacement.setInputEdges(aggregate.getInputEdges().stream()
                     .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
                     .collect(Collectors.toList()));
+            return replacement;
+        }
+        if (node instanceof BatchExecOverAggregate) {
+            BatchExecOverAggregate aggregate = (BatchExecOverAggregate) node;
+            BatchExecSort inputSort = boundedOverInputSort(aggregate);
+            if (inputSort == null || inputSort.getInputEdges().size() != 1) {
+                throw new IllegalStateException("Selected bounded OVER aggregate has no required input sort");
+            }
+            ExecEdge inputEdge = inputSort.getInputEdges().get(0);
+            StreamFusionBatchExecOverAggregate replacement = new StreamFusionBatchExecOverAggregate(
+                    aggregate.getPersistedConfig(),
+                    overSpec(aggregate),
+                    inputSort.getInputProperties().get(0),
+                    (RowType) aggregate.getOutputType(),
+                    "StreamFusionBatchOverAggregate");
+            replacement.setInputEdges(List.of(copyEdge(inputEdge, convert(inputEdge.getSource()), replacement)));
             return replacement;
         }
         if (node instanceof BatchExecRank) {
@@ -2708,6 +2742,31 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         }
     }
 
+    private String unsupportedReason(BatchExecOverAggregate aggregate, ProcessorContext context) {
+        BatchExecSort inputSort = boundedOverInputSort(aggregate);
+        ExecEdge input = inputSort == null
+                ? aggregate.getInputEdges().get(0)
+                : inputSort.getInputEdges().get(0);
+        try {
+            Class<?> translator = Class.forName(
+                    OVER_AGGREGATE_TRANSLATOR_CLASS,
+                    true,
+                    context.getPlanner().getFlinkContext().getClassLoader());
+            Method method = translator.getMethod(
+                    "unsupportedBoundedReason", RowType.class, RowType.class, OverSpec.class, ReadableConfig.class);
+            return (String) method.invoke(
+                    null,
+                    (RowType) input.getOutputType(),
+                    (RowType) aggregate.getOutputType(),
+                    overSpec(aggregate),
+                    aggregate.getPersistedConfig());
+        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException failure) {
+            throw new IllegalStateException("Could not inspect StreamFusion bounded OVER support", failure);
+        } catch (InvocationTargetException failure) {
+            throw new IllegalStateException("StreamFusion bounded OVER support inspection failed", failure.getCause());
+        }
+    }
+
     private String unsupportedReason(ProcessingTimeDeduplicate folded, ProcessorContext context) {
         String reason = unsupportedCalcReason(
                 (RowType) folded.inputEdge.getOutputType(),
@@ -3179,6 +3238,15 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             return null;
         }
         ExecNode<?> source = bypassBatchExchange(rank.getInputEdges().get(0)).getSource();
+        return source instanceof BatchExecSort ? (BatchExecSort) source : null;
+    }
+
+    private static BatchExecSort boundedOverInputSort(BatchExecOverAggregate aggregate) {
+        if (aggregate.getInputEdges().size() != 1) {
+            return null;
+        }
+        ExecNode<?> source =
+                bypassBatchExchange(aggregate.getInputEdges().get(0)).getSource();
         return source instanceof BatchExecSort ? (BatchExecSort) source : null;
     }
 

@@ -31,7 +31,7 @@ import tech.streamfusion.flink.deduplicate.ArrowBatchKeySelector;
 import tech.streamfusion.flink.exchange.StreamFusionExchangeTranslator;
 import tech.streamfusion.flink.state.StreamFusionStateBackendFactory;
 
-/** Reflection entry point for native unbounded streaming OVER aggregation. */
+/** Reflection entry point for native streaming and bounded OVER aggregation. */
 public final class StreamFusionOverAggregateTranslator {
     private StreamFusionOverAggregateTranslator() {}
 
@@ -164,6 +164,80 @@ public final class StreamFusionOverAggregateTranslator {
             }
             if (call.filterArg >= 0) {
                 return "aggregate[" + index + "]: FILTER is not implemented by native OVER aggregation";
+            }
+            String reason = StreamFusionGroupAggregateTranslator.unsupportedCall(
+                    inputType, outputType.getTypeAt(inputType.getFieldCount() + index), call);
+            if (reason != null) {
+                return "aggregate[" + index + "]: " + reason;
+            }
+        }
+        return null;
+    }
+
+    public static String unsupportedBoundedReason(
+            RowType inputType, RowType outputType, OverSpec overSpec, ReadableConfig config) {
+        if (overSpec.getGroups().size() != 1) {
+            return "window groups: native bounded OVER requires one Flink-compatible group";
+        }
+        OverSpec.GroupSpec group = overSpec.getGroups().get(0);
+        int[] orderKeys = group.getSort().getFieldIndices();
+        if (orderKeys.length != 1 || !group.getSort().getAscendingOrders()[0]) {
+            return "ordering: native bounded OVER currently requires one ascending order key";
+        }
+        if (orderKeys[0] < 0 || orderKeys[0] >= inputType.getFieldCount()) {
+            return "ordering: native bounded OVER order key is outside the input schema";
+        }
+        if (group.isRows()) {
+            return "frame: bounded ROWS tie ordering is not byte-stable across Flink sort implementations";
+        }
+        if (!group.getLowerBound().isPreceding() || !group.getUpperBound().isCurrentRow()) {
+            return "frame: native bounded OVER requires RANGE BETWEEN PRECEDING AND CURRENT ROW";
+        }
+        switch (inputType.getTypeAt(orderKeys[0]).getTypeRoot()) {
+            case TINYINT:
+            case SMALLINT:
+            case INTEGER:
+            case BIGINT:
+            case TIMESTAMP_WITHOUT_TIME_ZONE:
+            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
+                break;
+            default:
+                return "ordering: bounded native RANGE supports integral and timestamp order keys";
+        }
+        if (!group.getLowerBound().isUnbounded()) {
+            Object boundary = OverAggregateUtil.getBoundary(overSpec, group.getLowerBound());
+            if (!(boundary instanceof Long)) {
+                return "frame: native bounded OVER requires a Flink long boundary";
+            }
+            try {
+                long distance = Math.negateExact((Long) boundary);
+                if (distance < 0) {
+                    return "frame: native bounded OVER range distance must be non-negative";
+                }
+            } catch (ArithmeticException overflow) {
+                return "frame: native bounded OVER preceding offset exceeds 64 bits";
+            }
+        }
+        if (config.get(StateChangelogOptions.ENABLE_STATE_CHANGE_LOG)) {
+            return "state: bounded native OVER does not implement Flink changelog-state wrapping";
+        }
+        if (config.get(ExecutionConfigOptions.TABLE_EXEC_ASYNC_STATE_ENABLED)) {
+            return "state: bounded native OVER does not implement Flink async-state mode";
+        }
+        if (outputType.getFieldCount()
+                != inputType.getFieldCount() + group.getAggCalls().size()) {
+            return "schema: bounded OVER output must append one field per aggregate call";
+        }
+        for (int index = 0; index < group.getAggCalls().size(); index++) {
+            AggregateCall call = group.getAggCalls().get(index);
+            if (call.getAggregation().getKind() == org.apache.calcite.sql.SqlKind.AVG) {
+                return "aggregate[" + index + "]: AVG prefix compaction is not implemented by native bounded OVER";
+            }
+            if (call.isDistinct()) {
+                return "aggregate[" + index + "]: DISTINCT is not implemented by native bounded OVER";
+            }
+            if (call.filterArg >= 0) {
+                return "aggregate[" + index + "]: FILTER is not implemented by native bounded OVER";
             }
             String reason = StreamFusionGroupAggregateTranslator.unsupportedCall(
                     inputType, outputType.getTypeAt(inputType.getFieldCount() + index), call);

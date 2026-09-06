@@ -69,6 +69,26 @@ class LocalRowDataNexmarkBenchmarkIT {
 
     @ParameterizedTest
     @ValueSource(strings = {"hashmap", "rocksdb"})
+    void boundedOverAggregatesAbsorbRequiredSortAndPreserveFlinkRows(String backend) throws Exception {
+        System.setProperty("streamfusion.nexmark.batch-mode", "true");
+        for (String query : List.of("batch-over-aggregate-bounded-range")) {
+            LocalRowDataNexmarkBenchmark.RunResult flink =
+                    LocalRowDataNexmarkBenchmark.run(2_000, query, false, backend, 4);
+            LocalRowDataNexmarkBenchmark.RunResult streamFusion =
+                    LocalRowDataNexmarkBenchmark.run(2_000, query, true, backend, 4);
+
+            assertThat(streamFusion.completed()).as(backend + ":" + query).isTrue();
+            assertThat(streamFusion.debugRows()).as(backend + ":" + query).containsExactlyElementsOf(flink.debugRows());
+            assertThat(streamFusion.outputRows()).isEqualTo(flink.outputRows());
+            assertThat(streamFusion.outputSha256()).isEqualTo(flink.outputSha256());
+            assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+            assertThat(streamFusion.nativeOverAggregateBatches()).isGreaterThan(0);
+            assertThat(streamFusion.nativeBoundedSortBatches()).isZero();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"hashmap", "rocksdb"})
     void boundedTwoPhaseGroupAggregatesPreserveEveryPlannedStage(String backend) throws Exception {
         System.setProperty("streamfusion.nexmark.batch-mode", "true");
         System.setProperty("streamfusion.nexmark.aggregate-phase", "TWO_PHASE");

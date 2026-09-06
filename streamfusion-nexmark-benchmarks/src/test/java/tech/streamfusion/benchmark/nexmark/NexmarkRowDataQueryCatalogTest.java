@@ -29,6 +29,7 @@ class NexmarkRowDataQueryCatalogTest {
                         "aggregate-modifiers",
                         "batch-unnest",
                         "batch-window-tvf",
+                        "batch-over-aggregate-bounded-range",
                         "bounded-sort",
                         "bounded-sort-limit",
                         "bounded-limit",
