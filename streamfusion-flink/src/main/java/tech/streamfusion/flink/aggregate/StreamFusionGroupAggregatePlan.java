@@ -108,7 +108,7 @@ final class StreamFusionGroupAggregatePlan {
     }
 
     static byte[] createBoundedLocal(
-            RowType inputType, RowType internalOutputType, int[] grouping, AggregateCall[] calls) {
+            RowType inputType, RowType internalOutputType, int[] grouping, int[] auxiliary, AggregateCall[] calls) {
         LocalGroupAggregate.Builder aggregate = LocalGroupAggregate.newBuilder()
                 .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
                 .setBoundedBatch(true)
@@ -117,6 +117,9 @@ final class StreamFusionGroupAggregatePlan {
                 .addAllAggregateCalls(aggregateCalls(inputType, calls, new boolean[calls.length]));
         for (int index : grouping) {
             aggregate.addGroupingIndices(index);
+        }
+        for (int index : auxiliary) {
+            aggregate.addAuxiliaryIndices(index);
         }
         return NativePlan.newBuilder()
                 .setProtocolVersion(1)
@@ -156,6 +159,7 @@ final class StreamFusionGroupAggregatePlan {
             RowType internalInputType,
             RowType outputType,
             int groupingCount,
+            int auxiliaryCount,
             AggregateCall[] calls) {
         GlobalGroupAggregate.Builder aggregate = GlobalGroupAggregate.newBuilder()
                 .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
@@ -165,6 +169,9 @@ final class StreamFusionGroupAggregatePlan {
                 .addAllAggregateCalls(aggregateCalls(originalInputType, calls, new boolean[calls.length]));
         for (int index = 0; index < groupingCount; index++) {
             aggregate.addGroupingIndices(index);
+        }
+        for (int index = groupingCount; index < groupingCount + auxiliaryCount; index++) {
+            aggregate.addAuxiliaryIndices(index);
         }
         return NativePlan.newBuilder()
                 .setProtocolVersion(1)

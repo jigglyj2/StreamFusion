@@ -335,6 +335,7 @@ impl GroupAggregateProcessor {
                         input_schema: plan.input_schema,
                         output_schema: plan.output_schema,
                         bounded_final_output: plan.bounded_final_output,
+                        auxiliary_indices: plan.auxiliary_indices,
                     },
                     true,
                 )
@@ -1246,13 +1247,14 @@ impl GroupAggregateProcessor {
     }
 
     fn encode_grouping_rows(&self, batch: &RecordBatch) -> Result<Vec<Vec<u8>>> {
-        if self.plan.grouping_indices.is_empty() {
+        if self.plan.grouping_indices.is_empty() && self.plan.auxiliary_indices.is_empty() {
             return Ok((0..batch.num_rows()).map(|_| Vec::new()).collect());
         }
         let columns = self
             .plan
             .grouping_indices
             .iter()
+            .chain(&self.plan.auxiliary_indices)
             .map(|&index| Arc::clone(batch.column(index as usize)))
             .collect::<Vec<_>>();
         let rows = self
@@ -1266,16 +1268,17 @@ impl GroupAggregateProcessor {
     }
 
     fn bundle_output_batch(&self, events: BundleOutputEvents) -> Result<RecordBatch> {
-        let mut columns = if self.plan.grouping_indices.is_empty() {
-            Vec::new()
-        } else {
-            let converter = self
-                .grouping_converter
-                .as_ref()
-                .expect("grouping converter was negotiated");
-            let parser = converter.parser();
-            converter.convert_rows(events.grouping_rows.iter().map(|row| parser.parse(row)))?
-        };
+        let mut columns =
+            if self.plan.grouping_indices.is_empty() && self.plan.auxiliary_indices.is_empty() {
+                Vec::new()
+            } else {
+                let converter = self
+                    .grouping_converter
+                    .as_ref()
+                    .expect("grouping converter was negotiated");
+                let parser = converter.parser();
+                converter.convert_rows(events.grouping_rows.iter().map(|row| parser.parse(row)))?
+            };
         for (call, values) in self.calls.iter().zip(events.values) {
             columns.push(aggregate_array(&values, &call.output_type)?);
         }
@@ -1427,6 +1430,7 @@ impl GroupAggregateProcessor {
             .plan
             .grouping_indices
             .iter()
+            .chain(&self.plan.auxiliary_indices)
             .map(|&index| {
                 let index = index as usize;
                 schema
@@ -1473,14 +1477,15 @@ impl GroupAggregateProcessor {
             self.output_schema = Some(Arc::new(Schema::new(fields)));
         }
         if self.partial_input {
-            if visible_count != self.plan.grouping_indices.len() + 1
+            if visible_count
+                != self.plan.grouping_indices.len() + self.plan.auxiliary_indices.len() + 1
                 || schema
                     .fields()
                     .get(visible_count - 1)
                     .is_none_or(|field| field.data_type() != &DataType::Binary)
             {
                 return Err(DataFusionError::Plan(
-                    "global group aggregate expects grouping fields followed by one BINARY accumulator"
+                    "global group aggregate expects grouping and auxiliary fields followed by one BINARY accumulator"
                         .to_string(),
                 ));
             }
@@ -2512,7 +2517,9 @@ fn planned_group_output(
     };
     let input = crate::planner::arrow_schema(input)?;
     let output = crate::planner::arrow_schema(output)?;
-    if output.fields().len() != plan.grouping_indices.len() + plan.aggregate_calls.len() {
+    if output.fields().len()
+        != plan.grouping_indices.len() + plan.auxiliary_indices.len() + plan.aggregate_calls.len()
+    {
         return Err(DataFusionError::Plan(
             "group aggregate output schema does not match keys and calls".to_string(),
         ));
@@ -2520,6 +2527,7 @@ fn planned_group_output(
     let sort_fields = plan
         .grouping_indices
         .iter()
+        .chain(&plan.auxiliary_indices)
         .map(|&index| {
             input
                 .fields()

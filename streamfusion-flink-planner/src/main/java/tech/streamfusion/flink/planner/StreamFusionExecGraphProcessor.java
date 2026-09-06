@@ -1878,11 +1878,16 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
     private String unsupportedReason(BatchGroupAggregatePair pair, ProcessorContext context) {
         int[] localGrouping = batchGrouping(pair.local);
         int[] finalGrouping = batchGrouping(pair.global);
-        if (batchAuxiliaryGrouping(pair.local).length != 0 || batchAuxiliaryGrouping(pair.global).length != 0) {
-            return "auxiliary grouping: bounded native two-phase aggregation does not yet encode auxiliary keys";
-        }
+        int[] localAuxiliary = batchAuxiliaryGrouping(pair.local);
+        int[] finalAuxiliary = batchAuxiliaryGrouping(pair.global);
         if (localGrouping.length != finalGrouping.length) {
             return "grouping: bounded local and global aggregate key counts do not match";
+        }
+        int[] expectedFinalAuxiliary = java.util.stream.IntStream.range(
+                        localGrouping.length, localGrouping.length + localAuxiliary.length)
+                .toArray();
+        if (!Arrays.equals(finalAuxiliary, expectedFinalAuxiliary)) {
+            return "auxiliary grouping: bounded global aggregate must address the local auxiliary prefix";
         }
         if (batchAggregateCalls(pair.local).length != batchAggregateCalls(pair.global).length) {
             return "aggregate: bounded local and global call counts do not match";
@@ -1904,6 +1909,7 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     RowType.class,
                     RowType.class,
                     int[].class,
+                    int[].class,
                     org.apache.calcite.rel.core.AggregateCall[].class,
                     ReadableConfig.class);
             return (String) method.invoke(
@@ -1911,6 +1917,7 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     inputType,
                     (RowType) pair.global.getOutputType(),
                     localGrouping,
+                    localAuxiliary,
                     batchAggregateCalls(pair.local),
                     pair.global.getPersistedConfig());
         } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException failure) {
@@ -2026,13 +2033,17 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
 
     private ExecNode<?> convertBatchGroupAggregatePair(BatchGroupAggregatePair pair) {
         int[] grouping = batchGrouping(pair.local);
+        int[] auxiliary = batchAuxiliaryGrouping(pair.local);
         org.apache.calcite.rel.core.AggregateCall[] calls = batchAggregateCalls(pair.local);
         RowType originalInputType = (RowType) pair.inputEdge.getOutputType();
-        RowType internalType = nativeGroupAccumulatorType(originalInputType, grouping);
+        int[] payloadIndices = java.util.stream.IntStream.concat(Arrays.stream(grouping), Arrays.stream(auxiliary))
+                .toArray();
+        RowType internalType = nativeGroupAccumulatorType(originalInputType, payloadIndices);
 
         StreamFusionBatchExecLocalGroupAggregate local = new StreamFusionBatchExecLocalGroupAggregate(
                 pair.local.getPersistedConfig(),
                 grouping,
+                auxiliary,
                 calls,
                 InputProperty.DEFAULT,
                 internalType,
@@ -2059,6 +2070,7 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                 pair.global.getPersistedConfig(),
                 originalInputType,
                 grouping.length,
+                auxiliary.length,
                 calls,
                 hashInput,
                 (RowType) pair.global.getOutputType(),

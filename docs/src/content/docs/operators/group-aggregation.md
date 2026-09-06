@@ -79,7 +79,9 @@ bundle boundaries.
 
 Bounded `BatchExecHashAggregate` and the local/global hash- or sort-aggregate shapes use the same
 native accumulator kernels. A bounded local stage emits one opaque partial accumulator per touched
-key for each incoming Arrow batch. The framed Flink exchange transports that internal Arrow schema
+key for each incoming Arrow batch. Flink auxiliary grouping fields are carried beside the true
+grouping key through both phases and restored in final output, but do not participate in native
+hashing, exchange distribution, or key-group assignment. The framed Flink exchange transports that internal Arrow schema
 without Java interpretation; the receiving global stage decodes the frame inside the aggregate
 task, performs one distinct-key multi-get and one mutation batch, and emits final `INSERT` rows only
 after end of input. This also covers bounded grouping sets, `ROLLUP`, and `CUBE`: native Expand is

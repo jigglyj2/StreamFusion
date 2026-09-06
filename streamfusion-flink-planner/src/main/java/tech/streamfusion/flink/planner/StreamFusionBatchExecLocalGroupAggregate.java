@@ -30,12 +30,14 @@ public final class StreamFusionBatchExecLocalGroupAggregate extends ExecNodeBase
             "tech.streamfusion.flink.aggregate.StreamFusionLocalGroupAggregateTranslator";
 
     private final int[] grouping;
+    private final int[] auxiliary;
     private final AggregateCall[] calls;
     private final boolean hashAggregateMetrics;
 
     public StreamFusionBatchExecLocalGroupAggregate(
             ReadableConfig config,
             int[] grouping,
+            int[] auxiliary,
             AggregateCall[] calls,
             InputProperty inputProperty,
             RowType outputType,
@@ -48,6 +50,7 @@ public final class StreamFusionBatchExecLocalGroupAggregate extends ExecNodeBase
                 outputType,
                 "StreamFusionBatchLocalGroupAggregate");
         this.grouping = grouping.clone();
+        this.auxiliary = auxiliary.clone();
         this.calls = calls.clone();
         this.hashAggregateMetrics = hashAggregateMetrics;
     }
@@ -69,11 +72,20 @@ public final class StreamFusionBatchExecLocalGroupAggregate extends ExecNodeBase
                             RowType.class,
                             RowType.class,
                             int[].class,
+                            int[].class,
                             AggregateCall[].class,
                             RowDataKeySelector.class,
                             boolean.class);
             return (Transformation<RowData>) method.invoke(
-                    null, input, inputType, (RowType) getOutputType(), grouping, calls, selector, hashAggregateMetrics);
+                    null,
+                    input,
+                    inputType,
+                    (RowType) getOutputType(),
+                    grouping,
+                    auxiliary,
+                    calls,
+                    selector,
+                    hashAggregateMetrics);
         } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException failure) {
             throw new IllegalStateException("Could not invoke the bounded native local aggregate", failure);
         } catch (InvocationTargetException failure) {

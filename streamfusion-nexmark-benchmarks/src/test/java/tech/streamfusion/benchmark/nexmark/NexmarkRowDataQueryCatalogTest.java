@@ -37,6 +37,7 @@ class NexmarkRowDataQueryCatalogTest {
                         "bounded-sort-merge-join",
                         "incremental-group-aggregate",
                         "group-aggregate",
+                        "two-phase-auxiliary-group-aggregate",
                         "global-aggregate",
                         "grouping-sets",
                         "legacy-window-aggregate",

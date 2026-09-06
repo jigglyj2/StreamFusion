@@ -92,7 +92,12 @@ class LocalRowDataNexmarkBenchmarkIT {
     void boundedTwoPhaseGroupAggregatesPreserveEveryPlannedStage(String backend) throws Exception {
         System.setProperty("streamfusion.nexmark.batch-mode", "true");
         System.setProperty("streamfusion.nexmark.aggregate-phase", "TWO_PHASE");
-        for (String query : List.of("group-aggregate", "global-aggregate", "grouping-sets", "aggregate-modifiers")) {
+        for (String query : List.of(
+                "group-aggregate",
+                "global-aggregate",
+                "grouping-sets",
+                "aggregate-modifiers",
+                "two-phase-auxiliary-group-aggregate")) {
             LocalRowDataNexmarkBenchmark.RunResult flink =
                     LocalRowDataNexmarkBenchmark.run(2_000, query, false, backend, 4);
             LocalRowDataNexmarkBenchmark.RunResult streamFusion =

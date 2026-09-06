@@ -31,6 +31,7 @@ public final class StreamFusionBatchExecGlobalGroupAggregate extends ExecNodeBas
 
     private final RowType originalInputType;
     private final int groupingCount;
+    private final int auxiliaryCount;
     private final AggregateCall[] calls;
     private final boolean hashAggregateMetrics;
 
@@ -38,6 +39,7 @@ public final class StreamFusionBatchExecGlobalGroupAggregate extends ExecNodeBas
             ReadableConfig config,
             RowType originalInputType,
             int groupingCount,
+            int auxiliaryCount,
             AggregateCall[] calls,
             InputProperty inputProperty,
             RowType outputType,
@@ -51,6 +53,7 @@ public final class StreamFusionBatchExecGlobalGroupAggregate extends ExecNodeBas
                 "StreamFusionBatchGlobalGroupAggregate");
         this.originalInputType = originalInputType;
         this.groupingCount = groupingCount;
+        this.auxiliaryCount = auxiliaryCount;
         this.calls = calls.clone();
         this.hashAggregateMetrics = hashAggregateMetrics;
     }
@@ -74,6 +77,7 @@ public final class StreamFusionBatchExecGlobalGroupAggregate extends ExecNodeBas
                             RowType.class,
                             RowType.class,
                             int.class,
+                            int.class,
                             AggregateCall[].class,
                             ReadableConfig.class,
                             org.apache.flink.streaming.api.environment.StreamExecutionEnvironment.class,
@@ -86,6 +90,7 @@ public final class StreamFusionBatchExecGlobalGroupAggregate extends ExecNodeBas
                     internalType,
                     (RowType) getOutputType(),
                     groupingCount,
+                    auxiliaryCount,
                     calls,
                     getPersistedConfig(),
                     planner.getExecEnv(),

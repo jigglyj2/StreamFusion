@@ -180,6 +180,7 @@ mod tests {
                             ("sum", bigint(true)),
                         ])),
                         bounded_final_output: false,
+                        auxiliary_indices: Vec::new(),
                     },
                 ))),
             }),
@@ -254,6 +255,36 @@ mod tests {
         .unwrap()
     }
 
+    fn auxiliary_batch(rows: Vec<(i64, i64, Vec<u8>)>) -> RecordBatch {
+        let keys = rows.iter().map(|(key, _, _)| *key).collect::<Vec<_>>();
+        let auxiliary = rows.iter().map(|(_, value, _)| *value).collect::<Vec<_>>();
+        let accumulators = rows
+            .iter()
+            .map(|(_, _, accumulator)| accumulator.as_slice())
+            .collect::<Vec<_>>();
+        let encoded_keys = rows
+            .iter()
+            .map(|(key, _, _)| key.to_le_bytes().to_vec())
+            .collect::<Vec<_>>();
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("key", DataType::Int64, false),
+                Field::new("auxiliary", DataType::Int64, false),
+                Field::new("accumulator", DataType::Binary, false),
+                Field::new("__streamfusion_key", DataType::Binary, false),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(keys)) as ArrayRef,
+                Arc::new(Int64Array::from(auxiliary)) as ArrayRef,
+                Arc::new(BinaryArray::from_iter_values(accumulators)) as ArrayRef,
+                Arc::new(BinaryArray::from_iter_values(
+                    encoded_keys.iter().map(Vec::as_slice),
+                )) as ArrayRef,
+            ],
+        )
+        .unwrap()
+    }
+
     fn processor() -> GlobalGroupAggregateProcessor {
         GlobalGroupAggregateProcessor::new(
             &plan(2),
@@ -274,6 +305,50 @@ mod tests {
             HostMemoryReservation::new(
                 Arc::new(TestBroker::new(1 << 20)),
                 "bounded global aggregate test",
+            ),
+        )
+        .unwrap()
+    }
+
+    fn bounded_auxiliary_processor() -> GlobalGroupAggregateProcessor {
+        let native = proto::NativePlan::decode(bounded_plan().as_slice()).unwrap();
+        let mut aggregate = match native.root.unwrap().operator.unwrap() {
+            proto::operator::Operator::GlobalGroupAggregate(aggregate) => *aggregate,
+            _ => unreachable!(),
+        };
+        aggregate.auxiliary_indices = vec![1];
+        aggregate.input_schema.as_mut().unwrap().fields.insert(
+            1,
+            proto::Field {
+                name: "auxiliary".to_string(),
+                r#type: Some(bigint(false)),
+            },
+        );
+        aggregate.output_schema.as_mut().unwrap().fields.insert(
+            1,
+            proto::Field {
+                name: "auxiliary".to_string(),
+                r#type: Some(bigint(false)),
+            },
+        );
+        let serialized = proto::NativePlan {
+            protocol_version: crate::PLAN_PROTOCOL_VERSION,
+            root: Some(proto::Operator {
+                plan_node_id: 0,
+                operator: Some(proto::operator::Operator::GlobalGroupAggregate(Box::new(
+                    aggregate,
+                ))),
+            }),
+        }
+        .encode_to_vec();
+        GlobalGroupAggregateProcessor::new(
+            &serialized,
+            128,
+            0,
+            127,
+            HostMemoryReservation::new(
+                Arc::new(TestBroker::new(1 << 20)),
+                "bounded auxiliary global aggregate test",
             ),
         )
         .unwrap()
@@ -378,6 +453,51 @@ mod tests {
         rows.sort_unstable();
         assert_eq!(rows, vec![(1, 3, 35), (2, 1, 7)]);
         assert_eq!(processor.finish_bundle().unwrap().num_rows(), 0);
+    }
+
+    #[test]
+    fn bounded_mode_restores_auxiliary_fields_without_putting_them_in_the_state_key() {
+        let mut processor = bounded_auxiliary_processor();
+        processor
+            .process_arrow(auxiliary_batch(vec![
+                (1, 10, partial(&[5], true)),
+                (1, 10, partial(&[7], true)),
+                (2, 20, partial(&[3], true)),
+            ]))
+            .unwrap();
+        let output = processor.finish_bundle().unwrap();
+        let keys = output
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let auxiliary = output
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let counts = output
+            .column(2)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let sums = output
+            .column(3)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let mut rows = (0..output.num_rows())
+            .map(|row| {
+                (
+                    keys.value(row),
+                    auxiliary.value(row),
+                    counts.value(row),
+                    sums.value(row),
+                )
+            })
+            .collect::<Vec<_>>();
+        rows.sort_unstable();
+        assert_eq!(rows, vec![(1, 10, 2, 12), (2, 20, 1, 3)]);
     }
 
     #[test]

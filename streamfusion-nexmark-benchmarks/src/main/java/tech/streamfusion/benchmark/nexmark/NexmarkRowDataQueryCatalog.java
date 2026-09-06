@@ -106,6 +106,7 @@ final class NexmarkRowDataQueryCatalog {
         schemas.put(
                 "group-aggregate",
                 "bidder BIGINT, bids BIGINT, spend BIGINT, minimum_price BIGINT, maximum_price BIGINT");
+        schemas.put("two-phase-auxiliary-group-aggregate", "bidder BIGINT, spend BIGINT, grouped_rows BIGINT");
         schemas.put(
                 "global-aggregate",
                 "bids BIGINT, prices BIGINT, spend BIGINT, minimum_bidder BIGINT, maximum_auction BIGINT");

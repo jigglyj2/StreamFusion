@@ -50,10 +50,12 @@ public final class StreamFusionLocalGroupAggregateTranslator {
             RowType inputType,
             RowType internalOutputType,
             int[] grouping,
+            int[] auxiliary,
             AggregateCall[] calls,
             RowDataKeySelector keySelector,
             boolean hashAggregateMetrics) {
-        byte[] plan = StreamFusionGroupAggregatePlan.createBoundedLocal(inputType, internalOutputType, grouping, calls);
+        byte[] plan = StreamFusionGroupAggregatePlan.createBoundedLocal(
+                inputType, internalOutputType, grouping, auxiliary, calls);
         Transformation<ArrowRowDataBatch> arrowInput = StreamFusionArrowBoundaries.toArrow(input, inputType);
         OneInputTransformation<ArrowRowDataBatch, ArrowRowDataBatch> transformation = new OneInputTransformation<>(
                 arrowInput,

@@ -78,20 +78,22 @@ impl LocalGroupAggregateProcessor {
             crate::planner::arrow_schema(plan.output_schema.as_ref().ok_or_else(|| {
                 DataFusionError::Plan("local group aggregate requires an output schema".to_string())
             })?)?;
-        if output_schema.fields().len() != plan.grouping_indices.len() + 1
+        if output_schema.fields().len()
+            != plan.grouping_indices.len() + plan.auxiliary_indices.len() + 1
             || output_schema
                 .fields()
                 .last()
                 .is_none_or(|field| field.data_type() != &arrow::datatypes::DataType::Binary)
         {
             return Err(DataFusionError::Plan(
-                "local group aggregate output must contain grouping fields and one BINARY accumulator"
+                "local group aggregate output must contain grouping and auxiliary fields and one BINARY accumulator"
                     .to_string(),
             ));
         }
         let grouping_fields = plan
             .grouping_indices
             .iter()
+            .chain(&plan.auxiliary_indices)
             .map(|&index| {
                 input_schema
                     .fields()
@@ -288,13 +290,14 @@ impl LocalGroupAggregateProcessor {
     }
 
     fn encode_grouping_rows(&self, batch: &RecordBatch) -> Result<Option<Rows>> {
-        if self.plan.grouping_indices.is_empty() {
+        if self.plan.grouping_indices.is_empty() && self.plan.auxiliary_indices.is_empty() {
             return Ok(None);
         }
         let columns = self
             .plan
             .grouping_indices
             .iter()
+            .chain(&self.plan.auxiliary_indices)
             .map(|&index| Arc::clone(batch.column(index as usize)))
             .collect::<Vec<_>>();
         Ok(Some(self.grouping_converter.convert_columns(&columns)?))
@@ -364,13 +367,14 @@ impl LocalGroupAggregateProcessor {
         keys: Vec<Vec<u8>>,
         accumulators: Vec<Vec<u8>>,
     ) -> Result<RecordBatch> {
-        let mut columns = if self.plan.grouping_indices.is_empty() {
-            Vec::new()
-        } else {
-            let parser = self.grouping_converter.parser();
-            self.grouping_converter
-                .convert_rows(keys.iter().map(|key| parser.parse(key)))?
-        };
+        let mut columns =
+            if self.plan.grouping_indices.is_empty() && self.plan.auxiliary_indices.is_empty() {
+                Vec::new()
+            } else {
+                let parser = self.grouping_converter.parser();
+                self.grouping_converter
+                    .convert_rows(keys.iter().map(|key| parser.parse(key)))?
+            };
         columns.push(Arc::new(BinaryArray::from_iter_values(accumulators)) as ArrayRef);
         let output = RecordBatch::try_new(Arc::clone(&self.output_schema), columns)?;
         let bytes = output.get_array_memory_size();
@@ -460,6 +464,7 @@ mod tests {
                             ],
                         }),
                         bounded_batch: false,
+                        auxiliary_indices: Vec::new(),
                     },
                 ))),
             }),
@@ -574,6 +579,63 @@ mod tests {
             .unwrap();
         assert_eq!(second.num_rows(), 2);
         assert_eq!(processor.finish_bundle().unwrap().num_rows(), 0);
+    }
+
+    #[test]
+    fn bounded_mode_carries_auxiliary_fields_without_hashing_them() {
+        let native = proto::NativePlan::decode(plan(1, false).as_slice()).unwrap();
+        let mut aggregate = match native.root.unwrap().operator.unwrap() {
+            proto::operator::Operator::LocalGroupAggregate(aggregate) => *aggregate,
+            _ => unreachable!(),
+        };
+        aggregate.mini_batch_size = 0;
+        aggregate.bounded_batch = true;
+        aggregate.auxiliary_indices = vec![1];
+        aggregate.output_schema.as_mut().unwrap().fields.insert(
+            1,
+            proto::Field {
+                name: "auxiliary".to_string(),
+                r#type: Some(logical_bigint(true)),
+            },
+        );
+        let serialized = proto::NativePlan {
+            protocol_version: crate::PLAN_PROTOCOL_VERSION,
+            root: Some(proto::Operator {
+                plan_node_id: 0,
+                operator: Some(proto::operator::Operator::LocalGroupAggregate(Box::new(
+                    aggregate,
+                ))),
+            }),
+        }
+        .encode_to_vec();
+        let mut processor = LocalGroupAggregateProcessor::new(
+            &serialized,
+            HostMemoryReservation::new(
+                Arc::new(TestBroker::new(1 << 20)),
+                "bounded auxiliary aggregate test",
+            ),
+        )
+        .unwrap();
+
+        let output = processor
+            .process_arrow(batch(vec![1, 1, 2], vec![10, 10, 7], None))
+            .unwrap();
+        let keys = output
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let auxiliary = output
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let mut rows = (0..output.num_rows())
+            .map(|row| (keys.value(row), auxiliary.value(row)))
+            .collect::<Vec<_>>();
+        rows.sort_unstable();
+        assert_eq!(rows, vec![(1, 10), (2, 7)]);
+        assert!(output.column(2).as_any().is::<BinaryArray>());
     }
 
     #[test]

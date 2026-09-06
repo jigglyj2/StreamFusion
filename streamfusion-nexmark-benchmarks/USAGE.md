@@ -70,6 +70,9 @@ the final Arrow result only at end-of-input. The integration case checks exact f
 and requires native OVER activity with no separate native bounded-sort stage. Dedicated operator
 tests cover DELETE retractions, aligned and unaligned snapshots, canonical cross-backend restore,
 and incremental RocksDB SST reuse.
+`two-phase-auxiliary-group-aggregate` forces bounded two-phase grouping reduction so a
+functionally dependent auxiliary field crosses both native aggregate stages without becoming part
+of the hash key or key-group assignment.
 `temporal-join` derives a versioned auction table with row-time deduplication, then probes it from
 the bid stream with an event-time left temporal join and a residual condition.
 Official q4 and q9 exercise the binary multi-join physical form with the auction-expiry residual;

@@ -99,7 +99,8 @@ Set `-Dstreamfusion.nexmark.batch-mode=true` to run the finite RowData source th
 bounded SQL planner. The harness disables periodic checkpoints in that mode. This is an execution-
 mode control applied identically to both engines; it does not create a StreamFusion-only runtime.
 The `aggregate-modifiers`, `incremental-group-aggregate`,
-`group-aggregate`, `global-aggregate`, `grouping-sets`, `interval-join`, `over-aggregate`,
+`group-aggregate`, `two-phase-auxiliary-group-aggregate`, `global-aggregate`, `grouping-sets`,
+`interval-join`, `over-aggregate`,
 `over-aggregate-event-time`, `over-aggregate-processing-time`,
 `over-aggregate-bounded-rows`, `over-aggregate-bounded-range`,
 `batch-over-aggregate-bounded-range`, `select-distinct`,
@@ -123,8 +124,10 @@ The sliding-window case also runs at parallelism four on both state backends so 
 crosses the native key-group exchange rather than exercising only an in-task path.
 The bounded group-aggregate matrix likewise forces `TWO_PHASE` at parallelism four for
 `group-aggregate`, `global-aggregate`, `grouping-sets`, and `aggregate-modifiers` on memory and
-RocksDB. It compares exact materialized output, requires an accelerated EXPLAIN, and requires both
-native phase counters. `aggregate-modifiers` covers Flink's DISTINCT expansion into two nested
+RocksDB. The `two-phase-auxiliary-group-aggregate` case additionally forces Flink's grouping
+reduction to carry a functionally dependent auxiliary field through nested local/global stages
+without adding it to the true hash key. The matrix compares exact materialized output, requires an
+accelerated EXPLAIN, and requires both native phase counters. `aggregate-modifiers` covers Flink's DISTINCT expansion into two nested
 local -> exchange -> global pairs, including the conditional discriminator Calc between them, so
 the test guards every phase rather than merely the outer aggregate.
 `temporal-sort` orders the bounded bid stream by ascending event time and secondary price/auction

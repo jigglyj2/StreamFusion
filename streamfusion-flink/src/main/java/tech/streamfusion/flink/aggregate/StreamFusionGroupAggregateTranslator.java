@@ -119,6 +119,7 @@ public final class StreamFusionGroupAggregateTranslator {
             RowType internalInputType,
             RowType outputType,
             int groupingCount,
+            int auxiliaryCount,
             AggregateCall[] calls,
             boolean[] retractable,
             boolean generateUpdateBefore,
@@ -242,6 +243,7 @@ public final class StreamFusionGroupAggregateTranslator {
             RowType internalInputType,
             RowType outputType,
             int groupingCount,
+            int auxiliaryCount,
             AggregateCall[] calls,
             ReadableConfig config,
             StreamExecutionEnvironment environment,
@@ -250,7 +252,7 @@ public final class StreamFusionGroupAggregateTranslator {
         StreamFusionStateBackendFactory.install(environment);
         int[] grouping = java.util.stream.IntStream.range(0, groupingCount).toArray();
         byte[] plan = StreamFusionGroupAggregatePlan.createBoundedGlobal(
-                originalInputType, internalInputType, outputType, groupingCount, calls);
+                originalInputType, internalInputType, outputType, groupingCount, auxiliaryCount, calls);
         FramedInput framed = framed(input);
         OneInputTransformation<NativeExchangeFrame, ArrowRowDataBatch> transformation = new OneInputTransformation<>(
                 framed.transformation,
@@ -309,14 +311,25 @@ public final class StreamFusionGroupAggregateTranslator {
 
     public static String unsupportedBatchReason(
             RowType inputType, RowType outputType, int[] grouping, AggregateCall[] calls, ReadableConfig config) {
-        return unsupportedReason(
-                inputType, outputType, grouping, calls, new boolean[calls.length], false, false, 0L, config);
+        return unsupportedBatchReason(inputType, outputType, grouping, new int[0], calls, config);
     }
 
-    public static String unsupportedReason(
+    public static String unsupportedBatchReason(
             RowType inputType,
             RowType outputType,
             int[] grouping,
+            int[] auxiliary,
+            AggregateCall[] calls,
+            ReadableConfig config) {
+        return unsupportedReason(
+                inputType, outputType, grouping, auxiliary, calls, new boolean[calls.length], false, false, 0L, config);
+    }
+
+    private static String unsupportedReason(
+            RowType inputType,
+            RowType outputType,
+            int[] grouping,
+            int[] auxiliary,
             AggregateCall[] calls,
             boolean[] retractable,
             boolean generateUpdateBefore,
@@ -326,8 +339,9 @@ public final class StreamFusionGroupAggregateTranslator {
         if (calls.length != retractable.length) {
             return "aggregate: calls and retraction requirements must be equally sized";
         }
-        if (outputType.getFieldCount() != grouping.length + calls.length) {
-            return "schema: group aggregate output must contain grouping fields followed by aggregate values";
+        int payloadCount = grouping.length + auxiliary.length;
+        if (outputType.getFieldCount() != payloadCount + calls.length) {
+            return "schema: group aggregate output must contain grouping and auxiliary fields followed by aggregate values";
         }
         if (stateRetentionTime != 0) {
             return "state: native group aggregate TTL is not implemented";
@@ -357,8 +371,24 @@ public final class StreamFusionGroupAggregateTranslator {
                         + " must match exactly";
             }
         }
+        for (int index = 0; index < auxiliary.length; index++) {
+            int inputIndex = auxiliary[index];
+            int outputIndex = grouping.length + index;
+            if (inputIndex < 0 || inputIndex >= inputType.getFieldCount()) {
+                return "auxiliary key: index " + inputIndex + " is outside the input row";
+            }
+            if (!inputType.getTypeAt(inputIndex).equals(outputType.getTypeAt(outputIndex))) {
+                return "auxiliary key["
+                        + index
+                        + "]: input type "
+                        + inputType.getTypeAt(inputIndex)
+                        + " and output type "
+                        + outputType.getTypeAt(outputIndex)
+                        + " must match exactly";
+            }
+        }
         for (int index = 0; index < calls.length; index++) {
-            String reason = unsupportedCall(inputType, outputType.getTypeAt(grouping.length + index), calls[index]);
+            String reason = unsupportedCall(inputType, outputType.getTypeAt(payloadCount + index), calls[index]);
             if (reason != null) {
                 return "aggregate[" + index + "]: " + reason;
             }
@@ -367,6 +397,29 @@ public final class StreamFusionGroupAggregateTranslator {
             }
         }
         return null;
+    }
+
+    public static String unsupportedReason(
+            RowType inputType,
+            RowType outputType,
+            int[] grouping,
+            AggregateCall[] calls,
+            boolean[] retractable,
+            boolean generateUpdateBefore,
+            boolean needRetraction,
+            long stateRetentionTime,
+            ReadableConfig config) {
+        return unsupportedReason(
+                inputType,
+                outputType,
+                grouping,
+                new int[0],
+                calls,
+                retractable,
+                generateUpdateBefore,
+                needRetraction,
+                stateRetentionTime,
+                config);
     }
 
     public static String unsupportedCall(RowType inputType, LogicalType outputType, AggregateCall call) {
