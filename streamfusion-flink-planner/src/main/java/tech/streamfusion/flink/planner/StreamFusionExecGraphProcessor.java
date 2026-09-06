@@ -43,6 +43,7 @@ import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecHashAggrega
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecHashJoin;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecHashWindowAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecLimit;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecMatch;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecNestedLoopJoin;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecOverAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecRank;
@@ -434,6 +435,33 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             String reason = unsupportedReason((BatchExecSort) node, context);
             if (reason != null) {
                 rejections.add(nodePath + "\n" + reason);
+            }
+        } else if (node instanceof BatchExecMatch) {
+            ProcessingTimeMatchRecognize folded =
+                    StreamFusionMatchRecognizePlanner.processingTimeMatchRecognize((BatchExecMatch) node);
+            FixedMatchRecognize match = folded == null
+                    ? FixedMatchRecognize.rejected(
+                            (BatchExecMatch) node,
+                            "processing time: expected bounded Calc(PROCTIME) [-> Exchange] -> Match physical shape")
+                    : folded.match;
+            String reason = match.rejectionReason != null
+                    ? match.rejectionReason
+                    : StreamFusionMatchRecognizePlanner.unsupportedReason(match, context);
+            if (reason != null) {
+                rejections.add(nodePath + "\n" + reason);
+            }
+            if (folded != null && reason == null) {
+                String calcReason = unsupportedCalcReason(
+                        (RowType) folded.inputEdge.getOutputType(),
+                        folded.inputType,
+                        folded.inputProjection,
+                        folded.inputCondition,
+                        context);
+                if (calcReason != null) {
+                    rejections.add(nodePath + "/native-input-calc\n" + calcReason);
+                }
+                collectRejections(folded.inputEdge.getSource(), context, nodePath + "/native-input", rejections);
+                return;
             }
         } else if (node instanceof StreamExecCorrelate) {
             String reason = unsupportedReason((StreamExecCorrelate) node, context);
@@ -1031,6 +1059,59 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             replacement.setInputEdges(sort.getInputEdges().stream()
                     .map(edge -> copyEdge(edge, convert(edge.getSource()), replacement))
                     .collect(Collectors.toList()));
+            return replacement;
+        }
+        if (node instanceof BatchExecMatch) {
+            BatchExecMatch match = (BatchExecMatch) node;
+            ProcessingTimeMatchRecognize folded = StreamFusionMatchRecognizePlanner.processingTimeMatchRecognize(match);
+            if (folded == null || folded.match.rejectionReason != null) {
+                throw new IllegalStateException("Selected unsupported bounded MATCH_RECOGNIZE physical shape");
+            }
+            StreamFusionBatchExecCalc inputProjection = new StreamFusionBatchExecCalc(
+                    folded.inputCalc.getPersistedConfig(),
+                    folded.inputProjection,
+                    folded.inputCondition,
+                    folded.inputCalc.getInputProperties().get(0),
+                    folded.inputType,
+                    "StreamFusionBatchCalc");
+            inputProjection.setInputEdges(
+                    List.of(copyEdge(folded.inputEdge, convert(folded.inputEdge.getSource()), inputProjection)));
+            FixedMatchRecognize fixed = folded.match;
+            StreamFusionBatchExecMatchRecognize replacement = new StreamFusionBatchExecMatchRecognize(
+                    match.getPersistedConfig(),
+                    fixed.partitionKeys,
+                    fixed.variableNames,
+                    fixed.conditions,
+                    fixed.measureVariables,
+                    fixed.measureFields,
+                    fixed.skipPastLastRow,
+                    match.getInputProperties().get(0),
+                    (RowType) match.getOutputType(),
+                    "StreamFusionBatchMatchRecognize");
+            InputProperty exchangeInput = folded.exchange == null
+                    ? InputProperty.builder()
+                            .requiredDistribution(
+                                    fixed.partitionKeys.length == 0
+                                            ? InputProperty.SINGLETON_DISTRIBUTION
+                                            : InputProperty.hashDistribution(fixed.partitionKeys))
+                            .build()
+                    : folded.exchange.getInputProperties().get(0);
+            StreamFusionBatchExecExchange exchange = new StreamFusionBatchExecExchange(
+                    folded.exchange == null ? match.getPersistedConfig() : folded.exchange.getPersistedConfig(),
+                    exchangeInput,
+                    folded.inputType,
+                    "StreamFusionBatchMatchExchange");
+            if (folded.exchange != null) {
+                exchange.setInputEdges(
+                        List.of(copyEdge(folded.exchange.getInputEdges().get(0), inputProjection, exchange)));
+            } else {
+                exchange.setInputEdges(List.of(ExecEdge.builder()
+                        .source(inputProjection)
+                        .target(exchange)
+                        .shuffle(ExecEdge.FORWARD_SHUFFLE)
+                        .build()));
+            }
+            replacement.setInputEdges(List.of(copyEdge(match.getInputEdges().get(0), exchange, replacement)));
             return replacement;
         }
         if (node instanceof StreamExecDeduplicate) {

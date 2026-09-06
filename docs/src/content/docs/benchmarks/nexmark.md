@@ -107,8 +107,8 @@ The `aggregate-modifiers`, `incremental-group-aggregate`,
 `set-intersect-all`, `top-n`,
 `limit`, `bounded-limit`, `bounded-sort`, `bounded-sort-limit`, `bounded-rank`,
 `legacy-window-aggregate`, `legacy-window-aggregate-hop`,
-`legacy-window-aggregate-variable`, `two-phase-auxiliary-window-aggregate`, `temporal-join`, and
-`temporal-sort` cases
+`legacy-window-aggregate-variable`, `two-phase-auxiliary-window-aggregate`, `temporal-join`,
+`temporal-sort`, and `bounded-match-recognize` cases
 exercise both native state backends over the bounded bid stream; they are focused operator workloads
 rather than numbered Nexmark queries. `over-aggregate` deliberately casts the timestamp to a
 regular value to exercise ordered non-time state, while `over-aggregate-event-time` retains the
@@ -906,6 +906,42 @@ state, scratch, output, and RocksDB memory remain charged to Flink managed memor
 RocksDB path performs one `multi_get` and one atomic `WriteBatch` per incoming Arrow batch. No
 profile-backed architectural shortcut was warranted; these are local diagnostics, not portable
 performance guarantees.
+
+The `bounded-match-recognize` variant selects Flink's `BatchExecMatch` at parallelism four and
+exercises the complete native Calc -> hash exchange -> fixed MATCH path on both state backends. Its
+measures return the partitioning bidder from A, B, and C. That makes the final multiset independent
+of processing-time arrival interleaving between separate finite Flink jobs while retaining keyed
+partial-match state, opaque Flink routing keys, and the native network edge. The integration target
+compares the exact final multiset, requires an accelerated EXPLAIN and nonzero native Calc and MATCH
+batch counters, and runs memory and direct native RocksDB.
+
+On the September 5, 2026 local release/native-CPU run based on `fac50f1` plus the bounded MATCH
+working change, three alternating fresh-JVM forks per engine/backend processed 100,000 deterministic
+events at parallelism four. In memory, Flink and StreamFusion median elapsed times were 5.552 s and
+4.810 s, equivalent to 18,013 and 20,789 events/s and a 15.4% StreamFusion throughput gain. Median
+absolute deviations were 0.079 s and 0.082 s, with ranges of 5.206–5.630 s and 4.644–4.892 s. With
+RocksDB, medians were 5.338 s and 4.872 s, equivalent to 18,734 and 20,527 events/s and a 9.6% gain.
+Median absolute deviations were 0.136 s and 0.068 s, with ranges of 5.148–5.474 s and 4.755–4.940 s.
+Every fork materialized 30,011 rows with SHA-256
+`27cd7d8b4cd157bc1333473f8b97855de3d09c5f9ac63f4fab8750f2a30a9c06`; every StreamFusion fork
+reported full acceleration and executed eight native Calc plus 32 native MATCH batches. The host was
+a 16-vCPU x86-64 WSL2 environment backed by an Intel i7-12650H, OpenJDK 17.0.20, and Rust 1.94.0.
+Profiler-instrumented timings were excluded.
+
+Longer 500,000-event mixed JVM/native CPU profiles used Java non-safepoint sampling, native
+DWARF/frame-pointer unwinding, JFR, collapsed stacks, per-engine flame graphs, and differential flame
+graphs for both backends. The native MATCH processor accounted for 1.42% of whole-process CPU
+samples in memory and 1.54% with RocksDB; direct RocksDB was 0.07%, while the required
+RowData-to-Arrow boundary was 4.03% and 4.31%. Java and native allocation profiles were captured
+separately. They exposed Java materialization of the decoded exchange envelope and routing-key
+sidecar before MATCH. The final bridge now exports the borrowed transport root directly; post-change
+200,000-event allocation profiles contain no `ArrowExchangeInputBatch.materializeBatch` samples,
+versus 4.2 MiB and 4.7 MiB of sampled allocations before the change on memory and RocksDB. Native
+MATCH accounted for 4.66%/5.97% of native allocation volume, and direct RocksDB for 0.16%. Remaining
+visible work is the shared generator, RowData/Arrow edges, result materialization, canonical state,
+and Arrow C Data metadata. Profiles are retained under
+`streamfusion-nexmark-benchmarks/target/profiles/bounded-match-recognize/`. These are local
+diagnostics, not portable performance guarantees.
 
 ## Q18 and synchronous deduplicate RowData targets
 

@@ -18,14 +18,14 @@ import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeBase;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeConfig;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeContext;
 import org.apache.flink.table.planner.plan.nodes.exec.InputProperty;
-import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecNode;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecNode;
 import org.apache.flink.table.planner.plan.utils.KeySelectorUtil;
 import org.apache.flink.table.runtime.keyselector.RowDataKeySelector;
 import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
 import org.apache.flink.table.types.logical.RowType;
 
-/** Distinct StreamFusion physical node for fixed-sequence MATCH_RECOGNIZE. */
-public final class StreamFusionExecMatchRecognize extends ExecNodeBase<RowData> implements StreamExecNode<RowData> {
+/** Distinct bounded StreamFusion physical node for fixed-sequence MATCH_RECOGNIZE. */
+public final class StreamFusionBatchExecMatchRecognize extends ExecNodeBase<RowData> implements BatchExecNode<RowData> {
     private static final String TRANSLATOR_CLASS = "tech.streamfusion.flink.match.StreamFusionMatchRecognizeTranslator";
 
     private final int[] partitionKeys;
@@ -35,7 +35,7 @@ public final class StreamFusionExecMatchRecognize extends ExecNodeBase<RowData> 
     private final int[] measureFields;
     private final boolean skipPastLastRow;
 
-    public StreamFusionExecMatchRecognize(
+    public StreamFusionBatchExecMatchRecognize(
             ReadableConfig persistedConfig,
             int[] partitionKeys,
             List<String> variableNames,
@@ -48,7 +48,7 @@ public final class StreamFusionExecMatchRecognize extends ExecNodeBase<RowData> 
             String description) {
         super(
                 ExecNodeContext.newNodeId(),
-                new ExecNodeContext("streamfusion-exec-match-recognize_1"),
+                new ExecNodeContext("streamfusion-batch-exec-match-recognize_1"),
                 persistedConfig,
                 Collections.singletonList(inputProperty),
                 outputType,
@@ -101,15 +101,15 @@ public final class StreamFusionExecMatchRecognize extends ExecNodeBase<RowData> 
                     getPersistedConfig(),
                     planner.getExecEnv(),
                     selector,
-                    false);
+                    true);
             if (result == null) {
-                throw new IllegalStateException("A selected StreamFusion MATCH_RECOGNIZE failed translation");
+                throw new IllegalStateException("A selected bounded StreamFusion MATCH_RECOGNIZE failed translation");
             }
             return result;
         } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
-            throw new IllegalStateException("Could not invoke the StreamFusion MATCH_RECOGNIZE runtime", e);
+            throw new IllegalStateException("Could not invoke the bounded StreamFusion MATCH_RECOGNIZE runtime", e);
         } catch (InvocationTargetException e) {
-            throw new IllegalStateException("StreamFusion MATCH_RECOGNIZE translation failed", e.getCause());
+            throw new IllegalStateException("Bounded StreamFusion MATCH_RECOGNIZE translation failed", e.getCause());
         }
     }
 }

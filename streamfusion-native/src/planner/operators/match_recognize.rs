@@ -376,7 +376,8 @@ impl MatchRecognizeProcessor {
             return Ok(());
         }
         self.preencoded_key_index = metadata_index(&schema, "__streamfusion_key");
-        self.input_kind_index = metadata_index(&schema, "__streamfusion_input_row_kind");
+        self.input_kind_index = metadata_index(&schema, "__streamfusion_input_row_kind")
+            .or_else(|| metadata_index(&schema, "__streamfusion_row_kind"));
         if self.input_kind_index.is_none() {
             return Err(DataFusionError::Execution(
                 "match recognize requires RowKind metadata".to_string(),
@@ -608,7 +609,7 @@ fn read_u32(bytes: &[u8], offset: &mut usize) -> Result<u32> {
 mod tests {
     use super::*;
     use crate::memory_pool::{tests_support::TestBroker, HostMemoryReservation};
-    use arrow::array::{ArrayRef, Int64Array, StringArray};
+    use arrow::array::{ArrayRef, BinaryArray, Int64Array, StringArray};
     use prost::Message;
 
     #[test]
@@ -627,6 +628,17 @@ mod tests {
             .unwrap();
         assert_eq!(ids(&non_overlapping, 1), vec![1]);
         assert_eq!(ids(&non_overlapping, 2), vec![2]);
+    }
+
+    #[test]
+    fn accepts_exchange_envelope_and_opaque_routing_key_without_reencoding() {
+        let mut processor = processor(true, 0, 127);
+        let output = processor
+            .process_arrow(exchange_batch(&[7, 7, 7], &[1, 2, 3], &["x", "x", "x"]))
+            .unwrap();
+        assert_eq!(ids(&output, 1), vec![1]);
+        assert_eq!(ids(&output, 2), vec![2]);
+        assert_eq!(ids(&output, 3), vec![3]);
     }
 
     #[test]
@@ -689,6 +701,86 @@ mod tests {
         let mut final_ids = ids(&resumed, 3);
         final_ids.sort_unstable();
         assert_eq!(final_ids, vec![15, 25]);
+    }
+
+    #[test]
+    fn canonical_partial_matches_move_between_memory_and_rocksdb_with_batched_io() {
+        let Ok(plugin_path) = std::env::var("STREAMFUSION_TEST_ROCKSDB_PLUGIN") else {
+            return;
+        };
+        let broker = Arc::new(TestBroker::new(1 << 30));
+        let mut memory = MatchRecognizeProcessor::new(
+            &plan(true),
+            128,
+            0,
+            127,
+            HostMemoryReservation::new(broker.clone(), "match memory source"),
+        )
+        .unwrap();
+        memory
+            .process_arrow(batch(
+                &[7, 8, 7, 8],
+                &[10, 20, 11, 21],
+                &["a", "a", "b", "b"],
+            ))
+            .unwrap();
+        assert_eq!(memory.statistics(), [1, 1, 0]);
+        let snapshots = (0..128)
+            .map(|group| memory.snapshot_key_group(group).unwrap())
+            .collect::<Vec<_>>();
+
+        let directory = tempfile::tempdir().unwrap();
+        let mut rocks = MatchRecognizeProcessor::new_rocksdb(
+            &plan(true),
+            128,
+            0,
+            127,
+            std::path::Path::new(&plugin_path),
+            directory.path(),
+            64 << 20,
+            HostMemoryReservation::new(broker.clone(), "match RocksDB scratch"),
+        )
+        .unwrap();
+        for (group, snapshot) in snapshots.iter().enumerate() {
+            rocks.restore_key_group(group as u32, snapshot).unwrap();
+            assert_eq!(rocks.snapshot_key_group(group as u32).unwrap(), *snapshot);
+        }
+        let output = rocks
+            .process_arrow(batch(&[7, 8], &[12, 22], &["c", "c"]))
+            .unwrap();
+        let mut output_ids = ids(&output, 3);
+        output_ids.sort_unstable();
+        assert_eq!(output_ids, vec![12, 22]);
+        assert_eq!(rocks.statistics(), [1, 1, 2]);
+
+        rocks
+            .process_arrow(batch(
+                &[7, 8, 7, 8],
+                &[13, 23, 14, 24],
+                &["a", "a", "b", "b"],
+            ))
+            .unwrap();
+        let rocks_snapshots = (0..128)
+            .map(|group| rocks.snapshot_key_group(group).unwrap())
+            .collect::<Vec<_>>();
+        let mut restored = MatchRecognizeProcessor::new(
+            &plan(true),
+            128,
+            0,
+            127,
+            HostMemoryReservation::new(broker, "match memory restore"),
+        )
+        .unwrap();
+        for (group, snapshot) in rocks_snapshots.iter().enumerate() {
+            restored.restore_key_group(group as u32, snapshot).unwrap();
+        }
+        let output = restored
+            .process_arrow(batch(&[7, 8], &[15, 25], &["c", "c"]))
+            .unwrap();
+        let mut output_ids = ids(&output, 3);
+        output_ids.sort_unstable();
+        assert_eq!(output_ids, vec![15, 25]);
+        assert_eq!(restored.statistics(), [1, 1, 2]);
     }
 
     #[test]
@@ -828,6 +920,31 @@ mod tests {
             (
                 "__streamfusion_input_row_kind",
                 Arc::new(Int8Array::from(vec![INSERT; keys.len()])) as ArrayRef,
+            ),
+        ])
+        .unwrap()
+    }
+
+    fn exchange_batch(keys: &[i64], ids: &[i64], labels: &[&str]) -> RecordBatch {
+        let routing_keys = vec![Some(b"opaque-flink-key".as_slice()); keys.len()];
+        RecordBatch::try_from_iter(vec![
+            ("key", Arc::new(Int64Array::from(keys.to_vec())) as ArrayRef),
+            ("id", Arc::new(Int64Array::from(ids.to_vec())) as ArrayRef),
+            (
+                "label",
+                Arc::new(StringArray::from(labels.to_vec())) as ArrayRef,
+            ),
+            (
+                "__streamfusion_row_kind",
+                Arc::new(Int8Array::from(vec![INSERT; keys.len()])) as ArrayRef,
+            ),
+            (
+                "__streamfusion_stream_record_timestamp",
+                Arc::new(Int64Array::from(vec![None; keys.len()])) as ArrayRef,
+            ),
+            (
+                "__streamfusion_key",
+                Arc::new(BinaryArray::from(routing_keys)) as ArrayRef,
             ),
         ])
         .unwrap()

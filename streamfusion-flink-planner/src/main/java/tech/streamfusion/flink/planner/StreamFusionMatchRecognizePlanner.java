@@ -26,6 +26,10 @@ import org.apache.calcite.sql.SqlMatchRecognize;
 import org.apache.calcite.sql.fun.SqlStdOperatorTable;
 import org.apache.flink.configuration.ReadableConfig;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecEdge;
+import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeBase;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecCalc;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecExchange;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecMatch;
 import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecCalc;
 import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecMatch;
 import org.apache.flink.table.planner.plan.nodes.exec.processor.ProcessorContext;
@@ -44,6 +48,14 @@ final class StreamFusionMatchRecognizePlanner {
     private StreamFusionMatchRecognizePlanner() {}
 
     static ProcessingTimeMatchRecognize processingTimeMatchRecognize(StreamExecMatch node) {
+        return processingTimeMatchRecognize(node, false);
+    }
+
+    static ProcessingTimeMatchRecognize processingTimeMatchRecognize(BatchExecMatch node) {
+        return processingTimeMatchRecognize(node, true);
+    }
+
+    private static ProcessingTimeMatchRecognize processingTimeMatchRecognize(CommonExecMatch node, boolean bounded) {
         FixedMatchRecognize fixed = fixedMatchRecognize(node);
         if (fixed.rejectionReason != null || node.getInputEdges().size() != 1) {
             return fixed.rejectionReason == null
@@ -51,16 +63,27 @@ final class StreamFusionMatchRecognizePlanner {
                     : new ProcessingTimeMatchRecognize(null, null, null, null, null, null, fixed);
         }
         ExecEdge matchInput = node.getInputEdges().get(0);
-        if (!(matchInput.getSource() instanceof StreamExecExchange)) {
+        ExecNodeBase<?> exchange = null;
+        Object calcSource;
+        if (bounded && matchInput.getSource() instanceof BatchExecCalc) {
+            calcSource = matchInput.getSource();
+        } else {
+            if (!(matchInput.getSource() instanceof ExecNodeBase)) {
+                return null;
+            }
+            exchange = (ExecNodeBase<?>) matchInput.getSource();
+            boolean expectedExchange =
+                    bounded ? exchange instanceof BatchExecExchange : exchange instanceof StreamExecExchange;
+            if (!expectedExchange || exchange.getInputEdges().size() != 1) {
+                return null;
+            }
+            calcSource = exchange.getInputEdges().get(0).getSource();
+        }
+        boolean expectedCalc = bounded ? calcSource instanceof BatchExecCalc : calcSource instanceof StreamExecCalc;
+        if (!expectedCalc) {
             return null;
         }
-        StreamExecExchange exchange = (StreamExecExchange) matchInput.getSource();
-        if (exchange.getInputEdges().size() != 1
-                || !(exchange.getInputEdges().get(0).getSource() instanceof StreamExecCalc)) {
-            return null;
-        }
-        StreamExecCalc inputCalc =
-                (StreamExecCalc) exchange.getInputEdges().get(0).getSource();
+        CommonExecCalc inputCalc = (CommonExecCalc) calcSource;
         if (inputCalc.getInputEdges().size() != 1) {
             return null;
         }
@@ -141,7 +164,7 @@ final class StreamFusionMatchRecognizePlanner {
         }
     }
 
-    private static FixedMatchRecognize fixedMatchRecognize(StreamExecMatch node) {
+    private static FixedMatchRecognize fixedMatchRecognize(CommonExecMatch node) {
         MatchSpec spec = matchSpec(node);
         RowType inputType = (RowType) node.getInputEdges().get(0).getOutputType();
         SortSpec order = spec.getOrderKeys();
@@ -298,16 +321,16 @@ final class StreamFusionMatchRecognizePlanner {
         return new RowType(type.isNullable(), fields);
     }
 
-    private static MatchSpec matchSpec(StreamExecMatch match) {
+    private static MatchSpec matchSpec(CommonExecMatch match) {
         return (MatchSpec) field(match, CommonExecMatch.class, "matchSpec");
     }
 
     @SuppressWarnings("unchecked")
-    private static List<RexNode> projection(StreamExecCalc calc) {
+    private static List<RexNode> projection(CommonExecCalc calc) {
         return (List<RexNode>) field(calc, CommonExecCalc.class, "projection");
     }
 
-    private static RexNode condition(StreamExecCalc calc) {
+    private static RexNode condition(CommonExecCalc calc) {
         return (RexNode) field(calc, CommonExecCalc.class, "condition");
     }
 
@@ -367,7 +390,7 @@ final class StreamFusionMatchRecognizePlanner {
     }
 
     static final class FixedMatchRecognize {
-        final StreamExecMatch node;
+        final CommonExecMatch node;
         final int[] partitionKeys;
         final List<String> variableNames;
         final List<RexNode> conditions;
@@ -377,7 +400,7 @@ final class StreamFusionMatchRecognizePlanner {
         final String rejectionReason;
 
         private FixedMatchRecognize(
-                StreamExecMatch node,
+                CommonExecMatch node,
                 int[] partitionKeys,
                 List<String> variableNames,
                 List<RexNode> conditions,
@@ -395,15 +418,15 @@ final class StreamFusionMatchRecognizePlanner {
             this.rejectionReason = rejectionReason;
         }
 
-        static FixedMatchRecognize rejected(StreamExecMatch node, String reason) {
+        static FixedMatchRecognize rejected(CommonExecMatch node, String reason) {
             return new FixedMatchRecognize(
                     node, new int[0], List.of(), List.of(), new int[0], new int[0], false, reason);
         }
     }
 
     static final class ProcessingTimeMatchRecognize {
-        final StreamExecCalc inputCalc;
-        final StreamExecExchange exchange;
+        final CommonExecCalc inputCalc;
+        final ExecNodeBase<?> exchange;
         final ExecEdge inputEdge;
         final List<RexNode> inputProjection;
         final RexNode inputCondition;
@@ -411,8 +434,8 @@ final class StreamFusionMatchRecognizePlanner {
         final FixedMatchRecognize match;
 
         private ProcessingTimeMatchRecognize(
-                StreamExecCalc inputCalc,
-                StreamExecExchange exchange,
+                CommonExecCalc inputCalc,
+                ExecNodeBase<?> exchange,
                 ExecEdge inputEdge,
                 List<RexNode> inputProjection,
                 RexNode inputCondition,

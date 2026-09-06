@@ -34,6 +34,17 @@ class MatchRecognizeParityTest extends SqlParityTestSupport {
         assertThat(StreamFusionPlannerFactory.nativeMatchRecognizeBatchCount()).isGreaterThan(0);
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void boundedFixedProcessingTimeSequenceMatchesFlinkByteForByte(boolean skipPastLast) throws Exception {
+        byte[] flink = execute(false, skipPastLast, "A B C", "", true);
+        byte[] streamFusion = execute(true, skipPastLast, "A B C", "", true);
+
+        assertThat(streamFusion).isEqualTo(flink);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        assertThat(StreamFusionPlannerFactory.nativeMatchRecognizeBatchCount()).isGreaterThan(0);
+    }
+
     @Test
     void quantifiedPatternFallsBackWithAnExplicitReason() throws Exception {
         execute(true, false, "A+ B C", "");
@@ -56,6 +67,12 @@ class MatchRecognizeParityTest extends SqlParityTestSupport {
 
     private static byte[] execute(boolean streamFusion, boolean skipPastLast, String pattern, String patternSuffix)
             throws Exception {
+        return execute(streamFusion, skipPastLast, pattern, patternSuffix, false);
+    }
+
+    private static byte[] execute(
+            boolean streamFusion, boolean skipPastLast, String pattern, String patternSuffix, boolean bounded)
+            throws Exception {
         StreamFusionPlannerFactory.resetMetrics();
         if (streamFusion) {
             System.setProperty(
@@ -65,8 +82,14 @@ class MatchRecognizeParityTest extends SqlParityTestSupport {
         }
         StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();
         environment.setParallelism(1);
+        if (bounded) {
+            environment.setRuntimeMode(org.apache.flink.api.common.RuntimeExecutionMode.BATCH);
+        }
         StreamTableEnvironment tables = StreamTableEnvironment.create(
-                environment, EnvironmentSettings.newInstance().inStreamingMode().build());
+                environment,
+                bounded
+                        ? EnvironmentSettings.newInstance().inBatchMode().build()
+                        : EnvironmentSettings.newInstance().inStreamingMode().build());
         tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
         Table input = tables.fromDataStream(
                 environment.fromCollection(

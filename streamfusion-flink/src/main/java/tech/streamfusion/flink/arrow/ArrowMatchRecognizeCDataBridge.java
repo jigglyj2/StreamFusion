@@ -15,12 +15,40 @@ import org.apache.arrow.vector.VarBinaryVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.types.RowKind;
+import tech.streamfusion.flink.exchange.ArrowExchangeInputBatch;
 import tech.streamfusion.nativebridge.NativeMatchRecognizeBridge;
 import tech.streamfusion.nativebridge.NativeMemoryManager;
 
 /** Arrow C Data transport for native MATCH_RECOGNIZE. */
 public final class ArrowMatchRecognizeCDataBridge {
     private ArrowMatchRecognizeCDataBridge() {}
+
+    /** Exports a decoded exchange frame directly, including its native envelope and key sidecar. */
+    public static ArrowRowDataBatch processExchangeInput(
+            long handle,
+            ArrowExchangeInputBatch input,
+            RowType outputType,
+            BufferAllocator allocator,
+            NativeMemoryManager memoryManager) {
+        try (ArrowArray inputArray = ArrowArray.allocateNew(allocator);
+                ArrowSchema inputSchema = ArrowSchema.allocateNew(allocator);
+                ArrowArray outputArray = ArrowArray.allocateNew(allocator);
+                ArrowSchema outputSchema = ArrowSchema.allocateNew(allocator);
+                CDataDictionaryProvider dictionaries = new CDataDictionaryProvider()) {
+            try {
+                Data.exportVectorSchemaRoot(allocator, input.transportRoot(), null, inputArray, inputSchema);
+                long count = NativeMatchRecognizeBridge.process(
+                        handle,
+                        inputArray.memoryAddress(),
+                        inputSchema.memoryAddress(),
+                        outputArray.memoryAddress(),
+                        outputSchema.memoryAddress());
+                return importOutput(count, outputArray, outputSchema, outputType, allocator, dictionaries);
+            } finally {
+                memoryManager.finishArrowTransfer();
+            }
+        }
+    }
 
     public static ArrowRowDataBatch process(
             long handle,

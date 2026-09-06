@@ -128,6 +128,9 @@ final class NexmarkRowDataQueryCatalog {
                 "bidder BIGINT, spend BIGINT, grouped_rows BIGINT, starttime TIMESTAMP(3), endtime TIMESTAMP(3)");
         schemas.put(
                 "match-recognize", "bidder BIGINT, first_auction BIGINT, second_auction BIGINT, third_auction BIGINT");
+        schemas.put(
+                "bounded-match-recognize",
+                "bidder BIGINT, first_bidder BIGINT, second_bidder BIGINT, third_bidder BIGINT");
         schemas.put("interval-join", "auction BIGINT, bidder BIGINT, price BIGINT, bid_time TIMESTAMP(3)");
         schemas.put(
                 "temporal-join",

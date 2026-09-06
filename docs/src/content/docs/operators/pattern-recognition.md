@@ -5,9 +5,9 @@ sidebar:
   order: 18
 ---
 
-**Current status:** Accelerated for strict fixed processing-time sequences with current-row
-predicates, one output row per match, direct field measures, and either `AFTER MATCH SKIP TO NEXT
-ROW` or `AFTER MATCH SKIP PAST LAST ROW`.
+**Current status: Partial.** Accelerated in streaming and bounded plans for strict fixed
+processing-time sequences with current-row predicates, one output row per match, direct field
+measures, and either `AFTER MATCH SKIP TO NEXT ROW` or `AFTER MATCH SKIP PAST LAST ROW`.
 
 ## SQL example
 
@@ -33,11 +33,18 @@ MATCH_RECOGNIZE (
 
 ## Acceleration and fallback
 
-StreamFusion replaces `StreamExecMatch` only when Flink has selected an ascending processing-time
-order and the physical input is the normal `Calc(PROCTIME) -> Exchange -> Match` shape. The planner
-folds the synthetic, unobservable processing-time column out of the native Calc and Exchange before
-creating a distinct StreamFusion MATCH exec node. This follows the same all-or-nothing, separate-exec
-model used by the other StreamFusion operators.
+StreamFusion replaces `StreamExecMatch` or `BatchExecMatch` only when Flink has selected an
+ascending processing-time order. The streaming physical input must have the normal
+`Calc(PROCTIME) -> Exchange -> Match` shape. Bounded Flink plans may use either
+`Calc(PROCTIME) -> Match` or `Calc(PROCTIME) -> Exchange -> Match`; StreamFusion inserts the native
+hash or singleton exchange when Flink's adaptive batch plan omitted it. The exchange carries one
+versioned Arrow IPC frame with Flink's envelope and opaque routing-key sidecar. MATCH exports the
+decoded transport root directly through Arrow C Data in the consuming task, so partition keys,
+RowKinds, and timestamps are not copied into Java arrays or rebuilt before native execution.
+
+The planner folds the synthetic, unobservable processing-time column out of the native Calc and
+Exchange before creating a distinct streaming or bounded StreamFusion MATCH exec node. This follows
+the same all-or-nothing, separate-exec model used by the other StreamFusion operators.
 
 The accelerated pattern must be a non-empty strict concatenation of unique variables, such as
 `A B C`. `DEFINE` expressions may inspect the current row for their own variable and must lower to
@@ -77,10 +84,11 @@ checkpoints, canonical savepoints, and 1-to-N-to-1 rescaling. Regular RocksDB ch
 incremental Flink state handles and reuse immutable SSTs only after checkpoint completion.
 
 The accelerated processing-time slice has no timer state: input arrival order is its processing
-order, and a native batch finishes synchronously before a checkpoint snapshot. Flink owns channel
-state for unaligned checkpoints. Native partial-match state, hash tables, row encoding, batch
-scratch, exported Arrow buffers, and RocksDB cache/write buffers all reserve against Flink's
-existing managed-memory allocation.
+order, and a native batch finishes synchronously before a checkpoint snapshot. Flink's bounded
+`BatchExecMatch` likewise bypasses event-time timestamp insertion and sorting for processing-time
+order. Flink owns channel state for unaligned checkpoints. Native partial-match state, hash tables,
+row encoding, batch scratch, exported Arrow buffers, and RocksDB cache/write buffers all reserve
+against Flink's existing managed-memory allocation.
 
 The Flink metric surface includes logical `numRecordsIn`, logical `numRecordsOut`, and
 `numLateRecordsDropped`; the latter remains exactly zero for processing-time input. The additive

@@ -53,6 +53,7 @@ q1, q2, q4, q5, q7, q8, q9, q11, q12, q22, q23, group-aggregate,
 legacy-window-aggregate, select-distinct, top-n, limit, bounded-sort,
 bounded-sort-merge-join, over-aggregate, batch-over-aggregate-bounded-range,
 over-aggregate-event-time, over-aggregate-processing-time, temporal-join, match-recognize,
+bounded-match-recognize,
 set-intersect-all, and incremental-group-aggregate queries through both unmodified Flink
 and StreamFusion. The focused
 workloads use the Nexmark bid stream to exercise keyed `COUNT(*)`/`SUM`/`AVG`/`MIN`/`MAX`, legacy
@@ -88,6 +89,11 @@ Window Join or binary MultiJoin physical form; the binary form is lowered to the
 join and is reported by that activity counter.
 `match-recognize` partitions bids by bidder and recognizes strict processing-time `A B C` sequences
 with `AFTER MATCH SKIP PAST LAST ROW`, exercising partial-match state and three direct measures.
+`bounded-match-recognize` selects the equivalent bounded physical operator at parallelism four and
+returns bidder measures so independent processing-time batch runs have a deterministic final
+multiset. It exercises the native Calc, Arrow IPC hash exchange, and fixed MATCH stages on memory
+and direct native RocksDB; its integration case requires exact materialized parity and nonzero
+native Calc and MATCH counters.
 `set-intersect-all` intersects two filtered bid streams on the three-BIGINT auction/bidder/price
 identity. It exercises Flink's complete UNION, grouped count, Calc, and `$REPLICATE_ROWS$1` physical
 rewrite without making rowtime scheduling part of the benchmark key. In batch mode, setting
