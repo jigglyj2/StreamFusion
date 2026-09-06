@@ -79,6 +79,7 @@ final class StreamFusionWindowAggregatePlan {
             RowType inputType,
             RowType outputType,
             int[] grouping,
+            int[] auxiliary,
             AggregateCall[] calls,
             boolean inputChangelog,
             boolean needRetraction,
@@ -105,6 +106,9 @@ final class StreamFusionWindowAggregatePlan {
         for (int index : grouping) {
             aggregate.addGroupingIndices(index);
         }
+        for (int index : auxiliary) {
+            aggregate.addAuxiliaryIndices(index);
+        }
         for (tech.streamfusion.proto.plan.v1.AggregateCall call : aggregateCalls(inputType, calls, needRetraction)) {
             aggregate.addAggregateCalls(call);
         }
@@ -116,6 +120,7 @@ final class StreamFusionWindowAggregatePlan {
             RowType internalInputType,
             RowType outputType,
             int groupingCount,
+            int auxiliaryCount,
             AggregateCall[] calls,
             boolean needRetraction,
             StreamFusionWindowTableFunctionTranslator.WindowParameters window,
@@ -131,12 +136,15 @@ final class StreamFusionWindowAggregatePlan {
                 .setShiftTimeZone(shiftTimeZone)
                 .setInputSchema(schema(internalInputType))
                 .setOutputSchema(schema(outputType))
-                .setPartialAccumulatorIndex(groupingCount)
-                .setPartialWindowStartIndex(groupingCount + 1)
-                .setPartialSliceEndIndex(groupingCount + 2)
+                .setPartialAccumulatorIndex(groupingCount + auxiliaryCount)
+                .setPartialWindowStartIndex(groupingCount + auxiliaryCount + 1)
+                .setPartialSliceEndIndex(groupingCount + auxiliaryCount + 2)
                 .setPartialWindowsAreSlices(partialWindowsAreSlices);
         for (int index = 0; index < groupingCount; index++) {
             aggregate.addGroupingIndices(index);
+        }
+        for (int index = groupingCount; index < groupingCount + auxiliaryCount; index++) {
+            aggregate.addAuxiliaryIndices(index);
         }
         addCalls(aggregate, originalInputType, calls, needRetraction);
         for (NamedWindowProperty property : properties) {

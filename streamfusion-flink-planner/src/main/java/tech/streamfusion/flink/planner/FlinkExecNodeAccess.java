@@ -425,9 +425,9 @@ final class FlinkExecNodeAccess {
         return new RowType(false, fields);
     }
 
-    static RowType nativeWindowAccumulatorType(RowType inputType, int[] grouping) {
-        List<RowType.RowField> fields = new ArrayList<>(grouping.length + 3);
-        for (int index : grouping) {
+    static RowType nativeWindowAccumulatorType(RowType inputType, int[] payloadIndices) {
+        List<RowType.RowField> fields = new ArrayList<>(payloadIndices.length + 3);
+        for (int index : payloadIndices) {
             RowType.RowField field = inputType.getFields().get(index);
             fields.add(new RowType.RowField(field.getName(), field.getType()));
         }

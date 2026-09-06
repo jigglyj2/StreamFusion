@@ -35,6 +35,7 @@ pub(crate) struct LocalWindowAggregateProcessor {
     input_schema: SchemaRef,
     output_schema: SchemaRef,
     grouping_converter: RowConverter,
+    payload_converter: RowConverter,
     shift_time_zone: Tz,
     reservation: HostMemoryReservation,
     output_reservation: HostMemoryReservation,
@@ -76,15 +77,14 @@ impl LocalWindowAggregateProcessor {
                     "local window aggregate requires an output schema".to_string(),
                 )
             })?)?;
-        if output_schema.fields().len() != plan.grouping_indices.len() + 3
-            || output_schema.fields()[plan.grouping_indices.len()].data_type() != &DataType::Binary
-            || output_schema.fields()[plan.grouping_indices.len() + 1].data_type()
-                != &DataType::Int64
-            || output_schema.fields()[plan.grouping_indices.len() + 2].data_type()
-                != &DataType::Int64
+        let payload_count = plan.grouping_indices.len() + plan.auxiliary_indices.len();
+        if output_schema.fields().len() != payload_count + 3
+            || output_schema.fields()[payload_count].data_type() != &DataType::Binary
+            || output_schema.fields()[payload_count + 1].data_type() != &DataType::Int64
+            || output_schema.fields()[payload_count + 2].data_type() != &DataType::Int64
         {
             return Err(DataFusionError::Plan(
-                "local window output must contain grouping fields, BINARY accumulator, and BIGINT window bounds"
+                "local window output must contain grouping and auxiliary fields, BINARY accumulator, and BIGINT window bounds"
                     .to_string(),
             ));
         }
@@ -103,9 +103,30 @@ impl LocalWindowAggregateProcessor {
                     })
             })
             .collect::<Result<Vec<_>>>()?;
+        let payload_fields = plan
+            .grouping_indices
+            .iter()
+            .chain(&plan.auxiliary_indices)
+            .map(|&index| {
+                input_schema
+                    .fields()
+                    .get(index as usize)
+                    .map(|field| SortField::new(field.data_type().clone()))
+                    .ok_or_else(|| {
+                        DataFusionError::Plan(format!(
+                            "local window payload index {index} is outside its input"
+                        ))
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?;
         if !RowConverter::supports_fields(&grouping_fields) {
             return Err(DataFusionError::Plan(
                 "local window grouping type is not supported by Arrow row encoding".to_string(),
+            ));
+        }
+        if !RowConverter::supports_fields(&payload_fields) {
+            return Err(DataFusionError::Plan(
+                "local window auxiliary type is not supported by Arrow row encoding".to_string(),
             ));
         }
         let calls = plan
@@ -135,6 +156,7 @@ impl LocalWindowAggregateProcessor {
             input_schema,
             output_schema,
             grouping_converter: RowConverter::new(grouping_fields)?,
+            payload_converter: RowConverter::new(payload_fields)?,
             shift_time_zone,
             reservation,
             output_reservation,
@@ -166,6 +188,7 @@ impl LocalWindowAggregateProcessor {
 
     fn process_accounted(&self, batch: &RecordBatch) -> Result<RecordBatch> {
         let grouping_rows = self.grouping_rows(batch)?;
+        let payload_rows = self.payload_rows(batch)?;
         let attached_columns = self
             .plan
             .attached_window_start_index
@@ -182,7 +205,7 @@ impl LocalWindowAggregateProcessor {
             _ => unreachable!("validated local window kind"),
         };
         let mut pending =
-            HashMap::<SliceKey, AccumulatorState, RandomState>::with_capacity_and_hasher(
+            HashMap::<SliceKey, (Vec<u8>, AccumulatorState), RandomState>::with_capacity_and_hasher(
                 batch.num_rows(),
                 RandomState::new(),
             );
@@ -214,14 +237,17 @@ impl LocalWindowAggregateProcessor {
                 slice_end,
             };
             let accumulate = self.accumulates(batch, row)?;
-            let entry = pending
-                .entry(key)
-                .or_insert_with(|| AccumulatorState::new(&self.calls));
-            entry.apply(&self.calls, batch, row, accumulate)?;
+            let entry = pending.entry(key).or_insert_with(|| {
+                (
+                    payload_rows[row].clone(),
+                    AccumulatorState::new(&self.calls),
+                )
+            });
+            entry.1.apply(&self.calls, batch, row, accumulate)?;
         }
         let mut entries = pending
             .into_iter()
-            .filter(|(_, accumulator)| accumulator.has_delta())
+            .filter(|(_, (_, accumulator))| accumulator.has_delta())
             .collect::<Vec<_>>();
         entries.sort_unstable_by(|(left, _), (right, _)| {
             left.slice_end
@@ -233,19 +259,20 @@ impl LocalWindowAggregateProcessor {
         let mut accumulators = Vec::with_capacity(entries.len());
         let mut window_starts = Vec::with_capacity(entries.len());
         let mut slice_ends = Vec::with_capacity(entries.len());
-        for (key, accumulator) in entries {
-            grouping.push(key.grouping_row);
+        for (key, (payload, accumulator)) in entries {
+            grouping.push(payload);
             accumulators.push(encode_state(&accumulator));
             window_starts.push(key.window_start);
             slice_ends.push(key.slice_end);
         }
-        let mut columns = if self.plan.grouping_indices.is_empty() {
-            Vec::new()
-        } else {
-            let parser = self.grouping_converter.parser();
-            self.grouping_converter
-                .convert_rows(grouping.iter().map(|row| parser.parse(row)))?
-        };
+        let mut columns =
+            if self.plan.grouping_indices.is_empty() && self.plan.auxiliary_indices.is_empty() {
+                Vec::new()
+            } else {
+                let parser = self.payload_converter.parser();
+                self.payload_converter
+                    .convert_rows(grouping.iter().map(|row| parser.parse(row)))?
+            };
         columns.push(Arc::new(BinaryArray::from_iter_values(accumulators)) as ArrayRef);
         columns.push(Arc::new(Int64Array::from(window_starts)) as ArrayRef);
         columns.push(Arc::new(Int64Array::from(slice_ends)) as ArrayRef);
@@ -266,6 +293,27 @@ impl LocalWindowAggregateProcessor {
             .map(|&index| Arc::clone(batch.column(index as usize)))
             .collect::<Vec<_>>();
         let rows = self.grouping_converter.convert_columns(&columns)?;
+        Ok((0..batch.num_rows())
+            .map(|row| rows.row(row).as_ref().to_vec())
+            .collect())
+    }
+
+    fn payload_rows(&self, batch: &RecordBatch) -> Result<Vec<Vec<u8>>> {
+        let indices = self
+            .plan
+            .grouping_indices
+            .iter()
+            .chain(&self.plan.auxiliary_indices)
+            .copied()
+            .collect::<Vec<_>>();
+        if indices.is_empty() {
+            return Ok((0..batch.num_rows()).map(|_| Vec::new()).collect());
+        }
+        let columns = indices
+            .iter()
+            .map(|&index| Arc::clone(batch.column(index as usize)))
+            .collect::<Vec<_>>();
+        let rows = self.payload_converter.convert_columns(&columns)?;
         Ok((0..batch.num_rows())
             .map(|row| rows.row(row).as_ref().to_vec())
             .collect())
@@ -398,12 +446,44 @@ mod tests {
     }
 
     fn processor(changelog: bool) -> LocalWindowAggregateProcessor {
+        processor_with_auxiliary(changelog, false)
+    }
+
+    fn processor_with_auxiliary(changelog: bool, auxiliary: bool) -> LocalWindowAggregateProcessor {
+        let mut output_fields = vec![proto::Field {
+            name: "key".to_string(),
+            r#type: Some(logical_bigint(false)),
+        }];
+        if auxiliary {
+            output_fields.push(proto::Field {
+                name: "auxiliary".to_string(),
+                r#type: Some(logical_bigint(false)),
+            });
+        }
+        output_fields.extend([
+            proto::Field {
+                name: "accumulator".to_string(),
+                r#type: Some(proto::LogicalType {
+                    nullable: false,
+                    r#type: Some(proto::logical_type::Type::Binary(proto::EmptyType {})),
+                }),
+            },
+            proto::Field {
+                name: "window_start".to_string(),
+                r#type: Some(logical_bigint(false)),
+            },
+            proto::Field {
+                name: "slice_end".to_string(),
+                r#type: Some(logical_bigint(false)),
+            },
+        ]);
         let plan = proto::NativePlan {
             protocol_version: crate::PLAN_PROTOCOL_VERSION,
             root: Some(proto::Operator {
                 plan_node_id: 0,
                 operator: Some(proto::operator::Operator::LocalWindowAggregate(Box::new(
                     proto::LocalWindowAggregate {
+                        auxiliary_indices: auxiliary.then_some(1).into_iter().collect(),
                         input: None,
                         grouping_indices: vec![0],
                         aggregate_calls: vec![
@@ -422,29 +502,7 @@ mod tests {
                             ("ts", logical_timestamp(false)),
                         ])),
                         output_schema: Some(proto::Schema {
-                            fields: vec![
-                                proto::Field {
-                                    name: "key".to_string(),
-                                    r#type: Some(logical_bigint(false)),
-                                },
-                                proto::Field {
-                                    name: "accumulator".to_string(),
-                                    r#type: Some(proto::LogicalType {
-                                        nullable: false,
-                                        r#type: Some(proto::logical_type::Type::Binary(
-                                            proto::EmptyType {},
-                                        )),
-                                    }),
-                                },
-                                proto::Field {
-                                    name: "window_start".to_string(),
-                                    r#type: Some(logical_bigint(false)),
-                                },
-                                proto::Field {
-                                    name: "slice_end".to_string(),
-                                    r#type: Some(logical_bigint(false)),
-                                },
-                            ],
+                            fields: output_fields,
                         }),
                         shift_time_zone: "UTC".to_string(),
                         attached_window_start_index: None,
@@ -584,6 +642,31 @@ mod tests {
                 .unwrap()
                 .value(0),
             2_000
+        );
+    }
+
+    #[test]
+    fn carries_auxiliary_values_without_adding_them_to_the_slice_key() {
+        let mut processor = processor_with_auxiliary(false, true);
+        let output = processor.process_arrow(batch(None)).unwrap();
+        assert_eq!(output.num_rows(), 2);
+        assert_eq!(
+            output
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values(),
+            &[1, 1]
+        );
+        assert_eq!(
+            output
+                .column(1)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values(),
+            &[10, 30]
         );
     }
 

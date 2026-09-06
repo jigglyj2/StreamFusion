@@ -55,6 +55,7 @@ public final class StreamFusionGroupWindowAggregateTranslator {
             RowType inputType,
             RowType internalOutputType,
             int[] grouping,
+            int[] auxiliary,
             AggregateCall[] calls,
             LogicalWindow window,
             ReadableConfig config) {
@@ -63,7 +64,7 @@ public final class StreamFusionGroupWindowAggregateTranslator {
             return null;
         }
         return StreamFusionWindowAggregateTranslator.translateBatchLocal(
-                input, inputType, internalOutputType, grouping, calls, planned.timeStrategy, config);
+                input, inputType, internalOutputType, grouping, auxiliary, calls, planned.timeStrategy, config);
     }
 
     public static Transformation<RowData> translateBatchGlobal(
@@ -72,6 +73,7 @@ public final class StreamFusionGroupWindowAggregateTranslator {
             RowType internalInputType,
             RowType outputType,
             int groupingCount,
+            int auxiliaryCount,
             AggregateCall[] calls,
             LogicalWindow window,
             NamedWindowProperty[] properties,
@@ -89,6 +91,7 @@ public final class StreamFusionGroupWindowAggregateTranslator {
                 internalInputType,
                 outputType,
                 groupingCount,
+                auxiliaryCount,
                 calls,
                 planned.timeStrategy,
                 properties,
@@ -101,6 +104,7 @@ public final class StreamFusionGroupWindowAggregateTranslator {
             RowType inputType,
             RowType outputType,
             int[] grouping,
+            int[] auxiliary,
             AggregateCall[] calls,
             LogicalWindow window,
             NamedWindowProperty[] properties,
@@ -115,7 +119,7 @@ public final class StreamFusionGroupWindowAggregateTranslator {
         if (planned.timeStrategy.getWindow() instanceof SessionWindowSpec) {
             return "bounded two-phase window aggregate: SESSION is not a slicing local/global window";
         }
-        return unsupportedReason(inputType, outputType, grouping, calls, window, properties, false, config);
+        return unsupportedReason(inputType, outputType, grouping, auxiliary, calls, window, properties, false, config);
     }
 
     public static String unsupportedBatchOnePhaseReason(
@@ -126,7 +130,7 @@ public final class StreamFusionGroupWindowAggregateTranslator {
             LogicalWindow window,
             NamedWindowProperty[] properties,
             ReadableConfig config) {
-        return unsupportedReason(inputType, outputType, grouping, calls, window, properties, false, config);
+        return unsupportedReason(inputType, outputType, grouping, new int[0], calls, window, properties, false, config);
     }
 
     public static Transformation<RowData> translateBatchOnePhase(
@@ -302,6 +306,20 @@ public final class StreamFusionGroupWindowAggregateTranslator {
             NamedWindowProperty[] properties,
             boolean needRetraction,
             ReadableConfig config) {
+        return unsupportedReason(
+                inputType, outputType, grouping, new int[0], calls, window, properties, needRetraction, config);
+    }
+
+    private static String unsupportedReason(
+            RowType inputType,
+            RowType outputType,
+            int[] grouping,
+            int[] auxiliary,
+            AggregateCall[] calls,
+            LogicalWindow window,
+            NamedWindowProperty[] properties,
+            boolean needRetraction,
+            ReadableConfig config) {
         LegacyWindow planned = plan(window, grouping, config);
         if (planned.reason != null) {
             return planned.reason;
@@ -317,7 +335,15 @@ public final class StreamFusionGroupWindowAggregateTranslator {
                     Math.max(0, window.timeAttribute().getFieldIndex()));
         }
         return StreamFusionWindowAggregateTranslator.unsupportedReason(
-                inputType, outputType, grouping, calls, validationStrategy, properties, needRetraction, config);
+                inputType,
+                outputType,
+                grouping,
+                auxiliary,
+                calls,
+                validationStrategy,
+                properties,
+                needRetraction,
+                config);
     }
 
     private static LegacyWindow plan(LogicalWindow window, int[] grouping, ReadableConfig config) {

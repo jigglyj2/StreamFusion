@@ -236,7 +236,10 @@ impl WindowAggregateProcessor {
                 DataFusionError::Plan("window aggregate output schema is missing".to_string())
             })?)?;
         if planned_output.fields().len()
-            != plan.grouping_indices.len() + calls.len() + plan.window_properties.len()
+            != plan.grouping_indices.len()
+                + plan.auxiliary_indices.len()
+                + calls.len()
+                + plan.window_properties.len()
         {
             return Err(DataFusionError::Plan(
                 "window aggregate output schema does not match keys, calls, and properties"
@@ -246,6 +249,7 @@ impl WindowAggregateProcessor {
         let grouping_fields = plan
             .grouping_indices
             .iter()
+            .chain(&plan.auxiliary_indices)
             .map(|&index| {
                 planned_input
                     .fields()
@@ -1272,13 +1276,14 @@ impl WindowAggregateProcessor {
     }
 
     fn encode_grouping_rows(&self, batch: &RecordBatch) -> Result<Vec<Vec<u8>>> {
-        if self.plan.grouping_indices.is_empty() {
+        if self.plan.grouping_indices.is_empty() && self.plan.auxiliary_indices.is_empty() {
             return Ok((0..batch.num_rows()).map(|_| Vec::new()).collect());
         }
         let columns = self
             .plan
             .grouping_indices
             .iter()
+            .chain(&self.plan.auxiliary_indices)
             .map(|&index| Arc::clone(batch.column(index as usize)))
             .collect::<Vec<_>>();
         let rows = self
@@ -1357,6 +1362,7 @@ impl WindowAggregateProcessor {
             .plan
             .grouping_indices
             .iter()
+            .chain(&self.plan.auxiliary_indices)
             .map(|&index| {
                 schema
                     .fields()
@@ -1376,7 +1382,13 @@ impl WindowAggregateProcessor {
                 .as_ref()
                 .expect("validated input schema"),
         )?;
-        for (&index, actual) in self.plan.grouping_indices.iter().zip(&grouping_fields) {
+        for (&index, actual) in self
+            .plan
+            .grouping_indices
+            .iter()
+            .chain(&self.plan.auxiliary_indices)
+            .zip(&grouping_fields)
+        {
             let planned = planned_input.field(index as usize);
             if !planned.data_type().equals_datatype(actual.data_type()) {
                 return Err(DataFusionError::Plan(format!(
@@ -1482,13 +1494,14 @@ impl WindowAggregateProcessor {
         ends: Vec<i64>,
     ) -> Result<RecordBatch> {
         let row_count = starts.len();
-        let mut columns = if self.plan.grouping_indices.is_empty() {
-            Vec::new()
-        } else {
-            let converter = self.grouping_converter.as_ref().expect("schema prepared");
-            let parser = converter.parser();
-            converter.convert_rows(grouping_rows.iter().map(|row| parser.parse(row)))?
-        };
+        let mut columns =
+            if self.plan.grouping_indices.is_empty() && self.plan.auxiliary_indices.is_empty() {
+                Vec::new()
+            } else {
+                let converter = self.grouping_converter.as_ref().expect("schema prepared");
+                let parser = converter.parser();
+                converter.convert_rows(grouping_rows.iter().map(|row| parser.parse(row)))?
+            };
         for (call, values) in self.calls.iter().zip(aggregate_values) {
             columns.push(aggregate_array(&values, &call.output_type)?);
         }
@@ -2222,6 +2235,7 @@ mod tests {
                 plan_node_id: 0,
                 operator: Some(proto::operator::Operator::WindowAggregate(Box::new(
                     proto::WindowAggregate {
+                        auxiliary_indices: Vec::new(),
                         shift_time_zone: "UTC".to_string(),
                         input: None,
                         grouping_indices: vec![0],
@@ -2378,6 +2392,52 @@ mod tests {
                 Arc::new(BinaryArray::from_iter_values([state(1), state(2)])) as ArrayRef,
                 Arc::new(Int64Array::from(vec![0, 2_000])) as ArrayRef,
                 Arc::new(Int64Array::from(vec![2_000, 4_000])) as ArrayRef,
+            ],
+        )
+        .unwrap()
+    }
+
+    fn auxiliary_partial_plan() -> Vec<u8> {
+        let mut native = proto::NativePlan::decode(partial_plan().as_slice()).unwrap();
+        let aggregate = match native.root.as_mut().unwrap().operator.as_mut().unwrap() {
+            proto::operator::Operator::WindowAggregate(aggregate) => aggregate,
+            _ => unreachable!(),
+        };
+        aggregate.auxiliary_indices = vec![1];
+        aggregate.partial_accumulator_index = Some(2);
+        aggregate.partial_window_start_index = Some(3);
+        aggregate.partial_slice_end_index = Some(4);
+        aggregate
+            .input_schema
+            .as_mut()
+            .unwrap()
+            .fields
+            .insert(1, field("auxiliary", logical_bigint(false)));
+        aggregate
+            .output_schema
+            .as_mut()
+            .unwrap()
+            .fields
+            .insert(1, field("auxiliary", logical_bigint(false)));
+        native.encode_to_vec()
+    }
+
+    fn auxiliary_partial_batch() -> RecordBatch {
+        let partial = partial_batch();
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("key", DataType::Int64, false),
+                Field::new("auxiliary", DataType::Int64, false),
+                Field::new("accumulator", DataType::Binary, false),
+                Field::new("window_start", DataType::Int64, false),
+                Field::new("slice_end", DataType::Int64, false),
+            ])),
+            vec![
+                Arc::clone(partial.column(0)),
+                Arc::new(Int64Array::from(vec![99, 99])) as ArrayRef,
+                Arc::clone(partial.column(1)),
+                Arc::clone(partial.column(2)),
+                Arc::clone(partial.column(3)),
             ],
         )
         .unwrap()
@@ -2614,9 +2674,9 @@ mod tests {
             return;
         };
         let broker = Arc::new(TestBroker::new(1 << 30));
-        let bytes = partial_plan();
+        let bytes = auxiliary_partial_plan();
         let mut memory = processor(&bytes, broker.clone());
-        memory.process_arrow(partial_batch(), 0).unwrap();
+        memory.process_arrow(auxiliary_partial_batch(), 0).unwrap();
         let snapshots = (0..128)
             .map(|group| memory.snapshot_key_group(group).unwrap())
             .collect::<Vec<_>>();
@@ -2641,7 +2701,7 @@ mod tests {
         let output = rocks.advance_event_time(3_999).unwrap();
         assert_eq!(output.num_rows(), 2);
         let mut counts = output
-            .column(1)
+            .column(2)
             .as_any()
             .downcast_ref::<Int64Array>()
             .unwrap()
@@ -2649,6 +2709,15 @@ mod tests {
             .to_vec();
         counts.sort_unstable();
         assert_eq!(counts, [1, 3]);
+        assert_eq!(
+            output
+                .column(1)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values(),
+            &[99, 99]
+        );
     }
 
     #[test]

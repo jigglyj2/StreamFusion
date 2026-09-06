@@ -124,8 +124,11 @@ class LocalRowDataNexmarkBenchmarkIT {
     void boundedTwoPhaseWindowAggregatesPreserveBothNativeStages(String backend) throws Exception {
         System.setProperty("streamfusion.nexmark.batch-mode", "true");
         System.setProperty("streamfusion.nexmark.aggregate-phase", "TWO_PHASE");
-        for (String query :
-                List.of("legacy-window-aggregate", "legacy-window-aggregate-hop", "legacy-window-aggregate-variable")) {
+        for (String query : List.of(
+                "legacy-window-aggregate",
+                "legacy-window-aggregate-hop",
+                "legacy-window-aggregate-variable",
+                "two-phase-auxiliary-window-aggregate")) {
             LocalRowDataNexmarkBenchmark.RunResult flink =
                     LocalRowDataNexmarkBenchmark.run(2_000, query, false, backend, 1);
             LocalRowDataNexmarkBenchmark.RunResult streamFusion =

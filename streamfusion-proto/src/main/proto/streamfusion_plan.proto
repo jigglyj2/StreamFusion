@@ -459,6 +459,9 @@ message WindowAggregate {
   optional uint32 partial_slice_end_index = 18;
   optional uint32 partial_window_start_index = 19;
   bool partial_windows_are_slices = 20;
+  // Auxiliary grouping values are part of the persisted/output payload but not the keyed-state
+  // identity. Flink guarantees that they are functionally dependent on grouping_indices.
+  repeated uint32 auxiliary_indices = 21;
 }
 
 // State-free local half of Flink's two-stage slicing window aggregation. One incoming Arrow batch
@@ -479,6 +482,8 @@ message LocalWindowAggregate {
   string shift_time_zone = 12;
   optional uint32 attached_window_start_index = 13;
   optional uint32 attached_window_end_index = 14;
+  // Carried through the opaque local/global contract without participating in hash partitioning.
+  repeated uint32 auxiliary_indices = 15;
 }
 
 // Window-scoped first/last-row deduplication. Full rows use Arrow's schema-aware row encoding in

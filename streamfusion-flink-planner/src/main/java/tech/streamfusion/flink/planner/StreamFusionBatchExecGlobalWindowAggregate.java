@@ -34,6 +34,7 @@ public final class StreamFusionBatchExecGlobalWindowAggregate extends ExecNodeBa
 
     private final RowType originalInputType;
     private final int groupingCount;
+    private final int auxiliaryCount;
     private final AggregateCall[] calls;
     private final LogicalWindow window;
     private final NamedWindowProperty[] properties;
@@ -42,6 +43,7 @@ public final class StreamFusionBatchExecGlobalWindowAggregate extends ExecNodeBa
             ReadableConfig config,
             RowType originalInputType,
             int groupingCount,
+            int auxiliaryCount,
             AggregateCall[] calls,
             LogicalWindow window,
             NamedWindowProperty[] properties,
@@ -56,6 +58,7 @@ public final class StreamFusionBatchExecGlobalWindowAggregate extends ExecNodeBa
                 "StreamFusionBatchGlobalWindowAggregate");
         this.originalInputType = originalInputType;
         this.groupingCount = groupingCount;
+        this.auxiliaryCount = auxiliaryCount;
         this.calls = calls.clone();
         this.window = window;
         this.properties = properties.clone();
@@ -80,6 +83,7 @@ public final class StreamFusionBatchExecGlobalWindowAggregate extends ExecNodeBa
                             RowType.class,
                             RowType.class,
                             int.class,
+                            int.class,
                             AggregateCall[].class,
                             LogicalWindow.class,
                             NamedWindowProperty[].class,
@@ -93,6 +97,7 @@ public final class StreamFusionBatchExecGlobalWindowAggregate extends ExecNodeBa
                     internalType,
                     (RowType) getOutputType(),
                     groupingCount,
+                    auxiliaryCount,
                     calls,
                     window,
                     properties,

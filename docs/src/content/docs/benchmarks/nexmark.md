@@ -107,7 +107,8 @@ The `aggregate-modifiers`, `incremental-group-aggregate`,
 `set-intersect-all`, `top-n`,
 `limit`, `bounded-limit`, `bounded-sort`, `bounded-sort-limit`, `bounded-rank`,
 `legacy-window-aggregate`, `legacy-window-aggregate-hop`,
-`legacy-window-aggregate-variable`, `temporal-join`, and `temporal-sort` cases
+`legacy-window-aggregate-variable`, `two-phase-auxiliary-window-aggregate`, `temporal-join`, and
+`temporal-sort` cases
 exercise both native state backends over the bounded bid stream; they are focused operator workloads
 rather than numbered Nexmark queries. `over-aggregate` deliberately casts the timestamp to a
 regular value to exercise ordered non-time state, while `over-aggregate-event-time` retains the
@@ -122,6 +123,9 @@ independently; the one-phase test requires the local counter to remain zero. Thu
 collapsing a Flink two-phase plan nor inventing a local phase for a Flink one-phase plan can pass.
 The sliding-window case also runs at parallelism four on both state backends so each phase strategy
 crosses the native key-group exchange rather than exercising only an in-task path.
+The `two-phase-auxiliary-window-aggregate` case additionally checks that a functionally dependent
+value crosses the opaque local/global window payload without changing the true hash key, and
+requires both native window phase counters.
 The bounded group-aggregate matrix likewise forces `TWO_PHASE` at parallelism four for
 `group-aggregate`, `global-aggregate`, `grouping-sets`, and `aggregate-modifiers` on memory and
 RocksDB. The `two-phase-auxiliary-group-aggregate` case additionally forces Flink's grouping

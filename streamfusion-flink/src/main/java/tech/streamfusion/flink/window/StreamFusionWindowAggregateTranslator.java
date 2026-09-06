@@ -65,6 +65,7 @@ public final class StreamFusionWindowAggregateTranslator {
                 inputType,
                 internalOutputType,
                 grouping,
+                new int[0],
                 calls,
                 strategy,
                 needRetraction,
@@ -77,6 +78,7 @@ public final class StreamFusionWindowAggregateTranslator {
             RowType inputType,
             RowType internalOutputType,
             int[] grouping,
+            int[] auxiliary,
             AggregateCall[] calls,
             WindowingStrategy strategy,
             ReadableConfig config) {
@@ -85,6 +87,7 @@ public final class StreamFusionWindowAggregateTranslator {
                 inputType,
                 internalOutputType,
                 grouping,
+                auxiliary,
                 calls,
                 strategy,
                 false,
@@ -97,6 +100,7 @@ public final class StreamFusionWindowAggregateTranslator {
             RowType inputType,
             RowType internalOutputType,
             int[] grouping,
+            int[] auxiliary,
             AggregateCall[] calls,
             WindowingStrategy strategy,
             boolean needRetraction,
@@ -124,6 +128,7 @@ public final class StreamFusionWindowAggregateTranslator {
                 inputType,
                 internalOutputType,
                 grouping,
+                auxiliary,
                 calls,
                 needRetraction,
                 needRetraction,
@@ -180,6 +185,7 @@ public final class StreamFusionWindowAggregateTranslator {
             RowType internalInputType,
             RowType outputType,
             int groupingCount,
+            int auxiliaryCount,
             AggregateCall[] calls,
             WindowingStrategy strategy,
             NamedWindowProperty[] properties,
@@ -195,6 +201,7 @@ public final class StreamFusionWindowAggregateTranslator {
                 internalInputType,
                 outputType,
                 groupingCount,
+                auxiliaryCount,
                 calls,
                 false,
                 StreamFusionWindowTableFunctionTranslator.parameters(strategy.getWindow()),
@@ -276,6 +283,7 @@ public final class StreamFusionWindowAggregateTranslator {
                 internalInputType,
                 outputType,
                 groupingCount,
+                0,
                 calls,
                 needRetraction,
                 StreamFusionWindowTableFunctionTranslator.parameters(strategy.getWindow()),
@@ -390,6 +398,20 @@ public final class StreamFusionWindowAggregateTranslator {
             NamedWindowProperty[] properties,
             boolean needRetraction,
             ReadableConfig config) {
+        return unsupportedReason(
+                inputType, outputType, grouping, new int[0], calls, strategy, properties, needRetraction, config);
+    }
+
+    static String unsupportedReason(
+            RowType inputType,
+            RowType outputType,
+            int[] grouping,
+            int[] auxiliary,
+            AggregateCall[] calls,
+            WindowingStrategy strategy,
+            NamedWindowProperty[] properties,
+            boolean needRetraction,
+            ReadableConfig config) {
         if (!(strategy instanceof TimeAttributeWindowingStrategy)
                 && !(strategy instanceof WindowAttachedWindowingStrategy)) {
             return "window strategy: only direct or attached time windows are native";
@@ -421,9 +443,10 @@ public final class StreamFusionWindowAggregateTranslator {
         if (config.get(StateChangelogOptions.ENABLE_STATE_CHANGE_LOG)) {
             return "state: Flink changelog-state wrapping is not implemented by native window aggregation";
         }
-        int expectedFields = grouping.length + calls.length + properties.length;
+        int payloadCount = grouping.length + auxiliary.length;
+        int expectedFields = payloadCount + calls.length + properties.length;
         if (outputType.getFieldCount() != expectedFields) {
-            return "schema: window output must contain keys, aggregates, then named properties";
+            return "schema: window output must contain grouping and auxiliary keys, aggregates, then named properties";
         }
         for (int index = 0; index < grouping.length; index++) {
             int inputIndex = grouping[index];
@@ -434,8 +457,17 @@ public final class StreamFusionWindowAggregateTranslator {
                 return "key[" + index + "]: input and output types must match exactly";
             }
         }
+        for (int index = 0; index < auxiliary.length; index++) {
+            int inputIndex = auxiliary[index];
+            if (inputIndex < 0 || inputIndex >= inputType.getFieldCount()) {
+                return "auxiliary key: index " + inputIndex + " is outside the input row";
+            }
+            if (!inputType.getTypeAt(inputIndex).equals(outputType.getTypeAt(grouping.length + index))) {
+                return "auxiliary key[" + index + "]: input and output types must match exactly";
+            }
+        }
         for (int index = 0; index < calls.length; index++) {
-            LogicalType output = outputType.getTypeAt(grouping.length + index);
+            LogicalType output = outputType.getTypeAt(payloadCount + index);
             if (calls[index].isDistinct()) {
                 return "aggregate[" + index + "]: DISTINCT window aggregation is not implemented";
             }

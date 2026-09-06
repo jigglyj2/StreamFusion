@@ -42,6 +42,9 @@ requires redistribution, decodes the Arrow IPC frame directly at its native-plan
 pane-based sliding windows share these paths and emit only at end of input. As in Flink's bounded
 executor, intermediate watermarks are forwarded as control records and do not fire or evict
 windows before end of input.
+Flink auxiliary grouping values in a bounded two-phase plan travel beside the true grouping key in
+that opaque Arrow partial. They are restored by the global phase but do not participate in hash
+partitioning, key-group assignment, or keyed-state identity.
 The native calls are `COUNT(*)`, `COUNT(value)`, `SUM`, `AVG`, `MIN`, and `MAX`, including SQL
 `FILTER (WHERE ...)` with nullable Boolean predicates. `AVG` accepts every Flink numeric input,
 supports retractions, and merges its sum/count buffers across session namespaces. Keys use Arrow's canonical row encoding and
@@ -101,7 +104,8 @@ asserts that no additional HOP namespaces survive after the single attached name
 Bounded one- and two-phase coverage compares Flink and StreamFusion results for fixed-width
 tumbling, variable-width tumbling, and pane-based sliding aggregates on both state backends. The
 tests force Flink's phase strategy: one-phase runs require a zero local-stage count, while
-two-phase runs require both native phase counters to be nonzero. Each sliding case additionally
+two-phase runs require both native phase counters to be nonzero. A nested aggregate case forces an
+auxiliary grouping field through the local/exchange/global contract. Each sliding case additionally
 runs with distributed parallelism four to exercise the key-group exchange. The direct one-phase
 and framed global operators have aligned, unaligned, and canonical savepoint restore coverage,
 including memory-to-RocksDB and RocksDB-to-memory restore; the framed path also covers 1-to-2-to-1

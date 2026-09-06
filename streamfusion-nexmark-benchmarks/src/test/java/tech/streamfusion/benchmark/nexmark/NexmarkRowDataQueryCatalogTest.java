@@ -43,6 +43,7 @@ class NexmarkRowDataQueryCatalogTest {
                         "legacy-window-aggregate",
                         "legacy-window-aggregate-hop",
                         "legacy-window-aggregate-variable",
+                        "two-phase-auxiliary-window-aggregate",
                         "match-recognize",
                         "interval-join",
                         "temporal-join",

@@ -28,12 +28,14 @@ public final class StreamFusionBatchExecLocalWindowAggregate extends ExecNodeBas
             "tech.streamfusion.flink.window.StreamFusionGroupWindowAggregateTranslator";
 
     private final int[] grouping;
+    private final int[] auxiliary;
     private final AggregateCall[] calls;
     private final LogicalWindow window;
 
     public StreamFusionBatchExecLocalWindowAggregate(
             ReadableConfig config,
             int[] grouping,
+            int[] auxiliary,
             AggregateCall[] calls,
             LogicalWindow window,
             InputProperty inputProperty,
@@ -46,6 +48,7 @@ public final class StreamFusionBatchExecLocalWindowAggregate extends ExecNodeBas
                 outputType,
                 "StreamFusionBatchLocalWindowAggregate");
         this.grouping = grouping.clone();
+        this.auxiliary = auxiliary.clone();
         this.calls = calls.clone();
         this.window = window;
     }
@@ -64,6 +67,7 @@ public final class StreamFusionBatchExecLocalWindowAggregate extends ExecNodeBas
                             RowType.class,
                             RowType.class,
                             int[].class,
+                            int[].class,
                             AggregateCall[].class,
                             LogicalWindow.class,
                             ReadableConfig.class);
@@ -73,6 +77,7 @@ public final class StreamFusionBatchExecLocalWindowAggregate extends ExecNodeBas
                     (RowType) edge.getOutputType(),
                     (RowType) getOutputType(),
                     grouping,
+                    auxiliary,
                     calls,
                     window,
                     getPersistedConfig());
