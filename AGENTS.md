@@ -162,6 +162,13 @@ not add StreamFusion deployment toggles when an equivalent Flink setting exists.
 StreamFusion-specific feature gate is acceptable only when users must explicitly opt
 into behavior that may not be byte-identical to Flink.
 
+The user-facing runtime configuration surface must be the same as Flink's. The only
+StreamFusion-specific runtime options allowed are enabling StreamFusion and explicitly
+opting into operators whose behavior is not identical to Flink's. Use existing Flink
+settings and their semantics for all other runtime parameters; do not introduce separate
+StreamFusion tuning knobs, memory budgets, or admission bypasses. Internal implementation
+constants and benchmark-only measurement controls must not become deployment options.
+
 When implementing a native source or sink, translate every relevant Java/Flink
 connector and client setting to the native library's equivalent. If a setting or its
 semantics cannot be represented exactly, keep that boundary on the Flink implementation
@@ -248,3 +255,13 @@ the user explicitly requests checked-in artifacts.
 Immediately before each commit, run Palantir Java formatting and only the unit tests
 relevant to that commit. Treat this like a focused commit hook; do not spend time
 running unrelated test suites.
+
+Advance production Nexmark coverage in increasing query order. Verify existing admission
+first, then focus on the next query's demonstrated blockers instead of expanding into
+unrelated operator work. Each unlocked query is a delivery checkpoint: ordinary planner
+selection, exact parity, the applicable architecture/memory/metric/recovery contracts,
+and release profiling and optimization against Flink on both state backends must be
+verified and documented. Commit coherent tested prerequisites as they land; do not wait
+for every operator family to be complete. Batch compilation and focused validation before
+check-in rather than rebuilding after every edit; earlier checks should answer a specific
+blocking question. Stateless queries do not constitute RocksDB state-performance evidence.

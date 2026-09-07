@@ -5,6 +5,10 @@ description: The north-star Kafka-in/Kafka-out comparison.
 
 The north-star benchmark compares StreamFusion with native Flink using the Nexmark streaming workload. Both engines consume the same officially generated Nexmark events from Kafka and write results back to Kafka with exactly-once delivery.
 
+Current delivery follows [numbered query checkpoints](/StreamFusion/benchmarks/query-checkpoints/).
+Q0–Q2 have been rechecked for planner admission; Q3 is the next production target on both state
+backends. Performance results below are historical and do not imply current planner admission.
+
 ## Benchmark matrix
 
 | State backend | Mini-batching |
@@ -53,7 +57,7 @@ bounded adapter seeds each source split deterministically and restores the upstr
 generator position, so Flink and StreamFusion receive identical events. This remains a Kafka-free
 operator benchmark and does not replace the Kafka-in/Kafka-out north-star benchmark.
 
-Current all-or-nothing coverage can fully accelerate q0 (pass-through), q1 (decimal currency
+The implemented semantic catalog includes q0 (pass-through), q1 (decimal currency
 conversion), q2 (selection), q3 (regular streaming join), q4 (residual join plus grouped
 aggregation), q5 (nested hopping aggregates plus residual join), q7 (tumbling maximum plus a
 timestamp-interval residual join), q8 (tumbling aggregates plus Flink's selected Window Join or
@@ -61,6 +65,8 @@ binary MultiJoin), q9 (residual join plus Top-1), q11
 (event-time session aggregation), q19 (Top-N), q20 (regular join), q22 (URL directory extraction),
 and q23 (two regular joins). A deterministic `interval-join` workload exercises
 Flink's constant-bound event-time interval physical operator.
+This catalog is not production admission: current architecture gates still reject stateful plans,
+including Q3. The query checkpoint page records current selection separately from implementation.
 q13, q15, q16, and q17 still require an
 unsupported join shape or surrounding operator. q10
 uses unsupported `DATE_FORMAT`; q14 uses a Java UDF, mixed decimal
