@@ -16,6 +16,7 @@ use hashbrown::{HashMap, HashSet};
 
 use crate::exchange::{assign_key_group, encode_binary_row, KeyField};
 use crate::memory_pool::HostMemoryReservation;
+use crate::planner::persistent::unary::InvocationState;
 use crate::state::{
     KeyedState, MemoryKeyedState, RocksPluginKeyedState, StateKey, StateKeyRef, StateMutation,
 };
@@ -25,6 +26,14 @@ const INSERT: i8 = 0;
 const UPDATE_BEFORE: i8 = 1;
 const UPDATE_AFTER: i8 = 2;
 const DELETE: i8 = 3;
+
+pub(crate) mod execution_plan;
+pub(crate) mod region;
+
+#[cfg(test)]
+mod memory_tests;
+#[cfg(test)]
+mod owned_envelope_tests;
 
 /// Stateful execution handle for Flink's timer-free keep-last deduplicate node.
 pub(crate) struct DeduplicateProcessor {
@@ -39,6 +48,10 @@ pub(crate) struct DeduplicateProcessor {
     input_kind_index: Option<usize>,
     visible_count: Option<usize>,
     row_converter: Option<RowConverter>,
+    invocation: InvocationState,
+    // Dropped after the plan, schema and row converter, independently of per-batch scratch.
+    control_reservation: HostMemoryReservation,
+    schema_reservation: Option<HostMemoryReservation>,
 }
 
 impl DeduplicateProcessor {
@@ -68,12 +81,13 @@ impl DeduplicateProcessor {
         memory_limit: usize,
         scratch_reservation: HostMemoryReservation,
     ) -> Result<Self> {
-        let state = Box::new(RocksPluginKeyedState::open(
+        let state = Box::new(RocksPluginKeyedState::open_for_owner(
             plugin_path,
             database_path,
             first_key_group,
             last_key_group,
             memory_limit,
+            &scratch_reservation,
         )?);
         Self::with_state(serialized_plan, max_parallelism, state, scratch_reservation)
     }
@@ -84,6 +98,13 @@ impl DeduplicateProcessor {
         state: Box<dyn KeyedState>,
         scratch_reservation: HostMemoryReservation,
     ) -> Result<Self> {
+        let mut control_reservation =
+            scratch_reservation.sibling("native deduplicate plan and schema");
+        control_reservation.resize(
+            crate::execution_context::wire_memory::PlanMemory::scan(serialized_plan)?
+                .decoded()?
+                .saturating_add(4096),
+        )?;
         let native_plan = decode_plan(serialized_plan)?;
         let root = native_plan
             .root
@@ -109,6 +130,9 @@ impl DeduplicateProcessor {
             input_kind_index: None,
             visible_count: None,
             row_converter: None,
+            invocation: InvocationState::default(),
+            control_reservation,
+            schema_reservation: None,
         })
     }
 
@@ -143,6 +167,7 @@ impl DeduplicateProcessor {
     /// Boundary form: Java already owns the selected source rows, so only return ordinals and
     /// changelog kinds instead of gathering every visible Arrow column a second time.
     pub(crate) fn process_selection(&mut self, batch: RecordBatch) -> Result<RecordBatch> {
+        self.require_idle()?;
         let reservation = batch
             .get_array_memory_size()
             .saturating_mul(3)
@@ -183,15 +208,26 @@ impl DeduplicateProcessor {
             ));
             columns.push(Arc::new(builder.finish()));
         }
-        Ok(RecordBatch::try_new(
-            Arc::new(Schema::new(fields)),
-            columns,
-        )?)
+        let output = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)?;
+        self.admit_materialized_output(output)
+    }
+
+    fn admit_materialized_output(&mut self, output: RecordBatch) -> Result<RecordBatch> {
+        // Called while Selection still owns the historical-state workspace. The outer
+        // boundary subsequently transfers/splits this allowance into the Arrow owner.
+        self.scratch_reservation.try_grow(
+            output
+                .get_array_memory_size()
+                .saturating_sub(self.scratch_reservation.size()),
+        )?;
+        Ok(output)
     }
 
     /// Arrow-native runtime form: gather selected visible fields once and retain ordinal metadata
     /// solely for Flink's out-of-band record timestamps.
+    #[cfg(test)]
     pub(crate) fn process_arrow(&mut self, batch: RecordBatch) -> Result<RecordBatch> {
+        self.require_idle()?;
         let reservation = batch
             .get_array_memory_size()
             .saturating_mul(3)
@@ -199,6 +235,48 @@ impl DeduplicateProcessor {
         self.scratch_reservation.resize(reservation)?;
         let result = self.process_arrow_accounted(&batch);
         self.finish_output(result, reservation)
+    }
+
+    fn process_native(&mut self, batch: RecordBatch) -> Result<execution_plan::NativeOutput> {
+        self.prepare_schema(batch.schema(), batch.num_columns())?;
+        super::envelope::validate_owned_input(&batch)?;
+        if let Some(index) = self.input_kind_index {
+            let kinds = batch
+                .column(index)
+                .as_any()
+                .downcast_ref::<Int8Array>()
+                .ok_or_else(|| {
+                    DataFusionError::Execution("deduplicate RowKind must be Int8".into())
+                })?;
+            if kinds.null_count() != 0 || kinds.values().iter().any(|kind| *kind != INSERT) {
+                return Err(DataFusionError::Execution(
+                    "native SQL deduplicate requires insert-only input".into(),
+                ));
+            }
+        }
+        let reservation = batch
+            .get_array_memory_size()
+            .saturating_mul(3)
+            .saturating_add(batch.num_rows().saturating_mul(512));
+        self.scratch_reservation.resize(reservation)?;
+        let result = (|| {
+            let batch = self.process_arrow_accounted(&batch)?;
+            let bytes = batch.get_array_memory_size();
+            self.scratch_reservation.resize(reservation.max(bytes))?;
+            let memory = self
+                .scratch_reservation
+                .split(bytes, "deduplicate native output")?;
+            Ok(execution_plan::NativeOutput {
+                batch,
+                _memory: memory,
+            })
+        })();
+        self.scratch_reservation.resize(0)?;
+        result
+    }
+
+    fn require_idle(&self) -> Result<()> {
+        self.invocation.require_idle("deduplicate")
     }
 
     fn process_arrow_accounted(&mut self, batch: &RecordBatch) -> Result<RecordBatch> {
@@ -234,26 +312,17 @@ impl DeduplicateProcessor {
         } else {
             self.materialize_arrow_rows(&batch, &selection)?
         };
-        columns.push(Arc::new(Int8Array::from(selection.row_kinds)));
-        columns.push(Arc::new(Int32Array::from(selection.envelope_ordinals)));
-        let mut fields = batch.schema().fields()[..visible_count]
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>();
-        fields.push(Arc::new(Field::new(
-            "__streamfusion_row_kind",
-            DataType::Int8,
-            false,
-        )));
-        fields.push(Arc::new(Field::new(
-            "__streamfusion_input_row",
-            DataType::Int32,
-            false,
-        )));
-        Ok(RecordBatch::try_new(
-            Arc::new(Schema::new(fields)),
-            columns,
-        )?)
+        super::envelope::select_output(
+            batch,
+            Int32Array::from(selection.envelope_ordinals),
+            Arc::new(Int8Array::from(selection.row_kinds)),
+            &mut columns,
+        )?;
+        let fields = super::envelope::selected_output_fields(&batch.schema(), visible_count)?;
+        let output = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)?;
+        // A tiny incoming update can retract a wide historical row. Keep Selection's
+        // historical-state allowance until the materialized batch has its own admission.
+        self.admit_materialized_output(output)
     }
 
     fn finish_output(
@@ -335,7 +404,11 @@ impl DeduplicateProcessor {
             })
             .collect::<Vec<_>>();
         // RocksDB lowers this call to one multi_get. In-memory state returns borrowed values.
-        let existing = self.state.get_batch(&state_key_refs)?;
+        let existing = self
+            .state
+            .get_batch(&state_key_refs, &self.scratch_reservation)?;
+        let _loaded_state_workspace =
+            crate::state::reserve_decoded_values(&existing, &self.scratch_reservation)?;
         let mut staged = HashMap::<StateKeyRef<'_>, usize, RandomState>::with_capacity_and_hasher(
             batch.num_rows(),
             RandomState::new(),
@@ -439,6 +512,7 @@ impl DeduplicateProcessor {
             row_kinds,
             stored_rows: output_stored_rows,
             input_rows: encoded_rows,
+            _historical_memory: Some(_loaded_state_workspace),
         })
     }
 
@@ -460,7 +534,11 @@ impl DeduplicateProcessor {
                 key,
             })
             .collect::<Vec<_>>();
-        let existing = self.state.get_batch(&state_key_refs)?;
+        let existing = self
+            .state
+            .get_batch(&state_key_refs, &self.scratch_reservation)?;
+        let _loaded_state_workspace =
+            crate::state::reserve_decoded_values(&existing, &self.scratch_reservation)?;
         let mut seen = HashSet::<StateKeyRef<'_>, RandomState>::with_capacity_and_hasher(
             batch.num_rows(),
             RandomState::new(),
@@ -494,6 +572,7 @@ impl DeduplicateProcessor {
             content_ordinals,
             stored_rows: None,
             input_rows: None,
+            _historical_memory: Some(_loaded_state_workspace),
         })
     }
 
@@ -514,6 +593,7 @@ impl DeduplicateProcessor {
                 content_ordinals,
                 stored_rows: None,
                 input_rows: None,
+                _historical_memory: None,
             });
         }
 
@@ -526,7 +606,11 @@ impl DeduplicateProcessor {
                 key,
             })
             .collect::<Vec<_>>();
-        let existing = self.state.get_batch(&state_key_refs)?;
+        let existing = self
+            .state
+            .get_batch(&state_key_refs, &self.scratch_reservation)?;
+        let _loaded_state_workspace =
+            crate::state::reserve_decoded_values(&existing, &self.scratch_reservation)?;
         let mut staged = HashMap::<StateKeyRef<'_>, usize, RandomState>::with_capacity_and_hasher(
             batch.num_rows(),
             RandomState::new(),
@@ -612,6 +696,7 @@ impl DeduplicateProcessor {
             row_kinds,
             stored_rows: output_stored_rows,
             input_rows: Some(encoded_rows),
+            _historical_memory: Some(_loaded_state_workspace),
         })
     }
 
@@ -639,7 +724,11 @@ impl DeduplicateProcessor {
                 key,
             })
             .collect::<Vec<_>>();
-        let existing = self.state.get_batch(&state_key_refs)?;
+        let existing = self
+            .state
+            .get_batch(&state_key_refs, &self.scratch_reservation)?;
+        let _loaded_state_workspace =
+            crate::state::reserve_decoded_values(&existing, &self.scratch_reservation)?;
         let mut staged = HashMap::<StateKeyRef<'_>, usize, RandomState>::with_capacity_and_hasher(
             batch.num_rows(),
             RandomState::new(),
@@ -753,6 +842,7 @@ impl DeduplicateProcessor {
             row_kinds,
             stored_rows: Some(output_stored_rows),
             input_rows: None,
+            _historical_memory: Some(_loaded_state_workspace),
         })
     }
 
@@ -803,16 +893,25 @@ impl DeduplicateProcessor {
             .map_err(DataFusionError::from)
     }
 
-    pub(crate) fn snapshot_key_group(&self, key_group: u32) -> Result<Vec<u8>> {
-        self.state.snapshot_key_group(key_group)
+    pub(crate) fn state_memory(&self) -> HostMemoryReservation {
+        self.scratch_reservation.sibling("native state transfer")
+    }
+
+    pub(crate) fn snapshot_key_group(&self, key_group: u32) -> Result<crate::state::SnapshotBytes> {
+        self.require_idle()?;
+        self.state
+            .snapshot_key_group(key_group, &self.scratch_reservation)
     }
 
     pub(crate) fn checkpoint(&self, directory: &std::path::Path) -> Result<()> {
+        self.require_idle()?;
         self.state.checkpoint(directory)
     }
 
     pub(crate) fn restore_key_group(&mut self, key_group: u32, bytes: &[u8]) -> Result<()> {
-        self.state.restore_key_group(key_group, bytes)
+        self.require_idle()?;
+        self.state
+            .restore_key_group(key_group, bytes, &self.scratch_reservation)
     }
 
     fn prepare_schema(&mut self, schema: SchemaRef, column_count: usize) -> Result<()> {
@@ -824,27 +923,39 @@ impl DeduplicateProcessor {
             }
             return Ok(());
         }
-        self.preencoded_key_index = schema
+        // Arrow schemas and recursive RowConverter codecs outlive this input batch. Include
+        // nested fields and metadata, not just the number of top-level SQL columns.
+        let schema_bytes = schema.fields().iter().fold(4096usize, |bytes, field| {
+            bytes.saturating_add(field.size().saturating_mul(16))
+        });
+        let mut schema_reservation = self
+            .control_reservation
+            .sibling("deduplicate retained schema");
+        schema_reservation.resize(schema_bytes)?;
+        let preencoded_key_index = schema
             .fields()
             .iter()
             .position(|field| field.name() == "__streamfusion_key");
-        self.stored_row_index = schema
+        let stored_row_index = schema
             .fields()
             .iter()
             .position(|field| field.name() == "__streamfusion_stored_row");
-        self.input_kind_index = schema
-            .fields()
-            .iter()
-            .position(|field| field.name() == "__streamfusion_input_row_kind");
+        let input_kind_index = schema.fields().iter().position(|field| {
+            matches!(
+                field.name().as_str(),
+                "__streamfusion_input_row_kind" | "__streamfusion_row_kind"
+            )
+        });
         let input_ordinal_index = schema
             .fields()
             .iter()
             .position(|field| field.name() == "__streamfusion_input_row");
         let visible_count = [
-            self.preencoded_key_index,
-            self.stored_row_index,
-            self.input_kind_index,
+            preencoded_key_index,
+            stored_row_index,
+            input_kind_index,
             input_ordinal_index,
+            super::envelope::owned_timestamp_index(&schema)?,
             Some(column_count),
         ]
         .into_iter()
@@ -858,12 +969,12 @@ impl DeduplicateProcessor {
                 "deduplicate input has no visible columns".to_string(),
             ));
         }
-        if self.plan.input_changelog && self.stored_row_index.is_none() {
+        if self.plan.input_changelog && stored_row_index.is_none() {
             return Err(DataFusionError::Execution(
                 "deduplicate plan requires stored BinaryRow metadata".to_string(),
             ));
         }
-        if self.plan.input_changelog && self.input_kind_index.is_none() {
+        if self.plan.input_changelog && input_kind_index.is_none() {
             return Err(DataFusionError::Execution(
                 "changelog deduplicate requires input RowKind metadata".to_string(),
             ));
@@ -887,8 +998,17 @@ impl DeduplicateProcessor {
                 schema.field(order_index).data_type()
             )));
         }
-        if self.preencoded_key_index.is_none() {
-            self.key_fields = self
+        if let Some(index) = input_ordinal_index {
+            if schema.field(index).data_type() != &DataType::Int32
+                || schema.field(index).is_nullable()
+            {
+                return Err(DataFusionError::Plan(
+                    "deduplicate input ordinal must be non-null Int32".into(),
+                ));
+            }
+        }
+        let key_fields = if preencoded_key_index.is_none() {
+            self
                 .plan
                 .key_indices
                 .iter()
@@ -905,16 +1025,24 @@ impl DeduplicateProcessor {
                         })?;
                     Ok((index, KeyField::from_arrow_type(field.data_type())?))
                 })
-                .collect::<Result<Vec<_>>>()?;
-        }
-        self.row_converter = Some(RowConverter::new(
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            Vec::new()
+        };
+        let row_converter = RowConverter::new(
             schema.fields()[..visible_count]
                 .iter()
                 .map(|field| SortField::new(field.data_type().clone()))
                 .collect(),
-        )?);
+        )?;
+        self.key_fields = key_fields;
+        self.preencoded_key_index = preencoded_key_index;
+        self.stored_row_index = stored_row_index;
+        self.input_kind_index = input_kind_index;
+        self.row_converter = Some(row_converter);
         self.visible_count = Some(visible_count);
         self.input_schema = Some(schema);
+        self.schema_reservation = Some(schema_reservation);
         Ok(())
     }
 }
@@ -927,6 +1055,9 @@ struct Selection {
     /// Reuse row encoding that state materialization already required instead of converting every
     /// visible input column a second time while interleaving UPDATE_BEFORE rows.
     input_rows: Option<Rows>,
+    // Last field: keep historical row copies and decoding workspace admitted until all
+    // selection-owned allocations are gone and the output has acquired its own allowance.
+    _historical_memory: Option<HostMemoryReservation>,
 }
 
 fn replace_staged<'a>(
@@ -1074,10 +1205,16 @@ mod tests {
             protocol_version: crate::PLAN_PROTOCOL_VERSION,
             root: Some(proto::Operator {
                 plan_node_id: 0,
+                metric_name: String::new(),
+                clear_record_timestamps: false,
+                metric_uid: None,
                 operator: Some(proto::operator::Operator::Deduplicate(Box::new(
                     proto::Deduplicate {
                         input: Some(Box::new(proto::Operator {
                             plan_node_id: 0,
+                            metric_name: String::new(),
+                            clear_record_timestamps: false,
+                            metric_uid: None,
                             operator: Some(proto::operator::Operator::Input(proto::Input {
                                 schema: None,
                                 input_index: 0,
@@ -1228,6 +1365,41 @@ mod tests {
 
         assert!(broker.reserved() > state_only);
         drop(output);
+        drop(processor);
+        assert_eq!(broker.reserved(), 0);
+    }
+
+    #[test]
+    fn schema_cache_is_admitted_before_creation_and_retained_without_batch_scratch() {
+        let broker = Arc::new(TestBroker::new(1 << 20));
+        let mut processor = DeduplicateProcessor::new(
+            &plan_with(false, true, true, false),
+            128,
+            0,
+            127,
+            HostMemoryReservation::new(broker.clone(), "deduplicate cache test"),
+        )
+        .unwrap();
+        let initial = broker.reserved();
+        let input = batch(vec![10], vec![1_000]);
+        let mut pressure = HostMemoryReservation::new(broker.clone(), "other operator");
+        pressure.resize((1 << 20) - initial - 128).unwrap();
+        assert!(processor
+            .prepare_schema(input.schema(), input.num_columns())
+            .is_err());
+        assert!(processor.input_schema.is_none());
+        assert!(processor.row_converter.is_none());
+        drop(pressure);
+        processor
+            .prepare_schema(input.schema(), input.num_columns())
+            .unwrap();
+        assert!(broker.reserved() > initial + processor.row_converter.as_ref().unwrap().size());
+        assert_eq!(processor.scratch_reservation.size(), 0);
+        let cached = broker.reserved();
+        processor
+            .prepare_schema(input.schema(), input.num_columns())
+            .unwrap();
+        assert_eq!(broker.reserved(), cached);
         drop(processor);
         assert_eq!(broker.reserved(), 0);
     }

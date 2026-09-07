@@ -9,13 +9,10 @@
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef};
-use arrow::compute::interleave;
 use arrow::datatypes::{Schema, SchemaRef};
-use arrow::record_batch::RecordBatch;
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::error::{DataFusionError, Result};
-use datafusion::execution::memory_pool::MemoryConsumer;
+use datafusion::execution::memory_pool::{MemoryConsumer, MemoryPool};
 use datafusion::execution::TaskContext;
 use datafusion::physical_expr::{EquivalenceProperties, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::EmissionType;
@@ -27,11 +24,26 @@ use datafusion::physical_plan::{
 use futures::StreamExt;
 
 use super::calc::create_expression;
+use super::envelope::Envelope;
+use crate::planner::expressions::{managed_expression, managed_scalar};
 use crate::proto;
 
+#[cfg(test)]
+mod admission_tests;
+mod stream;
+
+#[cfg(test)]
 pub(crate) fn create(
     expand: &proto::Expand,
     child: Arc<dyn ExecutionPlan>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    create_with_memory(expand, child, None)
+}
+
+pub(crate) fn create_with_memory(
+    expand: &proto::Expand,
+    child: Arc<dyn ExecutionPlan>,
+    memory: Option<Arc<dyn MemoryPool>>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     if expand.projections.is_empty() {
         return Err(DataFusionError::Plan(
@@ -40,10 +52,7 @@ pub(crate) fn create(
     }
     let output_width = expand.projections[0].expressions.len();
     let child_schema = child.schema();
-    let ordinal_index = child_schema.fields().len().checked_sub(1).ok_or_else(|| {
-        DataFusionError::Plan("StreamFusion Expand input has no selection ordinal".to_string())
-    })?;
-    let ordinal_field = Arc::clone(&child_schema.fields()[ordinal_index]);
+    let envelope = Envelope::from_schema(child_schema.as_ref())?;
     let projections = expand
         .projections
         .iter()
@@ -58,7 +67,13 @@ pub(crate) fn create(
             projection
                 .expressions
                 .iter()
-                .map(|expression| create_expression(expression, child_schema.as_ref()))
+                .map(|expression| {
+                    managed_scalar::install(
+                        create_expression(expression, child_schema.as_ref())?,
+                        memory.as_ref(),
+                        child_schema.as_ref(),
+                    )
+                })
                 .collect::<Result<Vec<_>>>()
         })
         .collect::<Result<Vec<_>>>()?;
@@ -85,20 +100,24 @@ pub(crate) fn create(
                 .with_nullable(nullable),
         );
     }
-    fields.push(ordinal_field.as_ref().clone());
+    fields.extend(
+        envelope
+            .indices()
+            .map(|index| child_schema.field(index).as_ref().clone()),
+    );
     Ok(Arc::new(ExpandExec::new(
         child,
-        projections,
+        Arc::new(projections),
         Arc::new(Schema::new(fields)),
     )))
 }
 
-/// Evaluates every projection for one Arrow input batch, then interleaves their rows in Flink's
+/// Evaluates projections for bounded Arrow input slices, then interleaves their rows in Flink's
 /// input-row-major order. DataFusion's `UnionExec` emits projection-major batches, which changes
 /// downstream mini-batch boundaries and therefore changes observable streaming changelogs.
 struct ExpandExec {
     input: Arc<dyn ExecutionPlan>,
-    projections: Vec<Vec<Arc<dyn PhysicalExpr>>>,
+    projections: Arc<Vec<Vec<Arc<dyn PhysicalExpr>>>>,
     schema: SchemaRef,
     properties: Arc<PlanProperties>,
 }
@@ -106,7 +125,7 @@ struct ExpandExec {
 impl ExpandExec {
     fn new(
         input: Arc<dyn ExecutionPlan>,
-        projections: Vec<Vec<Arc<dyn PhysicalExpr>>>,
+        projections: Arc<Vec<Vec<Arc<dyn PhysicalExpr>>>>,
         schema: SchemaRef,
     ) -> Self {
         let properties = Arc::new(PlanProperties::new(
@@ -188,51 +207,35 @@ impl ExecutionPlan for ExpandExec {
     ) -> Result<SendableRecordBatchStream> {
         let schema = Arc::clone(&self.schema);
         let output_schema = Arc::clone(&schema);
-        let projections = self.projections.clone();
+        let projections = Arc::clone(&self.projections);
+        let pool = Arc::clone(context.memory_pool());
         let reservation = MemoryConsumer::new("StreamFusionExpandExec")
             .register(&context.runtime_env().memory_pool);
-        let stream = self.input.execute(partition, context)?.map(move |batch| {
-            let output = expand_batch(batch?, &projections, Arc::clone(&output_schema))?;
-            reservation.try_resize(output.get_array_memory_size())?;
-            Ok(output)
-        });
+        let registry = crate::memory_pool::buffer_registry(context.memory_pool());
+        let stream = self
+            .input
+            .execute(partition, context)?
+            .flat_map(move |batch| {
+                let work = batch.map(|batch| {
+                    stream::ExpansionWork::new(
+                        batch,
+                        Arc::clone(&projections),
+                        Arc::clone(&output_schema),
+                        reservation.new_empty(),
+                        registry.clone(),
+                        pool.clone(),
+                    )
+                });
+                futures::stream::try_unfold(work, |work| async move {
+                    let mut work = work?;
+                    match work.next_batch()? {
+                        Some(batch) => Ok(Some((batch, Ok(work)))),
+                        None => Ok(None),
+                    }
+                })
+            });
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
     }
-}
-
-fn expand_batch(
-    batch: RecordBatch,
-    projections: &[Vec<Arc<dyn PhysicalExpr>>],
-    schema: SchemaRef,
-) -> Result<RecordBatch> {
-    let row_count = batch.num_rows();
-    let projection_count = projections.len();
-    let ordinal = Arc::clone(batch.column(batch.num_columns() - 1));
-    let mut evaluated = projections
-        .iter()
-        .map(|projection| {
-            let mut columns = projection
-                .iter()
-                .map(|expression| expression.evaluate(&batch)?.into_array(row_count))
-                .collect::<Result<Vec<_>>>()?;
-            columns.push(Arc::clone(&ordinal));
-            Ok(columns)
-        })
-        .collect::<Result<Vec<Vec<ArrayRef>>>>()?;
-    let indices = (0..row_count)
-        .flat_map(|row| (0..projection_count).map(move |projection| (projection, row)))
-        .collect::<Vec<_>>();
-    let columns = (0..schema.fields().len())
-        .map(|column| {
-            let values = evaluated
-                .iter()
-                .map(|projection| projection[column].as_ref() as &dyn Array)
-                .collect::<Vec<_>>();
-            interleave(&values, &indices).map_err(DataFusionError::from)
-        })
-        .collect::<Result<Vec<_>>>()?;
-    evaluated.clear();
-    Ok(RecordBatch::try_new(schema, columns)?)
 }
 
 #[cfg(test)]

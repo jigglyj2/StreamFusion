@@ -22,24 +22,25 @@ use datafusion::physical_plan::{
 use futures::StreamExt;
 
 use super::calc::create_expression;
+use super::envelope::Envelope;
 use crate::proto;
 
+#[cfg(test)]
 const INPUT_ROW_COLUMN: &str = "__streamfusion_input_row";
 const MAX_OUTPUT_ROWS_PER_BATCH: usize = 16_384;
+// A vectorization target, not an independent deployment memory budget. One unusually wide
+// row is still admitted against the Flink pool; otherwise wide rows produce smaller batches.
+const TARGET_OUTPUT_WORKSPACE_BYTES: usize = 8 << 20;
+
+#[cfg(test)]
+mod memory_tests;
 
 pub(crate) fn create(
     replicate: &proto::ReplicateRows,
     child: Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let child_schema = child.schema();
-    let ordinal_index = child_schema.fields().len().checked_sub(1).ok_or_else(|| {
-        DataFusionError::Plan("replicate rows input has no input-row ordinal".to_string())
-    })?;
-    if child_schema.field(ordinal_index).name() != INPUT_ROW_COLUMN {
-        return Err(DataFusionError::Plan(
-            "replicate rows input-row ordinal must be the final column".to_string(),
-        ));
-    }
+    let envelope = Envelope::from_schema(child_schema.as_ref())?;
     let repetition = create_expression(
         replicate.repetition.as_ref().ok_or_else(|| {
             DataFusionError::Plan("replicate rows has no repetition expression".to_string())
@@ -63,7 +64,7 @@ pub(crate) fn create(
             "replicate rows requires at least one value expression".to_string(),
         ));
     }
-    let mut fields = child_schema.fields()[..ordinal_index]
+    let mut fields = child_schema.fields()[..envelope.payload_width]
         .iter()
         .map(|field| field.as_ref().clone())
         .collect::<Vec<_>>();
@@ -76,7 +77,11 @@ pub(crate) fn create(
                 .with_name(format!("__streamfusion_replicate_value_{index}")),
         );
     }
-    fields.push(child_schema.field(ordinal_index).as_ref().clone());
+    fields.extend(
+        envelope
+            .indices()
+            .map(|index| child_schema.field(index).as_ref().clone()),
+    );
     Ok(Arc::new(ReplicateRowsExec::new(
         child,
         repetition,
@@ -188,6 +193,7 @@ impl ExecutionPlan for ReplicateRowsExec {
         let values = self.values.clone();
         let reservation = MemoryConsumer::new("StreamFusionReplicateRowsExec")
             .register(&context.runtime_env().memory_pool);
+        let registry = crate::memory_pool::buffer_registry(context.memory_pool());
         let stream = self.input.execute(partition, context)?.flat_map(
             move |batch| -> futures::stream::BoxStream<'static, Result<RecordBatch>> {
                 match batch.and_then(|batch| {
@@ -197,12 +203,17 @@ impl ExecutionPlan for ReplicateRowsExec {
                         &values,
                         Arc::clone(&output_schema),
                         reservation.new_empty(),
+                        registry.clone(),
                     )
                 }) {
                     Ok(work) => futures::stream::unfold(Some(work), |work| async move {
                         let mut work = work?;
                         let output = work.next_batch();
-                        let next = if work.is_finished() { None } else { Some(work) };
+                        let next = if output.is_err() || work.is_finished() {
+                            None
+                        } else {
+                            Some(work)
+                        };
                         Some((output, next))
                     })
                     .boxed(),
@@ -221,7 +232,9 @@ struct ReplicationWork {
     input_rows: usize,
     row: usize,
     emitted_for_row: usize,
+    _sources_memory: MemoryReservation,
     reservation: MemoryReservation,
+    registry: Option<Arc<crate::memory_pool::arrow_lease::Registry>>,
 }
 
 impl ReplicationWork {
@@ -231,6 +244,7 @@ impl ReplicationWork {
         values: &[Arc<dyn PhysicalExpr>],
         schema: SchemaRef,
         reservation: MemoryReservation,
+        registry: Option<Arc<crate::memory_pool::arrow_lease::Registry>>,
     ) -> Result<Self> {
         let input_rows = batch.num_rows();
         if input_rows > u32::MAX as usize {
@@ -238,7 +252,13 @@ impl ReplicationWork {
                 "replicate rows input exceeds u32 rows".to_string(),
             ));
         }
+        let sources_memory = reservation.new_empty();
+        sources_memory.try_grow(crate::memory_pool::selection::add(
+            4096,
+            crate::memory_pool::selection::multiply(schema.fields().len(), 64)?,
+        )?)?;
         let counts = repetition.evaluate(&batch)?.into_array(input_rows)?;
+        sources_memory.try_grow(counts.get_array_memory_size())?;
         let counts = counts
             .as_any()
             .downcast_ref::<Int64Array>()
@@ -253,15 +273,24 @@ impl ReplicationWork {
                 ));
             }
         }
-        let visible_count = batch.num_columns() - 1;
+        let envelope = Envelope::from_schema(batch.schema().as_ref())?;
+        let visible_count = envelope.payload_width;
         let mut sources = batch.columns()[..visible_count].to_vec();
         sources.extend(
             values
                 .iter()
-                .map(|value| value.evaluate(&batch)?.into_array(input_rows))
+                .map(|value| {
+                    let array = value.evaluate(&batch)?.into_array(input_rows)?;
+                    sources_memory.try_grow(array.get_array_memory_size())?;
+                    Ok(array)
+                })
                 .collect::<Result<Vec<ArrayRef>>>()?,
         );
-        sources.push(Arc::clone(batch.column(visible_count)));
+        sources.extend(
+            envelope
+                .indices()
+                .map(|index| Arc::clone(batch.column(index))),
+        );
         let mut work = Self {
             schema,
             sources,
@@ -269,7 +298,9 @@ impl ReplicationWork {
             input_rows,
             row: 0,
             emitted_for_row: 0,
+            _sources_memory: sources_memory,
             reservation,
+            registry,
         };
         work.skip_empty_rows();
         Ok(work)
@@ -286,42 +317,102 @@ impl ReplicationWork {
     }
 
     fn next_batch(&mut self) -> Result<RecordBatch> {
+        use crate::memory_pool::selection;
+        let fixed = selection::add(
+            selection::fixed_allowance(&self.sources)?,
+            MAX_OUTPUT_ROWS_PER_BATCH * std::mem::size_of::<u32>(),
+        )?;
+        self.reservation.try_resize(fixed)?;
         let mut indices = Vec::with_capacity(MAX_OUTPUT_ROWS_PER_BATCH);
-        while self.row < self.input_rows && indices.len() < MAX_OUTPUT_ROWS_PER_BATCH {
-            let repetitions = self.counts.value(self.row).max(0) as usize;
-            let remaining = repetitions - self.emitted_for_row;
-            let selected = remaining.min(MAX_OUTPUT_ROWS_PER_BATCH - indices.len());
-            indices.extend(std::iter::repeat_n(self.row as u32, selected));
-            self.emitted_for_row += selected;
-            if self.emitted_for_row == repetitions {
-                self.row += 1;
-                self.emitted_for_row = 0;
-                self.skip_empty_rows();
+        let mut row = self.row;
+        let mut emitted_for_row = self.emitted_for_row;
+        let mut selected_bytes = 0;
+        while row < self.input_rows && indices.len() < MAX_OUTPUT_ROWS_PER_BATCH {
+            let repetitions = self.counts.value(row).max(0) as usize;
+            if repetitions == 0 {
+                row += 1;
+                continue;
+            }
+            let row_bytes = selection::row_allowance(&self.sources, row)?.max(1);
+            let remaining_bytes = TARGET_OUTPUT_WORKSPACE_BYTES.saturating_sub(selected_bytes);
+            let byte_rows = remaining_bytes / row_bytes;
+            if byte_rows == 0 && !indices.is_empty() {
+                break;
+            }
+            let remaining = repetitions - emitted_for_row;
+            let selected = remaining
+                .min(MAX_OUTPUT_ROWS_PER_BATCH - indices.len())
+                .min(byte_rows.max(1));
+            indices.extend(std::iter::repeat_n(row as u32, selected));
+            selected_bytes =
+                selection::add(selected_bytes, selection::multiply(row_bytes, selected)?)?;
+            emitted_for_row += selected;
+            if emitted_for_row == repetitions {
+                row += 1;
+                emitted_for_row = 0;
+            }
+        }
+        // Admit the whole gather at once, never through per-input-row JNI callbacks. On
+        // pressure, shorten the already admitted selection vector and recompute its runs.
+        loop {
+            match self
+                .reservation
+                .try_resize(selection::add(fixed, selected_bytes)?)
+            {
+                Ok(()) => break,
+                Err(DataFusionError::ResourcesExhausted(_)) if indices.len() > 1 => {
+                    indices.truncate(indices.len() / 2);
+                    selected_bytes =
+                        indices.chunk_by(|a, b| a == b).try_fold(0, |bytes, run| {
+                            selection::add(
+                                bytes,
+                                selection::multiply(
+                                    selection::row_allowance(&self.sources, run[0] as usize)?,
+                                    run.len(),
+                                )?,
+                            )
+                        })?;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        // Derive the committed cursor from the admitted prefix, not the optimistic selection.
+        if let Some(&last) = indices.last() {
+            row = last as usize;
+            emitted_for_row = if row == self.row {
+                self.emitted_for_row
+            } else {
+                0
+            };
+            emitted_for_row += indices
+                .iter()
+                .rev()
+                .take_while(|&&index| index == last)
+                .count();
+            if emitted_for_row == self.counts.value(row) as usize {
+                row += 1;
+                emitted_for_row = 0;
             }
         }
         let indices = UInt32Array::from(indices);
-        let estimated_arrays = if self.input_rows == 0 {
-            0
-        } else {
-            self.sources
-                .iter()
-                .map(|source| source.get_array_memory_size())
-                .sum::<usize>()
-                .saturating_mul(indices.len())
-                .div_ceil(self.input_rows)
-        };
-        self.reservation.try_resize(
-            estimated_arrays
-                .saturating_add(indices.len().saturating_mul(std::mem::size_of::<u32>())),
-        )?;
         let columns = self
             .sources
             .iter()
             .map(|source| take(source.as_ref(), &indices, None).map_err(DataFusionError::from))
             .collect::<Result<Vec<_>>>()?;
         let output = RecordBatch::try_new(Arc::clone(&self.schema), columns)?;
+        drop(indices);
         self.reservation
             .try_resize(output.get_array_memory_size())?;
+        let memory = self.reservation.split(output.get_array_memory_size());
+        let output = crate::memory_pool::arrow_lease::datafusion_batch_registered(
+            output,
+            memory,
+            self.registry.clone(),
+        )?;
+        self.row = row;
+        self.emitted_for_row = emitted_for_row;
+        self.skip_empty_rows();
         Ok(output)
     }
 }

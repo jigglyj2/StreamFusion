@@ -162,12 +162,13 @@ impl TopNProcessor {
         memory_limit: usize,
         reservation: HostMemoryReservation,
     ) -> Result<Self> {
-        let state = Box::new(RocksPluginKeyedState::open(
+        let state = Box::new(RocksPluginKeyedState::open_for_owner(
             plugin_path,
             database_path,
             first_key_group,
             last_key_group,
             memory_limit,
+            &reservation,
         )?);
         Self::with_state_with_range(
             serialized_plan,
@@ -324,7 +325,11 @@ impl TopNProcessor {
                 key: &key.key,
             })
             .collect::<Vec<_>>();
-        let values = self.state.get_batch(&state_refs)?;
+        let values = self
+            .state
+            .get_batch(&state_refs, &self.scratch_reservation)?;
+        let _loaded_state_workspace =
+            crate::state::reserve_decoded_values(&values, &self.scratch_reservation)?;
         self.state_read_batches = self.state_read_batches.saturating_add(1);
         self.groups_read = self.groups_read.saturating_add(values.len() as u64);
         let state_bytes = values
@@ -707,7 +712,9 @@ impl TopNProcessor {
         let mut groups = Vec::<(usize, usize)>::new();
         let mut snapshot_bytes = 0usize;
         for key_group in self.first_key_group..=self.last_key_group {
-            let snapshot = self.state.snapshot_key_group(key_group)?;
+            let snapshot = self
+                .state
+                .snapshot_key_group(key_group, &self.scratch_reservation)?;
             snapshot_bytes = snapshot_bytes.saturating_add(snapshot.len());
             self.scratch_reservation
                 .resize(snapshot_bytes.saturating_mul(2))?;
@@ -813,15 +820,21 @@ impl TopNProcessor {
         self.saturated_append_limit
     }
 
-    pub(crate) fn snapshot_key_group(&self, key_group: u32) -> Result<Vec<u8>> {
-        self.state.snapshot_key_group(key_group)
+    pub(crate) fn state_memory(&self) -> HostMemoryReservation {
+        self.scratch_reservation.sibling("native state transfer")
+    }
+
+    pub(crate) fn snapshot_key_group(&self, key_group: u32) -> Result<crate::state::SnapshotBytes> {
+        self.state
+            .snapshot_key_group(key_group, &self.scratch_reservation)
     }
 
     pub(crate) fn restore_key_group(&mut self, key_group: u32, bytes: &[u8]) -> Result<()> {
         self.saturated_append_limit = false;
         self.bounded_output = None;
         self.bounded_drained = false;
-        self.state.restore_key_group(key_group, bytes)
+        self.state
+            .restore_key_group(key_group, bytes, &self.scratch_reservation)
     }
 
     pub(crate) fn checkpoint(&self, directory: &std::path::Path) -> Result<()> {
@@ -1587,9 +1600,15 @@ mod tests {
             protocol_version: 1,
             root: Some(proto::Operator {
                 plan_node_id: 0,
+                metric_name: String::new(),
+                clear_record_timestamps: false,
+                metric_uid: None,
                 operator: Some(proto::operator::Operator::TopN(Box::new(proto::TopN {
                     input: Some(Box::new(proto::Operator {
                         plan_node_id: 0,
+                        metric_name: String::new(),
+                        clear_record_timestamps: false,
+                        metric_uid: None,
                         operator: Some(proto::operator::Operator::Input(proto::Input::default())),
                     })),
                     partition_key_indices: vec![0],
@@ -1871,9 +1890,15 @@ mod tests {
             protocol_version: 1,
             root: Some(proto::Operator {
                 plan_node_id: 0,
+                metric_name: String::new(),
+                clear_record_timestamps: false,
+                metric_uid: None,
                 operator: Some(proto::operator::Operator::TopN(Box::new(proto::TopN {
                     input: Some(Box::new(proto::Operator {
                         plan_node_id: 0,
+                        metric_name: String::new(),
+                        clear_record_timestamps: false,
+                        metric_uid: None,
                         operator: Some(proto::operator::Operator::Input(proto::Input::default())),
                     })),
                     partition_key_indices: vec![],
@@ -2013,7 +2038,7 @@ mod tests {
         assert!(source_broker.reserved() > 0);
         drop(output);
         drop(source);
-        assert_eq!(source_broker.reserved(), 0);
+        assert_eq!(source_broker.reserved(), snapshot.len());
 
         let restored_broker = Arc::new(TestBroker::new(64 << 20));
         let mut restored = TopNProcessor::new(
@@ -2025,6 +2050,8 @@ mod tests {
         )
         .unwrap();
         restored.restore_key_group(key_group, &snapshot).unwrap();
+        drop(snapshot);
+        assert_eq!(source_broker.reserved(), 0);
         let output = restored
             .process_arrow(batch(vec![1], vec!["b"]), 2)
             .unwrap();

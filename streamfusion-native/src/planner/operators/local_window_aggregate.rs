@@ -51,7 +51,7 @@ impl LocalWindowAggregateProcessor {
     pub(crate) fn new(serialized_plan: &[u8], reservation: HostMemoryReservation) -> Result<Self> {
         let native = proto::NativePlan::decode(serialized_plan)
             .map_err(|error| DataFusionError::Plan(format!("invalid native plan: {error}")))?;
-        if native.protocol_version != crate::PLAN_PROTOCOL_VERSION {
+        if !crate::supported_plan_protocol(native.protocol_version) {
             return Err(DataFusionError::Plan(format!(
                 "unsupported plan protocol version {}",
                 native.protocol_version
@@ -402,6 +402,9 @@ mod tests {
             protocol_version: crate::PLAN_PROTOCOL_VERSION,
             root: Some(proto::Operator {
                 plan_node_id: 0,
+                metric_name: String::new(),
+                clear_record_timestamps: false,
+                metric_uid: None,
                 operator: Some(proto::operator::Operator::LocalWindowAggregate(Box::new(
                     proto::LocalWindowAggregate {
                         input: None,

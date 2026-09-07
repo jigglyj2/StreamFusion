@@ -5,7 +5,10 @@ use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
 
 use ahash::RandomState;
-use arrow::array::{Array, ArrayRef, BinaryArray, Int32Array, Int8Array};
+use arrow::array::{
+    Array, ArrayRef, BinaryArray, Int16Array, Int32Array, Int64Array, Int8Array, UInt16Array,
+    UInt32Array, UInt64Array, UInt8Array,
+};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -23,8 +26,8 @@ use crate::planner::operators::group_aggregate::{
 };
 use crate::planner::operators::window_table_function::timestamp_millis;
 use crate::state::{
-    KeyedState, MemoryKeyedState, NativeTimerService, RocksPluginKeyedState, StateKey, StateKeyRef,
-    StateMutation, TimerDomain, TimerKey,
+    decode_key_group_snapshot, KeyedState, MemoryKeyedState, NativeTimerService,
+    RocksPluginKeyedState, StateKey, StateKeyRef, StateMutation, TimerDomain, TimerKey,
 };
 use crate::{decode_plan, proto};
 
@@ -43,6 +46,7 @@ const DELETE: i8 = 3;
 const OVER_STATE_PREFIX: u8 = 1;
 const TIMER_STATE_KEY: &[u8] = b"\0streamfusion-over-timers";
 const MAX_TIMERS_PER_CALLBACK: usize = 8_192;
+const BOUNDED_OUTPUT_BATCH_ROWS: usize = 16_384;
 
 #[derive(Clone)]
 struct OutputEvent {
@@ -79,6 +83,11 @@ pub(crate) struct OverAggregateProcessor {
     timer_registrations: u64,
     timer_deletions: u64,
     timers_fired: u64,
+    first_key_group: u32,
+    last_key_group: u32,
+    bounded_finish_key_group: u32,
+    bounded_pending: VecDeque<OutputEvent>,
+    bounded_drained: bool,
 }
 
 impl OverAggregateProcessor {
@@ -118,12 +127,13 @@ impl OverAggregateProcessor {
         scratch_reservation: HostMemoryReservation,
     ) -> Result<Self> {
         let timer_reservation = scratch_reservation.sibling("native RocksDB OVER aggregate timers");
-        let state = Box::new(RocksPluginKeyedState::open(
+        let state = Box::new(RocksPluginKeyedState::open_for_owner(
             plugin_path,
             database_path,
             first_key_group,
             last_key_group,
             memory_limit,
+            &scratch_reservation,
         )?);
         Self::with_state(
             serialized_plan,
@@ -207,6 +217,11 @@ impl OverAggregateProcessor {
             timer_registrations: 0,
             timer_deletions: 0,
             timers_fired: 0,
+            first_key_group,
+            last_key_group,
+            bounded_finish_key_group: first_key_group,
+            bounded_pending: VecDeque::new(),
+            bounded_drained: false,
         })
     }
 
@@ -287,7 +302,9 @@ impl OverAggregateProcessor {
                 key: &key.key,
             })
             .collect::<Vec<_>>();
-        let existing = self.state.get_batch(&refs)?;
+        let existing = self.state.get_batch(&refs, &self.scratch_reservation)?;
+        let _loaded_state_workspace =
+            crate::state::reserve_decoded_values(&existing, &self.scratch_reservation)?;
         self.state_read_batches = self.state_read_batches.saturating_add(1);
         if time_attribute == proto::OverTimeAttribute::ProcessingTime
             && !self.plan.input_changelog
@@ -344,6 +361,18 @@ impl OverAggregateProcessor {
                     .map(Option::unwrap_or_default)
             })
             .collect::<Result<Vec<_>>>()?;
+        if self.plan.bounded_final_output {
+            return self.process_bounded_input(
+                &batch,
+                &payload_rows,
+                order_rows
+                    .as_ref()
+                    .expect("bounded OVER has an order converter"),
+                state_keys,
+                row_state_indices,
+                states,
+            );
+        }
         if time_attribute == proto::OverTimeAttribute::ProcessingTime
             && self.plan.rows_frame
             && !self.plan.input_changelog
@@ -665,6 +694,149 @@ impl OverAggregateProcessor {
         self.output_batch(events)
     }
 
+    fn process_bounded_input(
+        &mut self,
+        batch: &RecordBatch,
+        payload_rows: &arrow_row::Rows,
+        order_rows: &arrow_row::Rows,
+        state_keys: Vec<StateKey>,
+        row_state_indices: Vec<usize>,
+        mut states: Vec<OverState>,
+    ) -> Result<RecordBatch> {
+        if self.bounded_drained || self.bounded_finish_key_group != self.first_key_group {
+            return Err(DataFusionError::Execution(
+                "bounded OVER received input after terminal output started".to_string(),
+            ));
+        }
+        let mut touched = vec![false; states.len()];
+        for row in 0..batch.num_rows() {
+            let state_index = row_state_indices[row];
+            let state = &mut states[state_index];
+            let order = order_rows.row(row).as_ref().to_vec();
+            let payload = payload_rows.row(row).as_ref().to_vec();
+            match self.input_kind(batch, row)? {
+                INSERT | UPDATE_AFTER => {
+                    let event_timestamp =
+                        if !self.plan.rows_frame && self.plan.preceding_offset.is_some() {
+                            range_value(batch.column(self.plan.order_key_index as usize), row)?
+                                .unwrap_or(i64::MIN)
+                        } else {
+                            i64::MIN
+                        };
+                    let contributions = row_aggregate_values(&self.calls, batch, row)?;
+                    state.rows.entry(order).or_default().push(StoredRow {
+                        id: state.next_id,
+                        event_timestamp,
+                        payload,
+                        contributions,
+                        output: Vec::new(),
+                    });
+                    state.next_id = state.next_id.wrapping_add(1);
+                }
+                UPDATE_BEFORE | DELETE => {
+                    if remove_row(state, &order, &payload).is_none() {
+                        if state.rows.contains_key(order.as_slice()) {
+                            self.missing_ids = self.missing_ids.saturating_add(1);
+                        } else {
+                            self.missing_sort_keys = self.missing_sort_keys.saturating_add(1);
+                        }
+                        return Err(DataFusionError::Execution("RowData not exist!".to_string()));
+                    }
+                }
+                other => {
+                    return Err(DataFusionError::Execution(format!(
+                        "unknown Flink RowKind byte {other}"
+                    )));
+                }
+            }
+            touched[state_index] = true;
+        }
+        let mutations = state_keys
+            .into_iter()
+            .zip(states.into_iter().zip(touched))
+            .filter_map(|(key, (state, touched))| {
+                touched.then(|| StateMutation {
+                    key,
+                    value: (!state.rows.is_empty()).then(|| encode_over_state(&state)),
+                })
+            })
+            .collect::<Vec<_>>();
+        if !mutations.is_empty() {
+            self.state.write_batch(mutations)?;
+            self.state_write_batches = self.state_write_batches.saturating_add(1);
+        }
+        self.output_batch(Vec::new())
+    }
+
+    pub(crate) fn finish(&mut self) -> Result<RecordBatch> {
+        if !self.plan.bounded_final_output {
+            return Err(DataFusionError::Execution(
+                "streaming OVER does not have bounded terminal output".to_string(),
+            ));
+        }
+        if self.bounded_drained {
+            return self.output_batch(Vec::new());
+        }
+        while self.bounded_pending.len() < BOUNDED_OUTPUT_BATCH_ROWS
+            && self.bounded_finish_key_group <= self.last_key_group
+        {
+            let key_group = self.bounded_finish_key_group;
+            self.bounded_finish_key_group = self.bounded_finish_key_group.saturating_add(1);
+            let snapshot = self
+                .state
+                .snapshot_key_group(key_group, &self.scratch_reservation)?;
+            self.scratch_reservation
+                .resize(snapshot.len().saturating_mul(2))?;
+            for (key, value) in decode_key_group_snapshot(key_group, &snapshot)? {
+                if key.first().copied() != Some(OVER_STATE_PREFIX) {
+                    continue;
+                }
+                let mut state = decode_over_state(&value, self.calls.len())?;
+                let changes = match self.plan.preceding_offset {
+                    Some(offset) => recompute_bounded(
+                        &mut state,
+                        &self.calls,
+                        self.plan.rows_frame,
+                        offset,
+                        None,
+                    )?,
+                    None => recompute(&mut state, &self.calls, self.plan.rows_frame)?,
+                };
+                for changed in changes {
+                    let ordinal = i32::try_from(self.bounded_pending.len()).unwrap_or(i32::MAX);
+                    self.bounded_pending.push_back(OutputEvent {
+                        payload: changed.payload,
+                        values: changed.new,
+                        kind: INSERT,
+                        input_ordinal: ordinal,
+                    });
+                }
+            }
+        }
+        let take = self.bounded_pending.len().min(BOUNDED_OUTPUT_BATCH_ROWS);
+        let events = self.bounded_pending.drain(..take).collect::<Vec<_>>();
+        if events.is_empty() && self.bounded_finish_key_group > self.last_key_group {
+            self.bounded_drained = true;
+        }
+        let output = self.output_batch(events)?;
+        let output_bytes = output.get_array_memory_size();
+        let retained = self
+            .bounded_pending
+            .iter()
+            .map(|event| {
+                event
+                    .payload
+                    .capacity()
+                    .saturating_add(event.values.len().saturating_mul(32))
+            })
+            .sum::<usize>();
+        self.scratch_reservation
+            .resize(retained.saturating_add(output_bytes))?;
+        self.scratch_reservation.transfer_to_arrow(output_bytes)?;
+        self.scratch_reservation.resize(retained)?;
+        Ok(output)
+    }
+
     fn prepare_schema(&mut self, schema: SchemaRef) -> Result<()> {
         if let Some(expected) = &self.input_schema {
             if expected.as_ref() != schema.as_ref() {
@@ -871,7 +1043,9 @@ impl OverAggregateProcessor {
                 key: &key.key,
             })
             .collect::<Vec<_>>();
-        let values = self.state.get_batch(&refs)?;
+        let values = self.state.get_batch(&refs, &self.scratch_reservation)?;
+        let _loaded_state_workspace =
+            crate::state::reserve_decoded_values(&values, &self.scratch_reservation)?;
         self.state_read_batches = self.state_read_batches.saturating_add(1);
         let mut events = Vec::new();
         let mut mutations = Vec::with_capacity(ready.len());
@@ -949,22 +1123,39 @@ impl OverAggregateProcessor {
         ]
     }
 
-    pub(crate) fn snapshot_key_group(&mut self, key_group: u32) -> Result<Vec<u8>> {
+    pub(crate) fn state_memory(&self) -> HostMemoryReservation {
+        self.scratch_reservation.sibling("native state transfer")
+    }
+
+    pub(crate) fn snapshot_key_group(
+        &mut self,
+        key_group: u32,
+    ) -> Result<crate::state::SnapshotBytes> {
         self.flush_timer_groups([key_group])?;
-        self.state.snapshot_key_group(key_group)
+        self.state
+            .snapshot_key_group(key_group, &self.scratch_reservation)
     }
 
     pub(crate) fn restore_key_group(&mut self, key_group: u32, bytes: &[u8]) -> Result<()> {
-        self.state.restore_key_group(key_group, bytes)?;
+        self.state
+            .restore_key_group(key_group, bytes, &self.scratch_reservation)?;
         let timer_key = StateKeyRef {
             key_group,
             key: TIMER_STATE_KEY,
         };
-        if let Some(timer_state) = self.state.get_batch(&[timer_key])?.pop().flatten() {
+        if let Some(timer_state) = self
+            .state
+            .get_batch(&[timer_key], &self.scratch_reservation)?
+            .pop()
+            .flatten()
+        {
             self.timers
                 .restore_key_group(key_group, timer_state.as_ref())?;
         }
         self.dirty_timer_groups.remove(&key_group);
+        self.bounded_finish_key_group = self.first_key_group;
+        self.bounded_pending.clear();
+        self.bounded_drained = false;
         self.state_read_batches = self.state_read_batches.saturating_add(1);
         Ok(())
     }
@@ -1203,6 +1394,76 @@ fn recompute_bounded(
     Ok(changed)
 }
 
+fn range_value(array: &ArrayRef, row: usize) -> Result<Option<i64>> {
+    if array.is_null(row) {
+        return Ok(None);
+    }
+    let value = match array.data_type() {
+        DataType::Int8 => i64::from(
+            array
+                .as_any()
+                .downcast_ref::<Int8Array>()
+                .unwrap()
+                .value(row),
+        ),
+        DataType::Int16 => i64::from(
+            array
+                .as_any()
+                .downcast_ref::<Int16Array>()
+                .unwrap()
+                .value(row),
+        ),
+        DataType::Int32 => i64::from(
+            array
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .value(row),
+        ),
+        DataType::Int64 => array
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .value(row),
+        DataType::UInt8 => i64::from(
+            array
+                .as_any()
+                .downcast_ref::<UInt8Array>()
+                .unwrap()
+                .value(row),
+        ),
+        DataType::UInt16 => i64::from(
+            array
+                .as_any()
+                .downcast_ref::<UInt16Array>()
+                .unwrap()
+                .value(row),
+        ),
+        DataType::UInt32 => i64::from(
+            array
+                .as_any()
+                .downcast_ref::<UInt32Array>()
+                .unwrap()
+                .value(row),
+        ),
+        DataType::UInt64 => i64::try_from(
+            array
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .unwrap()
+                .value(row),
+        )
+        .map_err(|_| DataFusionError::Execution("OVER RANGE key exceeds i64".to_string()))?,
+        DataType::Timestamp(_, _) => return timestamp_millis(array, row),
+        other => {
+            return Err(DataFusionError::Execution(format!(
+                "bounded OVER RANGE expected an integral or timestamp key, got {other}"
+            )));
+        }
+    };
+    Ok(Some(value))
+}
+
 fn prune_bounded_state(
     state: &mut OverState,
     rows_frame: bool,
@@ -1422,7 +1683,7 @@ fn validate_plan(plan: &proto::OverAggregate, max_parallelism: u32) -> Result<()
         ));
     }
     if let Some(offset) = plan.preceding_offset {
-        if time == Some(proto::OverTimeAttribute::NonTime) {
+        if time == Some(proto::OverTimeAttribute::NonTime) && !plan.bounded_final_output {
             return Err(DataFusionError::Plan(
                 "bounded native OVER requires processing time or event time".to_string(),
             ));
@@ -1437,6 +1698,11 @@ fn validate_plan(plan: &proto::OverAggregate, max_parallelism: u32) -> Result<()
                 "bounded native OVER RANGE offset exceeds i64".to_string(),
             ));
         }
+    }
+    if plan.bounded_final_output && time != Some(proto::OverTimeAttribute::NonTime) {
+        return Err(DataFusionError::Plan(
+            "bounded final OVER requires a non-time batch order key".to_string(),
+        ));
     }
     if plan.aggregate_calls.is_empty() {
         return Err(DataFusionError::Plan(

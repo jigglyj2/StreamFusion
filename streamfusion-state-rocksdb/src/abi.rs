@@ -7,10 +7,14 @@ use std::path::Path;
 use std::ptr;
 use std::sync::Arc;
 
-use arrow::array::{Array, BinaryArray, BinaryBuilder, RecordBatch, StructArray, UInt32Array};
+use arrow::array::{
+    Array, BinaryArray, BinaryViewArray, RecordBatch, StructArray, UInt32Array, UInt64Array,
+};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::ffi::{from_ffi, FFI_ArrowArray, FFI_ArrowSchema};
-use streamfusion_state_abi::{StateBackendApiV1, STATE_BACKEND_ABI_VERSION, STATE_BACKEND_OK};
+use streamfusion_state_abi::{
+    StateBackendApiV1, StateMemoryAdmission, STATE_BACKEND_ABI_VERSION, STATE_BACKEND_OK,
+};
 
 use crate::RocksStateBackend;
 
@@ -27,6 +31,7 @@ static API: StateBackendApiV1 = StateBackendApiV1 {
     snapshot_key_group,
     restore_key_group,
     checkpoint,
+    scan_key_group,
     last_error,
 };
 
@@ -48,6 +53,8 @@ unsafe extern "C" fn open(
     first_key_group: u32,
     last_key_group: u32,
     memory_limit: usize,
+    memory_scope_high: u64,
+    memory_scope_low: u64,
     output: *mut *mut c_void,
 ) -> i32 {
     operation(|| {
@@ -56,11 +63,12 @@ unsafe extern "C" fn open(
         }
         let path = std::str::from_utf8(unsafe { std::slice::from_raw_parts(path, path_len) })
             .map_err(|error| error.to_string())?;
-        let backend = RocksStateBackend::open_with_memory_limit(
+        let backend = RocksStateBackend::open_with_memory_scope(
             Path::new(path),
             first_key_group,
             last_key_group,
             memory_limit,
+            [memory_scope_high, memory_scope_low],
         )
         .map_err(|error| error.to_string())?;
         unsafe { ptr::write(output, Box::into_raw(Box::new(backend)).cast()) };
@@ -74,7 +82,7 @@ unsafe extern "C" fn close(handle: *mut c_void) {
     }
 }
 
-unsafe extern "C" fn get_batch(
+unsafe extern "C" fn scan_key_group(
     handle: *mut c_void,
     input_array: *mut FFI_ArrowArray,
     input_schema: *mut FFI_ArrowSchema,
@@ -83,27 +91,83 @@ unsafe extern "C" fn get_batch(
 ) -> i32 {
     operation(|| {
         let input = unsafe { import_batch(input_array, input_schema) }?;
+        if input.num_rows() != 1 {
+            return Err("state scan requires one request".to_string());
+        }
+        let groups = column::<UInt32Array>(&input, 0, "key_group")?;
+        let after = column::<BinaryArray>(&input, 1, "after")?;
+        let rows = column::<UInt32Array>(&input, 2, "max_rows")?;
+        let bytes = column::<UInt64Array>(&input, 3, "max_bytes")?;
+        if groups.is_null(0) || rows.is_null(0) || bytes.is_null(0) {
+            return Err("state scan bounds must be non-null".to_string());
+        }
+        let entries = backend(handle)?
+            .scan_key_group(
+                groups.value(0),
+                (!after.is_null(0)).then(|| after.value(0)),
+                rows.value(0) as usize,
+                usize::try_from(bytes.value(0)).map_err(|error| error.to_string())?,
+            )
+            .map_err(|error| error.to_string())?;
+        let (keys, values): (Vec<_>, Vec<_>) = entries
+            .into_iter()
+            .map(|(key, value)| (Some(key), Some(value)))
+            .unzip();
+        let output = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("key", DataType::BinaryView, false),
+                Field::new("value", DataType::BinaryView, false),
+            ])),
+            vec![
+                Arc::new(streamfusion_state_abi::owned_binary_views(keys)?),
+                Arc::new(streamfusion_state_abi::owned_binary_views(values)?),
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+        unsafe { export_batch(output, output_array, output_schema) }
+    })
+}
+
+unsafe extern "C" fn get_batch(
+    handle: *mut c_void,
+    input_array: *mut FFI_ArrowArray,
+    input_schema: *mut FFI_ArrowSchema,
+    output_array: *mut FFI_ArrowArray,
+    output_schema: *mut FFI_ArrowSchema,
+    admission: *const StateMemoryAdmission,
+) -> i32 {
+    operation(|| {
+        if admission.is_null() {
+            return Err("RocksDB batch read requires host memory admission".to_string());
+        }
+        let admission = unsafe { &*admission };
+        let input = unsafe { import_batch(input_array, input_schema) }?;
         let key_groups = column::<UInt32Array>(&input, 0, "key_group")?;
         let keys = column::<BinaryArray>(&input, 1, "key")?;
         let values = backend(handle)?
-            .get_batch_refs(
+            .get_batch_refs_admitted(
                 (0..input.num_rows()).map(|row| (key_groups.value(row), keys.value(row))),
+                |bytes| {
+                    if unsafe { (admission.try_grow)(admission.context, bytes) } == STATE_BACKEND_OK
+                    {
+                        Ok(())
+                    } else {
+                        Err(std::io::Error::new(
+                            std::io::ErrorKind::OutOfMemory,
+                            "Flink denied RocksDB batch read buffers",
+                        ))
+                    }
+                },
             )
             .map_err(|e| e.to_string())?;
-        let mut builder = BinaryBuilder::new();
-        for value in values {
-            match value {
-                Some(value) => builder.append_value(value),
-                None => builder.append_null(),
-            }
-        }
+        let values = streamfusion_state_abi::owned_binary_views(values)?;
         let output = RecordBatch::try_new(
             Arc::new(Schema::new(vec![Field::new(
                 "value",
-                DataType::Binary,
+                DataType::BinaryView,
                 true,
             )])),
-            vec![Arc::new(builder.finish())],
+            vec![Arc::new(values)],
         )
         .map_err(|error| error.to_string())?;
         unsafe { export_batch(output, output_array, output_schema) }
@@ -120,8 +184,8 @@ unsafe extern "C" fn write_batch(
     operation(|| {
         let input = unsafe { import_batch(input_array, input_schema) }?;
         let key_groups = column::<UInt32Array>(&input, 0, "key_group")?;
-        let keys = column::<BinaryArray>(&input, 1, "key")?;
-        let values = column::<BinaryArray>(&input, 2, "value")?;
+        let keys = column::<BinaryViewArray>(&input, 1, "key")?;
+        let values = column::<BinaryViewArray>(&input, 2, "value")?;
         backend(handle)?
             .write_batch_refs((0..input.num_rows()).map(|row| {
                 (
@@ -141,20 +205,36 @@ unsafe extern "C" fn snapshot_key_group(
     input_schema: *mut FFI_ArrowSchema,
     output_array: *mut FFI_ArrowArray,
     output_schema: *mut FFI_ArrowSchema,
+    admission: *const StateMemoryAdmission,
 ) -> i32 {
     operation(|| {
+        if admission.is_null() {
+            return Err("RocksDB snapshot requires host memory admission".to_string());
+        }
+        let admission = unsafe { &*admission };
         let input = unsafe { import_batch(input_array, input_schema) }?;
         let key_group = one_key_group(&input)?;
         let state = backend(handle)?
-            .snapshot_key_group(key_group)
+            .snapshot_key_group_admitted(key_group, |bytes| {
+                if unsafe { (admission.try_grow)(admission.context, bytes) } == STATE_BACKEND_OK {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::OutOfMemory,
+                        "Flink denied canonical snapshot",
+                    ))
+                }
+            })
             .map_err(|error| error.to_string())?;
         let output = RecordBatch::try_new(
             Arc::new(Schema::new(vec![Field::new(
                 "state",
-                DataType::Binary,
+                DataType::BinaryView,
                 false,
             )])),
-            vec![Arc::new(BinaryArray::from_vec(vec![state.as_slice()]))],
+            vec![Arc::new(streamfusion_state_abi::owned_binary_views([
+                Some(state),
+            ])?)],
         )
         .map_err(|error| error.to_string())?;
         unsafe { export_batch(output, output_array, output_schema) }

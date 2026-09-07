@@ -1,7 +1,7 @@
 // Copyright 2026 StreamFusion Authors
 // Licensed under the Apache License, Version 2.0
 
-use std::borrow::Cow;
+use crate::state::StateValue;
 use std::mem::size_of;
 
 use ahash::RandomState;
@@ -79,25 +79,27 @@ impl MemoryKeyedState {
             .capacity()
             .saturating_mul(size_of::<KeyGroupMap>())
             .saturating_add(self.entry_bytes)
-            .saturating_add(
-                self.groups
-                    .iter()
-                    .map(|group| table_heap_size(group.capacity()))
-                    .sum(),
-            )
+            .saturating_add(self.groups.iter().map(KeyGroupMap::allocation_size).sum())
     }
 }
 
 impl KeyedState for MemoryKeyedState {
-    fn get_batch<'a>(&'a self, keys: &[StateKeyRef<'_>]) -> Result<Vec<Option<Cow<'a, [u8]>>>> {
-        keys.iter()
+    fn get_batch<'a>(
+        &'a self,
+        keys: &[StateKeyRef<'_>],
+        owner: &HostMemoryReservation,
+    ) -> Result<super::StateReadBatch<'a>> {
+        let reservation = super::StateReadBatch::admit(keys.len(), owner)?;
+        let values = keys
+            .iter()
             .map(|key| {
                 Ok(self
                     .group(key.key_group)?
                     .get(key.key)
-                    .map(|value| Cow::Borrowed(value.as_slice())))
+                    .map(|value| StateValue::Borrowed(value.as_slice())))
             })
-            .collect()
+            .collect::<Result<Vec<_>>>()?;
+        Ok(super::StateReadBatch::new(values, reservation))
     }
 
     fn write_batch(&mut self, mutations: Vec<StateMutation>) -> Result<()> {
@@ -115,24 +117,57 @@ impl KeyedState for MemoryKeyedState {
                 (None, _) => growth,
             })
         })?;
-        let capacities_before = (grows != 0).then(|| {
-            self.groups
+        // Only an insertion into a full, affected table can require a second table.
+        // Value growth never grows a table, and spare capacity already belongs to the
+        // persistent reservation. Count additions before admitting any table allocation.
+        let mut workspace = self
+            .reservation
+            .sibling("native memory state write directory");
+        let additions_bound = mutations
+            .iter()
+            .filter(|mutation| {
+                mutation.value.is_some()
+                    && !self
+                        .group(mutation.key.key_group)
+                        .expect("validated key group")
+                        .contains_key(&mutation.key.key)
+            })
+            .count();
+        workspace.try_grow(additions_bound.min(self.groups.len()).saturating_mul(512))?;
+        let mut additions = std::collections::BTreeMap::<u32, usize>::new();
+        for mutation in &mutations {
+            if mutation.value.is_some()
+                && !self
+                    .group(mutation.key.key_group)?
+                    .contains_key(&mutation.key.key)
+            {
+                *additions.entry(mutation.key.key_group).or_default() += 1;
+            }
+        }
+        let table_growth_bound =
+            additions
                 .iter()
-                .map(HashMap::capacity)
-                .collect::<Vec<_>>()
-        });
-        if let Some(capacities) = &capacities_before {
-            // A first insertion can also grow a hash table. Admit a conservative second-table
-            // bound before mutation; update-only batches stay on the callback-free fast path.
-            let table_growth_bound = capacities
-                .iter()
-                .map(|capacity| capacity.saturating_mul(bucket_bytes()))
-                .sum::<usize>();
-            self.reservation.resize(
-                current
-                    .saturating_add(grows)
-                    .saturating_add(table_growth_bound),
-            )?;
+                .try_fold(0usize, |total, (&key_group, &count)| {
+                    let group = self.group(key_group)?;
+                    let required = group.len().saturating_add(count);
+                    Ok::<_, DataFusionError>(if required > group.capacity() {
+                        total.saturating_add(table_size_for_entries(required))
+                    } else {
+                        total
+                    })
+                })?;
+        self.reservation.resize(
+            current
+                .saturating_add(grows)
+                .saturating_add(table_growth_bound),
+        )?;
+        // Reserve once per growing table instead of repeatedly reallocating while
+        // applying a large batch. A failed allocation leaves logical state untouched.
+        for (key_group, count) in additions {
+            if let Err(error) = self.group_mut(key_group)?.try_reserve(count) {
+                self.reservation.resize(self.estimated_heap_size())?;
+                return Err(DataFusionError::ResourcesExhausted(error.to_string()));
+            }
         }
         for mutation in mutations {
             let (added, removed) = {
@@ -162,32 +197,102 @@ impl KeyedState for MemoryKeyedState {
                 .saturating_sub(removed)
                 .saturating_add(added);
         }
-        if let Some(capacities) = capacities_before {
-            debug_assert!(self
-                .groups
-                .iter()
-                .zip(capacities)
-                .all(|(group, before)| group.capacity() >= before));
-        }
         self.reservation.resize(self.estimated_heap_size())?;
         Ok(())
     }
 
-    fn snapshot_key_group(&self, key_group: u32) -> Result<Vec<u8>> {
-        let mut entries = self.group(key_group)?.iter().collect::<Vec<_>>();
-        entries.sort_unstable_by(|left, right| left.0.cmp(right.0));
-        snapshot::encode(
-            key_group,
-            entries
-                .into_iter()
-                .map(|(key, value)| (key.as_slice(), value.as_slice())),
-        )
+    fn visit_key_group(
+        &self,
+        key_group: u32,
+        max_rows: usize,
+        max_bytes: usize,
+        visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<()>,
+    ) -> Result<()> {
+        if max_rows == 0 || max_bytes == 0 {
+            return Err(DataFusionError::Execution(
+                "state scan bounds must be positive".to_string(),
+            ));
+        }
+        let mut page = Vec::with_capacity(max_rows.min(max_bytes / 96));
+        let mut bytes = 0usize;
+        for (key, value) in self.group(key_group)? {
+            let size = key.len().saturating_add(value.len()).saturating_add(96);
+            if size > max_bytes {
+                return Err(DataFusionError::ResourcesExhausted(
+                    "state scan entry exceeds the admitted page budget".to_string(),
+                ));
+            }
+            if page.len() == max_rows || bytes.saturating_add(size) > max_bytes {
+                visitor(&page)?;
+                page.clear();
+                bytes = 0;
+            }
+            page.push((key.as_slice(), value.as_slice()));
+            bytes += size;
+        }
+        if !page.is_empty() {
+            visitor(&page)?;
+        }
+        Ok(())
     }
 
-    fn restore_key_group(&mut self, key_group: u32, bytes: &[u8]) -> Result<()> {
+    fn snapshot_key_group(
+        &self,
+        key_group: u32,
+        owner: &HostMemoryReservation,
+    ) -> Result<super::SnapshotBytes> {
+        let group = self.group(key_group)?;
+        let bytes = group.iter().try_fold(16usize, |bytes, (key, value)| {
+            bytes
+                .checked_add(8)
+                .and_then(|bytes| bytes.checked_add(key.len()))
+                .and_then(|bytes| bytes.checked_add(value.len()))
+                .ok_or_else(|| {
+                    DataFusionError::ResourcesExhausted("canonical snapshot size overflow".into())
+                })
+        })?;
+        let mut reservation = owner.sibling("canonical snapshot bytes");
+        reservation.resize(bytes)?;
+        let mut sort_reservation = owner.sibling("canonical snapshot sorted references");
+        sort_reservation.resize(
+            group
+                .len()
+                .saturating_mul(size_of::<(&Vec<u8>, &Vec<u8>)>()),
+        )?;
+        let mut entries = group.iter().collect::<Vec<_>>();
+        entries.sort_unstable_by(|left, right| left.0.cmp(right.0));
+        let mut writer = streamfusion_state_abi::SnapshotWriter::new(key_group, group.len(), bytes)
+            .map_err(|error| DataFusionError::Execution(error.to_string()))?;
+        for (key, value) in entries {
+            writer
+                .append(key, value)
+                .map_err(|error| DataFusionError::Execution(error.to_string()))?;
+        }
+        let bytes = writer
+            .finish()
+            .map_err(|error| DataFusionError::Execution(error.to_string()))?;
+        Ok(super::SnapshotBytes::owned(bytes, reservation))
+    }
+
+    fn restore_key_group(
+        &mut self,
+        key_group: u32,
+        bytes: &[u8],
+        _owner: &HostMemoryReservation,
+    ) -> Result<()> {
+        if !self.group(key_group)?.is_empty() {
+            return Err(DataFusionError::Execution(format!(
+                "key group {key_group} was restored more than once"
+            )));
+        }
+        let count = streamfusion_state_abi::validate_key_group_snapshot(key_group, bytes)
+            .map_err(|error| DataFusionError::Execution(error.to_string()))?;
         let current = self.estimated_heap_size();
-        self.reservation
-            .resize(current.saturating_add(bytes.len().saturating_mul(3)))?;
+        self.reservation.resize(
+            current
+                .saturating_add(bytes.len().saturating_mul(3))
+                .saturating_add(count.saturating_mul(192)),
+        )?;
         let entries = match snapshot::decode(key_group, bytes) {
             Ok(entries) => entries,
             Err(error) => {
@@ -217,9 +322,31 @@ fn table_heap_size(capacity: usize) -> usize {
     if capacity == 0 {
         return 0;
     }
+    // hashbrown reports usable slots (3, 7, 14, 28, ...), not bucket count.
     capacity
+        .saturating_add(1)
+        .checked_next_power_of_two()
+        .unwrap_or(usize::MAX)
+        .saturating_mul(bucket_bytes())
+        .saturating_add(16)
+}
+
+#[cfg(test)]
+mod allocation_tests;
+
+fn table_size_for_entries(entries: usize) -> usize {
+    if entries <= 3 {
+        return table_heap_size(3);
+    }
+    if entries <= 7 {
+        return table_heap_size(7);
+    }
+    entries
         .saturating_mul(8)
+        .saturating_add(6)
         .saturating_div(7)
+        .checked_next_power_of_two()
+        .unwrap_or(usize::MAX)
         .saturating_mul(bucket_bytes())
         .saturating_add(16)
 }
@@ -246,6 +373,116 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_admission_is_released_on_denial_and_tracks_the_returned_bytes() {
+        let broker = Arc::new(TestBroker::new(1 << 20));
+        let mut state = new_state(0, 0, broker.clone());
+        state
+            .write_batch(vec![StateMutation {
+                key: StateKey {
+                    key_group: 0,
+                    key: b"key".to_vec(),
+                },
+                value: Some(vec![9; 32_000]),
+            }])
+            .unwrap();
+        let used = broker.reserved();
+        let owner = HostMemoryReservation::new(broker.clone(), "snapshot caller");
+        let mut pressure = owner.sibling("other operation");
+        pressure.resize((1 << 20) - used - 32_027).unwrap();
+        // The output fits exactly; the separate sorting workspace does not.
+        assert!(state.snapshot_key_group(0, &owner).is_err());
+        assert_eq!(broker.reserved(), (1 << 20) - 32_027);
+        drop(pressure);
+        let snapshot = state.snapshot_key_group(0, &owner).unwrap();
+        assert_eq!(snapshot.len(), 32_027);
+        assert_eq!(broker.reserved(), used + snapshot.len());
+        drop(state);
+        assert_eq!(broker.reserved(), snapshot.len());
+        assert_eq!(
+            snapshot::decode(0, &snapshot).unwrap()[0].1,
+            vec![9; 32_000]
+        );
+        drop(snapshot);
+        assert_eq!(broker.reserved(), 0);
+    }
+
+    #[test]
+    fn value_growth_does_not_reserve_other_key_group_tables() {
+        let broker = Arc::new(TestBroker::new(1 << 20));
+        let mut state = new_state(0, 15, broker.clone());
+        state
+            .write_batch(
+                (0..16)
+                    .flat_map(|group| {
+                        (0..64).map(move |key| StateMutation {
+                            key: StateKey {
+                                key_group: group,
+                                key: vec![key],
+                            },
+                            value: Some(vec![0; 8]),
+                        })
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        let used = broker.reserved();
+        // Leave enough space for an existing value to grow, but not a duplicate
+        // reservation for any of the unrelated key-group tables.
+        let mut pressure = HostMemoryReservation::new(broker.clone(), "other operator");
+        pressure.resize((1 << 20) - used - 64).unwrap();
+        state
+            .write_batch(vec![StateMutation {
+                key: StateKey {
+                    key_group: 0,
+                    key: vec![0],
+                },
+                value: Some(vec![7; 32]),
+            }])
+            .unwrap();
+        assert_eq!(
+            state
+                .get_batch(
+                    &[StateKeyRef {
+                        key_group: 0,
+                        key: &[0]
+                    }],
+                    &state.reservation
+                )
+                .unwrap()[0]
+                .as_deref(),
+            Some(&[7; 32][..])
+        );
+        drop(pressure);
+        drop(state);
+        assert_eq!(broker.reserved(), 0);
+    }
+
+    #[test]
+    fn denied_table_growth_leaves_all_batch_values_unchanged() {
+        let broker = Arc::new(TestBroker::new(4096));
+        let mut state = new_state(0, 0, broker.clone());
+        let mut pressure = HostMemoryReservation::new(broker.clone(), "other operator");
+        pressure.resize(4096 - broker.reserved() - 128).unwrap();
+        assert!(state
+            .write_batch(
+                (0..64)
+                    .map(|key| StateMutation {
+                        key: StateKey {
+                            key_group: 0,
+                            key: vec![key]
+                        },
+                        value: Some(vec![1]),
+                    })
+                    .collect()
+            )
+            .is_err());
+        assert!(state.group(0).unwrap().is_empty());
+        drop(pressure);
+        drop(state);
+        assert_eq!(broker.reserved(), 0);
+    }
+
+    #[test]
     fn snapshots_and_restores_one_key_group_without_exposing_rows() {
         let broker = Arc::new(TestBroker::new(1 << 20));
         let mut state = new_state(2, 3, broker.clone());
@@ -259,22 +496,28 @@ mod tests {
             }])
             .unwrap();
 
-        let snapshot = state.snapshot_key_group(2).unwrap();
+        let snapshot = state.snapshot_key_group(2, &state.reservation).unwrap();
         let mut restored = new_state(2, 2, broker.clone());
-        restored.restore_key_group(2, &snapshot).unwrap();
+        restored
+            .restore_key_group(2, &snapshot, &state.reservation)
+            .unwrap();
 
         assert_eq!(
             restored
-                .get_batch(&[StateKeyRef {
-                    key_group: 2,
-                    key: &[1],
-                }])
+                .get_batch(
+                    &[StateKeyRef {
+                        key_group: 2,
+                        key: &[1],
+                    }],
+                    &restored.reservation
+                )
                 .unwrap()[0]
                 .as_deref(),
             Some(&[9, 0, 0, 0, 0, 0, 0, 0, 4, 5][..])
         );
         drop(restored);
         drop(state);
+        drop(snapshot);
         assert_eq!(broker.reserved(), 0);
     }
 }

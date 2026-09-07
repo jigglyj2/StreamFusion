@@ -10,14 +10,43 @@
 package tech.streamfusion.nativebridge;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.junit.jupiter.api.Test;
 import tech.streamfusion.proto.plan.v1.Calc;
 import tech.streamfusion.proto.plan.v1.Input;
 import tech.streamfusion.proto.plan.v1.NativePlan;
 import tech.streamfusion.proto.plan.v1.Operator;
+import tech.streamfusion.proto.plan.v1.Union;
 
 class NativePlanNodeIdentityTest {
+    @Test
+    void reservesDescendantIdsBeforeAssigningMissingParentIds() throws Exception {
+        NativePlan original = NativePlan.newBuilder()
+                .setRoot(Operator.newBuilder()
+                        .setMetricName("Calc[original-37]")
+                        .setCalc(Calc.newBuilder()
+                                .setInput(Operator.newBuilder().setPlanNodeId(1).setInput(Input.getDefaultInstance()))))
+                .build();
+        NativePlan identified = NativePlan.parseFrom(NativePlanNodeIdentity.assign(original.toByteArray()));
+        assertThat(identified.getRoot().getPlanNodeId()).isEqualTo(2);
+        assertThat(identified.getRoot().getMetricName()).isEqualTo("Calc[original-37]");
+        assertThat(identified.getRoot().getCalc().getInput().getPlanNodeId()).isEqualTo(1);
+    }
+
+    @Test
+    void rejectsDuplicatePlannerIds() {
+        NativePlan original = NativePlan.newBuilder()
+                .setRoot(Operator.newBuilder()
+                        .setPlanNodeId(1)
+                        .setCalc(Calc.newBuilder()
+                                .setInput(Operator.newBuilder().setPlanNodeId(1).setInput(Input.getDefaultInstance()))))
+                .build();
+        assertThatThrownBy(() -> NativePlanNodeIdentity.assign(original.toByteArray()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("duplicate physical node id");
+    }
+
     @Test
     void assignsStablePreOrderIdsWithoutReplacingPlannerIds() throws Exception {
         Operator input =
@@ -32,9 +61,58 @@ class NativePlanNodeIdentityTest {
         NativePlan identified = NativePlan.parseFrom(NativePlanNodeIdentity.assign(original.toByteArray()));
 
         assertThat(identified.getRoot().getPlanNodeId()).isEqualTo(41);
-        assertThat(identified.getRoot().getCalc().getInput().getPlanNodeId()).isEqualTo(42);
+        assertThat(identified.getRoot().getCalc().getInput().getPlanNodeId()).isEqualTo(1);
         assertThat(NativePlanNodeIdentity.rootId(identified.toByteArray())).isEqualTo(41);
         assertThat(NativePlanNodeIdentity.assign(original.toByteArray()))
                 .containsExactly(NativePlanNodeIdentity.assign(original.toByteArray()));
+    }
+
+    @Test
+    void reservesPhysicalIdsAndWalksRepeatedChildrenWithoutFamilyDispatch() throws Exception {
+        long physicalId = (1L << 32) | 59;
+        NativePlan original = NativePlan.newBuilder()
+                .setRoot(Operator.newBuilder()
+                        .setPlanNodeId(physicalId)
+                        .setUnion(Union.newBuilder()
+                                .addInputs(Operator.newBuilder().setInput(Input.getDefaultInstance()))
+                                .addInputs(Operator.newBuilder()
+                                        .setCalc(Calc.newBuilder()
+                                                .setInput(Operator.newBuilder()
+                                                        .setPlanNodeId(1)
+                                                        .setInput(Input.getDefaultInstance()))))))
+                .build();
+        NativePlan identified = NativePlan.parseFrom(NativePlanNodeIdentity.assign(original.toByteArray()));
+        assertThat(identified.getRoot().getPlanNodeId()).isEqualTo(physicalId);
+        assertThat(identified.getRoot().getUnion().getInputs(0).getPlanNodeId()).isEqualTo(2);
+        assertThat(identified.getRoot().getUnion().getInputs(1).getPlanNodeId()).isEqualTo(3);
+        assertThat(identified
+                        .getRoot()
+                        .getUnion()
+                        .getInputs(1)
+                        .getCalc()
+                        .getInput()
+                        .getPlanNodeId())
+                .isEqualTo(1);
+        assertThat(NativePlanNodeIdentity.assign(identified.toByteArray())).containsExactly(identified.toByteArray());
+    }
+
+    @Test
+    void doesNotManufactureAbsentChildrenOrOverflowAtLargestSignedPhysicalId() throws Exception {
+        NativePlan original = NativePlan.newBuilder()
+                .setRoot(Operator.newBuilder().setPlanNodeId(Long.MAX_VALUE).setCalc(Calc.getDefaultInstance()))
+                .build();
+        NativePlan identified = NativePlan.parseFrom(NativePlanNodeIdentity.assign(original.toByteArray()));
+        assertThat(identified).isEqualTo(original);
+        assertThat(identified.getRoot().getCalc().hasInput()).isFalse();
+    }
+
+    @Test
+    void rejectsIdsOutsideSignedJavaRange() {
+        NativePlan original = NativePlan.newBuilder()
+                .setRoot(Operator.newBuilder().setPlanNodeId(-1).setInput(Input.getDefaultInstance()))
+                .build();
+        assertThatThrownBy(() -> NativePlanNodeIdentity.assign(original.toByteArray()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("invalid or duplicate physical node id");
     }
 }

@@ -7,15 +7,55 @@ use arrow::datatypes::DataType;
 use datafusion::error::{DataFusionError, Result};
 
 use super::{
-    proto, value_tag, Accumulator, AccumulatorState, AggregateValue, Call, STATE_MAGIC,
-    STATE_VERSION,
+    proto, value_tag, Accumulator, AccumulatorState, AggregateValue, Call, BOUNDED_STATE_MAGIC,
+    BOUNDED_STATE_VERSION, STATE_MAGIC, STATE_VERSION,
 };
+
+#[cfg(test)]
+mod tests;
 
 pub(in crate::planner::operators) fn encode_state(state: &AccumulatorState) -> Vec<u8> {
     // Split-DISTINCT incremental state commonly has only one active accumulator family for a
     // grouping key. Start with the exact sparse header instead of retaining worst-case capacity
     // in every long-lived in-memory value; populated accumulators grow geometrically as needed.
     let mut bytes = Vec::with_capacity(4 + 1 + 8 + 4 + state.accumulators.len());
+    encode_state_into(state, &mut bytes);
+    bytes
+}
+
+/// Size the canonical representation without allocating or counting B-tree node capacity.
+/// The same writer drives both sizing and encoding so new accumulator variants cannot diverge.
+pub(super) fn encoded_state_size(state: &AccumulatorState) -> usize {
+    let mut size = EncodedSize(0);
+    encode_state_into(state, &mut size);
+    size.0
+}
+
+pub(super) trait StateSink {
+    fn push(&mut self, value: u8);
+    fn extend_from_slice(&mut self, value: &[u8]);
+}
+
+impl StateSink for Vec<u8> {
+    fn push(&mut self, value: u8) {
+        Vec::push(self, value);
+    }
+    fn extend_from_slice(&mut self, value: &[u8]) {
+        Vec::extend_from_slice(self, value);
+    }
+}
+
+struct EncodedSize(usize);
+impl StateSink for EncodedSize {
+    fn push(&mut self, _value: u8) {
+        self.0 = self.0.saturating_add(1);
+    }
+    fn extend_from_slice(&mut self, value: &[u8]) {
+        self.0 = self.0.saturating_add(value.len());
+    }
+}
+
+fn encode_state_into(state: &AccumulatorState, bytes: &mut impl StateSink) {
     bytes.extend_from_slice(STATE_MAGIC);
     bytes.push(STATE_VERSION);
     bytes.extend_from_slice(&state.row_count.to_le_bytes());
@@ -33,13 +73,13 @@ pub(in crate::planner::operators) fn encode_state(state: &AccumulatorState) -> V
             Accumulator::DistinctCount { count, values } => {
                 bytes.push(5);
                 bytes.extend_from_slice(&count.to_le_bytes());
-                encode_counted_values(values, &mut bytes);
+                encode_counted_values(values, bytes);
             }
             Accumulator::Sum { value, count } => {
                 bytes.push(2);
                 bytes.push(value.is_some() as u8);
                 if let Some(value) = value {
-                    encode_value(value, &mut bytes);
+                    encode_value(value, bytes);
                 }
                 bytes.extend_from_slice(&count.to_le_bytes());
             }
@@ -51,16 +91,16 @@ pub(in crate::planner::operators) fn encode_state(state: &AccumulatorState) -> V
                 bytes.push(6);
                 bytes.push(value.is_some() as u8);
                 if let Some(value) = value {
-                    encode_value(value, &mut bytes);
+                    encode_value(value, bytes);
                 }
                 bytes.extend_from_slice(&count.to_le_bytes());
-                encode_counted_values(values, &mut bytes);
+                encode_counted_values(values, bytes);
             }
             Accumulator::Average { value, count } => {
                 bytes.push(7);
                 bytes.push(value.is_some() as u8);
                 if let Some(value) = value {
-                    encode_value(value, &mut bytes);
+                    encode_value(value, bytes);
                 }
                 bytes.extend_from_slice(&count.to_le_bytes());
             }
@@ -72,29 +112,28 @@ pub(in crate::planner::operators) fn encode_state(state: &AccumulatorState) -> V
                 bytes.push(8);
                 bytes.push(value.is_some() as u8);
                 if let Some(value) = value {
-                    encode_value(value, &mut bytes);
+                    encode_value(value, bytes);
                 }
                 bytes.extend_from_slice(&count.to_le_bytes());
-                encode_counted_values(values, &mut bytes);
+                encode_counted_values(values, bytes);
             }
             Accumulator::AppendExtremum(value) => {
                 bytes.push(4);
                 bytes.push(value.is_some() as u8);
                 if let Some(value) = value {
-                    encode_value(value, &mut bytes);
+                    encode_value(value, bytes);
                 }
             }
             Accumulator::Extremum(values) => {
                 bytes.push(3);
                 bytes.extend_from_slice(&(values.len() as u32).to_le_bytes());
                 for (value, count) in values {
-                    encode_value(value, &mut bytes);
+                    encode_value(value, bytes);
                     bytes.extend_from_slice(&count.to_le_bytes());
                 }
             }
         }
     }
-    bytes
 }
 
 pub(super) fn accumulator_is_neutral(accumulator: &Accumulator) -> bool {
@@ -130,7 +169,7 @@ fn optional_value_is_zero(value: Option<&AggregateValue>) -> bool {
     }
 }
 
-fn encode_counted_values(values: &BTreeMap<AggregateValue, i64>, bytes: &mut Vec<u8>) {
+fn encode_counted_values(values: &BTreeMap<AggregateValue, i64>, bytes: &mut impl StateSink) {
     bytes.extend_from_slice(&(values.len() as u32).to_le_bytes());
     for (value, count) in values {
         encode_value(value, bytes);
@@ -416,7 +455,7 @@ fn aggregate_value_matches_type(value: &AggregateValue, data_type: &DataType) ->
     }
 }
 
-pub(super) fn encode_value(value: &AggregateValue, bytes: &mut Vec<u8>) {
+pub(super) fn encode_value(value: &AggregateValue, bytes: &mut impl StateSink) {
     bytes.push(value_tag(value));
     match value {
         AggregateValue::Boolean(value) => bytes.push(*value as u8),
@@ -498,4 +537,56 @@ impl<'a> Cursor<'a> {
     fn is_empty(&self) -> bool {
         self.offset == self.bytes.len()
     }
+}
+
+pub(in crate::planner::operators) fn encode_bounded_state(
+    grouping_row: &[u8],
+    state: &AccumulatorState,
+) -> Result<Vec<u8>> {
+    let accumulator = encode_state(state);
+    let grouping_len = u32::try_from(grouping_row.len()).map_err(|_| {
+        DataFusionError::Execution(
+            "bounded group aggregate grouping row exceeds the canonical u32 length".to_string(),
+        )
+    })?;
+    let mut bytes = Vec::with_capacity(
+        BOUNDED_STATE_MAGIC.len() + 1 + 4 + grouping_row.len() + accumulator.len(),
+    );
+    bytes.extend_from_slice(BOUNDED_STATE_MAGIC);
+    bytes.push(BOUNDED_STATE_VERSION);
+    bytes.extend_from_slice(&grouping_len.to_le_bytes());
+    bytes.extend_from_slice(grouping_row);
+    bytes.extend_from_slice(&accumulator);
+    Ok(bytes)
+}
+
+pub(in crate::planner::operators) fn decode_bounded_state(
+    bytes: &[u8],
+    calls: &[Call],
+) -> Result<(Vec<u8>, AccumulatorState)> {
+    let header = BOUNDED_STATE_MAGIC.len() + 1 + 4;
+    if bytes.len() < header || &bytes[..4] != BOUNDED_STATE_MAGIC {
+        return Err(DataFusionError::Execution(
+            "invalid bounded group aggregate state magic".to_string(),
+        ));
+    }
+    if bytes[4] != BOUNDED_STATE_VERSION {
+        return Err(DataFusionError::Execution(format!(
+            "unsupported bounded group aggregate state version {}",
+            bytes[4]
+        )));
+    }
+    let grouping_len = u32::from_le_bytes(bytes[5..9].try_into().expect("fixed header")) as usize;
+    let grouping_end = header.checked_add(grouping_len).ok_or_else(|| {
+        DataFusionError::Execution("bounded group aggregate grouping length overflow".to_string())
+    })?;
+    if grouping_end > bytes.len() {
+        return Err(DataFusionError::Execution(
+            "truncated bounded group aggregate grouping row".to_string(),
+        ));
+    }
+    Ok((
+        bytes[header..grouping_end].to_vec(),
+        decode_state(&bytes[grouping_end..], calls)?,
+    ))
 }

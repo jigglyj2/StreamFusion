@@ -31,6 +31,11 @@
         </dependency>
     </dependencies>
 
+    <properties>
+        <!-- Focused Java tests may use an already validated development native library. -->
+        <skipNativeTests>${skipTests}</skipNativeTests>
+    </properties>
+
     <build>
         <plugins>
             <plugin>
@@ -60,7 +65,7 @@
                         <phase>test</phase>
                         <goals><goal>exec</goal></goals>
                         <configuration>
-                            <skip>${skipTests}</skip>
+                            <skip>${skipNativeTests}</skip>
                             <executable>cargo</executable>
                             <arguments>
                                 <argument>test</argument>

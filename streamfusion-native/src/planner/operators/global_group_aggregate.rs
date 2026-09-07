@@ -79,7 +79,11 @@ impl GlobalGroupAggregateProcessor {
         self.inner.statistics()
     }
 
-    pub(crate) fn snapshot_key_group(&self, key_group: u32) -> Result<Vec<u8>> {
+    pub(crate) fn state_memory(&self) -> HostMemoryReservation {
+        self.inner.state_memory()
+    }
+
+    pub(crate) fn snapshot_key_group(&self, key_group: u32) -> Result<crate::state::SnapshotBytes> {
         self.inner.snapshot_key_group(key_group)
     }
 
@@ -163,6 +167,9 @@ mod tests {
             protocol_version: crate::PLAN_PROTOCOL_VERSION,
             root: Some(proto::Operator {
                 plan_node_id: 0,
+                metric_name: String::new(),
+                clear_record_timestamps: false,
+                metric_uid: None,
                 operator: Some(proto::operator::Operator::GlobalGroupAggregate(Box::new(
                     proto::GlobalGroupAggregate {
                         input: None,
@@ -200,6 +207,9 @@ mod tests {
             protocol_version: crate::PLAN_PROTOCOL_VERSION,
             root: Some(proto::Operator {
                 plan_node_id: 0,
+                metric_name: String::new(),
+                clear_record_timestamps: false,
+                metric_uid: None,
                 operator: Some(proto::operator::Operator::GlobalGroupAggregate(Box::new(
                     aggregate,
                 ))),

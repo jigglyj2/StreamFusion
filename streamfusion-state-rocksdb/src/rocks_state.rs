@@ -8,10 +8,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, Weak};
 
 use rocksdb::checkpoint::Checkpoint;
-use rocksdb::{
-    BlockBasedOptions, Cache, Direction, IteratorMode, Options, WriteBatch, WriteBufferManager, DB,
-};
-use streamfusion_state_abi::{decode_key_group_snapshot, encode_key_group_snapshot};
+use rocksdb::{BlockBasedOptions, Cache, Options, WriteBatch, WriteBufferManager, DB};
+use streamfusion_state_abi::decode_key_group_snapshot;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StateKey {
@@ -47,11 +45,12 @@ pub struct RocksStateBackend {
 }
 
 struct SharedRocksMemory {
+    limit: usize,
     cache: Cache,
     write_buffers: WriteBufferManager,
 }
 
-static SHARED_ROCKS_MEMORY: LazyLock<Mutex<HashMap<usize, Weak<SharedRocksMemory>>>> =
+static SHARED_ROCKS_MEMORY: LazyLock<Mutex<HashMap<[u64; 2], Weak<SharedRocksMemory>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 impl RocksStateBackend {
@@ -65,6 +64,16 @@ impl RocksStateBackend {
         last_key_group: u32,
         memory_limit: usize,
     ) -> Result<Self> {
+        Self::open_with_memory_scope(path, first_key_group, last_key_group, memory_limit, [0, 0])
+    }
+
+    pub fn open_with_memory_scope(
+        path: &Path,
+        first_key_group: u32,
+        last_key_group: u32,
+        memory_limit: usize,
+        scope: [u64; 2],
+    ) -> Result<Self> {
         if first_key_group > last_key_group {
             return Err(Error::new(
                 ErrorKind::InvalidInput,
@@ -77,7 +86,7 @@ impl RocksStateBackend {
                 "RocksDB state memory limit must be at least 256 KiB",
             ));
         }
-        let shared_memory = shared_rocks_memory(memory_limit)?;
+        let shared_memory = shared_rocks_memory(memory_limit, scope)?;
         let mut options = Options::default();
         options.create_if_missing(true);
         let mut table_options = BlockBasedOptions::default();
@@ -91,7 +100,8 @@ impl RocksStateBackend {
         options.set_write_buffer_manager(&shared_memory.write_buffers);
         options.set_write_buffer_size(memory_limit / 4);
         options.set_max_write_buffer_number(2);
-        let db = DB::open(&options, path).map_err(rocks_error)?;
+        // Open the default family explicitly so batched pinned reads can address it.
+        let db = DB::open_cf(&options, path, ["default"]).map_err(rocks_error)?;
         Ok(Self {
             db,
             _shared_memory: shared_memory,
@@ -122,6 +132,44 @@ impl RocksStateBackend {
             .multi_get(database_keys)
             .into_iter()
             .map(|result| result.map_err(rocks_error))
+            .collect()
+    }
+
+    /// Pins one batched read in RocksDB's shared cache, admits the result payload once,
+    /// then copies it into producer-owned Arrow storage. No per-key host callbacks occur.
+    pub fn get_batch_refs_admitted<'a>(
+        &self,
+        keys: impl IntoIterator<Item = (u32, &'a [u8])>,
+        mut admit: impl FnMut(usize) -> Result<()>,
+    ) -> Result<Vec<Option<Vec<u8>>>> {
+        let database_keys = keys
+            .into_iter()
+            .map(|(key_group, key)| {
+                self.check_owned(key_group)?;
+                Ok(database_key_parts(key_group, key))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let cf = self
+            .db
+            .cf_handle("default")
+            .ok_or_else(|| Error::other("RocksDB default column family is missing"))?;
+        let pinned = self.db.batched_multi_get_cf(cf, &database_keys, false);
+        let bytes = pinned.iter().try_fold(0usize, |bytes, value| {
+            let value = value
+                .as_ref()
+                .map_err(|error| Error::other(error.to_string()))?;
+            bytes
+                .checked_add(value.as_ref().map_or(0, |value| value.len()))
+                .ok_or_else(|| Error::other("RocksDB batch payload size overflow"))
+        })?;
+        admit(bytes)?;
+        pinned
+            .into_iter()
+            .map(|value| {
+                value
+                    .map(|value| value.map(|value| value.to_vec()))
+                    .map_err(rocks_error)
+            })
             .collect()
     }
 
@@ -156,27 +204,108 @@ impl RocksStateBackend {
     }
 
     /// Emits the backend-neutral SFS1 key-group representation used by memory state as well.
-    pub fn snapshot_key_group(&self, key_group: u32) -> Result<Vec<u8>> {
+    pub fn scan_key_group(
+        &self,
+        key_group: u32,
+        after: Option<&[u8]>,
+        max_rows: usize,
+        max_bytes: usize,
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
         self.check_owned(key_group)?;
+        if max_rows == 0 || max_bytes == 0 {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "state scan bounds must be positive",
+            ));
+        }
         let prefix = key_group.to_be_bytes();
+        let seek = after.map(|key| database_key_parts(key_group, key));
+        let mut iterator = self.db.raw_iterator();
+        iterator.seek(seek.as_deref().unwrap_or(&prefix));
+        if let Some(seek) = &seek {
+            if iterator.key() == Some(seek.as_slice()) {
+                iterator.next();
+            }
+        }
         let mut entries = Vec::new();
-        for item in self
-            .db
-            .iterator(IteratorMode::From(&prefix, Direction::Forward))
-        {
-            let (key, value) = item.map_err(rocks_error)?;
+        let mut bytes = 0usize;
+        while iterator.valid() && entries.len() < max_rows {
+            let key = iterator.key().expect("valid iterator has key");
             if !key.starts_with(&prefix) {
                 break;
             }
+            let value = iterator.value().expect("valid iterator has value");
+            let size = key.len().saturating_add(value.len()).saturating_add(96);
+            if size > max_bytes {
+                return Err(Error::new(
+                    ErrorKind::OutOfMemory,
+                    "state scan entry exceeds the admitted page budget",
+                ));
+            }
+            if bytes.saturating_add(size) > max_bytes {
+                break;
+            }
             entries.push((key[4..].to_vec(), value.to_vec()));
+            bytes += size;
+            iterator.next();
         }
-        encode_key_group_snapshot(
-            key_group,
-            entries
-                .iter()
-                .map(|(key, value)| (key.as_slice(), value.as_slice())),
-        )
-        .map_err(Error::other)
+        iterator.status().map_err(rocks_error)?;
+        Ok(entries)
+    }
+
+    /// Emits the backend-neutral SFS1 key-group representation used by memory state as well.
+    pub fn snapshot_key_group(&self, key_group: u32) -> Result<Vec<u8>> {
+        self.snapshot_key_group_admitted(key_group, |_| Ok(()))
+    }
+
+    pub fn snapshot_key_group_admitted(
+        &self,
+        key_group: u32,
+        mut admit: impl FnMut(usize) -> Result<()>,
+    ) -> Result<Vec<u8>> {
+        self.check_owned(key_group)?;
+        let prefix = key_group.to_be_bytes();
+        // Both passes read one RocksDB snapshot. The first measures borrowed slices;
+        // the second writes directly into the admitted canonical buffer.
+        let snapshot = self.db.snapshot();
+        let mut iterator = snapshot.raw_iterator();
+        iterator.seek(prefix);
+        let mut count = 0usize;
+        let mut bytes = 16usize;
+        while iterator.valid() {
+            let key = iterator.key().expect("valid iterator has key");
+            if !key.starts_with(&prefix) {
+                break;
+            }
+            let value = iterator.value().expect("valid iterator has value");
+            bytes = bytes
+                .checked_add(4)
+                .and_then(|bytes| bytes.checked_add(key.len()))
+                .and_then(|bytes| bytes.checked_add(value.len()))
+                .ok_or_else(|| Error::other("canonical snapshot size overflow"))?;
+            count += 1;
+            iterator.next();
+        }
+        iterator.status().map_err(rocks_error)?;
+        admit(bytes)?;
+        let mut writer = streamfusion_state_abi::SnapshotWriter::new(key_group, count, bytes)
+            .map_err(Error::other)?;
+        iterator.seek(prefix);
+        while iterator.valid() {
+            let key = iterator.key().expect("valid iterator has key");
+            if !key.starts_with(&prefix) {
+                break;
+            }
+            writer
+                .append(
+                    &key[4..],
+                    iterator.value().expect("valid iterator has value"),
+                )
+                .map_err(Error::other)?;
+            iterator.next();
+        }
+        iterator.status().map_err(rocks_error)?;
+        writer.finish().map_err(Error::other)
     }
 
     pub fn restore_key_group(&self, key_group: u32, bytes: &[u8]) -> Result<()> {
@@ -224,15 +353,21 @@ impl RocksStateBackend {
     }
 }
 
-fn shared_rocks_memory(memory_limit: usize) -> Result<Arc<SharedRocksMemory>> {
+fn shared_rocks_memory(memory_limit: usize, scope: [u64; 2]) -> Result<Arc<SharedRocksMemory>> {
     let mut pools = SHARED_ROCKS_MEMORY
         .lock()
         .map_err(|_| Error::other("native RocksDB shared-memory registry is poisoned"))?;
-    if let Some(existing) = pools.get(&memory_limit).and_then(Weak::upgrade) {
+    if let Some(existing) = pools.get(&scope).and_then(Weak::upgrade) {
+        if existing.limit != memory_limit {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "RocksDB resource identity reused with a different memory budget",
+            ));
+        }
         return Ok(existing);
     }
     // Match Flink's shared RocksDB design: one cache and one write-buffer manager cap memory
-    // across all DB instances in the task manager instead of multiplying the budget per operator.
+    // across DB instances sharing one Flink memory resource instead of multiplying the budget per operator.
     // Charging memtables to the cache keeps their combined footprint within this single limit.
     // The Java lease reserves the full memory_limit from Flink. Keep one quarter as headroom for
     // RocksDB DB/iterator/table-reader metadata that is not cache- or memtable-owned.
@@ -244,11 +379,14 @@ fn shared_rocks_memory(memory_limit: usize) -> Result<Arc<SharedRocksMemory>> {
         cache.clone(),
     );
     let shared = Arc::new(SharedRocksMemory {
+        limit: memory_limit,
         cache,
         write_buffers,
     });
     pools.retain(|_, pool| pool.strong_count() > 0);
-    pools.insert(memory_limit, Arc::downgrade(&shared));
+    if scope != [0, 0] {
+        pools.insert(scope, Arc::downgrade(&shared));
+    }
     Ok(shared)
 }
 
@@ -283,6 +421,39 @@ fn rocks_error(error: rocksdb::Error) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn admitted_batch_reads_preserve_order_duplicates_and_missing_values() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = RocksStateBackend::open(directory.path(), 2, 2).unwrap();
+        state
+            .write_batch(vec![mutation(2, b"a", Some(b"value"))])
+            .unwrap();
+        let keys = [
+            (2, b"a".as_slice()),
+            (2, b"missing".as_slice()),
+            (2, b"a".as_slice()),
+        ];
+        let mut admissions = Vec::new();
+        let values = state
+            .get_batch_refs_admitted(keys, |bytes| {
+                admissions.push(bytes);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(admissions, vec![10]);
+        assert_eq!(
+            values,
+            vec![Some(b"value".to_vec()), None, Some(b"value".to_vec())]
+        );
+        assert!(state
+            .get_batch_refs_admitted(keys, |_| Err(Error::new(ErrorKind::OutOfMemory, "denied")))
+            .is_err());
+        assert_eq!(
+            state.get_batch(&[key(2, b"a")]).unwrap(),
+            vec![Some(b"value".to_vec())]
+        );
+    }
 
     #[test]
     fn batches_reads_and_writes_and_round_trips_the_canonical_memory_format() {
@@ -356,11 +527,28 @@ mod tests {
         let first_dir = tempfile::tempdir().unwrap();
         let second_dir = tempfile::tempdir().unwrap();
         let first =
-            RocksStateBackend::open_with_memory_limit(first_dir.path(), 0, 0, 1 << 20).unwrap();
+            RocksStateBackend::open_with_memory_scope(first_dir.path(), 0, 0, 1 << 20, [1, 42])
+                .unwrap();
         let second =
-            RocksStateBackend::open_with_memory_limit(second_dir.path(), 0, 0, 1 << 20).unwrap();
+            RocksStateBackend::open_with_memory_scope(second_dir.path(), 0, 0, 1 << 20, [1, 42])
+                .unwrap();
 
         assert!(Arc::ptr_eq(&first._shared_memory, &second._shared_memory));
+    }
+
+    #[test]
+    fn equal_budgets_in_distinct_resources_do_not_share_and_scope_checks_size() {
+        let first = shared_rocks_memory(1 << 20, [2, 41]).unwrap();
+        let second = shared_rocks_memory(1 << 20, [2, 42]).unwrap();
+        assert!(!Arc::ptr_eq(&first, &second));
+        assert!(shared_rocks_memory(2 << 20, [2, 41]).is_err());
+        let isolated = shared_rocks_memory(1 << 20, [0, 0]).unwrap();
+        assert!(!Arc::ptr_eq(
+            &isolated,
+            &shared_rocks_memory(1 << 20, [0, 0]).unwrap()
+        ));
+        drop(first);
+        assert!(shared_rocks_memory(2 << 20, [2, 41]).is_ok());
     }
 
     fn key(key_group: u32, key: &[u8]) -> StateKey {

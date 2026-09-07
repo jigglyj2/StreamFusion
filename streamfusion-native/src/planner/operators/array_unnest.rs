@@ -21,6 +21,7 @@ use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::unnest::{ListUnnest, UnnestExec};
 
+use super::envelope::Envelope;
 use crate::proto;
 
 mod map_entries;
@@ -29,6 +30,7 @@ mod ordinality;
 
 const VALUE_COLUMN: &str = "__streamfusion_unnest_value";
 const ORDINALITY_COLUMN: &str = "__streamfusion_unnest_ordinality";
+#[cfg(test)]
 const INPUT_ROW_COLUMN: &str = "__streamfusion_input_row";
 
 pub(crate) fn create(
@@ -36,14 +38,8 @@ pub(crate) fn create(
     child: Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let child_schema = child.schema();
-    let visible_field_count = child_schema.fields().len().checked_sub(1).ok_or_else(|| {
-        DataFusionError::Plan("array unnest input has no input-row ordinal".to_string())
-    })?;
-    if child_schema.field(visible_field_count).name() != INPUT_ROW_COLUMN {
-        return Err(DataFusionError::Plan(
-            "array unnest input-row ordinal must be the final column".to_string(),
-        ));
-    }
+    let envelope = Envelope::from_schema(child_schema.as_ref())?;
+    let visible_field_count = envelope.payload_width;
     let (source, array_field) = if let Some(expression) = unnest.collection_expression.as_ref() {
         let source = super::calc::create_expression(expression, child_schema.as_ref())?;
         let field = source.return_field(child_schema.as_ref())?;
@@ -146,10 +142,7 @@ pub(crate) fn create(
             ORDINALITY_COLUMN.to_string(),
         ));
     }
-    projection.push((
-        Arc::new(Column::new(INPUT_ROW_COLUMN, visible_field_count)),
-        INPUT_ROW_COLUMN.to_string(),
-    ));
+    projection.extend(envelope.expressions(child_schema.as_ref()));
     let projected = Arc::new(ProjectionExec::try_new(projection, child)?);
 
     let mut output_fields = child_schema
@@ -166,7 +159,11 @@ pub(crate) fn create(
             unnest.preserve_empty,
         )));
     }
-    output_fields.push(Arc::clone(&child_schema.fields()[visible_field_count]));
+    output_fields.extend(
+        envelope
+            .indices()
+            .map(|index| Arc::clone(&child_schema.fields()[index])),
+    );
     let output_schema = Arc::new(Schema::new(output_fields));
     let mut list_columns = vec![ListUnnest {
         index_in_input_schema: visible_field_count,
@@ -194,7 +191,6 @@ pub(crate) fn create(
         unnested,
         visible_field_count,
         unnest.with_ordinality,
-        needs_ordinality,
         unnest.preserve_empty,
         !is_map && !is_multiset,
     )
@@ -204,7 +200,6 @@ fn flatten_struct_element(
     unnested: Arc<dyn ExecutionPlan>,
     visible_field_count: usize,
     with_ordinality: bool,
-    has_ordinality: bool,
     preserve_empty: bool,
     skip_null_struct: bool,
 ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -268,11 +263,7 @@ fn flatten_struct_element(
             ORDINALITY_COLUMN.to_string(),
         ));
     }
-    let input_row_index = ordinal_index + usize::from(has_ordinality);
-    projection.push((
-        Arc::new(Column::new(INPUT_ROW_COLUMN, input_row_index)),
-        INPUT_ROW_COLUMN.to_string(),
-    ));
+    projection.extend(Envelope::from_schema(schema.as_ref())?.expressions(schema.as_ref()));
     Ok(Arc::new(ProjectionExec::try_new(projection, unnested)?))
 }
 

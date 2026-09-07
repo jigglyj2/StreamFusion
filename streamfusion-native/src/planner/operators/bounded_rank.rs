@@ -345,6 +345,9 @@ mod tests {
             protocol_version: crate::PLAN_PROTOCOL_VERSION,
             root: Some(proto::Operator {
                 plan_node_id: 0,
+                metric_name: String::new(),
+                clear_record_timestamps: false,
+                metric_uid: None,
                 operator: Some(proto::operator::Operator::BoundedRank(Box::new(
                     proto::BoundedRank {
                         input: None,

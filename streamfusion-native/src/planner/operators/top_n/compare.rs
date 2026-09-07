@@ -116,7 +116,7 @@ pub(super) fn row_has_nan(batch: &RecordBatch, row: usize, indices: &[u32]) -> R
     Ok(false)
 }
 
-pub(super) fn data_type_can_have_nan(data_type: &DataType) -> bool {
+pub(crate) fn data_type_can_have_nan(data_type: &DataType) -> bool {
     match data_type {
         DataType::Float32 | DataType::Float64 => true,
         DataType::List(field) | DataType::LargeList(field) | DataType::FixedSizeList(field, _) => {

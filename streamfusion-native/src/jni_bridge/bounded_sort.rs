@@ -14,6 +14,46 @@ use crate::memory_pool::{HostMemoryReservation, JvmMemoryReservationBroker};
 use crate::planner::operators::bounded_sort::BoundedSortProcessor;
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeBoundedSortBridge_setSpillDirectory<
+    'caller,
+>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    handle: jlong,
+    directory: JString<'caller>,
+) {
+    unowned_env
+        .with_env(|env| -> jni::errors::Result<()> {
+            let directory = directory.try_to_string(env)?;
+            unsafe { processor(handle) }
+                .and_then(|processor| processor.configure_spill_directory(directory.into()))
+                .map_err(|error| throw(env, error))
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeBoundedSortBridge_nativeSpillStatistics<
+    'caller,
+>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    handle: jlong,
+) -> jlongArray {
+    unowned_env
+        .with_env(|env| -> jni::errors::Result<_> {
+            let values = unsafe { processor(handle) }
+                .map(|processor| processor.spill_statistics())
+                .map_err(|error| throw(env, error))?
+                .map(|value| value.min(i64::MAX as u64) as jlong);
+            let output = env.new_long_array(values.len())?;
+            output.set_region(env, 0, &values)?;
+            Ok(output.into_raw())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeBoundedSortBridge_createHandle<
     'caller,
 >(
@@ -200,6 +240,12 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeBoundedSortBrid
 ) {
     unowned_env
         .with_env(|env| -> jni::errors::Result<_> {
+            let mut restore_input = unsafe { processor(handle) }
+                .map(|processor| processor.state_memory())
+                .map_err(|error| throw(env, error))?;
+            restore_input
+                .resize(bytes.len(env)?)
+                .map_err(|error| throw(env, error))?;
             let bytes = env.convert_byte_array(bytes)?;
             unsafe { processor(handle) }
                 .and_then(|processor| {
@@ -259,7 +305,10 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeBoundedSortBrid
                 let target = unsafe { processor(target_handle) }?;
                 for key_group in first_key_group..=last_key_group {
                     let key_group = non_negative(key_group, "key group")?;
-                    target.restore_key_group(key_group, &source.snapshot_key_group(key_group)?)?;
+                    target.restore_key_group(
+                        key_group,
+                        &source.snapshot_key_group(key_group, &target.state_memory())?,
+                    )?;
                 }
                 Ok(())
             })()

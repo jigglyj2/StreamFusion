@@ -9,7 +9,11 @@
  */
 package tech.streamfusion.nativebridge;
 
+import com.google.protobuf.Descriptors.FieldDescriptor;
 import com.google.protobuf.InvalidProtocolBufferException;
+import com.google.protobuf.Message;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 import tech.streamfusion.proto.plan.v1.NativePlan;
 import tech.streamfusion.proto.plan.v1.Operator;
@@ -24,10 +28,32 @@ final class NativePlanNodeIdentity {
             if (!plan.hasRoot()) {
                 return serializedPlan;
             }
-            assign(plan.getRootBuilder(), new AtomicLong(1));
+            Set<Long> existing = new HashSet<>();
+            collectExisting(plan.getRoot(), existing);
+            assign(plan.getRootBuilder(), new AtomicLong(1), existing);
             return plan.build().toByteArray();
         } catch (InvalidProtocolBufferException failure) {
             throw new IllegalArgumentException("Invalid StreamFusion native plan", failure);
+        }
+    }
+
+    private static void collectExisting(Message message, Set<Long> existing) {
+        if (message instanceof Operator) {
+            long id = ((Operator) message).getPlanNodeId();
+            if (id < 0 || (id != 0 && !existing.add(id))) {
+                throw new IllegalArgumentException("Native plan has an invalid or duplicate physical node id: " + id);
+            }
+        }
+        for (Object value : message.getAllFields().values()) {
+            if (value instanceof Message) {
+                collectExisting((Message) value, existing);
+            } else if (value instanceof Iterable<?>) {
+                for (Object item : (Iterable<?>) value) {
+                    if (item instanceof Message) {
+                        collectExisting((Message) item, existing);
+                    }
+                }
+            }
         }
     }
 
@@ -40,75 +66,35 @@ final class NativePlanNodeIdentity {
         }
     }
 
-    private static void assign(Operator.Builder operator, AtomicLong nextId) {
-        if (operator.getPlanNodeId() == 0) {
-            operator.setPlanNodeId(nextId.getAndIncrement());
-        } else {
-            nextId.accumulateAndGet(operator.getPlanNodeId() + 1, Math::max);
-        }
-        switch (operator.getOperatorCase()) {
-            case BOUNDED_SORT:
-                assign(operator.getBoundedSortBuilder().getInputBuilder(), nextId);
-                break;
-            case TEMPORAL_SORT:
-                assign(operator.getTemporalSortBuilder().getInputBuilder(), nextId);
-                break;
-            case OVER_AGGREGATE:
-                assign(operator.getOverAggregateBuilder().getInputBuilder(), nextId);
-                break;
-            case TOP_N:
-                assign(operator.getTopNBuilder().getInputBuilder(), nextId);
-                break;
-            case DEDUPLICATE:
-                assign(operator.getDeduplicateBuilder().getInputBuilder(), nextId);
-                break;
-            case CHANGELOG_NORMALIZE:
-                assign(operator.getChangelogNormalizeBuilder().getInputBuilder(), nextId);
-                break;
-            case GROUP_AGGREGATE:
-                assign(operator.getGroupAggregateBuilder().getInputBuilder(), nextId);
-                break;
-            case LOCAL_GROUP_AGGREGATE:
-                assign(operator.getLocalGroupAggregateBuilder().getInputBuilder(), nextId);
-                break;
-            case GLOBAL_GROUP_AGGREGATE:
-                assign(operator.getGlobalGroupAggregateBuilder().getInputBuilder(), nextId);
-                break;
-            case INCREMENTAL_GROUP_AGGREGATE:
-                assign(operator.getIncrementalGroupAggregateBuilder().getInputBuilder(), nextId);
-                break;
-            case WINDOW_AGGREGATE:
-                assign(operator.getWindowAggregateBuilder().getInputBuilder(), nextId);
-                break;
-            case WINDOW_DEDUPLICATE:
-                assign(operator.getWindowDeduplicateBuilder().getInputBuilder(), nextId);
-                break;
-            case WINDOW_RANK:
-                assign(operator.getWindowRankBuilder().getInputBuilder(), nextId);
-                break;
-            case WINDOW_TABLE_FUNCTION:
-                assign(operator.getWindowTableFunctionBuilder().getInputBuilder(), nextId);
-                break;
-            case UNION:
-                for (int index = 0; index < operator.getUnion().getInputsCount(); index++) {
-                    assign(operator.getUnionBuilder().getInputsBuilder(index), nextId);
+    private static void assign(Message.Builder message, AtomicLong nextId, Set<Long> existing) {
+        if (message instanceof Operator.Builder) {
+            Operator.Builder operator = (Operator.Builder) message;
+            if (operator.getPlanNodeId() == 0) {
+                while (existing.contains(nextId.get())) {
+                    nextId.set(Math.addExact(nextId.get(), 1));
                 }
-                break;
-            case EXPAND:
-                assign(operator.getExpandBuilder().getInputBuilder(), nextId);
-                break;
-            case CALC:
-                assign(operator.getCalcBuilder().getInputBuilder(), nextId);
-                break;
-            case ARRAY_UNNEST:
-                assign(operator.getArrayUnnestBuilder().getInputBuilder(), nextId);
-                break;
-            case REPLICATE_ROWS:
-                assign(operator.getReplicateRowsBuilder().getInputBuilder(), nextId);
-                break;
-            default:
-                // Stateful multi-input operators receive their Arrow inputs at the persistent
-                // handle boundary and therefore have no nested Operator children in the plan.
+                operator.setPlanNodeId(nextId.get());
+                existing.add(nextId.get());
+            }
+        }
+        // Traverse the protobuf shape, not an operator-family registry. Only visit present
+        // fields: identity assignment must not manufacture missing physical children.
+        for (var entry : message.getAllFields().entrySet()) {
+            FieldDescriptor field = entry.getKey();
+            if (field.getJavaType() != FieldDescriptor.JavaType.MESSAGE) {
+                continue;
+            }
+            if (field.isRepeated()) {
+                for (int index = 0; index < message.getRepeatedFieldCount(field); index++) {
+                    Message.Builder child = ((Message) message.getRepeatedField(field, index)).toBuilder();
+                    assign(child, nextId, existing);
+                    message.setRepeatedField(field, index, child.build());
+                }
+            } else {
+                Message.Builder child = ((Message) entry.getValue()).toBuilder();
+                assign(child, nextId, existing);
+                message.setField(field, child.build());
+            }
         }
     }
 }

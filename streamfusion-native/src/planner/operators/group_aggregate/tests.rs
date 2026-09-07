@@ -3,8 +3,10 @@ use crate::memory_pool::{tests_support::TestBroker, HostMemoryReservation};
 use crate::state::KeyedState;
 use arrow::array::{BooleanArray, Float32Array, Int64Array, StringArray};
 use prost::Message;
-use std::borrow::Cow;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+mod mini_batch;
+mod schema_allocation;
 
 fn logical_bigint(nullable: bool) -> proto::LogicalType {
     proto::LogicalType {
@@ -88,10 +90,16 @@ fn plan_with_grouping(
         protocol_version: crate::PLAN_PROTOCOL_VERSION,
         root: Some(proto::Operator {
             plan_node_id: 0,
+            metric_name: String::new(),
+            clear_record_timestamps: false,
+            metric_uid: None,
             operator: Some(proto::operator::Operator::GroupAggregate(Box::new(
                 proto::GroupAggregate {
                     input: Some(Box::new(proto::Operator {
                         plan_node_id: 0,
+                        metric_name: String::new(),
+                        clear_record_timestamps: false,
+                        metric_uid: None,
                         operator: Some(proto::operator::Operator::Input(proto::Input {
                             schema: None,
                             input_index: 0,
@@ -119,10 +127,16 @@ fn distinct_plan() -> Vec<u8> {
         protocol_version: crate::PLAN_PROTOCOL_VERSION,
         root: Some(proto::Operator {
             plan_node_id: 0,
+            metric_name: String::new(),
+            clear_record_timestamps: false,
+            metric_uid: None,
             operator: Some(proto::operator::Operator::GroupAggregate(Box::new(
                 proto::GroupAggregate {
                     input: Some(Box::new(proto::Operator {
                         plan_node_id: 0,
+                        metric_name: String::new(),
+                        clear_record_timestamps: false,
+                        metric_uid: None,
                         operator: Some(proto::operator::Operator::Input(proto::Input {
                             schema: None,
                             input_index: 0,
@@ -155,6 +169,9 @@ fn aggregate_distinct_plan() -> Vec<u8> {
         protocol_version: crate::PLAN_PROTOCOL_VERSION,
         root: Some(proto::Operator {
             plan_node_id: 0,
+            metric_name: String::new(),
+            clear_record_timestamps: false,
+            metric_uid: None,
             operator: Some(proto::operator::Operator::GroupAggregate(Box::new(
                 proto::GroupAggregate {
                     input: None,
@@ -192,26 +209,8 @@ fn processor(input_changelog: bool, update_before: bool) -> GroupAggregateProces
 }
 
 fn mini_processor(size: u64, input_changelog: bool) -> GroupAggregateProcessor {
-    let native = proto::NativePlan::decode(plan(input_changelog, true).as_slice()).unwrap();
-    let mut aggregate = match native.root.unwrap().operator.unwrap() {
-        proto::operator::Operator::GroupAggregate(aggregate) => *aggregate,
-        _ => unreachable!(),
-    };
-    aggregate.mini_batch_size = size;
-    aggregate.input_schema = Some(group_schema());
-    aggregate.output_schema = Some(group_output_schema());
-    let plan = proto::NativePlan {
-        protocol_version: crate::PLAN_PROTOCOL_VERSION,
-        root: Some(proto::Operator {
-            plan_node_id: 0,
-            operator: Some(proto::operator::Operator::GroupAggregate(Box::new(
-                aggregate,
-            ))),
-        }),
-    }
-    .encode_to_vec();
     GroupAggregateProcessor::new(
-        &plan,
+        &mini_plan(size, input_changelog),
         128,
         0,
         127,
@@ -221,6 +220,30 @@ fn mini_processor(size: u64, input_changelog: bool) -> GroupAggregateProcessor {
         ),
     )
     .unwrap()
+}
+
+fn mini_plan(size: u64, input_changelog: bool) -> Vec<u8> {
+    let native = proto::NativePlan::decode(plan(input_changelog, true).as_slice()).unwrap();
+    let mut aggregate = match native.root.unwrap().operator.unwrap() {
+        proto::operator::Operator::GroupAggregate(aggregate) => *aggregate,
+        _ => unreachable!(),
+    };
+    aggregate.mini_batch_size = size;
+    aggregate.input_schema = Some(group_schema());
+    aggregate.output_schema = Some(group_output_schema());
+    proto::NativePlan {
+        protocol_version: crate::PLAN_PROTOCOL_VERSION,
+        root: Some(proto::Operator {
+            plan_node_id: 0,
+            metric_name: String::new(),
+            clear_record_timestamps: false,
+            metric_uid: None,
+            operator: Some(proto::operator::Operator::GroupAggregate(Box::new(
+                aggregate,
+            ))),
+        }),
+    }
+    .encode_to_vec()
 }
 
 fn bounded_plan() -> Vec<u8> {
@@ -236,6 +259,9 @@ fn bounded_plan() -> Vec<u8> {
         protocol_version: crate::PLAN_PROTOCOL_VERSION,
         root: Some(proto::Operator {
             plan_node_id: 0,
+            metric_name: String::new(),
+            clear_record_timestamps: false,
+            metric_uid: None,
             operator: Some(proto::operator::Operator::GroupAggregate(Box::new(
                 aggregate,
             ))),
@@ -672,6 +698,9 @@ fn count_accepts_nonnumeric_inputs_and_ignores_nulls() {
     let aggregate = proto::GroupAggregate {
         input: Some(Box::new(proto::Operator {
             plan_node_id: 0,
+            metric_name: String::new(),
+            clear_record_timestamps: false,
+            metric_uid: None,
             operator: Some(proto::operator::Operator::Input(proto::Input {
                 schema: None,
                 input_index: 0,
@@ -696,6 +725,9 @@ fn count_accepts_nonnumeric_inputs_and_ignores_nulls() {
         protocol_version: crate::PLAN_PROTOCOL_VERSION,
         root: Some(proto::Operator {
             plan_node_id: 0,
+            metric_name: String::new(),
+            clear_record_timestamps: false,
+            metric_uid: None,
             operator: Some(proto::operator::Operator::GroupAggregate(Box::new(
                 aggregate,
             ))),
@@ -1427,10 +1459,18 @@ struct CountingState {
 }
 
 impl KeyedState for CountingState {
-    fn get_batch<'a>(&'a self, keys: &[StateKeyRef<'_>]) -> Result<Vec<Option<Cow<'a, [u8]>>>> {
+    fn get_batch<'a>(
+        &'a self,
+        keys: &[StateKeyRef<'_>],
+        owner: &HostMemoryReservation,
+    ) -> Result<crate::state::StateReadBatch<'a>> {
         self.reads.fetch_add(1, Ordering::Relaxed);
         self.read_keys.fetch_add(keys.len(), Ordering::Relaxed);
-        Ok(vec![None; keys.len()])
+        let reservation = crate::state::StateReadBatch::admit(keys.len(), owner)?;
+        Ok(crate::state::StateReadBatch::new(
+            vec![None; keys.len()],
+            reservation,
+        ))
     }
 
     fn write_batch(&mut self, mutations: Vec<StateMutation>) -> Result<()> {
@@ -1440,11 +1480,30 @@ impl KeyedState for CountingState {
         Ok(())
     }
 
-    fn snapshot_key_group(&self, _key_group: u32) -> Result<Vec<u8>> {
+    fn visit_key_group(
+        &self,
+        _: u32,
+        _: usize,
+        _: usize,
+        _: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<()>,
+    ) -> Result<()> {
+        unreachable!("scan is not used by the batch-call test")
+    }
+
+    fn snapshot_key_group(
+        &self,
+        _key_group: u32,
+        _owner: &HostMemoryReservation,
+    ) -> Result<crate::state::SnapshotBytes> {
         unreachable!("snapshot is not used by the batch-call test")
     }
 
-    fn restore_key_group(&mut self, _key_group: u32, _bytes: &[u8]) -> Result<()> {
+    fn restore_key_group(
+        &mut self,
+        _key_group: u32,
+        _bytes: &[u8],
+        _owner: &HostMemoryReservation,
+    ) -> Result<()> {
         unreachable!("restore is not used by the batch-call test")
     }
 }

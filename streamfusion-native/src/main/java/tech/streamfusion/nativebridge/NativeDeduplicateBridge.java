@@ -32,8 +32,8 @@ public final class NativeDeduplicateBridge {
 
     public static long create(
             byte[] plan, int maxParallelism, int firstKeyGroup, int lastKeyGroup, NativeMemoryManager memoryManager) {
-        long handle =
-                createHandle(plan, maxParallelism, firstKeyGroup, lastKeyGroup, memoryManager, memoryManager.limit());
+        long handle = createHandle(
+                identifyPlan(plan), maxParallelism, firstKeyGroup, lastKeyGroup, memoryManager, memoryManager.limit());
         if (handle == 0) {
             throw new IllegalStateException("Native deduplicate returned a null handle");
         }
@@ -49,7 +49,7 @@ public final class NativeDeduplicateBridge {
             long memoryLimit,
             NativeMemoryManager memoryManager) {
         long handle = createRocksHandle(
-                plan,
+                identifyPlan(plan),
                 maxParallelism,
                 firstKeyGroup,
                 lastKeyGroup,
@@ -93,6 +93,15 @@ public final class NativeDeduplicateBridge {
 
     public static long executedBatchCount() {
         return EXECUTED_BATCHES.get();
+    }
+
+    public static byte[] identifyPlan(byte[] plan) {
+        return NativePlanNodeIdentity.assign(plan);
+    }
+
+    /** Stable plan-node id, logical input count and logical output count triples. */
+    public static long[] metricSnapshot(long handle) {
+        return nativeMetricSnapshot(handle);
     }
 
     public static void resetMetrics() {
@@ -173,4 +182,6 @@ public final class NativeDeduplicateBridge {
             long memoryLimit);
 
     private static native void destroyHandle(long handle);
+
+    private static native long[] nativeMetricSnapshot(long handle);
 }

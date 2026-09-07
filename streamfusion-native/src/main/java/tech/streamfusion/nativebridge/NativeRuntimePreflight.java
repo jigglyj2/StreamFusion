@@ -15,5 +15,13 @@ public final class NativeRuntimePreflight {
 
     public static void verify() {
         NativeLibraryLoader.load();
+        if (NativeExecutionContext.nativePlanProtocolVersion() != 3) {
+            throw new IllegalStateException("Unsupported native plan record-envelope policy protocol");
+        }
+        if (NativeExecutionContext.nativeStreamEdgeVersion() != 1
+                || NativeExecutionContext.nativeControlEdgeVersion() != 2
+                || NativeExecutionContext.nativeGaugeEdgeVersion() != 1) {
+            throw new IllegalStateException("Unsupported native plan Arrow stream edge version");
+        }
     }
 }

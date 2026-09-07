@@ -15,7 +15,9 @@ use arrow::ffi::{from_ffi, from_ffi_and_data_type, FFI_ArrowArray, FFI_ArrowSche
 use arrow::ffi_stream::FFI_ArrowArrayStream;
 use arrow::record_batch::RecordBatchReader;
 use datafusion::execution::memory_pool::MemoryReservation;
-use datafusion::physical_plan::{collect, ExecutionPlan, SendableRecordBatchStream};
+use datafusion::physical_plan::{
+    collect, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
+};
 use futures::StreamExt;
 use jni::jni_str;
 use jni::strings::JNIString;
@@ -66,25 +68,61 @@ pub(super) unsafe fn import_input(
     input_index: usize,
     row_offset: usize,
 ) -> datafusion::error::Result<(RecordBatch, MemoryReservation)> {
+    let input_array = unsafe { input_array_address.as_ref() }.ok_or_else(|| {
+        datafusion::error::DataFusionError::Execution("Arrow C Data input address was null".into())
+    })?;
+    let row_count = usize::try_from(input_array.length).map_err(|_| {
+        datafusion::error::DataFusionError::Execution("negative Arrow input row count".into())
+    })?;
+    input_ordinal_end(row_offset, row_count)?;
+    let cached_schema = if input_schema_address.is_null() {
+        Some(context.input_schema(input_index)?)
+    } else {
+        None
+    };
+    // Payload-sized ordinal storage is budgeted; short-lived C Data descriptors are not.
+    let reservation = context.reservation("native input row ordinal");
+    reservation.try_grow(
+        row_count
+            .checked_mul(std::mem::size_of::<i32>())
+            .ok_or_else(|| {
+                datafusion::error::DataFusionError::ResourcesExhausted(
+                    "native ordinal size overflow".into(),
+                )
+            })?,
+    )?;
     let input_batch = if input_schema_address.is_null() {
-        let schema = context.input_schema(input_index)?;
+        let schema = cached_schema.expect("cached C Data schema");
         unsafe { import_record_batch_with_schema(input_array_address, schema)? }
     } else {
         let batch = unsafe { import_record_batch(input_array_address, input_schema_address) }?;
         context.remember_input_schema(input_index, batch.schema())?;
         batch
     };
-    let row_count = input_batch.num_rows();
-    let reservation = context.reservation("native input-row ordinal");
-    reservation.try_grow(
-        row_count
-            .checked_mul(std::mem::size_of::<i32>())
-            .ok_or_else(|| {
-                datafusion::error::DataFusionError::ResourcesExhausted(
-                    "input-row ordinal accounting overflowed usize".to_string(),
-                )
-            })?,
+    let input_batch = crate::memory_pool::arrow_lease::borrowed_batch(
+        input_batch,
+        crate::memory_pool::buffer_registry(context.task_context().memory_pool()),
     )?;
+    Ok((
+        prepare_input(context, input_batch, row_offset)?,
+        reservation,
+    ))
+}
+
+pub(super) fn prepare_input(
+    context: &NativeExecutionContext,
+    input_batch: RecordBatch,
+    row_offset: usize,
+) -> datafusion::error::Result<RecordBatch> {
+    let row_end = input_ordinal_end(row_offset, input_batch.num_rows())?;
+    let owned = context.plan().protocol_version >= crate::RECORD_POLICY_PLAN_PROTOCOL_VERSION;
+    let input_batch = if owned {
+        crate::planner::operators::envelope::own_edge_timestamp(input_batch)?
+    } else if context.requires_input_envelope() {
+        crate::planner::operators::envelope::without_edge_timestamp(input_batch)?
+    } else {
+        input_batch
+    };
     let mut fields = input_batch
         .schema()
         .fields()
@@ -98,12 +136,37 @@ pub(super) unsafe fn import_input(
     )));
     let mut columns = input_batch.columns().to_vec();
     columns.push(Arc::new(Int32Array::from_iter_values(
-        (row_offset..row_offset + row_count).map(|index| index as i32),
+        (row_offset..row_end).map(|index| if owned { -1 } else { index as i32 }),
     )));
-    Ok((
-        RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)?,
-        reservation,
-    ))
+    Ok(RecordBatch::try_new(
+        Arc::new(Schema::new(fields)),
+        columns,
+    )?)
+}
+
+fn input_ordinal_end(offset: usize, rows: usize) -> datafusion::error::Result<usize> {
+    offset
+        .checked_add(rows)
+        .filter(|end| *end <= i32::MAX as usize)
+        .ok_or_else(|| {
+            datafusion::error::DataFusionError::Execution(
+                "native plan input ordinal exceeds the Java INT index range".into(),
+            )
+        })
+}
+
+#[cfg(test)]
+mod import_tests;
+
+#[test]
+fn input_ordinals_reject_overflow_before_allocating_or_narrowing() {
+    assert_eq!(input_ordinal_end(3, 0).unwrap(), 3);
+    assert_eq!(
+        input_ordinal_end(i32::MAX as usize - 2, 2).unwrap(),
+        i32::MAX as usize
+    );
+    assert!(input_ordinal_end(i32::MAX as usize, 1).is_err());
+    assert!(input_ordinal_end(usize::MAX, 1).is_err());
 }
 
 pub(super) unsafe fn import_record_batch(
@@ -181,8 +244,8 @@ pub(super) unsafe fn execute_and_export(
 }
 
 pub(super) unsafe fn execute_and_export_stream(
-    context: &NativeExecutionContext,
-    plan: Arc<dyn ExecutionPlan>,
+    context: &Arc<NativeExecutionContext>,
+    batches: Vec<RecordBatch>,
     input_reservations: Vec<MemoryReservation>,
     output_stream_address: *mut FFI_ArrowArrayStream,
 ) -> datafusion::error::Result<()> {
@@ -191,20 +254,37 @@ pub(super) unsafe fn execute_and_export_stream(
             "Arrow C Stream output address was null".to_string(),
         ));
     }
-    let schema = plan.schema();
-    let stream = plan.execute(0, context.task_context())?;
+    unsafe {
+        export_plan_stream(
+            context,
+            context.start(batches)?,
+            input_reservations,
+            output_stream_address,
+        )
+    }
+}
+
+pub(super) unsafe fn export_plan_stream(
+    context: &Arc<NativeExecutionContext>,
+    stream: crate::execution_context::stream::NativePlanStream,
+    input_reservations: Vec<MemoryReservation>,
+    output_stream_address: *mut FFI_ArrowArrayStream,
+) -> datafusion::error::Result<()> {
+    let stream = Box::pin(stream);
+    let schema = stream.schema();
     let reader = DataFusionStreamReader {
         schema,
         stream,
-        runtime: context.shared_runtime(),
+        context: Arc::clone(context),
         output_reservation: context.reservation("native Arrow stream output"),
         _input_reservations: input_reservations,
     };
+    let exported = crate::memory_pool::c_stream::export(
+        reader,
+        context.reservation("native Arrow C Stream descriptors"),
+    )?;
     unsafe {
-        std::ptr::write(
-            output_stream_address,
-            FFI_ArrowArrayStream::new(Box::new(reader)),
-        );
+        std::ptr::write(output_stream_address, exported);
     }
     Ok(())
 }
@@ -212,23 +292,28 @@ pub(super) unsafe fn execute_and_export_stream(
 struct DataFusionStreamReader {
     schema: Arc<Schema>,
     stream: SendableRecordBatchStream,
-    runtime: Arc<tokio::runtime::Runtime>,
     output_reservation: MemoryReservation,
     _input_reservations: Vec<MemoryReservation>,
+    // Keep plan/schema/runtime control allocations admitted until the last stream releases them.
+    context: Arc<NativeExecutionContext>,
 }
 
 impl Iterator for DataFusionStreamReader {
     type Item = Result<RecordBatch, ArrowError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let next = self.runtime.block_on(self.stream.next())?;
+        let next = self.context.runtime().block_on(self.stream.next())?;
         Some(
             next.map_err(|error| ArrowError::ExternalError(Box::new(error)))
                 .and_then(|batch| {
-                    self.output_reservation
-                        .try_resize(batch.get_array_memory_size())
-                        .map_err(|error| ArrowError::ExternalError(Box::new(error)))?;
-                    Ok(batch)
+                    crate::memory_pool::arrow_lease::edge_batch(
+                        batch,
+                        self.output_reservation.new_empty(),
+                        crate::memory_pool::buffer_registry(
+                            self.context.task_context().memory_pool(),
+                        ),
+                    )
+                    .map_err(|error| ArrowError::ExternalError(Box::new(error)))
                 }),
         )
     }

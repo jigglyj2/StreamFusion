@@ -14,28 +14,47 @@ pub mod exchange;
 mod execution_context;
 mod jni_bridge;
 mod memory_pool;
+mod plan_metrics;
 pub mod planner;
 mod state;
+
+#[cfg(test)]
+mod allocation_test_support;
 
 pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/streamfusion.plan.v1.rs"));
 }
 
 pub const PLAN_PROTOCOL_VERSION: u32 = 1;
+pub const ENVELOPE_PLAN_PROTOCOL_VERSION: u32 = 2;
+pub const RECORD_POLICY_PLAN_PROTOCOL_VERSION: u32 = 3;
+
+pub(crate) fn supported_plan_protocol(version: u32) -> bool {
+    matches!(
+        version,
+        PLAN_PROTOCOL_VERSION
+            | ENVELOPE_PLAN_PROTOCOL_VERSION
+            | RECORD_POLICY_PLAN_PROTOCOL_VERSION
+    )
+}
 
 pub fn decode_plan(bytes: &[u8]) -> Result<proto::NativePlan> {
     let mut plan = proto::NativePlan::decode(bytes)
         .map_err(|error| DataFusionError::Plan(format!("invalid StreamFusion plan: {error}")))?;
-    if plan.protocol_version != PLAN_PROTOCOL_VERSION {
+    if !supported_plan_protocol(plan.protocol_version) {
         return Err(DataFusionError::Plan(format!(
-            "unsupported StreamFusion plan protocol version {}, expected {}",
-            plan.protocol_version, PLAN_PROTOCOL_VERSION
+            "unsupported StreamFusion plan protocol version {}, expected 1, 2 or 3",
+            plan.protocol_version
         )));
     }
     if let Some(root) = plan.root.as_mut() {
-        let mut next_id = 1;
+        // Reserve every explicit Java identity before generating any synthetic identity.
+        // Otherwise an early anonymous input can steal a later sibling's physical node ID.
+        let mut next_id = 0;
         let mut assigned = HashSet::new();
-        assign_plan_node_ids(root, &mut next_id, &mut assigned)?;
+        assign_plan_node_ids(root, &mut next_id, &mut assigned, plan.protocol_version)?;
+        next_id = 1;
+        assign_plan_node_ids(root, &mut next_id, &mut assigned, plan.protocol_version)?;
     }
     Ok(plan)
 }
@@ -44,52 +63,104 @@ fn assign_plan_node_ids(
     operator: &mut proto::Operator,
     next_id: &mut u64,
     assigned: &mut HashSet<u64>,
+    protocol_version: u32,
 ) -> Result<()> {
-    if operator.plan_node_id == 0 {
+    if operator.clear_record_timestamps && protocol_version < RECORD_POLICY_PLAN_PROTOCOL_VERSION {
+        return Err(DataFusionError::Plan(
+            "record timestamp policy requires plan protocol version 3".into(),
+        ));
+    }
+    // Zero selects the read-only identity-reservation pass; positive values assign missing
+    // IDs from the lowest available range. Both passes share the protocol child visitor.
+    if *next_id == 0 {
+        if operator.plan_node_id > i64::MAX as u64 {
+            return Err(DataFusionError::Plan(
+                "native plan-node identity exceeds Java's positive metric identity range".into(),
+            ));
+        }
+        if operator.plan_node_id != 0 && !assigned.insert(operator.plan_node_id) {
+            return Err(DataFusionError::Plan(format!(
+                "duplicate native plan-node identity {}",
+                operator.plan_node_id
+            )));
+        }
+    } else if operator.plan_node_id == 0 {
         while assigned.contains(next_id) {
             *next_id = next_id.checked_add(1).ok_or_else(|| {
                 DataFusionError::Plan("native plan-node identity overflowed u64".to_string())
             })?;
         }
         operator.plan_node_id = *next_id;
+        assigned.insert(operator.plan_node_id);
     }
-    if !assigned.insert(operator.plan_node_id) {
-        return Err(DataFusionError::Plan(format!(
-            "duplicate native plan-node identity {}",
-            operator.plan_node_id
-        )));
-    }
-    *next_id = (*next_id)
-        .max(operator.plan_node_id)
-        .checked_add(1)
-        .ok_or_else(|| {
-            DataFusionError::Plan("native plan-node identity overflowed u64".to_string())
-        })?;
 
     use proto::operator::Operator::*;
     match operator.operator.as_mut() {
-        Some(BoundedSort(node)) => assign_child(&mut node.input, next_id, assigned),
-        Some(TemporalSort(node)) => assign_child(&mut node.input, next_id, assigned),
-        Some(OverAggregate(node)) => assign_child(&mut node.input, next_id, assigned),
-        Some(TopN(node)) => assign_child(&mut node.input, next_id, assigned),
-        Some(Deduplicate(node)) => assign_child(&mut node.input, next_id, assigned),
-        Some(ChangelogNormalize(node)) => assign_child(&mut node.input, next_id, assigned),
-        Some(GroupAggregate(node)) => assign_child(&mut node.input, next_id, assigned),
-        Some(LocalGroupAggregate(node)) => assign_child(&mut node.input, next_id, assigned),
-        Some(GlobalGroupAggregate(node)) => assign_child(&mut node.input, next_id, assigned),
-        Some(IncrementalGroupAggregate(node)) => assign_child(&mut node.input, next_id, assigned),
-        Some(WindowAggregate(node)) => assign_child(&mut node.input, next_id, assigned),
-        Some(LocalWindowAggregate(node)) => assign_child(&mut node.input, next_id, assigned),
-        Some(WindowDeduplicate(node)) => assign_child(&mut node.input, next_id, assigned),
-        Some(WindowRank(node)) => assign_child(&mut node.input, next_id, assigned),
-        Some(WindowTableFunction(node)) => assign_child(&mut node.input, next_id, assigned),
-        Some(Expand(node)) => assign_child(&mut node.input, next_id, assigned),
-        Some(Calc(node)) => assign_child(&mut node.input, next_id, assigned),
-        Some(ArrayUnnest(node)) => assign_child(&mut node.input, next_id, assigned),
-        Some(ReplicateRows(node)) => assign_child(&mut node.input, next_id, assigned),
+        Some(RegularJoin(node)) => {
+            assign_child(&mut node.left_input, next_id, assigned, protocol_version)?;
+            assign_child(&mut node.right_input, next_id, assigned, protocol_version)
+        }
+        Some(BoundedSort(node)) => {
+            assign_child(&mut node.input, next_id, assigned, protocol_version)
+        }
+        Some(TemporalSort(node)) => {
+            assign_child(&mut node.input, next_id, assigned, protocol_version)
+        }
+        Some(OverAggregate(node)) => {
+            assign_child(&mut node.input, next_id, assigned, protocol_version)
+        }
+        Some(TopN(node)) => assign_child(&mut node.input, next_id, assigned, protocol_version),
+        Some(Deduplicate(node)) => {
+            assign_child(&mut node.input, next_id, assigned, protocol_version)
+        }
+        Some(ChangelogNormalize(node)) => {
+            assign_child(&mut node.input, next_id, assigned, protocol_version)
+        }
+        Some(GroupAggregate(node)) => {
+            assign_child(&mut node.input, next_id, assigned, protocol_version)
+        }
+        Some(LocalGroupAggregate(node)) => {
+            assign_child(&mut node.input, next_id, assigned, protocol_version)
+        }
+        Some(GlobalGroupAggregate(node)) => {
+            assign_child(&mut node.input, next_id, assigned, protocol_version)
+        }
+        Some(IncrementalGroupAggregate(node)) => {
+            assign_child(&mut node.input, next_id, assigned, protocol_version)
+        }
+        Some(WindowAggregate(node)) => {
+            assign_child(&mut node.input, next_id, assigned, protocol_version)
+        }
+        Some(LocalWindowAggregate(node)) => {
+            assign_child(&mut node.input, next_id, assigned, protocol_version)
+        }
+        Some(WindowDeduplicate(node)) => {
+            assign_child(&mut node.input, next_id, assigned, protocol_version)
+        }
+        Some(WindowRank(node)) => {
+            assign_child(&mut node.input, next_id, assigned, protocol_version)
+        }
+        Some(WindowTableFunction(node)) => {
+            assign_child(&mut node.input, next_id, assigned, protocol_version)
+        }
+        Some(Expand(node)) => assign_child(&mut node.input, next_id, assigned, protocol_version),
+        Some(Calc(node)) => {
+            if node.preserve_input_envelope && protocol_version < ENVELOPE_PLAN_PROTOCOL_VERSION {
+                return Err(DataFusionError::Plan(
+                    "implicit Calc envelope requires plan protocol version 2".into(),
+                ));
+            }
+            assign_child(&mut node.input, next_id, assigned, protocol_version)
+        }
+        Some(ArrayUnnest(node)) => {
+            assign_child(&mut node.input, next_id, assigned, protocol_version)
+        }
+        Some(ReplicateRows(node)) => {
+            assign_child(&mut node.input, next_id, assigned, protocol_version)
+        }
         Some(Union(node)) => {
             for input in &mut node.inputs {
-                assign_plan_node_ids(input, next_id, assigned)?;
+                assign_plan_node_ids(input, next_id, assigned, protocol_version)?;
             }
             Ok(())
         }
@@ -101,9 +172,10 @@ fn assign_child(
     child: &mut Option<Box<proto::Operator>>,
     next_id: &mut u64,
     assigned: &mut HashSet<u64>,
+    protocol_version: u32,
 ) -> Result<()> {
     match child.as_deref_mut() {
-        Some(child) => assign_plan_node_ids(child, next_id, assigned),
+        Some(child) => assign_plan_node_ids(child, next_id, assigned, protocol_version),
         None => Ok(()),
     }
 }
@@ -129,9 +201,16 @@ mod tests {
             protocol_version: PLAN_PROTOCOL_VERSION,
             root: Some(proto::Operator {
                 plan_node_id: 0,
+                metric_name: String::new(),
+                clear_record_timestamps: false,
+                metric_uid: None,
                 operator: Some(proto::operator::Operator::Calc(Box::new(proto::Calc {
+                    preserve_input_envelope: false,
                     input: Some(Box::new(proto::Operator {
                         plan_node_id: 0,
+                        metric_name: String::new(),
+                        clear_record_timestamps: false,
+                        metric_uid: None,
                         operator: Some(proto::operator::Operator::Input(proto::Input {
                             schema: Some(proto::Schema {
                                 fields: vec![proto::Field {
@@ -165,7 +244,11 @@ mod tests {
         };
         plan.root = Some(proto::Operator {
             plan_node_id: 0,
+            metric_name: String::new(),
+            clear_record_timestamps: false,
+            metric_uid: None,
             operator: Some(proto::operator::Operator::Calc(Box::new(proto::Calc {
+                preserve_input_envelope: false,
                 input: Some(Box::new(inner)),
                 projections: vec![proto::Expression {
                     expression: Some(proto::expression::Expression::InputReference(
@@ -186,10 +269,16 @@ mod tests {
             protocol_version: PLAN_PROTOCOL_VERSION,
             root: Some(proto::Operator {
                 plan_node_id: 0,
+                metric_name: String::new(),
+                clear_record_timestamps: false,
+                metric_uid: None,
                 operator: Some(proto::operator::Operator::Union(proto::Union {
                     inputs: (0..input_count)
                         .map(|input_index| proto::Operator {
                             plan_node_id: 0,
+                            metric_name: String::new(),
+                            clear_record_timestamps: false,
+                            metric_uid: None,
                             operator: Some(proto::operator::Operator::Input(proto::Input {
                                 schema: None,
                                 input_index,
@@ -218,6 +307,33 @@ mod tests {
         assert_eq!(root_id, 1);
         assert_eq!(inner_id, 2);
         assert_eq!(inner_calc.input.unwrap().plan_node_id, 3);
+    }
+
+    #[test]
+    fn explicit_physical_ids_are_reserved_before_synthetic_ids_are_assigned() {
+        let mut plan = identity_plan();
+        let root = plan.root.as_mut().unwrap();
+        let proto::operator::Operator::Calc(calc) = root.operator.as_mut().unwrap() else {
+            unreachable!()
+        };
+        calc.input.as_mut().unwrap().plan_node_id = 1;
+        let decoded = decode_plan(&plan.encode_to_vec()).unwrap();
+        let root = decoded.root.unwrap();
+        assert_eq!(root.plan_node_id, 2);
+        let proto::operator::Operator::Calc(calc) = root.operator.unwrap() else {
+            unreachable!()
+        };
+        assert_eq!(calc.input.unwrap().plan_node_id, 1);
+
+        let mut plan = identity_plan();
+        plan.root.as_mut().unwrap().plan_node_id = (1 << 32) | 27;
+        let decoded = decode_plan(&plan.encode_to_vec()).unwrap();
+        let root = decoded.root.unwrap();
+        assert_eq!(root.plan_node_id, (1 << 32) | 27);
+        let proto::operator::Operator::Calc(calc) = root.operator.unwrap() else {
+            unreachable!()
+        };
+        assert_eq!(calc.input.unwrap().plan_node_id, 1);
     }
 
     #[test]
@@ -270,9 +386,16 @@ mod tests {
             protocol_version: PLAN_PROTOCOL_VERSION,
             root: Some(proto::Operator {
                 plan_node_id: 0,
+                metric_name: String::new(),
+                clear_record_timestamps: false,
+                metric_uid: None,
                 operator: Some(proto::operator::Operator::Calc(Box::new(proto::Calc {
+                    preserve_input_envelope: false,
                     input: Some(Box::new(proto::Operator {
                         plan_node_id: 0,
+                        metric_name: String::new(),
+                        clear_record_timestamps: false,
+                        metric_uid: None,
                         operator: Some(proto::operator::Operator::Input(proto::Input {
                             schema: Some(proto::Schema {
                                 fields: vec![proto::Field {
@@ -423,7 +546,7 @@ mod tests {
     #[test]
     fn rejects_unknown_protocol_version() {
         let mut plan = identity_plan();
-        plan.protocol_version = PLAN_PROTOCOL_VERSION + 1;
+        plan.protocol_version = RECORD_POLICY_PLAN_PROTOCOL_VERSION + 1;
 
         let error = decode_plan(&plan.encode_to_vec()).unwrap_err();
 

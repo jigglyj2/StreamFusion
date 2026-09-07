@@ -125,12 +125,13 @@ impl TemporalJoinProcessor {
         let timer_reservation = reservation.sibling("native RocksDB temporal join timers");
         let scratch_reservation =
             reservation.sibling("native RocksDB temporal join batch scratch and output");
-        let state = Box::new(RocksPluginKeyedState::open(
+        let state = Box::new(RocksPluginKeyedState::open_for_owner(
             plugin_path,
             database_path,
             first_key_group,
             last_key_group,
             memory_limit,
+            &reservation,
         )?);
         Self::with_state(
             serialized_plan,
@@ -335,7 +336,9 @@ impl TemporalJoinProcessor {
                 key: &key.key,
             })
             .collect::<Vec<_>>();
-        let existing = self.state.get_batch(&refs)?;
+        let existing = self.state.get_batch(&refs, &self.scratch_reservation)?;
+        let _loaded_state_workspace =
+            crate::state::reserve_decoded_values(&existing, &self.scratch_reservation)?;
         self.state_read_batches = self.state_read_batches.saturating_add(1);
         let mut staged = keys
             .into_iter()
@@ -508,7 +511,7 @@ impl TemporalJoinProcessor {
             .collect::<Vec<_>>();
         let values = self
             .state
-            .get_batch(&refs)?
+            .get_batch(&refs, &self.scratch_reservation)?
             .into_iter()
             .map(|value| value.map(|value| value.into_owned()))
             .collect::<Vec<_>>();
@@ -846,9 +849,17 @@ impl TemporalJoinProcessor {
         )
     }
 
-    pub(crate) fn snapshot_key_group(&mut self, key_group: u32) -> Result<Vec<u8>> {
+    pub(crate) fn state_memory(&self) -> HostMemoryReservation {
+        self.scratch_reservation.sibling("native state transfer")
+    }
+
+    pub(crate) fn snapshot_key_group(
+        &mut self,
+        key_group: u32,
+    ) -> Result<crate::state::SnapshotBytes> {
         self.flush_timer_groups([key_group])?;
-        self.state.snapshot_key_group(key_group)
+        self.state
+            .snapshot_key_group(key_group, &self.scratch_reservation)
     }
 
     pub(crate) fn restore_key_group(&mut self, key_group: u32, bytes: &[u8]) -> Result<()> {
@@ -859,6 +870,7 @@ impl TemporalJoinProcessor {
             bytes,
             TIMER_STATE_KEY,
             &mut self.state_read_batches,
+            &self.scratch_reservation,
         )?;
         self.dirty_timer_groups.remove(&key_group);
         Ok(())
@@ -1141,6 +1153,7 @@ mod tests {
         drop(source);
         drop(low);
         drop(high);
+        drop(snapshots);
         assert_eq!(broker.reserved(), 0);
     }
 
@@ -1231,6 +1244,9 @@ mod tests {
             protocol_version: crate::PLAN_PROTOCOL_VERSION,
             root: Some(proto::Operator {
                 plan_node_id: 0,
+                metric_name: String::new(),
+                clear_record_timestamps: false,
+                metric_uid: None,
                 operator: Some(proto::operator::Operator::TemporalJoin(
                     proto::TemporalJoin {
                         left_key_indices: vec![0],

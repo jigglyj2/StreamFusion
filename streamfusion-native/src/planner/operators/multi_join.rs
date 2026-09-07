@@ -25,10 +25,16 @@ const UPDATE_BEFORE: i8 = 1;
 const UPDATE_AFTER: i8 = 2;
 const DELETE: i8 = 3;
 const STATE_MAGIC: &[u8; 4] = b"SFMJ";
-const STATE_VERSION: u8 = 1;
+const STATE_VERSION: u8 = 2;
+mod codec;
+mod pages;
+use codec::{decode_state, encode_state, read_u32, truncated};
+mod cursor;
+mod work;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct StoredRow {
+    slot: u64,
     row: Vec<u8>,
     condition_values: Vec<Option<Vec<u8>>>,
 }
@@ -54,6 +60,8 @@ struct StagedState {
     key: StateKey,
     value: MultiJoinState,
     touched: bool,
+    directory: pages::Directory,
+    dirty: std::collections::BTreeSet<(usize, u64)>,
 }
 
 struct OutputRow {
@@ -62,9 +70,10 @@ struct OutputRow {
     input_ordinal: i32,
 }
 
-/// Persistent N-input join state. One native invocation performs one backend multi-get and one
-/// write batch, regardless of the number of rows in the incoming Arrow batch.
+/// Persistent N-input join state. Each incoming batch loads directories/pages with batched
+/// state reads, drains bounded Arrow output, and flushes only dirty pages in one write batch.
 pub(crate) struct MultiJoinProcessor {
+    pending: Option<work::Work>,
     plan: proto::MultiJoin,
     max_parallelism: u32,
     state: Box<dyn KeyedState>,
@@ -80,6 +89,7 @@ pub(crate) struct MultiJoinProcessor {
     scratch_reservation: HostMemoryReservation,
     state_read_batches: u64,
     state_write_batches: u64,
+    failed: bool,
 }
 
 impl MultiJoinProcessor {
@@ -109,12 +119,13 @@ impl MultiJoinProcessor {
         memory_limit: usize,
         scratch: HostMemoryReservation,
     ) -> Result<Self> {
-        let state = Box::new(RocksPluginKeyedState::open(
+        let state = Box::new(RocksPluginKeyedState::open_for_owner(
             plugin_path,
             database_path,
             first_key_group,
             last_key_group,
             memory_limit,
+            &scratch,
         )?);
         Self::with_state(serialized_plan, max_parallelism, state, scratch)
     }
@@ -193,183 +204,63 @@ impl MultiJoinProcessor {
             scratch_reservation,
             state_read_batches: 0,
             state_write_batches: 0,
+            pending: None,
+            failed: false,
         })
     }
 
+    /// Compatibility for old single-batch harnesses. Large fan-out must use the native pull
+    /// interface; never concatenate or retain the complete Cartesian output at this edge.
     pub(crate) fn process_arrow(
         &mut self,
         input: usize,
         batch: RecordBatch,
     ) -> Result<RecordBatch> {
-        if input >= self.plan.inputs.len() {
-            return Err(DataFusionError::Execution(format!(
-                "multi-join input {input} is outside {} inputs",
-                self.plan.inputs.len()
-            )));
-        }
-        self.prepare_schema(input, batch.schema())?;
-        let visible_count = self.visible_schemas[input].fields().len();
-        let input_bytes = batch.columns()[..visible_count]
-            .iter()
-            .map(|column| column.get_array_memory_size())
-            .sum::<usize>();
-        let base = input_bytes.saturating_add(batch.num_rows().saturating_mul(256));
-        self.scratch_reservation.resize(base)?;
-        let encoded = self.row_converters[input].convert_columns(&batch.columns()[..visible_count]);
-        let result = match encoded {
-            Ok(encoded) => self.process_accounted(input, &batch, &encoded),
-            Err(error) => Err(error.into()),
-        };
-        match result {
-            Ok(output) => self.finish_output(output, base),
-            Err(error) => {
-                self.scratch_reservation.resize(0)?;
-                Err(error)
-            }
-        }
-    }
-
-    fn process_accounted(
-        &mut self,
-        input: usize,
-        batch: &RecordBatch,
-        encoded: &Rows,
-    ) -> Result<RecordBatch> {
-        let kinds = batch
-            .column(self.input_kind_indices[input].expect("schema prepared"))
-            .as_any()
-            .downcast_ref::<Int8Array>()
-            .ok_or_else(|| {
-                DataFusionError::Execution("multi-join RowKinds are not Int8".to_string())
-            })?;
-        let mut unique = HashMap::<StateKey, usize, RandomState>::with_capacity_and_hasher(
-            batch.num_rows(),
-            RandomState::new(),
-        );
-        let mut row_state_indices = Vec::with_capacity(batch.num_rows());
-        for row in 0..batch.num_rows() {
-            let key = self.group_key(input, batch, row)?;
-            let state_key = StateKey {
-                key_group: assign_key_group(&key, self.max_parallelism),
-                key,
-            };
-            let next = unique.len();
-            row_state_indices.push(*unique.entry(state_key).or_insert(next));
-        }
-        if unique.is_empty() {
+        self.start_arrow_stream(input, batch)?;
+        let Some(mut output) = self.next_output()? else {
             return self.empty_output();
+        };
+        if self.next_output()?.is_some() {
+            self.abort_unpublished()?;
+            return Err(DataFusionError::ResourcesExhausted(
+                "multi-join fan-out requires a bounded C Stream consumer".into(),
+            ));
         }
-        let mut ordered_keys = (0..unique.len()).map(|_| None).collect::<Vec<_>>();
-        for (key, index) in unique {
-            ordered_keys[index] = Some(key);
-        }
-        let keys = ordered_keys
-            .into_iter()
-            .map(|key| key.expect("multi-join state index is populated"))
-            .collect::<Vec<_>>();
-        let refs = keys
-            .iter()
-            .map(|key| StateKeyRef {
-                key_group: key.key_group,
-                key: &key.key,
-            })
-            .collect::<Vec<_>>();
-        let existing = self.state.get_batch(&refs)?;
-        self.state_read_batches = self.state_read_batches.saturating_add(1);
-        let input_count = self.plan.inputs.len();
-        let mut staged = keys
-            .into_iter()
-            .zip(existing)
-            .map(|(key, bytes)| {
-                Ok(StagedState {
-                    key,
-                    value: bytes
-                        .map(|bytes| decode_state(bytes.as_ref(), input_count))
-                        .transpose()?
-                        .unwrap_or_else(|| MultiJoinState::empty(input_count)),
-                    touched: false,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let mut output = Vec::new();
-        for row in 0..batch.num_rows() {
-            let ordinal = i32::try_from(row).map_err(|_| {
-                DataFusionError::Execution("multi-join batch exceeds Int32 indexing".to_string())
-            })?;
-            let kind = kinds.value(row);
-            let accumulate = match kind {
-                INSERT | UPDATE_AFTER => true,
-                UPDATE_BEFORE | DELETE => false,
-                other => {
-                    return Err(DataFusionError::Execution(format!(
-                        "unknown Flink RowKind byte {other}"
-                    )))
-                }
-            };
-            let stored = self.stored_row(input, batch, row, encoded.row(row).data().to_vec())?;
-            let state = &mut staged[row_state_indices[row]];
-            if accumulate {
-                enumerate_join(
-                    &self.plan,
-                    &state.value,
-                    &self.null_rows,
-                    input,
-                    &stored,
-                    kind,
-                    ordinal,
-                    &mut output,
-                );
-                state.value.inputs[input].push(stored);
-            } else if let Some(position) = state.value.inputs[input]
-                .iter()
-                .position(|candidate| candidate.row == stored.row)
-            {
-                // A retract only produces joined retracts when Flink's multiset state contains
-                // the row. Use the stored condition sidecars so a malformed/changed retract
-                // payload cannot influence matches before the exact state row is removed.
-                let existing = state.value.inputs[input][position].clone();
-                enumerate_join(
-                    &self.plan,
-                    &state.value,
-                    &self.null_rows,
-                    input,
-                    &existing,
-                    kind,
-                    ordinal,
-                    &mut output,
-                );
-                state.value.inputs[input].remove(position);
-            }
-            state.touched = true;
-        }
-        let mutations = staged
-            .into_iter()
-            .filter(|entry| entry.touched)
-            .map(|entry| StateMutation {
-                key: entry.key,
-                value: (!entry.value.is_empty()).then(|| encode_state(&entry.value)),
-            })
-            .collect::<Vec<_>>();
-        if !mutations.is_empty() {
-            self.state.write_batch(mutations)?;
-            self.state_write_batches = self.state_write_batches.saturating_add(1);
-        }
-        self.output_batch(output)
+        output.memory.transfer_to_arrow(output.memory.size())?;
+        Ok(output.batch)
     }
 
     pub(crate) fn statistics(&self) -> [u64; 2] {
         [self.state_read_batches, self.state_write_batches]
     }
 
-    pub(crate) fn snapshot_key_group(&self, key_group: u32) -> Result<Vec<u8>> {
-        self.state.snapshot_key_group(key_group)
+    pub(crate) fn state_memory(&self) -> HostMemoryReservation {
+        self.scratch_reservation.sibling("native state transfer")
+    }
+
+    fn require_idle(&self) -> Result<()> {
+        if self.pending.is_some() || self.failed {
+            return Err(DataFusionError::Execution(
+                "multi-join checkpoint/restore requires a fully drained healthy stream".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn snapshot_key_group(&self, key_group: u32) -> Result<crate::state::SnapshotBytes> {
+        self.require_idle()?;
+        self.state
+            .snapshot_key_group(key_group, &self.scratch_reservation)
     }
 
     pub(crate) fn restore_key_group(&mut self, key_group: u32, bytes: &[u8]) -> Result<()> {
-        self.state.restore_key_group(key_group, bytes)
+        self.require_idle()?;
+        self.state
+            .restore_key_group(key_group, bytes, &self.scratch_reservation)
     }
 
     pub(crate) fn checkpoint(&self, directory: &std::path::Path) -> Result<()> {
+        self.require_idle()?;
         self.state.checkpoint(directory)
     }
 
@@ -414,6 +305,7 @@ impl MultiJoinProcessor {
             }
         }
         Ok(StoredRow {
+            slot: 0,
             row: encoded,
             condition_values: values,
         })
@@ -506,188 +398,6 @@ impl MultiJoinProcessor {
     fn empty_output(&self) -> Result<RecordBatch> {
         Ok(RecordBatch::new_empty(self.output_schema.clone()))
     }
-
-    fn finish_output(&mut self, output: RecordBatch, base: usize) -> Result<RecordBatch> {
-        let output_bytes = output.get_array_memory_size();
-        self.scratch_reservation.resize(output_bytes.max(base))?;
-        self.scratch_reservation.transfer_to_arrow(output_bytes)?;
-        self.scratch_reservation.resize(0)?;
-        Ok(output)
-    }
-}
-
-fn enumerate_join(
-    plan: &proto::MultiJoin,
-    state: &MultiJoinState,
-    null_rows: &[Vec<u8>],
-    active_input: usize,
-    active: &StoredRow,
-    kind: i8,
-    ordinal: i32,
-    output: &mut Vec<OutputRow>,
-) {
-    fn recurse<'a>(
-        plan: &proto::MultiJoin,
-        state: &'a MultiJoinState,
-        null_rows: &[Vec<u8>],
-        active_input: usize,
-        active: &'a StoredRow,
-        kind: i8,
-        ordinal: i32,
-        depth: usize,
-        joined: &mut Vec<Option<&'a StoredRow>>,
-        is_active: bool,
-        output: &mut Vec<OutputRow>,
-    ) {
-        if depth == state.inputs.len() {
-            if is_active {
-                output.push(OutputRow {
-                    inputs: joined
-                        .iter()
-                        .enumerate()
-                        .map(|(input, row)| {
-                            row.as_ref()
-                                .map(|row| row.row.clone())
-                                .unwrap_or_else(|| null_rows[input].clone())
-                        })
-                        .collect(),
-                    kind,
-                    input_ordinal: ordinal,
-                });
-            }
-            return;
-        }
-
-        let is_left = depth > 0 && plan.join_types[depth] == proto::RegularJoinType::Left as i32;
-        let accumulate = matches!(kind, INSERT | UPDATE_AFTER);
-        let mut any_match = false;
-        let mut associations = 0_i32;
-
-        // Flink only scans the active level's existing state for a LEFT join, where the
-        // association count determines null-padded transitions. INNER joins can activate the
-        // incoming row directly.
-        if is_left || depth != active_input {
-            for candidate in &state.inputs[depth] {
-                if !conditions_match(plan, depth, joined, candidate) {
-                    continue;
-                }
-                any_match = true;
-                if is_left {
-                    associations += if !is_active || accumulate { 1 } else { -1 };
-                    if depth == active_input
-                        && ((accumulate && associations > 0) || (!accumulate && associations > 1))
-                    {
-                        break;
-                    }
-                }
-                if !is_active && depth == active_input {
-                    continue;
-                }
-                joined.push(Some(candidate));
-                recurse(
-                    plan,
-                    state,
-                    null_rows,
-                    active_input,
-                    active,
-                    kind,
-                    ordinal,
-                    depth + 1,
-                    joined,
-                    is_active,
-                    output,
-                );
-                joined.pop();
-            }
-        }
-
-        if depth == active_input {
-            if conditions_match(plan, depth, joined, active) {
-                if is_left {
-                    associations += if accumulate { 1 } else { -1 };
-                }
-                if accumulate && is_left && !any_match {
-                    joined.push(None);
-                    recurse(
-                        plan,
-                        state,
-                        null_rows,
-                        active_input,
-                        active,
-                        DELETE,
-                        ordinal,
-                        depth + 1,
-                        joined,
-                        true,
-                        output,
-                    );
-                    joined.pop();
-                }
-                joined.push(Some(active));
-                recurse(
-                    plan,
-                    state,
-                    null_rows,
-                    active_input,
-                    active,
-                    kind,
-                    ordinal,
-                    depth + 1,
-                    joined,
-                    true,
-                    output,
-                );
-                joined.pop();
-                if !accumulate && is_left && associations == 0 {
-                    joined.push(None);
-                    recurse(
-                        plan,
-                        state,
-                        null_rows,
-                        active_input,
-                        active,
-                        INSERT,
-                        ordinal,
-                        depth + 1,
-                        joined,
-                        true,
-                        output,
-                    );
-                    joined.pop();
-                }
-            }
-        } else if is_left && !any_match && associations == 0 {
-            joined.push(None);
-            recurse(
-                plan,
-                state,
-                null_rows,
-                active_input,
-                active,
-                kind,
-                ordinal,
-                depth + 1,
-                joined,
-                is_active,
-                output,
-            );
-            joined.pop();
-        }
-    }
-
-    recurse(
-        plan,
-        state,
-        null_rows,
-        active_input,
-        active,
-        kind,
-        ordinal,
-        0,
-        &mut Vec::with_capacity(state.inputs.len()),
-        false,
-        output,
-    );
 }
 
 fn conditions_match(
@@ -825,478 +535,5 @@ fn row_converter(schema: &SchemaRef) -> Result<RowConverter> {
     )?)
 }
 
-fn encode_state(state: &MultiJoinState) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(STATE_MAGIC);
-    bytes.push(STATE_VERSION);
-    bytes.extend_from_slice(&(state.inputs.len() as u32).to_le_bytes());
-    for rows in &state.inputs {
-        bytes.extend_from_slice(&(rows.len() as u32).to_le_bytes());
-        for row in rows {
-            bytes.extend_from_slice(&(row.row.len() as u32).to_le_bytes());
-            bytes.extend_from_slice(&row.row);
-            bytes.extend_from_slice(&(row.condition_values.len() as u32).to_le_bytes());
-            for value in &row.condition_values {
-                match value {
-                    Some(value) => {
-                        bytes.extend_from_slice(&(value.len() as u32).to_le_bytes());
-                        bytes.extend_from_slice(value);
-                    }
-                    None => bytes.extend_from_slice(&u32::MAX.to_le_bytes()),
-                }
-            }
-        }
-    }
-    bytes
-}
-
-fn decode_state(bytes: &[u8], expected_inputs: usize) -> Result<MultiJoinState> {
-    if bytes.len() < 9 || &bytes[..4] != STATE_MAGIC || bytes[4] != STATE_VERSION {
-        return Err(DataFusionError::Execution(
-            "invalid native multi-join state".to_string(),
-        ));
-    }
-    let mut offset = 5;
-    let input_count = read_u32(bytes, &mut offset)? as usize;
-    if input_count != expected_inputs {
-        return Err(DataFusionError::Execution(format!(
-            "multi-join state has {input_count} inputs, expected {expected_inputs}"
-        )));
-    }
-    let mut inputs = Vec::with_capacity(input_count);
-    for _ in 0..input_count {
-        let count = read_u32(bytes, &mut offset)? as usize;
-        let mut rows = Vec::with_capacity(count);
-        for _ in 0..count {
-            let row = read_bytes(bytes, &mut offset)?;
-            let condition_count = read_u32(bytes, &mut offset)? as usize;
-            let mut condition_values = Vec::with_capacity(condition_count);
-            for _ in 0..condition_count {
-                let length = read_u32(bytes, &mut offset)?;
-                condition_values.push(if length == u32::MAX {
-                    None
-                } else {
-                    Some(read_bytes_with_length(bytes, &mut offset, length as usize)?)
-                });
-            }
-            rows.push(StoredRow {
-                row,
-                condition_values,
-            });
-        }
-        inputs.push(rows);
-    }
-    if offset != bytes.len() {
-        return Err(DataFusionError::Execution(
-            "multi-join state has trailing bytes".to_string(),
-        ));
-    }
-    Ok(MultiJoinState { inputs })
-}
-
-fn read_bytes(bytes: &[u8], offset: &mut usize) -> Result<Vec<u8>> {
-    let length = read_u32(bytes, offset)? as usize;
-    read_bytes_with_length(bytes, offset, length)
-}
-
-fn read_bytes_with_length(bytes: &[u8], offset: &mut usize, length: usize) -> Result<Vec<u8>> {
-    let end = offset.checked_add(length).ok_or_else(truncated)?;
-    let value = bytes.get(*offset..end).ok_or_else(truncated)?.to_vec();
-    *offset = end;
-    Ok(value)
-}
-
-fn read_u32(bytes: &[u8], offset: &mut usize) -> Result<u32> {
-    let end = offset.checked_add(4).ok_or_else(truncated)?;
-    let value = bytes.get(*offset..end).ok_or_else(truncated)?;
-    *offset = end;
-    Ok(u32::from_le_bytes(value.try_into().unwrap()))
-}
-
-fn truncated() -> DataFusionError {
-    DataFusionError::Execution("truncated native multi-join state".to_string())
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::memory_pool::{tests_support::TestBroker, HostMemoryReservation};
-    use arrow::array::{ArrayRef, Int64Array, StringArray};
-    use prost::Message;
-
-    #[test]
-    fn three_input_inner_join_preserves_row_kinds_and_duplicates() {
-        let broker = Arc::new(TestBroker::new(64 << 20));
-        let mut processor = MultiJoinProcessor::new(
-            &plan(),
-            128,
-            0,
-            127,
-            HostMemoryReservation::new(broker.clone(), "multi-join test"),
-        )
-        .unwrap();
-        assert_eq!(
-            processor
-                .process_arrow(0, batch(&[1], &["a"], &[INSERT]))
-                .unwrap()
-                .num_rows(),
-            0
-        );
-        assert_eq!(
-            processor
-                .process_arrow(1, batch(&[1, 1], &["b", "b2"], &[INSERT, INSERT]))
-                .unwrap()
-                .num_rows(),
-            0
-        );
-        let joined = processor
-            .process_arrow(2, batch(&[1], &["c"], &[UPDATE_AFTER]))
-            .unwrap();
-        assert_eq!(joined.num_rows(), 2);
-        assert_eq!(kinds(&joined), vec![UPDATE_AFTER, UPDATE_AFTER]);
-        let retract = processor
-            .process_arrow(1, batch(&[1], &["b"], &[UPDATE_BEFORE]))
-            .unwrap();
-        assert_eq!(retract.num_rows(), 1);
-        assert_eq!(kinds(&retract), vec![UPDATE_BEFORE]);
-        assert_eq!(processor.statistics(), [4, 4]);
-        drop(joined);
-        drop(retract);
-        drop(processor);
-        assert_eq!(broker.reserved(), 0);
-    }
-
-    #[test]
-    fn absent_retraction_does_not_emit_a_phantom_join() {
-        let broker = Arc::new(TestBroker::new(64 << 20));
-        let mut processor = MultiJoinProcessor::new(
-            &plan(),
-            128,
-            0,
-            127,
-            HostMemoryReservation::new(broker, "multi-join absent retract"),
-        )
-        .unwrap();
-        processor
-            .process_arrow(0, batch(&[1], &["a"], &[INSERT]))
-            .unwrap();
-        processor
-            .process_arrow(1, batch(&[1], &["b"], &[INSERT]))
-            .unwrap();
-        assert_eq!(
-            processor
-                .process_arrow(2, batch(&[1], &["missing"], &[DELETE]))
-                .unwrap()
-                .num_rows(),
-            0
-        );
-    }
-
-    #[test]
-    fn chained_left_joins_retract_and_restore_null_padding() {
-        let broker = Arc::new(TestBroker::new(64 << 20));
-        let mut processor = MultiJoinProcessor::new(
-            &plan_with_types([
-                proto::RegularJoinType::Inner,
-                proto::RegularJoinType::Left,
-                proto::RegularJoinType::Left,
-            ]),
-            128,
-            0,
-            127,
-            HostMemoryReservation::new(broker, "multi-join left transitions"),
-        )
-        .unwrap();
-        assert_eq!(
-            kinds(
-                &processor
-                    .process_arrow(0, batch(&[1], &["a"], &[INSERT]))
-                    .unwrap()
-            ),
-            vec![INSERT]
-        );
-        assert_eq!(
-            kinds(
-                &processor
-                    .process_arrow(1, batch(&[1], &["b"], &[INSERT]))
-                    .unwrap()
-            ),
-            vec![DELETE, INSERT]
-        );
-        assert_eq!(
-            kinds(
-                &processor
-                    .process_arrow(2, batch(&[1], &["c"], &[INSERT]))
-                    .unwrap()
-            ),
-            vec![DELETE, INSERT]
-        );
-        assert_eq!(
-            kinds(
-                &processor
-                    .process_arrow(2, batch(&[1], &["c"], &[DELETE]))
-                    .unwrap()
-            ),
-            vec![DELETE, INSERT]
-        );
-        assert_eq!(
-            kinds(
-                &processor
-                    .process_arrow(1, batch(&[1], &["b"], &[DELETE]))
-                    .unwrap()
-            ),
-            vec![DELETE, INSERT]
-        );
-        assert_eq!(
-            kinds(
-                &processor
-                    .process_arrow(0, batch(&[1], &["a"], &[DELETE]))
-                    .unwrap()
-            ),
-            vec![DELETE]
-        );
-    }
-
-    #[test]
-    fn null_condition_values_do_not_match() {
-        let broker = Arc::new(TestBroker::new(64 << 20));
-        let mut processor = MultiJoinProcessor::new(
-            &plan(),
-            128,
-            0,
-            127,
-            HostMemoryReservation::new(broker, "multi-join null condition"),
-        )
-        .unwrap();
-        processor
-            .process_arrow(0, nullable_batch(&[1], &["a"], &[INSERT], &[None]))
-            .unwrap();
-        processor
-            .process_arrow(1, batch(&[1], &["b"], &[INSERT]))
-            .unwrap();
-        assert_eq!(
-            processor
-                .process_arrow(2, batch(&[1], &["c"], &[INSERT]))
-                .unwrap()
-                .num_rows(),
-            0
-        );
-    }
-
-    #[test]
-    fn rejects_unadmitted_batch_memory_and_releases_the_reservation() {
-        let broker = Arc::new(TestBroker::new(8_192));
-        let mut processor = MultiJoinProcessor::new(
-            &plan(),
-            128,
-            0,
-            127,
-            HostMemoryReservation::new(broker.clone(), "multi-join constrained memory"),
-        )
-        .unwrap();
-        let failure = processor
-            .process_arrow(0, batch(&[1], &["a"], &[INSERT]))
-            .unwrap_err();
-        assert!(failure.to_string().contains("Flink denied"));
-        drop(processor);
-        assert_eq!(broker.reserved(), 0);
-    }
-
-    #[test]
-    fn canonical_state_restores_after_rescaling() {
-        let broker = Arc::new(TestBroker::new(1 << 30));
-        let mut source = processor(broker.clone(), 0, 127);
-        source
-            .process_arrow(0, batch(&[1, 2], &["a", "x"], &[INSERT, INSERT]))
-            .unwrap();
-        source
-            .process_arrow(1, batch(&[1, 2], &["b", "y"], &[INSERT, INSERT]))
-            .unwrap();
-        let snapshots = (0..128)
-            .map(|group| source.snapshot_key_group(group).unwrap())
-            .collect::<Vec<_>>();
-        let mut low = processor(broker.clone(), 0, 63);
-        let mut high = processor(broker, 64, 127);
-        for (group, snapshot) in snapshots.iter().enumerate() {
-            if group < 64 {
-                low.restore_key_group(group as u32, snapshot).unwrap();
-            } else {
-                high.restore_key_group(group as u32, snapshot).unwrap();
-            }
-        }
-        for key in [1, 2] {
-            let input = batch(&[key], &[if key == 1 { "c" } else { "z" }], &[INSERT]);
-            let encoded = source.group_key(2, &input, 0).unwrap();
-            let result = if assign_key_group(&encoded, 128) < 64 {
-                low.process_arrow(2, input).unwrap()
-            } else {
-                high.process_arrow(2, input).unwrap()
-            };
-            assert_eq!(kinds(&result), vec![INSERT]);
-        }
-    }
-
-    #[test]
-    fn canonical_state_moves_from_memory_to_rocksdb_with_batched_io() {
-        let Ok(plugin_path) = std::env::var("STREAMFUSION_TEST_ROCKSDB_PLUGIN") else {
-            return;
-        };
-        let broker = Arc::new(TestBroker::new(1 << 30));
-        let mut memory = processor(broker.clone(), 0, 127);
-        memory
-            .process_arrow(0, batch(&[1, 2], &["a", "x"], &[INSERT, INSERT]))
-            .unwrap();
-        memory
-            .process_arrow(1, batch(&[1, 2], &["b", "y"], &[INSERT, INSERT]))
-            .unwrap();
-        assert_eq!(memory.statistics(), [2, 2]);
-        let snapshots = (0..128)
-            .map(|group| memory.snapshot_key_group(group).unwrap())
-            .collect::<Vec<_>>();
-
-        let directory = tempfile::tempdir().unwrap();
-        let mut rocks = MultiJoinProcessor::new_rocksdb(
-            &plan(),
-            128,
-            0,
-            127,
-            std::path::Path::new(&plugin_path),
-            directory.path(),
-            64 << 20,
-            HostMemoryReservation::new(broker, "multi-join RocksDB scratch"),
-        )
-        .unwrap();
-        for (group, snapshot) in snapshots.iter().enumerate() {
-            rocks.restore_key_group(group as u32, snapshot).unwrap();
-            assert_eq!(rocks.snapshot_key_group(group as u32).unwrap(), *snapshot);
-        }
-        let output = rocks
-            .process_arrow(2, batch(&[1, 2], &["c", "z"], &[INSERT, INSERT]))
-            .unwrap();
-        assert_eq!(kinds(&output), vec![INSERT, INSERT]);
-        assert_eq!(rocks.statistics(), [1, 1]);
-    }
-
-    fn processor(broker: Arc<TestBroker>, first: u32, last: u32) -> MultiJoinProcessor {
-        MultiJoinProcessor::new(
-            &plan(),
-            128,
-            first,
-            last,
-            HostMemoryReservation::new(broker, "multi-join rescale"),
-        )
-        .unwrap()
-    }
-
-    fn plan() -> Vec<u8> {
-        plan_with_types([
-            proto::RegularJoinType::Inner,
-            proto::RegularJoinType::Inner,
-            proto::RegularJoinType::Inner,
-        ])
-    }
-
-    fn plan_with_types(join_types: [proto::RegularJoinType; 3]) -> Vec<u8> {
-        let input = || proto::MultiJoinInput {
-            schema: Some(schema()),
-            common_key_indices: vec![0],
-            state_retention_millis: 0,
-        };
-        proto::NativePlan {
-            protocol_version: crate::PLAN_PROTOCOL_VERSION,
-            root: Some(proto::Operator {
-                plan_node_id: 0,
-                operator: Some(proto::operator::Operator::MultiJoin(proto::MultiJoin {
-                    inputs: vec![input(), input(), input()],
-                    join_types: join_types.into_iter().map(|kind| kind as i32).collect(),
-                    equi_conditions: vec![
-                        proto::MultiJoinEquiCondition {
-                            depth: 1,
-                            left_input_index: 0,
-                            left_field_index: 0,
-                            right_field_index: 0,
-                        },
-                        proto::MultiJoinEquiCondition {
-                            depth: 2,
-                            left_input_index: 1,
-                            left_field_index: 0,
-                            right_field_index: 0,
-                        },
-                    ],
-                })),
-            }),
-        }
-        .encode_to_vec()
-    }
-
-    fn schema() -> proto::Schema {
-        proto::Schema {
-            fields: vec![
-                field(
-                    "key",
-                    proto::logical_type::Type::Bigint(proto::EmptyType::default()),
-                ),
-                field(
-                    "value",
-                    proto::logical_type::Type::Varchar(proto::EmptyType::default()),
-                ),
-            ],
-        }
-    }
-
-    fn field(name: &str, r#type: proto::logical_type::Type) -> proto::Field {
-        proto::Field {
-            name: name.to_string(),
-            r#type: Some(proto::LogicalType {
-                nullable: true,
-                r#type: Some(r#type),
-            }),
-        }
-    }
-
-    fn batch(keys: &[i64], values: &[&str], row_kinds: &[i8]) -> RecordBatch {
-        let conditions = keys
-            .iter()
-            .map(|key| Some(key.to_le_bytes().to_vec()))
-            .collect::<Vec<_>>();
-        nullable_batch(keys, values, row_kinds, &conditions)
-    }
-
-    fn nullable_batch(
-        keys: &[i64],
-        values: &[&str],
-        row_kinds: &[i8],
-        conditions: &[Option<Vec<u8>>],
-    ) -> RecordBatch {
-        let condition_refs = conditions
-            .iter()
-            .map(|value| value.as_deref())
-            .collect::<Vec<_>>();
-        RecordBatch::try_from_iter(vec![
-            ("key", Arc::new(Int64Array::from(keys.to_vec())) as ArrayRef),
-            (
-                "value",
-                Arc::new(StringArray::from(values.to_vec())) as ArrayRef,
-            ),
-            (
-                "__streamfusion_input_row_kind",
-                Arc::new(Int8Array::from(row_kinds.to_vec())) as ArrayRef,
-            ),
-            (
-                "__streamfusion_condition_0",
-                Arc::new(BinaryArray::from(condition_refs)) as ArrayRef,
-            ),
-        ])
-        .unwrap()
-    }
-
-    fn kinds(batch: &RecordBatch) -> Vec<i8> {
-        batch
-            .column(batch.num_columns() - 2)
-            .as_any()
-            .downcast_ref::<Int8Array>()
-            .unwrap()
-            .values()
-            .to_vec()
-    }
-}
+mod tests;

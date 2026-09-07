@@ -189,6 +189,12 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeMultiJoinBridge
 ) {
     unowned_env
         .with_env(|env| -> jni::errors::Result<_> {
+            let mut restore_input = unsafe { processor(handle) }
+                .map(|processor| processor.state_memory())
+                .map_err(|error| throw(env, error))?;
+            restore_input
+                .resize(bytes.len(env)?)
+                .map_err(|error| throw(env, error))?;
             let bytes = env.convert_byte_array(bytes)?;
             unsafe { processor(handle) }
                 .and_then(|value| {
@@ -246,7 +252,10 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeMultiJoinBridge
                 let target = unsafe { processor(target) }?;
                 for group in first..=last {
                     let group = non_negative(group, "key group")?;
-                    target.restore_key_group(group, &source.snapshot_key_group(group)?)?;
+                    target.restore_key_group(
+                        group,
+                        &source.snapshot_key_group(group, &target.state_memory())?,
+                    )?;
                 }
                 Ok(())
             })()

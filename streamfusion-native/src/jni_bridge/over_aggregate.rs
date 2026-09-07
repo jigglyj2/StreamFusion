@@ -136,6 +136,34 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeOverAggregateBr
 }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeOverAggregateBridge_finish0<
+    'caller,
+>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    handle: jlong,
+    output_array_address: jlong,
+    output_schema_address: jlong,
+) -> jlong {
+    unowned_env
+        .with_env(|env| -> jni::errors::Result<_> {
+            let rows = (|| -> datafusion::error::Result<_> {
+                let output = unsafe { processor(handle) }?.finish()?;
+                unsafe {
+                    export_record_batch(
+                        output,
+                        output_array_address as *mut FFI_ArrowArray,
+                        output_schema_address as *mut FFI_ArrowSchema,
+                    )
+                }
+            })()
+            .map_err(|error| throw(env, error))?;
+            Ok(rows as jlong)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeOverAggregateBridge_advanceProcessingTime0<
     'caller,
 >(
@@ -307,6 +335,12 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeOverAggregateBr
 ) {
     unowned_env
         .with_env(|env| -> jni::errors::Result<_> {
+            let mut restore_input = unsafe { processor(handle) }
+                .map(|processor| processor.state_memory())
+                .map_err(|error| throw(env, error))?;
+            restore_input
+                .resize(bytes.len(env)?)
+                .map_err(|error| throw(env, error))?;
             let bytes = env.convert_byte_array(bytes)?;
             unsafe { processor(handle) }
                 .and_then(|processor| {
@@ -368,7 +402,10 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeOverAggregateBr
                 let target = unsafe { processor(target_handle) }?;
                 for group in first_key_group..=last_key_group {
                     let group = non_negative(group, "key group")?;
-                    target.restore_key_group(group, &source.snapshot_key_group(group)?)?;
+                    target.restore_key_group(
+                        group,
+                        &source.snapshot_key_group(group, &target.state_memory())?,
+                    )?;
                 }
                 Ok(())
             })()

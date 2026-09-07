@@ -269,6 +269,12 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeSessionWindowTa
 ) {
     unowned_env
         .with_env(|env| -> jni::errors::Result<_> {
+            let mut restore_input = unsafe { processor(handle) }
+                .map(|processor| processor.state_memory())
+                .map_err(|error| throw(env, error))?;
+            restore_input
+                .resize(bytes.len(env)?)
+                .map_err(|error| throw(env, error))?;
             let bytes = env.convert_byte_array(bytes)?;
             unsafe { processor(handle) }
                 .and_then(|value| {
@@ -330,7 +336,10 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeSessionWindowTa
                 let target = unsafe { processor(target_handle) }?;
                 for group in first_key_group..=last_key_group {
                     let group = non_negative(group, "key group")?;
-                    target.restore_key_group(group, &source.snapshot_key_group(group)?)?;
+                    target.restore_key_group(
+                        group,
+                        &source.snapshot_key_group(group, &target.state_memory())?,
+                    )?;
                 }
                 Ok(())
             })()

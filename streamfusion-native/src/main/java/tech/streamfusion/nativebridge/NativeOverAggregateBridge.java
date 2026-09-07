@@ -76,6 +76,12 @@ public final class NativeOverAggregateBridge {
         return rows;
     }
 
+    public static long finish(long handle, long outputArrayAddress, long outputSchemaAddress) {
+        long rows = finish0(handle, outputArrayAddress, outputSchemaAddress);
+        EXECUTED_BATCHES.incrementAndGet();
+        return rows;
+    }
+
     public static long[] statistics(long handle) {
         return statistics0(handle);
     }
@@ -162,6 +168,8 @@ public final class NativeOverAggregateBridge {
             long outputArrayAddress,
             long outputSchemaAddress,
             long processingTime);
+
+    private static native long finish0(long handle, long outputArrayAddress, long outputSchemaAddress);
 
     private static native long[] statistics0(long handle);
 

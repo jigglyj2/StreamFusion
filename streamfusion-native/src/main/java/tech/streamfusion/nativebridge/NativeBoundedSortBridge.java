@@ -74,6 +74,14 @@ public final class NativeBoundedSortBridge {
         return nativeStatistics(handle);
     }
 
+    public static void configureSpillDirectory(long handle, Path directory) {
+        setSpillDirectory(handle, directory.toString());
+    }
+
+    public static long[] spillStatistics(long handle) {
+        return nativeSpillStatistics(handle);
+    }
+
     public static long executedBatchCount() {
         return EXECUTED_BATCHES.get();
     }
@@ -126,6 +134,10 @@ public final class NativeBoundedSortBridge {
     private static native long finishArrow(long handle, long outputArray, long outputSchema);
 
     private static native long[] nativeStatistics(long handle);
+
+    private static native void setSpillDirectory(long handle, String directory);
+
+    private static native long[] nativeSpillStatistics(long handle);
 
     private static native byte[] snapshotKeyGroup(long handle, int keyGroup);
 

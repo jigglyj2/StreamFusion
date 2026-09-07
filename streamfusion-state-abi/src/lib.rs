@@ -6,8 +6,37 @@ use std::fmt::{Display, Formatter};
 
 use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 
-pub const STATE_BACKEND_ABI_VERSION: u32 = 3;
+mod snapshot_writer;
+pub use snapshot_writer::SnapshotWriter;
+
+pub const STATE_BACKEND_ABI_VERSION: u32 = 6;
 pub const STATE_BACKEND_OK: i32 = 0;
+
+/// Transfers owned values into Arrow BinaryView buffers without concatenating payloads.
+/// Short values are stored inline in the view; longer values retain their Vec allocation.
+pub fn owned_binary_views(
+    values: impl IntoIterator<Item = Option<Vec<u8>>>,
+) -> Result<arrow::array::BinaryViewArray, String> {
+    let values = values.into_iter();
+    let mut builder = arrow::array::BinaryViewBuilder::with_capacity(values.size_hint().0);
+    for value in values {
+        match value {
+            None => builder.append_null(),
+            Some(bytes) if bytes.len() <= 12 => builder.append_value(bytes),
+            Some(bytes) => {
+                if bytes.len() >= u32::MAX as usize {
+                    return Err("native state value exceeds the Arrow BinaryView limit".to_string());
+                }
+                let len = bytes.len() as u32;
+                let block = builder.append_block(arrow::buffer::Buffer::from_vec(bytes));
+                builder
+                    .try_append_view(block, 0, len)
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+    }
+    Ok(builder.finish())
+}
 
 pub type OpenBackend = unsafe extern "C" fn(
     path: *const u8,
@@ -15,6 +44,8 @@ pub type OpenBackend = unsafe extern "C" fn(
     first_key_group: u32,
     last_key_group: u32,
     memory_limit: usize,
+    memory_scope_high: u64,
+    memory_scope_low: u64,
     output: *mut *mut c_void,
 ) -> i32;
 pub type CloseBackend = unsafe extern "C" fn(handle: *mut c_void);
@@ -27,17 +58,40 @@ pub type ArrowOperation = unsafe extern "C" fn(
 ) -> i32;
 pub type LastError = unsafe extern "C" fn() -> *const c_char;
 
+/// Synchronous admission of additional bytes by the caller's host memory pool.
+/// The context is borrowed for one operation and must never be retained by a plugin.
+/// Zero indicates success. The caller owns the reservation after this callback returns,
+/// including on failure, and keeps it alive for any returned Arrow buffers.
+#[repr(C)]
+pub struct StateMemoryAdmission {
+    pub context: *mut c_void,
+    pub try_grow: unsafe extern "C" fn(context: *mut c_void, bytes: usize) -> i32,
+}
+
+pub type AdmittedArrowOperation = unsafe extern "C" fn(
+    handle: *mut c_void,
+    input_array: *mut FFI_ArrowArray,
+    input_schema: *mut FFI_ArrowSchema,
+    output_array: *mut FFI_ArrowArray,
+    output_schema: *mut FFI_ArrowSchema,
+    admission: *const StateMemoryAdmission,
+) -> i32;
+
 #[repr(C)]
 pub struct StateBackendApiV1 {
     pub abi_version: u32,
     pub open: OpenBackend,
     pub close: CloseBackend,
-    pub get_batch: ArrowOperation,
+    pub get_batch: AdmittedArrowOperation,
     pub write_batch: ArrowOperation,
-    pub snapshot_key_group: ArrowOperation,
+    pub snapshot_key_group: AdmittedArrowOperation,
     pub restore_key_group: ArrowOperation,
     /// Creates a consistent physical backend checkpoint at the path supplied as one Binary row.
     pub checkpoint: ArrowOperation,
+    /// Bounded key-group scan. Input: group UInt32, exclusive after-key Binary (nullable),
+    /// maximum rows UInt32, maximum payload bytes UInt64. Output: key/value BinaryView.
+    /// An empty output ends the scan. The caller holds the backend stable until completion.
+    pub scan_key_group: ArrowOperation,
     pub last_error: LastError,
 }
 

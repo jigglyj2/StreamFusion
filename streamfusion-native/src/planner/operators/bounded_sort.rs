@@ -4,6 +4,8 @@
 use std::cmp::Ordering;
 use std::sync::Arc;
 
+mod spill;
+
 use ahash::RandomState;
 use arrow::array::{Array, ArrayRef, Int8Array, UInt32Array};
 use arrow::compute::take;
@@ -95,6 +97,9 @@ pub(crate) struct BoundedSortProcessor {
     input_kind_index: Option<usize>,
     scratch: HostMemoryReservation,
     pending: Option<PendingSort>,
+    spillable: Option<spill::SpillableSort>,
+    spill_directory: std::path::PathBuf,
+    spill_statistics: (u64, u64),
     drained: bool,
     next_sequence: u64,
     physical_heap: Vec<PhysicalHeapRow>,
@@ -141,12 +146,13 @@ impl BoundedSortProcessor {
         memory_limit: usize,
         scratch: HostMemoryReservation,
     ) -> Result<Self> {
-        let state = Box::new(RocksPluginKeyedState::open(
+        let state = Box::new(RocksPluginKeyedState::open_for_owner(
             plugin_path,
             database_path,
             first_key_group,
             last_key_group,
             memory_limit,
+            &scratch,
         )?);
         Self::with_state(
             serialized_plan,
@@ -213,6 +219,9 @@ impl BoundedSortProcessor {
             input_kind_index: None,
             scratch,
             pending: None,
+            spillable: None,
+            spill_directory: std::env::temp_dir(),
+            spill_statistics: (0, 0),
             drained: false,
             next_sequence: 0,
             physical_heap: Vec::new(),
@@ -230,7 +239,7 @@ impl BoundedSortProcessor {
     }
 
     pub(crate) fn process_arrow(&mut self, batch: RecordBatch) -> Result<()> {
-        if self.pending.is_some() || self.drained {
+        if self.pending.is_some() || self.spillable.is_some() || self.drained {
             return Err(DataFusionError::Execution(
                 "bounded sort received input after terminal output started".to_string(),
             ));
@@ -306,7 +315,9 @@ impl BoundedSortProcessor {
                 key,
             })
             .collect::<Vec<_>>();
-        let existing = self.state.get_batch(&refs)?;
+        let existing = self.state.get_batch(&refs, &self.scratch)?;
+        let _loaded_state_workspace =
+            crate::state::reserve_decoded_values(&existing, &self.scratch)?;
         self.state_read_batches = self.state_read_batches.saturating_add(1);
         self.rows_read = self.rows_read.saturating_add(existing.len() as u64);
         let mut counts = existing
@@ -496,7 +507,7 @@ impl BoundedSortProcessor {
         let mut loaded = Vec::<(u32, u64, PhysicalHeapRow)>::new();
         let mut nonempty_groups = 0usize;
         for key_group in self.first_key_group..=self.last_key_group {
-            let snapshot = self.state.snapshot_key_group(key_group)?;
+            let snapshot = self.state.snapshot_key_group(key_group, &self.scratch)?;
             let mut group_rows = Vec::new();
             for (key, value) in decode_key_group_snapshot(key_group, &snapshot)? {
                 let Some(slot) = decode_physical_slot(&key)? else {
@@ -617,12 +628,36 @@ impl BoundedSortProcessor {
         Ok(())
     }
 
+    pub(crate) fn configure_spill_directory(
+        &mut self,
+        directory: std::path::PathBuf,
+    ) -> Result<()> {
+        if self.pending.is_some() || self.spillable.is_some() || self.drained {
+            return Err(DataFusionError::Execution(
+                "cannot change sort spill directory after output starts".to_string(),
+            ));
+        }
+        self.spill_directory = directory;
+        Ok(())
+    }
+
+    pub(crate) fn spill_statistics(&self) -> [u64; 2] {
+        let (files, bytes) = self.spillable.as_ref().map_or(
+            self.spill_statistics,
+            spill::SpillableSort::spill_statistics,
+        );
+        [files, bytes]
+    }
+
     pub(crate) fn finish(&mut self) -> Result<RecordBatch> {
+        if !self.plan.physical_input_semantics {
+            return self.finish_spillable();
+        }
         if self.drained {
             return Ok(RecordBatch::new_empty(Arc::clone(&self.output_schema)));
         }
         if self.pending.is_none() {
-            if let Err(error) = self.prepare_output() {
+            if let Err(error) = self.prepare_physical_output() {
                 self.scratch.resize(0)?;
                 return Err(error);
             }
@@ -654,79 +689,40 @@ impl BoundedSortProcessor {
         Ok(output)
     }
 
-    fn prepare_output(&mut self) -> Result<()> {
-        if self.plan.physical_input_semantics {
-            return self.prepare_physical_output();
+    fn finish_spillable(&mut self) -> Result<RecordBatch> {
+        if self.drained {
+            return Ok(RecordBatch::new_empty(Arc::clone(&self.output_schema)));
         }
-        let mut rows = HashMap::<Vec<u8>, u64, RandomState>::with_hasher(RandomState::new());
-        let mut snapshot_bytes = 0usize;
-        for key_group in self.first_key_group..=self.last_key_group {
-            let snapshot = self.state.snapshot_key_group(key_group)?;
-            snapshot_bytes = snapshot_bytes.saturating_add(snapshot.len());
-            let entries = decode_key_group_snapshot(key_group, &snapshot)?;
-            for (key, value) in entries {
-                if key.first().copied() != Some(STATE_KEY_PREFIX) {
-                    return Err(DataFusionError::Execution(
-                        "bounded sort state contains an unknown namespace".to_string(),
-                    ));
-                }
-                let count = decode_count(&value)?;
-                let total = rows.entry(key[1..].to_vec()).or_default();
-                *total = total.checked_add(count).ok_or_else(|| {
-                    DataFusionError::Execution("bounded sort row count overflow".to_string())
-                })?;
+        if self.spillable.is_none() {
+            self.scratch.resize(0)?;
+            self.spillable = Some(spill::SpillableSort::prepare(
+                self.state.as_ref(),
+                self.first_key_group..=self.last_key_group,
+                Arc::clone(&self.input_schema),
+                &self.row_converter,
+                &self.plan,
+                &self.scratch,
+                &self.spill_directory,
+            )?);
+        }
+        let sort = self.spillable.as_mut().unwrap();
+        let next = sort.next(Arc::clone(&self.output_schema), &mut self.scratch)?;
+        self.spill_statistics = sort.spill_statistics();
+        match next {
+            Some(batch) => {
+                let bytes = batch.get_array_memory_size();
+                self.scratch.resize(bytes)?;
+                self.scratch.transfer_to_arrow(bytes)?;
+                self.emitted_rows = self.emitted_rows.saturating_add(batch.num_rows() as u64);
+                Ok(batch)
+            }
+            None => {
+                self.spillable = None;
+                self.drained = true;
+                self.scratch.resize(0)?;
+                Ok(RecordBatch::new_empty(Arc::clone(&self.output_schema)))
             }
         }
-        self.scratch.resize(snapshot_bytes.saturating_mul(2))?;
-        let (encoded_rows, counts): (Vec<_>, Vec<_>) = rows.into_iter().unzip();
-        if encoded_rows.is_empty() {
-            return Ok(());
-        }
-        let parser = self.row_converter.parser();
-        let columns = self
-            .row_converter
-            .convert_rows(encoded_rows.iter().map(|row| parser.parse(row)))?;
-        let unique = RecordBatch::try_new(Arc::clone(&self.input_schema), columns)?;
-        let mut order = (0..unique.num_rows()).collect::<Vec<_>>();
-        let mut compare_error = None;
-        order.sort_by(|&left, &right| {
-            self.comparator_calls = self.comparator_calls.saturating_add(1);
-            match compare_rows(
-                &unique,
-                left,
-                &unique,
-                right,
-                &self.plan.sort_key_indices,
-                &self.plan.sort_ascending,
-                &self.plan.sort_nulls_last,
-            ) {
-                Ok(ordering) => ordering,
-                Err(error) => {
-                    compare_error = Some(error);
-                    Ordering::Equal
-                }
-            }
-        });
-        if let Some(error) = compare_error {
-            return Err(error);
-        }
-        let pending = PendingSort {
-            unique,
-            order,
-            counts,
-            kinds: None,
-            order_position: 0,
-            emitted_from_current: 0,
-            remaining_skip: self.plan.limit_start.unwrap_or(0),
-            remaining_take: self
-                .plan
-                .limit_end
-                .zip(self.plan.limit_start)
-                .map(|(end, start)| end - start),
-        };
-        self.scratch.resize(pending.retained_bytes())?;
-        self.pending = Some(pending);
-        Ok(())
     }
 
     fn prepare_physical_output(&mut self) -> Result<()> {
@@ -826,12 +822,17 @@ impl BoundedSortProcessor {
         ]
     }
 
-    pub(crate) fn snapshot_key_group(&self, key_group: u32) -> Result<Vec<u8>> {
-        self.state.snapshot_key_group(key_group)
+    pub(crate) fn state_memory(&self) -> HostMemoryReservation {
+        self.scratch.sibling("native state transfer")
+    }
+
+    pub(crate) fn snapshot_key_group(&self, key_group: u32) -> Result<crate::state::SnapshotBytes> {
+        self.state.snapshot_key_group(key_group, &self.scratch)
     }
 
     pub(crate) fn restore_key_group(&mut self, key_group: u32, bytes: &[u8]) -> Result<()> {
-        self.state.restore_key_group(key_group, bytes)?;
+        self.state
+            .restore_key_group(key_group, bytes, &self.scratch)?;
         if self.plan.physical_input_semantics {
             self.physical_heap.clear();
             self.physical_loaded_keys.clear();
@@ -1081,6 +1082,16 @@ fn validate_plan(plan: &proto::BoundedSort) -> Result<()> {
             "bounded sort key index is outside the input schema".to_string(),
         ));
     }
+    if !plan.physical_input_semantics {
+        let arrow = arrow_schema(schema)?;
+        for index in &plan.sort_key_indices {
+            if super::top_n::compare::data_type_can_have_nan(
+                arrow.field(*index as usize).data_type(),
+            ) {
+                return Err(DataFusionError::Plan("bounded sort floating-point ordering is not equivalent to Flink's NaN/signed-zero comparator".to_string()));
+            }
+        }
+    }
     match (plan.limit_start, plan.limit_end) {
         (None, None) => {}
         (Some(start), Some(end)) if start <= end => {}
@@ -1104,419 +1115,4 @@ fn validate_plan(plan: &proto::BoundedSort) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::memory_pool::{tests_support::TestBroker, HostMemoryReservation};
-    use arrow::array::{ArrayRef, Int32Array, StringArray};
-    use prost::Message;
-
-    #[test]
-    fn sorts_counted_rows_and_applies_all_retraction_kinds() {
-        let mut processor = new_processor();
-        processor
-            .process_arrow(batch(
-                &[3, 1, 2, 2, 2, 4],
-                &["c", "a", "b", "b", "b", "d"],
-                &[INSERT, INSERT, INSERT, INSERT, DELETE, UPDATE_AFTER],
-            ))
-            .unwrap();
-        processor
-            .process_arrow(batch(&[4], &["d"], &[UPDATE_BEFORE]))
-            .unwrap();
-        let output = processor.finish().unwrap();
-        assert_eq!(integers(&output), vec![1, 2, 3]);
-        assert_eq!(strings(&output), vec!["a", "b", "c"]);
-        assert_eq!(kinds(&output), vec![INSERT; 3]);
-        assert_eq!(processor.statistics()[..5], [2, 2, 5, 5, 0]);
-    }
-
-    #[test]
-    fn canonical_snapshot_restores_to_an_identical_terminal_sort() {
-        let mut source = new_processor();
-        source
-            .process_arrow(batch(&[4, 1, 3], &["d", "a", "c"], &[INSERT; 3]))
-            .unwrap();
-        let snapshot = source.snapshot_key_group(0).unwrap();
-        let mut restored = new_processor();
-        restored.restore_key_group(0, &snapshot).unwrap();
-        restored
-            .process_arrow(batch(&[2], &["b"], &[INSERT]))
-            .unwrap();
-        assert_eq!(integers(&restored.finish().unwrap()), vec![1, 2, 3, 4]);
-    }
-
-    #[test]
-    fn sort_limit_applies_offset_after_counting_duplicates() {
-        let mut processor = BoundedSortProcessor::new(
-            &limit_plan(2, 5, false),
-            0,
-            0,
-            HostMemoryReservation::new(
-                Arc::new(TestBroker::new(64 << 20)),
-                "bounded sort limit test",
-            ),
-        )
-        .unwrap();
-        processor
-            .process_arrow(batch(
-                &[1, 1, 2, 3, 4, 5],
-                &["a", "a", "b", "c", "d", "e"],
-                &[INSERT; 6],
-            ))
-            .unwrap();
-        assert_eq!(integers(&processor.finish().unwrap()), vec![2, 3, 4]);
-        assert_eq!(processor.finish().unwrap().num_rows(), 0);
-        assert_eq!(processor.statistics()[6], 3);
-    }
-
-    #[test]
-    fn local_sort_limit_merges_rescaled_owned_key_groups() {
-        let source_plan = limit_plan(0, 4, true);
-        let mut left = BoundedSortProcessor::new(
-            &source_plan,
-            0,
-            0,
-            HostMemoryReservation::new(
-                Arc::new(TestBroker::new(64 << 20)),
-                "bounded local sort left",
-            ),
-        )
-        .unwrap();
-        left.process_arrow(batch(&[5, 1], &["e", "a"], &[INSERT; 2]))
-            .unwrap();
-        let left_snapshot = left.snapshot_key_group(0).unwrap();
-
-        let mut right = BoundedSortProcessor::new(
-            &source_plan,
-            1,
-            1,
-            HostMemoryReservation::new(
-                Arc::new(TestBroker::new(64 << 20)),
-                "bounded local sort right",
-            ),
-        )
-        .unwrap();
-        right
-            .process_arrow(batch(&[4, 2], &["d", "b"], &[INSERT; 2]))
-            .unwrap();
-        let right_snapshot = right.snapshot_key_group(1).unwrap();
-
-        let mut restored = BoundedSortProcessor::new(
-            &source_plan,
-            0,
-            1,
-            HostMemoryReservation::new(
-                Arc::new(TestBroker::new(64 << 20)),
-                "bounded local sort rescaled",
-            ),
-        )
-        .unwrap();
-        restored.restore_key_group(0, &left_snapshot).unwrap();
-        restored.restore_key_group(1, &right_snapshot).unwrap();
-        restored
-            .process_arrow(batch(&[3], &["c"], &[INSERT]))
-            .unwrap();
-        assert_eq!(integers(&restored.finish().unwrap()), vec![1, 2, 3, 4]);
-    }
-
-    #[test]
-    fn physical_sort_limit_keeps_the_first_rows_at_an_equal_key_cutoff() {
-        let mut processor = BoundedSortProcessor::new(
-            &physical_limit_plan(0, 2, false),
-            0,
-            0,
-            HostMemoryReservation::new(
-                Arc::new(TestBroker::new(64 << 20)),
-                "bounded physical sort limit",
-            ),
-        )
-        .unwrap();
-        processor
-            .process_arrow(batch(
-                &[1, 1, 1, 1],
-                &["first", "second", "third", "fourth"],
-                &[INSERT, DELETE, UPDATE_BEFORE, UPDATE_AFTER],
-            ))
-            .unwrap();
-
-        let output = processor.finish().unwrap();
-        assert_eq!(strings(&output), vec!["first", "second"]);
-        assert_eq!(kinds(&output), vec![INSERT, DELETE]);
-    }
-
-    #[test]
-    fn physical_sort_limit_persists_only_the_bounded_heap_and_skips_unchanged_writes() {
-        let mut processor = BoundedSortProcessor::new(
-            &physical_limit_plan(0, 2, true),
-            0,
-            0,
-            HostMemoryReservation::new(
-                Arc::new(TestBroker::new(64 << 20)),
-                "bounded online physical heap",
-            ),
-        )
-        .unwrap();
-        processor
-            .process_arrow(batch(
-                &[1, 2, 3, 4, 5, 6],
-                &["a", "b", "c", "d", "e", "f"],
-                &[INSERT; 6],
-            ))
-            .unwrap();
-        assert_eq!(
-            decode_key_group_snapshot(0, &processor.snapshot_key_group(0).unwrap())
-                .unwrap()
-                .len(),
-            2
-        );
-        assert_eq!(processor.statistics()[..4], [0, 1, 0, 2]);
-
-        processor
-            .process_arrow(batch(&[7, 8], &["g", "h"], &[INSERT; 2]))
-            .unwrap();
-        assert_eq!(processor.statistics()[..4], [0, 1, 0, 2]);
-        assert_eq!(integers(&processor.finish().unwrap()), vec![2, 1]);
-    }
-
-    #[test]
-    fn canonical_state_moves_between_memory_and_rocksdb_with_batched_io() {
-        let Ok(plugin_path) = std::env::var("STREAMFUSION_TEST_ROCKSDB_PLUGIN") else {
-            return;
-        };
-        let broker = Arc::new(TestBroker::new(1 << 30));
-        let mut memory = BoundedSortProcessor::new(
-            &plan(),
-            0,
-            0,
-            HostMemoryReservation::new(broker.clone(), "bounded sort memory source"),
-        )
-        .unwrap();
-        memory
-            .process_arrow(batch(&[3, 1], &["c", "a"], &[INSERT, INSERT]))
-            .unwrap();
-        assert_eq!(memory.statistics()[..4], [1, 1, 2, 2]);
-        let snapshot = memory.snapshot_key_group(0).unwrap();
-
-        let directory = tempfile::tempdir().unwrap();
-        let mut rocks = BoundedSortProcessor::new_rocksdb(
-            &plan(),
-            0,
-            0,
-            std::path::Path::new(&plugin_path),
-            directory.path(),
-            64 << 20,
-            HostMemoryReservation::new(broker.clone(), "bounded sort RocksDB scratch"),
-        )
-        .unwrap();
-        rocks.restore_key_group(0, &snapshot).unwrap();
-        assert_eq!(rocks.snapshot_key_group(0).unwrap(), snapshot);
-        rocks.process_arrow(batch(&[2], &["b"], &[INSERT])).unwrap();
-        assert_eq!(rocks.statistics()[..4], [1, 1, 1, 1]);
-        let rocks_snapshot = rocks.snapshot_key_group(0).unwrap();
-
-        let mut restored = BoundedSortProcessor::new(
-            &plan(),
-            0,
-            0,
-            HostMemoryReservation::new(broker, "bounded sort memory restore"),
-        )
-        .unwrap();
-        restored.restore_key_group(0, &rocks_snapshot).unwrap();
-        assert_eq!(integers(&restored.finish().unwrap()), vec![1, 2, 3]);
-    }
-
-    #[test]
-    fn missing_retraction_fails_with_flinks_contract() {
-        let mut processor = new_processor();
-        let error = processor
-            .process_arrow(batch(&[9], &["missing"], &[DELETE]))
-            .unwrap_err();
-        assert!(error.to_string().contains("RowData not exist!"));
-        assert_eq!(processor.statistics()[4], 1);
-    }
-
-    #[test]
-    fn drains_terminal_output_in_managed_batches_without_splitting_row_counts() {
-        let rows = OUTPUT_BATCH_ROWS + 3_616;
-        let mut processor = new_processor();
-        processor
-            .process_arrow(batch(
-                &vec![7; rows],
-                &vec!["same"; rows],
-                &vec![INSERT; rows],
-            ))
-            .unwrap();
-
-        let first = processor.finish().unwrap();
-        let second = processor.finish().unwrap();
-        let exhausted = processor.finish().unwrap();
-        assert_eq!(first.num_rows(), OUTPUT_BATCH_ROWS);
-        assert_eq!(second.num_rows(), 3_616);
-        assert_eq!(exhausted.num_rows(), 0);
-        assert!(integers(&first).iter().all(|&value| value == 7));
-        assert!(integers(&second).iter().all(|&value| value == 7));
-        assert_eq!(processor.statistics()[6], rows as u64);
-    }
-
-    #[test]
-    fn accounts_state_scratch_and_output_and_releases_on_failure() {
-        let broker = Arc::new(TestBroker::new(64 << 20));
-        let mut processor = BoundedSortProcessor::new(
-            &plan(),
-            0,
-            0,
-            HostMemoryReservation::new(broker.clone(), "bounded sort accounting"),
-        )
-        .unwrap();
-        let empty_state = broker.reserved();
-        processor
-            .process_arrow(batch(&[2, 1], &["second", "first"], &[INSERT; 2]))
-            .unwrap();
-        assert!(broker.reserved() > empty_state);
-        let output = processor.finish().unwrap();
-        assert_eq!(output.num_rows(), 2);
-        drop(output);
-        drop(processor);
-        assert_eq!(broker.reserved(), 0);
-
-        let constrained = Arc::new(TestBroker::new(1 << 10));
-        let mut processor = BoundedSortProcessor::new(
-            &plan(),
-            0,
-            0,
-            HostMemoryReservation::new(constrained.clone(), "bounded sort constrained"),
-        )
-        .unwrap();
-        let payload = "x".repeat(8 << 10);
-        let error = processor
-            .process_arrow(batch(&[1], &[payload.as_str()], &[INSERT]))
-            .unwrap_err();
-        assert!(matches!(error, DataFusionError::ResourcesExhausted(_)));
-        drop(processor);
-        assert_eq!(constrained.reserved(), 0);
-    }
-
-    fn new_processor() -> BoundedSortProcessor {
-        BoundedSortProcessor::new(
-            &plan(),
-            0,
-            0,
-            HostMemoryReservation::new(Arc::new(TestBroker::new(64 << 20)), "bounded sort test"),
-        )
-        .unwrap()
-    }
-
-    fn plan() -> Vec<u8> {
-        limit_plan_values(None, None, false)
-    }
-
-    fn limit_plan(start: u64, end: u64, local: bool) -> Vec<u8> {
-        limit_plan_values(Some(start), Some(end), local)
-    }
-
-    fn physical_limit_plan(start: u64, end: u64, local: bool) -> Vec<u8> {
-        limit_plan_values_with_semantics(Some(start), Some(end), local, true)
-    }
-
-    fn limit_plan_values(start: Option<u64>, end: Option<u64>, local: bool) -> Vec<u8> {
-        limit_plan_values_with_semantics(start, end, local, false)
-    }
-
-    fn limit_plan_values_with_semantics(
-        start: Option<u64>,
-        end: Option<u64>,
-        local: bool,
-        physical_input_semantics: bool,
-    ) -> Vec<u8> {
-        let schema = proto::Schema {
-            fields: vec![
-                field(
-                    "number",
-                    proto::logical_type::Type::Integer(proto::EmptyType::default()),
-                ),
-                field(
-                    "label",
-                    proto::logical_type::Type::Varchar(proto::EmptyType::default()),
-                ),
-            ],
-        };
-        proto::NativePlan {
-            protocol_version: crate::PLAN_PROTOCOL_VERSION,
-            root: Some(proto::Operator {
-                plan_node_id: 0,
-                operator: Some(proto::operator::Operator::BoundedSort(Box::new(
-                    proto::BoundedSort {
-                        input: None,
-                        input_schema: Some(schema),
-                        sort_key_indices: vec![0],
-                        sort_ascending: vec![true],
-                        sort_nulls_last: vec![false],
-                        limit_start: start,
-                        limit_end: end,
-                        use_first_owned_key_group: local,
-                        physical_input_semantics,
-                        sort_limit_global: !local,
-                    },
-                ))),
-            }),
-        }
-        .encode_to_vec()
-    }
-
-    fn field(name: &str, r#type: proto::logical_type::Type) -> proto::Field {
-        proto::Field {
-            name: name.to_string(),
-            r#type: Some(proto::LogicalType {
-                nullable: true,
-                r#type: Some(r#type),
-            }),
-        }
-    }
-
-    fn batch(numbers: &[i32], labels: &[&str], row_kinds: &[i8]) -> RecordBatch {
-        RecordBatch::try_from_iter(vec![
-            (
-                "number",
-                Arc::new(Int32Array::from(numbers.to_vec())) as ArrayRef,
-            ),
-            (
-                "label",
-                Arc::new(StringArray::from(labels.to_vec())) as ArrayRef,
-            ),
-            (
-                INPUT_KIND_COLUMN,
-                Arc::new(Int8Array::from(row_kinds.to_vec())) as ArrayRef,
-            ),
-        ])
-        .unwrap()
-    }
-
-    fn integers(batch: &RecordBatch) -> Vec<i32> {
-        batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .unwrap()
-            .values()
-            .to_vec()
-    }
-
-    fn strings(batch: &RecordBatch) -> Vec<&str> {
-        let values = batch
-            .column(1)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap();
-        (0..values.len()).map(|row| values.value(row)).collect()
-    }
-
-    fn kinds(batch: &RecordBatch) -> Vec<i8> {
-        batch
-            .column(2)
-            .as_any()
-            .downcast_ref::<Int8Array>()
-            .unwrap()
-            .values()
-            .to_vec()
-    }
-}
+mod tests;

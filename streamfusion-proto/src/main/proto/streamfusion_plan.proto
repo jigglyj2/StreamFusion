@@ -46,6 +46,16 @@ enum ExchangeTransport {
 message Operator {
   // Stable Java-planner identity used to map native metrics back to this physical stage.
   uint64 plan_node_id = 100;
+  // Original Flink physical transformation name, including its configured simplification.
+  // Empty only for synthetic nodes and compatibility/direct native callers.
+  string metric_name = 101;
+  // Explicit UID assigned by the original Flink planner, absent when Flink assigns none.
+  // Used for the physical stage's metric/latency OperatorID, not the shared runtime owner.
+  optional string metric_uid = 102;
+  // Protocol 3: emit records without StreamRecord timestamps, as Flink's generated
+  // SQL collectors do. SQL rowtime payload columns are unaffected. Applied by the
+  // common stage boundary, independently of this stage's physical operator family.
+  bool clear_record_timestamps = 103;
   oneof operator {
     Input input = 1;
     Calc calc = 2;
@@ -211,6 +221,10 @@ message OverAggregate {
   uint64 state_ttl_millis = 11;
   bool sort_ascending = 12;
   bool sort_nulls_last = 13;
+  // BatchExecOverAggregate receives a finite, hash-partitioned input behind a required Flink
+  // sort. When set, the native operator absorbs that sort, buffers canonical keyed rows, and
+  // emits the final ordered OVER result only after bounded input completion.
+  bool bounded_final_output = 14;
 }
 
 enum OverTimeAttribute {
@@ -261,6 +275,10 @@ message RegularJoin {
   // insert-only relation after both bounded inputs end. This avoids exposing streaming outer-join
   // correction records while keeping memory/RocksDB state and savepoints backend-neutral.
   bool bounded_final_output = 10;
+  // Physical children of the fused native tree. Legacy persistent-handle plans omitted these;
+  // new planner-produced plans explicitly name the two external Arrow ports or native children.
+  Operator left_input = 11;
+  Operator right_input = 12;
 }
 
 enum RegularJoinType {
@@ -593,6 +611,9 @@ message Calc {
   Operator input = 1;
   repeated Expression projections = 2;
   optional Expression condition = 3;
+  // Protocol v2: projections describe SQL payload only. Preserve the native envelope
+  // (optional RowKind followed by input ordinal) from the child automatically.
+  bool preserve_input_envelope = 4;
 }
 
 message ArrayUnnest {

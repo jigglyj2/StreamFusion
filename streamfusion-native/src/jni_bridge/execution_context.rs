@@ -13,8 +13,33 @@ use jni::strings::JNIString;
 use jni::sys::jlong;
 use jni::EnvUnowned;
 
-use crate::decode_plan;
 use crate::execution_context;
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeExecutionContext_readMetricSnapshot<
+    'caller,
+>(
+    mut unowned_env: EnvUnowned<'caller>,
+    _class: JClass<'caller>,
+    handle: jlong,
+) -> jni::sys::jlongArray {
+    unowned_env
+        .with_env(|env| -> jni::errors::Result<_> {
+            let values = execution_context::get(handle)
+                .and_then(|context| context.metric_snapshot())
+                .map_err(|error| {
+                    let _ = env.throw_new(
+                        jni_str!("java/lang/IllegalStateException"),
+                        JNIString::new(error.to_string()),
+                    );
+                    jni::errors::Error::JavaException
+                })?;
+            let output = env.new_long_array(values.len())?;
+            output.set_region(env, 0, &values)?;
+            Ok(output.into_raw())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeExecutionContext_createExecutionContext<
@@ -35,23 +60,21 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeExecutionContex
                 );
                 return Err(jni::errors::Error::JavaException);
             }
+            // NativeExecutionContext's Java constructor admits this JNI copy before entry
+            // and returns its temporary credit only after all native locals have dropped.
             let plan = env.convert_byte_array(serialized_plan)?;
-            let plan = decode_plan(&plan).map_err(|error| {
-                let _ = env.throw_new(
-                    jni_str!("java/lang/IllegalArgumentException"),
-                    JNIString::new(error.to_string()),
-                );
-                jni::errors::Error::JavaException
-            })?;
             let java_vm = env.get_java_vm()?;
             let memory_manager = env.new_global_ref(memory_manager)?;
-            execution_context::register(plan, java_vm, memory_manager, memory_limit as usize)
+            execution_context::register(&plan, java_vm, memory_manager, memory_limit as usize)
                 .map(|handle| handle as jlong)
                 .map_err(|error| {
-                    let _ = env.throw_new(
-                        jni_str!("java/lang/IllegalStateException"),
-                        JNIString::new(error.to_string()),
-                    );
+                    let exception = if matches!(&error, datafusion::error::DataFusionError::Plan(_))
+                    {
+                        jni_str!("java/lang/IllegalArgumentException")
+                    } else {
+                        jni_str!("java/lang/IllegalStateException")
+                    };
+                    let _ = env.throw_new(exception, JNIString::new(error.to_string()));
                     jni::errors::Error::JavaException
                 })
         })

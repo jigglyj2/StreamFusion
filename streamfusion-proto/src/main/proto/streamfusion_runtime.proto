@@ -1,0 +1,84 @@
+syntax = "proto3";
+
+package streamfusion.plan.v1;
+option java_multiple_files = true;
+option java_package = "tech.streamfusion.proto.plan.v1";
+
+// Task-local resources chosen by Flink, separate from the physical SQL plan. These are
+// execution bindings, never a deployment-time StreamFusion memory configuration.
+message NativeStateBindings {
+  uint32 protocol_version = 1;
+  repeated NativeStateBinding bindings = 2;
+}
+
+message NativeStateBinding {
+  uint64 plan_node_id = 1;
+  uint32 max_parallelism = 2;
+  uint32 first_key_group = 3;
+  uint32 last_key_group = 4;
+  oneof backend {
+    NativeMemoryState memory = 5;
+    NativeRocksDbState rocksdb = 6;
+  }
+}
+
+message NativeMemoryState {}
+
+// Names/types/scopes are negotiated once; each gauge snapshot is a packed long[] in this order.
+// INT32 is sign-extended, INT64 is unchanged, FLOAT64 carries raw IEEE-754 bits.
+message NativeGaugeSchema {
+  uint32 protocol_version = 1;
+  repeated NativeGaugeDescriptor gauges = 2;
+}
+
+message NativeGaugeDescriptor {
+  uint64 plan_node_id = 1;
+  repeated string groups = 2;
+  string name = 3;
+  NativeGaugeValueKind value_kind = 4;
+}
+
+enum NativeGaugeValueKind {
+  NATIVE_GAUGE_VALUE_KIND_UNSPECIFIED = 0;
+  NATIVE_GAUGE_VALUE_KIND_INT32 = 1;
+  NATIVE_GAUGE_VALUE_KIND_INT64 = 2;
+  NATIVE_GAUGE_VALUE_KIND_FLOAT64 = 3;
+}
+
+// Flink-owned, coalesced physical-stage control events for one native-tree invocation.
+// The data inputs of this invocation must be typed empty Arrow batches.
+message NativeControlInvocation {
+  uint32 protocol_version = 1;
+  repeated NativeStageControl stages = 2;
+}
+
+message NativeStageControl {
+  uint64 plan_node_id = 1;
+  oneof event {
+    int64 watermark_millis = 2;
+    uint64 before_checkpoint = 3;
+    NativeControlEndInput end_input = 4;
+  }
+}
+
+message NativeControlEndInput {}
+
+// Discovered once after binding state, not an operator-family list in the JVM driver.
+message NativeControlCapabilities {
+  uint32 protocol_version = 1;
+  repeated NativeStageControlCapability stages = 2;
+}
+
+message NativeStageControlCapability {
+  uint64 plan_node_id = 1;
+  bool watermark = 2;
+  bool before_checkpoint = 3;
+  bool end_input = 4;
+}
+
+message NativeRocksDbState {
+  string plugin_path = 1;
+  string database_path = 2;
+  // The existing Flink-managed STATE_BACKEND/OPERATOR lease, not an extra budget.
+  uint64 memory_limit = 3;
+}

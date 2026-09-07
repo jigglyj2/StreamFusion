@@ -115,19 +115,19 @@ unsafe fn execute_arrow(
 }
 
 unsafe fn execute_arrow_stream(
-    context: &NativeExecutionContext,
+    context: &std::sync::Arc<NativeExecutionContext>,
     input_array_address: *mut FFI_ArrowArray,
     input_schema_address: *mut FFI_ArrowSchema,
     output_stream_address: *mut FFI_ArrowArrayStream,
 ) -> datafusion::error::Result<()> {
     let (input_batch, input_reservation) =
         unsafe { import_input(context, input_array_address, input_schema_address, 0, 0) }?;
-    context.execute_plan(vec![input_batch], |plan| unsafe {
+    unsafe {
         execute_and_export_stream(
             context,
-            plan,
+            vec![input_batch],
             vec![input_reservation],
             output_stream_address,
         )
-    })
+    }
 }

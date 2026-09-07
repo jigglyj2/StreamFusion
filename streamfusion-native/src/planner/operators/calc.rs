@@ -24,9 +24,24 @@ use crate::{planner::expressions, proto};
 
 const INPUT_ROW_COLUMN: &str = "__streamfusion_input_row";
 
+// DataFusion 55's filter coalescer bypasses batches larger than batch_size / 2. A target
+// of one therefore forwards every non-empty filtered batch whole; it does NOT split into
+// one-row batches. Preserve the upstream stream's bounded pulls and ownership instead of
+// copying/retaining small batches in a second, unaccounted coalescing buffer. This applies
+// to every child plan, not an operator-specific fusion path.
+const FILTER_PASSTHROUGH_BATCH_SIZE: usize = 1;
+
 pub(crate) fn create(
     calc: &proto::Calc,
     child: Arc<dyn ExecutionPlan>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    create_with_memory(calc, child, None)
+}
+
+pub(crate) fn create_with_memory(
+    calc: &proto::Calc,
+    child: Arc<dyn ExecutionPlan>,
+    memory: Option<Arc<dyn datafusion::execution::memory_pool::MemoryPool>>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let input_schema = child.schema();
     let mut expressions = calc
@@ -34,37 +49,111 @@ pub(crate) fn create(
         .iter()
         .enumerate()
         .map(|(index, expression)| {
-            let name = if index + 1 == calc.projections.len()
+            let name = if !calc.preserve_input_envelope
+                && index + 1 == calc.projections.len()
                 && is_input_row_reference(expression, input_schema.as_ref())
             {
                 INPUT_ROW_COLUMN.to_string()
+            } else if !calc.preserve_input_envelope
+                && index + 2 == calc.projections.len()
+                && input_row_kind_reference(expression, input_schema.as_ref())
+            {
+                "__streamfusion_row_kind".to_string()
             } else {
                 format!("projection_{index}")
             };
-            Ok((create_expression(expression, input_schema.as_ref())?, name))
+            let expression = create_expression(expression, input_schema.as_ref())?;
+            Ok((
+                expressions::managed_scalar::install(
+                    expression,
+                    memory.as_ref(),
+                    input_schema.as_ref(),
+                )?,
+                name,
+            ))
         })
         .collect::<Result<Vec<_>>>()?;
+    if calc.preserve_input_envelope {
+        let envelope = super::envelope::Envelope::from_schema(input_schema.as_ref())?;
+        for (expression, _) in &expressions {
+            if collect_columns(expression)
+                .iter()
+                .any(|column| column.index() >= envelope.payload_width)
+            {
+                return Err(DataFusionError::Plan(
+                    "Calc SQL projection cannot reference native envelope columns".into(),
+                ));
+            }
+        }
+        expressions.extend(envelope.expressions(input_schema.as_ref()));
+    }
     let child = match calc.condition.as_ref() {
         Some(condition) => {
-            let predicate = create_expression(condition, input_schema.as_ref())?;
+            let predicate = expressions::managed_scalar::install(
+                create_expression(condition, input_schema.as_ref())?,
+                memory.as_ref(),
+                input_schema.as_ref(),
+            )?;
+            if calc.preserve_input_envelope {
+                let envelope = super::envelope::Envelope::from_schema(input_schema.as_ref())?;
+                if collect_columns(&predicate)
+                    .iter()
+                    .any(|column| column.index() >= envelope.payload_width)
+                {
+                    return Err(DataFusionError::Plan(
+                        "Calc SQL predicate cannot reference native envelope columns".into(),
+                    ));
+                }
+            }
             let projection = referenced_input_columns(&expressions, input_schema.fields().len());
             if projection.len() < input_schema.fields().len() {
                 let filter = FilterExecBuilder::new(predicate, child)
+                    .with_batch_size(FILTER_PASSTHROUGH_BATCH_SIZE)
                     .apply_projection(Some(projection.clone()))?
                     .build()?;
                 expressions = expressions
                     .into_iter()
                     .map(|(expression, name)| Ok((remap_columns(expression, &projection)?, name)))
                     .collect::<Result<Vec<_>>>()?;
-                Arc::new(filter) as Arc<dyn ExecutionPlan>
+                super::managed_filter::ManagedFilterExec::wrap(filter, memory.clone())?
             } else {
-                Arc::new(FilterExecBuilder::new(predicate, child).build()?)
-                    as Arc<dyn ExecutionPlan>
+                super::managed_filter::ManagedFilterExec::wrap(
+                    FilterExecBuilder::new(predicate, child)
+                        .with_batch_size(FILTER_PASSTHROUGH_BATCH_SIZE)
+                        .build()?,
+                    memory.clone(),
+                )?
             }
         }
         None => child,
     };
+    let expressions = expressions
+        .into_iter()
+        .map(|(expression, name)| {
+            (
+                expressions::managed_expression::projection(expression, memory.as_ref()),
+                name,
+            )
+        })
+        .collect::<Vec<_>>();
     Ok(Arc::new(ProjectionExec::try_new(expressions, child)?))
+}
+
+fn input_row_kind_reference(
+    expression: &proto::Expression,
+    schema: &arrow::datatypes::Schema,
+) -> bool {
+    let Some(proto::expression::Expression::InputReference(reference)) =
+        expression.expression.as_ref()
+    else {
+        return false;
+    };
+    let index = reference.index as usize;
+    index + 2 == schema.fields().len()
+        && matches!(
+            schema.field(index).name().as_str(),
+            "__streamfusion_row_kind" | "__streamfusion_input_row_kind"
+        )
 }
 
 fn is_input_row_reference(

@@ -103,12 +103,13 @@ impl TemporalSortProcessor {
         reservation: HostMemoryReservation,
     ) -> Result<Self> {
         let timers = reservation.sibling("native temporal sort timers");
-        let state = Box::new(RocksPluginKeyedState::open(
+        let state = Box::new(RocksPluginKeyedState::open_for_owner(
             plugin_path,
             database_path,
             first_key_group,
             last_key_group,
             memory_limit,
+            &reservation,
         )?);
         Self::with_state(
             serialized_plan,
@@ -299,7 +300,9 @@ impl TemporalSortProcessor {
                 key: &key.key,
             })
             .collect::<Vec<_>>();
-        let existing = self.state.get_batch(&refs)?;
+        let existing = self.state.get_batch(&refs, &self.scratch_reservation)?;
+        let _loaded_state_workspace =
+            crate::state::reserve_decoded_values(&existing, &self.scratch_reservation)?;
         self.state_read_batches = self.state_read_batches.saturating_add(1);
         let domain = self.domain();
         let mut timer_dirty = false;
@@ -351,10 +354,15 @@ impl TemporalSortProcessor {
         // firing consequently observe an empty list. Keep the same state shape, including when a
         // delayed mailbox callback lets more than one processing-time timestamp accumulate.
         let key = processing_time_rows_state_key(self.key_group);
-        let existing = self.state.get_batch(&[StateKeyRef {
-            key_group: key.key_group,
-            key: &key.key,
-        }])?;
+        let existing = self.state.get_batch(
+            &[StateKeyRef {
+                key_group: key.key_group,
+                key: &key.key,
+            }],
+            &self.scratch_reservation,
+        )?;
+        let _loaded_state_workspace =
+            crate::state::reserve_decoded_values(&existing, &self.scratch_reservation)?;
         self.state_read_batches = self.state_read_batches.saturating_add(1);
         let mut rows = existing
             .into_iter()
@@ -449,7 +457,9 @@ impl TemporalSortProcessor {
                 key: &key.key,
             })
             .collect::<Vec<_>>();
-        let state = self.state.get_batch(&refs)?;
+        let state = self.state.get_batch(&refs, &self.scratch_reservation)?;
+        let _loaded_state_workspace =
+            crate::state::reserve_decoded_values(&state, &self.scratch_reservation)?;
         self.state_read_batches = self.state_read_batches.saturating_add(1);
         let mut row_groups = Vec::with_capacity(keys.len());
         for value in state {
@@ -576,22 +586,33 @@ impl TemporalSortProcessor {
         ]
     }
 
-    pub(crate) fn snapshot_key_group(&self, key_group: u32) -> Result<Vec<u8>> {
-        self.state.snapshot_key_group(key_group)
+    pub(crate) fn state_memory(&self) -> HostMemoryReservation {
+        self.scratch_reservation.sibling("native state transfer")
+    }
+
+    pub(crate) fn snapshot_key_group(&self, key_group: u32) -> Result<crate::state::SnapshotBytes> {
+        self.state
+            .snapshot_key_group(key_group, &self.scratch_reservation)
     }
 
     pub(crate) fn restore_key_group(&mut self, key_group: u32, bytes: &[u8]) -> Result<()> {
-        self.state.restore_key_group(key_group, bytes)?;
-        let restored = self.state.get_batch(&[
-            StateKeyRef {
-                key_group,
-                key: TIMER_STATE_KEY,
-            },
-            StateKeyRef {
-                key_group,
-                key: LAST_TRIGGER_STATE_KEY,
-            },
-        ])?;
+        self.state
+            .restore_key_group(key_group, bytes, &self.scratch_reservation)?;
+        let restored = self.state.get_batch(
+            &[
+                StateKeyRef {
+                    key_group,
+                    key: TIMER_STATE_KEY,
+                },
+                StateKeyRef {
+                    key_group,
+                    key: LAST_TRIGGER_STATE_KEY,
+                },
+            ],
+            &self.scratch_reservation,
+        )?;
+        let _loaded_state_workspace =
+            crate::state::reserve_decoded_values(&restored, &self.scratch_reservation)?;
         self.state_read_batches = self.state_read_batches.saturating_add(1);
         if let Some(bytes) = restored[0].as_ref() {
             self.timers.restore_key_group(key_group, bytes.as_ref())?;
@@ -1037,6 +1058,9 @@ mod tests {
             protocol_version: crate::PLAN_PROTOCOL_VERSION,
             root: Some(proto::Operator {
                 plan_node_id: 0,
+                metric_name: String::new(),
+                clear_record_timestamps: false,
+                metric_uid: None,
                 operator: Some(proto::operator::Operator::TemporalSort(Box::new(
                     proto::TemporalSort {
                         input: None,

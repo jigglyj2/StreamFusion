@@ -239,6 +239,28 @@ unsafe fn decode(
             "Arrow C Data exchange output address was null".to_string(),
         ));
     }
+    let batch = decode_batch(plan_bytes, payload, metadata_length)?;
+    reservation.resize(decoded_batch_accounted_bytes(
+        plan_bytes.len(),
+        payload_size,
+        &batch,
+    )?)?;
+    let rows = batch.num_rows();
+    let output_data = StructArray::from(batch).to_data();
+    let output_array = FFI_ArrowArray::new(&output_data);
+    let output_schema = FFI_ArrowSchema::try_from(output_data.data_type())?;
+    unsafe {
+        std::ptr::write(output_array_address, output_array);
+        std::ptr::write(output_schema_address, output_schema);
+    }
+    Ok(rows)
+}
+
+pub(super) fn decode_batch(
+    plan_bytes: &[u8],
+    payload: Vec<u8>,
+    metadata_length: usize,
+) -> Result<arrow::record_batch::RecordBatch> {
     let plan = decode_exchange_plan(plan_bytes)?;
     let visible_schema = crate::planner::arrow_schema(
         plan.schema
@@ -261,24 +283,7 @@ unsafe fn decode(
         metadata_length,
         transport_schema,
     )?;
-    reservation.resize(decoded_batch_accounted_bytes(
-        plan_bytes.len(),
-        payload_size,
-        &transport_batch,
-    )?)?;
-    // Keep the optional opaque BinaryRow routing key through the fused exchange/consumer edge.
-    // Ordinary readers expose only the visible vectors, while keyed native consumers can reuse
-    // the exact bytes Flink hashed instead of reconstructing a complex key in Java or Rust.
-    let batch = transport_batch;
-    let rows = batch.num_rows();
-    let output_data = StructArray::from(batch).to_data();
-    let output_array = FFI_ArrowArray::new(&output_data);
-    let output_schema = FFI_ArrowSchema::try_from(output_data.data_type())?;
-    unsafe {
-        std::ptr::write(output_array_address, output_array);
-        std::ptr::write(output_schema_address, output_schema);
-    }
-    Ok(rows)
+    Ok(transport_batch)
 }
 
 fn decoded_batch_accounted_bytes(

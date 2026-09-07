@@ -14,7 +14,20 @@ use datafusion::execution::memory_pool::{MemoryLimit, MemoryPool, MemoryReservat
 use jni::objects::{Global, JObject};
 use jni::{jni_sig, jni_str, JValue, JavaVM};
 
+pub(crate) mod arrow_lease;
+pub(crate) mod buffer_size;
+mod c_data;
+pub(crate) mod c_stream;
+pub(crate) mod selection;
+
 pub(crate) trait MemoryReservationBroker: Debug + Send + Sync {
+    fn rocks_scope(&self) -> Result<[u64; 2]> {
+        Ok([0, 0])
+    }
+
+    fn lease_registry(&self) -> Option<Arc<arrow_lease::Registry>> {
+        None
+    }
     fn try_reserve(&self, bytes: usize) -> Result<bool>;
 
     fn release(&self, bytes: usize) -> Result<()>;
@@ -78,6 +91,38 @@ impl HostMemoryReservation {
         Self::new(Arc::clone(&self.broker), consumer)
     }
 
+    /// Move an already admitted allowance to another native owner without releasing it to
+    /// Flink or charging it twice. This is not an Arrow Java ownership transfer.
+    pub(crate) fn split(&mut self, bytes: usize, consumer: impl Into<String>) -> Result<Self> {
+        if bytes > self.size {
+            return Err(DataFusionError::Internal(format!(
+                "cannot split {bytes} bytes from {} with only {} reserved",
+                self.consumer, self.size
+            )));
+        }
+        let mut reservation = self.sibling(consumer);
+        reservation.size = bytes;
+        self.size -= bytes;
+        Ok(reservation)
+    }
+
+    /// Move already-admitted workspace into a retained owner on the same Flink broker.
+    /// Growing state after computation must not require another allocation admission.
+    pub(crate) fn grow_from(&mut self, source: &mut Self, bytes: usize) -> Result<()> {
+        if !Arc::ptr_eq(&self.broker, &source.broker) || source.size < bytes {
+            return Err(DataFusionError::Internal(
+                "native reservation transfer requires sufficient credit on the same Flink broker"
+                    .into(),
+            ));
+        }
+        let size = self.size.checked_add(bytes).ok_or_else(|| {
+            DataFusionError::ResourcesExhausted("native reservation transfer overflow".into())
+        })?;
+        self.size = size;
+        source.size -= bytes;
+        Ok(())
+    }
+
     pub(crate) fn resize(&mut self, size: usize) -> Result<()> {
         if size > self.size {
             self.try_grow(size - self.size)
@@ -114,6 +159,10 @@ impl HostMemoryReservation {
         Arc::new(FlinkMemoryPool::new(Arc::clone(&self.broker), limit))
     }
 
+    pub(crate) fn rocks_scope(&self) -> Result<[u64; 2]> {
+        self.broker.rocks_scope()
+    }
+
     pub(crate) fn size(&self) -> usize {
         self.size
     }
@@ -133,6 +182,7 @@ impl Drop for HostMemoryReservation {
 pub(crate) struct JvmMemoryReservationBroker {
     java_vm: JavaVM,
     memory_manager: Global<JObject<'static>>,
+    lease_registry: Arc<arrow_lease::Registry>,
 }
 
 impl JvmMemoryReservationBroker {
@@ -140,11 +190,39 @@ impl JvmMemoryReservationBroker {
         Self {
             java_vm,
             memory_manager,
+            lease_registry: Arc::default(),
         }
     }
 }
 
 impl MemoryReservationBroker for JvmMemoryReservationBroker {
+    fn rocks_scope(&self) -> Result<[u64; 2]> {
+        self.java_vm
+            .attach_current_thread(|env| -> jni::errors::Result<[u64; 2]> {
+                let high = env
+                    .call_method(
+                        &self.memory_manager,
+                        jni_str!("rocksDbMemoryScopeHigh"),
+                        jni_sig!("()J"),
+                        &[],
+                    )?
+                    .j()?;
+                let low = env
+                    .call_method(
+                        &self.memory_manager,
+                        jni_str!("rocksDbMemoryScopeLow"),
+                        jni_sig!("()J"),
+                        &[],
+                    )?
+                    .j()?;
+                Ok([high as u64, low as u64])
+            })
+            .map_err(|error| DataFusionError::External(Box::new(error)))
+    }
+
+    fn lease_registry(&self) -> Option<Arc<arrow_lease::Registry>> {
+        Some(self.lease_registry.clone())
+    }
     fn try_reserve(&self, bytes: usize) -> Result<bool> {
         let bytes = i64::try_from(bytes).map_err(|_| {
             DataFusionError::ResourcesExhausted(format!(
@@ -233,6 +311,23 @@ pub(crate) struct FlinkMemoryPool {
     broker: Arc<dyn MemoryReservationBroker>,
     limit: usize,
     reserved: Mutex<usize>,
+}
+
+pub(crate) fn buffer_registry(pool: &Arc<dyn MemoryPool>) -> Option<Arc<arrow_lease::Registry>> {
+    pool.downcast_ref::<FlinkMemoryPool>()?
+        .broker
+        .lease_registry()
+}
+
+/// Task-local kernels use the same Flink broker as DataFusion, never a second budget.
+pub(crate) fn host_reservation(
+    pool: &Arc<dyn MemoryPool>,
+    consumer: impl Into<String>,
+) -> Result<HostMemoryReservation> {
+    let pool = pool.downcast_ref::<FlinkMemoryPool>().ok_or_else(|| {
+        DataFusionError::Plan("task-local native state requires a Flink memory pool".into())
+    })?;
+    Ok(HostMemoryReservation::new(pool.broker.clone(), consumer))
 }
 
 impl FlinkMemoryPool {
@@ -435,6 +530,36 @@ pub(crate) mod tests_support {
             reservation.resize(64).unwrap();
             assert_eq!(broker.reserved.load(Ordering::Relaxed), 64);
         }
+        assert_eq!(broker.reserved.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn retained_credit_moves_without_readmission_and_rejects_cross_broker_transfers() {
+        let broker = Arc::new(TestBroker {
+            reserved: AtomicUsize::new(0),
+            limit: 128,
+        });
+        let mut workspace = HostMemoryReservation::new(broker.clone(), "workspace");
+        let mut retained = workspace.sibling("retained state");
+        workspace.resize(128).unwrap();
+        retained.grow_from(&mut workspace, 96).unwrap();
+        assert_eq!((workspace.size(), retained.size()), (32, 96));
+        assert_eq!(broker.reserved.load(Ordering::Relaxed), 128);
+        assert!(retained.grow_from(&mut workspace, 33).is_err());
+        let other = Arc::new(TestBroker {
+            reserved: AtomicUsize::new(0),
+            limit: 128,
+        });
+        let mut foreign = HostMemoryReservation::new(other.clone(), "other task");
+        assert!(foreign.grow_from(&mut workspace, 1).is_err());
+        assert_eq!(
+            (workspace.size(), retained.size(), foreign.size()),
+            (32, 96, 0)
+        );
+        assert_eq!(other.reserved.load(Ordering::Relaxed), 0);
+        drop(workspace);
+        assert_eq!(broker.reserved.load(Ordering::Relaxed), 96);
+        drop(retained);
         assert_eq!(broker.reserved.load(Ordering::Relaxed), 0);
     }
 }

@@ -10,6 +10,10 @@ pub(super) mod array_unnest;
 pub(crate) mod bounded_rank;
 pub(crate) mod bounded_sort;
 pub(super) mod calc;
+pub(crate) mod envelope;
+
+#[cfg(test)]
+pub(crate) mod arrow_handoff_tests;
 pub(crate) mod changelog_normalize;
 mod collection;
 pub(crate) mod deduplicate;
@@ -22,10 +26,13 @@ pub(crate) mod incremental_group_aggregate;
 pub(super) mod input;
 pub(crate) mod interval_join;
 pub(crate) mod local_group_aggregate;
+pub(super) mod local_partitions;
 pub(crate) mod local_window_aggregate;
+mod managed_filter;
 pub(crate) mod match_recognize;
 pub(crate) mod multi_join;
 pub(crate) mod over_aggregate;
+pub(crate) mod record_policy;
 pub(crate) mod regular_join;
 pub(super) mod replicate_rows;
 pub(crate) mod reusable_input;

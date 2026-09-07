@@ -11,11 +11,14 @@ use arrow::datatypes::{DataType, TimeUnit};
 use arrow::error::{ArrowError, Result};
 use arrow::record_batch::RecordBatch;
 
+mod nested;
+
 /// Flink logical key types whose BinaryRow encoding has been proven independently.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyField {
     /// A complete BinaryRowData key encoded by Flink and supplied as an input-only sidecar.
     PreencodedBinaryRow,
+    Nested,
     Boolean,
     TinyInt,
     SmallInt,
@@ -60,6 +63,20 @@ impl KeyField {
             DataType::Decimal128(precision, _) => Ok(Self::Decimal {
                 precision: *precision,
             }),
+            DataType::List(field) => {
+                Self::from_arrow_type(field.data_type())?;
+                Ok(Self::Nested)
+            }
+            DataType::Struct(fields) => {
+                for field in fields {
+                    Self::from_arrow_type(field.data_type())?;
+                }
+                Ok(Self::Nested)
+            }
+            DataType::Map(entries, _) => {
+                Self::from_arrow_type(entries.data_type())?;
+                Ok(Self::Nested)
+            }
             other => Err(ArrowError::InvalidArgumentError(format!(
                 "Flink BinaryRow key does not support Arrow type {other}"
             ))),
@@ -124,83 +141,95 @@ pub fn encode_binary_row_into(
     let mut writer = BinaryRowWriter::new(fields.len(), output);
     for (position, (column_index, kind)) in fields.iter().copied().enumerate() {
         let array = batch.column(column_index);
-        if array.is_null(row) {
-            writer.set_null(position);
-            continue;
-        }
-        match kind {
-            KeyField::PreencodedBinaryRow => unreachable!("handled before BinaryRow encoding"),
-            KeyField::Boolean => writer.write_fixed(
-                position,
-                &[u8::from(value::<BooleanArray>(array, row)?.value(row))],
-            ),
-            KeyField::TinyInt => writer.write_fixed(
-                position,
-                &value::<Int8Array>(array, row)?.value(row).to_le_bytes(),
-            ),
-            KeyField::SmallInt => writer.write_fixed(
-                position,
-                &value::<Int16Array>(array, row)?.value(row).to_le_bytes(),
-            ),
-            KeyField::Integer => writer.write_fixed(
-                position,
-                &value::<Int32Array>(array, row)?.value(row).to_le_bytes(),
-            ),
-            KeyField::BigInt => writer.write_fixed(
-                position,
-                &value::<Int64Array>(array, row)?.value(row).to_le_bytes(),
-            ),
-            KeyField::Float => writer.write_fixed(
-                position,
-                &value::<Float32Array>(array, row)?.value(row).to_le_bytes(),
-            ),
-            KeyField::Double => writer.write_fixed(
-                position,
-                &value::<Float64Array>(array, row)?.value(row).to_le_bytes(),
-            ),
-            KeyField::String => writer.write_bytes(
-                position,
-                value::<StringArray>(array, row)?.value(row).as_bytes(),
-            ),
-            KeyField::Binary => match array.data_type() {
-                DataType::Binary => {
-                    writer.write_bytes(position, value::<BinaryArray>(array, row)?.value(row))
-                }
-                DataType::FixedSizeBinary(_) => writer.write_bytes(
-                    position,
-                    value::<FixedSizeBinaryArray>(array, row)?.value(row),
-                ),
-                other => {
-                    return Err(ArrowError::CastError(format!(
-                        "Flink binary key requires Arrow Binary or FixedSizeBinary, got {other}"
-                    )))
-                }
-            },
-            KeyField::Date => writer.write_fixed(
-                position,
-                &value::<Date32Array>(array, row)?.value(row).to_le_bytes(),
-            ),
-            KeyField::Time => writer.write_fixed(position, &time_millis(array, row)?.to_le_bytes()),
-            KeyField::Timestamp { precision } => {
-                let (millis, nanos) = timestamp_parts(array, row)?;
-                if precision <= 3 {
-                    writer.write_fixed(position, &millis.to_le_bytes());
-                } else {
-                    writer.write_noncompact_timestamp(position, millis, nanos);
-                }
+        write_value(&mut writer, position, array.as_ref(), row, kind)?;
+    }
+    Ok(())
+}
+
+fn write_value(
+    writer: &mut BinaryRowWriter<'_>,
+    position: usize,
+    array: &dyn Array,
+    row: usize,
+    kind: KeyField,
+) -> Result<()> {
+    if array.is_null(row) {
+        writer.set_null(position);
+        return Ok(());
+    }
+    match kind {
+        KeyField::PreencodedBinaryRow => unreachable!("handled before BinaryRow encoding"),
+        KeyField::Nested => nested::write_nested(writer, position, array, row)?,
+        KeyField::Boolean => writer.write_fixed(
+            position,
+            &[u8::from(value::<BooleanArray>(array, row)?.value(row))],
+        ),
+        KeyField::TinyInt => writer.write_fixed(
+            position,
+            &value::<Int8Array>(array, row)?.value(row).to_le_bytes(),
+        ),
+        KeyField::SmallInt => writer.write_fixed(
+            position,
+            &value::<Int16Array>(array, row)?.value(row).to_le_bytes(),
+        ),
+        KeyField::Integer => writer.write_fixed(
+            position,
+            &value::<Int32Array>(array, row)?.value(row).to_le_bytes(),
+        ),
+        KeyField::BigInt => writer.write_fixed(
+            position,
+            &value::<Int64Array>(array, row)?.value(row).to_le_bytes(),
+        ),
+        KeyField::Float => writer.write_fixed(
+            position,
+            &value::<Float32Array>(array, row)?.value(row).to_le_bytes(),
+        ),
+        KeyField::Double => writer.write_fixed(
+            position,
+            &value::<Float64Array>(array, row)?.value(row).to_le_bytes(),
+        ),
+        KeyField::String => writer.write_bytes(
+            position,
+            value::<StringArray>(array, row)?.value(row).as_bytes(),
+        ),
+        KeyField::Binary => match array.data_type() {
+            DataType::Binary => {
+                writer.write_bytes(position, value::<BinaryArray>(array, row)?.value(row))
             }
-            KeyField::Decimal { precision } => {
-                let unscaled = value::<Decimal128Array>(array, row)?.value(row);
-                if precision <= 18 {
-                    let compact = i64::try_from(unscaled).map_err(|_| {
-                        ArrowError::InvalidArgumentError(format!(
-                            "DECIMAL({precision}) key does not fit Flink's compact representation"
-                        ))
-                    })?;
-                    writer.write_fixed(position, &compact.to_le_bytes());
-                } else {
-                    writer.write_noncompact_decimal(position, unscaled);
-                }
+            DataType::FixedSizeBinary(_) => writer.write_bytes(
+                position,
+                value::<FixedSizeBinaryArray>(array, row)?.value(row),
+            ),
+            other => {
+                return Err(ArrowError::CastError(format!(
+                    "Flink binary key requires Arrow Binary or FixedSizeBinary, got {other}"
+                )))
+            }
+        },
+        KeyField::Date => writer.write_fixed(
+            position,
+            &value::<Date32Array>(array, row)?.value(row).to_le_bytes(),
+        ),
+        KeyField::Time => writer.write_fixed(position, &time_millis(array, row)?.to_le_bytes()),
+        KeyField::Timestamp { precision } => {
+            let (millis, nanos) = timestamp_parts(array, row)?;
+            if precision <= 3 {
+                writer.write_fixed(position, &millis.to_le_bytes());
+            } else {
+                writer.write_noncompact_timestamp(position, millis, nanos);
+            }
+        }
+        KeyField::Decimal { precision } => {
+            let unscaled = value::<Decimal128Array>(array, row)?.value(row);
+            if precision <= 18 {
+                let compact = i64::try_from(unscaled).map_err(|_| {
+                    ArrowError::InvalidArgumentError(format!(
+                        "DECIMAL({precision}) key does not fit Flink's compact representation"
+                    ))
+                })?;
+                writer.write_fixed(position, &compact.to_le_bytes());
+            } else {
+                writer.write_noncompact_decimal(position, unscaled);
             }
         }
     }
@@ -275,6 +304,9 @@ fn value<'a, T: Array + 'static>(array: &'a dyn Array, row: usize) -> Result<&'a
 }
 
 struct BinaryRowWriter<'a> {
+    base: usize,
+    stride: usize,
+    null_bit_offset: usize,
     null_bytes: usize,
     bytes: &'a mut Vec<u8>,
 }
@@ -284,16 +316,22 @@ impl<'a> BinaryRowWriter<'a> {
         let null_bytes = (arity + 63 + 8) / 64 * 8;
         bytes.clear();
         bytes.resize(null_bytes + arity * 8, 0);
-        Self { null_bytes, bytes }
+        Self {
+            base: 0,
+            stride: 8,
+            null_bit_offset: 8,
+            null_bytes,
+            bytes,
+        }
     }
 
     fn field_offset(&self, position: usize) -> usize {
-        self.null_bytes + position * 8
+        self.base + self.null_bytes + position * self.stride
     }
 
     fn set_null(&mut self, position: usize) {
-        let bit = position + 8;
-        self.bytes[bit / 8] |= 1 << (bit % 8);
+        let bit = position + self.null_bit_offset;
+        self.bytes[self.base + bit / 8] |= 1 << (bit % 8);
     }
 
     fn write_fixed(&mut self, position: usize, value: &[u8]) {
@@ -310,15 +348,18 @@ impl<'a> BinaryRowWriter<'a> {
         }
         let variable_offset = self.bytes.len();
         self.bytes.extend_from_slice(value);
-        self.bytes.resize(self.bytes.len().next_multiple_of(8), 0);
-        let offset_and_size = ((variable_offset as u64) << 32) | value.len() as u64;
+        self.bytes.resize(
+            self.base + (self.bytes.len() - self.base).next_multiple_of(8),
+            0,
+        );
+        let offset_and_size = (((variable_offset - self.base) as u64) << 32) | value.len() as u64;
         self.bytes[field_offset..field_offset + 8].copy_from_slice(&offset_and_size.to_le_bytes());
     }
 
     fn write_noncompact_timestamp(&mut self, position: usize, millis: i64, nanos: i32) {
         let variable_offset = self.bytes.len();
         self.bytes.extend_from_slice(&millis.to_le_bytes());
-        let offset_and_nanos = ((variable_offset as u64) << 32) | nanos as u32 as u64;
+        let offset_and_nanos = (((variable_offset - self.base) as u64) << 32) | nanos as u32 as u64;
         self.write_fixed(position, &offset_and_nanos.to_le_bytes());
     }
 
@@ -327,7 +368,7 @@ impl<'a> BinaryRowWriter<'a> {
         let variable_offset = self.bytes.len();
         self.bytes.resize(variable_offset + 16, 0);
         self.bytes[variable_offset..variable_offset + encoded.len()].copy_from_slice(&encoded);
-        let offset_and_size = ((variable_offset as u64) << 32) | encoded.len() as u64;
+        let offset_and_size = (((variable_offset - self.base) as u64) << 32) | encoded.len() as u64;
         self.write_fixed(position, &offset_and_size.to_le_bytes());
     }
 }

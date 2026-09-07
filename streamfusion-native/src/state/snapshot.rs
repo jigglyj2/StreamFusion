@@ -2,8 +2,11 @@
 // Licensed under the Apache License, Version 2.0
 
 use datafusion::error::{DataFusionError, Result};
-use streamfusion_state_abi::{decode_key_group_snapshot, encode_key_group_snapshot};
+use streamfusion_state_abi::decode_key_group_snapshot;
+#[cfg(test)]
+use streamfusion_state_abi::encode_key_group_snapshot;
 
+#[cfg(test)]
 pub(crate) fn encode<'a>(
     key_group: u32,
     entries: impl ExactSizeIterator<Item = (&'a [u8], &'a [u8])>,

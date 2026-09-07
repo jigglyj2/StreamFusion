@@ -2,16 +2,19 @@
 // Licensed under the Apache License, Version 2.0
 
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
     ReplaceChildrenOptions,
 };
+use futures::StreamExt;
 
 /// Transparent boundary retaining the protobuf identity of one StreamFusion physical operator.
 ///
@@ -23,6 +26,8 @@ use datafusion::physical_plan::{
 pub(crate) struct IdentifiedExec {
     plan_node_id: u64,
     input: Arc<dyn ExecutionPlan>,
+    output_rows: Arc<AtomicU64>,
+    output_batches: Arc<AtomicU64>,
 }
 
 impl IdentifiedExec {
@@ -30,6 +35,8 @@ impl IdentifiedExec {
         Arc::new(Self {
             plan_node_id,
             input,
+            output_rows: Arc::new(AtomicU64::new(0)),
+            output_batches: Arc::new(AtomicU64::new(0)),
         })
     }
 
@@ -39,6 +46,34 @@ impl IdentifiedExec {
 
     pub(crate) fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
+    }
+
+    pub(crate) fn output_rows(&self) -> u64 {
+        self.output_rows.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn output_batches(&self) -> u64 {
+        self.output_batches.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn input_batches(&self) -> u64 {
+        fn child_batches(plan: &Arc<dyn ExecutionPlan>) -> u64 {
+            if let Some(stage) = plan.downcast_ref::<IdentifiedExec>() {
+                return stage.output_batches();
+            }
+            plan.children().into_iter().map(child_batches).sum()
+        }
+        child_batches(&self.input)
+    }
+
+    pub(crate) fn input_rows(&self) -> u64 {
+        fn child_rows(plan: &Arc<dyn ExecutionPlan>) -> u64 {
+            if let Some(stage) = plan.downcast_ref::<IdentifiedExec>() {
+                return stage.output_rows();
+            }
+            plan.children().into_iter().map(child_rows).sum()
+        }
+        child_rows(&self.input)
     }
 }
 
@@ -99,6 +134,18 @@ impl ExecutionPlan for IdentifiedExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        self.input.execute(partition, context)
+        let output_rows = Arc::clone(&self.output_rows);
+        let output_batches = Arc::clone(&self.output_batches);
+        let stream = self.input.execute(partition, context)?.map(move |result| {
+            if let Ok(batch) = &result {
+                output_rows.fetch_add(batch.num_rows() as u64, Ordering::Relaxed);
+                output_batches.fetch_add(1, Ordering::Relaxed);
+            }
+            result
+        });
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            self.schema(),
+            stream,
+        )))
     }
 }

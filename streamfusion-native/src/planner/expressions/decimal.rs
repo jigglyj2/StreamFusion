@@ -41,7 +41,7 @@ enum DecimalOperation {
 }
 
 #[derive(Debug, Eq)]
-struct FlinkDecimalExpr {
+pub(super) struct FlinkDecimalExpr {
     operation: DecimalOperation,
     left: Arc<dyn PhysicalExpr>,
     right: Option<Arc<dyn PhysicalExpr>>,

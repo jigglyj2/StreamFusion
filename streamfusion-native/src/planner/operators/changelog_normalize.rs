@@ -92,12 +92,13 @@ impl ChangelogNormalizeProcessor {
         memory_limit: usize,
         scratch: HostMemoryReservation,
     ) -> Result<Self> {
-        let state = Box::new(RocksPluginKeyedState::open(
+        let state = Box::new(RocksPluginKeyedState::open_for_owner(
             plugin_path,
             database_path,
             first_key_group,
             last_key_group,
             memory_limit,
+            &scratch,
         )?);
         Self::with_state(serialized_plan, max_parallelism, state, scratch)
     }
@@ -246,7 +247,9 @@ impl ChangelogNormalizeProcessor {
                 key: &key.key,
             })
             .collect::<Vec<_>>();
-        let existing = self.state.get_batch(&refs)?;
+        let existing = self.state.get_batch(&refs, &self.scratch_reservation)?;
+        let _loaded_state_workspace =
+            crate::state::reserve_decoded_values(&existing, &self.scratch_reservation)?;
         self.state_read_batches = self.state_read_batches.saturating_add(1);
         let mut staged = keys
             .into_iter()
@@ -369,12 +372,18 @@ impl ChangelogNormalizeProcessor {
         ]
     }
 
-    pub(crate) fn snapshot_key_group(&self, key_group: u32) -> Result<Vec<u8>> {
-        self.state.snapshot_key_group(key_group)
+    pub(crate) fn state_memory(&self) -> HostMemoryReservation {
+        self.scratch_reservation.sibling("native state transfer")
+    }
+
+    pub(crate) fn snapshot_key_group(&self, key_group: u32) -> Result<crate::state::SnapshotBytes> {
+        self.state
+            .snapshot_key_group(key_group, &self.scratch_reservation)
     }
 
     pub(crate) fn restore_key_group(&mut self, key_group: u32, bytes: &[u8]) -> Result<()> {
-        self.state.restore_key_group(key_group, bytes)
+        self.state
+            .restore_key_group(key_group, bytes, &self.scratch_reservation)
     }
 
     pub(crate) fn checkpoint(&self, directory: &std::path::Path) -> Result<()> {
@@ -780,6 +789,9 @@ mod tests {
         native_plan(proto::ChangelogNormalize {
             input: Some(Box::new(proto::Operator {
                 plan_node_id: 0,
+                metric_name: String::new(),
+                clear_record_timestamps: false,
+                metric_uid: None,
                 operator: Some(proto::operator::Operator::Input(proto::Input::default())),
             })),
             key_indices: vec![0],
@@ -794,6 +806,9 @@ mod tests {
         native_plan(proto::ChangelogNormalize {
             input: Some(Box::new(proto::Operator {
                 plan_node_id: 0,
+                metric_name: String::new(),
+                clear_record_timestamps: false,
+                metric_uid: None,
                 operator: Some(proto::operator::Operator::Input(proto::Input::default())),
             })),
             key_indices: vec![0],
@@ -809,6 +824,9 @@ mod tests {
             protocol_version: crate::PLAN_PROTOCOL_VERSION,
             root: Some(proto::Operator {
                 plan_node_id: 0,
+                metric_name: String::new(),
+                clear_record_timestamps: false,
+                metric_uid: None,
                 operator: Some(proto::operator::Operator::ChangelogNormalize(Box::new(
                     normalize,
                 ))),

@@ -11,6 +11,15 @@ package tech.streamfusion.nativebridge;
 
 /** Host callbacks used by native execution to reserve and release task memory. */
 public interface NativeMemoryManager {
+    /** Identity of the Flink resource whose RocksDB cache budget is shared. Zero means isolated. */
+    default long rocksDbMemoryScopeHigh() {
+        return 0;
+    }
+
+    default long rocksDbMemoryScopeLow() {
+        return 0;
+    }
+
     /** Attempts to reserve bytes from the host task's memory budget. */
     boolean tryReserve(long bytes);
 

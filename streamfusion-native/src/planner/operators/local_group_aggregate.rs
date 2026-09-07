@@ -17,7 +17,13 @@ use super::group_aggregate::{
 };
 use crate::exchange::{encode_binary_row, KeyField};
 use crate::memory_pool::HostMemoryReservation;
+use crate::planner::persistent::unary::InvocationState;
 use crate::proto;
+
+mod admission;
+mod control;
+pub(crate) mod execution_plan;
+mod planning;
 
 /// Flink-compatible local bundle aggregation with no persistent keyed state.
 ///
@@ -35,8 +41,14 @@ pub(crate) struct LocalGroupAggregateProcessor {
     pending: HashMap<Vec<u8>, PendingLocal, RandomState>,
     pending_order: Vec<Vec<u8>>,
     pending_elements: usize,
+    invocation: InvocationState,
+    native_output_schema: Option<SchemaRef>,
+    control_flushing: bool,
     pending_reservation: HostMemoryReservation,
     output_reservation: HostMemoryReservation,
+    workspace: HostMemoryReservation,
+    _plan_reservation: HostMemoryReservation,
+    _schema_reservation: HostMemoryReservation,
 }
 
 struct PendingLocal {
@@ -45,112 +57,15 @@ struct PendingLocal {
 }
 
 impl LocalGroupAggregateProcessor {
-    pub(crate) fn new(plan_bytes: &[u8], reservation: HostMemoryReservation) -> Result<Self> {
-        let native = proto::NativePlan::decode(plan_bytes)
-            .map_err(|error| DataFusionError::Plan(format!("invalid native plan: {error}")))?;
-        if native.protocol_version != crate::PLAN_PROTOCOL_VERSION {
-            return Err(DataFusionError::Plan(format!(
-                "unsupported plan protocol version {}",
-                native.protocol_version
-            )));
-        }
-        let plan = match native.root.and_then(|operator| operator.operator) {
-            Some(proto::operator::Operator::LocalGroupAggregate(plan)) => *plan,
-            _ => {
-                return Err(DataFusionError::Plan(
-                    "native plan root is not a local group aggregate".to_string(),
-                ));
-            }
-        };
-        if (!plan.bounded_batch && plan.mini_batch_size == 0)
-            || plan.mini_batch_size > usize::MAX as u64
-        {
-            return Err(DataFusionError::Plan(
-                "local group aggregate requires a positive mini-batch size that fits usize"
-                    .to_string(),
-            ));
-        }
-        let input_schema =
-            crate::planner::arrow_schema(plan.input_schema.as_ref().ok_or_else(|| {
-                DataFusionError::Plan("local group aggregate requires an input schema".to_string())
-            })?)?;
-        let output_schema =
-            crate::planner::arrow_schema(plan.output_schema.as_ref().ok_or_else(|| {
-                DataFusionError::Plan("local group aggregate requires an output schema".to_string())
-            })?)?;
-        if output_schema.fields().len() != plan.grouping_indices.len() + 1
-            || output_schema
-                .fields()
-                .last()
-                .is_none_or(|field| field.data_type() != &arrow::datatypes::DataType::Binary)
-        {
-            return Err(DataFusionError::Plan(
-                "local group aggregate output must contain grouping fields and one BINARY accumulator"
-                    .to_string(),
-            ));
-        }
-        let grouping_fields = plan
-            .grouping_indices
-            .iter()
-            .map(|&index| {
-                input_schema
-                    .fields()
-                    .get(index as usize)
-                    .map(|field| SortField::new(field.data_type().clone()))
-                    .ok_or_else(|| {
-                        DataFusionError::Plan(format!(
-                            "local group aggregate grouping index {index} is outside its input"
-                        ))
-                    })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        if !RowConverter::supports_fields(&grouping_fields) {
-            return Err(DataFusionError::Plan(
-                "local group aggregate grouping type is not supported by Arrow row encoding"
-                    .to_string(),
-            ));
-        }
-        let mut key_fields = Vec::with_capacity(plan.grouping_indices.len());
-        let mut native_key_supported = true;
-        for &index in &plan.grouping_indices {
-            let index = index as usize;
-            let field = input_schema.fields().get(index).ok_or_else(|| {
-                DataFusionError::Plan(format!(
-                    "local group aggregate grouping index {index} is outside its input"
-                ))
-            })?;
-            match KeyField::from_arrow_type(field.data_type()) {
-                Ok(field) if native_key_supported => key_fields.push((index, field)),
-                Ok(_) => {}
-                Err(_) => {
-                    native_key_supported = false;
-                    key_fields.clear();
-                }
-            }
-        }
-        let calls = plan
-            .aggregate_calls
-            .iter()
-            .map(lower_call)
-            .collect::<Result<Vec<_>>>()?;
-        let output_reservation = reservation.sibling("native local group aggregate output");
-        Ok(Self {
-            plan,
-            calls,
-            input_schema,
-            output_schema,
-            grouping_converter: RowConverter::new(grouping_fields)?,
-            key_fields,
-            pending: HashMap::with_hasher(RandomState::new()),
-            pending_order: Vec::new(),
-            pending_elements: 0,
-            pending_reservation: reservation,
-            output_reservation,
-        })
+    pub(crate) fn process_arrow(&mut self, batch: RecordBatch) -> Result<RecordBatch> {
+        self.invocation.require_idle("local aggregate")?;
+        self.validate_batch(&batch)?;
+        self.workspace.resize(self.batch_admission(&batch)?)?;
+        let result = self.process_accounted(batch);
+        self.finish_legacy_output(result)
     }
 
-    pub(crate) fn process_arrow(&mut self, batch: RecordBatch) -> Result<RecordBatch> {
-        self.validate_batch(&batch)?;
+    fn process_accounted(&mut self, batch: RecordBatch) -> Result<RecordBatch> {
         let grouping_rows = self.encode_grouping_rows(&batch)?;
         let mut output_keys = Vec::new();
         let mut output_accumulators = Vec::new();
@@ -192,10 +107,17 @@ impl LocalGroupAggregateProcessor {
     }
 
     pub(crate) fn finish_bundle(&mut self) -> Result<RecordBatch> {
+        self.invocation.require_idle("local aggregate")?;
+        self.workspace.resize(self.flush_admission()?)?;
+        let result = self.finish_accounted();
+        self.finish_legacy_output(result)
+    }
+
+    fn finish_accounted(&mut self) -> Result<RecordBatch> {
         let mut output_keys = Vec::new();
         let mut output_accumulators = Vec::new();
         self.drain_pending(&mut output_keys, &mut output_accumulators);
-        self.pending_reservation.resize(0)?;
+        self.resize_reservation()?;
         self.output_batch(output_keys, output_accumulators)
     }
 
@@ -233,26 +155,36 @@ impl LocalGroupAggregateProcessor {
                 )));
             }
         }
-        if self.plan.input_changelog
-            && batch
+        if self.plan.input_changelog {
+            let kinds = batch
                 .column(visible)
                 .as_any()
                 .downcast_ref::<Int8Array>()
-                .is_none()
-        {
-            return Err(DataFusionError::Plan(
-                "local group aggregate changelog metadata must be Int8".to_string(),
-            ));
+                .ok_or_else(|| {
+                    DataFusionError::Plan(
+                        "local group aggregate changelog metadata must be Int8".into(),
+                    )
+                })?;
+            if kinds.null_count() != 0 || kinds.values().iter().any(|kind| !(0..=3).contains(kind))
+            {
+                return Err(DataFusionError::Execution(
+                    "local group aggregate input has null or invalid RowKind".into(),
+                ));
+            }
         }
         if let Some(index) = preencoded {
-            if batch
+            let keys = batch
                 .column(index)
                 .as_any()
                 .downcast_ref::<BinaryArray>()
-                .is_none()
-            {
-                return Err(DataFusionError::Plan(
-                    "local group aggregate preencoded key metadata must be Binary".to_string(),
+                .ok_or_else(|| {
+                    DataFusionError::Plan(
+                        "local group aggregate preencoded key metadata must be Binary".to_string(),
+                    )
+                })?;
+            if keys.null_count() != 0 {
+                return Err(DataFusionError::Execution(
+                    "local group aggregate preencoded key may not be null".into(),
                 ));
             }
         } else if self.key_fields.len() != self.plan.grouping_indices.len() {
@@ -338,10 +270,19 @@ impl LocalGroupAggregateProcessor {
     }
 
     fn resize_reservation(&mut self) -> Result<()> {
-        let map_bytes = self
-            .pending
-            .capacity()
-            .saturating_mul(std::mem::size_of::<(Vec<u8>, PendingLocal)>().saturating_add(16));
+        let bytes = self.pending_bytes();
+        if bytes > self.pending_reservation.size() {
+            self.pending_reservation
+                .grow_from(&mut self.workspace, bytes - self.pending_reservation.size())
+        } else {
+            self.pending_reservation.resize(bytes)
+        }
+    }
+
+    fn pending_bytes(&self) -> usize {
+        // capacity() measures insertion capacity, which can shrink with tombstones even
+        // when no backing storage is freed. Account the actual retained table allocation.
+        let map_bytes = self.pending.allocation_size();
         let order_bytes = self
             .pending_order
             .capacity()
@@ -352,11 +293,9 @@ impl LocalGroupAggregateProcessor {
                 .saturating_add(pending.grouping_row.capacity())
                 .saturating_add(pending.accumulator.estimated_dynamic_bytes())
         });
-        self.pending_reservation.resize(
-            map_bytes
-                .saturating_add(order_bytes)
-                .saturating_add(dynamic),
-        )
+        map_bytes
+            .saturating_add(order_bytes)
+            .saturating_add(dynamic)
     }
 
     fn output_batch(
@@ -372,252 +311,12 @@ impl LocalGroupAggregateProcessor {
                 .convert_rows(keys.iter().map(|key| parser.parse(key)))?
         };
         columns.push(Arc::new(BinaryArray::from_iter_values(accumulators)) as ArrayRef);
-        let output = RecordBatch::try_new(Arc::clone(&self.output_schema), columns)?;
-        let bytes = output.get_array_memory_size();
-        self.output_reservation.resize(bytes)?;
-        self.output_reservation.transfer_to_arrow(bytes)?;
-        self.output_reservation.resize(0)?;
-        Ok(output)
+        Ok(RecordBatch::try_new(
+            Arc::clone(&self.output_schema),
+            columns,
+        )?)
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::memory_pool::tests_support::TestBroker;
-    use crate::planner::operators::group_aggregate::decode_state;
-    use arrow::array::{Int64Array, Int8Array};
-    use arrow::datatypes::{DataType, Field, Schema};
-
-    fn logical_bigint(nullable: bool) -> proto::LogicalType {
-        proto::LogicalType {
-            nullable,
-            r#type: Some(proto::logical_type::Type::Bigint(proto::EmptyType {})),
-        }
-    }
-
-    fn schema(fields: &[(&str, proto::LogicalType)]) -> proto::Schema {
-        proto::Schema {
-            fields: fields
-                .iter()
-                .map(|(name, logical)| proto::Field {
-                    name: (*name).to_string(),
-                    r#type: Some(logical.clone()),
-                })
-                .collect(),
-        }
-    }
-
-    fn call(function: proto::AggregateFunction, input: Option<u32>) -> proto::AggregateCall {
-        proto::AggregateCall {
-            function: function as i32,
-            input_index: input,
-            input_type: input.map(|_| logical_bigint(true)),
-            output_type: Some(logical_bigint(
-                function != proto::AggregateFunction::CountStar,
-            )),
-            retractable: true,
-            filter_index: None,
-            distinct: false,
-            accumulator_type: None,
-        }
-    }
-
-    fn plan(size: u64, changelog: bool) -> Vec<u8> {
-        proto::NativePlan {
-            protocol_version: crate::PLAN_PROTOCOL_VERSION,
-            root: Some(proto::Operator {
-                plan_node_id: 0,
-                operator: Some(proto::operator::Operator::LocalGroupAggregate(Box::new(
-                    proto::LocalGroupAggregate {
-                        input: None,
-                        grouping_indices: vec![0],
-                        aggregate_calls: vec![
-                            call(proto::AggregateFunction::CountStar, None),
-                            call(proto::AggregateFunction::Sum, Some(1)),
-                        ],
-                        input_changelog: changelog,
-                        mini_batch_size: size,
-                        input_schema: Some(schema(&[
-                            ("key", logical_bigint(false)),
-                            ("value", logical_bigint(true)),
-                        ])),
-                        output_schema: Some(proto::Schema {
-                            fields: vec![
-                                proto::Field {
-                                    name: "key".to_string(),
-                                    r#type: Some(logical_bigint(false)),
-                                },
-                                proto::Field {
-                                    name: "accumulator".to_string(),
-                                    r#type: Some(proto::LogicalType {
-                                        nullable: false,
-                                        r#type: Some(proto::logical_type::Type::Binary(
-                                            proto::EmptyType {},
-                                        )),
-                                    }),
-                                },
-                            ],
-                        }),
-                        bounded_batch: false,
-                    },
-                ))),
-            }),
-        }
-        .encode_to_vec()
-    }
-
-    fn processor(size: u64, changelog: bool) -> LocalGroupAggregateProcessor {
-        LocalGroupAggregateProcessor::new(
-            &plan(size, changelog),
-            HostMemoryReservation::new(Arc::new(TestBroker::new(1 << 20)), "local aggregate test"),
-        )
-        .unwrap()
-    }
-
-    fn bounded_processor() -> LocalGroupAggregateProcessor {
-        let native = proto::NativePlan::decode(plan(1, false).as_slice()).unwrap();
-        let mut aggregate = match native.root.unwrap().operator.unwrap() {
-            proto::operator::Operator::LocalGroupAggregate(aggregate) => *aggregate,
-            _ => unreachable!(),
-        };
-        aggregate.mini_batch_size = 0;
-        aggregate.bounded_batch = true;
-        let plan = proto::NativePlan {
-            protocol_version: crate::PLAN_PROTOCOL_VERSION,
-            root: Some(proto::Operator {
-                plan_node_id: 0,
-                operator: Some(proto::operator::Operator::LocalGroupAggregate(Box::new(
-                    aggregate,
-                ))),
-            }),
-        }
-        .encode_to_vec();
-        LocalGroupAggregateProcessor::new(
-            &plan,
-            HostMemoryReservation::new(
-                Arc::new(TestBroker::new(1 << 20)),
-                "bounded local aggregate test",
-            ),
-        )
-        .unwrap()
-    }
-
-    fn batch(keys: Vec<i64>, values: Vec<i64>, kinds: Option<Vec<i8>>) -> RecordBatch {
-        let mut fields = vec![
-            Field::new("key", DataType::Int64, false),
-            Field::new("value", DataType::Int64, true),
-        ];
-        let mut columns = vec![
-            Arc::new(Int64Array::from(keys)) as ArrayRef,
-            Arc::new(Int64Array::from(values)) as ArrayRef,
-        ];
-        if let Some(kinds) = kinds {
-            fields.push(Field::new(
-                "__streamfusion_input_row_kind",
-                DataType::Int8,
-                false,
-            ));
-            columns.push(Arc::new(Int8Array::from(kinds)) as ArrayRef);
-        }
-        RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap()
-    }
-
-    #[test]
-    fn emits_one_opaque_delta_per_key_at_exact_bundle_boundaries() {
-        let mut processor = processor(3, false);
-        assert_eq!(
-            processor
-                .process_arrow(batch(vec![1, 1], vec![10, 20], None))
-                .unwrap()
-                .num_rows(),
-            0
-        );
-        let output = processor
-            .process_arrow(batch(vec![2, 1], vec![5, 7], None))
-            .unwrap();
-        assert_eq!(output.num_rows(), 2);
-        let keys = output
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap();
-        assert_eq!(keys.values(), &[2, 1]);
-        let encoded = output
-            .column(1)
-            .as_any()
-            .downcast_ref::<BinaryArray>()
-            .unwrap();
-        let calls = processor.calls.clone();
-        let first = decode_state(encoded.value(1), &calls).unwrap();
-        assert_eq!(first.row_count, 2);
-        assert_eq!(
-            first.values(&calls)[1],
-            Some(super::super::group_aggregate::AggregateValue::Int(30))
-        );
-        assert_eq!(processor.pending_element_count(), 1);
-        assert_eq!(processor.finish_bundle().unwrap().num_rows(), 1);
-    }
-
-    #[test]
-    fn bounded_mode_emits_one_opaque_partial_per_key_for_each_arrow_batch() {
-        let mut processor = bounded_processor();
-        let first = processor
-            .process_arrow(batch(vec![1, 1, 2], vec![10, 20, 5], None))
-            .unwrap();
-        assert_eq!(first.num_rows(), 2);
-        assert_eq!(processor.pending_element_count(), 0);
-        assert_eq!(processor.pending_key_count(), 0);
-
-        let second = processor
-            .process_arrow(batch(vec![1, 3], vec![7, 9], None))
-            .unwrap();
-        assert_eq!(second.num_rows(), 2);
-        assert_eq!(processor.finish_bundle().unwrap().num_rows(), 0);
-    }
-
-    #[test]
-    fn preserves_negative_retraction_deltas_for_the_global_stage() {
-        let mut processor = processor(10, true);
-        processor
-            .process_arrow(batch(vec![1], vec![7], Some(vec![3])))
-            .unwrap();
-        let output = processor.finish_bundle().unwrap();
-        let encoded = output
-            .column(1)
-            .as_any()
-            .downcast_ref::<BinaryArray>()
-            .unwrap();
-        let state = decode_state(encoded.value(0), &processor.calls).unwrap();
-        assert_eq!(state.row_count, -1);
-        assert_eq!(
-            state.values(&processor.calls)[1],
-            Some(super::super::group_aggregate::AggregateValue::Int(-7))
-        );
-    }
-
-    #[test]
-    fn accounts_pending_and_output_memory_through_the_host_broker() {
-        let broker = Arc::new(TestBroker::new(1 << 20));
-        let reservation =
-            HostMemoryReservation::new(broker.clone(), "local aggregate accounting test");
-        let mut processor =
-            LocalGroupAggregateProcessor::new(&plan(10, false), reservation).unwrap();
-
-        let empty = processor
-            .process_arrow(batch(vec![1, 1, 2], vec![10, 20, 30], None))
-            .unwrap();
-        assert_eq!(empty.num_rows(), 0);
-        assert!(broker.reserved() > 0, "pending hash state must be reserved");
-
-        let output = processor.finish_bundle().unwrap();
-        assert_eq!(output.num_rows(), 2);
-        assert_eq!(
-            broker.reserved(),
-            0,
-            "Arrow owns the transferred output memory"
-        );
-        drop(processor);
-        assert_eq!(broker.reserved(), 0);
-    }
-}
+mod tests;

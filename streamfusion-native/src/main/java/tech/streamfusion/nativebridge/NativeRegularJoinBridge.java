@@ -30,9 +30,19 @@ public final class NativeRegularJoinBridge {
         return KEYED_STATE_BRIDGE;
     }
 
+    public static byte[] identifyPlan(byte[] plan) {
+        return NativePlanNodeIdentity.assign(plan);
+    }
+
     public static long create(
             byte[] plan, int maxParallelism, int firstKeyGroup, int lastKeyGroup, NativeMemoryManager manager) {
-        long handle = createHandle(plan, maxParallelism, firstKeyGroup, lastKeyGroup, manager, manager.limit());
+        long handle = createHandle(
+                NativePlanNodeIdentity.assign(plan),
+                maxParallelism,
+                firstKeyGroup,
+                lastKeyGroup,
+                manager,
+                manager.limit());
         if (handle == 0) {
             throw new IllegalStateException("Native regular join returned a null handle");
         }
@@ -48,7 +58,7 @@ public final class NativeRegularJoinBridge {
             long limit,
             NativeMemoryManager manager) {
         long handle = createRocksHandle(
-                plan,
+                NativePlanNodeIdentity.assign(plan),
                 maxParallelism,
                 firstKeyGroup,
                 lastKeyGroup,
@@ -62,11 +72,9 @@ public final class NativeRegularJoinBridge {
         return handle;
     }
 
-    public static long process(
-            long handle, int side, long inputArray, long inputSchema, long outputArray, long outputSchema) {
-        long rows = processArrowBatch(handle, side, inputArray, inputSchema, outputArray, outputSchema);
+    public static void processStream(long handle, int side, long inputArray, long inputSchema, long outputStream) {
+        processArrowStream(handle, side, inputArray, inputSchema, outputStream);
         EXECUTED_BATCHES.incrementAndGet();
-        return rows;
     }
 
     public static long processBoundedExchangeFrame(
@@ -92,6 +100,10 @@ public final class NativeRegularJoinBridge {
 
     public static long[] statistics(long handle) {
         return nativeStatistics(handle);
+    }
+
+    public static long[] metricSnapshot(long handle) {
+        return nativeMetricSnapshot(handle);
     }
 
     public static long executedBatchCount() {
@@ -136,8 +148,8 @@ public final class NativeRegularJoinBridge {
             NativeMemoryManager manager,
             long limit);
 
-    private static native long processArrowBatch(
-            long handle, int side, long inputArray, long inputSchema, long outputArray, long outputSchema);
+    private static native void processArrowStream(
+            long handle, int side, long inputArray, long inputSchema, long outputStream);
 
     private static native long processBoundedFrame(
             long handle,
@@ -152,6 +164,8 @@ public final class NativeRegularJoinBridge {
     private static native long finishBoundedOutput(long handle, long outputArray, long outputSchema);
 
     private static native long[] nativeStatistics(long handle);
+
+    private static native long[] nativeMetricSnapshot(long handle);
 
     private static native byte[] snapshotKeyGroup(long handle, int group);
 

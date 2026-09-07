@@ -56,6 +56,8 @@ pub(crate) mod inet_ntoa;
 pub(crate) mod json_quote;
 pub(crate) mod like;
 pub(crate) mod lower;
+pub(crate) mod managed_expression;
+pub(crate) mod managed_scalar;
 pub(crate) mod map_constructor;
 pub(crate) mod map_element;
 pub(crate) mod map_entries;

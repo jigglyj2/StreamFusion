@@ -118,7 +118,13 @@ fn append_only_processing_time_uses_bounded_accumulator_state_and_restores_legac
         .map(|group| legacy.snapshot_key_group(group).unwrap())
         .collect::<Vec<_>>();
     drop(legacy);
-    assert_eq!(legacy_broker.reserved(), 0);
+    assert_eq!(
+        legacy_broker.reserved(),
+        legacy_snapshots
+            .iter()
+            .map(|bytes| bytes.len())
+            .sum::<usize>()
+    );
 
     let broker = Arc::new(TestBroker::new(64 << 20));
     let mut compact = OverAggregateProcessor::new(
@@ -132,6 +138,8 @@ fn append_only_processing_time_uses_bounded_accumulator_state_and_restores_legac
     for (group, snapshot) in legacy_snapshots.iter().enumerate() {
         compact.restore_key_group(group as u32, snapshot).unwrap();
     }
+    drop(legacy_snapshots);
+    assert_eq!(legacy_broker.reserved(), 0);
     let output = compact
         .process_arrow(batch(&["a"], &[7], &[5], &[INSERT]))
         .unwrap();
@@ -211,6 +219,7 @@ fn bounded_processing_time_rows_retracts_the_expired_prefix() {
         .unwrap();
     assert_eq!(sums(&output), vec![12]);
     drop(restored);
+    drop(snapshots);
     assert_eq!(broker.reserved(), 0);
 }
 
@@ -345,6 +354,7 @@ fn bounded_processing_time_range_groups_millisecond_peers_and_restores_timer() {
     assert_eq!(sums(&output), vec![5]);
     drop(output);
     drop(restored);
+    drop(snapshots);
     assert_eq!(broker.reserved(), 0);
 }
 
@@ -406,6 +416,174 @@ fn event_time_range_peers_share_the_same_watermark_result() {
     assert_eq!(broker.reserved(), 0);
 }
 
+#[test]
+fn bounded_final_rows_absorbs_sort_retractions_and_canonical_restore() {
+    let broker = Arc::new(TestBroker::new(64 << 20));
+    let plan = bounded_plan(true, Some(2));
+    let mut source = OverAggregateProcessor::new(
+        &plan,
+        128,
+        0,
+        127,
+        HostMemoryReservation::new(broker.clone(), "bounded final OVER source"),
+    )
+    .unwrap();
+    assert_eq!(
+        source
+            .process_arrow(batch(
+                &["a", "a", "a", "b"],
+                &[3, 1, 2, 1],
+                &[5, 10, 20, 7],
+                &[INSERT; 4],
+            ))
+            .unwrap()
+            .num_rows(),
+        0
+    );
+    source
+        .process_arrow(batch(&["a"], &[2], &[20], &[DELETE]))
+        .unwrap();
+    let snapshots = (0..128)
+        .map(|group| source.snapshot_key_group(group).unwrap())
+        .collect::<Vec<_>>();
+    drop(source);
+
+    let mut restored = OverAggregateProcessor::new(
+        &plan,
+        128,
+        0,
+        127,
+        HostMemoryReservation::new(broker.clone(), "bounded final OVER restore"),
+    )
+    .unwrap();
+    for (group, snapshot) in snapshots.iter().enumerate() {
+        restored.restore_key_group(group as u32, snapshot).unwrap();
+    }
+    let mut rows = Vec::new();
+    loop {
+        let output = restored.finish().unwrap();
+        if output.num_rows() == 0 {
+            break;
+        }
+        let keys = output
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let orders = output
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let output_sums = output
+            .column(3)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        for row in 0..output.num_rows() {
+            rows.push((
+                keys.value(row).to_string(),
+                orders.value(row),
+                output_sums.value(row),
+            ));
+        }
+    }
+    rows.sort();
+    assert_eq!(
+        rows,
+        vec![
+            ("a".to_string(), 1, 10),
+            ("a".to_string(), 3, 15),
+            ("b".to_string(), 1, 7)
+        ]
+    );
+    assert_eq!(restored.statistics()[0..2], [128, 0]);
+    drop(restored);
+    drop(snapshots);
+    assert_eq!(broker.reserved(), 0);
+}
+
+#[test]
+fn bounded_final_range_state_moves_from_memory_to_rocksdb_with_batched_io() {
+    let Ok(plugin_path) = std::env::var("STREAMFUSION_TEST_ROCKSDB_PLUGIN") else {
+        return;
+    };
+    let plan = bounded_plan(false, Some(10));
+    let broker = Arc::new(TestBroker::new(256 << 20));
+    let mut memory = OverAggregateProcessor::new(
+        &plan,
+        128,
+        0,
+        127,
+        HostMemoryReservation::new(broker.clone(), "bounded RANGE memory state"),
+    )
+    .unwrap();
+    memory
+        .process_arrow(batch(
+            &["a", "a", "a"],
+            &[20, 5, 10],
+            &[20, 5, 10],
+            &[INSERT; 3],
+        ))
+        .unwrap();
+    assert_eq!(memory.statistics()[0..2], [1, 1]);
+    let snapshots = (0..128)
+        .map(|group| memory.snapshot_key_group(group).unwrap())
+        .collect::<Vec<_>>();
+    drop(memory);
+
+    let directory = tempfile::tempdir().unwrap();
+    let mut rocks = OverAggregateProcessor::new_rocksdb(
+        &plan,
+        128,
+        0,
+        127,
+        std::path::Path::new(&plugin_path),
+        directory.path(),
+        64 << 20,
+        HostMemoryReservation::new(broker.clone(), "bounded RANGE RocksDB scratch"),
+    )
+    .unwrap();
+    for (group, snapshot) in snapshots.iter().enumerate() {
+        rocks.restore_key_group(group as u32, snapshot).unwrap();
+        assert_eq!(rocks.snapshot_key_group(group as u32).unwrap(), *snapshot);
+    }
+    let io_before_batch = rocks.statistics()[0..2].to_vec();
+    rocks
+        .process_arrow(batch(&["a"], &[25], &[1], &[INSERT]))
+        .unwrap();
+    assert_eq!(
+        rocks.statistics()[0..2],
+        [io_before_batch[0] + 1, io_before_batch[1] + 1]
+    );
+
+    let mut actual = Vec::new();
+    loop {
+        let output = rocks.finish().unwrap();
+        if output.num_rows() == 0 {
+            break;
+        }
+        let orders = output
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let output_sums = output
+            .column(3)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        for row in 0..output.num_rows() {
+            actual.push((orders.value(row), output_sums.value(row)));
+        }
+    }
+    actual.sort_unstable();
+    assert_eq!(actual, vec![(5, 5), (10, 15), (20, 30), (25, 21)]);
+    drop(rocks);
+    drop(snapshots);
+    assert_eq!(broker.reserved(), 0);
+}
+
 fn processor(broker: Arc<TestBroker>, rows_frame: bool) -> OverAggregateProcessor {
     processor_with_time(broker, rows_frame, proto::OverTimeAttribute::NonTime)
 }
@@ -460,10 +638,16 @@ fn plan_with_offset(
         protocol_version: crate::PLAN_PROTOCOL_VERSION,
         root: Some(proto::Operator {
             plan_node_id: 0,
+            metric_name: String::new(),
+            clear_record_timestamps: false,
+            metric_uid: None,
             operator: Some(proto::operator::Operator::OverAggregate(Box::new(
                 proto::OverAggregate {
                     input: Some(Box::new(proto::Operator {
                         plan_node_id: 0,
+                        metric_name: String::new(),
+                        clear_record_timestamps: false,
+                        metric_uid: None,
                         operator: Some(proto::operator::Operator::Input(proto::Input {
                             schema: Some(input.clone()),
                             input_index: 0,
@@ -484,11 +668,31 @@ fn plan_with_offset(
                     state_ttl_millis: 0,
                     sort_ascending: true,
                     sort_nulls_last: false,
+                    bounded_final_output: false,
                 },
             ))),
         }),
     }
     .encode_to_vec()
+}
+
+fn bounded_plan(rows_frame: bool, preceding_offset: Option<u64>) -> Vec<u8> {
+    let mut plan = proto::NativePlan::decode(
+        plan_with_offset(
+            rows_frame,
+            proto::OverTimeAttribute::NonTime,
+            true,
+            preceding_offset,
+        )
+        .as_slice(),
+    )
+    .unwrap();
+    let root = plan.root.as_mut().unwrap();
+    let Some(proto::operator::Operator::OverAggregate(over)) = root.operator.as_mut() else {
+        panic!("test plan root is not OVER");
+    };
+    over.bounded_final_output = true;
+    plan.encode_to_vec()
 }
 
 fn call(function: proto::AggregateFunction, input_index: Option<u32>) -> proto::AggregateCall {

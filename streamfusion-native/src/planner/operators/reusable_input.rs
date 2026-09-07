@@ -21,7 +21,8 @@ use datafusion::physical_plan::{
 /// An Arrow input whose batch can be replaced while its surrounding physical plan is reused.
 pub(crate) struct ReusableInputExec {
     schema: SchemaRef,
-    batch: Mutex<Option<RecordBatch>>,
+    batch: Arc<Mutex<Option<RecordBatch>>>,
+    streaming: std::sync::atomic::AtomicBool,
     properties: Arc<PlanProperties>,
 }
 
@@ -35,7 +36,8 @@ impl ReusableInputExec {
         ));
         Self {
             schema,
-            batch: Mutex::new(None),
+            batch: Arc::new(Mutex::new(None)),
+            streaming: std::sync::atomic::AtomicBool::new(false),
             properties,
         }
     }
@@ -54,6 +56,11 @@ impl ReusableInputExec {
             .map_err(|_| DataFusionError::Internal("reusable input lock poisoned".to_string()))? =
             Some(batch);
         Ok(())
+    }
+
+    pub(crate) fn streaming(&self, enabled: bool) {
+        self.streaming
+            .store(enabled, std::sync::atomic::Ordering::Release);
     }
 
     pub(crate) fn clear(&self) {
@@ -115,6 +122,23 @@ impl ExecutionPlan for ReusableInputExec {
             return Err(DataFusionError::Execution(format!(
                 "reusable input has no partition {partition}"
             )));
+        }
+        if self.streaming.load(std::sync::atomic::Ordering::Acquire) {
+            let slot = self.batch.clone();
+            return Ok(Box::pin(
+                datafusion::physical_plan::stream::RecordBatchStreamAdapter::new(
+                    self.schema.clone(),
+                    futures::stream::poll_fn(move |_cx| match slot.lock() {
+                        Ok(mut slot) => match slot.take() {
+                            Some(batch) => std::task::Poll::Ready(Some(Ok(batch))),
+                            None => std::task::Poll::Pending,
+                        },
+                        Err(_) => std::task::Poll::Ready(Some(Err(DataFusionError::Internal(
+                            "native input lock poisoned".into(),
+                        )))),
+                    }),
+                ),
+            ));
         }
         let batch = self
             .batch
