@@ -83,6 +83,23 @@ pub fn decode_key_group_snapshot(
     expected_key_group: u32,
     bytes: &[u8],
 ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, SnapshotError> {
+    // Validate lengths before allocating from the entry count supplied by a checkpoint.
+    let count = validate_key_group_snapshot(expected_key_group, bytes)?;
+    let mut input = SnapshotInput::new(bytes);
+    input.offset = 16;
+    let mut entries = Vec::with_capacity(count);
+    for _ in 0..count {
+        entries.push((input.read_bytes("key")?, input.read_bytes("value")?));
+    }
+    Ok(entries)
+}
+
+/// Validates the complete checkpoint without copying payloads and returns its entry count.
+/// Callers can then admit vector, map, and WriteBatch overhead before decoding.
+pub fn validate_key_group_snapshot(
+    expected_key_group: u32,
+    bytes: &[u8],
+) -> Result<usize, SnapshotError> {
     let mut input = SnapshotInput::new(bytes);
     if input.read_exact(4, "magic")? != SNAPSHOT_MAGIC {
         return Err(SnapshotError(
@@ -102,16 +119,23 @@ pub fn decode_key_group_snapshot(
         )));
     }
     let count = input.read_u32("entry count")? as usize;
-    let mut entries = Vec::with_capacity(count);
+    if count > bytes.len().saturating_sub(16) / 8 {
+        return Err(SnapshotError(
+            "canonical snapshot entry count exceeds its byte length".into(),
+        ));
+    }
     for _ in 0..count {
-        entries.push((input.read_bytes("key")?, input.read_bytes("value")?));
+        let key_len = input.read_u32("key length")? as usize;
+        input.read_exact(key_len, "key")?;
+        let value_len = input.read_u32("value length")? as usize;
+        input.read_exact(value_len, "value")?;
     }
     if !input.is_empty() {
         return Err(SnapshotError(
             "StreamFusion state has trailing bytes".to_string(),
         ));
     }
-    Ok(entries)
+    Ok(count)
 }
 
 fn write_len(output: &mut Vec<u8>, value: usize, description: &str) -> Result<(), SnapshotError> {
@@ -162,6 +186,22 @@ impl<'a> SnapshotInput<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejects_untrusted_entry_counts_before_allocating() {
+        let mut bytes = encode_key_group_snapshot(3, [].into_iter()).unwrap();
+        bytes[12..16].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(decode_key_group_snapshot(3, &bytes)
+            .unwrap_err()
+            .to_string()
+            .contains("entry count"));
+        let bytes =
+            encode_key_group_snapshot(3, [(b"k".as_slice(), b"v".as_slice())].into_iter()).unwrap();
+        for end in 0..bytes.len() {
+            assert!(validate_key_group_snapshot(3, &bytes[..end]).is_err());
+        }
+        assert_eq!(validate_key_group_snapshot(3, &bytes).unwrap(), 1);
+    }
 
     #[test]
     fn canonical_snapshot_has_a_stable_fixture() {

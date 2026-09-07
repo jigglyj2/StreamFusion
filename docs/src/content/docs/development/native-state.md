@@ -110,3 +110,10 @@ Arroyo does not currently expose an equivalent dedicated SQL deduplicate executo
 updates are sent to an epoch checkpointer, and binary key/value Arrow arrays are written as Parquet.
 That validates the opaque-byte and batch-checkpoint direction, while StreamFusion differs by using
 Flink-owned key groups and snapshot lifecycle plus direct RocksDB incremental files.
+
+## Canonical snapshot validation
+
+Canonical restore validates the complete SFS1 payload before allocating decoded entries.
+The entry count must fit the supplied byte length, every key/value length must be in bounds,
+and trailing bytes are rejected. This prevents a corrupt entry count from driving an oversized
+allocation; valid snapshots retain their existing byte format and cross-backend compatibility.
