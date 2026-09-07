@@ -97,8 +97,23 @@ These are not documented as accelerated until their end-to-end parity and recove
 
 The Java planner keeps the Flink node available for fallback and sends a versioned protobuf plan
 to a dedicated Rust physical operator. Arrow batches cross the JVM boundary only at the native
-plan edge. The operator uses ordered native keyed state and Arrow aggregate kernels because
-DataFusion alone does not provide Flink's incremental changelog and peer behavior.
+plan edge. Flink-specific ordered keyed state retains streaming changelog and timer behavior.
+For compatible bounded OVER calls, DataFusion's `PlainAggregateWindowExpr` and
+`SlidingAggregateWindowExpr` now own frame traversal and aggregate execution. COUNT, BIGINT SUM,
+and non-floating MIN/MAX use its built-in accumulators. A narrow Flink UDAF adapts integer AVG,
+integer result widths, SUM0 and DISTINCT multiplicities; integer AVG delegates its sum to
+DataFusion as well. Bounded ROWS subtracts one from Flink's retained-row count when constructing
+DataFusion's preceding bound, and RANGE preserves peer groups.
+
+Floating-point aggregate arithmetic/extrema and decimal arithmetic retain the ordered Flink
+frame transition: changing whether expired values are removed before new values are added changes floating rounding or decimal
+null-on-overflow state. COUNT on these input types and decimal MIN/MAX can still use DataFusion.
+This is an arithmetic-order exception, not a blanket exception for
+streaming computation. Large decoded inputs, frame workspace and result arrays use a coarse
+Flink host reservation. Generated direct-native tests compare numeric ROWS/RANGE frames with
+unmodified Flink SQL, including nullable values, peers and split batches, on memory and RocksDB.
+ROWS tests use a total ordering; they do not remove the production fallback for ambiguous peer
+ordering or any architecture admission gate.
 
 ## Local performance evidence
 

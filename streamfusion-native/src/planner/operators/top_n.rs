@@ -16,6 +16,9 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_row::{RowConverter, Rows};
 use datafusion::error::{DataFusionError, Result};
+use datafusion::functions_window::rank::Rank;
+use datafusion::logical_expr::WindowUDFImpl;
+use datafusion::scalar::ScalarValue;
 use hashbrown::HashMap;
 
 use self::compare::{compare_rows, equal_rows};
@@ -773,25 +776,46 @@ impl TopNProcessor {
         let mut indices = Vec::new();
         let mut ranks = Vec::new();
         let mut kinds = Vec::new();
+        let ordering = self
+            .plan
+            .sort_key_indices
+            .iter()
+            .map(|&i| rows.column(i as usize).clone())
+            .collect::<Vec<_>>();
+        let needs_peer_adapter = ordering
+            .iter()
+            .any(|array| super::bounded_rank::requires_flink_peers(array.data_type()));
         for group in group_order {
             let (offset, count) = groups[group];
+            let mut evaluator = Rank::basic().partition_evaluator(Default::default())?;
             let mut rank = 1u64;
             for index in 0..count {
                 let row = offset + index;
                 if index > 0 {
                     self.comparator_calls = self.comparator_calls.saturating_add(1);
-                    if compare_rows(
-                        &rows,
-                        row - 1,
-                        &rows,
-                        row,
-                        &self.plan.sort_key_indices,
-                        &self.plan.sort_ascending,
-                        &self.plan.sort_nulls_last,
-                    )? != Ordering::Equal
+                    if needs_peer_adapter
+                        && compare_rows(
+                            &rows,
+                            row - 1,
+                            &rows,
+                            row,
+                            &self.plan.sort_key_indices,
+                            &self.plan.sort_ascending,
+                            &self.plan.sort_nulls_last,
+                        )? != Ordering::Equal
                     {
                         rank = index as u64 + 1;
                     }
+                }
+                if !needs_peer_adapter {
+                    let ScalarValue::UInt64(Some(value)) =
+                        evaluator.evaluate(&ordering, &(row..row + 1))?
+                    else {
+                        return Err(DataFusionError::Internal(
+                            "DataFusion RANK returned a non-u64 value".into(),
+                        ));
+                    };
+                    rank = value;
                 }
                 if rank >= self.plan.rank_start && rank <= self.plan.rank_end.expect("validated") {
                     indices.push(u32::try_from(row).map_err(|_| {

@@ -56,6 +56,16 @@ duplicate insertion order with a persisted sequence number.
 
 ## Implementation
 
+Bounded rank computation now uses DataFusion's RANK partition evaluator, both for an already
+sorted physical input and for terminal keyed bounded rank output. The evaluator persists across
+Arrow batches and resets at Flink partition boundaries; Flink still owns rank-range filtering,
+physical RowKinds and state/recovery. Floating-point order keys, including nested floats, retain
+the Flink peer adapter: its generated comparator treats signed zeros and NaN/finite pairs as
+peers, whereas DataFusion scalar equality compares floating bits. Generated native/SQL parity
+tests cover integer peers and partition boundaries split across batches. This compute change
+does not remove the existing planner admission gates.
+
+
 Each incoming Arrow batch crosses JNI once. Rust computes Flink-compatible key groups, makes one
 backend batch read and one backend batch write for all touched partitions, maintains the sorted
 candidate sets, and emits one Arrow changelog batch. Memory state stores opaque canonical values.

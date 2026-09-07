@@ -31,6 +31,7 @@ use crate::state::{
 };
 use crate::{decode_plan, proto};
 
+mod datafusion_compute;
 mod state_codec;
 #[cfg(test)]
 mod tests;
@@ -792,15 +793,25 @@ impl OverAggregateProcessor {
                     continue;
                 }
                 let mut state = decode_over_state(&value, self.calls.len())?;
-                let changes = match self.plan.preceding_offset {
-                    Some(offset) => recompute_bounded(
+                let changes = if datafusion_compute::compatible(&self.calls) {
+                    datafusion_compute::evaluate(
                         &mut state,
                         &self.calls,
                         self.plan.rows_frame,
-                        offset,
-                        None,
-                    )?,
-                    None => recompute(&mut state, &self.calls, self.plan.rows_frame)?,
+                        self.plan.preceding_offset,
+                        &self.scratch_reservation,
+                    )?
+                } else {
+                    match self.plan.preceding_offset {
+                        Some(offset) => recompute_bounded(
+                            &mut state,
+                            &self.calls,
+                            self.plan.rows_frame,
+                            offset,
+                            None,
+                        )?,
+                        None => recompute(&mut state, &self.calls, self.plan.rows_frame)?,
+                    }
                 };
                 for changed in changes {
                     let ordinal = i32::try_from(self.bounded_pending.len()).unwrap_or(i32::MAX);

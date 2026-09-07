@@ -9,6 +9,9 @@ use arrow::compute::take;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion::error::{DataFusionError, Result};
+use datafusion::functions_window::rank::Rank;
+use datafusion::logical_expr::{PartitionEvaluator, WindowUDFImpl};
+use datafusion::scalar::ScalarValue;
 
 use crate::memory_pool::HostMemoryReservation;
 use crate::planner::arrow_schema;
@@ -26,12 +29,12 @@ pub(crate) struct BoundedRankProcessor {
     output_envelope_schema: SchemaRef,
     partition_ascending: Box<[bool]>,
     partition_nulls_last: Box<[bool]>,
-    sort_ascending: Box<[bool]>,
-    sort_nulls_last: Box<[bool]>,
     prepared_schema: Option<SchemaRef>,
     previous: Option<RecordBatch>,
-    row_number: u64,
-    rank: u64,
+    evaluator: Box<dyn PartitionEvaluator>,
+    compatibility_rank: u64,
+    compatibility_rows: u64,
+    needs_peer_adapter: bool,
     retained: HostMemoryReservation,
     scratch: HostMemoryReservation,
     comparator_calls: u64,
@@ -63,20 +66,22 @@ impl BoundedRankProcessor {
         let output_envelope_schema = Arc::new(Schema::new(output_fields));
         let partition_ascending = vec![true; plan.partition_key_indices.len()].into_boxed_slice();
         let partition_nulls_last = vec![false; plan.partition_key_indices.len()].into_boxed_slice();
-        let sort_ascending = vec![true; plan.sort_key_indices.len()].into_boxed_slice();
-        let sort_nulls_last = vec![false; plan.sort_key_indices.len()].into_boxed_slice();
+        let needs_peer_adapter = plan
+            .sort_key_indices
+            .iter()
+            .any(|&i| requires_flink_peers(input_schema.field(i as usize).data_type()));
         Ok(Self {
             plan,
             input_schema,
             output_envelope_schema,
             partition_ascending,
             partition_nulls_last,
-            sort_ascending,
-            sort_nulls_last,
             prepared_schema: None,
             previous: None,
-            row_number: 0,
-            rank: 0,
+            evaluator: Rank::basic().partition_evaluator(Default::default())?,
+            compatibility_rank: 0,
+            compatibility_rows: 0,
+            needs_peer_adapter,
             scratch: reservation.sibling("native bounded rank batch scratch and output"),
             retained: reservation,
             comparator_calls: 0,
@@ -103,8 +108,13 @@ impl BoundedRankProcessor {
     fn process_accounted(&mut self, batch: &RecordBatch) -> Result<RecordBatch> {
         let mut indices = Vec::with_capacity(batch.num_rows());
         let mut ranks = Vec::with_capacity(batch.num_rows());
+        let ordering = self
+            .plan
+            .sort_key_indices
+            .iter()
+            .map(|&index| Arc::clone(batch.column(index as usize)))
+            .collect::<Vec<_>>();
         for row in 0..batch.num_rows() {
-            self.row_number = self.row_number.saturating_add(1);
             let previous = if row == 0 {
                 self.previous.as_ref().map(|batch| (batch, 0))
             } else {
@@ -126,27 +136,48 @@ impl BoundedRankProcessor {
                 }
             };
             if partition_changed {
-                self.rank = 1;
-                self.row_number = 1;
-            } else if let Some((previous, previous_row)) = previous {
+                self.evaluator = Rank::basic().partition_evaluator(Default::default())?;
+            } else {
                 self.comparator_calls = self.comparator_calls.saturating_add(1);
-                if !compare_equal(
-                    previous,
-                    previous_row,
-                    batch,
-                    row,
-                    &self.plan.sort_key_indices,
-                    &self.sort_ascending,
-                    &self.sort_nulls_last,
-                )? {
-                    self.rank = self.row_number;
-                }
             }
-            if self.rank >= self.plan.rank_start && self.rank <= self.plan.rank_end {
+            // Flink's generated float comparator treats signed zeros and even NaN/finite
+            // pairs as peers. DataFusion scalar equality is bitwise; preserve that narrow
+            // comparator contract (including nested floats) instead of changing rank boundaries.
+            let rank = if self.needs_peer_adapter {
+                self.compatibility_rows = self.compatibility_rows.saturating_add(1);
+                if partition_changed {
+                    self.compatibility_rows = 1;
+                    self.compatibility_rank = 1;
+                } else if let Some((previous, previous_row)) = previous {
+                    let flags = vec![true; self.plan.sort_key_indices.len()];
+                    if !compare_equal(
+                        previous,
+                        previous_row,
+                        batch,
+                        row,
+                        &self.plan.sort_key_indices,
+                        &flags,
+                        &flags,
+                    )? {
+                        self.compatibility_rank = self.compatibility_rows;
+                    }
+                }
+                self.compatibility_rank
+            } else {
+                let ScalarValue::UInt64(Some(rank)) =
+                    self.evaluator.evaluate(&ordering, &(row..row + 1))?
+                else {
+                    return Err(DataFusionError::Internal(
+                        "DataFusion RANK returned a non-u64 value".into(),
+                    ));
+                };
+                rank
+            };
+            if rank >= self.plan.rank_start && rank <= self.plan.rank_end {
                 indices.push(u32::try_from(row).map_err(|_| {
                     DataFusionError::Execution("bounded rank batch exceeds u32 rows".to_string())
                 })?);
-                ranks.push(self.rank as i64);
+                ranks.push(rank as i64);
             }
         }
 
@@ -222,6 +253,22 @@ impl BoundedRankProcessor {
         }
         self.prepared_schema = Some(schema);
         Ok(())
+    }
+}
+
+/// Flink's generated ordering differs from DataFusion equality for floating-point peers.
+pub(super) fn requires_flink_peers(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Float16 | DataType::Float32 | DataType::Float64 => true,
+        DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::FixedSizeList(field, _)
+        | DataType::Map(field, _) => requires_flink_peers(field.data_type()),
+        DataType::Struct(fields) => fields
+            .iter()
+            .any(|field| requires_flink_peers(field.data_type())),
+        DataType::Dictionary(_, value) => requires_flink_peers(value),
+        _ => false,
     }
 }
 
@@ -303,6 +350,59 @@ mod tests {
         drop(second);
         drop(processor);
         assert_eq!(broker.reserved(), 0);
+    }
+
+    #[test]
+    fn bounded_rank_preserves_flink_float_peers_across_batches() {
+        let mut native_plan = decode_plan(&plan()).unwrap();
+        let Some(proto::operator::Operator::BoundedRank(rank)) =
+            native_plan.root.as_mut().unwrap().operator.as_mut()
+        else {
+            unreachable!()
+        };
+        let float = proto::LogicalType {
+            r#type: Some(proto::logical_type::Type::Double(proto::EmptyType {})),
+            nullable: true,
+        };
+        rank.input_schema.as_mut().unwrap().fields[1].r#type = Some(float.clone());
+        rank.output_schema.as_mut().unwrap().fields[1].r#type = Some(float);
+        rank.rank_start = 1;
+        rank.rank_end = u64::MAX;
+        let input_schema = Arc::new(Schema::new(vec![
+            Field::new("p", DataType::Int32, true),
+            Field::new("v", DataType::Float64, true),
+            Field::new(INPUT_KIND_COLUMN, DataType::Int8, false),
+        ]));
+        let mut processor = BoundedRankProcessor::new(
+            &native_plan.encode_to_vec(),
+            HostMemoryReservation::new(Arc::new(TestBroker::new(64 << 20)), "float peer test"),
+        )
+        .unwrap();
+        let mut actual = Vec::new();
+        for values in [vec![-0.0, 0.0, f64::NAN], vec![42.0, 43.0]] {
+            let n = values.len();
+            let input = RecordBatch::try_new(
+                input_schema.clone(),
+                vec![
+                    Arc::new(Int32Array::from(vec![0; n])),
+                    Arc::new(arrow::array::Float64Array::from(values)),
+                    Arc::new(Int8Array::from(vec![0; n])),
+                ],
+            )
+            .unwrap();
+            let output = processor.process_arrow(input).unwrap();
+            actual.extend(
+                output
+                    .column(2)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap()
+                    .values()
+                    .iter()
+                    .copied(),
+            );
+        }
+        assert_eq!(actual, vec![1, 1, 1, 1, 5]);
     }
 
     #[test]
