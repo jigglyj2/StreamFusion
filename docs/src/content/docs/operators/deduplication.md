@@ -40,6 +40,10 @@ for these SQL nodes would not be Flink-compatible. The underlying native byte-st
 has a separately tested changelog mode for `INSERT`, `UPDATE_AFTER`, `UPDATE_BEFORE`, and `DELETE`,
 ready for a future Flink physical node whose contract permits those changes.
 
+For row-time deduplication, enabling `UPDATE_BEFORE` also requires the first row for each
+key to be an `INSERT`, even when insert sensitivity is disabled. Later winning rows emit
+the previous row as `UPDATE_BEFORE` followed by the replacement as `UPDATE_AFTER`.
+
 ## Implementation
 
 The production paths remain Arrow-backed between source and sink boundaries. Rust gathers selected

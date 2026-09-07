@@ -400,11 +400,15 @@ impl DeduplicateProcessor {
             }
             content_ordinals.push(row_ordinal);
             envelope_ordinals.push(row_ordinal);
-            row_kinds.push(if previous_order.is_none() && self.plan.generate_insert {
-                INSERT
-            } else {
-                UPDATE_AFTER
-            });
+            row_kinds.push(
+                if previous_order.is_none()
+                    && (self.plan.generate_insert || self.plan.generate_update_before)
+                {
+                    INSERT
+                } else {
+                    UPDATE_AFTER
+                },
+            );
             if let Some(output) = output_stored_rows.as_mut() {
                 output.push(None);
             }
@@ -1339,6 +1343,53 @@ mod tests {
                 processor.snapshot_key_group(key_group).unwrap(),
                 empty.snapshot_key_group(key_group).unwrap()
             );
+        }
+    }
+
+    #[test]
+    fn rowtime_initial_insert_is_required_by_update_before() {
+        for keep_last in [false, true] {
+            for generate_insert in [false, true] {
+                for generate_update_before in [false, true] {
+                    let mut processor = new_processor_with(
+                        false,
+                        keep_last,
+                        generate_insert,
+                        generate_update_before,
+                    );
+                    let first = processor
+                        .process_arrow(batch(vec![10], vec![1_000]))
+                        .unwrap();
+                    let kinds = first
+                        .column(first.num_columns() - 2)
+                        .as_any()
+                        .downcast_ref::<Int8Array>()
+                        .unwrap();
+                    assert_eq!(
+                        kinds.values(),
+                        &[if generate_insert || generate_update_before {
+                            INSERT
+                        } else {
+                            UPDATE_AFTER
+                        }]
+                    );
+                    drop(first);
+                    let next = processor
+                        .process_arrow(batch(vec![20], vec![if keep_last { 2_000 } else { 0 }]))
+                        .unwrap();
+                    let kinds = next
+                        .column(next.num_columns() - 2)
+                        .as_any()
+                        .downcast_ref::<Int8Array>()
+                        .unwrap();
+                    let expected: &[i8] = if generate_update_before {
+                        &[UPDATE_BEFORE, UPDATE_AFTER]
+                    } else {
+                        &[UPDATE_AFTER]
+                    };
+                    assert_eq!(kinds.values().as_ref(), expected);
+                }
+            }
         }
     }
 }
