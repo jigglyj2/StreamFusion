@@ -41,7 +41,7 @@ class StringInitCapParityTest extends SqlParityTestSupport {
                 INPUTS,
                 "init_cap_projection_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 
     @Test
@@ -52,6 +52,6 @@ class StringInitCapParityTest extends SqlParityTestSupport {
                 INPUTS,
                 "init_cap_filter_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 }

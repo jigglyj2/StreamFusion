@@ -39,7 +39,7 @@ class Base64EncodeParityTest extends SqlParityTestSupport {
                         Row.of((Object) null)),
                 "string_base64_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 
     @Test
@@ -55,7 +55,7 @@ class Base64EncodeParityTest extends SqlParityTestSupport {
                         Row.of((Object) null)),
                 "binary_base64_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 
     private static byte[] filledBytes(int length) {

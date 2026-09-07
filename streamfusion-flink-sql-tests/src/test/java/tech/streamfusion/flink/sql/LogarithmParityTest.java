@@ -47,7 +47,7 @@ class LogarithmParityTest extends SqlParityTestSupport {
                         Row.of((Object) null)),
                 "logarithm_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 
     @ParameterizedTest
@@ -68,6 +68,6 @@ class LogarithmParityTest extends SqlParityTestSupport {
                         Row.of((Object) null)),
                 "logarithm_filter_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 }

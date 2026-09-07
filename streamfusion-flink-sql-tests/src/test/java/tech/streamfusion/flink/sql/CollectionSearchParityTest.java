@@ -33,7 +33,7 @@ class CollectionSearchParityTest extends SqlParityTestSupport {
                         Row.of((Object) null)),
                 "array_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount())
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())
                 .isGreaterThan(0);
     }
@@ -47,7 +47,7 @@ class CollectionSearchParityTest extends SqlParityTestSupport {
                 Arrays.asList(Row.of((Object) new Integer[] {1, null, 3}), Row.of((Object) null)),
                 "array_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount())
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())
                 .isGreaterThan(0);
     }

@@ -8,6 +8,16 @@ sidebar:
 **Current status:** Input references, literals, supported arithmetic/casts, conditionals,
 and the explicitly listed stateless functions are accelerated.
 
+The shared native expression path now admits workspace for fixed-width arithmetic, numeric casts,
+Flink wrapping integer casts, and decimal rescale/division before running their existing kernels.
+Array output credit follows Arrow buffer ownership through slices and downstream stages. Scalar
+results retain their original scalar semantics inside the expression tree. At projection roots,
+scalar broadcasting now reserves capacity before DataFusion materializes the array; existing array
+results pass through unchanged and cached literals are borrowed without a per-batch payload clone.
+Unlisted large expression workspaces still need admission coverage. Bounded bufferless descriptors
+do not require separate reservations. See
+[memory accounting](/StreamFusion/development/memory-and-configuration/) for the exact scope.
+
 ## SQL example
 
 ```sql
@@ -68,7 +78,8 @@ StreamFusion can select, reorder, omit, or repeat direct input columns of these 
 - `BOOLEAN`, `TINYINT`, `SMALLINT`, `INT`, `BIGINT`, `FLOAT`, and `DOUBLE`
 - `CHAR`, `VARCHAR`, `BINARY`, and `VARBINARY`
 - `DECIMAL`, `DATE`, `TIME`, `TIMESTAMP(0..6)`, and `TIMESTAMP_LTZ(0..6)`
-- `ARRAY`, `MAP`, and `ROW`, recursively containing Arrow-compatible types
+- SQL year-month and day-time intervals as direct input references
+- `ARRAY`, `MAP`, `MULTISET`, and `ROW`, recursively containing Arrow-compatible types
 
 Complex types may be selected, reordered, omitted, or repeated as direct input references.
 Named `ROW` fields may also be projected or used inside supported expressions, including
@@ -83,8 +94,10 @@ Map lookup is accelerated when both the map and key are otherwise supported expr
 the declared map types; present values, present null values, absent keys, and null maps match
 Flink's scalar result. `CARDINALITY` is accelerated for maps and arrays of any supported nesting
 depth, returning an `INT` count or null for a null collection. A dedicated native expression counts
-only the outer array, matching Flink rather than DataFusion's recursive leaf count. Non-null `MAP` and `ROW` literals,
-`MULTISET`, and collection functions not explicitly listed below still fall back with the whole Calc. Nested child types, field names,
+only the outer array, matching Flink rather than DataFusion's recursive leaf count. Multisets support
+direct input references and null checks using the existing Arrow element/count-map representation;
+this does not enable additional multiset operations. Non-null `MAP` and `ROW` literals and collection
+functions not explicitly listed below still fall back with the whole Calc. Nested child types, field names,
 ordering, nullability, and Arrow offsets are preserved across the native plan.
 
 Precision, scale, fixed width, and nullability are preserved. Timestamp precision 7 through 9
@@ -134,9 +147,13 @@ Timezone-free timestamp addition and subtraction with constant SQL year-month or
 intervals are accelerated. Calcite's signed month or millisecond value is carried as an explicit
 semantic interval literal in protobuf and lowered to DataFusion interval arithmetic; it is never
 mistaken for Flink's physical `INT`/`BIGINT` interval storage. Generated parity cases cover seconds,
-days, calendar months, the pre-epoch boundary, and leap day. Dynamic interval columns and direct
-interval-valued Calc results remain on Flink until their Arrow semantic/physical representation is
-covered independently.
+days, calendar months, the pre-epoch boundary, and leap day. Dynamic interval arithmetic remains
+on Flink until its semantic/physical representation is covered independently. Direct interval
+input references and null checks are accelerated using Flink's physical month/millisecond integers.
+Identity references tolerate FlinkTypeFactory's interval qualifier/precision normalization within
+the same family without changing stored values. This does not enable interval casts or relax
+timestamp/decimal precision checks. Generated SQL checks cover interval and multiset payloads,
+null predicates, and all changelog kinds alongside the other supported types.
 Direct constant character literals are encoded as UTF-8 and accelerated. Character
 expressions that require a converting planner-inserted cast still fall back with the whole Calc.
 Planner-inserted casts that leave the complete logical type unchanged, including width,
@@ -145,8 +162,11 @@ normally. This covers the redundant typed-literal casts Flink introduces around 
 branches without delegating any conversion semantics to DataFusion.
 Direct hexadecimal binary literals are accelerated with their exact byte sequence and
 fixed width. Cast-derived and computed binary expressions remain on Flink.
-Typed `NULL` literals are accelerated for the supported scalar projection types except
-`TIMESTAMP_LTZ`, and for `ARRAY`, `MAP`, and `ROW`. The protobuf carries the complete
+Typed `NULL` literals are accelerated for the supported scalar projection types, including
+`TIMESTAMP_LTZ(0..6)` and both interval families, and for `ARRAY`, `MAP`, `MULTISET`, and `ROW`.
+The null-only additions do not enable non-null timezone/interval conversions or multiset operations.
+Generated changelog parity covers typed-null projections across all 22 supported payload families.
+The protobuf carries the complete
 recursive declared type, including `CHAR(n)` and `BINARY(n)` width, so
 DataFusion materializes a correctly typed all-null Arrow vector rather than an untyped
 Arrow `Null` vector. Arrow requires map keys to be non-nullable, so StreamFusion normalizes
@@ -192,9 +212,14 @@ including the parent and child buffers of arrays, maps, and rows, and allocates 
 vector when arithmetic produces new values.
 
 For `ROW` access, Java resolves every field against Flink's authoritative row type and
-encodes its name as a nested protobuf expression. Rust lowers each step to DataFusion's
-vectorized `get_field`. The child value buffers remain shared where Arrow validity permits;
-DataFusion may create a validity bitmap to combine nullable parent and child rows.
+encodes its name as a nested protobuf expression. Rust uses a narrow DataFusion scalar
+function that evaluates the parent once and shares the selected Arrow child buffers.
+DataFusion 55's `get_field` alone omits parent validity, while Arrow permits non-null hidden
+child values beneath a null ROW. StreamFusion therefore combines the parent and child
+validity bitmaps when needed, without copying child values or reevaluating the operand.
+Parents with no nulls return the shared child directly. This preserves Flink null semantics,
+including collection functions consuming those fields; the semantic correction is not an
+inter-operator handoff or a separate execution driver.
 Positive literal array indexes are encoded as `INT64` in the protobuf and lowered to
 DataFusion's vectorized `array_element`, which has the same one-based and out-of-range-null
 behavior. StreamFusion deliberately rejects the remaining index shapes until their Flink
@@ -575,6 +600,11 @@ look-around and backreferences that Rust/DataFusion regex deliberately does not 
 including computed counts. StreamFusion widens the count inside the native plan for DataFusion's
 vectorized kernel; zero and negative counts produce the empty string as in Flink, while null
 values or counts produce null. Fixed-width `CHAR` remains on Flink.
+In the common task-scoped Calc path, `REPEAT` reserves its growth and temporary kernel workspace
+before computation. Result buffers retain that reservation through native consumers and slices.
+Generated SQL parity includes nullable Unicode inputs, nested repeats, and computed counts, with
+nonzero native invocation counters required. This policy does not yet cover every argument
+expression's temporary allocation or eliminate the separate final edge output charge.
 `REVERSE(value)` is accelerated for supported `VARCHAR` expressions in projections and filters
 using DataFusion's vectorized Unicode reverse kernel. Both engines reverse Unicode scalar values,
 so supplementary characters remain intact while combining marks retain their independent code

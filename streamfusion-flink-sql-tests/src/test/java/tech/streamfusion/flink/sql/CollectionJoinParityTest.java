@@ -33,7 +33,7 @@ class CollectionJoinParityTest extends SqlParityTestSupport {
                         Row.of((Object) null)),
                 "array_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount())
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())
                 .isGreaterThan(0);
     }
@@ -51,7 +51,7 @@ class CollectionJoinParityTest extends SqlParityTestSupport {
                         Row.of((Object) null)),
                 "array_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isZero();
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("delimiter is a non-null literal");
     }
 }

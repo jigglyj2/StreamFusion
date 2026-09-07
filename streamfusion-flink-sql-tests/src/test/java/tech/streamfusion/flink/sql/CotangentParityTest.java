@@ -42,6 +42,6 @@ class CotangentParityTest extends SqlParityTestSupport {
                         Row.of((Object) null)),
                 "cotangent_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 }

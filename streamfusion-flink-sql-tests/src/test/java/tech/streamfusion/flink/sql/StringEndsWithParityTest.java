@@ -33,7 +33,7 @@ class StringEndsWithParityTest extends SqlParityTestSupport {
                 ROWS,
                 "string_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount())
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())
                 .isGreaterThan(0);
     }
@@ -47,7 +47,7 @@ class StringEndsWithParityTest extends SqlParityTestSupport {
                 ROWS,
                 "string_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount())
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())
                 .isGreaterThan(0);
     }

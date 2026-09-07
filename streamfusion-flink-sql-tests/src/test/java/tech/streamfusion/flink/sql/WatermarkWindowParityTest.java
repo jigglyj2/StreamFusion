@@ -21,7 +21,6 @@ import org.apache.flink.types.Row;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
-import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 
 class WatermarkWindowParityTest extends SqlParityTestSupport {
     @ParameterizedTest
@@ -37,7 +36,7 @@ class WatermarkWindowParityTest extends SqlParityTestSupport {
         byte[] streamFusion = execute(sql, true);
 
         assertThat(streamFusion).isEqualTo(flink);
-        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        SqlFallbackAssertions.admission();
     }
 
     @org.junit.jupiter.api.Test
@@ -46,7 +45,7 @@ class WatermarkWindowParityTest extends SqlParityTestSupport {
         byte[] streamFusion = executeLtz(true);
 
         assertThat(streamFusion).isEqualTo(flink);
-        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
 
     private static byte[] executeLtz(boolean streamFusionEnabled) throws Exception {

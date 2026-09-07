@@ -8,6 +8,38 @@ sidebar:
 **Current status:** Supported scalar expressions can be recursively composed into numeric,
 decimal, string, binary, date, time, and local timestamp predicates.
 
+Native filters use DataFusion's vectorized FilterExec and preserve non-empty filtered batch
+boundaries instead of coalescing adjacent batches. All-accepted predicates retain the payload
+buffers; selective predicates may allocate their output as required by filtering. This preserves
+bounded upstream stream pulls without an additional coalescing copy and does not introduce
+row-at-a-time execution. Shared Calc lowering admits projected gather workspace before input
+consumption and retains output credit with Arrow buffer owners. The cached DataFusion filter and
+its metrics are reused across invocations; empty-result workspace is released before waiting for
+another input. This is a conservative capacity envelope and excludes projection columns that the
+filter does not emit. Generated SQL parity covers the 22 supported payload type families, nullable
+predicates, and all four changelog kinds. Predicate workspace accounting remains part of the
+[architecture admission audit](/StreamFusion/development/architecture-admission/).
+
+Fixed-width arithmetic/comparison, boolean and null-check predicates now use common expression
+workspace admission. This covers DataFusion's masked gather/scatter and boolean short-circuit
+workspace while retaining its conditional error behavior; no additional batch copy is introduced.
+Other predicate families still need their own verified allocation policies. This does not change
+SQL coverage or lift the stateful production-admission gate.
+
+Planner-generated nonempty `SEARCH` range predicates now preserve Calcite's `TRUE`, `FALSE`, or
+`UNKNOWN` policy for null inputs. This includes rewrites such as `x IS NULL OR x <> 0`, null-aware
+`IN`/`BETWEEN`, and their projected boolean results. Native lowering applies `IS NOT FALSE` or
+`IS TRUE` to the existing three-valued range predicate, without reevaluating the operand for a
+separate null check. Existing endpoint-type, binary-point-search and empty/universal-range
+restrictions remain; unsupported shapes still fall back as a whole plan.
+
+Identity projections and null checks include intervals and multisets, whose existing native
+representations are integer months, long milliseconds, and Arrow maps of element counts.
+Identity projections accept Flink's normalization of interval qualifier/precision declarations
+within the same interval family. They forward the original month or millisecond value unchanged,
+just as Flink's generated input reference does. This does not enable interval casts or relax
+timestamp/decimal precision checks; cross-family interval projections still fall back.
+
 ## SQL example
 
 ```sql

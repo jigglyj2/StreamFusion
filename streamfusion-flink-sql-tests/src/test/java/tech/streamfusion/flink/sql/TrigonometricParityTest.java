@@ -44,6 +44,6 @@ class TrigonometricParityTest extends SqlParityTestSupport {
                         Row.of((Object) null)),
                 "trigonometric_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 }

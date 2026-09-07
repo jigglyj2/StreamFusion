@@ -29,7 +29,7 @@ class MapConstructorParityTest extends SqlParityTestSupport {
                 Arrays.asList(Row.of(12), Row.of(-1), Row.of((Object) null)),
                 "int_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount())
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())
                 .isGreaterThan(0);
     }
@@ -43,7 +43,7 @@ class MapConstructorParityTest extends SqlParityTestSupport {
                 Arrays.asList(Row.of(12), Row.of(-1), Row.of((Object) null)),
                 "int_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isZero();
         assertThat(StreamFusionPlanningDiagnostics.explain())
                 .contains("Flink keeps the last duplicate key while DataFusion rejects duplicates");
     }

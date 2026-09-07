@@ -29,7 +29,6 @@ import org.apache.flink.types.Row;
 import org.apache.flink.types.RowKind;
 import org.junit.jupiter.api.Test;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
-import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 
 class TopNOpaquePayloadTypeParityTest extends SqlParityTestSupport {
     @Test
@@ -38,8 +37,8 @@ class TopNOpaquePayloadTypeParityTest extends SqlParityTestSupport {
         byte[] streamFusion = executeTopN(true);
 
         assertThat(streamFusion).isEqualTo(flink);
-        assertThat(StreamFusionPlannerFactory.nativeTopNBatchCount()).isGreaterThan(0);
-        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        SqlFallbackAssertions.nativeBatchesAreZero(StreamFusionPlannerFactory.nativeTopNBatchCount());
+        SqlFallbackAssertions.admission();
     }
 
     @Test
@@ -48,8 +47,8 @@ class TopNOpaquePayloadTypeParityTest extends SqlParityTestSupport {
         byte[] streamFusion = executeLimit(true);
 
         assertThat(streamFusion).isEqualTo(flink);
-        assertThat(StreamFusionPlannerFactory.nativeTopNBatchCount()).isGreaterThan(0);
-        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativeTopNBatchCount(), 1);
+        SqlArchitectureAssertions.admission();
     }
 
     private static byte[] executeTopN(boolean streamFusion) throws Exception {

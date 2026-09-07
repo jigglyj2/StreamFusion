@@ -35,7 +35,7 @@ class CollectionSplitParityTest extends SqlParityTestSupport {
                         Row.of((Object) null)),
                 "string_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount())
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())
                 .isGreaterThan(0);
     }
@@ -49,7 +49,7 @@ class CollectionSplitParityTest extends SqlParityTestSupport {
                 Arrays.asList(Row.of("123,ä"), Row.of(""), Row.of((Object) null)),
                 "string_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isZero();
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Flink splits into Unicode characters");
     }
 }

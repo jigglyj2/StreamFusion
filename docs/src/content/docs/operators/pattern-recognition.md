@@ -5,7 +5,11 @@ sidebar:
   order: 18
 ---
 
-**Current status:** Accelerated for strict fixed processing-time sequences with current-row
+**Current status:** Temporarily uses whole-plan Flink fallback under the
+[architecture admission requirements](/StreamFusion/development/architecture-admission/). The native paths
+described below are retained for development and direct parity tests; SQL planning does not select them.
+
+**Retained implementation scope:** Implementation for strict fixed processing-time sequences with current-row
 predicates, one output row per match, direct field measures, and either `AFTER MATCH SKIP TO NEXT
 ROW` or `AFTER MATCH SKIP PAST LAST ROW`.
 

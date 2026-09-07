@@ -5,9 +5,9 @@ sidebar:
   order: 11
 ---
 
-**Current status:** `UNION ALL`, `UNION DISTINCT`, `INTERSECT [ALL]`, and `EXCEPT [ALL]`
-are accelerated for complete eligible streaming plans. `UNION ALL` is also accelerated in
-complete eligible bounded plans.
+**Current status:** `UNION ALL` remains eligible in otherwise supported plans. Set operations whose
+physical rewrite requires native aggregate, join, or ranking state temporarily use whole-plan Flink
+fallback under the [architecture admission requirements](/StreamFusion/development/architecture-admission/).
 
 ## SQL example
 
@@ -65,23 +65,29 @@ connector- or UDF-dependent alternatives remain on Flink.
 
 The planner replaces `StreamExecUnion` with the distinct `StreamFusionExecUnion` node and
 `BatchExecUnion` with the distinct `StreamFusionBatchExecUnion` node. Both use the same
-schema-negotiated multi-input Arrow transport rather than maintaining a separate row-oriented
-batch implementation.
-Its Flink runtime is a non-keyed multiple-input operator: Flink still schedules and
-multiplexes the inputs, aligns checkpoint barriers, combines watermarks, and tracks input
-idleness. A multiple-input gate is an unavoidable Flink network boundary, so each native
-branch first emits the same schema-negotiated Arrow IPC exchange frame used by native
-hash exchange. The union decodes each frame using Flink-managed memory and forwards its
-Arrow batch immediately. It does not buffer rows, transpose through `RowData`, invoke a
-merge kernel, or copy the decoded column buffers merely to implement union semantics.
+physical-fragment contract as other native nodes. Generic region discovery includes adjacent
+Calc and UNION stages in one DataFusion tree; UNION has no separate fusion driver or intermediate
+Java forwarding operator. The region's external inputs use the schema-negotiated Arrow IPC exchange
+frame at Flink network boundaries. Frames are decoded once at the region edge using Flink-managed
+memory. Native branches and their consumers then exchange reference-counted Arrow batches directly,
+without intermediate JNI calls, RowData transposition, or concatenation copies.
+
+Inside a directly constructed native execution tree, DataFusion's UNION partitions are now
+normalized by the shared task-local partition adapter used for every physical node. It forwards
+each branch's Arrow batches without concatenation or buffer copies, including when a persistent
+stage consumes the UNION. Planner-selected Calc/UNION trees use this same shared path in both
+streaming and bounded modes. Stateful consumers remain subject to their separate admission gates.
 
 The frame carries the input batches' Flink `RowKind` and record-timestamp envelope as
 metadata vectors. Decoding restores that envelope without reconstructing payload rows.
-Flink's multiple-input operator provides the control-event ordering, combined watermark,
-barrier alignment, idleness, and end-of-input behavior. Standard input and output counters are
-corrected from the physical Arrow-frame count to Flink logical records on every forwarded batch;
-`UNION ALL` adds no operator-specific metric surface beyond Flink's standard task/operator I/O
-metrics.
+Flink retains scheduling and checkpoint barriers. The region's control tree uses Flink's network
+watermark valve for UNION channel merging, flattening adjacent UNION wiring nodes while retaining
+real operator boundaries. This preserves idle-channel realignment and all-idle watermark flushing.
+The native region's I/O counters count logical records, never Arrow frames. Flink's `CommonExecUnion`
+does not create an operator, so native UNION nodes do not invent additional Flink operator metric
+scopes; per-node native counts remain available in diagnostic snapshots. Shared stream invocations
+are exposed by `nativePlanBatchCount()`; the legacy Java-forwarding UNION counter does not count
+these fused executions.
 
 The bounded coverage in this milestone is deliberately limited to `UNION ALL`; bounded
 DISTINCT, INTERSECT, and EXCEPT physical rewrites remain on Flink until every node in those
@@ -93,5 +99,17 @@ the canonical key-group savepoint bytes, rescaling behavior, aligned/unaligned c
 and incremental RocksDB checkpoint files already documented for group aggregation and regular
 join. The stateless row replicator has no savepoint payload of its own. Its output allocation and
 selection vector are charged to Flink managed memory.
+
+Row replication sizes each selected input row using its actual variable-width and nested ranges,
+including the Arrow list kernel's initial capacity allowance. It no longer estimates a repeated
+wide row from the average input width. Pulls remain capped at 16,384 rows and use smaller chunks
+for wide payloads, with an 8 MiB estimated-workspace vectorization target. This is not an additional
+deployment memory budget: admission uses Flink's pool, and a refused reservation reduces the chunk
+before gathering. One row wider than the target is allowed only if Flink can admit it. If even one
+row cannot be admitted, execution fails without advancing the replication cursor. Retained count
+and value arrays have a separate lifetime reservation; output leases survive the producer stream.
+Generated tests compare serialized changelogs and logical counts with Flink's ReplicateRowsFunction,
+including all RowKinds, nulls, nested arrays, and wide-row skew. General expression scratch-space
+pre-admission remains part of the unfinished architecture audit.
 
 See the [Flink 2.3 Set operations documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/set-ops/).

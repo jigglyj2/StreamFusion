@@ -37,13 +37,17 @@ current planner admits a query.
 The actual RowData Q3 plan uses Flink's binary `StreamExecMultiJoin` for the auction/person join.
 The existing semantic lowering can represent that binary shape as the native regular join;
 it must not be confused with the separate native multi-way join algorithm. The early architecture
-gate currently reports persistent-memory, composition, whole-key-rewrite, and unbounded-output
-restrictions against the original MultiJoin node before this lowering.
+gate now uses the same binary-shape decision as semantic lowering. It retains persistent-memory
+and composition restrictions for the binary regular-join path without incorrectly reporting the
+multi-way algorithm's separate integration restriction. Genuine multi-way and non-lowerable
+binary shapes still require their paged-state/output cursor to join the common execution, metric,
+and checkpoint lifecycle. This diagnostic correction does not
+unlock Q3 or remove its remaining memory and metric requirements.
 
 The next work is limited to this production path:
 
-1. Make admission describe the implementation selected for this binary shape while preserving
-   precise whole-plan fallback for unsupported shapes. Do not disable Flink's optimizer to select
+1. Preserve shape-aware admission and precise whole-plan fallback for unsupported shapes.
+   Do not disable Flink's optimizer to select
    a more convenient benchmark plan or add an admission bypass.
 2. Establish the shared two-input region's Flink metric/control parity and memory ownership,
    including direct Arrow handoff, bounded join output and dirty-page state writes. Reuse the

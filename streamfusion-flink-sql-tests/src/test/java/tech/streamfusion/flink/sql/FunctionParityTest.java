@@ -38,7 +38,7 @@ class FunctionParityTest extends SqlParityTestSupport {
             throws Exception {
         assertDataStreamParity(sql, type, rows, tableName);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
 
     private static Stream<Arguments> nativeCoalesceDataStreamCases() {
@@ -72,7 +72,7 @@ class FunctionParityTest extends SqlParityTestSupport {
                 Arrays.asList(Row.of(-3), Row.of(0), Row.of(1), Row.of(2), Row.of((Object) null)),
                 "conditional_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
 
     private static Stream<Arguments> nativeConditionalDataStreamCases() {
@@ -90,7 +90,7 @@ class FunctionParityTest extends SqlParityTestSupport {
             String ignoredName, TypeInformation<?> type, List<Row> rows, String tableName) throws Exception {
         assertDataStreamParity("SELECT ABS(metric) FROM " + tableName, type, rows, tableName);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
 
     private static Stream<Arguments> nativeAbsoluteValueDataStreamCases() {
@@ -167,7 +167,7 @@ class FunctionParityTest extends SqlParityTestSupport {
             throws Exception {
         assertDataStreamParity("SELECT " + function + "(metric) FROM " + tableName, type, rows, tableName);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
 
     private static Stream<Arguments> nativeRoundingDataStreamCases() {
@@ -243,7 +243,7 @@ class FunctionParityTest extends SqlParityTestSupport {
             String ignoredName, TypeInformation<?> type, List<Row> rows, String tableName) throws Exception {
         assertDataStreamParity("SELECT SIGN(metric) FROM " + tableName, type, rows, tableName);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
 
     private static Stream<Arguments> nativeSignDataStreamCases() {
@@ -268,7 +268,7 @@ class FunctionParityTest extends SqlParityTestSupport {
                         Row.of((Object) null)),
                 "character_length_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
 
     @ParameterizedTest(name = "{0}")
@@ -289,7 +289,7 @@ class FunctionParityTest extends SqlParityTestSupport {
                         Row.of((Object) null)),
                 "case_mapping_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
 
     @ParameterizedTest(name = "CONCAT {0}")
@@ -301,7 +301,7 @@ class FunctionParityTest extends SqlParityTestSupport {
                 Arrays.asList(Row.of(""), Row.of("AbC"), Row.of("你好😀"), Row.of((Object) null)),
                 "concat_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
 
     private static Stream<Arguments> nativeConcatCases() {
@@ -323,7 +323,7 @@ class FunctionParityTest extends SqlParityTestSupport {
                                 null)),
                 "recursive_string_filter_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
 
     private static Stream<Arguments> nativeRecursiveStringFilterCases() {
@@ -350,7 +350,7 @@ class FunctionParityTest extends SqlParityTestSupport {
                         Row.of((Object) null)),
                 "recursive_numeric_filter_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
 
     @ParameterizedTest(name = "LIKE {0}")
@@ -370,7 +370,7 @@ class FunctionParityTest extends SqlParityTestSupport {
                         Row.of((Object) null)),
                 "like_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
 
     private static Stream<Arguments> nativeLikeCases() {
@@ -400,7 +400,7 @@ class FunctionParityTest extends SqlParityTestSupport {
                         Row.of((Object) null)),
                 "starts_with_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
 
     @ParameterizedTest(name = "SUBSTRING {0}")
@@ -412,7 +412,7 @@ class FunctionParityTest extends SqlParityTestSupport {
                 Arrays.asList(Row.of(""), Row.of("abcdef"), Row.of("你好世界"), Row.of("a😀bc"), Row.of((Object) null)),
                 "substring_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
 
     private static Stream<Arguments> nativeSubstringCases() {
@@ -432,7 +432,7 @@ class FunctionParityTest extends SqlParityTestSupport {
                 Arrays.asList(Row.of("abcdef"), Row.of("你好世界"), Row.of((Object) null)),
                 "substring_fallback_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isZero();
     }
 
     @ParameterizedTest(name = "SUBSTRING filter {0}")
@@ -444,7 +444,7 @@ class FunctionParityTest extends SqlParityTestSupport {
                 Arrays.asList(Row.of(""), Row.of("abcd"), Row.of("ab😀d"), Row.of("你好世界"), Row.of((Object) null)),
                 "substring_filter_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
 
     private static Stream<Arguments> nativeSubstringFilterCases() {

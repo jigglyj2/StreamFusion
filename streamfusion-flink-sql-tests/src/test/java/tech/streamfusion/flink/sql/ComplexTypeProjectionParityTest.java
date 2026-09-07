@@ -42,7 +42,7 @@ class ComplexTypeProjectionParityTest extends SqlParityTestSupport {
                 rows,
                 "array_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount())
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())
                 .isGreaterThan(0);
     }
@@ -62,7 +62,9 @@ class ComplexTypeProjectionParityTest extends SqlParityTestSupport {
                 Arrays.asList(Row.of(first), Row.of(second), Row.of((Object) null)),
                 "map_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isGreaterThan(0);
     }
 
     @Test
@@ -74,6 +76,8 @@ class ComplexTypeProjectionParityTest extends SqlParityTestSupport {
                 Arrays.asList(Row.of(Row.of("x", 7)), Row.of(Row.of("y", null)), Row.of((Object) null)),
                 "row_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isGreaterThan(0);
     }
 }

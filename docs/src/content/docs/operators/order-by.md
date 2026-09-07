@@ -5,7 +5,11 @@ sidebar:
   order: 12
 ---
 
-**Current status:** Accelerated for bounded and finite-stream full sorts, streaming
+**Current status:** Temporarily uses whole-plan Flink fallback under the
+[architecture admission requirements](/StreamFusion/development/architecture-admission/). The native paths
+described below are retained for development and direct parity tests; SQL planning does not select them.
+
+**Retained implementation scope:** Implementation for bounded and finite-stream full sorts, streaming
 `ORDER BY ... LIMIT/OFFSET`, and time-ascending temporal sorts. Flink lowers these to
 `BatchExecSort`, `BatchExecSortLimit`, or `StreamExecSort`, `StreamExecSortLimit`, and
 `StreamExecTemporalSort`
@@ -27,16 +31,17 @@ Finite streaming sort-limit accepts the same Flink-valid order-key types, null p
 ascending/descending directions, changelog strategies, state backends, and recovery contract as
 [Top-N](../top-n/).
 
-Bounded full sort is selected when Flink produces `BatchExecSort` or `StreamExecSort`, including
+The retained bounded full-sort implementation handles `BatchExecSort` or `StreamExecSort`, including
 the internal `__table.exec.sort.non-temporal.enabled__` bounded-stream mode used by the parity and
 Nexmark harnesses. It accepts every Arrow-supported payload type. Ordering fields accept every
-Flink-comparable scalar, array, and row type, including decimal and temporal values, nested nulls,
-floating-point NaN, and signed zero. Map, multiset, raw, symbol, and descriptor values remain valid
+Flink-comparable non-floating scalar, array, and row types, including decimal and temporal values
+and nested nulls. Float/double ordering fields, including floats inside arrays or rows, are rejected:
+Flink's NaN and signed-zero comparator does not match DataFusion's external sort. Map, multiset, raw, symbol, and descriptor values remain valid
 opaque payload fields but fall back if used as order fields because Flink has no exact comparator
 contract for them. Ascending/descending direction and null placement are preserved per field.
 
 Bounded `ORDER BY ... LIMIT/OFFSET` replaces both local and global `BatchExecSortLimit`. It uses the
-same comparator/type surface and counted retraction semantics as bounded full sort, but prunes state
+retained bounded-heap comparator and physical input semantics, prunes state
 to the local/global cutoff and emits only the requested range. The local phase intentionally ignores
 the global offset, matching Flink's two-phase selection contract.
 
@@ -82,10 +87,20 @@ versioned protobuf node and persistent native processor. Each incoming Arrow bat
 once, deduplicated with ahash, read with one backend batch call, and committed with one mutation
 batch. Memory state keeps opaque bytes and the optional RocksDB component calls `multi_get` and one
 `WriteBatch` directly in Rust; neither data path crosses JNI for state access. Counts and complete
-Arrow rows use the canonical key-group format. At end of input, unique rows are decoded once,
-ordered by the shared Flink comparator, and emitted in managed 16,384-row Arrow batches. The
+Arrow rows use the canonical key-group format. At end of input, the backend visits bounded pages
+without materializing a complete key-group snapshot. Small inputs remain in admitted Arrow buffers;
+larger inputs use a temporary Arrow IPC stream. DataFusion's external `SortExec` then sorts those
+pages with its memory pool backed by Flink managed memory and bounded spill-merge fan-in. Counts stay
+compressed until output is requested, and output batches contain at most 16,384 logical rows.
+Temporary input and sort files use Flink's IO-manager directories and are removed on completion,
+failure, or close. `numSpillFiles` and `spillInBytes` report actual native spilling. The
 operator advertises Flink's internal-sort capability so the runtime does not insert a second
 `SortingDataInput` ahead of the native sorter.
+
+Floating-point ordering keys, including floats nested in arrays or rows, fall back with an EXPLAIN
+reason: Flink's NaN and signed-zero ordering is not equivalent to DataFusion's external-sort ordering.
+Floating-point payload columns that are not ordering keys remain supported. The historical benchmark
+results below precede this spillable implementation; it has not yet been rebenchmarked.
 
 `BatchExecSortLimit` reuses that counted bounded-sort state and adds a bounded heap cutoff. The
 bounded-rank selector reuses the native Top-N state codec with a terminal-output protocol, including

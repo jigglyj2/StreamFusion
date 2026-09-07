@@ -30,7 +30,7 @@ class CharacterExtremumFallbackTest extends SqlParityTestSupport {
                 Arrays.asList(Row.of("a"), Row.of("z"), Row.of((Object) null)),
                 "character_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isZero();
         assertThat(StreamFusionPlanningDiagnostics.explain())
                 .contains("fixed-width CHAR padding")
                 .contains("Accelerated: no");

@@ -24,7 +24,7 @@ class TemporalExtremumParityTest extends SqlParityTestSupport {
     void timezoneFreeTemporalExtremaMatchFlinkByteForByte(String sql) throws Exception {
         assertParity(sql, true);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount())
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())
                 .isGreaterThan(0);
     }
@@ -43,7 +43,7 @@ class TemporalExtremumParityTest extends SqlParityTestSupport {
     void nanosecondTimestampExtremaFallBackAcrossFlinksCompleteCalendarRange() throws Exception {
         assertParity(timestampQuery(9), true, false);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isZero();
         assertThat(StreamFusionPlanningDiagnostics.explain())
                 .contains("TIMESTAMP precision 9 stays on Flink")
                 .contains("Arrow nanosecond timestamps cannot represent Flink's complete calendar range");

@@ -70,7 +70,7 @@ class PlanningParityTest extends SqlParityTestSupport {
 
         assertParity(sql, true);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 
     @Test
@@ -82,18 +82,20 @@ class PlanningParityTest extends SqlParityTestSupport {
 
         assertParity(sql, true);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("streamingSqlCases")
-    void acceleratedStreamingExecutionMatchesFlinkByteForByte(String ignoredName, String sql) throws Exception {
-        assertParity(sql, true);
+    void streamingSelectionAndExecutionMatchTheDeclaredCapability(
+            String ignoredName, String sql, boolean nativeExpected) throws Exception {
+        assertParity(sql, true, nativeExpected);
+        if (!nativeExpected) SqlFallbackAssertions.admission();
     }
 
     private static Stream<Arguments> streamingSqlCases() {
         return Stream.of(
-                Arguments.of("calc", STREAMING_CALC_SQL),
-                Arguments.of("group-aggregate-changelog", STREAMING_AGGREGATE_SQL));
+                Arguments.of("calc", STREAMING_CALC_SQL, true),
+                Arguments.of("group-aggregate-changelog", STREAMING_AGGREGATE_SQL, false));
     }
 }

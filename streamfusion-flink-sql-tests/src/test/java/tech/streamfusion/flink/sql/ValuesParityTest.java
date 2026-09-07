@@ -34,25 +34,25 @@ class ValuesParityTest extends SqlParityTestSupport {
     void sourceFreeValuesMatchFlinkByteForByte() throws Exception {
         assertParity("VALUES (1, 'one'), (2, 'two')", true);
 
-        assertThat(StreamFusionPlannerFactory.nativeValuesBatchCount()).isGreaterThan(0);
+        SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativeValuesBatchCount(), 1);
     }
 
     @Test
     void scalarValuesWithPlannerInsertedCalcsStillMatchFlinkByteForByte() throws Exception {
         assertParity(ALL_SCALAR_TYPES, true);
 
-        assertThat(StreamFusionPlannerFactory.nativeValuesBatchCount()).isGreaterThan(0);
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
-        assertThat(StreamFusionPlannerFactory.nativeUnionBatchCount()).isGreaterThan(0);
+        SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativeValuesBatchCount(), 1);
+        SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
+        assertThat(StreamFusionPlannerFactory.nativeUnionBatchCount()).isZero();
     }
 
     @Test
     void boundedScalarValuesCoverEverySupportedScalarTypeByteForByte() throws Exception {
         assertParity(ALL_SCALAR_TYPES, false);
 
-        assertThat(StreamFusionPlannerFactory.nativeValuesBatchCount()).isGreaterThan(0);
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
-        assertThat(StreamFusionPlannerFactory.nativeUnionBatchCount()).isGreaterThan(0);
+        SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativeValuesBatchCount(), 1);
+        SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
+        assertThat(StreamFusionPlannerFactory.nativeUnionBatchCount()).isZero();
     }
 
     @Test

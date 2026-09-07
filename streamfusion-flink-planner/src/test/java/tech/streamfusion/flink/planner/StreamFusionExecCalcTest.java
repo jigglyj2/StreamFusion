@@ -41,7 +41,7 @@ class StreamFusionExecCalcTest {
         outer.setInputEdges(
                 List.of(ExecEdge.builder().source(inner).target(outer).build()));
 
-        assertThat(StreamFusionExecCalc.adjacentChain(outer)).containsExactly(inner, outer);
+        assertThat(StreamFusionStatelessRegion.stages(outer)).containsExactly(inner, outer);
     }
 
     private static StreamFusionExecCalc calc(

@@ -15,10 +15,27 @@ import org.junit.jupiter.api.Test;
 
 class StreamFusionRuntimePreflightTest {
     @Test
-    void acceptsACompleteStreamFusionRuntime() {
+    void rejectsNativeOnlyClasspathWithoutTheFlinkRegionRuntime() {
+        // This planner module deliberately has only the native bridge as a test dependency.
+        // The SQL integration module verifies the complete runtime classpath.
         assertThat(StreamFusionExecGraphProcessor.runtimePreflightRejection(
                         getClass().getClassLoader()))
-                .isNull();
+                .contains("StreamFusionNativeRegionTranslator");
+    }
+
+    @Test
+    void rejectsBeforeReplacementWhenTheSharedRegionRuntimeIsMissing() {
+        ClassLoader incompleteRuntime = new ClassLoader(getClass().getClassLoader()) {
+            @Override
+            protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+                if (name.equals("tech.streamfusion.flink.operator.StreamFusionNativeRegionTranslator")) {
+                    throw new ClassNotFoundException(name);
+                }
+                return super.loadClass(name, resolve);
+            }
+        };
+        assertThat(StreamFusionExecGraphProcessor.runtimePreflightRejection(incompleteRuntime))
+                .contains("not consistently visible", "StreamFusionNativeRegionTranslator");
     }
 
     @Test

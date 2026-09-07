@@ -33,7 +33,7 @@ class OverlayFallbackTest extends SqlParityTestSupport {
                 Arrays.asList(Row.of("abc"), Row.of("😀x"), Row.of(""), Row.of((Object) null)),
                 "overlay_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isZero();
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("unpaired surrogate");
     }
 }

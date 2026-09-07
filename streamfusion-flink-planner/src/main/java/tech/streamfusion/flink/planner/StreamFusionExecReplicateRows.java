@@ -5,8 +5,6 @@
  */
 package tech.streamfusion.flink.planner;
 
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
 import java.util.Collections;
 import org.apache.calcite.rex.RexCall;
 import org.apache.flink.api.dag.Transformation;
@@ -23,7 +21,15 @@ import org.apache.flink.table.runtime.operators.join.FlinkJoinType;
 import org.apache.flink.table.types.logical.RowType;
 
 /** Distinct accelerator exec node for Flink's internal set-operation row replicator. */
-public final class StreamFusionExecReplicateRows extends CommonExecCorrelate implements StreamExecNode<RowData> {
+public final class StreamFusionExecReplicateRows extends CommonExecCorrelate
+        implements StreamExecNode<RowData>, StreamFusionNativePlanNode {
+    private final StreamFusionNativeNodeMetadata nativeMetadata = new StreamFusionNativeNodeMetadata();
+
+    @Override
+    public StreamFusionNativeNodeMetadata nativeMetadata() {
+        return nativeMetadata;
+    }
+
     private static final String TRANSLATOR_CLASS =
             "tech.streamfusion.flink.replicate.StreamFusionReplicateRowsTranslator";
 
@@ -61,38 +67,20 @@ public final class StreamFusionExecReplicateRows extends CommonExecCorrelate imp
         return streamFusionJoinType;
     }
 
-    @SuppressWarnings("unchecked")
+    @Override
+    public byte[] nativePlanFragment(PlannerBase planner) {
+        return StreamFusionNativePlanNode.invokeBuilder(
+                planner,
+                TRANSLATOR_CLASS,
+                new Class<?>[] {RowType.class, RowType.class, Object.class, Object.class},
+                (RowType) getInputEdges().get(0).getOutputType(),
+                (RowType) getOutputType(),
+                streamFusionJoinType,
+                streamFusionInvocation);
+    }
+
     @Override
     protected Transformation<RowData> translateToPlanInternal(PlannerBase planner, ExecNodeConfig config) {
-        Transformation<RowData> input =
-                (Transformation<RowData>) getInputEdges().get(0).translateToPlan(planner);
-        try {
-            Class<?> translator = Class.forName(
-                    TRANSLATOR_CLASS, true, planner.getFlinkContext().getClassLoader());
-            Method translate = translator.getMethod(
-                    "translate",
-                    Transformation.class,
-                    RowType.class,
-                    RowType.class,
-                    Object.class,
-                    Object.class,
-                    Object.class);
-            Transformation<RowData> result = (Transformation<RowData>) translate.invoke(
-                    null,
-                    input,
-                    (RowType) getInputEdges().get(0).getOutputType(),
-                    (RowType) getOutputType(),
-                    streamFusionJoinType,
-                    streamFusionInvocation,
-                    null);
-            if (result == null) {
-                throw new IllegalStateException("A selected StreamFusion REPLICATE_ROWS failed translation");
-            }
-            return result;
-        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
-            throw new IllegalStateException("Could not invoke the StreamFusion REPLICATE_ROWS runtime", e);
-        } catch (InvocationTargetException e) {
-            throw new IllegalStateException("StreamFusion REPLICATE_ROWS translation failed", e.getCause());
-        }
+        return StreamFusionStatelessRegion.translate(this, planner);
     }
 }

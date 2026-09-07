@@ -41,8 +41,7 @@ class FloatingComparisonParityTest extends SqlParityTestSupport {
                         Row.of((Object) null)),
                 "floating_comparison_input");
 
-        assertThat(tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics.explain())
-                .contains("Accelerated: yes");
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        SqlArchitectureAssertions.admission();
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 }

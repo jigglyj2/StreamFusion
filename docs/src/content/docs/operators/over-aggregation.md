@@ -5,10 +5,15 @@ sidebar:
   order: 8
 ---
 
-**Current status:** Partially accelerated. Streaming non-time `ROWS` and `RANGE` frames from
+**Current status:** Temporarily uses whole-plan Flink fallback under the
+[architecture admission requirements](/StreamFusion/development/architecture-admission/). The native paths
+described below are retained for development and direct parity tests; SQL planning does not select them.
+
+**Retained implementation scope:** Partial implementation. Streaming non-time `ROWS` and `RANGE` frames from
 `UNBOUNDED PRECEDING` through `CURRENT ROW` run natively. Processing-time and event-time frames
 also accept a constant bounded `PRECEDING` boundary. All forms require one ascending order key and
-supported aggregates.
+supported aggregates. Bounded batch `RANGE` OVER also runs natively for integral and timestamp
+order keys; its required Flink sort is absorbed into the same keyed native operator.
 
 **Future acceleration target:** Yes.
 
@@ -63,6 +68,14 @@ current watermark when it fires. The third canonical state-codec version uses va
 sequence and aggregate encodings; restore coverage retains compatibility with the first two
 fixed-width versions.
 
+For bounded input, the native batch operator buffers canonical keyed Arrow-row state, handles the
+complete insert/update/delete changelog, and emits sorted final output from `endInput()` in managed
+16,384-row batches. It performs one batched state read and one batched write per non-empty input
+Arrow batch. Canonical key-group snapshots restore across rescaling and can move directly between
+the memory and RocksDB implementations. The absorbed Flink sort metrics remain present; memory use
+reports the native managed reservation and spill counters remain zero because this admitted path
+does not spill outside the selected state backend.
+
 The non-time operator publishes Flink's `numOfIdsNotFound` and `numOfSortKeysNotFound` counters;
 the event-time operator publishes `numLateRecordsDropped`. Both publish the standard logical-record
 I/O metrics. StreamFusion state, checkpoint, recovery, allocation, pending event-time and
@@ -73,6 +86,11 @@ If a query selects, filters on, or otherwise observes the synthetic processing-t
 still falls back explicitly because removing that value would change semantics. Following frames,
 non-constant frame boundaries, descending or multiple order keys, aggregate functions beyond the set
 above, mini-batch mode, async state, changelog-state wrapping, and state TTL also fall back.
+Batch `ROWS` OVER currently falls back as well: when order keys tie, Flink's batch sorter can
+permute peers and that permutation affects a `ROWS` frame. StreamFusion will not claim parity until
+it reproduces that sorter contract. Flink 2.3's generated comparator for a bounded timestamp
+`RANGE` can fail before execution by casting `TimestampData` to `Long`; numeric `RANGE` is covered
+end-to-end while timestamp support remains covered in the native state tests.
 These are not documented as accelerated until their end-to-end parity and recovery suites pass.
 
 ## Implementation

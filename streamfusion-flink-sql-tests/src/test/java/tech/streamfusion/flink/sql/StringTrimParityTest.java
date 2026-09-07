@@ -20,6 +20,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.util.Arrays;
 import java.util.stream.Stream;
 import org.apache.flink.api.common.typeinfo.Types;
+import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.types.Row;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -55,8 +56,40 @@ class StringTrimParityTest extends SqlParityTestSupport {
     @ParameterizedTest(name = "dynamic {0}")
     @MethodSource("dynamicTrimCases")
     void dynamicTrimCharactersMatchFlinkByteForByte(String ignoredName, String expression) throws Exception {
-        assertParity("SELECT " + expression + " FROM " + DYNAMIC_INPUT, true);
+        // These three TRIM fixtures fold their two null cases to the same shared Calc.
+        // LTRIM/RTRIM/BTRIM retain distinct branches. Runtime arguments below cover all six natively.
+        String sql = "SELECT " + expression + " FROM " + DYNAMIC_INPUT;
+        if (expression.startsWith("TRIM(")) {
+            assertFallbackParity(sql, true);
+            SqlFallbackAssertions.nativeBatchesAreZero(StreamFusionPlannerFactory.nativePlanBatchCount());
+        } else {
+            assertParity(sql, true);
+            SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
+        }
+    }
 
+    @ParameterizedTest(name = "runtime dynamic {0}")
+    @MethodSource("dynamicTrimCases")
+    void dynamicTrimExecutesNativelyWithoutConstantFolding(String ignoredName, String expression) throws Exception {
+        assertDataStreamParity(
+                "SELECT "
+                        + expression
+                                .replace("trim_characters", "metric.trim_characters")
+                                .replace("text_value", "metric.text_value")
+                        + " FROM dynamic_trim_input",
+                Types.ROW_NAMED(new String[] {"text_value", "trim_characters"}, Types.STRING, Types.STRING),
+                DataTypes.ROW(
+                        DataTypes.FIELD("text_value", DataTypes.STRING()),
+                        DataTypes.FIELD("trim_characters", DataTypes.STRING())),
+                Arrays.asList(
+                        Row.of(Row.of("xyxstreamxy", "xy")),
+                        Row.of(Row.of("  padded  ", " ")),
+                        Row.of(Row.of("😀text😀", "😀")),
+                        Row.of(Row.of("", "x")),
+                        Row.of(Row.of(null, "x")),
+                        Row.of(Row.of("x", null)),
+                        Row.of((Object) null)),
+                "dynamic_trim_input");
         assertNativeCalcRan();
     }
 
@@ -79,7 +112,7 @@ class StringTrimParityTest extends SqlParityTestSupport {
     }
 
     private static void assertNativeCalcRan() {
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount())
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())
                 .isGreaterThan(0);
     }

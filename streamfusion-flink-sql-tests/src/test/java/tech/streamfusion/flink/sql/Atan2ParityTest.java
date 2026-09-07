@@ -43,6 +43,6 @@ class Atan2ParityTest extends SqlParityTestSupport {
                         Row.of((Object) null)),
                 "atan2_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 }

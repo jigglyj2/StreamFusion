@@ -5,9 +5,54 @@ sidebar:
   order: 16
 ---
 
-**Current status:** Accelerated for all synchronous, timer-free Flink deduplication modes:
+**Current status:** Temporarily uses whole-plan Flink fallback under the
+[architecture admission requirements](/StreamFusion/development/architecture-admission/). The native paths
+described below are retained for development and direct parity tests; SQL planning does not select them.
+
+**Retained implementation scope:** Implementation for all synchronous, timer-free Flink deduplication modes:
 row-time first/last updating plans, processing-time keep-first insert-only plans, and
 processing-time keep-last updating plans. Nexmark Q18 uses the row-time keep-last path.
+
+The retained Arrow runtime now binds `DeduplicateExec` into the shared native execution context.
+Adjacent nodes use recursive physical-plan lowering and shared Arrow streams; deduplication has no
+operator-specific Calc fusion loop or intermediate JNI handoff. The legacy single-output C Data
+facade drains that shared tree and rejects multi-batch results, which require the general stream
+edge. Native metrics report stable node IDs and logical input/output counts. Its shared-region
+composition capability is now admitted, but the separate stateful memory gate still prevents SQL selection.
+`DeduplicateExec` now uses the common synchronous unary physical adapter for polling,
+invocation exclusion, cancellation, and stream-control memory admission. Its state codec and
+checkpoint format are unchanged. A failed or abandoned invocation requires recovery; constructor
+failure before this kernel consumes input can retry. There is no new pair-specific fusion path.
+
+The selected deduplication node now supplies its fragment and keyed-state capability to the common
+region collector. It can share one Flink keyed runtime with another native state owner; it does not
+create its own intermediate Java operator. Planned exchange frames and their decoding contracts
+are retained at the region edge. Missing or incompatible routing domains are rejected. Generated
+runtime checks consume hash frames and restore two deduplication owners across canonical memory/
+RocksDB savepoints; production selection remains gated as stated above.
+
+Hidden envelope ordinals compose through preceding native stages, including stored-row
+`UPDATE_BEFORE` outputs. Schema/codec admission is transactional on validation failure. Native
+handoff retains its output allowance; transfer to Arrow Java occurs only at the outer edge.
+Output reservations now follow reference-counted Arrow buffers through retained projections/slices
+and producer close. Other large buffering-consumer owners still require the common admission checks.
+
+Protocol-3 deduplication now consumes and emits the shared owned-record envelope. Synchronous
+outputs select the triggering input's timestamp presence/value, including when their SQL payload
+is a stored historical `UPDATE_BEFORE` row. SQL rowtime values remain separate payload columns.
+Metadata selection and owned-ordinal validation use the common envelope helper; raw and local
+aggregation use that same validator. Invalid owned ordinals are rejected before state mutation,
+even for an arrival that would otherwise lose the rowtime comparison. The legacy borrowed-envelope
+contract and canonical state bytes are unchanged. This is an execution-contract change, not a new
+fusion combination or removal of the production admission gate.
+
+Shared-stage conformance compares all synchronous modes and both backends against actual Flink
+deduplicate functions between generated Calc stages. Complete ordered changelogs, record timestamp
+presence/values, watermarks/status, latency events, pre-barrier and terminal callbacks, stage IDs,
+default registered metric surfaces and latency histogram semantics are covered. When update-before
+output is enabled, a rowtime key's first output is `INSERT` even when insert sensitivity is disabled,
+matching Flink; subsequent winners emit the requested update pair. Configured keyed-state latency
+histograms and RocksDB native metrics remain a shared planning fallback, not silently missing metrics.
 
 ## SQL example
 
@@ -54,6 +99,11 @@ the last Arrow row when it must distinguish inserts, suppress equal updates, or 
 previous value. The stateless processing-time keep-last shape forwards the Arrow batch without a
 state call. Java does not interpret native keys or values. Row encodings created for state are reused
 when assembling updating output instead of converting the same input columns twice.
+
+Historical rows remain memory-accounted after state replacement or deletion while their retractions
+are materialized. Their workspace is released only after the output obtains its own allowance;
+the native Arrow buffer lease then survives retained slices and producer close. This is tested with
+wide historical values and narrow incoming updates on both backends, including memory refusal.
 
 All key roots accepted by the translator have generated byte-parity coverage, including nullable
 boolean and numeric values, floating point, character and binary strings, compact and non-compact

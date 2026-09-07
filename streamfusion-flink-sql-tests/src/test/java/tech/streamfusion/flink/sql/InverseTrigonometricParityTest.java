@@ -46,6 +46,6 @@ class InverseTrigonometricParityTest extends SqlParityTestSupport {
                         Row.of((Object) null)),
                 "inverse_trigonometric_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 }

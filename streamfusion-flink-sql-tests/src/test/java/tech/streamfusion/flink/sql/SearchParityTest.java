@@ -46,7 +46,7 @@ class SearchParityTest extends SqlParityTestSupport {
         assertDataStreamParity(
                 "SELECT metric FROM " + tableName + " WHERE " + predicate, type, logicalType, rows, tableName);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 
     private static Stream<Arguments> nativeFixedWidthSearchCases() {
@@ -91,7 +91,7 @@ class SearchParityTest extends SqlParityTestSupport {
                 fixedBinaryRows(),
                 "fixed_binary_fallback_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isZero();
     }
 
     @ParameterizedTest(name = "null-containing IN {0}")
@@ -104,7 +104,7 @@ class SearchParityTest extends SqlParityTestSupport {
     void nullContainingInSearchMatchesFlinkByteForByte(String predicate) throws Exception {
         assertIntegerDataStreamParity("SELECT metric FROM integer_input WHERE " + predicate);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 
     @ParameterizedTest(name = "null-aware search {0}")
@@ -132,7 +132,7 @@ class SearchParityTest extends SqlParityTestSupport {
                         Row.of((Object) null)),
                 "varbinary_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 
     private static Stream<Arguments> nativeVarbinaryDataStreamRangeCases() {
@@ -147,7 +147,7 @@ class SearchParityTest extends SqlParityTestSupport {
                 Arrays.asList(Row.of(new byte[] {0x00}), Row.of(new byte[] {0x03}), Row.of(new byte[] {(byte) 0x80})),
                 "varbinary_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isZero();
     }
 
     @ParameterizedTest(name = "{0}")
@@ -157,7 +157,7 @@ class SearchParityTest extends SqlParityTestSupport {
                 "SELECT id FROM (VALUES (1, TRUE), (2, FALSE), (3, TRUE)) AS input(id, enabled) WHERE " + predicate;
         assertParity(sql, true);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 
     private static Stream<Arguments> nativeBooleanColumnCases() {

@@ -46,6 +46,6 @@ class AngleConversionParityTest extends SqlParityTestSupport {
                         Row.of((Object) null)),
                 "angle_conversion_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 }

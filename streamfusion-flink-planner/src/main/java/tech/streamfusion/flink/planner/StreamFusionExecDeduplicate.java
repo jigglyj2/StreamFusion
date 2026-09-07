@@ -4,29 +4,29 @@
  */
 package tech.streamfusion.flink.planner;
 
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
-import java.util.Collections;
 import java.util.List;
 import org.apache.flink.api.dag.Transformation;
+import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.ReadableConfig;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.planner.delegation.PlannerBase;
-import org.apache.flink.table.planner.plan.nodes.exec.ExecEdge;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeBase;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeConfig;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeContext;
 import org.apache.flink.table.planner.plan.nodes.exec.InputProperty;
 import org.apache.flink.table.planner.plan.nodes.exec.StateMetadata;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecNode;
-import org.apache.flink.table.planner.plan.utils.KeySelectorUtil;
-import org.apache.flink.table.runtime.keyselector.RowDataKeySelector;
 import org.apache.flink.table.types.logical.RowType;
 
-/** Distinct StreamFusion physical node for timer-free rowtime keep-last deduplication. */
-public final class StreamFusionExecDeduplicate extends ExecNodeBase<RowData> implements StreamExecNode<RowData> {
-    private static final String TRANSLATOR_CLASS =
-            "tech.streamfusion.flink.deduplicate.StreamFusionDeduplicateTranslator";
+/** Selected timer-free deduplication fragment; common region infrastructure binds its state. */
+public final class StreamFusionExecDeduplicate extends ExecNodeBase<RowData>
+        implements StreamExecNode<RowData>, StreamFusionNativePlanNode {
+    private final StreamFusionNativeNodeMetadata nativeMetadata = new StreamFusionNativeNodeMetadata();
+
+    @Override
+    public StreamFusionNativeNodeMetadata nativeMetadata() {
+        return nativeMetadata;
+    }
 
     private final int[] uniqueKeys;
     private final boolean isRowtime;
@@ -50,7 +50,7 @@ public final class StreamFusionExecDeduplicate extends ExecNodeBase<RowData> imp
                 ExecNodeContext.newNodeId(),
                 new ExecNodeContext("streamfusion-exec-deduplicate_1"),
                 persistedConfig,
-                Collections.singletonList(inputProperty),
+                List.of(inputProperty),
                 outputType,
                 description);
         this.uniqueKeys = uniqueKeys.clone();
@@ -61,18 +61,22 @@ public final class StreamFusionExecDeduplicate extends ExecNodeBase<RowData> imp
         this.stateMetadata = stateMetadata;
     }
 
-    @SuppressWarnings("unchecked")
     @Override
-    protected Transformation<RowData> translateToPlanInternal(PlannerBase planner, ExecNodeConfig config) {
-        ExecEdge inputEdge = getInputEdges().get(0);
-        Transformation<RowData> input = (Transformation<RowData>) inputEdge.translateToPlan(planner);
-        long stateRetention = StateMetadata.getStateTtlForOneInputOperator(config, stateMetadata);
-        try {
-            Class<?> translator = Class.forName(
-                    TRANSLATOR_CLASS, true, planner.getFlinkContext().getClassLoader());
-            Method method = translator.getMethod(
-                    "translate",
-                    Transformation.class,
+    public boolean ownsNativeKeyedState() {
+        return true;
+    }
+
+    @Override
+    public byte[] nativePlanFragment(PlannerBase planner) {
+        Configuration config = Configuration.fromMap(
+                planner.getTableConfig().getConfiguration().toMap());
+        config.addAll(Configuration.fromMap(getPersistedConfig().toMap()));
+        long retention =
+                StateMetadata.getStateTtlForOneInputOperator(ExecNodeConfig.ofNodeConfig(config, false), stateMetadata);
+        return StreamFusionNativePlanNode.invokeBuilder(
+                planner,
+                "tech.streamfusion.flink.deduplicate.StreamFusionDeduplicateTranslator",
+                new Class<?>[] {
                     RowType.class,
                     RowType.class,
                     int[].class,
@@ -81,35 +85,21 @@ public final class StreamFusionExecDeduplicate extends ExecNodeBase<RowData> imp
                     boolean.class,
                     boolean.class,
                     long.class,
-                    ReadableConfig.class,
-                    org.apache.flink.streaming.api.environment.StreamExecutionEnvironment.class,
-                    RowDataKeySelector.class);
-            RowDataKeySelector selector = KeySelectorUtil.getRowDataSelector(
-                    planner.getFlinkContext().getClassLoader(),
-                    uniqueKeys,
-                    org.apache.flink.table.runtime.typeutils.InternalTypeInfo.of((RowType) inputEdge.getOutputType()));
-            Transformation<RowData> result = (Transformation<RowData>) method.invoke(
-                    null,
-                    input,
-                    (RowType) inputEdge.getOutputType(),
-                    (RowType) getOutputType(),
-                    uniqueKeys,
-                    isRowtime,
-                    keepLastRow,
-                    outputInsertOnly,
-                    generateUpdateBefore,
-                    stateRetention,
-                    getPersistedConfig(),
-                    planner.getExecEnv(),
-                    selector);
-            if (result == null) {
-                throw new IllegalStateException("A selected StreamFusion Deduplicate failed translation");
-            }
-            return result;
-        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
-            throw new IllegalStateException("Could not invoke the StreamFusion Deduplicate runtime", e);
-        } catch (InvocationTargetException e) {
-            throw new IllegalStateException("StreamFusion Deduplicate translation failed", e.getCause());
-        }
+                    ReadableConfig.class
+                },
+                getInputEdges().get(0).getOutputType(),
+                getOutputType(),
+                uniqueKeys,
+                isRowtime,
+                keepLastRow,
+                outputInsertOnly,
+                generateUpdateBefore,
+                retention,
+                config);
+    }
+
+    @Override
+    protected Transformation<RowData> translateToPlanInternal(PlannerBase planner, ExecNodeConfig config) {
+        return StreamFusionStatelessRegion.translate(this, planner);
     }
 }

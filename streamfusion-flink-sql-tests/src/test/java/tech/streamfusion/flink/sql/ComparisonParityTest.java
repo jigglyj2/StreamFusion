@@ -38,7 +38,7 @@ class ComparisonParityTest extends SqlParityTestSupport {
         assertParity(sql, true, nativeExecutionExpected || ignoredName.contains("constant-folded"));
 
         if (nativeExecutionExpected) {
-            assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+            assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
         }
     }
 
@@ -62,7 +62,7 @@ class ComparisonParityTest extends SqlParityTestSupport {
                 + predicate;
         assertParity(sql, true);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 
     private static Stream<Arguments> nativeBigintComparisonCases() {
@@ -92,7 +92,7 @@ class ComparisonParityTest extends SqlParityTestSupport {
         assertParity(sql, true, nativeExecutionExpected);
 
         if (nativeExecutionExpected) {
-            assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+            assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
         }
     }
 
@@ -120,7 +120,7 @@ class ComparisonParityTest extends SqlParityTestSupport {
         assertParity(sql, true, nativeExecutionExpected);
 
         if (nativeExecutionExpected) {
-            assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+            assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
         }
     }
 
@@ -142,7 +142,7 @@ class ComparisonParityTest extends SqlParityTestSupport {
                 + predicate;
         assertParity(sql, true);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 
     private static Stream<Arguments> nativeDateComparisonCases() {
@@ -163,7 +163,7 @@ class ComparisonParityTest extends SqlParityTestSupport {
                 + predicate;
         assertParity(sql, true);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 
     private static Stream<Arguments> nativeTimeComparisonCases() {
@@ -191,7 +191,7 @@ class ComparisonParityTest extends SqlParityTestSupport {
                 + ") <= event_time";
         assertParity(sql, true);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 
     private static Stream<Integer> nativeTimePrecisionCases() {
@@ -210,7 +210,7 @@ class ComparisonParityTest extends SqlParityTestSupport {
                 + predicate;
         assertParity(sql, true);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 
     private static Stream<Arguments> nativeTimestampComparisonCases() {
@@ -226,7 +226,7 @@ class ComparisonParityTest extends SqlParityTestSupport {
     void nativeDecimalComparisonsMatchFlinkByteForByte(String ignoredName, String sql) throws Exception {
         assertParity(sql, true);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 
     private static Stream<Arguments> nativeDecimalComparisonCases() {
@@ -269,7 +269,7 @@ class ComparisonParityTest extends SqlParityTestSupport {
                 + predicate;
         assertParity(sql, true);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 
     private static Stream<Arguments> nativeUnknownPredicateCases() {
@@ -285,7 +285,7 @@ class ComparisonParityTest extends SqlParityTestSupport {
                 + predicate;
         assertParity(sql, true);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 
     private static Stream<Arguments> nativeBooleanPredicateCases() {
@@ -301,7 +301,7 @@ class ComparisonParityTest extends SqlParityTestSupport {
     void nativeDataStreamRangePredicatesMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {
         assertIntegerDataStreamParity("SELECT metric FROM integer_input WHERE " + predicate);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 
     private static Stream<Arguments> nativeDataStreamRangePredicateCases() {
@@ -318,7 +318,7 @@ class ComparisonParityTest extends SqlParityTestSupport {
             String ignoredName, TypeInformation<?> type, List<Row> rows, String predicate) throws Exception {
         assertDataStreamParity("SELECT metric FROM integral_input WHERE " + predicate, type, rows, "integral_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 
     private static Stream<Arguments> nativeIntegralDataStreamRangeCases() {
@@ -355,7 +355,7 @@ class ComparisonParityTest extends SqlParityTestSupport {
                         Row.of(new java.math.BigDecimal("2.500000000000000000"))),
                 "decimal_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 
     private static Stream<Arguments> nativeDecimalDataStreamRangeCases() {
@@ -383,7 +383,7 @@ class ComparisonParityTest extends SqlParityTestSupport {
                         Row.of(java.sql.Date.valueOf("2030-01-01"))),
                 "date_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 
     private static Stream<Arguments> nativeDateDataStreamRangeCases() {
@@ -405,7 +405,7 @@ class ComparisonParityTest extends SqlParityTestSupport {
                         Row.of(java.sql.Time.valueOf("23:59:59"))),
                 "time_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 
     private static Stream<Arguments> nativeTimeDataStreamRangeCases() {
@@ -428,7 +428,7 @@ class ComparisonParityTest extends SqlParityTestSupport {
                         Row.of(java.sql.Timestamp.valueOf("2030-01-01 00:00:00.000"))),
                 "timestamp_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isZero();
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("TIMESTAMP precision 9 stays on Flink");
     }
 
@@ -452,7 +452,7 @@ class ComparisonParityTest extends SqlParityTestSupport {
                 Arrays.asList(Row.of("alpha"), Row.of("beta"), Row.of("delta"), Row.of("zeta"), Row.of((Object) null)),
                 "varchar_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 
     private static Stream<Arguments> nativeVarcharDataStreamRangeCases() {

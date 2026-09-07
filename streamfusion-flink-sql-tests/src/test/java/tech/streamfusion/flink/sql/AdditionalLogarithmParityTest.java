@@ -35,7 +35,7 @@ class AdditionalLogarithmParityTest extends SqlParityTestSupport {
                 logarithmInputs(),
                 "additional_logarithm_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 
     @Test
@@ -46,7 +46,7 @@ class AdditionalLogarithmParityTest extends SqlParityTestSupport {
                 logarithmInputs(),
                 "binary_logarithm_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isZero();
         assertThat(tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics.explain())
                 .contains("differs from Flink by one ULP");
     }
@@ -60,7 +60,7 @@ class AdditionalLogarithmParityTest extends SqlParityTestSupport {
                 logarithmInputs(),
                 "arbitrary_logarithm_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 
     private static List<Row> logarithmInputs() {

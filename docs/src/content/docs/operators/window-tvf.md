@@ -5,8 +5,9 @@ sidebar:
   order: 5
 ---
 
-**Current status:** Streaming and bounded event-time `TUMBLE`, `HOP`, and `CUMULATE` are
-accelerated. Streaming `SESSION` is also accelerated.
+**Current status:** Event-time `TUMBLE`, `HOP`, and `CUMULATE` remain eligible as standalone native stages.
+Stateful `SESSION` and unverified adjacent native combinations temporarily cause whole-plan Flink
+fallback under the [architecture admission requirements](/StreamFusion/development/architecture-admission/).
 
 StreamFusion has a distinct native physical operator for the row-semantics `TUMBLE`, `HOP`, and
 `CUMULATE` TVFs. The set-semantics `SESSION` TVF uses a keyed native merging operator and emits at

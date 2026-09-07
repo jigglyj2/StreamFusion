@@ -5,9 +5,9 @@ sidebar:
   order: 19
 ---
 
-**Current status:** Partially accelerated. Planner-inserted `ChangelogNormalize` and
-`DropUpdateBefore` have distinct StreamFusion implementations; explicit changelog conversion
-functions remain on Flink.
+**Current status:** Arrow `DropUpdateBefore` remains eligible. Stateful `ChangelogNormalize` temporarily
+causes whole-plan Flink fallback under the
+[architecture admission requirements](/StreamFusion/development/architecture-admission/).
 
 **Future acceleration target:** Not currently a compute target.
 

@@ -31,7 +31,7 @@ class ComplexTypeLiteralParityTest extends SqlParityTestSupport {
 
         assertParity(sql, true);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 
     @ParameterizedTest(name = "bounded {0} typed null")
@@ -41,7 +41,7 @@ class ComplexTypeLiteralParityTest extends SqlParityTestSupport {
 
         assertParity(sql, false);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
         assertThat(StreamFusionPlannerFactory.nativeValuesBatchCount()).isGreaterThan(0);
     }
 

@@ -42,7 +42,7 @@ class RoundParityTest extends SqlParityTestSupport {
                         Row.of((Object) null)),
                 "round_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isZero();
         assertThat(tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics.explain())
                 .contains("data-dependent error semantics for non-finite values");
     }

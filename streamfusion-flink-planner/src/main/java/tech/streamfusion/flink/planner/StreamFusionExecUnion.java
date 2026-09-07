@@ -9,15 +9,11 @@
  */
 package tech.streamfusion.flink.planner;
 
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
-import java.util.ArrayList;
 import java.util.List;
 import org.apache.flink.api.dag.Transformation;
 import org.apache.flink.configuration.ReadableConfig;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.planner.delegation.PlannerBase;
-import org.apache.flink.table.planner.plan.nodes.exec.ExecEdge;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeConfig;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeContext;
 import org.apache.flink.table.planner.plan.nodes.exec.InputProperty;
@@ -25,9 +21,15 @@ import org.apache.flink.table.planner.plan.nodes.exec.common.CommonExecUnion;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecNode;
 import org.apache.flink.table.types.logical.RowType;
 
-/** StreamFusion physical coverage for Flink's zero-work streaming UNION ALL wiring. */
-public final class StreamFusionExecUnion extends CommonExecUnion implements StreamExecNode<RowData> {
-    private static final String TRANSLATOR_CLASS = "tech.streamfusion.flink.union.StreamFusionUnionTranslator";
+/** UNION supplies its physical fragment; shared discovery owns composition and runtime creation. */
+public final class StreamFusionExecUnion extends CommonExecUnion
+        implements StreamExecNode<RowData>, StreamFusionNativePlanNode {
+    private final StreamFusionNativeNodeMetadata nativeMetadata = new StreamFusionNativeNodeMetadata();
+
+    @Override
+    public StreamFusionNativeNodeMetadata nativeMetadata() {
+        return nativeMetadata;
+    }
 
     public StreamFusionExecUnion(
             ReadableConfig persistedConfig,
@@ -43,27 +45,18 @@ public final class StreamFusionExecUnion extends CommonExecUnion implements Stre
                 description);
     }
 
-    @SuppressWarnings("unchecked")
+    @Override
+    public byte[] nativePlanFragment(PlannerBase planner) {
+        return StreamFusionNativePlanNode.invokeBuilder(
+                planner,
+                "tech.streamfusion.flink.union.StreamFusionUnionTranslator",
+                new Class<?>[] {RowType.class, int.class},
+                getOutputType(),
+                getInputEdges().size());
+    }
+
     @Override
     protected Transformation<RowData> translateToPlanInternal(PlannerBase planner, ExecNodeConfig config) {
-        List<Transformation<RowData>> inputs = new ArrayList<>(getInputEdges().size());
-        for (ExecEdge edge : getInputEdges()) {
-            inputs.add((Transformation<RowData>) edge.translateToPlan(planner));
-        }
-        try {
-            Class<?> translator = Class.forName(
-                    TRANSLATOR_CLASS, true, planner.getFlinkContext().getClassLoader());
-            Method translate = translator.getMethod("translate", List.class, RowType.class);
-            Transformation<RowData> result =
-                    (Transformation<RowData>) translate.invoke(null, inputs, (RowType) getOutputType());
-            if (result == null) {
-                throw new IllegalStateException("A selected StreamFusion UNION ALL failed translation");
-            }
-            return result;
-        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
-            throw new IllegalStateException("Could not invoke the StreamFusion UNION ALL runtime", e);
-        } catch (InvocationTargetException e) {
-            throw new IllegalStateException("StreamFusion UNION ALL translation failed", e.getCause());
-        }
+        return StreamFusionStatelessRegion.translate(this, planner);
     }
 }

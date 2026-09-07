@@ -32,6 +32,6 @@ class NumericConstantParityTest extends SqlParityTestSupport {
                 Arrays.asList(Row.of(-1.0d), Row.of(0.0d), Row.of(2.5d), Row.of((Object) null)),
                 "numeric_constant_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 }

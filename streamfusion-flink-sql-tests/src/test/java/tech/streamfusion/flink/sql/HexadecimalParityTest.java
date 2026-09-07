@@ -40,7 +40,7 @@ class HexadecimalParityTest extends SqlParityTestSupport {
                         Row.of((Object) null)),
                 "integer_hex_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 
     @Test
@@ -58,6 +58,6 @@ class HexadecimalParityTest extends SqlParityTestSupport {
                         Row.of((Object) null)),
                 "string_hex_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 }

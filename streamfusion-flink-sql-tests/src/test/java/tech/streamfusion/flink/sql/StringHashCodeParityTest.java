@@ -28,7 +28,7 @@ class StringHashCodeParityTest extends SqlParityTestSupport {
     void javaStringHashMatchesFlinkByteForByte(String sql) throws Exception {
         assertParity(sql, true);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount())
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())
                 .isGreaterThan(0);
     }
@@ -52,7 +52,7 @@ class StringHashCodeParityTest extends SqlParityTestSupport {
                         + "CAST(NULL AS BIGINT))) input(tiny_value, small_value, int_value, big_value)",
                 true);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount())
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())
                 .isGreaterThan(0);
     }

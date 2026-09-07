@@ -32,7 +32,7 @@ class BitmapFunctionFallbackTest extends SqlParityTestSupport {
                         Row.of((Object) null)),
                 "bitmap_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isZero();
         assertThat(StreamFusionPlanningDiagnostics.explain())
                 .contains("BITMAP_CARDINALITY")
                 .contains("Java serialization bytes")

@@ -29,7 +29,7 @@ class RowConstructorParityTest extends SqlParityTestSupport {
                 Arrays.asList(Row.of(12), Row.of(-1), Row.of((Object) null)),
                 "int_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount())
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())
                 .isGreaterThan(0);
     }

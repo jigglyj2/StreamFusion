@@ -17,11 +17,13 @@ StreamFusion nodes.
 Streaming and bounded replacements share the same protobuf and native DataFusion operator tree;
 bounded execution is not a parallel JNI or RowData implementation. The original Flink nodes are neither modified nor
 given native execution branches; if eligibility fails, the original graph is returned
-unchanged. At translation time, the outermost `StreamFusionExecCalc` collects every
-adjacent StreamFusion Calc below it; the bounded Calc node applies the identical rule. Each
-preserves input-to-output order and creates
-one Flink runtime operator for the connected chain. A non-StreamFusion node ends the
-chain and therefore defines a native-plan boundary.
+unchanged. At translation time, native nodes provide local protobuf fragments through a shared
+contract. The region collector discovers the connected physical tree and binds each fragment's
+input slots to child plans, preserving child order and stable stage identities. It creates one
+Flink runtime owner for the region and translates only its external inputs. Calc and UNION nodes
+in both execution modes use this contract; adding another supported family does not require a
+new operator-pair fusion driver. See [architecture admission](../architecture-admission/) for the
+families still gated on lifecycle, memory, and metric integration.
 
 Before replacing any node, the graph processor checks the planner classloader for the
 protocol and runtime entry points and verifies that the packaged native library can be
@@ -30,13 +32,15 @@ errors, an absent native resource, or an incompatible binary reject the complete
 with a `runtime-preflight` EXPLAIN reason. Capability-inspection reflection failures are
 also treated as inconclusive support and fall back before graph mutation.
 
-`UNION ALL` in either runtime mode is a deliberate exception to native compute lowering, but not to
-physical coverage. Flink keeps control of watermarks, barriers, scheduling, and input
-interleaving in a StreamFusion multiple-input operator. Because Flink
-multiple-input gates are network boundaries, each branch writes the existing versioned
-Arrow IPC exchange frame and the union decodes it through Flink-managed memory before
-forwarding the Arrow batch. Raw process-local Arrow owners never reach a network
-serializer, and the union performs no DataFusion merge or row materialization.
+`UNION ALL` lowers to a native DataFusion stage in the shared region, exchanging Arrow batches
+directly with its native children and parents. Flink retains scheduling, barriers, and external
+input interleaving through the region's multiple-input owner. Only external region inputs write
+the versioned Arrow IPC exchange frame and decode it through Flink-managed memory; there is no
+IPC or JNI handoff between native stages. Raw process-local Arrow owners never reach a network
+serializer. Adjacent UNION wiring is flattened for input watermark control using Flink's own
+`StatusWatermarkValve`; real computational stages retain their individual control state. Because
+Flink UNION creates no runtime operator, it has native diagnostic counts but no invented Flink
+operator metric scope.
 
 ```text
 Flink source

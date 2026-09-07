@@ -41,7 +41,7 @@ class StringReverseParityTest extends SqlParityTestSupport {
                 INPUTS,
                 "reverse_projection_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 
     @Test
@@ -52,6 +52,6 @@ class StringReverseParityTest extends SqlParityTestSupport {
                 INPUTS,
                 "reverse_filter_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 }

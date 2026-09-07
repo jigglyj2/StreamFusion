@@ -5,8 +5,9 @@ sidebar:
   order: 13
 ---
 
-**Current status:** Accelerated for Flink streaming global constant `LIMIT`/`OFFSET` and bounded
-local/global `BatchExecLimit`.
+**Current status:** Bounded Arrow-slice `LIMIT`/`OFFSET` remains eligible. Streaming native Top-N/counter
+paths temporarily cause whole-plan Flink fallback under the
+[architecture admission requirements](/StreamFusion/development/architecture-admission/).
 
 ## SQL example
 

@@ -73,12 +73,12 @@ class CollectionExtremumParityTest extends SqlParityTestSupport {
                         Row.of((Object) new Double[] {null, null}),
                         Row.of((Object) null)),
                 "double_array_input");
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isZero();
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Flink and DataFusion order NaN differently");
     }
 
     private static void assertNativeCalcRan() {
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount())
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())
                 .isGreaterThan(0);
     }

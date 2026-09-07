@@ -31,7 +31,7 @@ class StringReplaceParityTest extends SqlParityTestSupport {
                         Row.of("This is a test String."), Row.of("ää foo foo"), Row.of(""), Row.of((Object) null)),
                 "string_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount())
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())
                 .isGreaterThan(0);
     }

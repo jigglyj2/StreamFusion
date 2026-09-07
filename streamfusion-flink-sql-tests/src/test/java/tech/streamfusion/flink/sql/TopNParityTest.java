@@ -18,12 +18,11 @@ import org.apache.flink.types.Row;
 import org.apache.flink.types.RowKind;
 import org.junit.jupiter.api.Test;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
-import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 
 class TopNParityTest extends SqlParityTestSupport {
     @Test
     void partitionedConstantRangeWithOffsetAndRankNumberMatchesFlinkByteForByte() throws Exception {
-        assertParity(
+        assertFallbackParity(
                 "SELECT category, amount, label, row_num FROM ("
                         + "SELECT *, ROW_NUMBER() OVER (PARTITION BY category "
                         + "ORDER BY amount DESC NULLS LAST, label ASC NULLS FIRST) AS row_num "
@@ -32,13 +31,13 @@ class TopNParityTest extends SqlParityTestSupport {
                         + "AS input(category, amount, label)) WHERE row_num BETWEEN 2 AND 3",
                 true);
 
-        assertThat(StreamFusionPlannerFactory.nativeTopNBatchCount()).isGreaterThan(0);
-        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        SqlFallbackAssertions.nativeBatchesAreZero(StreamFusionPlannerFactory.nativeTopNBatchCount());
+        SqlFallbackAssertions.admission();
     }
 
     @Test
     void updatingAggregateInputRetractionsMatchFlinkByteForByte() throws Exception {
-        assertParity(
+        assertFallbackParity(
                 "SELECT category, total FROM ("
                         + "SELECT *, ROW_NUMBER() OVER (ORDER BY total DESC, category ASC) AS row_num FROM ("
                         + "SELECT category, SUM(amount) AS total FROM "
@@ -46,8 +45,8 @@ class TopNParityTest extends SqlParityTestSupport {
                         + "AS input(category, amount) GROUP BY category)) WHERE row_num <= 2",
                 true);
 
-        assertThat(StreamFusionPlannerFactory.nativeTopNBatchCount()).isGreaterThan(0);
-        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        SqlFallbackAssertions.nativeBatchesAreZero(StreamFusionPlannerFactory.nativeTopNBatchCount());
+        SqlFallbackAssertions.admission();
     }
 
     @Test
@@ -57,7 +56,7 @@ class TopNParityTest extends SqlParityTestSupport {
 
         assertThat(streamFusion).isEqualTo(flink);
 
-        assertThat(StreamFusionPlannerFactory.nativeTopNBatchCount()).isGreaterThan(0);
+        SqlFallbackAssertions.nativeBatchesAreZero(StreamFusionPlannerFactory.nativeTopNBatchCount());
     }
 
     @Test
@@ -67,7 +66,7 @@ class TopNParityTest extends SqlParityTestSupport {
                         + "AS input(id, label) ORDER BY id LIMIT 2 OFFSET 1",
                 true);
 
-        assertThat(StreamFusionPlannerFactory.nativeTopNBatchCount()).isGreaterThan(0);
+        SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativeTopNBatchCount(), 1);
     }
 
     @Test
@@ -76,8 +75,8 @@ class TopNParityTest extends SqlParityTestSupport {
         byte[] streamFusion = executeRetractions(true);
 
         assertThat(streamFusion).isEqualTo(flink);
-        assertThat(StreamFusionPlannerFactory.nativeTopNBatchCount()).isGreaterThan(0);
-        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        SqlFallbackAssertions.nativeBatchesAreZero(StreamFusionPlannerFactory.nativeTopNBatchCount());
+        SqlFallbackAssertions.admission();
     }
 
     @Test
@@ -86,7 +85,7 @@ class TopNParityTest extends SqlParityTestSupport {
         byte[] streamFusion = executeDuplicateRetractions(true);
 
         assertThat(streamFusion).isEqualTo(flink);
-        assertThat(StreamFusionPlannerFactory.nativeTopNBatchCount()).isGreaterThan(0);
+        SqlFallbackAssertions.nativeBatchesAreZero(StreamFusionPlannerFactory.nativeTopNBatchCount());
     }
 
     private static byte[] executeDuplicateRetractions(boolean streamFusionEnabled) throws Exception {

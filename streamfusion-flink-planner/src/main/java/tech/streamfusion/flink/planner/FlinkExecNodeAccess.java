@@ -27,6 +27,8 @@ import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecHashJoin;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecHashWindowAggregate;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecLimit;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecNestedLoopJoin;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecOverAggregate;
+import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecOverAggregateBase;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecRank;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecSort;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecSortAggregate;
@@ -264,6 +266,10 @@ final class FlinkExecNodeAccess {
 
     static OverSpec overSpec(StreamExecOverAggregate aggregate) {
         return (OverSpec) field(aggregate, StreamExecOverAggregate.class, "overSpec");
+    }
+
+    static OverSpec overSpec(BatchExecOverAggregate aggregate) {
+        return (OverSpec) field(aggregate, BatchExecOverAggregateBase.class, "overSpec");
     }
 
     static org.apache.calcite.rel.core.AggregateCall[] aggregateCalls(StreamExecGroupAggregate aggregate) {

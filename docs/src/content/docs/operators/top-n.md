@@ -5,10 +5,14 @@ sidebar:
   order: 14
 ---
 
-**Current status:** Accelerated for Flink streaming `ROW_NUMBER` Top-N, including partitioned and
+**Current status:** Temporarily uses whole-plan Flink fallback under the
+[architecture admission requirements](/StreamFusion/development/architecture-admission/). The native paths
+described below are retained for development and direct parity tests; SQL planning does not select them.
+
+**Retained implementation scope:** Implementation for Flink streaming `ROW_NUMBER` Top-N, including partitioned and
 global Top-N, constant ranges (including `OFFSET`), variable per-partition upper bounds, rank-number
 output, and Flink's append-fast, update-fast, and retract strategies.
-Bounded SQL `RANK` is also accelerated through Flink's
+Bounded SQL `RANK` is also implemented through Flink's
 local-sort/local-rank/hash-exchange/global-sort/global-rank plan.
 
 Flink's unordered global `StreamExecLimit` specialization uses the same physical node and native

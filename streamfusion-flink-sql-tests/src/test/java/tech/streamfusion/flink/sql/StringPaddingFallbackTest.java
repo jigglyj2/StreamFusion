@@ -29,7 +29,7 @@ class StringPaddingFallbackTest extends SqlParityTestSupport {
                 Arrays.asList(Row.of("abc"), Row.of("😀z"), Row.of(""), Row.of((Object) null)),
                 "string_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isZero();
         assertThat(StreamFusionPlanningDiagnostics.explain())
                 .contains("UTF-16 code units")
                 .contains("Arrow UTF-8");

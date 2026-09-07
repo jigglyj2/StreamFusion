@@ -28,7 +28,7 @@ class StringAsciiParityTest extends SqlParityTestSupport {
         assertDataStreamParity(
                 "SELECT ASCII(metric) FROM string_input", Types.STRING, DataTypes.STRING(), ROWS, "string_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount())
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())
                 .isGreaterThan(0);
     }
@@ -42,7 +42,7 @@ class StringAsciiParityTest extends SqlParityTestSupport {
                 ROWS,
                 "string_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount())
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())
                 .isGreaterThan(0);
     }

@@ -5,7 +5,11 @@ sidebar:
   order: 7
 ---
 
-**Current status:** Partially accelerated for native `TUMBLE`, `HOP`, `CUMULATE`, and `SESSION`
+**Current status:** Temporarily uses whole-plan Flink fallback under the
+[architecture admission requirements](/StreamFusion/development/architecture-admission/). The native paths
+described below are retained for development and direct parity tests; SQL planning does not select them.
+
+**Retained implementation scope:** Partial implementation for native `TUMBLE`, `HOP`, `CUMULATE`, and `SESSION`
 aggregation, including Flink's legacy group-window physical node.
 
 ## SQL example

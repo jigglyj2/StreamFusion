@@ -5,8 +5,271 @@ sidebar:
   order: 6
 ---
 
-**Current status:** Partially accelerated for timer-free keyed and global streaming aggregates and
+**Current status:** Temporarily uses whole-plan Flink fallback under the
+[architecture admission requirements](/StreamFusion/development/architecture-admission/). The native paths
+described below are retained for development and direct parity tests; SQL planning does not select them.
+
+**Retained implementation scope:** Partial implementation for timer-free keyed and global streaming aggregates and
 bounded hash aggregates, including grouping sets, `ROLLUP`, and `CUBE` in both runtime modes.
+
+The synchronous, non-mini-batch streaming path now binds its state into the shared native
+execution context and uses the common unary DataFusion adapter. Adjacent Calc stages exchange
+Arrow batches directly; native RowKind and input-ordinal metadata preserve retractions and record
+timestamps. Both memory and direct RocksDB bindings use the same node-addressed canonical
+snapshot/restore interface. Output admission follows its Arrow buffers through retained slices
+and producer close, without transferring to Java between native stages. Plan/codecs and cached
+schemas have independent lifetime reservations, and failed schema preparation is transactional.
+
+Planned schemas and row codecs now have a separate shape-based admission before Arrow type
+lowering, including recursive codec construction's temporary null arrays. Compact protobuf byte
+length alone underestimated these allocations: a controlled 64-field nested-key constructor
+retained 45,317 bytes against 27,072 bytes of total credit before this fix. Construction credit now
+shrinks to a conservative retained schema/call/codec estimate after initialization. Same-thread
+Rust allocator tests cover 1/64/512-field keys, additional row/array nesting, and nested `COUNT`
+payloads; they check decode admission separately, peak/live coverage, allocation-free sizing,
+temporary-credit release, and cleanup when Flink denies schema construction. This is not yet a
+complete shared-plan or C++/cross-thread allocation profile, and does not lift production admission.
+
+A generated SQL integration matrix now exercises 22 grouping-key families and nullable `COUNT`
+payloads through the common native region, on memory and RocksDB with mini-batching disabled and
+enabled. It compares the complete byte-encoded changelog multiset against Flink, using all four
+RowKinds and independently changing each key field. This includes arrays, maps, multisets, and rows:
+the shared native BinaryRow key codec now encodes their nested Arrow values into caller-owned
+scratch storage. Separate Flink serializer fixtures check exact nested key bytes; sliced-array tests
+check offsets and scratch reuse. The SQL test requires native invocation counters and an Arrow-only
+internal topology. It uses a **test-only admission override** after checking production fallback;
+it does not establish production eligibility, ordered-output parity, full-type recovery/metric parity,
+or end-to-end allocation/performance results.
+
+Synchronous batch execution now admits variable-width key/accumulator copies before encoding,
+historical string-result event copies before processing rows, and Arrow gather/builder capacity
+before materializing output or committing dirty state. Historical event credit includes extrema
+that can become visible after retractions, not just the currently emitted value. Budget calls
+remain batch-scoped rather than per-record JNI calls. These are conservative capacity estimates:
+tests cover wide values, sliced/nested/decimal/dictionary gather buffers, and denial before state
+commit, but this does not establish allocation-profile or performance parity for every type/mode.
+
+Counted DISTINCT and retractable extrema also include a fixed sparse B-tree allowance: the first
+value allocates an entire node, not just one key/value pair. Synchronous execution admits initial
+nodes per distinct group, per-row map growth, accumulator vectors, and fixed mutation storage
+before loading or decoding state. Controlled same-thread System-allocator tests measure requested
+heap bytes for sparse and dense numeric/string maps, including node splits and shrink-to-empty
+retractions, against the estimate. They reproduced a 464-byte first node previously charged as
+112 bytes on the current test platform. Removing the last value can retain that node, so the
+estimate retains base credit for empty maps too. Low-budget tests verify rejection before state
+reads/writes and release of batch reservations. This is allocation
+regression evidence, not an end-to-end JVM/native allocation profile or a measured throughput gain.
+
+Generated Calc/Aggregate/Calc tests compare `COUNT(*)`, `SUM`, `MIN`, and `MAX` against an
+operator produced by Flink's SQL planner, including its generated handler. They cover null and
+Unicode keys, null values, all four input RowKinds, empty batches, timestamp presence/values,
+logical stage counts, and canonical restore in both memory/RocksDB directions. This is direct
+shared-runtime evidence, not yet planner-selected acceleration or a full metric-surface audit.
+
+The selected synchronous aggregation node now contributes a protobuf fragment to the common
+region collector instead of constructing a legacy per-operator Java runtime. Direct selected-graph
+tests cover hash-keyed aggregation, singleton global aggregation, and `SELECT DISTINCT` between
+Calc stages: one common keyed runtime, Arrow edges, and the original Flink stage ID/name/UID.
+Fragment validation merges active table configuration with persisted node overrides, and rejects
+TTL, unsupported retraction contracts, and unimplemented optional state metric configurations explicitly.
+Raw mini-batch controls now use the same fragment path, with the configured bundle size preserved.
+
+SQL integration tests additionally execute actual planner-generated source/exchange/region/sink
+graphs on a Flink mini-cluster with both backends. A test-only processor first verifies that the
+normal planner rejects only the outstanding architecture requirements, then applies the ordinary
+selected-node conversion. Retracting DataStream inputs exercise keyed/global aggregates, DISTINCT,
+and projection/filter stages around aggregation; literal VALUES exercise keyed/global aggregates.
+The tests compare the complete collected external-Row changelog with Flink, require nonzero shared
+native-plan batch counters and zero legacy aggregate batch counters, and reject Java transformations
+for internal fragment-compatible stages. Network edges remain Arrow IPC and region outputs remain
+Arrow batches. This extends integration coverage without introducing a production gate override.
+Order-sensitive VALUES fixtures use one literal source: expressions inside VALUES can become
+independent UNION sources, whose arrival interleaving is not deterministic across separate jobs.
+
+The ordinary shared Flink runtime also has generated SQL-handler changelog/timestamp parity
+after canonical cross-backend restore and aligned/unaligned operator-state restore on both
+backends. RocksDB tests verify that a completed checkpoint's SST files are reused by the next
+checkpoint. A separate generated 1→2→1 rescaling matrix routes actual Rust hash-exchange frames
+across all 16 test key groups and uses Flink's checkpoint repartitioning. It checks per-key
+serialized changelog order and timestamp presence/values through canonical cross-backend restore
+and aligned/unaligned operator-state restore on both backends, including retractions that empty
+the restored groups. These tests do not cover in-flight network replay and do not remove the
+production admission gate.
+
+For the default synchronous configuration, a metric-subtree comparison against the SQL-generated
+Flink operator verifies registered names/types, deterministic record counters and watermark gauges,
+and rate-meter counts/implementation on both backends, together with insertion/retraction changelog
+parity. Optional metric configurations and all terminal-path semantics remain outside that test's scope.
+
+Raw mini-batch and global partial-accumulator aggregation now bind into the shared native tree.
+They use the same unary adapter, working set, controls, gauges, and state factory; composition
+does not require operator-pair fusion rules. The local producer now uses the same native lifecycle
+adapter and Java fragment contract. The incremental stage and bounded-final modes still need migration.
+Missing mini-batch schemas, a zero-sized
+streaming global bundle, and bounded-final bindings are rejected before opening a database.
+Invocation EOF is not a flush or end-of-input signal. Full managed-memory and Flink metric-surface
+admission, remaining control-mode migration, and release Nexmark comparisons remain unfinished. The existing
+whole-plan fallback is unchanged.
+
+The common native runtime now provides explicit stage-addressed control drains through the same
+execution tree, with ordered child-before-parent processing and one Arrow output batch per pull.
+Each producing kernel remains responsible for bounding and admitting its output allocation.
+Raw and global partial mini-batch aggregation implement these controls with at most 2,048 groups/4,096 changelog
+rows per pull. It emits the owned-timestamp v1 envelope with absent record timestamps, matching
+Flink's bundle collector. Adjacent Calc and aggregate stages consume those batches directly;
+synchronous aggregation also preserves owned timestamps. State boundaries reject undrained
+bundles. Cancellation requires recovery and keeps returned output memory leased until release.
+The versioned protobuf JNI control edge and common Flink runtime owner now schedule discovered
+stage capabilities automatically: watermark drains complete before forwarding the mark,
+pre-checkpoint hooks flush pending bundles, and physical-stage completion follows its children.
+Full metrics and production planner admission remain unfinished.
+
+The shared raw and global partial mini-batch kernel now prefetches missing
+keys once per incoming Arrow batch and commits the latest flushed values in at most one backend
+write. A decoded working set preserves each count-triggered bundle's changelog, including
+delete/reinsert sequences; an unfinished tail stays pending and is not included in that write.
+Regression tests exercise both native backends, exact output order across Arrow chunkings,
+canonical state, absent-key retractions, and denied memory admission. Packed-state decode credit
+stays live through decoding, sparse accumulator/output storage is admitted before computation,
+and an emptied pending map retains its capacity charge. Global input admits and decodes the whole
+opaque accumulator batch before modifying pending state. Original SQL value indices never index
+the receiving key-plus-accumulator schema. These state-I/O checks do not lift planner gates or
+establish a measured performance gain.
+
+Native global-partial tests cover both backends, count triggers across Arrow chunkings, one
+read/write batch per incoming batch, malformed/denied decode before state access, 5,000-key bounded
+control drains, per-stage logical counters and bundle gauges, retained output leases, and canonical
+cross-backend restore followed by signed partial retractions. These are shared-runtime checks,
+not full-type/metric parity, in-flight unaligned channel replay, or a complete allocation profile.
+
+A generated JNI test drives the global consumer through `Calc → GlobalGroupAggregate → Calc`
+with one-record local bundles as opaque input fixtures. It compares the ordered serialized
+changelog against Flink's SQL-generated raw aggregate handler at equivalent receiving bundle
+boundaries: both backends, three triggers, three seeds, nullable Unicode keys/BIGINT payloads,
+all four raw RowKinds encoded into signed partials, empty arrivals, watermarks, pre-checkpoint
+flushes, and finish. Logical stage counters, absent timestamps, and released memory are checked.
+The local fixture producer uses its retained API outside the shared input edge; this test does
+not establish fused local production, two-phase SQL planner selection, or full metric parity.
+
+The selected Java global node now implements the shared fragment/metadata contract and declares
+keyed state ownership. Its former per-operator runtime translator has been removed. The ordinary
+region collector absorbs the exchange reader and composes adjacent Calc stages without translating
+an intermediate Java operator. Topology tests preserve the original global physical ID, metric
+name/UID, configured bundle size, and raw SQL accumulator indices even when those indices are
+outside the receiving opaque-input schema. Table configuration and persisted overrides are merged
+before validation; unsupported TTL, async/changelog state, retraction contracts, malformed partial
+schemas, and optional state-metric requests reject the fragment instead of silently changing behavior.
+This global-fragment change alone does not establish a complete two-phase SQL plan.
+
+The ordinary Flink region owner is also tested with global fragments from the production builder:
+automatic watermark/pre-barrier/end/finish drains, canonical cross-backend restore and native aligned
+and unaligned state restore, followed by signed-partial retractions. A separate matrix compares the
+complete registered **default** bundle metric surface at equivalent Flink bundle boundaries, including
+empty arrivals, pending bundles and flushes, on both backends and three count triggers. The input
+fixtures use one-record local bundles and Flink's SQL-generated raw handler as an equivalent receiving
+bundle oracle, not a complete local/global SQL pipeline. These checks do not cover in-flight channel
+replay, optional RocksDB/state-latency metrics, full-type restoration, or end-to-end allocation profiles.
+Global composition is admitted independently of the still-active persistent-memory gate.
+
+The retained local producer now admits protobuf decode, planned Arrow schemas/codecs, batch derivatives,
+accumulator updates and opaque output construction before allocation. Workspace credit moves into
+retained state without re-admission, and flushing keeps the actual hash-table allocation charged.
+The same tombstone-safe table accounting is used by raw/global bundles and native memory keyed state.
+Invalid RowKinds and denied workspace do not change the prior local bundle; computation/transfer
+failure frees mutated storage before its credit and requires recovery. Controlled Rust heap tests
+check constructor and batch live/peak coverage, denial and cleanup.
+
+Local aggregation now also registers its replayable task-local buffer automatically in the shared
+native context, before control/metric capability negotiation. It uses the existing unary
+DataFusion adapter and stream driver, with no operator-pair recognition or separate keyed backend.
+The factory copies only its own configuration, not a serialized child sub-plan. Count-triggered
+partials and explicit control output carry INSERT kinds and absent owned timestamps; invocation
+EOF does not flush. Control output is pulled in at most 2,048 groups per batch. Canonical keyed
+snapshot requests to the local node reject explicitly; Flink must drain its bundle before a
+checkpoint and rebuild it through replay.
+
+Native tests compose `Calc → LocalGroupAggregate → Calc → GlobalGroupAggregate → Calc` with
+memory and RocksDB global state, verifying child-before-parent controls, stage logical counters,
+bundle gauges, cross-backend restore/retractions, and no Java ownership transfer internally.
+Additional tests compare count-trigger/retraction partial bytes with the retained local kernel,
+check 5,000-key bounded control drains and fail-closed cancellation, and retain output leases after
+tree destruction. A same-thread heap check covers shared-context construction, count-triggered output
+and control drains against admitted peak/live credit; invalid late RowKinds preserve the prior bundle
+and poison the invocation for recovery. This is native composition evidence, not a Flink SQL local/global parity oracle,
+full-type/metric or in-flight checkpoint coverage. A complete allocation profile remains unfinished;
+production fallback and Nexmark performance claims are unchanged.
+
+The selected streaming local node now contributes a protocol-v2 fragment to the ordinary region
+collector; its standalone streaming runtime translator has been removed. It preserves original
+physical metric identities during local/global and incremental rewrites, merges table settings with
+persisted overrides, and rejects malformed grouping/opaque schemas, disabled or invalid mini-batching,
+and unsupported call/retraction contracts. It declares no keyed-state ownership.
+
+The common one-input Arrow owner now uses the same discovered control scheduler and gauge publication
+as the multi-input owner. Its planned input schema allows control delivery before the first row;
+watermark, pre-barrier and end/finish callbacks drain through the shared tree. Envelope requirements
+are negotiated once from native task-lifetime resources, independently of keyed state bindings, so
+local changelog RowKinds are not lost. Actual routing/envelope field names remain reserved, but the
+planner's `__streamfusion_accumulator` is an opaque payload rather than routing metadata.
+
+Generated SQL tests now exercise complete Flink local/exchange/global graphs through a **test-only**
+selection probe: memory/RocksDB, keyed/singleton aggregates, three bundle sizes and three seeds, null
+and Unicode keys, nullable BIGINT payloads, all four RowKinds, and retractions that empty the groups.
+They compare the complete external changelog bytes, require nonzero shared-plan and zero legacy
+local/aggregate invocation counters, and check Arrow topology plus original stage identities.
+A separate common-unary harness compares the complete default local metric surface with Flink's
+SQL-generated `MapBundleOperator`, including count triggers, empty arrivals, watermark/pre-barrier
+drains, finish and timestamp-less INSERT partials. This is not full-type, arbitrary failure-path,
+two-phase in-flight recovery or end-to-end allocation/performance parity. Production admission remains gated.
+
+The generated retained-kernel JNI test also compares ordered `RowDataSerializer` changelog bytes
+against the original SQL-planned Flink mini-batch operator for both backends, three seeds and
+three count triggers. It covers nullable Unicode keys and BIGINT values, all four RowKinds,
+empty inputs, count and final-watermark flushes, at-most-one read/write per Arrow input, and
+released native/Arrow memory. It is not full-type, full-metric, or fused-control parity evidence.
+
+A separate shared-tree JNI test now compares ordered serialized changelogs and absent record
+timestamps against that SQL-planned Flink operator through `Calc → GroupAggregate → Calc`, on
+both backends with three count triggers. It drives explicit watermarks, pre-checkpoint flushes,
+and finish, verifies per-stage logical I/O counts, and checks empty arrivals and memory release.
+Rust tests also cover 5,000-key bounded drains through adjacent aggregate stages and canonical
+cross-backend restore followed by retractions. These tests exercise the common native control
+API directly; they do not prove the complete mini-batch gauge surface.
+
+The common Flink runtime is also tested through its actual watermark, pre-barrier, end-input,
+and finish hooks against SQL-generated Flink changelogs. This includes canonical restore between
+memory and RocksDB, aligned/unaligned state checkpoints, incremental RocksDB checkpoint reuse,
+output-before-watermark ordering, idempotent completion, and memory release. Branch scheduling
+tests cover stalled inputs and all-idle transitions that advance an ancestor watermark twice;
+the scheduler preserves separate ordered control waves. In-flight network replay remains outside
+this coverage.
+
+Mini-batch bindings now expose Flink's `bundleSize` (Integer) and `bundleRatio` (Double) through
+the common native gauge schema and bulk snapshot, with stable physical-stage identities. Metric
+reporters read Java snapshots without per-gauge JNI calls. Generated tests compare the complete
+default registered operator metric subtree and ordered changelogs on both backends, at batch and
+control boundaries, over three count triggers and six seeds. They cover pending/empty inputs,
+count/watermark/checkpoint flushes and completion. Recovery tests check bundle gauges after
+canonical cross-backend restore and aligned/unaligned state checkpoints. Native tests also verify
+independent gauges for adjacent aggregates and released snapshot allocations. Optional metric
+configurations remain explicit planner restrictions; this does not open production admission or
+prove per-row sampling inside a vectorized batch.
+
+The shared fragment builder now preserves configured raw mini-batch sizes. The generic region
+composition check admits streaming aggregation alongside other verified families; it adds no
+operator-pair rules. An injected downstream failure after 2,048 emitted flush records matches
+Flink's partial serialized output and complete default metric surface on both backends, without
+forwarding a watermark. Subsequent native control/checkpoint work requires recovery, and failure
+close releases native memory without flushing the remaining bundle. Arbitrary row-interior
+failure equivalence is not established. Enabled keyed-state latency histograms and RocksDB native
+property/statistics metrics still reject the shared fragment with a precise metric-specific reason.
+Large-owner admission, backend configuration, recovery, and metric conformance still gate production selection.
+
+The real-SQL graph probe now also runs one-phase raw mini-batch keyed/global queries through
+source, Arrow exchange, common native region and sink on both backends, comparing changelog bytes
+against Flink and requiring non-zero shared native invocations with zero retained per-family
+aggregate invocations. This probe still converts graphs only after asserting that production
+fallback reasons are architectural; it is not proof that the production planner gate is open.
 
 ## SQL example
 
@@ -113,8 +376,9 @@ The aggregate uses the shared backend-neutral native keyed-state interface:
   `batch`; no StreamFusion-only backend selector is required.
 - `EmbeddedRocksDBStateBackend` talks to the separately packaged RocksDB component through its
   versioned native ABI. The immediate path performs one distinct-key multi-get and one `WriteBatch`
-  per Arrow input batch, including deletes. Mini-batch stages avoid empty backend calls and batch
-  missing-key reads and mutations at exact Flink bundle boundaries.
+  per Arrow input batch, including deletes. Raw and global partial mini-batch aggregation perform at most one
+  missing-key read and one mutation write per incoming Arrow batch while preserving exact Flink
+  bundle boundaries in their output. Other retained partial-accumulator stages require separate audits.
 
 Both backends use the same versioned canonical key-group snapshot format. Accumulator payload
 version 6 adds sparse neutral-accumulator tags while continuing to read versions 1–5; version 5
@@ -157,6 +421,14 @@ reads and writes,
 checkpoint kind/bytes/duration/failures, incremental upload and SST-reuse bytes, and restore
 bytes/duration/failures.
 
+In the shared raw mini-batch path, bounded control-drain scratch is based on visible result payloads
+and serialized mutations rather than multiplying already-charged retained B-tree storage. Canonical
+sizing is allocation-free and shares the encoder with persistence, with no state-format change.
+The sparse-extremum unit case (2,048 groups) reserves less than a quarter of the previous scratch
+allowance. This is an admission-size comparison, not measured throughput. Controlled native heap
+observations cover shared-tree lifetimes with numeric groups and nullable/wide-string hot keys;
+full end-to-end allocation profiles and production memory admission remain unfinished.
+
 Stateful aggregate stages declare a larger Flink `OPERATOR` managed-memory weight than stateless
 Arrow stages, while the bounded local bundle declares a smaller intermediate weight. These are
 relative Flink operator weights, not a StreamFusion memory pool or deployment setting. They keep
@@ -166,8 +438,9 @@ buffer; allocation remains fail-fast when the resulting Flink allowance is exhau
 Retractable `MIN` and `MAX` keep counted ordered values so deleting the current extremum reveals the
 next one. Insert-only extrema use a single scalar instead. The immediate batch path deduplicates
 keys with `ahash`, decodes each touched accumulator once, and applies every row in input order. The
-mini-batch path performs backend multi-get calls only for missing keys and one mutation batch per
-completed bundle, while preserving Flink `HashMap` iteration order inside the bundle. This follows the keyed
+raw mini-batch path performs one backend multi-get for missing keys and at most one mutation batch
+per incoming Arrow batch, while preserving Flink `HashMap` iteration order inside each completed
+bundle. Global partial-input mini-batches use this same batch working set. This follows the keyed
 aggregate-group/cache shape used by RisingWave and Arroyo's Arrow incremental aggregates while
 retaining Flink's immediate or mini-batch changelog contract as planned.
 

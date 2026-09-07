@@ -43,7 +43,7 @@ class CharacterFromCodeParityTest extends SqlParityTestSupport {
         assertDataStreamParity(
                 "SELECT CHR(metric) FROM chr_projection_input", Types.LONG, INPUTS, "chr_projection_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 
     @Test
@@ -54,6 +54,6 @@ class CharacterFromCodeParityTest extends SqlParityTestSupport {
                 INPUTS,
                 "chr_filter_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 }

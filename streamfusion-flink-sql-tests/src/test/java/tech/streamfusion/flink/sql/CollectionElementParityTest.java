@@ -31,7 +31,7 @@ class CollectionElementParityTest extends SqlParityTestSupport {
                         Row.of((Object) new Integer[] {7}), Row.of((Object) new Integer[] {}), Row.of((Object) null)),
                 "array_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount())
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())
                 .isGreaterThan(0);
     }
@@ -58,6 +58,6 @@ class CollectionElementParityTest extends SqlParityTestSupport {
         assertThat(streamFusionFailure)
                 .isNotNull()
                 .hasStackTraceContaining("ELEMENT requires an array with at most one element");
-        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        SqlArchitectureAssertions.admission();
     }
 }

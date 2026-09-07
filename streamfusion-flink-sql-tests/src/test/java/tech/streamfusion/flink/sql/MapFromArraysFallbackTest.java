@@ -29,7 +29,7 @@ class MapFromArraysFallbackTest extends SqlParityTestSupport {
                 Arrays.asList(Row.of((Object) new Integer[] {1, 2}), Row.of((Object) new Integer[] {3, 4})),
                 "array_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isZero();
         assertThat(StreamFusionPlanningDiagnostics.explain())
                 .contains("MapDataForMapFromArrays")
                 .contains("GenericMapData")

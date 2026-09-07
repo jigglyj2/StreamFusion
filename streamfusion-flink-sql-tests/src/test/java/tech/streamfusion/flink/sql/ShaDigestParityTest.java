@@ -35,7 +35,7 @@ class ShaDigestParityTest extends SqlParityTestSupport {
                 Arrays.asList(Row.of(""), Row.of("abc"), Row.of("你好😀"), Row.of("a\u0000b"), Row.of((Object) null)),
                 "sha_projection_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 
     @ParameterizedTest
@@ -47,7 +47,7 @@ class ShaDigestParityTest extends SqlParityTestSupport {
                 Arrays.asList(Row.of("abc"), Row.of("def"), Row.of("你好"), Row.of((Object) null)),
                 "sha_filter_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 
     private static Stream<String> fixedShaFunctions() {

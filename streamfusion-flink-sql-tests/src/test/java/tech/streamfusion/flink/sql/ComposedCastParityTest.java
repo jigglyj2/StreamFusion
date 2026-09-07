@@ -30,7 +30,7 @@ class ComposedCastParityTest extends SqlParityTestSupport {
     void composedNumericCastsMatchFlinkByteForByte(String ignoredName, String sql) throws Exception {
         assertParity(sql, true);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 
     @Test
@@ -40,7 +40,7 @@ class ComposedCastParityTest extends SqlParityTestSupport {
                         + "(VALUES (-129), (-128), (-1), (0), (127), (128), (CAST(NULL AS INT))) input(metric)",
                 true);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 
     private static Stream<Arguments> composedCastCases() {

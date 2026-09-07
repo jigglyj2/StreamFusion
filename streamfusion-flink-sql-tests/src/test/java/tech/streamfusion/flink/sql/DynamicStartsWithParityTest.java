@@ -37,6 +37,6 @@ class DynamicStartsWithParityTest extends SqlParityTestSupport {
     void dynamicPrefixMatchesFlinkByteForByte(String sql) throws Exception {
         assertParity(sql, true);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 }

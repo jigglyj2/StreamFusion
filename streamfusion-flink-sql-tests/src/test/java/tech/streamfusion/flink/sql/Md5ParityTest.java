@@ -32,7 +32,7 @@ class Md5ParityTest extends SqlParityTestSupport {
                 Arrays.asList(Row.of(""), Row.of("abc"), Row.of("你好😀"), Row.of("a\u0000b"), Row.of((Object) null)),
                 "string_md5_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 
     @Test
@@ -43,6 +43,6 @@ class Md5ParityTest extends SqlParityTestSupport {
                 Arrays.asList(Row.of(new byte[0]), Row.of(new byte[] {0, 1, 2, 127, -128, -1}), Row.of((Object) null)),
                 "binary_md5_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 }

@@ -55,7 +55,7 @@ class PowerParityTest extends SqlParityTestSupport {
                         Row.of((Object) null)),
                 "power_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 
     @Test
@@ -68,7 +68,7 @@ class PowerParityTest extends SqlParityTestSupport {
                                 null)),
                 "negative_power_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isZero();
         assertThat(tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics.explain())
                 .contains("DataFusion errors on zero raised to a negative power");
     }

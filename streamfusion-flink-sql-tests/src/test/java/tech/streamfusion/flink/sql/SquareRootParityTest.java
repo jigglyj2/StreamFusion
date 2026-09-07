@@ -41,6 +41,6 @@ class SquareRootParityTest extends SqlParityTestSupport {
                         Row.of((Object) null)),
                 "square_root_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 }

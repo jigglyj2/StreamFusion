@@ -34,7 +34,7 @@ class CollectionRemovalParityTest extends SqlParityTestSupport {
                         Row.of((Object) null)),
                 "array_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount())
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())
                 .isGreaterThan(0);
     }
@@ -48,7 +48,7 @@ class CollectionRemovalParityTest extends SqlParityTestSupport {
                 Arrays.asList(Row.of((Object) new Integer[] {1, null, 2, null}), Row.of((Object) null)),
                 "array_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount())
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())
                 .isGreaterThan(0);
     }
@@ -72,7 +72,7 @@ class CollectionRemovalParityTest extends SqlParityTestSupport {
                         Row.of((Object) null)),
                 "dynamic_array_remove_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount())
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())
                 .isGreaterThan(0);
     }

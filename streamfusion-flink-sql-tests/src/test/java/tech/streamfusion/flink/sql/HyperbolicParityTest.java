@@ -45,7 +45,7 @@ class HyperbolicParityTest extends SqlParityTestSupport {
         assertDataStreamParity(
                 "SELECT " + function + "(metric) FROM hyperbolic_input", Types.DOUBLE, INPUTS, "hyperbolic_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 
     @Test
@@ -53,7 +53,7 @@ class HyperbolicParityTest extends SqlParityTestSupport {
         assertFallbackDataStreamParity(
                 "SELECT COSH(metric) FROM hyperbolic_cosh_input", Types.DOUBLE, INPUTS, "hyperbolic_cosh_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isZero();
         assertThat(tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics.explain())
                 .contains("differs from Flink by one ULP");
     }
@@ -66,8 +66,7 @@ class HyperbolicParityTest extends SqlParityTestSupport {
                 INPUTS,
                 "hyperbolic_filter_input");
 
-        assertThat(tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics.explain())
-                .contains("Accelerated: yes");
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        SqlArchitectureAssertions.admission();
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 }

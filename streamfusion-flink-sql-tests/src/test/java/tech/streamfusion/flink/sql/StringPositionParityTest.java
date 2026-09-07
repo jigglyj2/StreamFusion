@@ -31,7 +31,7 @@ class StringPositionParityTest extends SqlParityTestSupport {
                         Row.of("www.apache.org"), Row.of("in中文"), Row.of("😀"), Row.of(""), Row.of((Object) null)),
                 "string_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount())
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())
                 .isGreaterThan(0);
     }

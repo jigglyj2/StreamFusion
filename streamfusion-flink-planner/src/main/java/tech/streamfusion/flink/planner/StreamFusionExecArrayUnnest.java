@@ -9,8 +9,6 @@
  */
 package tech.streamfusion.flink.planner;
 
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -30,7 +28,15 @@ import org.apache.flink.table.runtime.operators.join.FlinkJoinType;
 import org.apache.flink.table.types.logical.RowType;
 
 /** StreamFusion physical node for parity-safe inner array UNNEST. */
-public final class StreamFusionExecArrayUnnest extends CommonExecCorrelate implements StreamExecNode<RowData> {
+public final class StreamFusionExecArrayUnnest extends CommonExecCorrelate
+        implements StreamExecNode<RowData>, StreamFusionNativePlanNode {
+    private final StreamFusionNativeNodeMetadata nativeMetadata = new StreamFusionNativeNodeMetadata();
+
+    @Override
+    public StreamFusionNativeNodeMetadata nativeMetadata() {
+        return nativeMetadata;
+    }
+
     private static final String TRANSLATOR_CLASS = "tech.streamfusion.flink.unnest.StreamFusionArrayUnnestTranslator";
 
     private final RexCall streamFusionInvocation;
@@ -67,38 +73,21 @@ public final class StreamFusionExecArrayUnnest extends CommonExecCorrelate imple
         return streamFusionJoinType;
     }
 
-    @SuppressWarnings("unchecked")
+    @Override
+    public byte[] nativePlanFragment(PlannerBase planner) {
+        return StreamFusionNativePlanNode.invokeBuilder(
+                planner,
+                TRANSLATOR_CLASS,
+                new Class<?>[] {RowType.class, RowType.class, Object.class, Object.class},
+                (RowType) getInputEdges().get(0).getOutputType(),
+                (RowType) getOutputType(),
+                streamFusionJoinType,
+                streamFusionInvocation);
+    }
+
     @Override
     protected Transformation<RowData> translateToPlanInternal(PlannerBase planner, ExecNodeConfig config) {
-        List<StreamFusionExecArrayUnnest> chain = adjacentChain(this);
-        ExecEdge boundaryEdge = chain.get(0).getInputEdges().get(0);
-        Transformation<RowData> input = (Transformation<RowData>) boundaryEdge.translateToPlan(planner);
-        List<RowType> inputTypes = new ArrayList<>(chain.size());
-        List<RowType> outputTypes = new ArrayList<>(chain.size());
-        List<Object> joinTypes = new ArrayList<>(chain.size());
-        List<Object> invocations = new ArrayList<>(chain.size());
-        for (StreamFusionExecArrayUnnest unnest : chain) {
-            inputTypes.add((RowType) unnest.getInputEdges().get(0).getOutputType());
-            outputTypes.add((RowType) unnest.getOutputType());
-            joinTypes.add(unnest.streamFusionJoinType);
-            invocations.add(unnest.streamFusionInvocation);
-        }
-        try {
-            Class<?> translator = Class.forName(
-                    TRANSLATOR_CLASS, true, planner.getFlinkContext().getClassLoader());
-            Method translate = translator.getMethod(
-                    "translateChain", Transformation.class, List.class, List.class, List.class, List.class);
-            Transformation<RowData> result = (Transformation<RowData>)
-                    translate.invoke(null, input, inputTypes, outputTypes, joinTypes, invocations);
-            if (result == null) {
-                throw new IllegalStateException("A selected StreamFusion array UNNEST failed translation");
-            }
-            return result;
-        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
-            throw new IllegalStateException("Could not invoke the StreamFusion array UNNEST runtime", e);
-        } catch (InvocationTargetException e) {
-            throw new IllegalStateException("StreamFusion array UNNEST translation failed", e.getCause());
-        }
+        return StreamFusionStatelessRegion.translate(this, planner);
     }
 
     static List<StreamFusionExecArrayUnnest> adjacentChain(StreamFusionExecArrayUnnest root) {

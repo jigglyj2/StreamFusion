@@ -4,8 +4,6 @@
  */
 package tech.streamfusion.flink.sql;
 
-import static org.assertj.core.api.Assertions.assertThat;
-
 import java.util.List;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.table.types.DataType;
@@ -14,12 +12,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
-import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 
 class BoundedSortLimitParityTest extends SqlParityTestSupport {
     @Test
     void boundedRankPreservesTiesPartitionResetsAndGappedRanks() throws Exception {
-        assertParity(
+        assertFallbackParity(
                 "SELECT category, amount, rank_value FROM (SELECT category, amount, "
                         + "RANK() OVER (PARTITION BY category ORDER BY amount DESC) AS rank_value "
                         + "FROM (VALUES ('a', 9), ('a', 9), ('a', 8), ('a', 7), "
@@ -27,14 +24,14 @@ class BoundedSortLimitParityTest extends SqlParityTestSupport {
                         + "WHERE rank_value BETWEEN 2 AND 3",
                 false);
 
-        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        SqlFallbackAssertions.admission();
     }
 
     @ParameterizedTest(name = "rank-{0}")
-    @MethodSource("tech.streamfusion.flink.sql.TopNOrderingTypeParityTest#orderableTypes")
+    @MethodSource("tech.streamfusion.flink.sql.TopNOrderingTypeFallbackParityTest#orderableTypes")
     void everyFlinkOrderableTypeWorksAsABoundedRankKey(
             String description, TypeInformation<?> type, DataType dataType, Object low, Object high) throws Exception {
-        assertBatchDataStreamParity(
+        assertFallbackBatchDataStreamParity(
                 "SELECT metric, rank_value FROM (SELECT metric, RANK() OVER (ORDER BY metric ASC NULLS LAST) "
                         + "AS rank_value FROM bounded_rank_input) WHERE rank_value <= 3",
                 type,
@@ -42,7 +39,7 @@ class BoundedSortLimitParityTest extends SqlParityTestSupport {
                 List.of(Row.of(high), Row.of(low), Row.of(high), Row.of((Object) null)),
                 "bounded_rank_input");
 
-        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        SqlFallbackAssertions.admission();
     }
 
     @Test
@@ -52,44 +49,44 @@ class BoundedSortLimitParityTest extends SqlParityTestSupport {
                         + "AS input(id, label) LIMIT 3 OFFSET 1",
                 false);
 
-        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        SqlArchitectureAssertions.admission();
     }
 
     @Test
     void twoStageOrderByLimitOffsetMatchesFlinkByteForByte() throws Exception {
-        assertParity(
+        assertFallbackParity(
                 "SELECT id, label FROM (VALUES (3, 'c'), (1, 'a'), (1, 'again'), "
                         + "(CAST(NULL AS INT), 'null'), (4, 'd'), (2, 'b')) AS input(id, label) "
                         + "ORDER BY id ASC NULLS LAST, label DESC NULLS FIRST LIMIT 3 OFFSET 1",
                 false);
 
-        assertThat(StreamFusionPlannerFactory.nativeBoundedSortBatchCount()).isGreaterThan(0);
-        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        SqlFallbackAssertions.nativeBatchesAreZero(StreamFusionPlannerFactory.nativeBoundedSortBatchCount());
+        SqlFallbackAssertions.admission();
     }
 
     @Test
     void sortLimitTieAtTheCutoffMatchesFlinksSelectedPayloads() throws Exception {
-        assertParity(
+        assertFallbackParity(
                 "SELECT score, payload FROM (VALUES (1, 'first'), (1, 'second'), "
                         + "(1, 'third'), (1, 'fourth')) AS input(score, payload) "
                         + "ORDER BY score LIMIT 2",
                 false);
 
-        assertThat(StreamFusionPlannerFactory.nativeBoundedSortBatchCount()).isGreaterThan(0);
+        SqlFallbackAssertions.nativeBatchesAreZero(StreamFusionPlannerFactory.nativeBoundedSortBatchCount());
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("tech.streamfusion.flink.sql.TopNOrderingTypeParityTest#orderableTypes")
+    @MethodSource("tech.streamfusion.flink.sql.TopNOrderingTypeFallbackParityTest#orderableTypes")
     void everyFlinkOrderableTypeWorksAsASortLimitKey(
             String description, TypeInformation<?> type, DataType dataType, Object low, Object high) throws Exception {
-        assertBatchDataStreamParity(
+        assertFallbackBatchDataStreamParity(
                 "SELECT metric FROM bounded_sort_limit_input ORDER BY metric ASC NULLS LAST LIMIT 2 OFFSET 1",
                 type,
                 dataType,
                 List.of(Row.of(high), Row.of(low), Row.of(high), Row.of((Object) null)),
                 "bounded_sort_limit_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeBoundedSortBatchCount()).isGreaterThan(0);
-        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        SqlFallbackAssertions.nativeBatchesAreZero(StreamFusionPlannerFactory.nativeBoundedSortBatchCount());
+        SqlFallbackAssertions.admission();
     }
 }

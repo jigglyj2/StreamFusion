@@ -5,7 +5,60 @@ sidebar:
   order: 12
 ---
 
-**Current status:** streaming and bounded inner/cross and left `UNNEST`, with or without
+**Current status:** a standalone supported `UNNEST` stage remains eligible. Adjacent
+Calc/UNNEST and UNNEST/UNNEST combinations temporarily cause whole-plan Flink fallback under
+[architecture admission](/StreamFusion/development/architecture-admission/). This also affects
+computed collections when Flink adds an adjacent Calc. The shared native-region implementations
+remain covered by direct tests.
+
+Selected UNNEST nodes now build standalone protobuf fragments for the common planner region
+collector, alongside Calc, Expand, and row replication. Neither the collector nor the runtime
+requires a Calc/UNNEST-specific executor. Mixed-region tests cover complete changelog bytes and
+per-stage logical counts against Flink, including null collections/elements and retractions;
+the broader memory and metric-surface admission audit is still incomplete. Expand and row-replication
+output reservations now follow their Arrow buffers through downstream retention and producer close;
+kernel pre-allocation admission remains a separate unfinished requirement.
+
+Expand now produces at most 4,096 rows per native stream pull instead of materializing the
+complete input/projection Cartesian product. It preserves input-row-major projection order,
+including when a single input row has more than 4,096 projections, and retains only the input
+and cursor between pulls. Input slicing shares Arrow buffers. Single-projection chunks also
+reuse their evaluated buffers rather than performing an identity gather. Projection descriptors,
+selection indices, and repeated literal storage acquire managed-memory allowances before allocation;
+interleaving uses a conservative allowance based on the evaluated arrays, not average row width.
+Expand now uses Calc's shared expression-admission installation and projection-root scalar materializer,
+including declared-width admission for NULL fixed-binary literals. Cached literals are borrowed, and
+the immutable projection table is shared across invocations instead of cloning its nested vectors.
+Input-slice descriptors are admitted using the common Arrow descriptor estimate before slicing, then
+released before the temporary workspace is reduced to output ownership. These changes add no fusion
+pair rules or Java handoffs; row-major interleaving remains the Flink-semantic reason for the custom
+physical operator rather than a projection-major DataFusion union.
+This is a row-count bound, not a fixed byte limit: wide or deeply nested values still consume
+their actual storage. General expression scratch-space admission remains unfinished. Generated
+Flink-codegen tests cover multi-pull changelog ordering and each stage's logical record counts;
+native tests also cover sliced nested values, large projection lists, cancellation, and denial.
+New generated cases exercise arithmetic, column-dependent REPEAT, scalar REPEAT and typed NULL projections
+through surrounding Calc stages, with all RowKinds and varied batch boundaries. Allocation observations
+check that large REPEAT, declared-width NULL binary, and wide bufferless slicing fail before their
+payload/descriptor allocation. Arbitrary unaudited expression policies and complete metric-surface
+admission remain unfinished; this does not remove the production composition gate or establish
+benchmark performance.
+
+SQL Expand and Calc now declare the shared plan-protocol-3 timestamp policy: like Flink's generated
+SQL collectors, they drop StreamRecord timestamps while retaining SQL rowtime columns and RowKinds.
+The common native stage boundary implements this behavior; it is not a Calc/Expand fusion adapter.
+Payload arrays are forwarded directly, and metadata vectors use the existing managed projection
+materializer. Existing protocol-1/2 plans retain their previous envelope semantics.
+Generated Calc/Expand/Calc harness coverage compares serialized rows and record timestamps, all four
+RowKinds, watermarks, idle/active transitions, latency markers, pre-barrier callbacks and terminal
+paths. It discovers each stage's registered Flink metric subtree and latency histogram scopes,
+comparing names/types, deterministic counters/gauges and histogram counts while checking actual
+Flink meter/histogram implementations and runtime-dependent value semantics. This covers the tested
+INT/NULL projection shape, including multi-pull output; it is not a claim of full operator admission
+or in-flight checkpoint recovery. A separate generated UNION test covers timestamp-clearing and
+timestamp-preserving branches in the same native tree.
+
+**Retained implementation scope:** streaming and bounded inner/cross and left `UNNEST`, with or without
 `WITH ORDINALITY`, over directly
 referenced arrays of supported scalar values are accelerated. Inner/cross expansion also supports
 arrays of rows whose fields are scalars or recursively nested arrays. Inner/cross and left expansion of maps with supported scalar or
@@ -16,7 +69,8 @@ elements are recursively nested arrays are also accelerated, with each inner arr
 Computed collection operands are accelerated when their complete expression is supported by
 StreamFusion Calc. This includes `ARRAY[...]`, supported array and map functions, and nested row
 fields containing supported arrays, maps, or multisets. Other table functions and expansion forms
-fall back to Flink. Adjacent supported `UNNEST` operations are accelerated as one native plan.
+fall back to Flink. Adjacent supported `UNNEST` implementations form one native plan in direct tests,
+but SQL selection is temporarily gated pending complete stage metric parity.
 
 ## SQL example
 

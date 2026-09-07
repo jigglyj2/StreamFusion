@@ -44,6 +44,6 @@ class Sha2DynamicParityTest extends SqlParityTestSupport {
                         Row.of((Object) null)),
                 "sha2_dynamic_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 }

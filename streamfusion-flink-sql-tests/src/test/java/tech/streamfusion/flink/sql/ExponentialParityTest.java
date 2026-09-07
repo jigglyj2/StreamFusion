@@ -43,6 +43,6 @@ class ExponentialParityTest extends SqlParityTestSupport {
                         Row.of((Object) null)),
                 "exponential_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isGreaterThan(0);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 }

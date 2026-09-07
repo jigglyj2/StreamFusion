@@ -21,6 +21,27 @@ import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 
 class StringRepeatParityTest extends SqlParityTestSupport {
     @Test
+    void generatedNullableUnicodeAndNestedRepeatsStayNative() throws Exception {
+        var rows = new java.util.ArrayList<Row>();
+        for (int seed = 0; seed < 4; seed++) {
+            var random = new java.util.Random(seed);
+            for (int index = 0; index < 32; index++) {
+                rows.add(Row.of(index % 7 == 0 ? null : (index % 2 == 0 ? "é" : "界").repeat(random.nextInt(129))));
+            }
+        }
+        assertDataStreamParity(
+                "SELECT REPEAT(REPEAT(metric, 2), 3), REPEAT(metric, CHAR_LENGTH(metric)), "
+                        + "REPEAT(metric, -1), REPEAT(metric, 0) FROM string_input",
+                Types.STRING,
+                DataTypes.STRING(),
+                rows,
+                "string_input");
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount())
+                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
+                .isGreaterThan(0);
+    }
+
+    @Test
     void repeatsStringsWithLiteralAndComputedCounts() throws Exception {
         assertDataStreamParity(
                 "SELECT REPEAT(metric, 2), REPEAT(metric, 0), REPEAT(metric, -1), "
@@ -30,7 +51,7 @@ class StringRepeatParityTest extends SqlParityTestSupport {
                 Arrays.asList(Row.of("ab"), Row.of("ä"), Row.of(""), Row.of((Object) null)),
                 "string_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount())
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())
                 .isGreaterThan(0);
     }

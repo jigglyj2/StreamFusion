@@ -9,37 +9,30 @@
  */
 package tech.streamfusion.flink.sql;
 
-import static org.assertj.core.api.Assertions.assertThat;
-
 import org.junit.jupiter.api.Test;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
-import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 
 class ValuesUnnestParityTest extends SqlParityTestSupport {
     @Test
-    void sourceFreeArrayConstructorUnnestUsesNativeExpansion() throws Exception {
+    void sourceFreeArrayConstructorUnnestUsesRetainedExpansion() throws Exception {
         assertParity(
                 "SELECT item, ord_idx FROM UNNEST(ARRAY[1, CAST(NULL AS INT), 3]) "
                         + "WITH ORDINALITY AS expanded(item, ord_idx)",
                 true);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
-                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
-                .isEqualTo(1);
-        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
+        SqlArchitectureAssertions.admission();
     }
 
     @Test
-    void sourceFreeMapConstructorUnnestUsesNativeExpansion() throws Exception {
+    void sourceFreeMapConstructorUnnestUsesRetainedExpansion() throws Exception {
         assertParity(
                 "SELECT map_key, map_value, ord_idx "
                         + "FROM UNNEST(MAP['first', 1, 'nullable', CAST(NULL AS INT)]) "
                         + "WITH ORDINALITY AS expanded(map_key, map_value, ord_idx)",
                 true);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
-                .withFailMessage(StreamFusionPlanningDiagnostics.explain())
-                .isEqualTo(1);
-        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
+        SqlArchitectureAssertions.admission();
     }
 }

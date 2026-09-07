@@ -38,7 +38,7 @@ class StringTranslateParityTest extends SqlParityTestSupport {
     void dynamicAlphabetsMatchFlinkByteForByte(String sql) throws Exception {
         assertParity(sql, true);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount())
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())
                 .isGreaterThan(0);
     }

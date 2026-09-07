@@ -42,7 +42,6 @@ import org.apache.flink.util.CloseableIterator;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.extension.ExtendWith;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
-import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 
 @ExtendWith(SharedMiniClusterExtension.class)
 abstract class SqlParityTestSupport {
@@ -87,6 +86,26 @@ abstract class SqlParityTestSupport {
         StreamFusionPlannerFactory.resetMetrics();
     }
 
+    protected static void assertFallbackParity(String sql, boolean streaming) throws Exception {
+        assertParity(sql, streaming, false);
+        SqlFallbackAssertions.admission();
+    }
+
+    protected static void assertFallbackBatchDataStreamParity(
+            String sql, TypeInformation<?> type, DataType logicalType, List<Row> rows, String tableName)
+            throws Exception {
+        assertDataStreamParity(sql, type, logicalType, rows, tableName, false, false);
+        SqlFallbackAssertions.admission();
+    }
+
+    protected static void assertFallbackIntegerDataStreamParity(String sql) throws Exception {
+        assertFallbackDataStreamParity(
+                sql,
+                Types.INT,
+                Arrays.asList(Row.of(1), Row.of(2), Row.of(3), Row.of(4), Row.of((Object) null)),
+                "integer_input");
+    }
+
     protected static void assertParity(String sql, boolean streaming) throws Exception {
         assertParity(sql, streaming, true);
     }
@@ -97,11 +116,11 @@ abstract class SqlParityTestSupport {
 
         assertThat(StreamFusionPlannerFactory.createdPlannerCount()).isEqualTo(1);
         assertThat(StreamFusionPlannerFactory.translatedPlanCount()).isGreaterThan(0);
-        assertThat(StreamFusionPlanningDiagnostics.explain())
-                .withFailMessage(
-                        "Unexpected StreamFusion acceleration outcome for SQL:%n%s%n%s",
-                        sql, StreamFusionPlanningDiagnostics.explain())
-                .contains(accelerationExpected ? "Accelerated: yes" : "Accelerated: no");
+        if (accelerationExpected) {
+            SqlArchitectureAssertions.admission();
+        } else {
+            SqlFallbackAssertions.unaccelerated();
+        }
         assertThat(streamFusionResult).isEqualTo(flinkResult);
     }
 
@@ -166,11 +185,11 @@ abstract class SqlParityTestSupport {
 
         assertThat(StreamFusionPlannerFactory.createdPlannerCount()).isEqualTo(1);
         assertThat(StreamFusionPlannerFactory.translatedPlanCount()).isGreaterThan(0);
-        assertThat(StreamFusionPlanningDiagnostics.explain())
-                .withFailMessage(
-                        "Unexpected StreamFusion acceleration outcome for SQL:%n%s%n%s",
-                        sql, StreamFusionPlanningDiagnostics.explain())
-                .contains(accelerationExpected ? "Accelerated: yes" : "Accelerated: no");
+        if (accelerationExpected) {
+            SqlArchitectureAssertions.admission();
+        } else {
+            SqlFallbackAssertions.unaccelerated();
+        }
         assertThat(streamFusionResult).isEqualTo(flinkResult);
     }
 

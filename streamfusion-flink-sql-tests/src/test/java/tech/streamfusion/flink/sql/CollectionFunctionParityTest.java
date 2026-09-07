@@ -138,7 +138,7 @@ class CollectionFunctionParityTest extends SqlParityTestSupport {
     }
 
     private static void assertNativeCalcRan() {
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount())
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())
                 .isGreaterThan(0);
     }

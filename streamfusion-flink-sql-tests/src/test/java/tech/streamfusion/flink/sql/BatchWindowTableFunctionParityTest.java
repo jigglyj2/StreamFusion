@@ -35,10 +35,10 @@ class BatchWindowTableFunctionParityTest extends SqlParityTestSupport {
         byte[] streamFusion = execute(windowCall, true);
 
         assertThat(streamFusion).isEqualTo(flink);
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount())
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount())
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())
                 .isGreaterThan(0);
-        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        SqlArchitectureAssertions.admission();
     }
 
     private static byte[] execute(String windowCall, boolean streamFusionEnabled) throws Exception {

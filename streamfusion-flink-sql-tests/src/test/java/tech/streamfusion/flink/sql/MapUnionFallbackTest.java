@@ -37,7 +37,7 @@ class MapUnionFallbackTest extends SqlParityTestSupport {
                 Arrays.asList(Row.of(first), Row.of(second), Row.of((Object) null)),
                 "map_input");
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isZero();
         assertThat(StreamFusionPlanningDiagnostics.explain())
                 .contains("MapDataForMapUnion")
                 .contains("Arrow maps require non-null keys")

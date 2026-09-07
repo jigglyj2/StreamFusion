@@ -26,7 +26,7 @@ class TemporalExtractFallbackTest extends SqlParityTestSupport {
                 true,
                 false);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isZero();
         assertThat(StreamFusionPlanningDiagnostics.explain())
                 .contains("timestamp EXTRACT stays on Flink")
                 .contains("session-zone and subsecond precision semantics")
@@ -42,7 +42,7 @@ class TemporalExtractFallbackTest extends SqlParityTestSupport {
                 true,
                 false);
 
-        assertThat(StreamFusionPlannerFactory.nativeCalcBatchCount()).isZero();
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isZero();
         assertThat(StreamFusionPlanningDiagnostics.explain())
                 .contains("DATE EXTRACT field CENTURY stays on Flink")
                 .contains("BCE and year-zero calendar conventions")
