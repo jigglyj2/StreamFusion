@@ -41,6 +41,15 @@ Virtual physical stages observe input and output watermarks independently. Each 
 updated on arrival at that physical stage; `currentInputWatermark` uses Flink's minimum over those
 gauges, including an idle input's last value. `currentOutputWatermark` records only emitted
 watermarks. The input gauge therefore need not advance when idleness allows the output to advance.
+Multi-input native stages also publish Flink's `currentInput1Watermark`,
+`currentInput2Watermark`, and subsequent per-port gauges, using the same input frontiers.
+The shared metric tree derives these from physical arity, not a join-specific registration list.
+Generated binary-inner-MultiJoin tests compare the actual Flink operator and generated Calc
+against the common native keyed region on memory and RocksDB: full default metric surfaces,
+logical counts, stage identities, latency histograms, all four RowKinds, cleared record timestamps,
+idle/reactivation and pre-barrier events. A 5,000-row multiplicity exercises output beyond one
+batch while requiring native batches to stay within 4,096 rows and memory credit to release on close.
+This scoped conformance is not a production-admission or benchmark claim.
 The control and metric trees derive physical input arity from the same protobuf traversal rather
 than an operator-pair table. Generated tests compare all four stages of nested binary/unary trees
 with real Flink control operators and Flink's gauge implementations across idle/reactivation events.

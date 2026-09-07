@@ -44,6 +44,12 @@ binary shapes still require their paged-state/output cursor to join the common e
 and checkpoint lifecycle. This diagnostic correction does not
 unlock Q3 or remove its remaining memory and metric requirements.
 
+The binary **inner** join and its downstream generated Calc now have shared runtime conformance
+for both backends, including the full default metric surface, per-input watermarks, latency,
+all four RowKinds and bounded hot-key fan-out. Outer binary MultiJoin is deliberately not lowered
+to the regular join: its retraction/null-padding sequence differs. It remains on the separate,
+unadmitted MultiJoin path. Q3 is an inner join and is unaffected by that semantic restriction.
+
 The next work is limited to this production path:
 
 1. Preserve shape-aware admission and precise whole-plan fallback for unsupported shapes.

@@ -64,13 +64,27 @@ class StreamFusionMultiJoinAdmissionTest {
     }
 
     private StreamExecMultiJoin join(int inputs, boolean equiKeys) {
+        return join(inputs, equiKeys, FlinkJoinType.INNER);
+    }
+
+    @Test
+    void outerBinaryMultiJoinMustNotBorrowRegularJoinsChangelogContract() {
+        var join = join(2, true, FlinkJoinType.LEFT);
+        assertThat(FlinkExecNodeAccess.binaryMultiJoinSpec(join)).isNull();
+        assertThat(new StreamFusionExecGraphProcessor().convert(join)).isInstanceOf(StreamFusionExecMultiJoin.class);
+        var reasons = new ArrayList<String>();
+        StreamFusionArchitectureSupport.collect(new ExecNodeGraph(List.of(join)), reasons);
+        assertThat(String.join("\n", reasons)).contains("checkpoint/control lifecycle");
+    }
+
+    private StreamExecMultiJoin join(int inputs, boolean equiKeys, FlinkJoinType type) {
         var joinTypes = new ArrayList<FlinkJoinType>();
         var conditions = new ArrayList<RexNode>();
         var properties = new ArrayList<InputProperty>();
         var uniqueKeys = new ArrayList<List<int[]>>();
         var attributes = new java.util.HashMap<Integer, List<ConditionAttributeRef>>();
         for (int index = 0; index < inputs; index++) {
-            joinTypes.add(FlinkJoinType.INNER);
+            joinTypes.add(index == 0 ? FlinkJoinType.INNER : type);
             conditions.add(index == 0 ? null : rex.makeCall(SqlStdOperatorTable.EQUALS, ref(0), ref(index)));
             properties.add(InputProperty.DEFAULT);
             uniqueKeys.add(List.of());

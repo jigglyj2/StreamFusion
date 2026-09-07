@@ -147,6 +147,15 @@ public final class StreamFusionNativeMetricTree implements AutoCloseable {
                     new LatencyStats(taskMetrics.addGroup("latency"), historySize, subtaskIndex, stageId, granularity),
                     NativePhysicalPlan.children(operator).size());
             group.gauge("currentInputWatermark", new MinWatermarkGauge(stage.inputs));
+            // MultipleInputStreamTask exposes each physical input frontier as well
+            // as their minimum. Preserve those scopes for every fused multi-input stage.
+            if (stage.inputs.length > 1) {
+                for (int input = 0; input < stage.inputs.length; input++) {
+                    group.gauge(
+                            org.apache.flink.runtime.metrics.MetricNames.currentInputWatermarkName(input + 1),
+                            stage.inputs[input]);
+                }
+            }
             group.gauge("currentOutputWatermark", stage.outputWatermark);
             stages.put(id, stage);
         }

@@ -28,10 +28,16 @@ final class KeyedNativeMetricHarness extends KeyedMultiInputStreamOperatorTestHa
     final DataOutputSerializer output = new DataOutputSerializer(128);
     final List<StreamElement> controls = new ArrayList<>();
     final FlinkManagedMemory memory;
+    int maxOutputBatchRows;
     private final RowType outputType;
 
     KeyedNativeMetricHarness(boolean rocks, byte[] plan, RowType type, List<Long> states) throws Exception {
-        super(new StreamFusionNativeRegionOperatorFactory(List.of(type), type, plan, states), 16, 1, 0);
+        this(rocks, plan, List.of(type), type, states);
+    }
+
+    KeyedNativeMetricHarness(boolean rocks, byte[] plan, List<RowType> inputTypes, RowType type, List<Long> states)
+            throws Exception {
+        super(new StreamFusionNativeRegionOperatorFactory(inputTypes, type, plan, states), 16, 1, 0);
         outputType = type;
         var previous = getEnvironment().getMemoryManager();
         var field = getEnvironment().getClass().getDeclaredField("memManager");
@@ -43,13 +49,15 @@ final class KeyedNativeMetricHarness extends KeyedMultiInputStreamOperatorTestHa
                         .build());
         previous.shutdown();
         config.setStateKeySerializer(IntSerializer.INSTANCE);
-        setKeySelector(0, ignored -> 0); // One subtask owns every native key group.
+        // One subtask owns every native key group; Rust performs the real key-group assignment.
+        for (int port = 0; port < inputTypes.size(); port++) setKeySelector(port, ignored -> 0);
         setStateBackend(new StreamFusionStateBackend(
                 rocks ? new EmbeddedRocksDBStateBackend(true) : new HashMapStateBackend()));
         setOutputCreator(ignored -> new CollectorOutput<ArrowRowDataBatch>(controls) {
             @Override
             public void collect(StreamRecord<ArrowRowDataBatch> record) {
                 var batch = record.getValue();
+                maxOutputBatchRows = Math.max(maxOutputBatchRows, batch.size());
                 for (int row = 0; row < batch.size(); row++) {
                     var value = batch.rowView(row);
                     value.setRowKind(batch.rowKind(row));

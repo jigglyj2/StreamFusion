@@ -663,6 +663,11 @@ final class FlinkExecNodeAccess {
         if (joinTypes.size() != 2 || conditions.size() != 2) {
             return null;
         }
+        // Outer MultiJoin's retraction/null-padding sequence is not equivalent to
+        // StreamingJoin's. Keep that physical contract on the MultiJoin path.
+        if (joinTypes.stream().anyMatch(type -> type != FlinkJoinType.INNER)) {
+            return null;
+        }
         List<RowType> inputTypes = join.getInputEdges().stream()
                 .map(edge -> (RowType) edge.getOutputType())
                 .collect(Collectors.toList());
