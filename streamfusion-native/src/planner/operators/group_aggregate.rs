@@ -33,7 +33,12 @@ use crate::{decode_plan, proto};
 
 mod accumulator;
 mod control;
+pub(super) mod datafusion_compute;
+#[cfg(test)]
+mod datafusion_compute_tests;
+pub(super) mod datafusion_rows;
 pub(crate) mod execution_plan;
+pub(super) mod flink_udaf;
 mod mini_batch;
 mod output_admission;
 mod partial_batch;
@@ -43,7 +48,7 @@ mod values;
 pub(super) use planning::lower_call;
 use planning::*;
 use values::*;
-pub(super) use values::{aggregate_array, row_aggregate_values, value_tag};
+pub(super) use values::{aggregate_array, aggregate_value, row_aggregate_values, value_tag};
 
 use state_codec::accumulator_is_neutral;
 #[cfg(test)]
@@ -98,7 +103,7 @@ pub(crate) struct GroupAggregateProcessor {
     schema_reservation: Option<HostMemoryReservation>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(super) struct Call {
     pub(super) function: proto::AggregateFunction,
     pub(super) input_index: Option<usize>,
@@ -573,6 +578,11 @@ impl GroupAggregateProcessor {
             .sibling("group aggregate historical output events");
         event_memory.resize(self.event_admission(&batch, &staged_values, &row_key_indices)?)?;
 
+        let kernels = datafusion_compute::Kernels::new(&self.calls)?;
+        let row_inputs = datafusion_rows::RowInputs::new(&self.calls, &batch)?;
+        let mut row_kernels = (0..unique_keys.len())
+            .map(|_| None)
+            .collect::<Vec<Option<datafusion_rows::RowKernels>>>();
         for row in 0..batch.num_rows() {
             let key_index = row_key_indices[row];
             let accumulate = self.accumulates(&batch, row)?;
@@ -616,7 +626,21 @@ impl GroupAggregateProcessor {
             let current =
                 staged_values[key_index].get_or_insert_with(|| AccumulatorState::new(&self.calls));
             let previous_values = current.values(&self.calls);
-            current.apply(&self.calls, &batch, row, accumulate)?;
+            if row_kernels[key_index].is_none() {
+                row_kernels[key_index] = Some(datafusion_rows::RowKernels::new(
+                    &self.calls,
+                    &kernels,
+                    current,
+                )?);
+            }
+            row_kernels[key_index].as_mut().unwrap().apply(
+                current,
+                &self.calls,
+                &row_inputs,
+                &batch,
+                row,
+                accumulate,
+            )?;
             let current_values = current.values(&self.calls);
             let input_row = u32::try_from(row).map_err(|_| {
                 DataFusionError::Execution(
@@ -740,15 +764,27 @@ impl GroupAggregateProcessor {
             })
             .collect::<Result<Vec<_>>>()?;
         drop(existing);
-        for row in 0..batch.num_rows() {
-            let index = row_key_indices[row];
-            let accumulate = self.accumulates(&batch, row)?;
-            if staged[index].1.row_count == 0 && !accumulate {
-                continue;
-            }
-            staged[index]
-                .1
-                .apply(&self.calls, &batch, row, accumulate)?;
+        let kernels = datafusion_compute::Kernels::new(&self.calls)?;
+        let mut group_rows = vec![Vec::new(); keys.len()];
+        let mut accumulate = Vec::with_capacity(batch.num_rows());
+        for (row, &key) in row_key_indices.iter().enumerate() {
+            group_rows[key].push(row);
+            accumulate.push(self.accumulates(&batch, row)?);
+        }
+        let row_inputs = accumulate
+            .contains(&false)
+            .then(|| datafusion_rows::RowInputs::new(&self.calls, &batch))
+            .transpose()?;
+        for (state, rows) in staged.iter_mut().zip(group_rows) {
+            state.1.apply_input_rows(
+                &self.calls,
+                &kernels,
+                &batch,
+                &rows,
+                &accumulate,
+                row_inputs.as_ref(),
+                true,
+            )?;
         }
         let mutations = keys
             .into_iter()

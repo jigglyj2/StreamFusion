@@ -20,6 +20,24 @@ snapshot/restore interface. Output admission follows its Arrow buffers through r
 and producer close, without transferring to Java between native stages. Plan/codecs and cached
 schemas have independent lifetime reservations, and failed schema preparation is transactional.
 
+Aggregate computation now delegates compatible calls to DataFusion accumulators. Bounded
+aggregation and local/append-only mini-batches call `update_batch` on Arrow group selections;
+streaming aggregation retains a DataFusion accumulator per loaded group during
+an incoming batch and evaluates every required intermediate changelog result. Expressions and
+input casts are prepared once per batch, not rebuilt per row or group. This includes COUNT,
+integer SUM/SUM0, integer AVG's sum component, and append-only MIN/MAX over non-floating types.
+Flink-specific adapters retain integer result widths, AVG division, null/SUM0 behavior,
+canonical state encoding, key ownership, bundle boundaries, and logical-record metrics.
+
+Custom arithmetic remains for floating sums/averages (vectorized reassociation changes bits),
+decimal arithmetic (Flink overflow can poison the accumulator), DISTINCT multiplicities, and
+arbitrarily retractable extrema. DataFusion's distinct sets and ordered sliding extrema do not
+represent the same signed/retractable state. Mixed-changelog bundles use the same DataFusion accumulators while retaining their
+ordered state updates and resetting the temporary cache at each Flink bundle boundary. These are specific semantic exceptions; wrapping custom computation in
+an `ExecutionPlan` is not itself DataFusion compute reuse. Generated direct-native tests compare
+bounded results to unmodified Flink SQL on both state backends, and the existing generated
+streaming suites compare every changelog record. Production admission remains gated.
+
 Planned schemas and row codecs now have a separate shape-based admission before Arrow type
 lowering, including recursive codec construction's temporary null arrays. Compact protobuf byte
 length alone underestimated these allocations: a controlled 64-field nested-key constructor

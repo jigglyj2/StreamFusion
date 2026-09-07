@@ -134,66 +134,133 @@ impl GroupAggregateProcessor {
             RandomState::new(),
         );
         let mut events = BundleOutputEvents::new(self.calls.len());
-        for (row, index) in row_keys.into_iter().enumerate() {
-            let key = &keys[index];
-            if !self.pending.contains_key(key) {
-                let state = working
-                    .get(key)
-                    .expect("every incoming key was prefetched or flushed");
-                self.pending_order.push(key.clone());
-                self.pending.insert(
-                    key.clone(),
-                    PendingGroup {
-                        grouping_row: grouping_rows[row].clone(),
-                        original: state.clone(),
-                        current: state.clone(),
-                    },
-                );
-            }
-            let accumulate = if partials.is_some() {
-                true
-            } else {
-                self.accumulates(&batch, row)?
-            };
-            let group = self.pending.get_mut(key).expect("staged group");
-            if let Some(partials) = partials {
-                group
-                    .current
-                    .get_or_insert_with(|| AccumulatorState::new(&self.calls))
-                    .merge(&self.calls, &partials[row])?;
-            } else if self.calls.is_empty() {
-                match apply_count_change(
-                    group.current.as_ref().map(|state| state.row_count),
-                    accumulate,
-                ) {
-                    CountChange::Ignored => {}
-                    CountChange::Present(count, _) => {
-                        group.current = Some(AccumulatorState {
-                            row_count: count,
-                            accumulators: Vec::new(),
-                        })
-                    }
-                    CountChange::Removed => {
-                        group.current = Some(AccumulatorState {
-                            row_count: 0,
-                            accumulators: Vec::new(),
-                        })
+        let append_only = partials.is_none()
+            && !self.calls.is_empty()
+            && (0..batch.num_rows())
+                .map(|row| self.accumulates(&batch, row))
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .all(|v| v);
+        if append_only {
+            let kernels = datafusion_compute::Kernels::new(&self.calls)?;
+            let mut offset = 0;
+            while offset < batch.num_rows() {
+                let length = (trigger - self.pending_elements).min(batch.num_rows() - offset);
+                let mut groups = HashMap::<usize, Vec<usize>, RandomState>::default();
+                for row in offset..offset + length {
+                    let index = row_keys[row];
+                    let key = &keys[index];
+                    groups.entry(index).or_default().push(row);
+                    if !self.pending.contains_key(key) {
+                        let state = working.get(key).expect("incoming state was prefetched");
+                        self.pending_order.push(key.clone());
+                        self.pending.insert(
+                            key.clone(),
+                            PendingGroup {
+                                grouping_row: grouping_rows[row].clone(),
+                                original: state.clone(),
+                                current: state.clone(),
+                            },
+                        );
                     }
                 }
-            } else if accumulate
-                || group
-                    .current
-                    .as_ref()
-                    .is_some_and(|state| state.row_count != 0)
-            {
-                group
-                    .current
-                    .get_or_insert_with(|| AccumulatorState::new(&self.calls))
-                    .apply(&self.calls, &batch, row, accumulate)?;
+                for (index, rows) in groups {
+                    self.pending
+                        .get_mut(&keys[index])
+                        .expect("group was initialized")
+                        .current
+                        .get_or_insert_with(|| AccumulatorState::new(&self.calls))
+                        .apply_append_batch(&self.calls, &kernels, &batch, &rows)?;
+                }
+                offset += length;
+                self.pending_elements += length;
+                if self.pending_elements == trigger {
+                    self.flush_to_working(&mut working, &mut dirty, &mut events);
+                }
             }
-            self.pending_elements += 1;
-            if self.pending_elements == trigger {
-                self.flush_to_working(&mut working, &mut dirty, &mut events);
+        } else {
+            let kernels = datafusion_compute::Kernels::new(&self.calls)?;
+            let row_inputs = partials
+                .is_none()
+                .then(|| datafusion_rows::RowInputs::new(&self.calls, &batch))
+                .transpose()?;
+            let mut row_kernels =
+                HashMap::<StateKey, datafusion_rows::RowKernels, RandomState>::default();
+            for (row, index) in row_keys.into_iter().enumerate() {
+                let key = &keys[index];
+                if !self.pending.contains_key(key) {
+                    let state = working
+                        .get(key)
+                        .expect("every incoming key was prefetched or flushed");
+                    self.pending_order.push(key.clone());
+                    self.pending.insert(
+                        key.clone(),
+                        PendingGroup {
+                            grouping_row: grouping_rows[row].clone(),
+                            original: state.clone(),
+                            current: state.clone(),
+                        },
+                    );
+                }
+                let accumulate = if partials.is_some() {
+                    true
+                } else {
+                    self.accumulates(&batch, row)?
+                };
+                let group = self.pending.get_mut(key).expect("staged group");
+                if let Some(partials) = partials {
+                    group
+                        .current
+                        .get_or_insert_with(|| AccumulatorState::new(&self.calls))
+                        .merge(&self.calls, &partials[row])?;
+                } else if self.calls.is_empty() {
+                    match apply_count_change(
+                        group.current.as_ref().map(|state| state.row_count),
+                        accumulate,
+                    ) {
+                        CountChange::Ignored => {}
+                        CountChange::Present(count, _) => {
+                            group.current = Some(AccumulatorState {
+                                row_count: count,
+                                accumulators: Vec::new(),
+                            })
+                        }
+                        CountChange::Removed => {
+                            group.current = Some(AccumulatorState {
+                                row_count: 0,
+                                accumulators: Vec::new(),
+                            })
+                        }
+                    }
+                } else if accumulate
+                    || group
+                        .current
+                        .as_ref()
+                        .is_some_and(|state| state.row_count != 0)
+                {
+                    let current = group
+                        .current
+                        .get_or_insert_with(|| AccumulatorState::new(&self.calls));
+                    if !row_kernels.contains_key(key) {
+                        row_kernels.insert(
+                            key.clone(),
+                            datafusion_rows::RowKernels::new(&self.calls, &kernels, current)?,
+                        );
+                    }
+                    row_kernels.get_mut(key).unwrap().apply(
+                        current,
+                        &self.calls,
+                        row_inputs.as_ref().expect("raw bundle input"),
+                        &batch,
+                        row,
+                        accumulate,
+                    )?;
+                }
+                self.pending_elements += 1;
+                if self.pending_elements == trigger {
+                    self.flush_to_working(&mut working, &mut dirty, &mut events);
+                    row_kernels.clear();
+                }
             }
         }
         // Pending owns its retained credit before temporary historical/cache credit is released.

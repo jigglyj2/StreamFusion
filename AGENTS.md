@@ -4,6 +4,18 @@
 
 We are creating a Flink accelerator on top of Apache DataFusion. This means we'll use DataFusion to accelerate operators where possible, otherwise we'll create our own based on Arroyo and RisingWave code. The rust layer is just responsible for execution, the existing Flink code is responsible for snapshotting, checkpointing, distribution, recovery, and planning. If you need to reference external code, check if it is in ~/data, and if not, clone it there.
 
+Native operators must delegate computation to DataFusion physical operators, aggregate
+accumulators, window evaluators, expressions, and kernels wherever they preserve Flink
+semantics. Implementing DataFusion's `ExecutionPlan` interface around a handwritten
+algorithm does not satisfy this rule. Keep custom code limited to the Flink-specific
+state, changelog, timer, ownership, and semantic adaptations that DataFusion cannot
+provide. Audit bounded joins, aggregation, sorting, and windows against DataFusion
+before introducing or retaining a custom compute path. Document the concrete semantic
+reason for every remaining custom computation and test that difference; a general
+claim that an operator is streaming is not sufficient justification. Reuse DataFusion
+within streaming stateful operators too, without changing Flink's observable changelog
+or batching away required intermediate results.
+
 ## Project Structure & Module Organization
 
 Structure this project like Flink and use Flink's own module boundaries as the default model.

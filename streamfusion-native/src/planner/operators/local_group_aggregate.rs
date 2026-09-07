@@ -66,6 +66,7 @@ impl LocalGroupAggregateProcessor {
     }
 
     fn process_accounted(&mut self, batch: RecordBatch) -> Result<RecordBatch> {
+        let kernels = super::group_aggregate::datafusion_compute::Kernels::new(&self.calls)?;
         let grouping_rows = self.encode_grouping_rows(&batch)?;
         let mut output_keys = Vec::new();
         let mut output_accumulators = Vec::new();
@@ -74,27 +75,47 @@ impl LocalGroupAggregateProcessor {
         } else {
             self.plan.mini_batch_size as usize
         };
+        let accumulate = (0..batch.num_rows())
+            .map(|row| self.accumulates(&batch, row))
+            .collect::<Result<Vec<_>>>()?;
+        let row_inputs = accumulate
+            .contains(&false)
+            .then(|| super::group_aggregate::datafusion_rows::RowInputs::new(&self.calls, &batch))
+            .transpose()?;
         let mut offset = 0;
         while offset < batch.num_rows() {
             let length = (trigger - self.pending_elements).min(batch.num_rows() - offset);
+            let mut groups = HashMap::<Vec<u8>, Vec<usize>, RandomState>::default();
             for row in offset..offset + length {
                 let key = self.key(&batch, row)?;
-                let accumulate = self.accumulates(&batch, row)?;
-                let pending = match self.pending.entry(key) {
-                    hashbrown::hash_map::Entry::Occupied(entry) => entry.into_mut(),
-                    hashbrown::hash_map::Entry::Vacant(entry) => {
-                        self.pending_order.push(entry.key().clone());
-                        entry.insert(PendingLocal {
+                groups.entry(key.clone()).or_default().push(row);
+                if !self.pending.contains_key(&key) {
+                    self.pending_order.push(key.clone());
+                    self.pending.insert(
+                        key,
+                        PendingLocal {
                             grouping_row: grouping_rows
                                 .as_ref()
                                 .map_or_else(Vec::new, |rows| rows.row(row).as_ref().to_vec()),
                             accumulator: AccumulatorState::new(&self.calls),
-                        })
-                    }
-                };
-                pending
+                        },
+                    );
+                }
+            }
+            for (key, rows) in groups {
+                self.pending
+                    .get_mut(&key)
+                    .expect("group was initialized")
                     .accumulator
-                    .apply(&self.calls, &batch, row, accumulate)?;
+                    .apply_input_rows(
+                        &self.calls,
+                        &kernels,
+                        &batch,
+                        &rows,
+                        &accumulate,
+                        row_inputs.as_ref(),
+                        false,
+                    )?;
             }
             self.pending_elements += length;
             offset += length;
