@@ -48,6 +48,11 @@ exceptions and must use a StreamFusion connector or a lightweight Flink RowData 
 batch view. EXPLAIN output must state why the whole plan fell back and give a reason for
 every operator that prevented acceleration.
 
+This all-or-nothing replacement granularity is StreamFusion's primary intentional and
+allowed divergence from DataFusion Comet. StreamFusion must fall back the complete plan
+instead of mixing StreamFusion and Flink intermediate operators. All other deviations
+from Comet require a documented Flink-semantic or architectural justification.
+
 Fuse adjacent Rust operators into one native DataFusion execution-plan tree. They must
 exchange Arrow `RecordBatch` streams directly using shared, reference-counted buffers;
 the handoff between adjacent native operators must not serialize or copy whole batches.
@@ -83,8 +88,10 @@ sink) must satisfy all of the following before its functionality is considered a
    routing metadata. Decode the frame exactly once at the receiving native-plan edge; do not use
    a proprietary row encoding or expose the frame as the logical input/output of operators beyond
    that exchange edge.
-2. Account for every native allocation, including DataFusion and custom Rust state, through
-   Flink's managed/off-heap memory accounting and allocator budget.
+2. Follow Comet's reservation-based memory model: account for large buffers, retained
+   DataFusion/custom Rust state, and memory that grows with input or state size through
+   Flink's managed/off-heap budget. Small, bounded, short-lived allocations do not require
+   individual reservations; apply the native-memory policy below.
 3. Expose the same metric surface and semantics as the corresponding Flink operator,
    including operator-specific metrics and logical-record I/O counters.
 4. Be directly composable with adjacent native intermediate operators inside one fused
@@ -154,10 +161,27 @@ redefine a Flink metric. Generated parity tests must compare the complete Flink 
 surface, deterministic values, and runtime-dependent metric semantics in addition to
 the output changelog.
 
-Account all StreamFusion native memory, including DataFusion and custom Rust data
-structures, through Flink's existing managed/off-heap memory model. StreamFusion must
-not introduce a separate deployment-time memory budget: existing Flink TaskManager
-managed-memory size/fraction and consumer-weight settings govern its allocation. Do
+Follow DataFusion Comet's pragmatic, reservation-based native-memory model rather than
+an exhaustive ledger of every allocation. Use DataFusion's MemoryPool/MemoryReservation
+interfaces and equivalent coarse-grained reservations for large Arrow buffers, retained
+operator state, hash tables, sort/join buffers, RocksDB caches/write buffers, and other
+memory that grows with input or state size. Flink's existing managed/off-heap memory
+model governs these reservations. Count shared Arrow buffers once and retain their
+accounting for as long as the owning consumer retains them.
+
+Small, bounded, short-lived allocations such as descriptors, temporary expression
+objects, and stream-control structures do not need individual reservations. Allow
+reasonable internal headroom for this overhead within Flink's existing allowance.
+Do not add per-allocation JNI calls, global-allocator enforcement, or elaborate
+per-expression sizing machinery solely to account for ephemeral allocations. A global
+allocator observer may be used for diagnostics, but exhaustive allocation instrumentation
+and proof of every temporary allocation are not production-admission requirements.
+Short lifetime alone does not exempt a large buffer or an unbounded workspace: reserve
+at an appropriate batch/operator boundary and spill, bound the work, or return a
+recoverable error when the budget cannot accommodate it.
+
+StreamFusion must not introduce a separate deployment-time memory budget: existing Flink
+TaskManager managed-memory size/fraction and consumer-weight settings govern its allocation. Do
 not add StreamFusion deployment toggles when an equivalent Flink setting exists. A
 StreamFusion-specific feature gate is acceptable only when users must explicitly opt
 into behavior that may not be byte-identical to Flink.
