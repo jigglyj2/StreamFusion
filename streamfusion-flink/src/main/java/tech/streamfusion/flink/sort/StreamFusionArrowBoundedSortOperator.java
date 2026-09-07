@@ -28,6 +28,7 @@ final class StreamFusionArrowBoundedSortOperator extends AbstractStreamFusionArr
     private final boolean fullSortMetrics;
 
     private transient long[] observedStatistics;
+    private transient volatile long[] observedSpillStatistics;
     private transient Counter rowsLoaded;
     private transient Counter rowsCommitted;
     private transient Counter invalidRetractions;
@@ -50,7 +51,15 @@ final class StreamFusionArrowBoundedSortOperator extends AbstractStreamFusionArr
     @Override
     public void open() throws Exception {
         super.open();
+        NativeBoundedSortBridge.configureSpillDirectory(
+                nativeHandle(),
+                getContainingTask()
+                        .getEnvironment()
+                        .getIOManager()
+                        .getSpillingDirectories()[0]
+                        .toPath());
         observedStatistics = NativeBoundedSortBridge.statistics(nativeHandle());
+        observedSpillStatistics = NativeBoundedSortBridge.spillStatistics(nativeHandle());
         String prefix = fullSortMetrics ? "boundedSort" : "boundedSortLimit";
         rowsLoaded = getMetricGroup().addGroup("StreamFusion").counter(prefix + "RowsLoaded");
         rowsCommitted = getMetricGroup().addGroup("StreamFusion").counter(prefix + "RowsCommitted");
@@ -59,8 +68,8 @@ final class StreamFusionArrowBoundedSortOperator extends AbstractStreamFusionArr
         emittedRows = getMetricGroup().addGroup("StreamFusion").counter(prefix + "EmittedRows");
         if (fullSortMetrics) {
             getMetricGroup().gauge("memoryUsedSizeInBytes", this::managedMemoryUsed);
-            getMetricGroup().gauge("numSpillFiles", () -> 0L);
-            getMetricGroup().gauge("spillInBytes", () -> 0L);
+            getMetricGroup().gauge("numSpillFiles", () -> observedSpillStatistics[0]);
+            getMetricGroup().gauge("spillInBytes", () -> observedSpillStatistics[1]);
         }
     }
 
@@ -93,6 +102,7 @@ final class StreamFusionArrowBoundedSortOperator extends AbstractStreamFusionArr
                     if (result.size() == 0) {
                         break;
                     }
+                    observedSpillStatistics = NativeBoundedSortBridge.spillStatistics(nativeHandle());
                     output.collect(new StreamRecord<>(result));
                     FlinkMetricParity.replacePhysicalRecords(
                             getMetricGroup().getIOMetricGroup().getNumRecordsOutCounter(), 1, result.size());
@@ -107,6 +117,7 @@ final class StreamFusionArrowBoundedSortOperator extends AbstractStreamFusionArr
     }
 
     private void updateStatistics() {
+        observedSpillStatistics = NativeBoundedSortBridge.spillStatistics(nativeHandle());
         long[] current = NativeBoundedSortBridge.statistics(nativeHandle());
         if (current.length != 7 || observedStatistics.length != 7) {
             throw new IllegalStateException("Native bounded sort statistics have an incompatible shape");

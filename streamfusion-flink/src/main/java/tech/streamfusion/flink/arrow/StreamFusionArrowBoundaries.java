@@ -23,7 +23,7 @@ public final class StreamFusionArrowBoundaries {
         OneInputTransformation<RowData, ArrowRowDataBatch> boundary = new OneInputTransformation<>(
                 input,
                 "streamfusion-rowdata-to-arrow",
-                new RowDataToArrowBatchOperator(rowType),
+                new RowDataToArrowBatchOperator(rowType, null, null, input.getBufferTimeout()),
                 ArrowRowDataBatchTypeInfo.INSTANCE,
                 input.getParallelism(),
                 false);
@@ -41,7 +41,8 @@ public final class StreamFusionArrowBoundaries {
         OneInputTransformation<RowData, ArrowRowDataBatch> boundary = new OneInputTransformation<>(
                 input,
                 "streamfusion-rowdata-to-arrow",
-                new RowDataToArrowBatchOperator(projectedType, inputFieldPaths, inputRowArities),
+                new RowDataToArrowBatchOperator(
+                        projectedType, inputFieldPaths, inputRowArities, input.getBufferTimeout()),
                 ArrowRowDataBatchTypeInfo.INSTANCE,
                 input.getParallelism(),
                 false);

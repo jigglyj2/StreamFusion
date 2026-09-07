@@ -19,30 +19,64 @@ import tech.streamfusion.flink.arrow.StreamFusionArrowBoundaries;
 public final class StreamFusionLocalGroupAggregateTranslator {
     private StreamFusionLocalGroupAggregateTranslator() {}
 
-    public static Transformation<RowData> translate(
-            Transformation<RowData> input,
+    /** A protobuf fragment only; the shared region owns data and control execution. */
+    public static byte[] createStagePlan(
             RowType inputType,
             RowType internalOutputType,
             int[] grouping,
             AggregateCall[] calls,
             boolean[] retractable,
             boolean inputChangelog,
-            long miniBatchSize,
-            RowDataKeySelector keySelector) {
-        byte[] plan = StreamFusionGroupAggregatePlan.createLocal(
-                inputType, internalOutputType, grouping, calls, retractable, inputChangelog, miniBatchSize);
-        Transformation<ArrowRowDataBatch> arrowInput = StreamFusionArrowBoundaries.toArrow(input, inputType);
-        OneInputTransformation<ArrowRowDataBatch, ArrowRowDataBatch> transformation = new OneInputTransformation<>(
-                arrowInput,
-                "streamfusion-local-group-aggregate",
-                new StreamFusionArrowLocalGroupAggregateOperator(
-                        plan, inputType, internalOutputType, grouping, inputChangelog, keySelector, false),
-                ArrowRowDataBatchTypeInfo.INSTANCE,
-                input.getParallelism(),
-                false);
-        transformation.declareManagedMemoryUseCaseAtOperatorScope(
-                ManagedMemoryUseCase.OPERATOR, AggregateManagedMemoryWeights.LOCAL);
-        return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
+            org.apache.flink.configuration.ReadableConfig config) {
+        String reason = unsupportedStageReason(
+                inputType, internalOutputType, grouping, calls, retractable, inputChangelog, config);
+        if (reason != null) throw new IllegalArgumentException(reason);
+        return StreamFusionGroupAggregatePlan.createLocal(
+                inputType,
+                internalOutputType,
+                grouping,
+                calls,
+                retractable,
+                inputChangelog,
+                config.get(org.apache.flink.table.api.config.ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_SIZE),
+                2);
+    }
+
+    public static String unsupportedStageReason(
+            RowType inputType,
+            RowType internalOutputType,
+            int[] grouping,
+            AggregateCall[] calls,
+            boolean[] retractable,
+            boolean inputChangelog,
+            org.apache.flink.configuration.ReadableConfig config) {
+        if (!config.get(org.apache.flink.table.api.config.ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ENABLED)
+                || config.get(org.apache.flink.table.api.config.ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_SIZE) <= 0)
+            return "mini-batch: local aggregate requires enabled mini-batching with a positive size";
+        if (internalOutputType.getFieldCount() != grouping.length + 1)
+            return "schema: local aggregate output must contain grouping fields followed by one opaque accumulator";
+        var accumulator = internalOutputType.getTypeAt(grouping.length);
+        if (accumulator.getTypeRoot() != org.apache.flink.table.types.logical.LogicalTypeRoot.VARBINARY
+                || accumulator.isNullable()) return "schema: local aggregate requires a non-null VARBINARY accumulator";
+        if (calls.length != retractable.length)
+            return "aggregate: calls and retraction requirements must be equally sized";
+        for (int i = 0; i < grouping.length; i++) {
+            int index = grouping[i];
+            if (index < 0 || index >= inputType.getFieldCount())
+                return "key: index " + index + " is outside the input row";
+            if (!inputType.getTypeAt(index).equals(internalOutputType.getTypeAt(i)))
+                return "key[" + i + "]: local input and output types must match exactly";
+        }
+        for (int i = 0; i < calls.length; i++) {
+            String reason = StreamFusionGroupAggregateTranslator.unsupportedCall(
+                    inputType,
+                    org.apache.flink.table.planner.calcite.FlinkTypeFactory.toLogicalType(calls[i].getType()),
+                    calls[i]);
+            if (reason != null) return "aggregate[" + i + "]: " + reason;
+            if (inputChangelog && !retractable[i])
+                return "aggregate[" + i + "]: Flink did not select a retractable accumulator";
+        }
+        return null;
     }
 
     public static Transformation<RowData> translateBatch(

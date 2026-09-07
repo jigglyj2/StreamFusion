@@ -79,7 +79,7 @@ final class StreamFusionArrowDeduplicateOperator extends AbstractStreamFusionArr
         }
     }
 
-    private static byte[] createPlan(
+    static byte[] createPlan(
             int[] uniqueKeys,
             int orderIndex,
             boolean isRowtime,

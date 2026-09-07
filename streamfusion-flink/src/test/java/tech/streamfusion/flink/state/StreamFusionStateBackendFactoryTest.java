@@ -14,6 +14,18 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class StreamFusionStateBackendFactoryTest {
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void honorsConfiguredIncrementalCheckpointSetting(boolean enabled) throws Exception {
+        var configuration = new Configuration();
+        configuration.set(StateBackendOptions.STATE_BACKEND, "rocksdb");
+        configuration.set(org.apache.flink.configuration.CheckpointingOptions.INCREMENTAL_CHECKPOINTS, enabled);
+        StreamFusionStateBackendFactory.install(configuration);
+        var backend = new StreamFusionStateBackendFactory()
+                .createFromConfig(configuration, getClass().getClassLoader());
+        assertThat(backend.configuredIncrementalCheckpoints()).isEqualTo(enabled);
+    }
+
     @Test
     void recognizesOnlyPlannerOwnedNativeOperatorIdentifiers() {
         assertThat(StreamFusionStateBackend.isNativeOperator("streamfusion-incremental-group-aggregate_deadbeef_(1/1)"))

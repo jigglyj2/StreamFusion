@@ -27,6 +27,37 @@ import tech.streamfusion.flink.state.StreamFusionStateBackendFactory;
 public final class StreamFusionDeduplicateTranslator {
     private StreamFusionDeduplicateTranslator() {}
 
+    /** Builds only this selected stage. Routing, state and neighboring stages belong to the region. */
+    public static byte[] createStagePlan(
+            RowType inputType,
+            RowType outputType,
+            int[] uniqueKeys,
+            boolean isRowtime,
+            boolean keepLastRow,
+            boolean outputInsertOnly,
+            boolean generateUpdateBefore,
+            long stateRetentionTime,
+            ReadableConfig config) {
+        String reason = unsupportedReason(
+                inputType,
+                outputType,
+                uniqueKeys,
+                isRowtime,
+                keepLastRow,
+                outputInsertOnly,
+                generateUpdateBefore,
+                stateRetentionTime,
+                config);
+        if (reason != null) throw new IllegalArgumentException(reason);
+        return StreamFusionArrowDeduplicateOperator.createPlan(
+                uniqueKeys,
+                isRowtime ? rowtimeIndex(inputType) : 0,
+                isRowtime,
+                keepLastRow,
+                config.get(ExecutionConfigOptions.TABLE_EXEC_DEDUPLICATE_INSERT_UPDATE_AFTER_SENSITIVE_ENABLED),
+                generateUpdateBefore);
+    }
+
     public static Transformation<RowData> translate(
             Transformation<RowData> input,
             RowType inputType,
@@ -76,7 +107,9 @@ public final class StreamFusionDeduplicateTranslator {
                 false);
         // Stateful byte maps and their resize peak need a larger share than stateless Arrow
         // stages. This remains Flink's standard operator-weight mechanism, not a new budget.
-        transformation.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 8);
+        transformation.declareManagedMemoryUseCaseAtOperatorScope(
+                ManagedMemoryUseCase.OPERATOR,
+                tech.streamfusion.flink.memory.StreamFusionTaskMemory.STATEFUL_MANAGED_MEMORY_WEIGHT);
         transformation.setStateKeySelector(new ArrowBatchKeySelector(keySelector));
         transformation.setStateKeyType(keySelector.getProducedType());
         return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);

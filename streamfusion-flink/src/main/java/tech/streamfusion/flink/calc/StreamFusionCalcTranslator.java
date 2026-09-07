@@ -21,8 +21,6 @@ import tech.streamfusion.flink.arrow.ArrowRowDataBatchTypeInfo;
 import tech.streamfusion.flink.arrow.StreamFusionArrowBoundaries;
 import tech.streamfusion.flink.memory.StreamFusionTaskMemory;
 import tech.streamfusion.flink.operator.StreamFusionArrowNativeOperator;
-import tech.streamfusion.flink.replicate.StreamFusionReplicateRowsTranslator;
-import tech.streamfusion.flink.unnest.StreamFusionArrayUnnestTranslator;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.Operator;
 
@@ -88,6 +86,19 @@ public final class StreamFusionCalcTranslator extends StreamFusionExpressionTran
                 java.util.Collections.singletonList(condition));
     }
 
+    /** Plans one physical stage; a region builder supplies its native child before execution. */
+    public static byte[] createStagePlan(RowType inputType, RowType outputType, List<?> projections, Object condition) {
+        NativeCalcStages stages = nativeCalcStages(
+                List.of(inputType),
+                List.of(outputType),
+                List.of(projections),
+                java.util.Collections.singletonList(condition));
+        if (stages == null) {
+            throw new IllegalArgumentException("A selected native Calc stage failed semantic validation");
+        }
+        return StreamFusionCalcPlan.createStage(stages.projections.get(0), stages.conditions.get(0));
+    }
+
     /** Translates adjacent Flink Calc nodes into one native operator and one nested native plan. */
     public static Transformation<RowData> translateChain(
             Transformation<RowData> input,
@@ -145,148 +156,6 @@ public final class StreamFusionCalcTranslator extends StreamFusionExpressionTran
         return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
     }
 
-    /** Fuses an array UNNEST and every immediately following Calc into one native plan. */
-    public static Transformation<RowData> translateArrayUnnestChain(
-            Transformation<RowData> input,
-            RowType boundaryInputType,
-            RowType unnestOutputType,
-            Object joinType,
-            Object invocation,
-            List<RowType> inputTypes,
-            List<RowType> outputTypes,
-            List<List<?>> projectionStages,
-            List<?> conditions) {
-        return translateArrayUnnestChains(
-                input,
-                java.util.Collections.singletonList(boundaryInputType),
-                java.util.Collections.singletonList(unnestOutputType),
-                java.util.Collections.singletonList(joinType),
-                java.util.Collections.singletonList(invocation),
-                inputTypes,
-                outputTypes,
-                projectionStages,
-                conditions);
-    }
-
-    /** Fuses adjacent UNNEST stages and every immediately following Calc into one native plan. */
-    public static Transformation<RowData> translateArrayUnnestChains(
-            Transformation<RowData> input,
-            List<RowType> unnestInputTypes,
-            List<RowType> unnestOutputTypes,
-            List<?> joinTypes,
-            List<?> invocations,
-            List<RowType> inputTypes,
-            List<RowType> outputTypes,
-            List<List<?>> projectionStages,
-            List<?> conditions) {
-        return translateCalcArrayUnnestCalcChains(
-                input,
-                java.util.Collections.emptyList(),
-                java.util.Collections.emptyList(),
-                java.util.Collections.emptyList(),
-                java.util.Collections.emptyList(),
-                unnestInputTypes,
-                unnestOutputTypes,
-                joinTypes,
-                invocations,
-                inputTypes,
-                outputTypes,
-                projectionStages,
-                conditions);
-    }
-
-    /** Fuses Calc stages on both sides of adjacent UNNEST stages into one native plan. */
-    public static Transformation<RowData> translateCalcArrayUnnestCalcChains(
-            Transformation<RowData> input,
-            List<RowType> boundaryCalcInputTypes,
-            List<RowType> boundaryCalcOutputTypes,
-            List<List<?>> boundaryCalcProjectionStages,
-            List<?> boundaryCalcConditions,
-            List<RowType> unnestInputTypes,
-            List<RowType> unnestOutputTypes,
-            List<?> joinTypes,
-            List<?> invocations,
-            List<RowType> inputTypes,
-            List<RowType> outputTypes,
-            List<List<?>> projectionStages,
-            List<?> conditions) {
-        int unnestCount = unnestInputTypes.size();
-        if (unnestCount == 0
-                || unnestOutputTypes.size() != unnestCount
-                || joinTypes.size() != unnestCount
-                || invocations.size() != unnestCount) {
-            throw new IllegalArgumentException("A fused UNNEST chain must contain equally sized, non-empty stages");
-        }
-        List<Integer> arrayIndexes = new ArrayList<>(unnestCount);
-        List<Boolean> withOrdinalities = new ArrayList<>(unnestCount);
-        List<Boolean> preserveEmpty = new ArrayList<>(unnestCount);
-        List<tech.streamfusion.proto.plan.v1.UnnestCollection> collections = new ArrayList<>(unnestCount);
-        List<Expression> collectionExpressions = new ArrayList<>(unnestCount);
-        List<Integer> unnestOutputFieldCounts = new ArrayList<>(unnestCount);
-        for (int stage = 0; stage < unnestCount; stage++) {
-            RowType stageInput = unnestInputTypes.get(stage);
-            RowType stageOutput = unnestOutputTypes.get(stage);
-            Object joinType = joinTypes.get(stage);
-            Object invocation = invocations.get(stage);
-            if (StreamFusionArrayUnnestTranslator.unsupportedReason(stageInput, stageOutput, joinType, invocation, null)
-                    != null) {
-                return null;
-            }
-            arrayIndexes.add(StreamFusionArrayUnnestTranslator.arrayIndex(invocation));
-            withOrdinalities.add(StreamFusionArrayUnnestTranslator.withOrdinality(invocation));
-            preserveEmpty.add(StreamFusionArrayUnnestTranslator.isLeft(joinType));
-            collections.add(StreamFusionArrayUnnestTranslator.collection(stageInput, invocation));
-            collectionExpressions.add(StreamFusionArrayUnnestTranslator.collectionExpression(stageInput, invocation));
-            unnestOutputFieldCounts.add(stageOutput.getFieldCount());
-        }
-        if (inputTypes.isEmpty() || !inputTypes.get(0).equals(unnestOutputTypes.get(unnestCount - 1))) {
-            throw new IllegalArgumentException("The first Calc input must equal the fused UNNEST output");
-        }
-        NativeCalcStages boundaryCalcs = nativeCalcStages(
-                boundaryCalcInputTypes, boundaryCalcOutputTypes, boundaryCalcProjectionStages, boundaryCalcConditions);
-        NativeCalcStages outputCalcs = nativeCalcStages(inputTypes, outputTypes, projectionStages, conditions);
-        if (boundaryCalcs == null || outputCalcs == null) {
-            return null;
-        }
-        RowType outputType = outputTypes.get(outputTypes.size() - 1);
-        RowType planInputType = unnestInputTypes.get(0);
-        Transformation<ArrowRowDataBatch> arrowInput;
-        if (!boundaryCalcInputTypes.isEmpty() && !StreamFusionArrowBoundaries.isArrow(input)) {
-            planInputType = boundaryCalcInputTypes.get(0);
-            StreamFusionInputProjection.Projection inputProjection = StreamFusionInputProjection.create(
-                    planInputType, boundaryCalcs.projections.get(0), boundaryCalcs.conditions.get(0));
-            planInputType = inputProjection.inputType();
-            boundaryCalcs.projections.set(0, inputProjection.projections());
-            boundaryCalcs.conditions.set(0, inputProjection.condition());
-            arrowInput = StreamFusionArrowBoundaries.toArrow(
-                    input, planInputType, inputProjection.fieldPaths(), inputProjection.rowArities());
-        } else {
-            arrowInput = StreamFusionArrowBoundaries.toArrow(input, planInputType);
-        }
-        byte[] plan = StreamFusionCalcPlan.createFusedCalcUnnest(
-                arrayIndexes,
-                withOrdinalities,
-                preserveEmpty,
-                collections,
-                collectionExpressions,
-                unnestOutputFieldCounts,
-                planInputType.getFieldCount(),
-                boundaryCalcs.projections,
-                boundaryCalcs.conditions,
-                outputCalcs.projections,
-                outputCalcs.conditions);
-        OneInputTransformation<ArrowRowDataBatch, ArrowRowDataBatch> transformation = new OneInputTransformation<>(
-                arrowInput,
-                "streamfusion-array-unnest-calc-chain[" + inputTypes.size() + "]",
-                new StreamFusionArrowNativeOperator(outputType, plan, "streamfusion-array-unnest-calc"),
-                ArrowRowDataBatchTypeInfo.INSTANCE,
-                input.getParallelism(),
-                false);
-        transformation.declareManagedMemoryUseCaseAtOperatorScope(
-                ManagedMemoryUseCase.OPERATOR, StreamFusionTaskMemory.MANAGED_MEMORY_WEIGHT);
-        return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
-    }
-
     private static NativeCalcStages nativeCalcStages(
             List<RowType> inputTypes, List<RowType> outputTypes, List<List<?>> projectionStages, List<?> conditions) {
         if (inputTypes.size() != outputTypes.size()
@@ -322,64 +191,6 @@ public final class StreamFusionCalcTranslator extends StreamFusionExpressionTran
             this.projections = projections;
             this.conditions = conditions;
         }
-    }
-
-    /** Fuses Flink's set-operation row replicator and every immediately following Calc. */
-    public static Transformation<RowData> translateReplicateRowsChain(
-            Transformation<RowData> input,
-            RowType replicateInputType,
-            RowType replicateOutputType,
-            Object joinType,
-            Object invocation,
-            List<RowType> inputTypes,
-            List<RowType> outputTypes,
-            List<List<?>> projectionStages,
-            List<?> conditions) {
-        if (StreamFusionReplicateRowsTranslator.unsupportedReason(
-                        replicateInputType, replicateOutputType, joinType, invocation, null)
-                != null) {
-            return null;
-        }
-        if (inputTypes.isEmpty() || !inputTypes.get(0).equals(replicateOutputType)) {
-            throw new IllegalArgumentException("The first Calc input must equal the fused REPLICATE_ROWS output");
-        }
-        List<List<Expression>> nativeProjectionStages = new ArrayList<>(projectionStages.size());
-        List<Expression> nativeConditions = new ArrayList<>(conditions.size());
-        for (int stage = 0; stage < inputTypes.size(); stage++) {
-            RowType stageInputType = inputTypes.get(stage);
-            RowType stageOutputType = outputTypes.get(stage);
-            List<?> stageProjections = projectionStages.get(stage);
-            if (unsupportedReason(stageInputType, stageOutputType, stageProjections, conditions.get(stage)) != null) {
-                return null;
-            }
-            List<Expression> nativeProjections = new ArrayList<>(stageProjections.size());
-            for (int outputIndex = 0; outputIndex < stageProjections.size(); outputIndex++) {
-                nativeProjections.add(projectionExpression(
-                        stageProjections.get(outputIndex), stageInputType, stageOutputType.getTypeAt(outputIndex)));
-            }
-            nativeProjectionStages.add(nativeProjections);
-            nativeConditions.add(conditionExpression(conditions.get(stage), stageInputType));
-        }
-        List<Expression> replicateExpressions = StreamFusionReplicateRowsTranslator.expressions(
-                replicateInputType, (org.apache.calcite.rex.RexCall) invocation);
-        RowType outputType = outputTypes.get(outputTypes.size() - 1);
-        byte[] plan = StreamFusionCalcPlan.createFusedReplicateRows(
-                replicateExpressions.get(0),
-                replicateExpressions.subList(1, replicateExpressions.size()),
-                replicateOutputType.getFieldCount(),
-                nativeProjectionStages,
-                nativeConditions);
-        Transformation<ArrowRowDataBatch> arrowInput = StreamFusionArrowBoundaries.toArrow(input, replicateInputType);
-        OneInputTransformation<ArrowRowDataBatch, ArrowRowDataBatch> transformation = new OneInputTransformation<>(
-                arrowInput,
-                "streamfusion-replicate-rows-calc-chain[" + inputTypes.size() + "]",
-                new StreamFusionArrowNativeOperator(outputType, plan, "streamfusion-replicate-rows-calc"),
-                ArrowRowDataBatchTypeInfo.INSTANCE,
-                input.getParallelism(),
-                false);
-        transformation.declareManagedMemoryUseCaseAtOperatorScope(
-                ManagedMemoryUseCase.OPERATOR, StreamFusionTaskMemory.MANAGED_MEMORY_WEIGHT);
-        return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
     }
 
     public static boolean canTranslate(RowType inputType, RowType outputType, List<?> projections, Object condition) {
@@ -426,7 +237,9 @@ public final class StreamFusionCalcTranslator extends StreamFusionExpressionTran
                         + outputIndex
                         + "]/input["
                         + directInput
-                        + "]: input and output types must match except for nullability";
+                        + "]: input and output types must match except for nullability (input="
+                        + (directInput < inputType.getFieldCount() ? inputType.getTypeAt(directInput) : "out of range")
+                        + ", output=" + expectedType + ")";
             }
             if (projectionExpression(projection, inputType, expectedType) == null) {
                 return expressionFailure(projection, inputType, expectedType, false, "projection[" + outputIndex + "]");
@@ -446,6 +259,15 @@ public final class StreamFusionCalcTranslator extends StreamFusionExpressionTran
     private static boolean sameTypeIgnoringNullability(
             org.apache.flink.table.types.logical.LogicalType input,
             org.apache.flink.table.types.logical.LogicalType output) {
+        // FlinkTypeFactory normalizes interval qualifiers/precision through Calcite.
+        // An identity RexInputRef still forwards the original months/milliseconds;
+        // this is not a CAST and must not truncate or reinterpret its value.
+        if (input.getTypeRoot() == output.getTypeRoot()
+                && (input.getTypeRoot() == org.apache.flink.table.types.logical.LogicalTypeRoot.INTERVAL_DAY_TIME
+                        || input.getTypeRoot()
+                                == org.apache.flink.table.types.logical.LogicalTypeRoot.INTERVAL_YEAR_MONTH)) {
+            return true;
+        }
         return input.copy(true).equals(output.copy(true));
     }
 }

@@ -64,25 +64,6 @@ final class StreamFusionRegularJoinPlan {
         return nativePlan(root);
     }
 
-    static byte[] createWithOutputCalcs(
-            RowType leftType,
-            RowType rightType,
-            int[] leftKeys,
-            int[] rightKeys,
-            boolean[] filterNulls,
-            FlinkJoinType joinType,
-            Object residualCondition,
-            List<RowType> calcInputTypes,
-            List<RowType> calcOutputTypes,
-            List<List<?>> calcProjections,
-            List<?> calcConditions) {
-        Operator join = createOperator(
-                leftType, rightType, leftKeys, rightKeys, filterNulls, joinType, residualCondition, false);
-        Operator root = StreamFusionCalcTranslator.appendChangelogCalcOperators(
-                join, calcInputTypes, calcOutputTypes, calcProjections, calcConditions);
-        return root == null ? null : nativePlan(root);
-    }
-
     private static byte[] create(
             RowType leftType,
             RowType rightType,
@@ -113,6 +94,12 @@ final class StreamFusionRegularJoinPlan {
             Object residualCondition,
             boolean boundedFinalOutput) {
         RegularJoin.Builder join = RegularJoin.newBuilder()
+                .setLeftInput(Operator.newBuilder()
+                        .setInput(tech.streamfusion.proto.plan.v1.Input.newBuilder()
+                                .setInputIndex(0)))
+                .setRightInput(Operator.newBuilder()
+                        .setInput(tech.streamfusion.proto.plan.v1.Input.newBuilder()
+                                .setInputIndex(1)))
                 .setLeftSchema(schema(leftType))
                 .setRightSchema(schema(rightType))
                 .setJoinType(joinType(joinType))

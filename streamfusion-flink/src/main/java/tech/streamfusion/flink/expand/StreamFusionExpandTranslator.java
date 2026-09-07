@@ -39,6 +39,25 @@ public final class StreamFusionExpandTranslator {
         if (unsupportedReason(inputType, outputType, projects) != null) {
             return null;
         }
+        byte[] plan = createStagePlan(inputType, outputType, projects);
+        Transformation<ArrowRowDataBatch> arrowInput = StreamFusionArrowBoundaries.toArrow(input, inputType);
+        OneInputTransformation<ArrowRowDataBatch, ArrowRowDataBatch> transformation = new OneInputTransformation<>(
+                arrowInput,
+                "streamfusion-expand[" + projects.size() + "]",
+                new StreamFusionArrowNativeOperator(outputType, plan, "streamfusion-expand"),
+                ArrowRowDataBatchTypeInfo.INSTANCE,
+                input.getParallelism(),
+                false);
+        transformation.declareManagedMemoryUseCaseAtOperatorScope(
+                ManagedMemoryUseCase.OPERATOR, StreamFusionTaskMemory.MANAGED_MEMORY_WEIGHT);
+        return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
+    }
+
+    public static byte[] createStagePlan(RowType inputType, RowType outputType, List<List<?>> projects) {
+        String reason = unsupportedReason(inputType, outputType, projects);
+        if (reason != null) {
+            throw new IllegalArgumentException("A selected native Expand stage failed validation: " + reason);
+        }
         List<List<Expression>> nativeProjects = new ArrayList<>(projects.size());
         for (List<?> project : projects) {
             List<Expression> expressions = new ArrayList<>(project.size());
@@ -48,18 +67,7 @@ public final class StreamFusionExpandTranslator {
             }
             nativeProjects.add(expressions);
         }
-        Transformation<ArrowRowDataBatch> arrowInput = StreamFusionArrowBoundaries.toArrow(input, inputType);
-        OneInputTransformation<ArrowRowDataBatch, ArrowRowDataBatch> transformation = new OneInputTransformation<>(
-                arrowInput,
-                "streamfusion-expand[" + projects.size() + "]",
-                new StreamFusionArrowNativeOperator(
-                        outputType, StreamFusionExpandPlan.create(nativeProjects), "streamfusion-expand"),
-                ArrowRowDataBatchTypeInfo.INSTANCE,
-                input.getParallelism(),
-                false);
-        transformation.declareManagedMemoryUseCaseAtOperatorScope(
-                ManagedMemoryUseCase.OPERATOR, StreamFusionTaskMemory.MANAGED_MEMORY_WEIGHT);
-        return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
+        return StreamFusionExpandPlan.create(nativeProjects);
     }
 
     public static String unsupportedReason(RowType inputType, RowType outputType, List<List<?>> projects) {

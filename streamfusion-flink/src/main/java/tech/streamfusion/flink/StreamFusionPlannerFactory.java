@@ -89,6 +89,11 @@ public final class StreamFusionPlannerFactory implements PlannerFactory {
         return NativeCalcBridge.executedBatchCount();
     }
 
+    /** Shared native-plan stream invocations; legacy per-family counters exclude fused stages. */
+    public static long nativePlanBatchCount() {
+        return tech.streamfusion.nativebridge.NativeExecutionContext.openedStreamCount();
+    }
+
     public static long nativeChangelogNormalizeBatchCount() {
         return NativeChangelogNormalizeBridge.executedBatchCount();
     }
@@ -174,6 +179,7 @@ public final class StreamFusionPlannerFactory implements PlannerFactory {
     }
 
     public static void resetMetrics() {
+        tech.streamfusion.nativebridge.NativeExecutionContext.resetStreamMetrics();
         CREATED_PLANNERS.set(0);
         StreamFusionPlanner.resetMetrics();
         NativeCalcBridge.resetMetrics();

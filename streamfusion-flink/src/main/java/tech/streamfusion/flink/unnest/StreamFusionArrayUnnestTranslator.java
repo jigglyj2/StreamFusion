@@ -37,6 +37,19 @@ import tech.streamfusion.proto.plan.v1.UnnestCollection;
 public final class StreamFusionArrayUnnestTranslator {
     private StreamFusionArrayUnnestTranslator() {}
 
+    public static byte[] createStagePlan(RowType inputType, RowType outputType, Object joinType, Object invocation) {
+        String reason = unsupportedReason(inputType, outputType, joinType, invocation, null);
+        if (reason != null) {
+            throw new IllegalArgumentException(reason);
+        }
+        return StreamFusionArrayUnnestPlan.create(
+                List.of(arrayIndex(invocation)),
+                List.of(withOrdinality(invocation)),
+                List.of(isLeft(joinType)),
+                List.of(collection(inputType, invocation)),
+                java.util.Collections.singletonList(collectionExpression(inputType, invocation)));
+    }
+
     public static Transformation<RowData> translate(
             Transformation<RowData> input, RowType inputType, RowType outputType, Object joinType, Object invocation) {
         return translateChain(

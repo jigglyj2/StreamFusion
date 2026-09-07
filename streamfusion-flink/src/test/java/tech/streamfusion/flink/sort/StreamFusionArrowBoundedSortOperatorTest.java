@@ -58,9 +58,9 @@ import tech.streamfusion.flink.exchange.NativeExchangePlanSerializer;
 import tech.streamfusion.flink.state.StreamFusionStateBackend;
 
 class StreamFusionArrowBoundedSortOperatorTest {
-    private static final RowType ROW_TYPE =
+    static final RowType ROW_TYPE =
             RowType.of(false, new LogicalType[] {new IntType(), new VarCharType()}, new String[] {"number", "label"});
-    private static final SortSpec SORT_SPEC =
+    static final SortSpec SORT_SPEC =
             SortSpec.builder().addField(0, true, true).addField(1, false, false).build();
     private static final byte[] EXCHANGE_PLAN = NativeExchangePlanSerializer.singleton(ROW_TYPE);
 
@@ -214,7 +214,7 @@ class StreamFusionArrowBoundedSortOperatorTest {
                 .getJobManagerOwnedState();
     }
 
-    private static Harness harness(OperatorSubtaskState state, boolean rocks) throws Exception {
+    static Harness harness(OperatorSubtaskState state, boolean rocks) throws Exception {
         byte[] plan = StreamFusionBoundedSortPlan.create(ROW_TYPE, SORT_SPEC);
         Harness harness = new Harness(new StreamFusionArrowBoundedSortOperator(ROW_TYPE, plan, EXCHANGE_PLAN));
         harness.setStateBackend(new StreamFusionStateBackend(
@@ -237,7 +237,7 @@ class StreamFusionArrowBoundedSortOperatorTest {
         return harness;
     }
 
-    private static void process(Harness harness, RootAllocator allocator, GenericRowData... rows) throws Exception {
+    static void process(Harness harness, RootAllocator allocator, GenericRowData... rows) throws Exception {
         RowKind[] kinds =
                 java.util.Arrays.stream(rows).map(GenericRowData::getRowKind).toArray(RowKind[]::new);
         try (ArrowRowDataBatch batch = ArrowRowDataBatch.transpose(List.of(rows), ROW_TYPE, allocator)
@@ -265,18 +265,20 @@ class StreamFusionArrowBoundedSortOperatorTest {
         CANONICAL
     }
 
-    private static final class Harness
+    static final class Harness
             extends KeyedOneInputStreamOperatorTestHarness<Integer, NativeExchangeFrame, ArrowRowDataBatch> {
         private final List<String> captured = new ArrayList<>();
+        final org.apache.flink.core.memory.DataOutputSerializer bytes =
+                new org.apache.flink.core.memory.DataOutputSerializer(1024);
 
         private Harness(StreamFusionArrowBoundedSortOperator operator) throws Exception {
             super(operator, new NativeExchangeFrameKeySelector(1), Types.INT, 1, 1, 0);
-            setOutputCreator(ignored -> new CapturingOutput(captured));
+            setOutputCreator(ignored -> new CapturingOutput(captured, bytes));
         }
 
         private Harness(StreamFusionArrowBoundedSortOperator operator, MockEnvironment environment) throws Exception {
             super(operator, new NativeExchangeFrameKeySelector(1), Types.INT, environment);
-            setOutputCreator(ignored -> new CapturingOutput(captured));
+            setOutputCreator(ignored -> new CapturingOutput(captured, bytes));
         }
 
         private List<String> take() {
@@ -289,8 +291,11 @@ class StreamFusionArrowBoundedSortOperatorTest {
     private static final class CapturingOutput implements Output<StreamRecord<ArrowRowDataBatch>> {
         private final List<String> captured;
 
-        private CapturingOutput(List<String> captured) {
+        private final org.apache.flink.core.memory.DataOutputSerializer bytes;
+
+        private CapturingOutput(List<String> captured, org.apache.flink.core.memory.DataOutputSerializer bytes) {
             this.captured = captured;
+            this.bytes = bytes;
         }
 
         @Override
@@ -298,7 +303,13 @@ class StreamFusionArrowBoundedSortOperatorTest {
             ArrowRowDataBatch batch = record.getValue();
             for (int index = 0; index < batch.size(); index++) {
                 RowData row = batch.rowView(index);
-                captured.add(batch.rowKind(index).shortString() + ":" + row.getInt(0) + ":" + row.getString(1));
+                captured.add(batch.rowKind(index).shortString() + ":" + (row.isNullAt(0) ? null : row.getInt(0)) + ":"
+                        + (row.isNullAt(1) ? null : row.getString(1)));
+                try {
+                    new org.apache.flink.table.runtime.typeutils.RowDataSerializer(ROW_TYPE).serialize(row, bytes);
+                } catch (java.io.IOException failure) {
+                    throw new java.io.UncheckedIOException(failure);
+                }
             }
         }
 

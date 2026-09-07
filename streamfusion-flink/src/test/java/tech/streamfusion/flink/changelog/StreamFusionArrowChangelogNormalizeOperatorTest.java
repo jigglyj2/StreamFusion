@@ -170,6 +170,28 @@ class StreamFusionArrowChangelogNormalizeOperatorTest {
         }
     }
 
+    @Test
+    void disablingIncrementalCheckpointsUsesFullStateAndRestoresRetractions() throws Exception {
+        try (RootAllocator inputs = new RootAllocator(64L << 20)) {
+            for (SnapshotKind kind : SnapshotKind.values()) {
+                OperatorSubtaskState state;
+                try (Harness source = harness(null, true, false)) {
+                    process(source.operator, inputs, row(7, "before", RowKind.INSERT));
+                    takeKinds(source.operator);
+                    state = snapshot(source.operator, kind);
+                    assertThat(state.getRawKeyedState()).isNotEmpty();
+                    assertThat(state.getManagedKeyedState())
+                            .noneMatch(IncrementalRemoteKeyedStateHandle.class::isInstance);
+                }
+                try (Harness restored = harness(state, true, false)) {
+                    process(restored.operator, inputs, row(7, "after", RowKind.UPDATE_AFTER));
+                    assertThat(takeKinds(restored.operator))
+                            .containsExactly(RowKind.UPDATE_BEFORE, RowKind.UPDATE_AFTER);
+                }
+            }
+        }
+    }
+
     private static IncrementalRemoteKeyedStateHandle incremental(OperatorSubtaskState state) {
         assertThat(state.getRawKeyedState()).isEmpty();
         assertThat(state.getManagedKeyedState()).hasSize(1);
@@ -195,6 +217,10 @@ class StreamFusionArrowChangelogNormalizeOperatorTest {
     }
 
     private static Harness harness(OperatorSubtaskState state, boolean rocks) throws Exception {
+        return harness(state, rocks, true);
+    }
+
+    private static Harness harness(OperatorSubtaskState state, boolean rocks, boolean incremental) throws Exception {
         RowDataKeySelector selector = selector();
         KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> harness =
                 new KeyedOneInputStreamOperatorTestHarness<>(
@@ -205,7 +231,7 @@ class StreamFusionArrowChangelogNormalizeOperatorTest {
                         1,
                         0);
         harness.setStateBackend(new StreamFusionStateBackend(
-                rocks ? new EmbeddedRocksDBStateBackend(true) : new HashMapStateBackend()));
+                rocks ? new EmbeddedRocksDBStateBackend(incremental) : new HashMapStateBackend()));
         harness.setup(ArrowRowDataBatchSerializer.INSTANCE);
         if (state != null) {
             harness.initializeState(state);

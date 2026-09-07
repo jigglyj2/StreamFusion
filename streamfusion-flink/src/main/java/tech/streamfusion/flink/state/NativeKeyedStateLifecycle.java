@@ -43,6 +43,7 @@ final class NativeKeyedStateLifecycle implements Serializable {
     private transient BufferAllocator allocator;
     private transient Path rocksDbDirectory;
     private transient long rocksDbManagedMemory;
+    private transient long rocksDbOperatorReservation;
     private transient boolean writeRawKeyedSnapshot = true;
     private transient long rawSnapshotBytes;
     private transient StreamFusionStatefulOperatorMetrics statefulMetrics;
@@ -69,6 +70,10 @@ final class NativeKeyedStateLifecycle implements Serializable {
         keyGroupRange = ((CheckpointableKeyedStateBackend<?>) keyedStateBackend).getKeyGroupRange();
         managedMemory = FlinkManagedMemory.create(
                 environment, operatorConfig, metricGroup, "streamfusion-" + stateName.replace(' ', '-'));
+        if (keyedStateBackend instanceof StreamFusionKeyedStateBackend) {
+            var scope = ((StreamFusionKeyedStateBackend<?>) keyedStateBackend).nativeRocksDbMemoryScope();
+            if (scope != null) managedMemory.shareRocksDbMemoryScope(scope);
+        }
         allocator = managedMemory.allocator();
         String backendType = keyedStateBackend.getBackendTypeIdentifier();
         boolean useRocksDb = "rocksdb".equals(backendType)
@@ -97,6 +102,7 @@ final class NativeKeyedStateLifecycle implements Serializable {
                         rocksDbMemory,
                         managedMemory);
                 rocksDbManagedMemory = rocksDbMemory;
+                rocksDbOperatorReservation = operatorMemoryFallback ? rocksDbMemory : 0;
             } catch (RuntimeException failure) {
                 if (operatorMemoryFallback) {
                     managedMemory.release(rocksDbMemory);
@@ -280,11 +286,21 @@ final class NativeKeyedStateLifecycle implements Serializable {
 
     void close(CheckedRunnable beforeClose) throws Exception {
         long handle = nativeHandle;
-        nativeHandle = 0;
         try {
-            beforeClose.run();
-            if (handle != 0) {
-                bridge.destroy(handle);
+            try {
+                beforeClose.run();
+            } finally {
+                nativeHandle = 0;
+                if (handle != 0) {
+                    bridge.destroy(handle);
+                    // The embedded-runner fallback owns this explicit cache allowance. It is
+                    // not a native allocation callback and must be returned after DB teardown.
+                    // A separately weighted STATE_BACKEND lease is owned by the keyed backend.
+                    if (rocksDbOperatorReservation != 0) {
+                        managedMemory.release(rocksDbOperatorReservation);
+                        rocksDbOperatorReservation = 0;
+                    }
+                }
             }
         } finally {
             try {

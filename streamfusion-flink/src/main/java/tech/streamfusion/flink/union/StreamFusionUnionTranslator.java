@@ -32,6 +32,23 @@ import tech.streamfusion.flink.exchange.StreamFusionExchangeTranslator;
 public final class StreamFusionUnionTranslator {
     private StreamFusionUnionTranslator() {}
 
+    public static byte[] createStagePlan(RowType rowType, int inputCount) {
+        String reason = unsupportedReason(rowType);
+        if (inputCount < 2 || reason != null) {
+            throw new IllegalArgumentException(reason == null ? "UNION requires at least two inputs" : reason);
+        }
+        var union = tech.streamfusion.proto.plan.v1.Union.newBuilder();
+        for (int index = 0; index < inputCount; index++) {
+            union.addInputs(tech.streamfusion.proto.plan.v1.Operator.newBuilder()
+                    .setInput(tech.streamfusion.proto.plan.v1.Input.newBuilder().setInputIndex(index)));
+        }
+        return tech.streamfusion.proto.plan.v1.NativePlan.newBuilder()
+                .setProtocolVersion(2)
+                .setRoot(tech.streamfusion.proto.plan.v1.Operator.newBuilder().setUnion(union))
+                .build()
+                .toByteArray();
+    }
+
     public static String unsupportedReason(RowType rowType) {
         for (int index = 0; index < rowType.getFieldCount(); index++) {
             String reason = StreamFusionTimestampRangeSupport.unsupportedReason(

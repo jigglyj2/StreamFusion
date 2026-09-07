@@ -24,6 +24,103 @@ import tech.streamfusion.nativebridge.NativeMemoryManager;
 
 class NativeManagedMemoryBridgeTest extends ArrowCDataBridgeTestSupport {
     @Test
+    void liveInvocationRejectsBothEdgesAndCancellationAllowsCleanStatelessReuse() {
+        for (boolean drain : List.of(false, true)) {
+            TrackingMemoryManager memory = new TrackingMemoryManager(64L << 20);
+            RowType rowType = RowType.of(new IntType(false));
+            try (RootAllocator allocator = new RootAllocator(64L << 20);
+                    NativeExecutionContext context = new NativeExecutionContext(chainedSelectionPlan(), memory);
+                    ArrowRowDataBatch input = ArrowRowDataBatch.transpose(
+                            List.of(GenericRowData.of(1), GenericRowData.of(2), GenericRowData.of(3)),
+                            rowType,
+                            allocator)) {
+                var execution = new ArrowCDataBridge.ReusableExecution(context, rowType, allocator);
+                try (var active = execution.executeStream(input)) {
+                    assertThatThrownBy(() -> execution.executeStream(input))
+                            .isInstanceOf(IllegalStateException.class)
+                            .hasMessageContaining("active or failed invocation");
+                    assertThatThrownBy(() -> ArrowCDataBridge.executeWithSelection(context, input, rowType, allocator))
+                            .isInstanceOf(IllegalStateException.class)
+                            .hasMessageContaining("active or failed invocation");
+                    if (drain) {
+                        try (var output = active.nextWithSelection()) {
+                            assertThat(output.batch().rowView(0).getInt(0)).isEqualTo(12);
+                            assertThat(output.batch().rowView(1).getInt(0)).isEqualTo(13);
+                        }
+                        assertThat(active.nextWithSelection()).isNull();
+                    }
+                }
+                try (var next = execution.executeStream(input)) {
+                    try (var output = next.nextWithSelection()) {
+                        assertThat(output.batch().rowView(0).getInt(0)).isEqualTo(12);
+                        assertThat(output.batch().rowView(1).getInt(0)).isEqualTo(13);
+                    }
+                    assertThat(next.nextWithSelection()).isNull();
+                }
+            }
+            assertThat(memory.reserved()).isZero();
+        }
+    }
+
+    @Test
+    void importedOutputKeepsNativeBuffersAdmittedAfterStreamAndContextClose() {
+        TrackingMemoryManager memory = new TrackingMemoryManager(64L << 20);
+        RowType rowType = RowType.of(new IntType(false));
+        try (RootAllocator allocator = new RootAllocator(64L << 20);
+                NativeExecutionContext context = new NativeExecutionContext(chainedSelectionPlan(), memory);
+                ArrowRowDataBatch input = ArrowRowDataBatch.transpose(
+                        List.of(GenericRowData.of(1), GenericRowData.of(2), GenericRowData.of(3)),
+                        rowType,
+                        allocator)) {
+            var execution = new ArrowCDataBridge.ReusableExecution(context, rowType, allocator);
+            var stream = execution.executeStream(input);
+            try (NativeCalcResult result = stream.nextWithSelection()) {
+                assertThat(stream.nextWithSelection()).isNull();
+                stream.close();
+                context.close();
+                assertThat(memory.reserved()).isPositive();
+                assertThat(result.batch().rowView(0).getInt(0)).isEqualTo(12);
+                assertThat(result.batch().rowView(1).getInt(0)).isEqualTo(13);
+            } finally {
+                stream.close();
+            }
+            assertThat(memory.reserved()).isZero();
+        }
+    }
+
+    @Test
+    void liveStreamKeepsPlanSchemaAndRuntimeAdmittedAfterContextHandleCloses() {
+        for (boolean drain : List.of(false, true)) {
+            TrackingMemoryManager memory = new TrackingMemoryManager(64L << 20);
+            RowType rowType = RowType.of(new IntType(false));
+            try (RootAllocator allocator = new RootAllocator(64L << 20);
+                    NativeExecutionContext context = new NativeExecutionContext(chainedSelectionPlan(), memory);
+                    ArrowRowDataBatch input = ArrowRowDataBatch.transpose(
+                            List.of(GenericRowData.of(1), GenericRowData.of(2), GenericRowData.of(3)),
+                            rowType,
+                            allocator)) {
+                var execution = new ArrowCDataBridge.ReusableExecution(context, rowType, allocator);
+                try (var stream = execution.executeStream(input)) {
+                    long admitted = memory.reserved();
+                    assertThat(admitted).isGreaterThan(256L << 10);
+                    context.close();
+                    assertThat(memory.reserved()).isEqualTo(admitted);
+                    if (drain) {
+                        try (NativeCalcResult output = stream.nextWithSelection()) {
+                            assertThat(output.batch().size()).isEqualTo(2);
+                            assertThat(output.batch().rowView(0).getInt(0)).isEqualTo(12);
+                        }
+                        assertThat(stream.nextWithSelection()).isNull();
+                    }
+                    // A cancelled, never-polled stream has the same last-owner cleanup contract.
+                }
+                assertThat(memory.reserved()).isZero();
+            }
+            assertThat(memory.reserved()).isZero();
+        }
+    }
+
+    @Test
     void accountsNativePlanScratchAndOutputThroughHostCallbacks() {
         byte[] plan = chainedSelectionPlan();
         TrackingMemoryManager memory = new TrackingMemoryManager(64L << 20);
@@ -44,6 +141,12 @@ class NativeManagedMemoryBridgeTest extends ArrowCDataBridgeTestSupport {
 
     @Test
     void rejectsNativeScratchThatExceedsTheHostBudget() {
+        for (String edge : List.of("batch", "cached-batch", "stream")) {
+            assertInputAdmissionRecovery(edge);
+        }
+    }
+
+    private static void assertInputAdmissionRecovery(String edge) {
         byte[] plan = chainedSelectionPlan();
         TrackingMemoryManager memory = new TrackingMemoryManager(64L << 20);
         RowType rowType = RowType.of(new IntType(false));
@@ -52,16 +155,43 @@ class NativeManagedMemoryBridgeTest extends ArrowCDataBridgeTestSupport {
         try (RootAllocator allocator = new RootAllocator(64L << 20);
                 NativeExecutionContext context = new NativeExecutionContext(plan, memory);
                 ArrowRowDataBatch input = ArrowRowDataBatch.transpose(rows, rowType, allocator)) {
-            try (NativeCalcResult ignored = ArrowCDataBridge.executeWithSelection(context, input, rowType, allocator)) {
+            var execution = new ArrowCDataBridge.ReusableExecution(context, rowType, allocator);
+            java.util.function.Supplier<NativeCalcResult> invoke = () -> {
+                if (edge.equals("batch")) {
+                    return ArrowCDataBridge.executeWithSelection(context, input, rowType, allocator);
+                }
+                if (edge.equals("cached-batch")) return execution.executeWithSelection(input);
+                try (var stream = execution.executeStream(input)) {
+                    NativeCalcResult output = stream.nextWithSelection();
+                    assertThat(stream.nextWithSelection()).isNull();
+                    return output;
+                }
+            };
+            try (NativeCalcResult ignored = invoke.get()) {
                 // Warm the task-lifetime schema and physical-plan caches before constraining
                 // the remaining per-batch scratch allowance.
             }
-            memory.setLimit(memory.reserved() + 4L);
-            assertThatThrownBy(() -> ArrowCDataBridge.executeWithSelection(context, input, rowType, allocator))
-                    .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("Resources exhausted")
-                    .hasMessageContaining("denied 12 bytes")
-                    .hasMessageContaining("native input-row ordinal");
+            long retained = memory.reserved();
+            long peak = memory.peak();
+            long javaRetained = allocator.getAllocatedMemory();
+            // Deny the large-owner ordinal workspace consistently at every edge.
+            memory.setLimit(retained + 4L);
+            for (int attempt = 0; attempt < 2; attempt++) {
+                assertThatThrownBy(invoke::get)
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("Resources exhausted")
+                        .hasMessageContaining("Flink denied")
+                        .hasMessageContaining("native input row ordinal");
+                assertThat(memory.reserved()).isEqualTo(retained);
+                assertThat(memory.peak()).isEqualTo(peak);
+                assertThat(allocator.getAllocatedMemory()).isEqualTo(javaRetained);
+                assertThat(input.rowView(0).getInt(0)).isEqualTo(1);
+            }
+            memory.setLimit(64L << 20);
+            try (NativeCalcResult result = invoke.get()) {
+                assertThat(result.batch().size()).isEqualTo(2);
+                assertThat(result.batch().rowView(0).getInt(0)).isEqualTo(12);
+            }
         }
 
         assertThat(memory.reserved()).isZero();

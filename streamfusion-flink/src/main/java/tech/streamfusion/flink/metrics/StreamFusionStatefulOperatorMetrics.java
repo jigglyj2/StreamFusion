@@ -93,6 +93,10 @@ public final class StreamFusionStatefulOperatorMetrics {
     public void processedWithoutStateCalls(long inputRows, ArrowRowDataBatch output) {
         processedBatches.inc();
         processedRows.inc(inputRows);
+        emittedOutput(output);
+    }
+
+    public void emittedOutput(ArrowRowDataBatch output) {
         emittedRows.inc(output.size());
         for (int row = 0; row < output.size(); row++) {
             RowKind kind = output.rowKind(row);

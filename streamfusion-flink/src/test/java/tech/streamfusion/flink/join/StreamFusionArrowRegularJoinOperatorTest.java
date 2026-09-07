@@ -125,7 +125,7 @@ class StreamFusionArrowRegularJoinOperatorTest {
                 assertThat(((Counter) metrics.get("emittedRows")).getCount()).isEqualTo(2L);
                 assertThat(((Counter) metrics.get("emittedInserts")).getCount()).isEqualTo(2L);
                 assertThat(((Counter) metrics.get("stateReadBatches")).getCount())
-                        .isEqualTo(3L);
+                        .isEqualTo(5L);
                 assertThat(((Counter) metrics.get("stateWriteBatches")).getCount())
                         .isEqualTo(3L);
                 assertThat(((Gauge<?>) metrics.get("pendingEventTimeTimers")).getValue())
@@ -196,7 +196,7 @@ class StreamFusionArrowRegularJoinOperatorTest {
             assertThat(((Counter) metrics.get("processedRows")).getCount()).isEqualTo(2L);
             assertThat(((Counter) metrics.get("emittedRows")).getCount()).isEqualTo(1L);
             assertThat(((Counter) metrics.get("emittedInserts")).getCount()).isEqualTo(1L);
-            assertThat(((Counter) metrics.get("stateReadBatches")).getCount()).isEqualTo(2L);
+            assertThat(((Counter) metrics.get("stateReadBatches")).getCount()).isEqualTo(3L);
             assertThat(((Counter) metrics.get("stateWriteBatches")).getCount()).isEqualTo(2L);
             assertThat(((Gauge<?>) metrics.get("numSpillFiles")).getValue()).isEqualTo(0L);
             assertThat(((Gauge<?>) metrics.get("spillInBytes")).getValue()).isEqualTo(0L);

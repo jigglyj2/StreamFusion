@@ -59,16 +59,16 @@ impl IpcBatchFrame {
 
     /// Decodes a contiguous metadata/body payload without cloning its Arrow body buffers.
     pub(crate) fn decode_contiguous(
-        payload: Vec<u8>,
+        payload: impl Into<Buffer>,
         metadata_length: usize,
         schema: SchemaRef,
     ) -> Result<RecordBatch> {
+        let payload = payload.into();
         if metadata_length > payload.len() {
             return Err(ArrowError::ParseError(
                 "exchange IPC metadata exceeds its payload".to_string(),
             ));
         }
-        let payload = Buffer::from(payload);
         let message = root_as_message(&payload[..metadata_length]).map_err(|error| {
             ArrowError::ParseError(format!("invalid exchange IPC metadata: {error}"))
         })?;

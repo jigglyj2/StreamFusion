@@ -25,6 +25,9 @@ class StreamFusionExpandPlanTest {
 
         NativePlan plan = NativePlan.parseFrom(StreamFusionExpandPlan.create(List.of(List.of(first), List.of(second))));
 
+        assertThat(plan.getProtocolVersion()).isEqualTo(3);
+        assertThat(plan.getRoot().getClearRecordTimestamps()).isTrue();
+
         assertThat(plan.getRoot().getExpand().getProjectionsList())
                 .extracting(projection ->
                         projection.getExpressions(0).getIntegerLiteral().getValue())

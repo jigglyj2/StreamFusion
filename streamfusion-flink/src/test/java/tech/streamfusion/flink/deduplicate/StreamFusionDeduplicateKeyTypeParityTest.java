@@ -293,7 +293,7 @@ public class StreamFusionDeduplicateKeyTypeParityTest {
         return bytes;
     }
 
-    private static RowType physicalRowType(RowType rowType) {
+    static RowType physicalRowType(RowType rowType) {
         List<RowType.RowField> fields = new ArrayList<>(rowType.getFieldCount());
         for (RowType.RowField field : rowType.getFields()) {
             fields.add(new RowType.RowField(

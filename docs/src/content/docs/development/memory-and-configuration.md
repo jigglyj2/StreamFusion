@@ -1,109 +1,67 @@
 ---
 title: Memory and configuration
-description: How native execution participates in Flink memory accounting and configuration.
+description: Comet-style native reservations governed by Flink's existing resource model.
 ---
 
-StreamFusion follows the host engine's resource model. Operators may execute in Rust,
-but they do not own an unaccounted native-memory pool or require a second set of
-deployment settings.
+StreamFusion follows DataFusion Comet's reservation model. Flink owns resource allocation;
+Rust and Arrow allocate physical storage. StreamFusion does not override Rust's global
+allocator to call Flink for each allocation.
 
-## Memory accounting
+## What is accounted
 
-Flink's existing TaskManager memory configuration governs all memory used by a
-StreamFusion operator, including Arrow buffers, DataFusion reservations, and custom
-Rust data structures. In particular, operators participate in Flink's
-operator-scoped managed-memory allocation, whose total is determined by
-`taskmanager.memory.managed.size` or `taskmanager.memory.managed.fraction` and divided
-using Flink's managed-memory consumer weights. StreamFusion must not treat
-`taskmanager.memory.task.off-heap.size` as an extra untracked allowance.
+Reservations cover large Arrow buffers, growing DataFusion structures, retained native state,
+and large temporary workspaces. Credit follows the buffer or state owner until its last
+reference is released, including across Arrow C Data/C Stream handoff and cancellation.
+Shared allocations count once, even when an IPC payload backs many columns or slices.
+Imported Java buffers retain their producer's budget and release callback; native forwarding
+does not charge that payload again. Newly allocated native output retains its native reservation.
 
-The runtime bridge is:
+Small bounded temporaries, execution-stream wrappers, Arrow descriptors, and control objects
+do not need individual reservations. Allocation instrumentation can diagnose unexpected growth;
+matching every ephemeral allocation to a reservation is not a production admission requirement.
+This exception does not permit unbounded temporary allocations or unaccounted retained state.
 
-1. The generated Flink transformation declares the `OPERATOR` managed-memory use case.
-2. Flink assigns the operator its fraction of TaskManager managed memory.
-3. A task-scoped broker reserves and releases bytes through Flink's `MemoryManager`.
-   Arrow Java allocators and the native DataFusion memory pool use the same broker and
-   therefore the same operator limit.
-4. Every reservation and release is reflected in that adapter. A refused reservation
-   asks a spill-capable operator to spill; if it cannot, execution fails with a useful
-   resource error rather than allocating beyond Flink's limit.
-5. Closing, cancellation, and failure release reservations, with leak checks covering
-   each terminal path.
+Use DataFusion's memory consumers and reservation pool for DataFusion operators. Custom native
+state uses coarse reservations on the same Flink broker. Ordinary buffer ownership and Arrow
+release callbacks remain responsible for physical lifetime. Compatibility copies, such as a
+rebased validity bitmap at the C Data boundary, remain budgeted.
 
-The broker, Arrow allocator, decoded protobuf plan, Tokio runtime, and DataFusion task
-context live for the Flink operator's task lifetime. Native execution contexts are
-closed before the Arrow allocator so outstanding DataFusion reservations return to
-Flink before imported Arrow buffers are checked and released. The operator exposes its
-current, peak, and assigned managed-memory bytes as Flink metrics.
+Filters evaluate their predicate once. All-pass output retains the input buffers; all-rejected
+input needs no gathered payload. Partial selections reserve gather space from the projected
+logical buffer spans, avoiding multiplication of a shared IPC allocation by the schema width.
+Operations that expand output, such as `REPEAT`, must reserve their large output before allocation.
 
-The context reserves a control envelope for the decoded plan, Tokio runtime, DataFusion
-session/task context, and registry entry before constructing them. Cached Arrow schemas
-and the lowered physical-plan tree have separate reservations that grow before those
-objects are retained. Production bridge overloads cannot select an unbounded manager:
-every JNI entry requires either the task-scoped context or an explicit
-`NativeMemoryManager`. Low-level tests use a bounded test broker.
-Operators that retain this context use a shared minimum Flink managed-memory weight,
-so the fixed control and physical-plan reservations remain viable when a task chain
-also contains a high-weight buffering operator such as bounded sort.
+## Flink budgets and settings
 
-Native RocksDB normally receives its cache and write-buffer lease from Flink's
-`STATE_BACKEND` managed-memory share, leaving the operator share for Arrow and execution scratch.
-When an embedded runner cannot expose that lease, the compatibility fallback gives RocksDB one
-quarter of the operator allowance and keeps the remainder available for batch input, output, and
-accounted native working memory. This is an internal division of Flink's existing allowance, not a
-second memory budget or deployment setting.
-RocksDB uses three quarters of that lease for a shared block cache, charges its
-write-buffer manager to that cache, and places index and filter blocks in the same
-cache. The remaining quarter is reserved headroom for RocksDB table-reader, iterator,
-and database metadata rather than being exposed as another native pool.
+The TaskManager's `taskmanager.memory.managed.size` or
+`taskmanager.memory.managed.fraction`, together with Flink's consumer weights, determines the
+available budget. Native DataFusion and Arrow Java participate in that resource model.
+`taskmanager.memory.task.off-heap.size` is not an additional untracked StreamFusion allowance.
+No separate StreamFusion memory budget or admission bypass is supported.
 
-This is modeled on Apache DataFusion Comet's unified off-heap path. Comet implements a
-DataFusion `MemoryPool` that calls a JVM `CometTaskMemoryManager` over JNI. That adapter
-registers an off-heap Spark `MemoryConsumer` and delegates acquisition and release to
-Spark's `TaskMemoryManager`; a partial grant becomes a DataFusion resource error that
-can trigger spilling. StreamFusion should preserve that single-authority design while
-using Flink's managed-memory APIs and lifecycle instead of copying Spark-specific
-configuration or task classes.
+Fused regions preserve the managed-memory weights of their state owners. A RocksDB cache and
+write-buffer manager are shared by the owners of the same Flink shared memory resource.
+Different resources with equal byte limits must remain independent. The reservation is released
+only after the last owner closes; restore readers without a shared resource use isolated pools.
 
-DataFusion reservations and production Arrow boundary allocations are accounted by this
-bridge. Native exchange JNI output is also reserved while it is copied into its
-producer-owned Java result. Ordinary Rust memory follows Comet's pattern too: Rust's
-system allocator remains responsible for the physical allocation, while task-owned
-plans, vectors, maps, scratch buffers, and custom operator state hold RAII reservations
-from the same DataFusion pool. Dropping the Rust owner returns the reservation to Flink.
+Flink's configured incremental-checkpoint setting determines whether the native RocksDB adapter
+uses incremental handles. Selecting RocksDB does not implicitly enable incremental checkpoints.
+Other RocksDB settings still require equivalent native handling before production stateful
+admission. Unsupported configuration or uncertain semantics require whole-plan Flink fallback.
 
-Arrow and other batch-producing kernels can learn the exact buffer size only after
-building one batch. Like Comet's buffered operators, StreamFusion charges that newly
-produced batch before allowing it to continue; a refused reservation drops it and fails
-with a resource error. Additional copies whose size is predictable, such as concatenated
-output or encoded exchange buffers, are reserved before allocation. When Rust-produced
-Arrow buffers cross the C Data boundary, Arrow Java's foreign-allocation wrapper assumes
-their accounting for the remainder of their lifetime. New custom Rust operators must use
-the shared reservation APIs for any data structures that DataFusion's `MemoryPool` does
-not already track; adding an unbounded allocator is not an acceptable fallback.
+The runtime configuration surface follows Flink. StreamFusion-specific runtime options are
+limited to enabling acceleration and explicit opt-ins for operators whose behavior differs from
+Flink. Implementation constants and benchmark controls must not become deployment tuning knobs.
+Native connectors must map each applicable Flink/client setting or retain the Flink boundary
+with a precise fallback reason.
 
-## Configuration policy
+## Current readiness
 
-StreamFusion does not add deployment knobs for behavior Flink already configures.
-Parallelism, checkpoints, state, network memory, managed/off-heap memory, connectors,
-and client behavior continue to use their normal Flink settings. This keeps an
-accelerated deployment operationally equivalent to the Flink job it replaces.
+Persistent stateful families remain gated by
+[architecture admission](/StreamFusion/development/architecture-admission/). Their large-state
+memory behavior, backend configuration, metrics, and checkpoint/restore contracts must be verified
+before admission. Removing descriptor reservations does not establish those contracts.
 
-A StreamFusion-specific switch is justified only as an explicit feature gate for
-functionality that may not yet be byte-identical to Flink. Such a switch must document
-the semantic difference and default to the parity-preserving behavior. It must not be
-used to create a parallel tuning surface for an existing Flink option.
-
-## Native connector settings
-
-A native source or sink is eligible only if it preserves the effective configuration
-of the Flink/Java connector. Its adapter must translate relevant client properties—such
-as security, authentication, serialization, delivery guarantees, transaction and
-timeout behavior, retry policy, and broker discovery—to equivalent Rust client
-settings.
-
-Translation is semantic, not just a matching-name exercise. Tests must compare the
-resolved Java and Rust configurations, including Flink defaults and derived values. If
-the native library has no exact equivalent, StreamFusion must retain the Flink source
-or sink and expose the unsupported setting as the fallback reason. It must never
-silently accept the Rust client's default.
+Native parity tests must require acceleration and native execution. Tests exercising whole-plan
+fallback are explicitly identified as fallback coverage; a successful Flink-versus-Flink comparison
+does not establish native operator parity.

@@ -33,6 +33,23 @@ public final class FlinkManagedMemory implements AllocationListener, NativeMemor
     private final BufferAllocator allocator;
     private final ThreadLocal<Deque<AllocationCharge>> preAllocationCharges = ThreadLocal.withInitial(ArrayDeque::new);
 
+    private java.util.UUID rocksDbMemoryScope = java.util.UUID.randomUUID();
+
+    /** Bind before native state creation to the shared STATE_BACKEND reservation identity. */
+    public void shareRocksDbMemoryScope(java.util.UUID scope) {
+        this.rocksDbMemoryScope = java.util.Objects.requireNonNull(scope);
+    }
+
+    @Override
+    public long rocksDbMemoryScopeHigh() {
+        return rocksDbMemoryScope.getMostSignificantBits();
+    }
+
+    @Override
+    public long rocksDbMemoryScopeLow() {
+        return rocksDbMemoryScope.getLeastSignificantBits();
+    }
+
     private long reserved;
     private long peakReserved;
     private long pendingArrowTransfer;
@@ -148,7 +165,7 @@ public final class FlinkManagedMemory implements AllocationListener, NativeMemor
 
     @Override
     public synchronized long available() {
-        return Math.min(limit - reserved, memoryManager.availableMemory());
+        return closed ? 0 : Math.min(limit - reserved, memoryManager.availableMemory());
     }
 
     @Override
@@ -201,6 +218,15 @@ public final class FlinkManagedMemory implements AllocationListener, NativeMemor
 
     @Override
     public void close() {
+        synchronized (this) {
+            if (closed) {
+                return;
+            }
+            // Prevent new admission, but allow outstanding native/Arrow owners to release
+            // their bytes after the operator or stream that produced them has closed.
+            closed = true;
+            finishArrowTransfer();
+        }
         RuntimeException allocatorFailure = null;
         try {
             allocator.close();
@@ -215,14 +241,9 @@ public final class FlinkManagedMemory implements AllocationListener, NativeMemor
             } else {
                 allocatorFailure.addSuppressed(failure);
             }
-        } finally {
-            synchronized (this) {
-                memoryManager.releaseAllMemory(reservationOwner);
-                reserved = 0;
-                pendingArrowTransfer = 0;
-                closed = true;
-            }
         }
+        // Do not releaseAllMemory here: a retained foreign buffer may still own a native
+        // reservation. A leaked owner must remain visible to Flink, not be reported as freed.
         if (allocatorFailure != null) {
             throw allocatorFailure;
         }

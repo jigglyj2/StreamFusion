@@ -31,6 +31,28 @@ import tech.streamfusion.proto.plan.v1.ValuesRow;
 
 class ArrowValuesCDataBridgeTest {
     @Test
+    void sharedPlanStreamSupportsZeroInputsWithoutStrippingTheLastPayloadColumn() {
+        RowType outputType = RowType.of(new IntType(), new VarCharType());
+        for (boolean empty : new boolean[] {false, true}) {
+            var memory = tech.streamfusion.flink.TestingNativeMemoryManager.create();
+            try (RootAllocator allocator = new RootAllocator(64L << 20);
+                    var context = new tech.streamfusion.nativebridge.NativeExecutionContext(plan(empty), memory)) {
+                var edge = new ArrowNativePlanBridge(context, outputType, allocator);
+                try (var stream = edge.executeStream(java.util.List.of());
+                        var output = stream.next()) {
+                    assertThat(output.size()).isEqualTo(empty ? 0 : 2);
+                    assertThat(output.root().getFieldVectors()).hasSize(2);
+                    if (!empty) {
+                        assertThat(output.rowView(0).getString(1).toString()).isEqualTo("seven");
+                    }
+                    assertThat(stream.next()).isNull();
+                }
+            }
+            assertThat(memory.available()).isEqualTo(memory.limit());
+        }
+    }
+
+    @Test
     void importsNullableValuesWithoutAnInputArrowBatch() {
         RowType outputType = RowType.of(new IntType(), new VarCharType());
 

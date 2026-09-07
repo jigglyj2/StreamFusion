@@ -23,8 +23,8 @@ final class StreamFusionExpandPlan {
             expand.addProjections(ExpandProjection.newBuilder().addAllExpressions(projection));
         }
         return NativePlan.newBuilder()
-                .setProtocolVersion(1)
-                .setRoot(Operator.newBuilder().setExpand(expand))
+                .setProtocolVersion(3)
+                .setRoot(Operator.newBuilder().setExpand(expand).setClearRecordTimestamps(true))
                 .build()
                 .toByteArray();
     }

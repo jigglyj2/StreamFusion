@@ -80,6 +80,10 @@ public final class StreamFusionBoundedSortTranslator {
             if (fieldIndex < 0 || fieldIndex >= inputType.getFieldCount()) {
                 return "sort: field index " + fieldIndex + " is outside the input row";
             }
+            if (containsFloatingPoint(inputType.getTypeAt(fieldIndex))) {
+                return "sort: field " + fieldIndex
+                        + " contains floating-point ordering; Flink's NaN/signed-zero comparator is not equivalent to DataFusion external sort";
+            }
             if (!orderable(inputType.getTypeAt(fieldIndex))) {
                 return "sort: field " + fieldIndex + " type " + inputType.getTypeAt(fieldIndex)
                         + " has no exact native Flink comparator";
@@ -110,6 +114,16 @@ public final class StreamFusionBoundedSortTranslator {
                 return false;
             default:
                 return true;
+        }
+    }
+
+    private static boolean containsFloatingPoint(LogicalType type) {
+        switch (type.getTypeRoot()) {
+            case FLOAT:
+            case DOUBLE:
+                return true;
+            default:
+                return type.getChildren().stream().anyMatch(StreamFusionBoundedSortTranslator::containsFloatingPoint);
         }
     }
 

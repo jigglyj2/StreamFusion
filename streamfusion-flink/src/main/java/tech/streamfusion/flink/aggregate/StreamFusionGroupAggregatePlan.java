@@ -90,6 +90,19 @@ final class StreamFusionGroupAggregatePlan {
             boolean[] retractable,
             boolean inputChangelog,
             long miniBatchSize) {
+        return createLocal(
+                inputType, internalOutputType, grouping, calls, retractable, inputChangelog, miniBatchSize, 1);
+    }
+
+    static byte[] createLocal(
+            RowType inputType,
+            RowType internalOutputType,
+            int[] grouping,
+            AggregateCall[] calls,
+            boolean[] retractable,
+            boolean inputChangelog,
+            long miniBatchSize,
+            int protocolVersion) {
         LocalGroupAggregate.Builder aggregate = LocalGroupAggregate.newBuilder()
                 .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
                 .setInputChangelog(inputChangelog)
@@ -101,7 +114,7 @@ final class StreamFusionGroupAggregatePlan {
             aggregate.addGroupingIndices(index);
         }
         return NativePlan.newBuilder()
-                .setProtocolVersion(1)
+                .setProtocolVersion(protocolVersion)
                 .setRoot(Operator.newBuilder().setLocalGroupAggregate(aggregate))
                 .build()
                 .toByteArray();

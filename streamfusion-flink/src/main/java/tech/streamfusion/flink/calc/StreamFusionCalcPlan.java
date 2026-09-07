@@ -6,7 +6,6 @@ package tech.streamfusion.flink.calc;
 
 import java.util.List;
 import org.apache.flink.table.types.logical.RowType;
-import tech.streamfusion.proto.plan.v1.ArrayUnnest;
 import tech.streamfusion.proto.plan.v1.Calc;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.Input;
@@ -14,94 +13,30 @@ import tech.streamfusion.proto.plan.v1.InputReference;
 import tech.streamfusion.proto.plan.v1.LogicalType;
 import tech.streamfusion.proto.plan.v1.NativePlan;
 import tech.streamfusion.proto.plan.v1.Operator;
-import tech.streamfusion.proto.plan.v1.ReplicateRows;
-import tech.streamfusion.proto.plan.v1.UnnestCollection;
 
-/** Builds protobuf plans for Arrow-native Calc and fused UNNEST/Calc execution. */
+/** Builds Calc plan fragments and preserves native changelog metadata. */
 public final class StreamFusionCalcPlan {
     private StreamFusionCalcPlan() {}
+
+    /** Generated Flink SQL collectors drop record timestamps, but preserve SQL rowtime fields. */
+    static byte[] createStage(List<Expression> projections, Expression condition) {
+        Calc.Builder calc = Calc.newBuilder()
+                .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
+                .addAllProjections(projections)
+                .setPreserveInputEnvelope(true);
+        if (condition != null) {
+            calc.setCondition(condition);
+        }
+        return NativePlan.newBuilder()
+                .setProtocolVersion(3)
+                .setRoot(Operator.newBuilder().setCalc(calc).setClearRecordTimestamps(true))
+                .build()
+                .toByteArray();
+    }
 
     static byte[] create(RowType inputType, List<List<Expression>> projectionStages, List<Expression> conditions) {
         Operator input = Operator.newBuilder().setInput(Input.newBuilder()).build();
         return appendCalcs(input, inputType.getFieldCount(), projectionStages, conditions);
-    }
-
-    static byte[] createFusedUnnest(
-            List<Integer> indexes,
-            List<Boolean> withOrdinalities,
-            List<Boolean> preserveEmpty,
-            List<UnnestCollection> collections,
-            List<Expression> collectionExpressions,
-            List<Integer> outputFieldCounts,
-            List<List<Expression>> projectionStages,
-            List<Expression> conditions) {
-        return createFusedCalcUnnest(
-                indexes,
-                withOrdinalities,
-                preserveEmpty,
-                collections,
-                collectionExpressions,
-                outputFieldCounts,
-                outputFieldCounts.get(0) - 1,
-                java.util.Collections.emptyList(),
-                java.util.Collections.emptyList(),
-                projectionStages,
-                conditions);
-    }
-
-    static byte[] createFusedCalcUnnest(
-            List<Integer> indexes,
-            List<Boolean> withOrdinalities,
-            List<Boolean> preserveEmpty,
-            List<UnnestCollection> collections,
-            List<Expression> collectionExpressions,
-            List<Integer> outputFieldCounts,
-            int planInputFieldCount,
-            List<List<Expression>> inputProjectionStages,
-            List<Expression> inputConditions,
-            List<List<Expression>> outputProjectionStages,
-            List<Expression> outputConditions) {
-        int stages = indexes.size();
-        if (stages == 0
-                || withOrdinalities.size() != stages
-                || preserveEmpty.size() != stages
-                || collections.size() != stages
-                || collectionExpressions.size() != stages
-                || outputFieldCounts.size() != stages) {
-            throw new IllegalArgumentException("A fused UNNEST chain must contain equally sized, non-empty stages");
-        }
-        Operator operator = Operator.newBuilder().setInput(Input.newBuilder()).build();
-        operator = appendCalcOperators(operator, planInputFieldCount, inputProjectionStages, inputConditions);
-        for (int stage = 0; stage < stages; stage++) {
-            ArrayUnnest.Builder unnest = ArrayUnnest.newBuilder()
-                    .setInput(operator)
-                    .setArrayIndex(indexes.get(stage))
-                    .setWithOrdinality(withOrdinalities.get(stage))
-                    .setPreserveEmpty(preserveEmpty.get(stage))
-                    .setCollection(collections.get(stage));
-            Expression expression = collectionExpressions.get(stage);
-            if (expression != null) {
-                unnest.setCollectionExpression(expression);
-            }
-            operator = Operator.newBuilder().setArrayUnnest(unnest).build();
-        }
-        return appendCalcs(operator, outputFieldCounts.get(stages - 1), outputProjectionStages, outputConditions);
-    }
-
-    static byte[] createFusedReplicateRows(
-            Expression repetition,
-            List<Expression> values,
-            int replicateOutputFieldCount,
-            List<List<Expression>> projectionStages,
-            List<Expression> conditions) {
-        Operator input = Operator.newBuilder().setInput(Input.newBuilder()).build();
-        Operator replicate = Operator.newBuilder()
-                .setReplicateRows(ReplicateRows.newBuilder()
-                        .setInput(input)
-                        .setRepetition(repetition)
-                        .addAllValues(values))
-                .build();
-        return appendCalcs(replicate, replicateOutputFieldCount, projectionStages, conditions);
     }
 
     private static byte[] appendCalcs(

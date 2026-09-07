@@ -80,6 +80,10 @@ public abstract class AbstractStreamFusionArrowKeyedStateOperator extends Abstra
         lifecycle.metrics().processedWithoutStateCalls(inputRows);
     }
 
+    protected final void recordEmittedOutput(ArrowRowDataBatch output) {
+        lifecycle.metrics().emittedOutput(output);
+    }
+
     protected final void recordProcessedWithoutStateCalls(ArrowRowDataBatch input) {
         lifecycle.metrics().processedWithoutStateCalls(input);
     }

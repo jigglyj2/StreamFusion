@@ -16,9 +16,13 @@ import java.util.List;
 import org.apache.flink.table.types.logical.IntType;
 import org.apache.flink.table.types.logical.RowType;
 import org.junit.jupiter.api.Test;
+import tech.streamfusion.flink.operator.StreamFusionNativeRegionTranslator;
+import tech.streamfusion.proto.plan.v1.ArrayUnnest;
 import tech.streamfusion.proto.plan.v1.Calc;
 import tech.streamfusion.proto.plan.v1.Expression;
+import tech.streamfusion.proto.plan.v1.Input;
 import tech.streamfusion.proto.plan.v1.NativePlan;
+import tech.streamfusion.proto.plan.v1.Operator;
 import tech.streamfusion.proto.plan.v1.UnnestCollection;
 
 class StreamFusionCalcChainPlanTest {
@@ -45,23 +49,27 @@ class StreamFusionCalcChainPlanTest {
         RowType rowType = RowType.of(new IntType(false));
         Expression value = StreamFusionCalcPlan.inputReference(0, StreamFusionCalcPlan.logicalType(rowType, 0));
 
-        byte[] bytes = StreamFusionCalcPlan.createFusedCalcUnnest(
-                List.of(0),
-                List.of(false),
-                List.of(false),
-                List.of(UnnestCollection.UNNEST_COLLECTION_ARRAY),
-                Arrays.asList((Expression) null),
-                List.of(2),
-                1,
-                List.of(List.of(value)),
-                Arrays.asList((Expression) null),
-                List.of(List.of(value)),
-                Arrays.asList((Expression) null));
+        byte[] inputCalc =
+                StreamFusionCalcPlan.create(rowType, List.of(List.of(value)), Arrays.asList((Expression) null));
+        byte[] unnest = NativePlan.newBuilder()
+                .setProtocolVersion(1)
+                .setRoot(Operator.newBuilder()
+                        .setArrayUnnest(ArrayUnnest.newBuilder()
+                                .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
+                                .setArrayIndex(0)
+                                .setCollection(UnnestCollection.UNNEST_COLLECTION_ARRAY)))
+                .build()
+                .toByteArray();
+        byte[] output = StreamFusionCalcPlan.create(
+                RowType.of(new IntType(false), new IntType()), List.of(List.of(value)), Arrays.asList((Expression)
+                        null));
+        byte[] bytes = StreamFusionNativeRegionTranslator.compose(List.of(inputCalc, unnest, output));
 
         NativePlan plan = NativePlan.parseFrom(bytes);
         Calc outputCalc = plan.getRoot().getCalc();
-        Calc inputCalc = outputCalc.getInput().getArrayUnnest().getInput().getCalc();
-        assertThat(inputCalc.getInput().hasInput()).isTrue();
+        Calc firstCalc = outputCalc.getInput().getArrayUnnest().getInput().getCalc();
+        assertThat(firstCalc.getInput().hasInput()).isTrue();
         assertThat(outputCalc.getInput().hasArrayUnnest()).isTrue();
+        assertThat(outputCalc.getProjections(1).getInputReference().getIndex()).isEqualTo(2);
     }
 }

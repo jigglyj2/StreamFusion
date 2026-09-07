@@ -258,7 +258,7 @@ unsafe fn decode(
 
 pub(super) fn decode_batch(
     plan_bytes: &[u8],
-    payload: Vec<u8>,
+    payload: impl Into<arrow::buffer::Buffer>,
     metadata_length: usize,
 ) -> Result<arrow::record_batch::RecordBatch> {
     let plan = decode_exchange_plan(plan_bytes)?;

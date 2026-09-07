@@ -31,6 +31,15 @@ public final class StreamFusionReplicateRowsTranslator {
 
     private StreamFusionReplicateRowsTranslator() {}
 
+    public static byte[] createStagePlan(RowType inputType, RowType outputType, Object joinType, Object invocation) {
+        String reason = unsupportedReason(inputType, outputType, joinType, invocation, null);
+        if (reason != null) {
+            throw new IllegalArgumentException(reason);
+        }
+        List<Expression> expressions = expressions(inputType, (RexCall) invocation);
+        return StreamFusionReplicateRowsPlan.create(expressions.get(0), expressions.subList(1, expressions.size()));
+    }
+
     public static Transformation<RowData> translate(
             Transformation<RowData> input,
             RowType inputType,

@@ -16,14 +16,17 @@ import org.apache.flink.streaming.api.operators.OperatorAttributes;
 import org.apache.flink.streaming.api.operators.OperatorAttributesBuilder;
 import org.apache.flink.streaming.api.operators.TwoInputStreamOperator;
 import org.apache.flink.streaming.api.watermark.Watermark;
+import org.apache.flink.streaming.runtime.streamrecord.LatencyMarker;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.table.runtime.keyselector.RowDataKeySelector;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.flink.arrow.ArrowRegularJoinCDataBridge;
+import tech.streamfusion.flink.arrow.ArrowRegularJoinOutputStream;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.exchange.ArrowExchangeInputBatch;
 import tech.streamfusion.flink.exchange.NativeExchangeFrame;
 import tech.streamfusion.flink.metrics.FlinkMetricParity;
+import tech.streamfusion.flink.metrics.StreamFusionNativeMetricTree;
 import tech.streamfusion.flink.state.AbstractStreamFusionArrowKeyedStateOperator;
 import tech.streamfusion.nativebridge.NativeCalcBridge;
 import tech.streamfusion.nativebridge.NativeRegularJoinBridge;
@@ -38,6 +41,8 @@ final class StreamFusionArrowRegularJoinOperator extends AbstractStreamFusionArr
     private final boolean[] preencodeKeys;
     private final byte[][] exchangePlans;
     private final boolean boundedFinalOutput;
+    private final byte[] identifiedPlan;
+    private final long joinPlanNodeId;
 
     private transient long[] inputWatermarks = {Long.MIN_VALUE, Long.MIN_VALUE};
     private transient long emittedWatermark = Long.MIN_VALUE;
@@ -46,6 +51,9 @@ final class StreamFusionArrowRegularJoinOperator extends AbstractStreamFusionArr
     private transient ListState<Long> rightWatermarkState;
     private transient boolean[] inputEnded;
     private transient boolean finished;
+    private transient StreamFusionNativeMetricTree metricTree;
+    private transient long observedJoinOutput;
+    private transient long emittedRegionOutput;
 
     StreamFusionArrowRegularJoinOperator(
             RowType leftType,
@@ -93,12 +101,24 @@ final class StreamFusionArrowRegularJoinOperator extends AbstractStreamFusionArr
                 };
         this.exchangePlans = new byte[][] {leftExchangePlan.clone(), rightExchangePlan.clone()};
         this.boundedFinalOutput = boundedFinalOutput;
+        this.identifiedPlan = NativeRegularJoinBridge.identifyPlan(plan);
+        this.joinPlanNodeId = joinNodeId(identifiedPlan);
     }
 
     @Override
     public void open() throws Exception {
         super.open();
         observedStatistics = NativeRegularJoinBridge.statistics(nativeHandle());
+        if (!boundedFinalOutput) {
+            metricTree = new StreamFusionNativeMetricTree(
+                    identifiedPlan,
+                    getOperatorID(),
+                    getContainingTask().getEnvironment().getMetricGroup(),
+                    getContainingTask().getEnvironment().getTaskManagerInfo().getConfiguration(),
+                    getContainingTask().getIndexInSubtaskGroup(),
+                    joinPlanNodeId);
+            metricTree.watermark(emittedWatermark);
+        }
         getMetricGroup().addGroup("StreamFusion").gauge("pendingEventTimeTimers", () -> 0L);
         getMetricGroup().addGroup("StreamFusion").gauge("pendingProcessingTimeTimers", () -> 0L);
         if (boundedFinalOutput) {
@@ -138,20 +158,23 @@ final class StreamFusionArrowRegularJoinOperator extends AbstractStreamFusionArr
                 List<byte[]> keys = preencodeKeys[side]
                         ? preencodeKeys(input.arrowBatch(), keySelectors[side], "regular join")
                         : null;
-                try (ArrowRowDataBatch result = ArrowRegularJoinCDataBridge.execute(
+                try (ArrowRegularJoinOutputStream stream = new ArrowRegularJoinOutputStream(
                         nativeHandle(), side, input, keys, outputType, allocator(), memoryManager())) {
-                    int physicalOutput = 0;
-                    if (result.size() > 0) {
-                        output.collect(new StreamRecord<>(result));
-                        physicalOutput = 1;
+                    while (true) {
+                        try (ArrowRowDataBatch result = stream.next()) {
+                            if (result == null) {
+                                break;
+                            }
+                            output.collect(new StreamRecord<>(result));
+                            FlinkMetricParity.replacePhysicalRecords(
+                                    getMetricGroup().getIOMetricGroup().getNumRecordsOutCounter(), 1, result.size());
+                            recordEmittedOutput(result);
+                            emittedRegionOutput += result.size();
+                        }
                     }
                     FlinkMetricParity.replacePhysicalRecords(
                             getMetricGroup().getIOMetricGroup().getNumRecordsInCounter(), 1, input.size());
-                    FlinkMetricParity.replacePhysicalRecords(
-                            getMetricGroup().getIOMetricGroup().getNumRecordsOutCounter(),
-                            physicalOutput,
-                            result.size());
-                    recordProcessedWithoutStateCalls(input.size(), result);
+                    recordProcessedWithoutStateCalls(input.size());
                 }
                 updateNativeStatistics();
             } catch (Throwable failure) {
@@ -169,6 +192,24 @@ final class StreamFusionArrowRegularJoinOperator extends AbstractStreamFusionArr
         recordNativeWindowStatistics(current[0] - observedStatistics[0], current[1] - observedStatistics[1], 0, 0, 0);
         NativeCalcBridge.recordFusedBatches(current[2] - observedStatistics[2]);
         observedStatistics = current;
+        if (metricTree != null) {
+            long[] snapshot = NativeRegularJoinBridge.metricSnapshot(nativeHandle());
+            metricTree.update(snapshot);
+            for (int index = 0; index < snapshot.length; index += 3) {
+                if (snapshot[index] == joinPlanNodeId) {
+                    long joinOutput = snapshot[index + 2];
+                    // The physical lifecycle owner is Join. Its output counts pre-Calc rows;
+                    // the Calc stages publish their own counts in the metric tree.
+                    getMetricGroup()
+                            .getIOMetricGroup()
+                            .getNumRecordsOutCounter()
+                            .inc(joinOutput - observedJoinOutput - emittedRegionOutput);
+                    observedJoinOutput = joinOutput;
+                    emittedRegionOutput = 0;
+                    break;
+                }
+            }
+        }
     }
 
     @Override
@@ -187,6 +228,9 @@ final class StreamFusionArrowRegularJoinOperator extends AbstractStreamFusionArr
         long watermark = Math.min(inputWatermarks[0], inputWatermarks[1]);
         if (watermark > emittedWatermark) {
             emittedWatermark = watermark;
+            if (metricTree != null) {
+                metricTree.watermark(watermark);
+            }
             recordWatermark();
             output.emitWatermark(new Watermark(watermark));
         }
@@ -255,6 +299,39 @@ final class StreamFusionArrowRegularJoinOperator extends AbstractStreamFusionArr
             restored = Math.max(restored, candidate);
         }
         return restored;
+    }
+
+    @Override
+    public void processLatencyMarker1(LatencyMarker marker) throws Exception {
+        if (metricTree != null) {
+            metricTree.latency(marker);
+        }
+        super.processLatencyMarker1(marker);
+    }
+
+    @Override
+    public void processLatencyMarker2(LatencyMarker marker) throws Exception {
+        if (metricTree != null) {
+            metricTree.latency(marker);
+        }
+        super.processLatencyMarker2(marker);
+    }
+
+    @Override
+    protected void beforeNativeClose() {
+        if (metricTree != null) {
+            try {
+                updateNativeStatistics();
+            } finally {
+                metricTree.close();
+                metricTree = null;
+            }
+        }
+    }
+
+    private static long joinNodeId(byte[] plan) {
+        return StreamFusionNativeMetricTree.uniqueNodeId(
+                plan, tech.streamfusion.proto.plan.v1.Operator.OperatorCase.REGULAR_JOIN);
     }
 
     @Override

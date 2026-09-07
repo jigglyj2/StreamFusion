@@ -33,6 +33,7 @@ public final class ArrowCDataBridge {
         private final NativeExecutionContext context;
         private final RowType outputType;
         private final BufferAllocator allocator;
+        private final ArrowNativePlanBridge streamExecution;
         private Schema inputSchema;
         private Schema outputSchema;
 
@@ -40,6 +41,7 @@ public final class ArrowCDataBridge {
             this.context = context;
             this.outputType = outputType;
             this.allocator = allocator;
+            this.streamExecution = new ArrowNativePlanBridge(context, outputType, allocator);
         }
 
         public NativeCalcResult executeWithSelection(ArrowRowDataBatch input) {
@@ -55,37 +57,11 @@ public final class ArrowCDataBridge {
 
         /** Executes one input through the Arrow C Stream output boundary. */
         public NativeOutputStream executeStream(ArrowRowDataBatch input) {
-            Schema currentInputSchema = input.root().getSchema();
-            if (inputSchema != null && !inputSchema.equals(currentInputSchema)) {
-                throw new IllegalStateException("Arrow input schema changed after native negotiation");
-            }
-            boolean negotiate = inputSchema == null;
-            BufferAllocator inputAllocator = input.allocator();
-            try (ArrowArray inputArray = ArrowArray.allocateNew(inputAllocator);
-                    ArrowSchema inputSchemaHandle = negotiate ? ArrowSchema.allocateNew(inputAllocator) : null) {
-                if (negotiate) {
-                    Data.exportVectorSchemaRoot(inputAllocator, input.root(), null, inputArray, inputSchemaHandle);
-                } else {
-                    Data.exportVectorSchemaRoot(inputAllocator, input.root(), null, inputArray);
-                }
-                ArrowArrayStream stream = ArrowArrayStream.allocateNew(allocator);
-                try {
-                    NativeCalcBridge.executeArrowStream(
-                            context,
-                            inputArray.memoryAddress(),
-                            negotiate ? inputSchemaHandle.memoryAddress() : 0,
-                            stream.memoryAddress());
-                    NativeOutputStream output = new NativeOutputStream(stream, outputType, allocator, outputSchema);
-                    if (outputSchema == null) {
-                        outputSchema = output.schema();
-                    }
-                    inputSchema = currentInputSchema;
-                    return output;
-                } catch (RuntimeException | Error failure) {
-                    releaseStream(stream);
-                    throw failure;
-                }
-            }
+            NativeOutputStream output = streamExecution.executeStream(java.util.List.of(input));
+            // Preserve the existing single-input boundary diagnostic; physical stage counters
+            // are propagated independently from the context's native metric tree.
+            NativeCalcBridge.recordFusedBatches(1);
+            return output;
         }
 
         public long metricValue(String name) {
@@ -104,17 +80,22 @@ public final class ArrowCDataBridge {
                     ArrowSchema inputSchemaHandle = negotiate ? ArrowSchema.allocateNew(inputAllocator) : null;
                     ArrowSchema outputSchemaHandle = negotiate ? ArrowSchema.allocateNew(allocator) : null;
                     CDataDictionaryProvider dictionaries = new CDataDictionaryProvider()) {
-                if (negotiate) {
-                    Data.exportVectorSchemaRoot(inputAllocator, input.root(), null, inputArray, inputSchemaHandle);
-                } else {
-                    Data.exportVectorSchemaRoot(inputAllocator, input.root(), null, inputArray);
+                long rowCount;
+                try {
+                    if (negotiate) {
+                        Data.exportVectorSchemaRoot(inputAllocator, input.root(), null, inputArray, inputSchemaHandle);
+                    } else {
+                        Data.exportVectorSchemaRoot(inputAllocator, input.root(), null, inputArray);
+                    }
+                    rowCount = NativeCalcBridge.executeArrow(
+                            context,
+                            inputArray.memoryAddress(),
+                            negotiate ? inputSchemaHandle.memoryAddress() : 0,
+                            outputArray.memoryAddress(),
+                            negotiate ? outputSchemaHandle.memoryAddress() : 0);
+                } finally {
+                    releaseInputExports(inputArray, inputSchemaHandle);
                 }
-                long rowCount = NativeCalcBridge.executeArrow(
-                        context,
-                        inputArray.memoryAddress(),
-                        negotiate ? inputSchemaHandle.memoryAddress() : 0,
-                        outputArray.memoryAddress(),
-                        negotiate ? outputSchemaHandle.memoryAddress() : 0);
                 validateRowCount(rowCount);
                 VectorSchemaRoot output;
                 if (negotiate) {
@@ -145,7 +126,7 @@ public final class ArrowCDataBridge {
         private final Schema schema;
         private boolean closed;
 
-        private NativeOutputStream(
+        NativeOutputStream(
                 ArrowArrayStream stream, RowType outputType, BufferAllocator allocator, Schema expectedSchema) {
             this.stream = stream;
             this.outputType = outputType;
@@ -154,20 +135,45 @@ public final class ArrowCDataBridge {
                 stream.getSchema(schemaHandle);
                 this.schema = Data.importSchema(allocator, schemaHandle, dictionaries);
             } catch (java.io.IOException error) {
+                dictionaries.close();
                 throw new IllegalStateException("Failed to import native Arrow stream schema", error);
+            } catch (RuntimeException | Error failure) {
+                dictionaries.close();
+                throw failure;
             }
             if (expectedSchema != null && !expectedSchema.equals(schema)) {
+                dictionaries.close();
                 throw new IllegalStateException("Arrow output schema changed after native negotiation");
             }
         }
 
-        private Schema schema() {
+        Schema schema() {
             return schema;
+        }
+
+        private java.util.List<? extends AutoCloseable> inputEnvelopes = java.util.List.of();
+
+        void ownInputs(java.util.List<? extends AutoCloseable> inputs) {
+            // Transfer the private edge-owned list; it is not mutated after this call.
+            inputEnvelopes = inputs;
         }
 
         public ArrowRowDataBatch next() {
             VectorSchemaRoot root = nextRoot();
-            return root == null ? null : removeUnusedSelection(root, outputType, allocator);
+            if (root == null) {
+                return null;
+            }
+            // Source-free plans may emit SQL payload only; selection-bearing plans append
+            // their explicit native ordinal. Never strip a payload column just because it is INT.
+            if (root.getFieldVectors().size() == outputType.getFieldCount()) {
+                return ArrowRowDataBatch.wrap(root, outputType, allocator);
+            }
+            if (root.getFieldVectors().size() == outputType.getFieldCount() + 2
+                    || root.getFieldVectors().size() == outputType.getFieldCount() + 3) {
+                return NativePlanOutputEnvelope.read(root, outputType, allocator)
+                        .batch();
+            }
+            return removeUnusedSelection(root, outputType, allocator);
         }
 
         public NativeCalcResult nextWithSelection() {
@@ -176,6 +182,9 @@ public final class ArrowCDataBridge {
         }
 
         private VectorSchemaRoot nextRoot() {
+            if (closed) {
+                throw new IllegalStateException("Native Arrow output stream is closed");
+            }
             try (ArrowArray array = ArrowArray.allocateNew(allocator)) {
                 stream.getNext(array);
                 ArrowArray.Snapshot snapshot = array.snapshot();
@@ -204,15 +213,20 @@ public final class ArrowCDataBridge {
             if (!closed) {
                 closed = true;
                 try {
-                    releaseStream(stream);
+                    org.apache.flink.util.IOUtils.closeAll(
+                            () -> releaseStream(stream),
+                            dictionaries,
+                            () -> org.apache.flink.util.IOUtils.closeAll(inputEnvelopes));
+                } catch (Exception failure) {
+                    throw new IllegalStateException("Failed to release native Arrow stream resources", failure);
                 } finally {
-                    dictionaries.close();
+                    inputEnvelopes = java.util.List.of();
                 }
             }
         }
     }
 
-    private static void releaseStream(ArrowArrayStream stream) {
+    static void releaseStream(ArrowArrayStream stream) {
         try {
             if (stream.snapshot().release != 0) {
                 stream.release();
@@ -272,6 +286,10 @@ public final class ArrowCDataBridge {
 
     private static NativeCalcResult removeSelection(
             VectorSchemaRoot output, RowType outputType, BufferAllocator allocator) {
+        if (output.getFieldVectors().size() == outputType.getFieldCount() + 2
+                || output.getFieldVectors().size() == outputType.getFieldCount() + 3) {
+            return NativePlanOutputEnvelope.read(output, outputType, allocator);
+        }
         int ordinalIndex = output.getFieldVectors().size() - 1;
         FieldVector ordinalVector = output.getVector(ordinalIndex);
         if (!(ordinalVector instanceof IntVector)) {
@@ -309,12 +327,17 @@ public final class ArrowCDataBridge {
                 ArrowArray outputArray = ArrowArray.allocateNew(allocator);
                 ArrowSchema outputSchema = ArrowSchema.allocateNew(allocator);
                 CDataDictionaryProvider dictionaries = new CDataDictionaryProvider()) {
-            Data.exportVectorSchemaRoot(inputAllocator, input.root(), null, inputArray, inputSchema);
-            long rowCount = invocation.execute(
-                    inputArray.memoryAddress(),
-                    inputSchema.memoryAddress(),
-                    outputArray.memoryAddress(),
-                    outputSchema.memoryAddress());
+            long rowCount;
+            try {
+                Data.exportVectorSchemaRoot(inputAllocator, input.root(), null, inputArray, inputSchema);
+                rowCount = invocation.execute(
+                        inputArray.memoryAddress(),
+                        inputSchema.memoryAddress(),
+                        outputArray.memoryAddress(),
+                        outputSchema.memoryAddress());
+            } finally {
+                releaseInputExports(inputArray, inputSchema);
+            }
             validateRowCount(rowCount);
             VectorSchemaRoot output = Data.importVectorSchemaRoot(allocator, outputArray, outputSchema, dictionaries);
             output.setRowCount((int) rowCount);
@@ -325,6 +348,17 @@ public final class ArrowCDataBridge {
     private static void validateRowCount(long rowCount) {
         if (rowCount < 0 || rowCount > Integer.MAX_VALUE) {
             throw new IllegalStateException("Native calc returned invalid row count " + rowCount);
+        }
+    }
+
+    private static void releaseInputExports(ArrowArray array, ArrowSchema schema) {
+        // Closing a C handle frees its struct, not the producer's exported allocation. Rust
+        // clears release when it consumes the handle; early admission failure leaves Java
+        // responsible for the still-live callback, just like the shared C Stream edge.
+        try {
+            if (array.snapshot().release != 0) array.release();
+        } finally {
+            if (schema != null && schema.snapshot().release != 0) schema.release();
         }
     }
 

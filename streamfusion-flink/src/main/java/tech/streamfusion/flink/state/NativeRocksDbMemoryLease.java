@@ -15,19 +15,23 @@ final class NativeRocksDbMemoryLease implements AutoCloseable {
     private boolean closed;
 
     static NativeRocksDbMemoryLease reserve(StateBackend.KeyedStateBackendParameters<?> parameters) throws Exception {
-        if (parameters.getManagedMemoryFraction() <= 0) {
-            return null;
-        }
-        OpaqueMemoryResource<SharedBudget> resource = parameters
-                .getEnv()
-                .getMemoryManager()
-                .getSharedMemoryResourceForManagedMemory(
-                        RESOURCE_ID, SharedBudget::new, parameters.getManagedMemoryFraction());
+        return reserve(parameters.getEnv().getMemoryManager(), parameters.getManagedMemoryFraction());
+    }
+
+    static NativeRocksDbMemoryLease reserve(org.apache.flink.runtime.memory.MemoryManager manager, double fraction)
+            throws Exception {
+        if (fraction <= 0) return null;
+        OpaqueMemoryResource<SharedBudget> resource =
+                manager.getSharedMemoryResourceForManagedMemory(RESOURCE_ID, SharedBudget::new, fraction);
         return new NativeRocksDbMemoryLease(resource);
     }
 
     private NativeRocksDbMemoryLease(OpaqueMemoryResource<SharedBudget> resource) {
         this.resource = resource;
+    }
+
+    java.util.UUID scopeId() {
+        return resource.getResourceHandle().scopeId;
     }
 
     long size() {
@@ -46,8 +50,9 @@ final class NativeRocksDbMemoryLease implements AutoCloseable {
         }
     }
 
-    /** Marker handle; RocksDB's process-wide cache and write-buffer manager own the actual bytes. */
+    /** Marker handle; RocksDB's resource-scoped cache and write-buffer manager own the actual bytes. */
     private static final class SharedBudget implements AutoCloseable {
+        private final java.util.UUID scopeId = java.util.UUID.randomUUID();
         private final long size;
 
         private SharedBudget(long size) {

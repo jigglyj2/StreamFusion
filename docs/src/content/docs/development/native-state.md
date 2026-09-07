@@ -3,6 +3,140 @@ title: Native keyed state
 description: Backend contract, checkpoint formats, and implementation references for native operators.
 ---
 
+Persistent native stateful paths currently use whole-plan Flink fallback under
+[architecture admission](/StreamFusion/development/architecture-admission/). Operator-lifetime caches
+and batch/expression workspaces still need complete verified admission and lifetime accounting.
+The implementation details below describe retained code and its target memory contract.
+
+## Shared native-plan state bindings
+
+The common Java `NativeExecutionContext` accepts a separate, versioned `NativeStateBindings`
+protobuf. Flink supplies each physical node's stable identity, maximum parallelism, assigned
+key-group range, and memory or RocksDB resources. RocksDB paths and memory leases are task-local
+Flink assignments, not deployment settings. The runtime validates the complete binding request
+before constructing state, then installs the factories into one native execution context. It
+does not create a second execution context for each state owner.
+
+The common keyed-region transformation sums the relative managed-memory weights of its persistent
+owners (currently 8 per shared streaming owner). Fusion therefore preserves their combined weight
+in Flink's allocation calculation, independently of the number of external inputs. The runtime
+still uses one Flink-assigned allowance and one shared RocksDB memory lease.
+
+Deduplication, regular-join, and streaming raw/global group-aggregate constructors currently implement this shared contract. The
+per-family code constructs state and provides snapshot/restore/checkpoint methods; recursive
+physical lowering, Arrow stream execution, and node-addressed control dispatch are shared.
+Canonical snapshots remain independently addressable by `(plan_node_id, key_group)` so merging
+native regions does not merge their SQL state namespaces. Snapshot and restore cannot race an
+active stream. A failed mutating restore requires a fresh context and recovery rather than reuse
+of possibly partial state.
+
+The group-aggregate binding accepts synchronous and mini-batch streaming raw input, including
+retractions, and mini-batch global partial-accumulator input. Raw/global bundles drain through the
+shared child-before-parent control stream; keyed snapshots reject pending or incomplete drains.
+Bounded-final mode is still rejected before opening a database. A generated Calc/Aggregate/Calc
+comparison uses Flink's SQL-generated aggregate handler and checks complete changelog bytes,
+nullable values/keys, all four RowKinds, record timestamps, logical stage counts, and canonical
+memory-to-RocksDB and RocksDB-to-memory restore. Further shared Flink runtime tests cover canonical
+cross-backend and aligned/unaligned operator-state restoration with the same SQL-handler parity,
+and incremental RocksDB SST reuse after checkpoint completion. They verify all managed native
+reservations are released at runtime close. This does not establish production planner admission,
+full metric-surface parity or in-flight unaligned network replay. A separate aggregation 1→2→1
+rescaling matrix now covers all 16 test key groups using Rust hash-exchange frames and Flink's
+state repartitioning, with per-key SQL changelog/timestamp parity after restore and retractions.
+Canonical restore switches memory/RocksDB in both directions; aligned/unaligned operator-state
+restore retains the backend, including physical incremental RocksDB checkpoint handles.
+
+Task-lifetime lifecycle registration is distinct from keyed state binding. Local aggregate buffers
+are discovered from the native plan before capability negotiation and use the same stream/control,
+gauge and invocation interfaces. Later keyed bindings merge with these owners and reject duplicate
+identities rather than replacing them. The local factory has no backend or keyed snapshot format:
+it drains before checkpoints and is reconstructed through replay. Native local/Calc/global tests
+cover both global backends and canonical restore with retractions. The local Java fragment now uses
+the common one-input owner, including automatic pre-barrier drains. Record-envelope negotiation
+is independent of keyed-state ownership, preserving RowKinds for non-keyed buffers. Generated
+two-phase SQL integration covers both backends with a test-only selection probe; full-type recovery,
+in-flight channel replay and production memory admission remain unfinished.
+
+The synchronous aggregate's transient allocation admissions distinguish input-derived copies,
+historical output-event payloads, and materialized Arrow output. They are requested before their
+respective allocations while loaded-state workspaces remain reserved. A budget denial before
+commit discards staged updates; tests also verify scratch release. Historical string extrema use
+one conservative per-batch allowance, avoiding per-row JNI admission calls. Mini-batch and bounded
+allocation paths remain separate audit work; these checks do not remove their admission gates.
+
+Accumulator workspace additionally reserves sparse counted-map nodes per distinct group and
+per-row growth before state reads or decoding. The shared retained-size estimate includes a base
+allowance even for an empty B-tree, since removing its last entry can retain a root allocation.
+Same-thread test-only allocation observations cover sparse/dense maps and retraction shrinkage;
+they do not instrument the release library or replace mixed JVM/native allocation profiling.
+
+`NativeRegionStateParticipant` provides one Flink checkpoint participant for these shared owners.
+Its raw keyed stream uses an `SFR1` envelope: a sorted list of node identities followed by each
+node's opaque canonical snapshot in every key group. This framing keeps SQL state namespaces
+separate during Flink key-group redistribution and is distinct from the legacy single-owner raw
+stream. Changed node identities, duplicate key-group input, and incompatible headers are rejected;
+the Flink initialization must fail and discard the region on any restore error.
+
+Physical RocksDB checkpoints put each owner's files in a `node-<id>` directory. The existing Flink
+incremental adapter uploads those directories in one handle and retains each namespace in its SST
+reuse keys. Shared-context checkpoint import uses the canonical key-group contract for the assigned
+range and charges its temporary RocksDB reader and snapshot buffers to the task's memory budget.
+There is no operator-specific checkpoint-import JNI bridge on this path.
+Missing RocksDB `CURRENT` files are rejected rather than opening a new empty database during restore.
+
+Generated two-owner deduplication tests compare post-restore changelogs with Flink, verify both
+cross-backend canonical directions and split key-group assignments, and pass physical checkpoints
+through the real incremental adapter with aligned and unaligned checkpoint options. Unchanged
+checkpoints must reuse the same SST handles for both node namespaces. These tests cover checkpoint
+transport, not in-flight channel replay, timer recovery, or a planner-selected stateful topology.
+
+The common multiple-input Flink runtime now accepts state-node identities from its factory and
+uses `NativeRegionStateLifecycle` to bind all owners before `open`. The lifecycle derives the
+key-group range and backend from Flink, shares one task memory owner/native context, registers the
+region checkpoint participant, and restores before accepting records. RocksDB owners share the
+assigned cache/write-buffer lease; embedded runners without a separate state-backend lease reserve
+one fallback allowance from existing operator managed memory, not one allowance per state node.
+Database handles close before that fallback lease is returned, including initialization failures.
+Stable checkpoint staging lives outside the live database directory: Flink's asynchronous upload
+retains its files after native state-owner close and owns their cleanup after materialization.
+Closing the Flink keyed backend itself cancels its pending native uploads.
+
+Runtime harness tests drive two timer-free deduplication stages through this actual common operator,
+check Flink changelog bytes and record timestamps before and after restore, and exercise canonical,
+aligned, and unaligned checkpoint options on both backends. The planner collector now supplies
+regular-join and deduplication state identities through the shared fragment contract. One Flink
+keyed multi-input transformation retains the planned external exchanges and their decoding contracts;
+it rejects missing exchanges or incompatible routing domains. Additional runtime tests consume
+hash-exchange frames and restore two owners across canonical memory/RocksDB savepoints. These tests do
+not establish timer-driven semantics, channel-state replay, or complete state-specific metric parity.
+The incremental uploader now uses an explicitly owned asynchronous snapshot task. Pre-start
+cancellation removes staged files; cancellation during upload closes registered I/O and lets the
+worker release its resources. Failed or cancelled attempts discard newly created remote handles,
+never SST handles reused from an earlier checkpoint. Publication is coordinated with cancellation:
+an unpublished result cannot report success or install a new SST-reuse map. Checkpoint storage's
+`couldReuseStateHandle` decision is honored before reusing an SST. Focused tests cover cancellation
+with and without interruption, blocked writes, partial-upload failure, publication races, and
+backend closure in addition to the real RocksDB restore tests above.
+
+State bindings require native plan protocol v2. At the shared input edge, RowKind and timestamp
+metadata are attached once for the whole region, including retraction inputs and empty ports.
+Only the metadata vectors are allocated; user column buffers are shared and retained until the
+output stream closes. User payload field names beginning with `__streamfusion_` are rejected at
+this boundary because that prefix is reserved for native transport metadata.
+
+The shared Arrow output edge also recognizes the v2 native RowKind/ordinal envelope. Native
+changelog kinds take precedence over input kinds when propagating an input's timestamps; user
+column buffers remain shared. Input-ordinal timestamp propagation is only valid for operators
+whose semantics select an input envelope, not arbitrary timer-created or historical output.
+
+This API is a lifecycle-integration foundation, not production admission. The generic Flink
+region still needs migration of other physical families, timer/control dispatch for timer-driven operators, per-stage
+state-specific metric integration, and full allocation admission. Existing state operators remain
+behind the whole-plan restriction above; the new bindings do not establish complete aligned/unaligned
+Flink recovery parity for a multi-state runtime region or Nexmark performance parity.
+
+## Backend contract
+
 Native operators use a small backend-neutral Rust interface over opaque key and value bytes:
 batched get, batched mutation, canonical key-group snapshot, and canonical key-group restore.
 The in-memory backend can return borrowed values. The RocksDB backend implements a batch get with
@@ -11,6 +145,18 @@ one `multi_get` and a batch mutation with one `WriteBatch`.
 Keys are prefixed or partitioned by the key group computed with StreamFusion's Flink-compatible
 Rust key-group logic. This makes key-group ownership independent of the backend and lets Flink's
 normal redistribution assign intersections during rescaling.
+
+State component ABI version 6 transports read results and owned mutation keys/values as Arrow
+`BinaryView` arrays. Large payloads retain producer-owned buffers across the C Data boundary;
+the runtime does not concatenate mutations or copy every returned value into a second byte
+vector. Inline values use Arrow's standard short-value representation. Runtime and plugin ABI
+versions must match; incompatible components are rejected before use.
+
+The ABI also supports bounded key-group scans. A request carries an exclusive continuation key,
+a row limit, and an admitted byte limit; replies contain standard Arrow `BinaryView` key/value
+columns. Full sort uses these pages rather than decoding whole key-group snapshots. The memory
+backend visits its existing tables directly. Scanning holds the backend stable until the operation
+completes and does not change the canonical checkpoint representation.
 
 The optional RocksDB module is not linked into the central runtime. The runtime loads its versioned
 C function table, exchanges batch requests through Arrow C Data, and calls RocksDB directly from

@@ -5,7 +5,11 @@ sidebar:
   order: 9
 ---
 
-**Current status:** Partially accelerated for bounded hash/adaptive/sort-merge/nested-loop joins and for
+**Current status:** Temporarily uses whole-plan Flink fallback under the
+[architecture admission requirements](/StreamFusion/development/architecture-admission/). The native paths
+described below are retained for development and direct parity tests; SQL planning does not select them.
+
+**Retained implementation scope:** Partial implementation for bounded hash/adaptive/sort-merge/nested-loop joins and for
 synchronous regular, multi-way, time-bounded, and temporal streaming joins.
 
 ## SQL example
@@ -18,8 +22,9 @@ JOIN person AS p ON b.bidder = p.id;
 
 ## Acceleration and fallback
 
-StreamFusion currently accelerates Flink's synchronous regular streaming `INNER`, `LEFT`,
-`RIGHT`, `FULL`, `SEMI`, and `ANTI` joins when both sides use non-unique multiset state. A join may
+The retained native runtime implements Flink's synchronous regular streaming `INNER`, `LEFT`,
+`RIGHT`, `FULL`, `SEMI`, and `ANTI` joins when both sides use non-unique multiset state; production
+selection remains subject to the architecture-admission restriction above. A join may
 combine its non-empty equi key with a generated residual predicate; the residual is evaluated over
 the concatenated left/right row with SQL three-valued Boolean semantics, including treating `NULL`
 as non-matching.
@@ -28,6 +33,58 @@ may use every such type that Flink accepts for SQL equality. The native operator
 complete insert/update-before/update-after/delete changelog, retains
 duplicates, applies Flink's per-key null filtering, and reproduces Flink's null-padding and
 association-count transitions.
+
+The two-input streaming bridge executes a persistent `RegularJoinExec` and downstream native fragments
+inside one reusable native plan tree. Left/right ports are explicit protobuf children; native
+stages share Arrow arrays directly and only the outer output stream transfers accounting to Java.
+The join's logical output counters describe its own output before downstream stages, which have
+separate stage counts. Selected regular joins now use the same fragment/state-capability interface
+as deduplication, with one generic keyed-region runtime and no special lifecycle-owner fusion hook.
+The region retains planned exchange frames and decodes them once at its input edge.
+Metric-owner lookup follows the protobuf tree rather
+than assuming a Calc tail. Protocol-v2 Calc fragments and the common native envelope preserve
+RowKind through downstream projections and expansions. This foundation still requires complete
+large-owner/metric admission. Direct topology tests combine join, Expand, Calc and deduplication in one
+region, but arbitrary internal key transformations, bounded families, timers and full multi-stateful
+SQL admission remain unfinished.
+
+Streaming output reservations now follow shared Arrow buffer owners rather than the producer's
+next pull. Retained projections, nested children, and slices stay charged after the producer closes;
+no payload copy is introduced. The common edge recognizes registered owners, including imported
+producer-owned buffers, and does not reserve their payload again. Large kernel workspaces still
+require admission before allocation.
+
+The common state binder copies only the join's configuration, not either physical child subtree.
+Construction reserves decoded-plan memory before protobuf decoding and uses shared type-shape
+admission before allocating Arrow schemas and row codecs. Wide/nested-schema allocation tests and
+denied-construction cleanup tests cover those allowances independently of batch scratch. Residual
+expression allocation and the remaining lifetime caches still require the complete admission audit.
+Canonical paged-state restore drops its validation-only decoded pages and allowance before invoking
+the backend restore. Both backends have a constrained-budget regression that allows either phase
+but not both workspaces simultaneously; validation still finishes before any state is replaced.
+
+The retained two-input streaming runtime emits bounded Arrow C Stream batches, capped at 4,096
+rows with a smaller row target for wide payloads. It does not first collect the complete fan-out.
+Residual predicates use bounded vectorized candidate chunks, while equality-only/null-rejected
+keys need no match bitmap. Input and historical-state memory remains charged until the input batch
+is fully consumed. State uses stable per-side row IDs and 64-row pages. Batch admission fetches all
+manifests in one lookup, then all referenced pages in a second lookup; the single end-of-batch
+write contains only changed pages and changed manifest metadata. Retracting an early row does not
+shift later pages, and association-count changes rewrite only their affected pages. Historical rows
+are still decoded for touched keys, so this is a write-amplification fix, not a claim of constant
+read or working-set cost for arbitrarily large keys. Checkpoints cannot observe a partially drained
+batch. Cancellation or failure
+requires task recovery; the stream safely retains native ownership if its Java handle is released.
+Logical Flink I/O counters count records across all output chunks; StreamFusion's processed-batch
+diagnostic counts each input once, not each output pull.
+
+Canonical SFS1 snapshots now carry versioned `SFJM` manifests and `SFJP` pages, identical across native
+memory and RocksDB. Restoring legacy whole-key `SFRJ` v1/v2 snapshots migrates them to the paged layout.
+Restore rejects missing, duplicate, orphan, and malformed page records before changing backend state.
+Physical RocksDB checkpoints retain the paged layout and the existing incremental checkpoint protocol.
+The `StreamFusion.stateReadBatches` diagnostic counts actual backend lookups: one for a new key batch,
+two when historical pages exist. `stateWriteBatches` counts non-empty backend write batches, so a
+missing-row retraction that changes no state need not increment it.
 
 Flink `BatchExecHashJoin`, `BatchExecAdaptiveJoin`, and `BatchExecSortMergeJoin` equality joins use
 the same native two-sided counted state with terminal output while retaining distinct physical-node
@@ -54,8 +111,8 @@ generated residual join conditions. A failed residual predicate drops an inner r
 null-padded right row for a left join. Keys and stored rows support every Arrow-representable Flink
 scalar and nested logical type.
 
-Flink `StreamExecMultiJoin` plans are accelerated when all join predicates are represented by its
-attribute-based equi-join map and all inputs share a non-empty partition key. The native recursive
+The retained `StreamExecMultiJoin` implementation supports plans where all join predicates are represented by its
+attribute-based equi-join map and all inputs share a non-empty partition key. The native continuation-based
 operator supports Flink's `INNER` and `LEFT` chain shapes, duplicate multiset rows, all four row
 kinds, SQL-null join semantics, and the null-padding retraction/insertion transitions of chained
 left joins. Stored payloads and predicate fields accept every Arrow-representable Flink scalar and
@@ -63,8 +120,22 @@ nested logical type.
 
 A two-input `StreamExecMultiJoin` with a common equi key is lowered to the regular native join.
 This preserves its full generated residual condition and covers Flink's physical form for official
-Nexmark q4 and q9. Three-or-more-input multi-joins continue to use the recursive operator and still
+Nexmark q4 and q9. Three-or-more-input multi-joins use the multi-way cursor and still
 require every predicate to be represented by the attribute map.
+
+Multi-way state now uses a per-key directory and independently persisted 256-row pages. Stable
+row slots preserve insertion order; only dirty payload pages and their directory are written at
+batch completion. Required directories and payload pages are read in batches before computation.
+The output cursor retains join-depth continuation state and emits at most 4,096 rows or roughly
+1 MiB of encoded payload per pull (one oversized row requires sufficient memory credit). It never
+collects the complete Cartesian product. Output leases survive the processor if a consumer keeps
+a batch. Checkpoint/restore requires a healthy, fully drained stream, and partial computation
+failure requires recovery. The old single-batch harness rejects fan-out needing multiple pulls.
+
+This paged format replaces the development-only whole-key multi-join format; old multi-way
+snapshots are not a supported migration boundary. Production selection remains disabled until
+the cursor is connected to the common fused execution and Flink metric/checkpoint lifecycle.
+
 
 The containing plan falls back to Flink with an EXPLAIN reason when a streaming regular join has no
 usable equi key, state TTL, mini-batch execution, asynchronous state, changelog-state wrapping, or a
@@ -83,16 +154,18 @@ changelog-state wrapping.
 
 The planner replaces an eligible streaming or bounded join with a distinct StreamFusion exec node and sends
 a versioned protobuf join contract to Rust. Each input crosses a native Arrow exchange edge; the
-join itself receives Arrow batches and returns Arrow batches without a RowData loop or per-record
-JNI call. A regular streaming join followed by one or more eligible Calc nodes is lowered as one
+join itself receives Arrow batches and returns Arrow batches without a Java RowData payload loop.
+A regular streaming join followed by one or more eligible Calc nodes is lowered as one
 persistent native join handle with a reusable DataFusion Calc tail. Those stages exchange the
 join's Arrow `RecordBatch` directly in Rust, so the fused edge adds neither a Java operator nor an
-additional JNI round trip. The same path is used by bounded hash and nested-loop joins. Other
-stateful operator families currently retain their own native handles and therefore do not yet
-claim cross-operator fusion.
+additional data-plane JNI round trip. The same path is used by bounded hash and nested-loop joins.
+This retained implementation is not yet a single DataFusion ExecutionPlan containing both the
+persistent join and its Calc stages, and does not close the general fusion admission requirement.
+Other stateful operator families currently retain their own native handles as well.
 
 Rust stores an ordered multiset for both input sides under a Flink-compatible key group. One input
-batch performs one distinct batched state read and one atomic batched write. The same opaque state
+batch loads all touched manifests and then their referenced pages in at most two distinct batched
+reads, followed by one atomic write batch containing only changed pages and metadata. The same opaque state
 contract runs on managed native memory or direct native RocksDB. Canonical key-group snapshots move
 between those backends and across parallelism, while ordinary RocksDB checkpoints use the shared
 incremental-SST lifecycle. Aligned and unaligned checkpoints preserve join state and the two input
@@ -107,8 +180,8 @@ sorting both inputs: SQL does not promise join output order, and a downstream Fl
 enforces any explicit `ORDER BY`. Its output changelog and null/residual semantics remain identical.
 Bounded nested-loop joins discard Flink's broadcast/ANY exchange wrapper and install a native singleton
 exchange because the complete cross-product condition is evaluated in Rust. Neither path builds a
-second Java hash table or sorter. Both memory and direct RocksDB state perform one distinct batched
-read and one atomic batched write per incoming Arrow frame. Aligned, unaligned, and canonical
+second Java hash table or sorter. Both memory and direct RocksDB state perform the same manifest/page
+batched reads and dirty-page write batch per incoming Arrow frame. Aligned, unaligned, and canonical
 cross-backend restoration use the same SFS1 key-group bytes as streaming regular joins, and
 ordinary RocksDB checkpoints retain incremental SST reuse.
 
@@ -123,9 +196,10 @@ Aligned exchange can therefore continue coalescing key groups per destination, w
 exchange can retain one frame per key group without changing the state format.
 
 Regular-join residual predicates are encoded in the same versioned protobuf expression contract as
-Calc and lowered to a DataFusion physical expression. The operator collects every candidate pair
-for one input Arrow batch, decodes those pairs into one Arrow batch, and evaluates the predicate
-once vectorially while retaining Flink's per-record state-transition order. Association counts and
+Calc and lowered to a DataFusion physical expression. Streaming regular joins evaluate candidate
+pairs in Arrow chunks of at most 4,096 rows, retaining only the current input row's match bitmap
+while output drains. Equality-only and null-rejected keys use constant masks without allocating a
+candidate bitmap. Evaluation retains Flink's per-record state-transition order. Association counts and
 outer/semi/anti transitions count only accepted candidates. Predicate scratch, state, and exported
 Arrow output are all charged to the operator's Flink managed-memory reservation.
 ROW, ARRAY, MAP, and MULTISET values are accepted as opaque equality keys and stored payloads, but

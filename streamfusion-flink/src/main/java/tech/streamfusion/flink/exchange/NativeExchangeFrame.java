@@ -105,6 +105,29 @@ public final class NativeExchangeFrame {
                 memoryManager);
     }
 
+    /** Decode and execute inside Rust without importing the intermediate batch into Arrow Java. */
+    public long executeNativePlan(
+            tech.streamfusion.nativebridge.NativeExecutionContext context,
+            int port,
+            byte[] plan,
+            long[] arrays,
+            long[] schemas,
+            long output) {
+        if (bodyOffset != metadataOffset + metadataLength) {
+            throw new IllegalStateException("Native IPC plan input requires contiguous metadata and body");
+        }
+        return context.executeExchangeStream(
+                port,
+                plan,
+                payload,
+                metadataOffset,
+                Math.addExact(metadataLength, bodyLength),
+                metadataLength,
+                arrays,
+                schemas,
+                output);
+    }
+
     /** Sends this schema-free IPC frame directly into a bounded native regular join. */
     public long processBoundedRegularJoinNative(long handle, int side, byte[] exchangePlan) {
         return NativeRegularJoinBridge.processBoundedExchangeFrame(

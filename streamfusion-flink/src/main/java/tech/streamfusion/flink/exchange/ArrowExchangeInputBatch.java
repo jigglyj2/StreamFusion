@@ -59,7 +59,10 @@ public final class ArrowExchangeInputBatch implements AutoCloseable {
             timestampPresence[row] = !timestamps.isNull(row);
             timestampValues[row] = timestampPresence[row] ? timestamps.get(row) : Long.MIN_VALUE;
         }
-        return ArrowRowDataBatch.borrowed(visible, rowType).withEnvelope(kinds, timestampPresence, timestampValues);
+        // Empty payload schemas still carry records. Their envelope vectors retain the receiving
+        // allocator even though there is no user vector from which a borrowed batch can infer it.
+        return ArrowRowDataBatch.borrowed(visible, rowType, rowKinds.getAllocator())
+                .withEnvelope(kinds, timestampPresence, timestampValues);
     }
 
     public int size() {

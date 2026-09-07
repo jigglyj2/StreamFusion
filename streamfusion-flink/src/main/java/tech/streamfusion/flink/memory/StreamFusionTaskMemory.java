@@ -20,6 +20,9 @@ public final class StreamFusionTaskMemory implements AutoCloseable {
     /** Minimum Flink operator-memory weight for a retained native DataFusion execution context. */
     public static final int MANAGED_MEMORY_WEIGHT = 2;
 
+    /** Relative Flink OPERATOR weight for each independently retained native keyed-state owner. */
+    public static final int STATEFUL_MANAGED_MEMORY_WEIGHT = 8;
+
     private final FlinkManagedMemory managedMemory;
     private final NativeExecutionContext executionContext;
 
@@ -29,11 +32,28 @@ public final class StreamFusionTaskMemory implements AutoCloseable {
             OperatorMetricGroup metricGroup,
             String name,
             byte[] serializedPlan) {
+        return createWithState(environment, operatorConfig, metricGroup, name, serializedPlan, ignored -> null);
+    }
+
+    /** Supplies task-local state bindings after Flink has assigned the shared operator allowance. */
+    public static StreamFusionTaskMemory createWithState(
+            Environment environment,
+            StreamConfig operatorConfig,
+            OperatorMetricGroup metricGroup,
+            String name,
+            byte[] serializedPlan,
+            java.util.function.Function<tech.streamfusion.nativebridge.NativeMemoryManager, byte[]> bindings) {
         FlinkManagedMemory managedMemory = FlinkManagedMemory.create(environment, operatorConfig, metricGroup, name);
         try {
-            return new StreamFusionTaskMemory(managedMemory, new NativeExecutionContext(serializedPlan, managedMemory));
-        } catch (RuntimeException failure) {
-            managedMemory.close();
+            return new StreamFusionTaskMemory(
+                    managedMemory,
+                    new NativeExecutionContext(serializedPlan, managedMemory, bindings.apply(managedMemory)));
+        } catch (RuntimeException | Error failure) {
+            try {
+                managedMemory.close();
+            } catch (RuntimeException | Error cleanup) {
+                failure.addSuppressed(cleanup);
+            }
             throw failure;
         }
     }
@@ -49,6 +69,11 @@ public final class StreamFusionTaskMemory implements AutoCloseable {
 
     public NativeExecutionContext executionContext() {
         return executionContext;
+    }
+
+    /** Exchange decoding at a region edge shares the execution context's Flink allowance. */
+    public tech.streamfusion.nativebridge.NativeMemoryManager nativeMemoryManager() {
+        return managedMemory;
     }
 
     @Override

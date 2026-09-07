@@ -58,12 +58,27 @@ public final class StreamFusionStateBackend implements StateBackend {
                     keyedDelegate.createKeyedStateBackend(delegateParameters),
                     nativeHandles,
                     nativeBackendType,
-                    rocksDbMemory);
+                    rocksDbMemory,
+                    configuredIncrementalCheckpoints());
         } catch (Throwable failure) {
             if (rocksDbMemory != null) {
                 rocksDbMemory.close();
             }
             throw failure;
+        }
+    }
+
+    // The optional RocksDB integration remains optional on the runtime classpath. Read its
+    // configured public API instead of inferring checkpoint behavior from the backend name.
+    boolean configuredIncrementalCheckpoints() {
+        if (!"rocksdb".equals(nativeBackendType)) return false;
+        try {
+            return (Boolean) delegate.getClass()
+                    .getMethod("isIncrementalCheckpointsEnabled")
+                    .invoke(delegate);
+        } catch (ReflectiveOperationException failure) {
+            throw new IllegalStateException(
+                    "Cannot preserve the configured RocksDB incremental-checkpoint setting", failure);
         }
     }
 

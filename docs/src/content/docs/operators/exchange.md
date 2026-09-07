@@ -30,6 +30,13 @@ encoder, the Java writer adds one input-only opaque `BinaryRowData` key sidecar.
 canonical bytes directly and strips the sidecar before network transport. Singleton distribution is
 also eligible.
 
+The shared native key codec also supports Arrow lists, maps, and structs recursively for native
+state consumers after an exchange strips its routing sidecar. It writes Flink's nested container
+layouts into one caller-owned scratch buffer, with container-relative offsets and array-specific
+NaN normalization. Exact array/map/row byte fixtures are checked against Flink's serializers.
+This does not change the exchange planner's existing sidecar selection or claim full nested-type
+rescaling coverage; native state consumers and exchange routing share the key-group hash code.
+
 Unsupported distributions, Arrow-incompatible boundary types, dictionary-encoded IPC batches, or
 any other unsupported node in the graph cause whole-plan fallback. EXPLAIN identifies the rejected
 exchange or the other node that prevented selection.
@@ -42,7 +49,11 @@ the Flink record-envelope vectors, and Rust computes exactly the same
 `BinaryRowData` hash, Murmur mix, and stable key group as Flink 2.3. Each schema-free Arrow IPC frame
 contains rows for one key group. Flink maps that key group to the current downstream subtask and can
 remap restored frames after rescaling with its `RANGE` channel-state mapping. A native reader decodes
-the frame back into an Arrow batch and restores the envelope sidecar without row materialization.
+the frame directly at the native-plan edge and restores its owned record envelope. The decoded
+batch stays in Rust; it is not imported into Arrow Java and exported back to Rust. Frame-consuming
+regions use plan protocol 3 even when their tree contains only stateless UNION stages. The incoming
+allocation aligns the IPC body so fixed-width and decimal buffers do not need decoder alignment
+copies; padding and the allocation capacity are included in the single payload reservation.
 Flink's record counters continue to report logical rows on both sides of the exchange;
 internal Arrow IPC frames are transport units and are not published as record counts.
 

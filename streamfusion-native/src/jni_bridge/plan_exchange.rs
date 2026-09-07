@@ -51,15 +51,15 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeExecutionContex
             return Err(throw(env, "invalid native IPC plan input range or address"));
         }
         let memory = context.reservation("native exchange input payload");
-        memory
-            .try_grow(length as usize)
+        let (mut storage, padding) = input_storage(length as usize, metadata as usize, &memory)
             .map_err(|e| throw(env, e))?;
         let plan = env.convert_byte_array(plan)?;
-        let mut bytes = vec![0u8; length as usize];
-        // JNI copies the network range once; the IPC decoder borrows its backing allocation.
+        // Copy once into a body-aligned allocation; decimal/nested IPC buffers then stay shared.
+        let bytes = &mut storage.as_slice_mut()[padding..padding + length as usize];
         payload.get_region(env, offset, unsafe {
             std::slice::from_raw_parts_mut(bytes.as_mut_ptr().cast(), bytes.len())
         })?;
+        let bytes = arrow::buffer::Buffer::from(storage).slice(padding);
         let decoded: Result<_> = (|| {
             let mut batch = super::exchange::decode_batch(&plan, bytes, metadata as usize)?;
             // Routing has already selected the Flink subtask. This edge uses SQL keys natively.
@@ -108,3 +108,33 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeExecutionContex
     })
     .resolve::<ThrowRuntimeExAndDefault>()
 }
+
+// IPC buffer offsets are body-relative. The FlatBuffer metadata itself need not have the
+// alignment required by Decimal128/256, so align the body, not merely the allocation start.
+fn input_storage(
+    length: usize,
+    metadata: usize,
+    memory: &datafusion::execution::memory_pool::MemoryReservation,
+) -> Result<(arrow::buffer::MutableBuffer, usize)> {
+    if metadata > length {
+        return Err(DataFusionError::Execution(
+            "IPC metadata exceeds payload".into(),
+        ));
+    }
+    let padding = (64 - metadata % 64) % 64;
+    let used = length
+        .checked_add(padding)
+        .ok_or_else(|| DataFusionError::ResourcesExhausted("IPC size overflow".into()))?;
+    let capacity = used
+        .checked_add(63)
+        .map(|value| value & !63)
+        .filter(|value| *value <= isize::MAX as usize)
+        .ok_or_else(|| {
+            DataFusionError::ResourcesExhausted("IPC allocation size overflow".into())
+        })?;
+    memory.try_grow(capacity)?;
+    Ok((arrow::buffer::MutableBuffer::from_len_zeroed(used), padding))
+}
+
+#[cfg(test)]
+mod tests;

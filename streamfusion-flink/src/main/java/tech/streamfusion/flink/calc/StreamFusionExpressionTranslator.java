@@ -373,11 +373,11 @@ abstract class StreamFusionExpressionTranslator extends StreamFusionProjectionTr
             }
             Expression value = projectionExpression(operands.get(0), inputType, valueType);
             Object sarg = invoke(operands.get(1), "getValue");
-            if (value == null
-                    || sarg == null
-                    || !"UNKNOWN".equals(publicField(sarg, "nullAs").toString())) {
+            if (value == null || sarg == null) {
                 return null;
             }
+            String nullAs = publicField(sarg, "nullAs").toString();
+            if (!StreamFusionSearchNullSemantics.supports(nullAs)) return null;
             if ((valueType.getTypeRoot() == LogicalTypeRoot.VARBINARY
                             || valueType.getTypeRoot() == LogicalTypeRoot.BINARY)
                     && ((boolean) invoke(sarg, "isPoints") || (boolean) invoke(sarg, "isComplementedPoints"))) {
@@ -433,7 +433,7 @@ abstract class StreamFusionExpressionTranslator extends StreamFusionProjectionTr
                                         .setOperator(BooleanOperator.BOOLEAN_OPERATOR_OR))
                                 .build();
             }
-            return result;
+            return StreamFusionSearchNullSemantics.apply(result, nullAs);
         } catch (RuntimeException exception) {
             return null;
         }

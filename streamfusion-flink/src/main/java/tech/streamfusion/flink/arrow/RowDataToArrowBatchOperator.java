@@ -4,6 +4,8 @@
  */
 package tech.streamfusion.flink.arrow;
 
+import java.util.concurrent.ScheduledFuture;
+import org.apache.flink.configuration.ExecutionOptions;
 import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
 import org.apache.flink.streaming.api.operators.BoundedOneInput;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
@@ -26,6 +28,7 @@ final class RowDataToArrowBatchOperator extends AbstractStreamOperator<ArrowRowD
     private final RowType rowType;
     private final int[][] fieldPaths;
     private final int[][] rowArities;
+    private final long bufferTimeoutOverride;
     private final RowKind[] rowKinds = new RowKind[DEFAULT_BATCH_SIZE];
     private final boolean[] hasTimestamps = new boolean[DEFAULT_BATCH_SIZE];
     private final long[] timestamps = new long[DEFAULT_BATCH_SIZE];
@@ -33,15 +36,22 @@ final class RowDataToArrowBatchOperator extends AbstractStreamOperator<ArrowRowD
     private int batchSize;
     private transient FlinkManagedMemory managedMemory;
     private transient ArrowRowDataBatchWriter writer;
+    private transient long flushIntervalMillis;
+    private transient ScheduledFuture<?> flushTimer;
 
     RowDataToArrowBatchOperator(RowType rowType) {
         this(rowType, null, null);
     }
 
     RowDataToArrowBatchOperator(RowType rowType, int[][] fieldPaths, int[][] rowArities) {
+        this(rowType, fieldPaths, rowArities, -1);
+    }
+
+    RowDataToArrowBatchOperator(RowType rowType, int[][] fieldPaths, int[][] rowArities, long bufferTimeoutOverride) {
         this.rowType = rowType;
         this.fieldPaths = copy(fieldPaths);
         this.rowArities = copy(rowArities);
+        this.bufferTimeoutOverride = bufferTimeoutOverride;
     }
 
     @Override
@@ -54,6 +64,13 @@ final class RowDataToArrowBatchOperator extends AbstractStreamOperator<ArrowRowD
                 "streamfusion-source-arrow-boundary");
         writer = ArrowRowDataBatchWriter.createAdaptive(rowType, managedMemory.allocator(), DEFAULT_BATCH_SIZE);
         batchSize = writer.batchCapacity();
+        org.apache.flink.configuration.Configuration configuration =
+                getContainingTask().getEnvironment().getJobConfiguration();
+        flushIntervalMillis = bufferTimeoutOverride >= 0
+                ? bufferTimeoutOverride
+                : configuration.get(ExecutionOptions.BUFFER_TIMEOUT_ENABLED)
+                        ? configuration.get(ExecutionOptions.BUFFER_TIMEOUT).toMillis()
+                        : -1;
     }
 
     @Override
@@ -68,8 +85,16 @@ final class RowDataToArrowBatchOperator extends AbstractStreamOperator<ArrowRowD
         hasTimestamps[rowCount] = element.hasTimestamp();
         timestamps[rowCount] = element.hasTimestamp() ? element.getTimestamp() : Long.MIN_VALUE;
         rowCount++;
-        if (rowCount == batchSize) {
+        if (rowCount == batchSize || flushIntervalMillis == 0) {
             flush();
+        } else if (rowCount == 1 && flushIntervalMillis > 0) {
+            flushTimer = getProcessingTimeService()
+                    .registerTimer(
+                            Math.addExact(getProcessingTimeService().getCurrentProcessingTime(), flushIntervalMillis),
+                            timestamp -> {
+                                flushTimer = null;
+                                flush();
+                            });
         }
     }
 
@@ -119,6 +144,7 @@ final class RowDataToArrowBatchOperator extends AbstractStreamOperator<ArrowRowD
     }
 
     private void flush() {
+        cancelFlushTimer();
         if (rowCount == 0) {
             return;
         }
@@ -136,6 +162,7 @@ final class RowDataToArrowBatchOperator extends AbstractStreamOperator<ArrowRowD
     @Override
     public void close() throws Exception {
         try {
+            cancelFlushTimer();
             if (writer != null) {
                 writer.close();
                 writer = null;
@@ -146,6 +173,13 @@ final class RowDataToArrowBatchOperator extends AbstractStreamOperator<ArrowRowD
             }
         } finally {
             super.close();
+        }
+    }
+
+    private void cancelFlushTimer() {
+        if (flushTimer != null) {
+            flushTimer.cancel(false);
+            flushTimer = null;
         }
     }
 }

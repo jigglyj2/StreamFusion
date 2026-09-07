@@ -62,6 +62,18 @@ public final class ArrowRowDataBatch implements AutoCloseable {
         return transpose(rows, rowType, allocator, false);
     }
 
+    /** A typed empty input port, built directly as Arrow without a RowData writer. */
+    public static ArrowRowDataBatch empty(RowType rowType, BufferAllocator allocator) {
+        VectorSchemaRoot root = VectorSchemaRoot.create(ArrowUtils.toArrowSchema(rowType), allocator);
+        try {
+            root.setRowCount(0);
+            return wrap(root, rowType, allocator);
+        } catch (RuntimeException | Error failure) {
+            root.close();
+            throw failure;
+        }
+    }
+
     private static ArrowRowDataBatch transpose(
             List<? extends RowData> rows, RowType rowType, BufferAllocator allocator, boolean ownsAllocator) {
         VectorSchemaRoot root = VectorSchemaRoot.create(ArrowUtils.toArrowSchema(rowType), allocator);

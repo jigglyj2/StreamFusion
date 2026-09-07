@@ -39,6 +39,67 @@ import tech.streamfusion.flink.state.StreamFusionStateBackendFactory;
 public final class StreamFusionGroupAggregateTranslator {
     private StreamFusionGroupAggregateTranslator() {}
 
+    /** Builds one physical fragment; no exchange, Java state owner, or neighboring operator. */
+    public static byte[] createStagePlan(
+            RowType inputType,
+            RowType outputType,
+            int[] grouping,
+            AggregateCall[] calls,
+            boolean[] retractable,
+            boolean generateUpdateBefore,
+            boolean needRetraction,
+            long stateRetentionTime,
+            ReadableConfig config) {
+        String reason = unsupportedStageReason(
+                inputType,
+                outputType,
+                grouping,
+                calls,
+                retractable,
+                generateUpdateBefore,
+                needRetraction,
+                stateRetentionTime,
+                config);
+        if (reason != null) throw new IllegalArgumentException(reason);
+        long miniBatchSize = config.get(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ENABLED)
+                ? config.get(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_SIZE)
+                : 0L;
+        return StreamFusionGroupAggregatePlan.create(
+                inputType,
+                grouping,
+                calls,
+                retractable,
+                generateUpdateBefore,
+                needRetraction,
+                miniBatchSize,
+                outputType);
+    }
+
+    /** Shared runtime admission must not silently substitute per-invocation EOF for bundle flush. */
+    public static String unsupportedStageReason(
+            RowType inputType,
+            RowType outputType,
+            int[] grouping,
+            AggregateCall[] calls,
+            boolean[] retractable,
+            boolean generateUpdateBefore,
+            boolean needRetraction,
+            long stateRetentionTime,
+            ReadableConfig config) {
+        String reason = unsupportedReason(
+                inputType,
+                outputType,
+                grouping,
+                calls,
+                retractable,
+                generateUpdateBefore,
+                needRetraction,
+                stateRetentionTime,
+                config);
+        if (reason != null) return reason;
+        return tech.streamfusion.flink.metrics.NativeStateMetricSupport.unsupportedReason(config);
+    }
+
     public static Transformation<RowData> translate(
             Transformation<RowData> input,
             RowType inputType,
@@ -105,49 +166,6 @@ public final class StreamFusionGroupAggregateTranslator {
                 false);
         if (partitionedInput.getMaxParallelism() > 0) {
             transformation.setMaxParallelism(partitionedInput.getMaxParallelism());
-        }
-        transformation.declareManagedMemoryUseCaseAtOperatorScope(
-                ManagedMemoryUseCase.OPERATOR, AggregateManagedMemoryWeights.STATEFUL);
-        transformation.setStateKeySelector(new ArrowBatchKeySelector(keySelector));
-        transformation.setStateKeyType(keySelector.getProducedType());
-        return StreamFusionArrowBoundaries.asPlannerTransformation(transformation);
-    }
-
-    public static Transformation<RowData> translateGlobal(
-            Transformation<RowData> input,
-            RowType originalInputType,
-            RowType internalInputType,
-            RowType outputType,
-            int groupingCount,
-            AggregateCall[] calls,
-            boolean[] retractable,
-            boolean generateUpdateBefore,
-            ReadableConfig config,
-            StreamExecutionEnvironment environment,
-            RowDataKeySelector keySelector) {
-        StreamFusionStateBackendFactory.install(environment);
-        long miniBatchSize = config.get(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_SIZE);
-        int[] grouping = java.util.stream.IntStream.range(0, groupingCount).toArray();
-        byte[] plan = StreamFusionGroupAggregatePlan.createGlobal(
-                originalInputType,
-                internalInputType,
-                outputType,
-                groupingCount,
-                calls,
-                retractable,
-                generateUpdateBefore,
-                miniBatchSize);
-        Transformation<ArrowRowDataBatch> arrowInput = StreamFusionArrowBoundaries.toArrow(input, internalInputType);
-        OneInputTransformation<ArrowRowDataBatch, ArrowRowDataBatch> transformation = new OneInputTransformation<>(
-                arrowInput,
-                "streamfusion-global-group-aggregate",
-                new StreamFusionArrowGroupAggregateOperator(
-                        internalInputType, outputType, grouping, plan, false, keySelector, miniBatchSize),
-                ArrowRowDataBatchTypeInfo.INSTANCE,
-                input.getParallelism(),
-                false);
-        if (input.getMaxParallelism() > 0) {
-            transformation.setMaxParallelism(input.getMaxParallelism());
         }
         transformation.declareManagedMemoryUseCaseAtOperatorScope(
                 ManagedMemoryUseCase.OPERATOR, AggregateManagedMemoryWeights.STATEFUL);
@@ -301,19 +319,8 @@ public final class StreamFusionGroupAggregateTranslator {
         if (outputType.getFieldCount() != grouping.length + calls.length) {
             return "schema: group aggregate output must contain grouping fields followed by aggregate values";
         }
-        if (stateRetentionTime != 0) {
-            return "state: native group aggregate TTL is not implemented";
-        }
-        if (config.get(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ENABLED)
-                && config.get(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_SIZE) <= 0) {
-            return "mini-batch: size must be positive";
-        }
-        if (config.get(ExecutionConfigOptions.TABLE_EXEC_ASYNC_STATE_ENABLED)) {
-            return "state: Flink async-state mode is not implemented by native group aggregate";
-        }
-        if (config.get(StateChangelogOptions.ENABLE_STATE_CHANGE_LOG)) {
-            return "state: Flink changelog-state wrapping is not implemented by native group aggregate";
-        }
+        String stateReason = unsupportedStateReason(stateRetentionTime, config);
+        if (stateReason != null) return stateReason;
         for (int outputIndex = 0; outputIndex < grouping.length; outputIndex++) {
             int inputIndex = grouping[outputIndex];
             if (inputIndex < 0 || inputIndex >= inputType.getFieldCount()) {
@@ -337,6 +344,23 @@ public final class StreamFusionGroupAggregateTranslator {
             if (needRetraction && !retractable[index]) {
                 return "aggregate[" + index + "]: Flink did not select a retractable accumulator";
             }
+        }
+        return null;
+    }
+
+    static String unsupportedStateReason(long stateRetentionTime, ReadableConfig config) {
+        if (stateRetentionTime != 0) {
+            return "state: native group aggregate TTL is not implemented";
+        }
+        if (config.get(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ENABLED)
+                && config.get(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_SIZE) <= 0) {
+            return "mini-batch: size must be positive";
+        }
+        if (config.get(ExecutionConfigOptions.TABLE_EXEC_ASYNC_STATE_ENABLED)) {
+            return "state: Flink async-state mode is not implemented by native group aggregate";
+        }
+        if (config.get(StateChangelogOptions.ENABLE_STATE_CHANGE_LOG)) {
+            return "state: Flink changelog-state wrapping is not implemented by native group aggregate";
         }
         return null;
     }
