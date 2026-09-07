@@ -88,7 +88,8 @@ missing-row retraction that changes no state need not increment it.
 
 Flink `BatchExecHashJoin`, `BatchExecAdaptiveJoin`, and `BatchExecSortMergeJoin` equality joins use
 the same native two-sided counted state with terminal output while retaining distinct physical-node
-identities for planning and metrics. `BatchExecNestedLoopJoin` uses one singleton key group and
+identities for planning and metrics. Terminal matching now uses DataFusion `HashJoinExec`, including
+its outer/semi/anti algorithms and residual `JoinFilter`, instead of a handwritten pair cursor. `BatchExecNestedLoopJoin` uses one singleton key group and
 evaluates its complete predicate as a vectorized residual condition. Bounded `INNER`, `LEFT`,
 `RIGHT`, `FULL`, `SEMI`, and `ANTI` results are emitted as insert-only Arrow batches after both
 inputs end. Duplicate rows, null join semantics, residual predicates, and all four input row kinds
@@ -174,9 +175,19 @@ timer service and materialize dirty timer groups into canonical keyed state at s
 avoiding repeated whole-group timer serialization during normal batch processing. Both variants
 coalesce and forward watermarks using Flink's two-input rule.
 
+The bounded DataFusion join receives each Flink equality-key partition after the canonical
+multiset has applied input retractions. A nullable synthetic key preserves the partition's
+mixed null-safe/null-filtered equality decision, and DataFusion evaluates any remaining SQL
+predicate over Arrow columns. This retains Flink's state/checkpoint ownership while delegating
+matching to DataFusion. Its hash table uses the Flink-backed DataFusion memory pool; Arrow input
+and bounded output identity buffers have coarse host reservations. One native runtime is reused
+across key partitions. Generated direct-native tests compare all six join kinds to Flink SQL on
+memory and RocksDB, including null keys, duplicates and a retraction before terminal output.
+The shared-plan/configuration/metric admission gates are unchanged.
+
 Bounded hash/adaptive/sort-merge joins partition both sides by the planned Flink equality key. The
-native sort-merge replacement deliberately uses the counted-state join algorithm rather than
-sorting both inputs: SQL does not promise join output order, and a downstream Flink sort still
+native sort-merge replacement uses DataFusion hash-join computation over the already keyed
+terminal state rather than sorting both inputs: SQL does not promise join output order, and a downstream Flink sort still
 enforces any explicit `ORDER BY`. Its output changelog and null/residual semantics remain identical.
 Bounded nested-loop joins discard Flink's broadcast/ANY exchange wrapper and install a native singleton
 exchange because the complete cross-product condition is evaluated in Rust. Neither path builds a

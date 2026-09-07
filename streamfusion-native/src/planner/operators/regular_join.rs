@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 
+mod bounded_datafusion;
 mod candidates;
 mod change_cursor;
 #[cfg(test)]
@@ -94,23 +95,10 @@ struct OutputRow {
     input_ordinal: i32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum BoundedOutputPhase {
-    Pairs,
-    LeftRemainder,
-    RightRemainder,
-    Done,
-}
-
 struct BoundedJoinCursor {
     state: JoinState,
-    left_matchable: Vec<bool>,
-    right_matchable: Vec<bool>,
-    left_matched: Vec<bool>,
-    right_matched: Vec<bool>,
-    pair_index: usize,
-    remainder_index: usize,
-    phase: BoundedOutputPhase,
+    native: bounded_datafusion::JoinStream,
+    done: bool,
     estimated_dynamic_bytes: usize,
 }
 
@@ -152,6 +140,7 @@ pub(crate) struct RegularJoinProcessor {
     bounded_output_entries_bytes: usize,
     bounded_output_entry_index: usize,
     bounded_cursor: Option<BoundedJoinCursor>,
+    bounded_runtime: Option<Arc<bounded_datafusion::JoinRuntime>>,
     bounded_output_finished: bool,
     streaming_cursor: Option<streaming::StreamingCursor>,
     streaming_failed: bool,
@@ -366,6 +355,7 @@ impl RegularJoinProcessor {
             bounded_output_entries_bytes: 0,
             bounded_output_entry_index: 0,
             bounded_cursor: None,
+            bounded_runtime: None,
             bounded_output_finished: false,
             streaming_cursor: None,
             streaming_failed: false,
@@ -857,7 +847,7 @@ impl RegularJoinProcessor {
                 .take()
                 .expect("bounded regular join cursor was loaded");
             self.drain_bounded_cursor(&mut cursor, &mut output, &mut output_estimate, max_rows)?;
-            if cursor.phase != BoundedOutputPhase::Done {
+            if !cursor.done {
                 self.bounded_cursor = Some(cursor);
                 break;
             }
@@ -896,35 +886,38 @@ impl RegularJoinProcessor {
                     self.bounded_matchable(0, &state.left, state.left_matchable)?;
                 let right_matchable =
                     self.bounded_matchable(1, &state.right, state.right_matchable)?;
-                let left_matched = vec![false; state.left.len()];
-                let right_matched = vec![false; state.right.len()];
                 let estimated_dynamic_bytes = state
                     .left
                     .iter()
                     .chain(&state.right)
-                    .fold(0usize, |bytes, row| {
-                        bytes.saturating_add(row.row.len().saturating_add(2 * size_of::<usize>()))
-                    })
-                    .saturating_add(
-                        state
-                            .left
-                            .capacity()
-                            .saturating_add(state.right.capacity())
-                            .saturating_mul(std::mem::size_of::<StoredRow>()),
-                    )
-                    .saturating_add(left_matchable.capacity())
-                    .saturating_add(right_matchable.capacity())
-                    .saturating_add(left_matched.capacity())
-                    .saturating_add(right_matched.capacity());
+                    .map(|row| row.row.len() + size_of::<StoredRow>())
+                    .sum::<usize>();
+                self.scratch_reservation.resize(
+                    self.bounded_retained_bytes()
+                        .saturating_add(estimated_dynamic_bytes)
+                        .saturating_add(pending_output_bytes),
+                )?;
+                let runtime = match &self.bounded_runtime {
+                    Some(runtime) => runtime.clone(),
+                    None => {
+                        let runtime = Arc::new(bounded_datafusion::JoinRuntime::new(
+                            &self.scratch_reservation,
+                        )?);
+                        self.bounded_runtime = Some(runtime.clone());
+                        runtime
+                    }
+                };
+                let native = bounded_datafusion::JoinStream::new(
+                    self,
+                    &state,
+                    &left_matchable,
+                    &right_matchable,
+                    runtime,
+                )?;
                 self.bounded_cursor = Some(BoundedJoinCursor {
-                    left_matched,
-                    right_matched,
-                    left_matchable,
-                    right_matchable,
                     state,
-                    pair_index: 0,
-                    remainder_index: 0,
-                    phase: BoundedOutputPhase::Pairs,
+                    native,
+                    done: false,
                     estimated_dynamic_bytes,
                 });
                 self.scratch_reservation.resize(
@@ -1005,152 +998,31 @@ impl RegularJoinProcessor {
         output_estimate: &mut usize,
         max_rows: usize,
     ) -> Result<()> {
-        while output.len() < max_rows && cursor.phase != BoundedOutputPhase::Done {
-            match cursor.phase {
-                BoundedOutputPhase::Pairs => {
-                    let total = cursor
-                        .state
-                        .left
-                        .len()
-                        .checked_mul(cursor.state.right.len())
-                        .ok_or_else(|| {
-                            DataFusionError::ResourcesExhausted(
-                                "bounded regular join pair count overflowed usize".to_string(),
-                            )
-                        })?;
-                    if cursor.pair_index == total {
-                        cursor.phase = BoundedOutputPhase::LeftRemainder;
-                        cursor.remainder_index = 0;
-                        continue;
-                    }
-                    let mut candidates = (max_rows - output.len())
-                        .max(1)
-                        .min(total - cursor.pair_index)
-                        .min(max_rows);
-                    let start = cursor.pair_index;
-                    let matches = loop {
-                        let end = start + candidates;
-                        match self.bounded_pair_matches(
-                            cursor,
-                            start,
-                            end,
-                            output_estimate.saturating_mul(2),
-                        ) {
-                            Err(DataFusionError::ResourcesExhausted(_)) if candidates > 1 => {
-                                candidates = (candidates / 2).max(1);
-                            }
-                            result => break result?,
-                        }
-                    };
-                    for (offset, matched) in matches.into_iter().enumerate() {
-                        if !matched {
-                            cursor.pair_index = start + offset + 1;
-                            continue;
-                        }
-                        let pair = start + offset;
-                        let left = pair / cursor.state.right.len();
-                        let right = pair % cursor.state.right.len();
-                        if !matches!(
-                            self.join_type,
-                            proto::RegularJoinType::Semi | proto::RegularJoinType::Anti
-                        ) {
-                            let Some(next_estimate) = self.prepare_bounded_output_row(
-                                cursor,
-                                *output_estimate,
-                                !output.is_empty(),
-                                Some(&cursor.state.left[left]),
-                                Some(&cursor.state.right[right]),
-                            )?
-                            else {
-                                cursor.pair_index = pair;
-                                return Ok(());
-                            };
-                            *output_estimate = next_estimate;
-                            output.push(OutputRow {
-                                left: Some(cursor.state.left[left].row.clone()),
-                                right: Some(cursor.state.right[right].row.clone()),
-                                kind: INSERT,
-                                input_ordinal: bounded_ordinal(output.len())?,
-                            });
-                        }
-                        cursor.left_matched[left] = true;
-                        cursor.right_matched[right] = true;
-                        cursor.pair_index = pair + 1;
-                    }
-                }
-                BoundedOutputPhase::LeftRemainder => {
-                    while cursor.remainder_index < cursor.state.left.len()
-                        && output.len() < max_rows
-                    {
-                        let index = cursor.remainder_index;
-                        let emit = match self.join_type {
-                            proto::RegularJoinType::Semi => cursor.left_matched[index],
-                            proto::RegularJoinType::Anti => !cursor.left_matched[index],
-                            _ => is_outer(self.join_type, 0) && !cursor.left_matched[index],
-                        };
-                        if emit {
-                            let Some(next_estimate) = self.prepare_bounded_output_row(
-                                cursor,
-                                *output_estimate,
-                                !output.is_empty(),
-                                Some(&cursor.state.left[index]),
-                                None,
-                            )?
-                            else {
-                                return Ok(());
-                            };
-                            *output_estimate = next_estimate;
-                            output.push(OutputRow {
-                                left: Some(cursor.state.left[index].row.clone()),
-                                right: None,
-                                kind: INSERT,
-                                input_ordinal: bounded_ordinal(output.len())?,
-                            });
-                        }
-                        cursor.remainder_index += 1;
-                    }
-                    if cursor.remainder_index == cursor.state.left.len() {
-                        cursor.phase = BoundedOutputPhase::RightRemainder;
-                        cursor.remainder_index = 0;
-                    }
-                }
-                BoundedOutputPhase::RightRemainder => {
-                    while cursor.remainder_index < cursor.state.right.len()
-                        && output.len() < max_rows
-                    {
-                        let index = cursor.remainder_index;
-                        if !matches!(
-                            self.join_type,
-                            proto::RegularJoinType::Semi | proto::RegularJoinType::Anti
-                        ) && is_outer(self.join_type, 1)
-                            && !cursor.right_matched[index]
-                        {
-                            let Some(next_estimate) = self.prepare_bounded_output_row(
-                                cursor,
-                                *output_estimate,
-                                !output.is_empty(),
-                                None,
-                                Some(&cursor.state.right[index]),
-                            )?
-                            else {
-                                return Ok(());
-                            };
-                            *output_estimate = next_estimate;
-                            output.push(OutputRow {
-                                left: None,
-                                right: Some(cursor.state.right[index].row.clone()),
-                                kind: INSERT,
-                                input_ordinal: bounded_ordinal(output.len())?,
-                            });
-                        }
-                        cursor.remainder_index += 1;
-                    }
-                    if cursor.remainder_index == cursor.state.right.len() {
-                        cursor.phase = BoundedOutputPhase::Done;
-                    }
-                }
-                BoundedOutputPhase::Done => break,
-            }
+        while output.len() < max_rows {
+            let Some((left, right)) = cursor.native.peek()? else {
+                cursor.done = true;
+                break;
+            };
+            let left = left.map(|i| &cursor.state.left[i]);
+            let right = right.map(|i| &cursor.state.right[i]);
+            let Some(estimate) = self.prepare_bounded_output_row(
+                cursor,
+                *output_estimate,
+                !output.is_empty(),
+                left,
+                right,
+            )?
+            else {
+                break;
+            };
+            *output_estimate = estimate;
+            output.push(OutputRow {
+                left: left.map(|r| r.row.clone()),
+                right: right.map(|r| r.row.clone()),
+                kind: INSERT,
+                input_ordinal: bounded_ordinal(output.len())?,
+            });
+            cursor.native.advance();
         }
         Ok(())
     }
@@ -1202,69 +1074,6 @@ impl RegularJoinProcessor {
             Err(DataFusionError::ResourcesExhausted(_)) if can_split => Ok(false),
             Err(error) => Err(error),
         }
-    }
-
-    fn bounded_pair_matches(
-        &mut self,
-        cursor: &BoundedJoinCursor,
-        start: usize,
-        end: usize,
-        pending_output_bytes: usize,
-    ) -> Result<Vec<bool>> {
-        let right_count = cursor.state.right.len();
-        let mut result = Vec::with_capacity(end - start);
-        let mut pair_rows = [Vec::<&[u8]>::new(), Vec::<&[u8]>::new()];
-        let mut locations = Vec::new();
-        for pair in start..end {
-            let left = pair / right_count;
-            let right = pair % right_count;
-            let matchable = cursor.left_matchable[left] && cursor.right_matchable[right];
-            result.push(matchable && self.residual_condition.is_none());
-            if matchable && self.residual_condition.is_some() {
-                pair_rows[0].push(&cursor.state.left[left].row);
-                pair_rows[1].push(&cursor.state.right[right].row);
-                locations.push(pair - start);
-            }
-        }
-        let Some(condition) = &self.residual_condition else {
-            return Ok(result);
-        };
-        if locations.is_empty() {
-            return Ok(result);
-        }
-        let condition_bytes = pair_rows
-            .iter()
-            .flatten()
-            .map(|row| row.len().saturating_add(64))
-            .sum::<usize>();
-        self.scratch_reservation.resize(
-            self.bounded_retained_bytes()
-                .saturating_add(cursor.estimated_dynamic_bytes())
-                .saturating_add(pending_output_bytes)
-                .saturating_add(condition_bytes.saturating_mul(2)),
-        )?;
-        let mut columns = Vec::new();
-        for side in 0..2 {
-            let parser = self.row_converters[side].parser();
-            columns.extend(
-                self.row_converters[side]
-                    .convert_rows(pair_rows[side].iter().map(|row| parser.parse(row)))?,
-            );
-        }
-        let pairs = RecordBatch::try_new(self.condition_schema.clone(), columns)?;
-        let values = condition.evaluate(&pairs)?.into_array(locations.len())?;
-        let values = values
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .ok_or_else(|| {
-                DataFusionError::Execution(
-                    "regular join residual condition did not evaluate to BooleanArray".to_string(),
-                )
-            })?;
-        for (condition_row, output_row) in locations.into_iter().enumerate() {
-            result[output_row] = !values.is_null(condition_row) && values.value(condition_row);
-        }
-        Ok(result)
     }
 
     fn bounded_retained_bytes(&self) -> usize {
