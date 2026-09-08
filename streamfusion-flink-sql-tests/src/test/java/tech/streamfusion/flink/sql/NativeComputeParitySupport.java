@@ -58,7 +58,13 @@ abstract class NativeComputeParitySupport extends SqlParityTestSupport {
             while (rows.hasNext()) {
                 var row = rows.next();
                 var fields = new Object[row.getArity()];
-                for (int i = 0; i < fields.length; i++) fields[i] = row.getField(i);
+                for (int i = 0; i < fields.length; i++) {
+                    var field = row.getField(i);
+                    fields[i] = field instanceof java.time.LocalDateTime
+                            ? org.apache.flink.table.data.TimestampData.fromLocalDateTime(
+                                    (java.time.LocalDateTime) field)
+                            : field;
+                }
                 var value = GenericRowData.of(fields);
                 value.setRowKind(row.getKind());
                 result.add(bytes(value, output));

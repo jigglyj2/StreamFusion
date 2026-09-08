@@ -24,18 +24,23 @@ pub(super) struct StoredRow {
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct OverState {
     pub(super) next_id: i64,
+    pub(super) partial: bool,
+    pub(super) persisted: super::super::ordered_partition::Entries,
     pub(super) rows: BTreeMap<Vec<u8>, Vec<StoredRow>>,
 }
 
 impl Default for OverState {
     fn default() -> Self {
         Self {
+            partial: false,
+            persisted: Default::default(),
             next_id: i64::MIN,
             rows: BTreeMap::new(),
         }
     }
 }
 
+#[cfg(test)]
 pub(super) fn encode_state(state: &OverState) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(MAGIC);
@@ -117,7 +122,43 @@ pub(super) fn decode_state(bytes: &[u8], call_count: usize) -> Result<OverState>
     }
     Ok(OverState {
         next_id,
+        partial: false,
+        persisted: Default::default(),
         rows: rows_by_order,
+    })
+}
+
+pub(super) fn encode_index_row(row: &StoredRow) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&row.event_timestamp.to_le_bytes());
+    put_bytes(&mut bytes, &row.payload);
+    put_values_without_count(&mut bytes, &row.contributions);
+    bytes.push(u8::from(!row.output.is_empty()));
+    if !row.output.is_empty() {
+        put_values_without_count(&mut bytes, &row.output);
+    }
+    bytes
+}
+
+pub(super) fn decode_index_row(id: i64, bytes: &[u8], call_count: usize) -> Result<StoredRow> {
+    let mut cursor = Cursor { bytes, offset: 0 };
+    let event_timestamp = cursor.i64()?;
+    let payload = cursor.bytes()?.to_vec();
+    let contributions = cursor.compact_values_exact(call_count)?;
+    let output = match cursor.u8()? {
+        0 => Vec::new(),
+        1 => cursor.compact_values_exact(call_count)?,
+        tag => return Err(invalid(format!("unknown OVER output-presence tag {tag}"))),
+    };
+    if cursor.offset != bytes.len() {
+        return Err(invalid("OVER indexed row has trailing bytes"));
+    }
+    Ok(StoredRow {
+        id,
+        event_timestamp,
+        payload,
+        contributions,
+        output,
     })
 }
 
@@ -174,6 +215,7 @@ fn put_value(bytes: &mut Vec<u8>, value: &Option<AggregateValue>, compact_intege
     }
 }
 
+#[cfg(test)]
 fn put_var_u64(bytes: &mut Vec<u8>, mut value: u64) {
     while value >= 0x80 {
         bytes.push((value as u8) | 0x80);
@@ -348,6 +390,8 @@ mod tests {
     #[test]
     fn canonical_state_round_trips_values_and_rejects_trailing_bytes() {
         let state = OverState {
+            partial: false,
+            persisted: Default::default(),
             next_id: 9,
             rows: BTreeMap::from([(
                 vec![1, 2],
@@ -376,6 +420,8 @@ mod tests {
     #[test]
     fn restores_first_version_non_time_state_without_an_event_timestamp() {
         let state = OverState {
+            partial: false,
+            persisted: Default::default(),
             next_id: 9,
             rows: BTreeMap::from([(
                 vec![1, 2],
@@ -402,6 +448,8 @@ mod tests {
     #[test]
     fn restores_second_version_fixed_width_rows() {
         let state = OverState {
+            partial: false,
+            persisted: Default::default(),
             next_id: i64::MIN + 2,
             rows: BTreeMap::from([(
                 vec![1, 2],

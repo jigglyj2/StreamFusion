@@ -64,14 +64,13 @@ including pending-timer redistribution during scale-out and scale-in recovery. D
 are materialized into keyed state only at canonical or native RocksDB checkpoint boundaries; the
 runtime does not rewrite an ever-growing timer snapshot on every input batch. Event-time OVER
 keeps one active earliest-pending timer per partition and advances that partition through the
-current watermark when it fires. The third canonical state-codec version uses variable-width
-sequence and aggregate encodings; restore coverage retains compatibility with the first two
-fixed-width versions.
+current watermark when it fires. Indexed state retains compact aggregate encodings and can
+restore the earlier whole-partition row-state versions, including the first two fixed-width versions.
 
 For bounded input, the native batch operator buffers canonical keyed Arrow-row state, handles the
 complete insert/update/delete changelog, and emits sorted final output from `endInput()` in managed
-16,384-row batches. It performs one batched state read and one batched write per non-empty input
-Arrow batch. Canonical key-group snapshots restore across rescaling and can move directly between
+16,384-row batches. It batches metadata reads and mutations per input Arrow batch and reads
+affected order buckets through bounded native range scans. Canonical key-group snapshots restore across rescaling and can move directly between
 the memory and RocksDB implementations. The absorbed Flink sort metrics remain present; memory use
 reports the native managed reservation and spill counters remain zero because this admitted path
 does not spill outside the selected state backend.
@@ -196,3 +195,18 @@ of which remain governed by Flink managed-memory admission and release. Profiler
 timings were excluded from throughput results.
 
 See the [Flink 2.3 OVER aggregation documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/over-agg/).
+
+## Indexed native state
+
+Retained OVER rows now use separate ordered entries keyed by partition, existing Arrow-encoded
+order columns (or processing-time order), and stable row identity. Partition metadata stores the
+next identity. Batch writeback updates changed rows and removes expired/retracted rows rather than
+rewriting an entire partition value. Legacy row-state versions remain readable and migrate on
+write. Append-only unbounded processing-time OVER keeps its compact accumulator representation.
+
+Bounded-final input loads only order buckets touched by the batch, including all duplicates needed
+for exact retraction matching. Terminal discovery scans metadata and loads one partition's rows
+for DataFusion window evaluation. Streaming OVER still loads its retained partition and uses the
+existing Flink-compatible affected-suffix/full-frame computations; indexed persistence does not
+yet provide a bounded affected-frame cache for that path. No measured speedup or new planner
+admission is claimed. Both state backends share the ordered encoding and canonical restore format.

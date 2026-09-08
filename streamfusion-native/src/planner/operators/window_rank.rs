@@ -23,8 +23,8 @@ use crate::exchange::{assign_key_group, KeyField};
 use crate::memory_pool::HostMemoryReservation;
 use crate::planner::arrow_schema;
 use crate::state::{
-    KeyedState, MemoryKeyedState, NativeTimerService, RocksPluginKeyedState, StateKey, StateKeyRef,
-    StateMutation, TimerDomain, TimerKey,
+    KeyedState, NativeTimerService, OrderedMemoryKeyedState, RocksPluginKeyedState, StateKey,
+    StateKeyRef, StateMutation, TimerDomain, TimerKey,
 };
 use crate::{decode_plan, proto};
 
@@ -35,6 +35,10 @@ use super::stateful_utils::{
 use super::top_n::compare::compare_rows;
 use super::window_aggregate::local_to_timer_epoch;
 use super::window_table_function::timestamp_millis;
+
+mod indexed;
+#[cfg(test)]
+mod indexed_tests;
 
 const INSERT: i8 = 0;
 const UPDATE_BEFORE: i8 = 1;
@@ -55,6 +59,7 @@ pub(crate) struct WindowRankProcessor {
     visible_schema: SchemaRef,
     output_schema: SchemaRef,
     row_converter: RowConverter,
+    sort_keys: Option<super::sortable_state::SortKeys>,
     input_schema: Option<SchemaRef>,
     key_fields: Vec<(usize, KeyField)>,
     preencoded_key_index: Option<usize>,
@@ -98,7 +103,7 @@ impl WindowRankProcessor {
     ) -> Result<Self> {
         let scratch = state_reservation.sibling("native window rank batch scratch and output");
         let timers = state_reservation.sibling("native window rank timers");
-        let state = Box::new(MemoryKeyedState::new(
+        let state = Box::new(OrderedMemoryKeyedState::new(
             first_key_group,
             last_key_group,
             state_reservation,
@@ -168,6 +173,12 @@ impl WindowRankProcessor {
         let visible_schema =
             arrow_schema(plan.input_schema.as_ref().expect("validated input schema"))?;
         let row_converter = row_converter(&visible_schema)?;
+        let sort_keys = super::sortable_state::SortKeys::new(
+            &visible_schema,
+            &plan.sort_key_indices,
+            &plan.sort_ascending,
+            &plan.sort_nulls_last,
+        )?;
         let mut output_fields = visible_schema.fields().iter().cloned().collect::<Vec<_>>();
         if plan.output_rank_number {
             output_fields.push(Arc::new(Field::new(
@@ -201,6 +212,7 @@ impl WindowRankProcessor {
             visible_schema,
             output_schema,
             row_converter,
+            sort_keys,
             input_schema: None,
             key_fields: Vec::new(),
             preencoded_key_index: None,
@@ -255,6 +267,9 @@ impl WindowRankProcessor {
         batch: &RecordBatch,
         encoded_rows: &Rows,
     ) -> Result<RecordBatch> {
+        if self.sort_keys.is_some() {
+            return indexed::process(self, batch, encoded_rows);
+        }
         let kinds = batch
             .column(self.input_kind_index.expect("schema prepared"))
             .as_any()
@@ -415,6 +430,9 @@ impl WindowRankProcessor {
         self.timers_fired = self.timers_fired.saturating_add(fired.len() as u64);
         if fired.is_empty() {
             return self.empty_output();
+        }
+        if self.sort_keys.is_some() {
+            return indexed::fire(self, fired);
         }
         let refs = fired
             .iter()
@@ -895,7 +913,7 @@ mod tests {
         assert_eq!(lower.statistics()[5] + upper.statistics()[5], 0);
     }
 
-    fn plan() -> Vec<u8> {
+    pub(super) fn plan() -> Vec<u8> {
         proto::NativePlan {
             protocol_version: crate::PLAN_PROTOCOL_VERSION,
             root: Some(proto::Operator {
@@ -951,7 +969,12 @@ mod tests {
         }
     }
 
-    fn batch(keys: &[i64], window_end: &[i64], rows: &[&[u8]], kinds: &[i8]) -> RecordBatch {
+    pub(super) fn batch(
+        keys: &[i64],
+        window_end: &[i64],
+        rows: &[&[u8]],
+        kinds: &[i8],
+    ) -> RecordBatch {
         RecordBatch::try_from_iter(vec![
             ("key", Arc::new(Int64Array::from(keys.to_vec())) as ArrayRef),
             (

@@ -35,11 +35,17 @@ pub(crate) fn compare_rows(
             nulls_last,
         )?;
         if ordering != Ordering::Equal {
-            return Ok(if ascending {
-                ordering
-            } else {
-                ordering.reverse()
-            });
+            // Flink handles top-level nulls before applying the direction to non-null values.
+            return Ok(
+                if ascending
+                    || left.column(index).is_null(left_row)
+                    || right.column(index).is_null(right_row)
+                {
+                    ordering
+                } else {
+                    ordering.reverse()
+                },
+            );
         }
     }
     Ok(Ordering::Equal)

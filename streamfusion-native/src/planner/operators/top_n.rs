@@ -29,8 +29,8 @@ use crate::exchange::{assign_key_group, encode_binary_row, KeyField};
 use crate::memory_pool::HostMemoryReservation;
 use crate::planner::arrow_schema;
 use crate::state::{
-    decode_key_group_snapshot, KeyedState, MemoryKeyedState, RocksPluginKeyedState, StateKey,
-    StateKeyRef, StateMutation,
+    KeyedState, OrderedMemoryKeyedState, RocksPluginKeyedState, StateKey, StateKeyRef,
+    StateMutation,
 };
 use crate::{decode_plan, proto};
 
@@ -58,6 +58,7 @@ pub(crate) struct TopNProcessor {
     preencoded_key_index: Option<usize>,
     input_kind_index: Option<usize>,
     row_converter: Option<RowConverter>,
+    sort_keys: Option<super::sortable_state::SortKeys>,
     state_read_batches: u64,
     state_write_batches: u64,
     groups_read: u64,
@@ -77,6 +78,20 @@ struct CandidateRef {
     row: usize,
     sequence: u64,
     kind: i8,
+}
+
+#[cfg(test)]
+mod indexed_tests;
+
+struct CandidateSources {
+    batches: Vec<Arc<RecordBatch>>,
+    orders: Option<Vec<Rows>>,
+}
+impl std::ops::Deref for CandidateSources {
+    type Target = [Arc<RecordBatch>];
+    fn deref(&self) -> &Self::Target {
+        &self.batches
+    }
 }
 
 struct GroupWork {
@@ -140,7 +155,7 @@ impl TopNProcessor {
         reservation: HostMemoryReservation,
     ) -> Result<Self> {
         let scratch = reservation.sibling("native top-n batch scratch and output");
-        let state = Box::new(MemoryKeyedState::new(
+        let state = Box::new(OrderedMemoryKeyedState::new(
             first_key_group,
             last_key_group,
             reservation,
@@ -206,6 +221,12 @@ impl TopNProcessor {
         let input_schema = arrow_schema(plan.input_schema.as_ref().expect("validated"))?;
         let output_schema = arrow_schema(plan.output_schema.as_ref().expect("validated"))?;
         validate_output_schema(&plan, &input_schema, &output_schema)?;
+        let sort_keys = super::sortable_state::SortKeys::new(
+            &input_schema,
+            &plan.sort_key_indices,
+            &plan.sort_ascending,
+            &plan.sort_nulls_last,
+        )?;
         let initial_row_converter = row_converter(&input_schema)?;
         Ok(Self {
             plan,
@@ -221,6 +242,7 @@ impl TopNProcessor {
             preencoded_key_index: None,
             input_kind_index: None,
             row_converter: Some(initial_row_converter),
+            sort_keys,
             state_read_batches: 0,
             state_write_batches: 0,
             groups_read: 0,
@@ -343,13 +365,64 @@ impl TopNProcessor {
         self.scratch_reservation
             .resize(base_reservation.saturating_add(state_bytes.saturating_mul(4)))?;
 
+        let mut index_credit = self
+            .scratch_reservation
+            .sibling("top-n ordered partition working set");
+        let mut indexed = state_keys
+            .iter()
+            .zip(values.iter())
+            .map(|(key, value)| {
+                if value
+                    .as_ref()
+                    .is_some_and(|v| v.starts_with(super::sortable_state::FORMAT))
+                {
+                    super::ordered_partition::load(self.state.as_ref(), key, &mut index_credit)
+                } else {
+                    Ok(super::ordered_partition::Entries::new())
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+        index_credit.try_grow(
+            indexed
+                .iter()
+                .flat_map(|entries| entries.iter())
+                .map(|(k, v)| {
+                    k.len()
+                        .saturating_add(v.len().saturating_mul(4))
+                        .saturating_add(256)
+                })
+                .sum(),
+        )?;
         let mut restored_rows = Vec::new();
         let mut decoded_groups = Vec::with_capacity(values.len());
-        for value in &values {
-            let decoded = value
+        for (group_index, value) in values.iter().enumerate() {
+            let mut decoded = value
                 .as_ref()
-                .map(|bytes| decode_state_rows(bytes.as_ref()))
+                .map(|bytes| {
+                    decode_state_rows(
+                        bytes
+                            .strip_prefix(super::sortable_state::FORMAT)
+                            .unwrap_or(bytes.as_ref()),
+                    )
+                })
                 .transpose()?;
+            if value
+                .as_ref()
+                .is_some_and(|v| v.starts_with(super::sortable_state::FORMAT))
+            {
+                if indexed[group_index].values().any(Vec::is_empty) {
+                    return Err(DataFusionError::Execution(
+                        "truncated Top-N indexed candidate".into(),
+                    ));
+                }
+                let d = decoded.as_mut().expect("indexed group has metadata");
+                d.sequences = indexed[group_index]
+                    .keys()
+                    .map(|k| u64::from_be_bytes(k[k.len() - 8..].try_into().unwrap()))
+                    .collect();
+                d.row_kinds = Some(indexed[group_index].values().map(|v| v[0] as i8).collect());
+                d.rows = indexed[group_index].values().map(|v| &v[1..]).collect();
+            }
             if let Some(decoded) = decoded {
                 if self.is_expired(decoded.last_access_millis, now_millis) {
                     self.expired_groups = self.expired_groups.saturating_add(1);
@@ -392,7 +465,18 @@ impl TopNProcessor {
                 converter.convert_rows(restored_rows.into_iter().map(|row| parser.parse(row)))?;
             RecordBatch::try_new(Arc::clone(&self.input_schema), columns)?
         };
-        let sources = vec![visible, Arc::new(restored)];
+        let batches = vec![visible, Arc::new(restored)];
+        let orders = self
+            .sort_keys
+            .as_ref()
+            .map(|keys| {
+                batches
+                    .iter()
+                    .map(|b| keys.encode(b.columns()))
+                    .collect::<Result<Vec<_>>>()
+            })
+            .transpose()?;
+        let sources = CandidateSources { batches, orders };
         let mut groups = state_keys
             .into_iter()
             .zip(decoded_groups)
@@ -413,6 +497,22 @@ impl TopNProcessor {
                     .collect(),
             })
             .collect::<Vec<_>>();
+        if let Some(orders) = &sources.orders {
+            for (i, group) in groups.iter_mut().enumerate() {
+                if values[i]
+                    .as_ref()
+                    .is_some_and(|v| !v.starts_with(super::sortable_state::FORMAT))
+                {
+                    // Old snapshots predate independent descending null placement.
+                    group.candidates.sort_by(|a, b| {
+                        orders[a.source]
+                            .row(a.row)
+                            .cmp(&orders[b.source].row(b.row))
+                            .then_with(|| a.sequence.cmp(&b.sequence))
+                    });
+                }
+            }
+        }
         if is_append_limit(&self.plan) {
             for group in &mut groups {
                 group.candidates.clear();
@@ -582,8 +682,9 @@ impl TopNProcessor {
             .iter()
             .map(|source| converter.convert_columns(source.columns()))
             .collect::<std::result::Result<Vec<Rows>, _>>()?;
+        let touched_group_count = groups.len();
         let mut mutations = Vec::with_capacity(groups.len());
-        for group in groups {
+        for (group_index, group) in groups.into_iter().enumerate() {
             let sequences = group
                 .candidates
                 .iter()
@@ -597,6 +698,57 @@ impl TopNProcessor {
                     .collect::<Vec<_>>()
             });
             let preserve_empty = group.rank_end.is_some();
+            if let Some(orders) = &sources.orders {
+                let prefix = super::sortable_state::prefix(0xf0, &group.state_key.key)?;
+                let mut entries = super::ordered_partition::Entries::new();
+                index_credit.try_grow(
+                    group
+                        .candidates
+                        .iter()
+                        .map(|c| {
+                            prefix.len()
+                                + orders[c.source].row(c.row).data().len()
+                                + encoded_sources[c.source].row(c.row).data().len()
+                                + 201
+                        })
+                        .sum(),
+                )?;
+                for c in &group.candidates {
+                    let key = super::sortable_state::row_key(
+                        &prefix,
+                        orders[c.source].row(c.row).data(),
+                        c.sequence,
+                    );
+                    let mut value = vec![c.kind as u8];
+                    value.extend_from_slice(encoded_sources[c.source].row(c.row).data());
+                    entries.insert(key, value);
+                }
+                super::ordered_partition::write_delta(
+                    &group.state_key,
+                    std::mem::take(&mut indexed[group_index]),
+                    entries,
+                    &mut mutations,
+                );
+                let value = if !sequences.is_empty() || preserve_empty {
+                    let mut bytes = super::sortable_state::FORMAT.to_vec();
+                    bytes.extend_from_slice(&encode_state_rows_with_kinds(
+                        group.next_sequence,
+                        group.rank_end,
+                        now_millis,
+                        &[],
+                        None,
+                        std::iter::empty::<arrow_row::Row<'_>>(),
+                    )?);
+                    Some(bytes)
+                } else {
+                    None
+                };
+                mutations.push(StateMutation {
+                    key: group.state_key,
+                    value,
+                });
+                continue;
+            }
             mutations.push(StateMutation {
                 key: group.state_key,
                 value: (!sequences.is_empty() || preserve_empty)
@@ -615,7 +767,9 @@ impl TopNProcessor {
                     .transpose()?,
             });
         }
-        self.groups_written = self.groups_written.saturating_add(mutations.len() as u64);
+        self.groups_written = self
+            .groups_written
+            .saturating_add(touched_group_count as u64);
         if !mutations.is_empty() {
             self.state.write_batch(mutations)?;
             self.state_write_batches = self.state_write_batches.saturating_add(1);
@@ -713,19 +867,46 @@ impl TopNProcessor {
         let mut encoded_rows = Vec::<Vec<u8>>::new();
         let mut row_kinds = Vec::<i8>::new();
         let mut groups = Vec::<(usize, usize)>::new();
-        let mut snapshot_bytes = 0usize;
+        let mut metadata_credit = self.scratch_reservation.sibling("bounded Top-N metadata");
         for key_group in self.first_key_group..=self.last_key_group {
-            let snapshot = self
-                .state
-                .snapshot_key_group(key_group, &self.scratch_reservation)?;
-            snapshot_bytes = snapshot_bytes.saturating_add(snapshot.len());
-            self.scratch_reservation
-                .resize(snapshot_bytes.saturating_mul(2))?;
-            for (key, value) in decode_key_group_snapshot(key_group, &snapshot)? {
+            for (key, value) in super::ordered_partition::metadata(
+                self.state.as_ref(),
+                key_group,
+                STATE_KEY_PREFIX,
+                &mut metadata_credit,
+            )? {
                 if key.first().copied() != Some(STATE_KEY_PREFIX) {
                     continue;
                 }
-                let decoded = decode_state_rows(&value)?;
+                let mut index_credit = self
+                    .scratch_reservation
+                    .sibling("bounded Top-N ordered partition");
+                let entries = if value.starts_with(super::sortable_state::FORMAT) {
+                    Some(super::ordered_partition::load(
+                        self.state.as_ref(),
+                        &StateKey {
+                            key_group,
+                            key: key.clone(),
+                        },
+                        &mut index_credit,
+                    )?)
+                } else {
+                    None
+                };
+                let mut decoded = decode_state_rows(
+                    value
+                        .strip_prefix(super::sortable_state::FORMAT)
+                        .unwrap_or(&value),
+                )?;
+                if let Some(entries) = &entries {
+                    if entries.values().any(Vec::is_empty) {
+                        return Err(DataFusionError::Execution(
+                            "truncated Top-N indexed candidate".into(),
+                        ));
+                    }
+                    decoded.rows = entries.values().map(|v| &v[1..]).collect();
+                    decoded.row_kinds = Some(entries.values().map(|v| v[0] as i8).collect());
+                }
                 if decoded.rows.is_empty() {
                     continue;
                 }
@@ -734,6 +915,13 @@ impl TopNProcessor {
                         "bounded Top-N state is missing physical RowKinds".to_string(),
                     )
                 })?;
+                self.scratch_reservation.try_grow(
+                    decoded
+                        .rows
+                        .iter()
+                        .map(|row| row.len().saturating_mul(3).saturating_add(256))
+                        .sum(),
+                )?;
                 let offset = encoded_rows.len();
                 encoded_rows.extend(decoded.rows.into_iter().map(<[u8]>::to_vec));
                 row_kinds.extend(kinds);
@@ -1059,7 +1247,7 @@ fn selected(group: &GroupWork, rank_start: u64, rank_end: i64) -> &[CandidateRef
 
 fn insert_sorted(
     plan: &proto::TopN,
-    sources: &[Arc<RecordBatch>],
+    sources: &CandidateSources,
     candidates: &mut Vec<CandidateRef>,
     candidate: CandidateRef,
     comparator_calls: &mut u64,
@@ -1142,7 +1330,7 @@ fn rank_type(plan: &proto::TopN) -> proto::TopNRankType {
 
 fn truncate_rank(
     plan: &proto::TopN,
-    sources: &[Arc<RecordBatch>],
+    sources: &CandidateSources,
     candidates: &mut Vec<CandidateRef>,
     rank_end: i64,
     comparator_calls: &mut u64,
@@ -1167,7 +1355,7 @@ fn truncate_rank(
 
 fn candidate_order(
     plan: &proto::TopN,
-    sources: &[Arc<RecordBatch>],
+    sources: &CandidateSources,
     left: CandidateRef,
     right: CandidateRef,
 ) -> Result<Ordering> {
@@ -1177,10 +1365,15 @@ fn candidate_order(
 
 fn sort_key_order(
     plan: &proto::TopN,
-    sources: &[Arc<RecordBatch>],
+    sources: &CandidateSources,
     left: CandidateRef,
     right: CandidateRef,
 ) -> Result<Ordering> {
+    if let Some(orders) = &sources.orders {
+        return Ok(orders[left.source]
+            .row(left.row)
+            .cmp(&orders[right.source].row(right.row)));
+    }
     compare_rows(
         sources[left.source].as_ref(),
         left.row,
@@ -1587,7 +1780,7 @@ mod tests {
         ]))
     }
 
-    fn plan() -> Vec<u8> {
+    pub(super) fn plan() -> Vec<u8> {
         let schema = proto::Schema {
             fields: vec![
                 proto::Field {
@@ -1658,7 +1851,7 @@ mod tests {
         .encode_to_vec()
     }
 
-    fn batch(keys: Vec<i32>, values: Vec<&str>) -> RecordBatch {
+    pub(super) fn batch(keys: Vec<i32>, values: Vec<&str>) -> RecordBatch {
         let rows = keys.len();
         batch_with_kinds(keys, values, vec![INSERT; rows])
     }

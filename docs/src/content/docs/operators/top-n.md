@@ -66,14 +66,22 @@ tests cover integer peers and partition boundaries split across batches. This co
 does not remove the existing planner admission gates.
 
 
-Each incoming Arrow batch crosses JNI once. Rust computes Flink-compatible key groups, makes one
-backend batch read and one backend batch write for all touched partitions, maintains the sorted
-candidate sets, and emits one Arrow changelog batch. Memory state stores opaque canonical values.
-RocksDB uses one `multi_get` and one atomic `WriteBatch` through the optional versioned native
-component; it does not route state through JNI. Candidate payloads are gathered directly from the
-incoming or restored Arrow batches. Each partition's backend-neutral value contains versioned
-metadata plus reversible Arrow row bytes. Restored rows from all touched partitions are decoded in
-one vectorized conversion, avoiding per-key-group IPC streams and small Arrow gathers.
+Each incoming Arrow batch crosses JNI once. Rust computes Flink-compatible key groups, reads the
+touched partitions, maintains candidate sets, and commits changes in one backend batch. For
+supported scalar sort keys (excluding floats), sort columns are Arrow-row-encoded once per input
+or restored batch and compared as bytes. Top-level null placement is independent of ascending or
+descending direction, matching Flink.
+
+These partitions store small versioned metadata separately from individually ordered candidate
+entries. RocksDB uses its bytewise comparator; the in-memory implementation uses a B-tree.
+Unchanged candidates are not rewritten. Legacy whole-partition values migrate when first touched.
+Float/nested sort keys retain the custom comparator and whole-partition representation; unordered
+LIMIT retains its existing specialized behavior. Native state never passes through JNI.
+
+Top-N still loads the retained candidate set of each touched partition and uses a sorted candidate
+vector. This change does not implement RisingWave's bounded low/middle/high cache or eliminate
+large retractable-group working sets. Terminal rank discovery scans only partition metadata,
+then reads the corresponding ordered candidates. Payload decoding/output remain vectorized.
 
 The implementation was gut-checked against RisingWave's non-window Top-N state/cache split: both
 keep deterministic `(ORDER BY, remaining primary key)` ordering and retain enough state to refill

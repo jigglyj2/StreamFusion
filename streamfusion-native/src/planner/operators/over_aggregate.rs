@@ -26,19 +26,20 @@ use crate::planner::operators::group_aggregate::{
 };
 use crate::planner::operators::window_table_function::timestamp_millis;
 use crate::state::{
-    decode_key_group_snapshot, KeyedState, MemoryKeyedState, NativeTimerService,
-    RocksPluginKeyedState, StateKey, StateKeyRef, StateMutation, TimerDomain, TimerKey,
+    KeyedState, NativeTimerService, OrderedMemoryKeyedState, RocksPluginKeyedState, StateKey,
+    StateKeyRef, StateMutation, TimerDomain, TimerKey,
 };
 use crate::{decode_plan, proto};
 
 mod datafusion_compute;
+mod indexed;
+#[cfg(test)]
+mod indexed_tests;
 mod state_codec;
 #[cfg(test)]
 mod tests;
 
-use state_codec::{
-    decode_state as decode_over_state, encode_state as encode_over_state, OverState, StoredRow,
-};
+use state_codec::{decode_state as decode_over_state, OverState, StoredRow};
 
 const INSERT: i8 = 0;
 const UPDATE_BEFORE: i8 = 1;
@@ -101,7 +102,7 @@ impl OverAggregateProcessor {
     ) -> Result<Self> {
         let scratch = state_reservation.sibling("native over aggregate batch scratch and output");
         let timers = state_reservation.sibling("native over aggregate timers");
-        let state = Box::new(MemoryKeyedState::new(
+        let state = Box::new(OrderedMemoryKeyedState::new(
             first_key_group,
             last_key_group,
             state_reservation,
@@ -311,9 +312,38 @@ impl OverAggregateProcessor {
             && !self.plan.input_changelog
             && self.plan.preceding_offset.is_none()
         {
-            let mut accumulators = existing
+            let mut migration_credit = self
+                .scratch_reservation
+                .sibling("OVER compact state migration");
+            let mut migrated_rows = Vec::new();
+            let mut accumulators = state_keys
                 .iter()
-                .map(|value| match value.as_deref() {
+                .zip(existing.iter())
+                .map(|(key, value)| match value.as_deref() {
+                    Some(bytes) if bytes.starts_with(super::sortable_state::FORMAT) => {
+                        let state = indexed::load(
+                            self.state.as_ref(),
+                            key,
+                            bytes,
+                            self.calls.len(),
+                            &mut migration_credit,
+                            None,
+                        )?;
+                        let mut accumulator = AccumulatorState::new(&self.calls);
+                        for row in state.rows.values().flatten() {
+                            accumulator.apply_values(&self.calls, &row.contributions, true)?;
+                        }
+                        migrated_rows.extend(state.persisted.into_keys().map(|bytes| {
+                            StateMutation {
+                                key: StateKey {
+                                    key_group: key.key_group,
+                                    key: bytes,
+                                },
+                                value: None,
+                            }
+                        }));
+                        Ok(accumulator)
+                    }
                     Some(bytes) => self.decode_processing_time_accumulator(bytes),
                     None => Ok(AccumulatorState::new(&self.calls)),
                 })
@@ -336,7 +366,7 @@ impl OverAggregateProcessor {
                 });
                 touched[state_index] = true;
             }
-            let mutations = state_keys
+            let mut mutations = state_keys
                 .into_iter()
                 .zip(accumulators.into_iter().zip(touched))
                 .filter_map(|(key, (state, touched))| {
@@ -346,18 +376,42 @@ impl OverAggregateProcessor {
                     })
                 })
                 .collect::<Vec<_>>();
+            mutations.extend(migrated_rows);
             if !mutations.is_empty() {
                 self.state.write_batch(mutations)?;
                 self.state_write_batches = self.state_write_batches.saturating_add(1);
             }
             return self.output_batch(events);
         }
-        let mut states = existing
+        let mut index_credit = self
+            .scratch_reservation
+            .sibling("OVER ordered partition working set");
+        let mut affected_orders = vec![BTreeSet::new(); state_keys.len()];
+        if self.plan.bounded_final_output {
+            let orders = order_rows.as_ref().expect("bounded OVER order keys");
+            for (row, &group) in row_state_indices.iter().enumerate() {
+                affected_orders[group].insert(orders.row(row).data().to_vec());
+            }
+        }
+        let mut states = state_keys
             .iter()
-            .map(|value| {
+            .zip(existing.iter())
+            .enumerate()
+            .map(|(i, (key, value))| {
                 value
                     .as_deref()
-                    .map(|bytes| decode_over_state(bytes, self.calls.len()))
+                    .map(|bytes| {
+                        indexed::load(
+                            self.state.as_ref(),
+                            key,
+                            bytes,
+                            self.calls.len(),
+                            &mut index_credit,
+                            self.plan
+                                .bounded_final_output
+                                .then_some(&affected_orders[i]),
+                        )
+                    })
                     .transpose()
                     .map(Option::unwrap_or_default)
             })
@@ -447,16 +501,14 @@ impl OverAggregateProcessor {
                     rows.drain(..expired);
                 }
             }
-            let mutations = state_keys
-                .into_iter()
-                .zip(states.into_iter().zip(touched))
-                .filter_map(|(key, (state, touched))| {
-                    touched.then(|| StateMutation {
-                        key,
-                        value: Some(encode_over_state(&state)),
-                    })
-                })
-                .collect::<Vec<_>>();
+            let mut mutations = Vec::new();
+            for (key, (state, touched)) in
+                state_keys.into_iter().zip(states.into_iter().zip(touched))
+            {
+                if touched {
+                    mutations.extend(indexed::mutations(key, state, true, &mut index_credit)?);
+                }
+            }
             if !mutations.is_empty() {
                 self.state.write_batch(mutations)?;
                 self.state_write_batches = self.state_write_batches.saturating_add(1);
@@ -677,16 +729,13 @@ impl OverAggregateProcessor {
             }
         }
 
-        let mutations = state_keys
-            .into_iter()
-            .zip(states.into_iter().zip(touched))
-            .filter_map(|(key, (state, touched))| {
-                touched.then(|| StateMutation {
-                    key,
-                    value: (!state.rows.is_empty()).then(|| encode_over_state(&state)),
-                })
-            })
-            .collect::<Vec<_>>();
+        let mut index_credit = self.scratch_reservation.sibling("OVER ordered mutations");
+        let mut mutations = Vec::new();
+        for (key, (state, touched)) in state_keys.into_iter().zip(states.into_iter().zip(touched)) {
+            if touched {
+                mutations.extend(indexed::mutations(key, state, false, &mut index_credit)?);
+            }
+        }
         self.dirty_timer_groups.extend(dirty_timer_groups);
         if !mutations.is_empty() {
             self.state.write_batch(mutations)?;
@@ -752,16 +801,13 @@ impl OverAggregateProcessor {
             }
             touched[state_index] = true;
         }
-        let mutations = state_keys
-            .into_iter()
-            .zip(states.into_iter().zip(touched))
-            .filter_map(|(key, (state, touched))| {
-                touched.then(|| StateMutation {
-                    key,
-                    value: (!state.rows.is_empty()).then(|| encode_over_state(&state)),
-                })
-            })
-            .collect::<Vec<_>>();
+        let mut index_credit = self.scratch_reservation.sibling("OVER ordered mutations");
+        let mut mutations = Vec::new();
+        for (key, (state, touched)) in state_keys.into_iter().zip(states.into_iter().zip(touched)) {
+            if touched {
+                mutations.extend(indexed::mutations(key, state, false, &mut index_credit)?);
+            }
+        }
         if !mutations.is_empty() {
             self.state.write_batch(mutations)?;
             self.state_write_batches = self.state_write_batches.saturating_add(1);
@@ -783,16 +829,41 @@ impl OverAggregateProcessor {
         {
             let key_group = self.bounded_finish_key_group;
             self.bounded_finish_key_group = self.bounded_finish_key_group.saturating_add(1);
-            let snapshot = self
-                .state
-                .snapshot_key_group(key_group, &self.scratch_reservation)?;
-            self.scratch_reservation
-                .resize(snapshot.len().saturating_mul(2))?;
-            for (key, value) in decode_key_group_snapshot(key_group, &snapshot)? {
+            let mut metadata_credit = self.scratch_reservation.sibling("bounded OVER metadata");
+            for (key, value) in super::ordered_partition::metadata(
+                self.state.as_ref(),
+                key_group,
+                OVER_STATE_PREFIX,
+                &mut metadata_credit,
+            )? {
                 if key.first().copied() != Some(OVER_STATE_PREFIX) {
                     continue;
                 }
-                let mut state = decode_over_state(&value, self.calls.len())?;
+                let mut index_credit = self
+                    .scratch_reservation
+                    .sibling("bounded OVER indexed partition");
+                let mut state = indexed::load(
+                    self.state.as_ref(),
+                    &StateKey { key_group, key },
+                    &value,
+                    self.calls.len(),
+                    &mut index_credit,
+                    None,
+                )?;
+                self.scratch_reservation.try_grow(
+                    state
+                        .rows
+                        .values()
+                        .flatten()
+                        .map(|row| {
+                            row.payload
+                                .len()
+                                .saturating_mul(3)
+                                .saturating_add(self.calls.len().saturating_mul(128))
+                                .saturating_add(128)
+                        })
+                        .sum(),
+                )?;
                 let changes = if datafusion_compute::compatible(&self.calls) {
                     datafusion_compute::evaluate(
                         &mut state,
@@ -1060,11 +1131,21 @@ impl OverAggregateProcessor {
         self.state_read_batches = self.state_read_batches.saturating_add(1);
         let mut events = Vec::new();
         let mut mutations = Vec::with_capacity(ready.len());
+        let mut index_credit = self
+            .scratch_reservation
+            .sibling("OVER timer indexed partition");
         for ((key, fired_through), value) in ready.into_iter().zip(values) {
             let Some(value) = value else {
                 continue;
             };
-            let mut state = decode_over_state(value.as_ref(), self.calls.len())?;
+            let mut state = indexed::load(
+                self.state.as_ref(),
+                &key,
+                value.as_ref(),
+                self.calls.len(),
+                &mut index_credit,
+                None,
+            )?;
             let ready_through = if domain == TimerDomain::EventTime {
                 timestamp
             } else {
@@ -1094,10 +1175,7 @@ impl OverAggregateProcessor {
                     }
                 }
             }
-            mutations.push(StateMutation {
-                key,
-                value: Some(encode_over_state(&state)),
-            });
+            mutations.extend(indexed::mutations(key, state, true, &mut index_credit)?);
         }
         self.dirty_timer_groups.extend(dirty_timer_groups);
         if !mutations.is_empty() {

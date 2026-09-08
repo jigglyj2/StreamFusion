@@ -676,7 +676,7 @@ fn plan_with_offset(
     .encode_to_vec()
 }
 
-fn bounded_plan(rows_frame: bool, preceding_offset: Option<u64>) -> Vec<u8> {
+pub(super) fn bounded_plan(rows_frame: bool, preceding_offset: Option<u64>) -> Vec<u8> {
     let mut plan = proto::NativePlan::decode(
         plan_with_offset(
             rows_frame,
@@ -747,7 +747,7 @@ fn timestamp() -> proto::LogicalType {
     }
 }
 
-fn batch(keys: &[&str], order: &[i64], values: &[i64], row_kinds: &[i8]) -> RecordBatch {
+pub(super) fn batch(keys: &[&str], order: &[i64], values: &[i64], row_kinds: &[i8]) -> RecordBatch {
     RecordBatch::try_from_iter(vec![
         (
             "key",
