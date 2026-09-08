@@ -62,7 +62,13 @@ Generated wide-payload Flink tests compare all changelog transitions and registe
 both backends; native tests cover cross-row chunks, hot keys, and oversized-pair admission.
 The state transitions still consume these masks in original input order, including outer/semi/anti
 association counts in retained implementations. State writes and output draining retain their
-existing batch boundaries, and the persisted format is unchanged.
+existing state batch boundaries, and the persisted format is unchanged. If predicate or output
+admission is denied while an output prefix is ready, the stream emits that admitted prefix and
+resumes its cursor on the next pull. An empty output halves its fan-out target down to two slots,
+keeping a null-padding retraction adjacent to its joined row. These smaller Arrow outputs add no
+state reads/writes or native-plan invocations. If the minimum transition cannot fit, execution
+still fails recoverably. Generated wide-payload metric/changelog tests and native pressure tests
+cover these continuations, including exact persisted state and one write per input batch.
 
 The Q4 release profiles before this change attributed about 6–7% of process CPU samples to JVM
 memory reservation callbacks. A native regression test reproduced 4,119 budget callbacks for

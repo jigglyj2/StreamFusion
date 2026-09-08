@@ -48,7 +48,7 @@ class SharedBinaryJoinMetricSurfaceTest {
                 // Narrow rows use one value with high multiplicity. Wide rows use distinct
                 // keys so a single batch crosses the byte quantum with deterministic order.
                 // Neither case assumes an iteration order between distinct MapState entries.
-                int count = predicate == Predicate.WIDE_RANGE ? 96 : (arrival == 0 ? 5000 : 1);
+                int count = predicate == Predicate.WIDE_RANGE ? 128 : (arrival == 0 ? 5000 : 1);
                 var rows = new ArrayList<GenericRowData>();
                 for (int row = 0; row < count; row++) {
                     var value = fixture.row(predicate == Predicate.WIDE_RANGE ? 7L + 66L * row : 7L, port);

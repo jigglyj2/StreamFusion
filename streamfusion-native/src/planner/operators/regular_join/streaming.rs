@@ -156,21 +156,27 @@ impl RegularJoinProcessor {
                 .scratch_reservation
                 .sibling("regular join bounded Arrow output");
             let mut admitted = 4096usize;
-            while cursor.row < cursor.batch.num_rows() {
+            'rows: while cursor.row < cursor.batch.num_rows() {
                 let state_index = cursor.indices[cursor.row];
                 if cursor.change.is_none() {
                     if self.residual_condition.is_some() && cursor.candidate_batch.is_empty() {
                         // The previous transition is complete, so release its exhausted cache
                         // before admitting the next predicate chunk.
                         cursor.candidate_batch = CandidateBatch::default();
-                        cursor.candidate_batch = self.condition_matches_batch(
+                        cursor.candidate_batch = match self.condition_matches_batch(
                             cursor.side,
                             &cursor.batch,
                             &cursor.encoded,
                             &cursor.staged,
                             &cursor.indices,
                             cursor.row,
-                        )?;
+                        ) {
+                            Ok(cache) => cache,
+                            Err(DataFusionError::ResourcesExhausted(_)) if !output.is_empty() => {
+                                break
+                            }
+                            Err(error) => return Err(error),
+                        };
                     }
                     let state = &cursor.staged[state_index].value;
                     let candidates = if cursor.side == 0 {
@@ -197,15 +203,20 @@ impl RegularJoinProcessor {
                             )))
                         }
                     };
-                    cursor.matches = Some(match cursor.candidate_batch.pop() {
-                        Some(matches) => matches,
+                    let matches = match cursor.candidate_batch.pop() {
+                        Some(matches) => Ok(matches),
                         None => self.condition_matches_row(
                             cursor.side,
                             &cursor.batch,
                             cursor.row,
                             input,
                             candidates,
-                        )?,
+                        ),
+                    };
+                    cursor.matches = Some(match matches {
+                        Ok(matches) => matches,
+                        Err(DataFusionError::ResourcesExhausted(_)) if !output.is_empty() => break,
+                        Err(error) => return Err(error),
                     });
                     cursor.pair_bytes = candidates
                         .iter()
@@ -230,27 +241,42 @@ impl RegularJoinProcessor {
                 }
                 // A byte target complements the row cap for wide rows. One candidate transition
                 // may produce a padding retract and a pair, so progress always permits two rows.
-                let limit =
+                let mut limit =
                     ((2 << 20) / cursor.pair_bytes.max(1)).clamp(2, BOUNDED_EDGE_OUTPUT_MAX_ROWS);
                 if output.len().saturating_add(2) > limit {
                     break;
                 }
-                let maximum_rows = cursor
-                    .matches
-                    .as_ref()
-                    .expect("initialized mask")
-                    .count()
-                    .saturating_mul(2)
-                    .saturating_add(1)
-                    .min(limit - output.len());
-                admit_output_capacity(
-                    &mut output_memory,
-                    admitted.saturating_add(
-                        maximum_rows
-                            .saturating_mul(cursor.pair_bytes)
-                            .saturating_mul(4),
-                    ),
-                )?;
+                loop {
+                    let maximum_rows = cursor
+                        .matches
+                        .as_ref()
+                        .expect("initialized mask")
+                        .count()
+                        .saturating_mul(2)
+                        .saturating_add(1)
+                        .min(limit - output.len());
+                    match admit_output_capacity(
+                        &mut output_memory,
+                        admitted.saturating_add(
+                            maximum_rows
+                                .saturating_mul(cursor.pair_bytes)
+                                .saturating_mul(4),
+                        ),
+                    ) {
+                        Ok(()) => break,
+                        Err(DataFusionError::ResourcesExhausted(_)) if !output.is_empty() => {
+                            // Emit the already admitted prefix before advancing this transition.
+                            // Its cursor/mask stay live for the next pull, with no repeated state I/O.
+                            break 'rows;
+                        }
+                        Err(DataFusionError::ResourcesExhausted(_)) if maximum_rows > 2 => {
+                            // An empty output can still make progress with a smaller fan-out.
+                            // Keep two slots so padding retraction and joined row stay adjacent.
+                            limit = (maximum_rows / 2).max(2);
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
                 let before = output.len();
                 let done = cursor.change.as_mut().expect("initialized change").drain(
                     &mut cursor.staged[state_index].value,

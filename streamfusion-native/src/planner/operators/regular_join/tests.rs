@@ -10,6 +10,7 @@ mod candidate_batch;
 mod coarse_memory;
 mod compact_state;
 mod input_memory;
+mod output_pressure;
 mod planning_memory;
 mod region;
 mod streaming;

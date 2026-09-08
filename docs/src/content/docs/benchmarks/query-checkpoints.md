@@ -103,8 +103,12 @@ semantics or state retention. The failed run remains under the benchmark module'
 The retry at `da5969c9` also failed: the 8,386,348-byte chunk had only 4,856,345 bytes available.
 Predicate admission now halves actual candidate chunks on budget denial before Arrow allocation,
 retaining full per-pair accounting. Native tests verify both cross-row and hot-key masks under a
-2 MiB allowance and oversized-pair failure. A new release comparison is required before reporting
-Q9 performance.
+2 MiB allowance and oversized-pair failure. The next attempt at `1e44fed9` reached output
+construction, which denied an additional 4,796 bytes with 4,643,496 bytes already reserved for
+output and 3,219 bytes available. Join output now emits an admitted prefix under pressure and
+resumes the existing transition cursor, reducing empty-output fan-out when needed. The Flink
+fork in that failed attempt took 36.006814 seconds; it remains diagnostic, not a comparison.
+A new release comparison is required before reporting Q9 performance.
 
 ## Q6 has no Flink streaming baseline
 
