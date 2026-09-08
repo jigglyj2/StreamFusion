@@ -38,8 +38,9 @@ Other persistent families remain on whole-plan fallback until their state/buffer
 backend settings, checkpoint behavior, and complete Flink metric contracts are verified.
 
 Other implemented families also require general region composition and per-stage metric parity.
-Shared internal stages with multiple consumers remain gated pending shared-topology channel
-recovery and production validation. The selected-graph path already preserves one native owner
+Shared internal stages with multiple consumers remain gated pending production validation.
+Selected-path tests cover input-channel replay through both exits on both backends, including
+a buffered attached local MAX branch. The selected-graph path preserves one native owner
 and metric identity through multiple Arrow exits. Unsupported schemas, settings, and semantic
 subsets retain their precise fallback reasons. Sources and sinks may use explicit Arrow/RowData
 edge adapters; an internal RowData operator or an intermediate JNI round trip is not admitted.

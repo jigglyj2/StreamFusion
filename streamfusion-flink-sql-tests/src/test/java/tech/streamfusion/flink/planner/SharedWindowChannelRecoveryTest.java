@@ -33,6 +33,8 @@ import tech.streamfusion.flink.operator.StreamFusionNativeRegionOperatorFactory;
 
 /** Actual network barriers, channel-state writer/reader and Arrow IPC replay after a window clock restore. */
 class SharedWindowChannelRecoveryTest {
+    private int outputBarriers;
+
     @ParameterizedTest
     @CsvSource({
         "false,false,false",
@@ -54,9 +56,11 @@ class SharedWindowChannelRecoveryTest {
                                     rocks,
                                     null)
                             : GlobalWindowFlinkOracle.create(rocks, null);
-                    var allocator = new RootAllocator(64L << 20)) {
+                    var allocator = new RootAllocator(64L << 20);
+                    var additional = additionalOracle(attached)) {
                 var memory = new SharedChannelStateIO.RoutingMemory();
                 TaskStateSnapshot checkpoint;
+                outputBarriers = 0;
                 try (var task = create(attached, rocks, unaligned, null)) {
                     input(
                             attached,
@@ -73,6 +77,7 @@ class SharedWindowChannelRecoveryTest {
                             ? CheckpointOptions.unaligned(CheckpointType.CHECKPOINT, location)
                             : CheckpointOptions.alignedNoTimeout(CheckpointType.CHECKPOINT, location);
                     var barrier = new CheckpointBarrier(1, 1, options);
+                    if (unaligned) beforeCheckpoint(1);
                     task.processEvent(barrier, 0, 0);
                     // The second channel has not delivered its barrier. An unaligned snapshot
                     // contains these IPC frames in channel state, before their keyed mutations.
@@ -83,6 +88,7 @@ class SharedWindowChannelRecoveryTest {
                     for (int row = 0; row < 31; row++)
                         inflight.add(partial(random.nextInt(99) + 1, (random.nextInt(7) - 1) * 2000L));
                     input(attached, oracle, task, allocator, memory, 1, inflight, unaligned);
+                    if (!unaligned) beforeCheckpoint(1);
                     task.processEvent(barrier, 0, 1);
                     long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15);
                     while (task.getTaskStateManager().getReportedCheckpointId() != 1 && System.nanoTime() < deadline) {
@@ -96,6 +102,8 @@ class SharedWindowChannelRecoveryTest {
                     assertThat(state.getInputChannelState().isEmpty()).isEqualTo(!unaligned);
                     assertThat(state.getManagedOperatorState()).isNotEmpty();
                     compare(attached, oracle, task);
+                    assertThat(outputBarriers).isEqualTo(1);
+                    verifyCheckpointOutputs();
                     task.endInput();
                     task.waitForTaskCompletion();
                 }
@@ -127,7 +135,7 @@ class SharedWindowChannelRecoveryTest {
         return NativeExchangePlanSerializer.hash(SharedSlicingWindowFixture.INPUT, new int[] {0}, 1, 1, true);
     }
 
-    private static StreamTaskMailboxTestHarness<RowData> create(
+    protected StreamTaskMailboxTestHarness<RowData> create(
             boolean attached, boolean rocks, boolean unaligned, TaskStateSnapshot state) throws Exception {
         var factory = new StreamFusionNativeRegionOperatorFactory(
                 List.of(SharedSlicingWindowFixture.INPUT),
@@ -138,7 +146,7 @@ class SharedWindowChannelRecoveryTest {
         return SharedKeyedChannelHarness.create(factory, output(attached), new int[] {2}, rocks, unaligned, state);
     }
 
-    private static void input(
+    private void input(
             boolean attached,
             KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> oracle,
             StreamTaskMailboxTestHarness<RowData> task,
@@ -172,7 +180,7 @@ class SharedWindowChannelRecoveryTest {
         compare(attached, oracle, task);
     }
 
-    private static void watermark(
+    private void watermark(
             boolean attached,
             KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> oracle,
             StreamTaskMailboxTestHarness<RowData> task,
@@ -184,19 +192,41 @@ class SharedWindowChannelRecoveryTest {
         compare(attached, oracle, task);
     }
 
-    private static void compare(
+    private void compare(
             boolean attached,
             KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> oracle,
             StreamTaskMailboxTestHarness<RowData> task)
             throws Exception {
+        var events = new ArrayList<StreamElement>();
         var expected = new DataOutputSerializer(128);
-        for (var event : oracle.getOutput()) StageEventBytes.encode(output(attached), (StreamElement) event, expected);
+        for (var event : oracle.getOutput()) {
+            events.add((StreamElement) event);
+            StageEventBytes.encode(output(attached), (StreamElement) event, expected);
+        }
         oracle.getOutput().clear();
-        var actual = new DataOutputSerializer(128);
-        for (var event : task.getOutput())
-            if (event instanceof StreamRecord<?> || event instanceof Watermark)
-                StageEventBytes.encode(output(attached), (StreamElement) event, actual);
-        task.getOutput().clear();
-        assertThat(actual.getCopyOfBuffer()).containsExactly(expected.getCopyOfBuffer());
+        compareAdditionalOutputs(attached, events);
+        outputBarriers += task.getOutput().stream()
+                .filter(event -> event instanceof CheckpointBarrier)
+                .count();
+        assertOutput(output(attached), task.getOutput(), expected.getCopyOfBuffer());
     }
+
+    protected static void assertOutput(RowType type, java.util.Queue<Object> queue, byte[] expected) throws Exception {
+        var actual = new DataOutputSerializer(128);
+        for (var event : queue)
+            if (event instanceof StreamRecord<?> || event instanceof Watermark)
+                StageEventBytes.encode(type, (StreamElement) event, actual);
+        queue.clear();
+        assertThat(actual.getCopyOfBuffer()).containsExactly(expected);
+    }
+
+    protected void compareAdditionalOutputs(boolean attached, List<StreamElement> events) throws Exception {}
+
+    protected AutoCloseable additionalOracle(boolean attached) throws Exception {
+        return () -> {};
+    }
+
+    protected void beforeCheckpoint(long id) throws Exception {}
+
+    protected void verifyCheckpointOutputs() {}
 }

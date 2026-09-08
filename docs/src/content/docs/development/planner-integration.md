@@ -159,7 +159,7 @@ fixtures use the same builder. Selected local-window nodes now join this contrac
 original resource calculator to the complete-pipeline finalizer. Their derived local/exchange nodes
 retain original identity, and source-side local regions consume Arrow directly through the shared
 runtime's single input. Generated direct and attached HOP SQL tests verify this wiring on both
-backends. Reused-output ownership and full-query validation still block ordinary whole-plan Q5
+backends. Production validation still blocks ordinary whole-plan Q5
 admission; see [Window aggregation](/StreamFusion/operators/window-aggregation/).
 
 Native reuse inspection now builds a graph-wide region layout before replacement. Each physical
@@ -250,8 +250,8 @@ fixture now runs the same generated Flink recovery cases on both exits:
 canonical savepoints (including switching backends), aligned and unaligned operator checkpoints,
 late input before the first replayed watermark, and rescaling with the minimum union clock.
 Both exit changelogs and controls match Flink, with one native window state owner and managed
-memory released at teardown. These operator-level checks do not yet validate shared-exit
-network channel replay for the complete COUNT-to-local-MAX topology.
+memory released at teardown. Network-task tests additionally replay input channels through
+both exits, including the COUNT-to-local-MAX topology described below.
 
 The Java metric publisher also consumes flat physical definitions directly. It binds each
 original stage scope once, omits anonymous local Input slots, and verifies the complete native
@@ -269,9 +269,8 @@ are broadcast once after all exits complete the same control wave; incompatible 
 fail instead of emitting an incorrect watermark. Generated runtime tests compare both
 heterogeneous exit changelogs against Flink-generated Calc operators, with nullable data,
 all row kinds, repeated arrivals, direct Arrow and IPC inputs, stage I/O counts, control
-broadcasting, and managed-memory release on successful and cancelled execution. Full-topology
-recovery, including shared-exit channel replay, remains outstanding. No additional whole-plan
-query is admitted by this runtime prerequisite.
+broadcasting, and managed-memory release on successful and cancelled execution. These runtime
+checks do not establish production benchmark results or admit additional whole-plan queries.
 
 The selected-graph translator now binds one cached owner to all physical stages in a shared
 region. Translating either exit materializes that owner once; the main output and virtual Flink
@@ -287,8 +286,19 @@ optimizer setting and verify that topology explicitly. Three generated inputs co
 and 10-second HOP windows and parallelism one and two, with exact external changelog bytes,
 nonzero shared native activity and zero retained local-window bridge calls. Topology tests verify
 one three-stage owner, two Arrow exits, one keyed-state identity, original resource binding, and
-successful JobGraph serialization. Shared-exit channel replay and production benchmark validation
-remain outstanding, so ordinary whole-plan multi-output admission is still gated.
+successful JobGraph serialization.
+
+The Flink mailbox-task recovery matrix now exercises both shared exits through separate, real
+Arrow-to-RowData sink adapters and network result writers. Two input channels deliver generated
+Arrow IPC partials between checkpoint barriers. Both aligned and unaligned checkpoints restore
+on memory and RocksDB; each exit's complete changelog, record envelope and watermark sequence
+matches the corresponding SQL-generated Flink operators. The variants cover shared HOP COUNT
+and attached global MAX/COUNT, both with a following Calc and with a buffered attached local
+MAX/COUNT on the second exit. The local stage uses its original 3 MiB buffer capacity and
+checkpoint flush callback. Each output delivers exactly one checkpoint barrier. Three generated
+inputs include late partials and replayed older watermarks. These tests verify input-channel
+replay through the shared topology; they do not measure full-query performance. Ordinary
+whole-plan multi-output admission remains gated pending production validation.
 
 Comet retains Spark's exchange reuse, while Flink can reuse an intermediate stage before two
 different exchanges. This Flink-specific topology keeps the shared computation in one native

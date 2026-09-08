@@ -119,8 +119,8 @@ final class StreamFusionArchitectureSupport {
         }
         if (shared.containsKey(node)) {
             rejections.add(nodePath + "\narchitecture: native stage has multiple consumers " + shared.get(node)
-                    + "; multi-output native region ownership remains gated pending shared-topology channel recovery "
-                    + "and production validation; independent fusion would "
+                    + "; multi-output native region ownership remains gated pending "
+                    + "production validation; independent fusion would "
                     + "duplicate execution and per-stage metrics");
         }
         boolean persistent = PERSISTENT_STATE.contains(name);

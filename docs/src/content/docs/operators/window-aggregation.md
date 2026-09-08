@@ -86,8 +86,8 @@ The selected-graph path now runs a reused global COUNT through one native owner 
 Calc and attached local MAX consumer. The raw COUNT and local partial exits use separate Arrow
 outputs feeding the existing exchanges. Generated SQL comparisons with the benchmark's binary
 MultiJoin setting match Flink on both backends, for 6-second/10-second HOP windows and parallelism
-one/two. This is test-only selected-graph evidence: shared-exit channel replay, ordinary whole-plan
-admission and release benchmark validation remain required before Q5 is delivered.
+one/two. This is test-only selected-graph evidence. Ordinary whole-plan admission and release benchmark
+validation remain required before Q5 is delivered.
 
 ### Global HOP slicer
 
@@ -185,15 +185,16 @@ complete changelogs and watermarks with Flink on both backends. Cases include fu
 partially late input, shared/attached namespaces, and an older replayed watermark after restore.
 The test seam supplies network capture for Flink's test channel; checkpoint handles, serialization,
 state writing/reading, routing, and the Arrow-to-RowData sink boundary use their real implementations.
-These direct-region checks still leave production planner admission outstanding. Remaining
-Q5 requirements include:
+The same network matrix now also covers both exits of a shared global window, including an
+attached local MAX/COUNT on the second branch with its original buffer allowance. Separate
+production sink adapters and network writers capture each branch. Both exit changelogs,
+watermarks and checkpoint barriers match Flink after aligned and unaligned input-channel replay
+on each backend. The local Flink oracle receives the same global output and checkpoint flushes.
 
-- Full-query integration of the verified local-window resource binding with reused outputs.
-- Ownership of the reused aggregate's two outputs, without duplicating computation or disabling
-  Flink reuse.
-- Final physical-topology metric and checkpoint/replay contracts, including optional state/backend
-  metric settings, latency scopes, and recovery of the complete selected multi-stage topology.
-- Ordinary whole-plan admission, followed by release benchmarks and profiling on both backends.
+These selected-path checks leave ordinary whole-plan admission and full-query production
+validation outstanding. Unsupported state/backend metric settings and sampled latency routing
+must retain precise fallback reasons. Q5 delivery still requires release benchmarks and mixed
+JVM/native profiling on both backends.
 
 ## Retained semantic implementation
 

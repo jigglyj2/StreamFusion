@@ -52,6 +52,19 @@ final class SharedKeyedChannelHarness extends StreamTaskMailboxTestHarnessBuilde
             boolean unaligned,
             TaskStateSnapshot restore)
             throws Exception {
+        return create(factory, output, channels, rocks, unaligned, restore, null, output);
+    }
+
+    static StreamTaskMailboxTestHarness<RowData> create(
+            StreamFusionNativeRegionOperatorFactory factory,
+            org.apache.flink.table.types.logical.RowType output,
+            int[] channels,
+            boolean rocks,
+            boolean unaligned,
+            TaskStateSnapshot restore,
+            java.util.Queue<Object> sideOutput,
+            org.apache.flink.table.types.logical.RowType sideOutputType)
+            throws Exception {
         var builder = new SharedKeyedChannelHarness(output);
         for (int count : channels)
             builder.addInput(NativeExchangeFrameTypeInfo.INSTANCE, count, new NativeExchangeFrameKeySelector(1));
@@ -77,6 +90,9 @@ final class SharedKeyedChannelHarness extends StreamTaskMailboxTestHarnessBuilde
                 .setOperatorFactory(SimpleOperatorFactory.of(sinkBoundary))
                 .build()
                 .finish();
+        if (sideOutput != null)
+            builder.additionalOutputs.add(SharedChannelOutputBranch.attach(
+                    builder.streamConfig, sideOutputType, sideOutput, factory.outputTag(1)));
         if (restore != null) builder.setTaskStateSnapshot(1, restore);
         var harness = builder.buildUnrestored();
         var readFinished = new CompletableFuture<Void>();
