@@ -66,3 +66,18 @@ before admission. Removing descriptor reservations does not establish those cont
 Native parity tests must require acceleration and native execution. Tests exercising whole-plan
 fallback are explicitly identified as fallback coverage; a successful Flink-versus-Flink comparison
 does not establish native operator parity.
+
+## Local window flush capacity
+
+The buffered local-window kernel accepts Flink-resolved capacity through `NativeTaskBindings`
+version 1. Each `NativeLocalWindowBuffer` supplies the original physical stage's resolved managed
+memory share and Flink page size. These values model `WindowBytesMultiMap` flush boundaries;
+they do not reserve raw Flink rows or grant another native memory budget. DataFusion group
+vectors, retained Arrow row keys, input cursors and output buffers continue to consume the normal
+host pool through coarse reservations.
+
+The task binding is installed once, before native lowering, alongside any separate keyed-state
+bindings. Invalid requests leave existing bindings unchanged and return their temporary credit.
+The Java/native constructor admits all protobuf copies before JNI. Original-plan resource-share
+resolution in ordinary planner translation is still required before admitting the Q5 window plan;
+manual binding/parity tests are not production Nexmark admission.

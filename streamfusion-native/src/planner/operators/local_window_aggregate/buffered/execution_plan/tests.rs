@@ -51,8 +51,6 @@ fn context() -> (Arc<NativeExecutionContext>, Arc<TestBroker>, SchemaRef) {
     };
     let broker = Arc::new(TestBroker::new(256 << 20));
     let memory = HostMemoryReservation::new(broker.clone(), "shared local window test");
-    let factory =
-        LocalWindowFactory::new(&local, memory.sibling("window"), 3 << 20, 32 << 10).unwrap();
     let plan = proto::NativePlan {
         protocol_version: 2,
         root: Some(calc(4, local, 4)),
@@ -61,10 +59,28 @@ fn context() -> (Arc<NativeExecutionContext>, Arc<TestBroker>, SchemaRef) {
         NativeExecutionContext::new(&plan.encode_to_vec(), memory.datafusion_pool(256 << 20))
             .unwrap();
     context
-        .bind_persistent(vec![(3, Arc::new(factory))])
+        .install_task_resources(
+            &resources(3).encode_to_vec(),
+            memory.sibling("task resources"),
+        )
         .unwrap();
     (Arc::new(context), broker, schema)
 }
+fn resources(id: u64) -> proto::NativeTaskBindings {
+    proto::NativeTaskBindings {
+        protocol_version: 1,
+        bindings: vec![proto::NativeTaskBinding {
+            plan_node_id: id,
+            resource: Some(proto::native_task_binding::Resource::LocalWindowBuffer(
+                proto::NativeLocalWindowBuffer {
+                    flink_buffer_memory_bytes: 3 << 20,
+                    flink_page_bytes: 32 << 10,
+                },
+            )),
+        }],
+    }
+}
+
 fn input(schema: &SchemaRef, rows: &[(i64, i64, i64)], kind: i8) -> RecordBatch {
     let mut fields = schema.fields().to_vec();
     fields.extend([
@@ -271,6 +287,63 @@ fn invalid_rowkind_and_cancelled_partial_flush_require_recovery() {
             .unwrap_err()
             .to_string()
             .contains("recovery"));
+        drop(context);
+        assert_eq!(broker.reserved(), 0);
+    }
+}
+
+#[test]
+fn resource_binding_rejects_invalid_requests_transactionally() {
+    let (original, _, _) = context();
+    let wire = original.plan().encode_to_vec();
+    for case in 0..9 {
+        let broker = Arc::new(TestBroker::new(256 << 20));
+        let memory = HostMemoryReservation::new(broker.clone(), "resource validation");
+        let mut context =
+            NativeExecutionContext::new(&wire, memory.datafusion_pool(256 << 20)).unwrap();
+        let baseline = broker.reserved();
+        let mut invalid = resources(3);
+        match case {
+            0 => invalid.protocol_version = 2,
+            1 => invalid.bindings[0].plan_node_id = 0,
+            2 => invalid.bindings[0].plan_node_id = 2,
+            3 => invalid.bindings[0].plan_node_id = 99,
+            4 => invalid.bindings[0].resource = None,
+            5 => invalid.bindings.push(invalid.bindings[0].clone()),
+            6 => {
+                invalid.bindings[0].resource =
+                    Some(proto::native_task_binding::Resource::LocalWindowBuffer(
+                        proto::NativeLocalWindowBuffer {
+                            flink_buffer_memory_bytes: 1,
+                            flink_page_bytes: 17,
+                        },
+                    ))
+            }
+            7 => invalid.bindings.clear(),
+            _ => {
+                invalid.bindings[0].resource =
+                    Some(proto::native_task_binding::Resource::LocalWindowBuffer(
+                        proto::NativeLocalWindowBuffer {
+                            flink_buffer_memory_bytes: u64::MAX,
+                            flink_page_bytes: 32 << 10,
+                        },
+                    ))
+            }
+        }
+        assert!(context
+            .install_task_resources(&invalid.encode_to_vec(), memory.sibling("invalid"))
+            .is_err());
+        assert_eq!(
+            broker.reserved(),
+            baseline,
+            "failed request {case} leaked credit"
+        );
+        context
+            .install_task_resources(&resources(3).encode_to_vec(), memory.sibling("valid retry"))
+            .unwrap();
+        assert!(context
+            .install_task_resources(&resources(3).encode_to_vec(), memory.sibling("duplicate"))
+            .is_err());
         drop(context);
         assert_eq!(broker.reserved(), 0);
     }

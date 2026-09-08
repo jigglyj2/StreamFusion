@@ -84,3 +84,23 @@ message NativeRocksDbState {
   // State-binding protocol v2: Flink's TaskManager-resolved RocksDB log directory.
   optional string log_directory = 4;
 }
+
+// Non-keyed task-lifetime execution resources resolved by Flink before native lowering.
+message NativeTaskBindings {
+  uint32 protocol_version = 1;
+  repeated NativeTaskBinding bindings = 2;
+}
+
+message NativeTaskBinding {
+  uint64 plan_node_id = 1;
+  oneof resource {
+    NativeLocalWindowBuffer local_window_buffer = 2;
+  }
+}
+
+message NativeLocalWindowBuffer {
+  // Original physical Flink operator's resolved OPERATOR share; determines semantic flush
+  // boundaries only. Actual native allocations still consume the existing host memory pool.
+  uint64 flink_buffer_memory_bytes = 1;
+  uint32 flink_page_bytes = 2;
+}

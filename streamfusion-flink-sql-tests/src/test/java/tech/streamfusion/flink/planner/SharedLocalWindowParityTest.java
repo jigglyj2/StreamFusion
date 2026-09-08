@@ -1,0 +1,269 @@
+/*
+ * Copyright 2026 StreamFusion Authors
+ * Licensed under the Apache License, Version 2.0
+ */
+package tech.streamfusion.flink.planner;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Random;
+import org.apache.arrow.memory.RootAllocator;
+import org.apache.flink.core.memory.DataOutputSerializer;
+import org.apache.flink.streaming.api.watermark.Watermark;
+import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
+import org.apache.flink.streaming.util.OneInputStreamOperatorTestHarness;
+import org.apache.flink.table.data.GenericRowData;
+import org.apache.flink.table.data.RowData;
+import org.apache.flink.table.data.TimestampData;
+import org.apache.flink.table.runtime.typeutils.RowDataSerializer;
+import org.apache.flink.table.types.logical.BigIntType;
+import org.apache.flink.table.types.logical.RowType;
+import org.apache.flink.table.types.logical.TimestampType;
+import org.apache.flink.table.types.logical.VarBinaryType;
+import org.apache.flink.types.RowKind;
+import org.junit.jupiter.api.Test;
+import tech.streamfusion.flink.arrow.ArrowNativePlanDispatcher;
+import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
+import tech.streamfusion.flink.proto.FlinkLogicalTypeProto;
+import tech.streamfusion.nativebridge.NativeExecutionContext;
+import tech.streamfusion.proto.plan.v1.*;
+
+/** Real SQL-generated Flink local slicer versus Calc -> buffered native local window -> Calc. */
+class SharedLocalWindowParityTest {
+    private static final RowType INPUT = RowType.of(new BigIntType(), new TimestampType(false, 3));
+    private static final RowType PARTIAL = RowType.of(
+            new BigIntType(),
+            new VarBinaryType(false, VarBinaryType.MAX_LENGTH),
+            new BigIntType(false),
+            new BigIntType(false));
+    private static final RowType FLINK_PARTIAL =
+            RowType.of(new BigIntType(), new BigIntType(false), new BigIntType(false));
+
+    @Test
+    void generatedControlChangelogsMatchFlinkAcrossArrowBatchSizes() throws Exception {
+        for (int seed = 0; seed < 3; seed++)
+            for (int batchSize : List.of(7, 31)) {
+                try (var run = new Comparison()) {
+                    var random = new Random(seed);
+                    for (int phase = 0; phase < 12; phase++) {
+                        var rows = new ArrayList<RowData>();
+                        for (int row = 0; row < 31; row++)
+                            rows.add(GenericRowData.of(
+                                    row % 11 == 0 ? null : (long) random.nextInt(17),
+                                    TimestampData.fromEpochMillis(random.nextInt(16001) - 8000)));
+                        for (int offset = 0; offset < rows.size(); offset += batchSize)
+                            run.process(rows.subList(offset, Math.min(rows.size(), offset + batchSize)));
+                        if (phase % 3 == 2) run.watermark(phase * 1000L - 3000);
+                        if (phase == 6) run.checkpoint(7);
+                    }
+                    run.watermark(Long.MAX_VALUE);
+                    run.checkpoint(8);
+                }
+            }
+    }
+
+    @Test
+    void pressureFlushChangelogMatchesFlinkWithResolvedThreeMebibyteCapacity() throws Exception {
+        for (int batchSize : List.of(4096, 16384))
+            try (var run = new Comparison()) {
+                for (int start = 0; start < 180000; start += batchSize) {
+                    var rows = new ArrayList<RowData>();
+                    for (int row = start; row < Math.min(180000, start + batchSize); row++)
+                        rows.add(GenericRowData.of((long) (row % 17), TimestampData.fromEpochMillis(1000)));
+                    run.process(rows);
+                }
+                assertThat(run.outputs).isEqualTo(34);
+                run.checkpoint(1);
+                assertThat(run.outputs).isEqualTo(51);
+            }
+    }
+
+    @Test
+    void rejectedTaskResourceConstructionReturnsAllJniAndNativeCredit() throws Exception {
+        var memory = new SharedAggregateRegionParityTest.Memory();
+        var invalid = NativeTaskBindings.parseFrom(resources()).toBuilder()
+                .setProtocolVersion(99)
+                .build()
+                .toByteArray();
+        assertThatThrownBy(() -> new NativeExecutionContext(plan(), memory, null, invalid))
+                .hasMessageContaining("protocol");
+        assertThat(memory.available()).isEqualTo(memory.limit());
+        try (var context = new NativeExecutionContext(plan(), memory, null, resources())) {
+            assertThat(context.requiresInputEnvelope()).isTrue();
+        }
+        assertThat(memory.available()).isEqualTo(memory.limit());
+    }
+
+    private static final class Comparison implements AutoCloseable {
+        final SharedAggregateRegionParityTest.Memory memory = new SharedAggregateRegionParityTest.Memory();
+        final OneInputStreamOperatorTestHarness<RowData, RowData> flink;
+        final RootAllocator allocator;
+        final NativeExecutionContext context;
+        final ArrowNativePlanDispatcher dispatcher;
+        final RowDataSerializer serializer = new RowDataSerializer(FLINK_PARTIAL);
+        long inputs, outputs;
+
+        Comparison() throws Exception {
+            flink = LocalWindowFlinkOracle.create(3L << 20);
+            allocator = new RootAllocator(64L << 20);
+            context = new NativeExecutionContext(plan(), memory, null, resources());
+            dispatcher = new ArrowNativePlanDispatcher(context, List.of(INPUT), PARTIAL, allocator);
+            assertThat(context.hasStateBindings()).isFalse();
+            assertThat(context.requiresInputEnvelope()).isTrue();
+        }
+
+        void process(List<RowData> rows) throws Exception {
+            for (var row : rows) flink.processElement(new StreamRecord<>(row, 123));
+            inputs += rows.size();
+            var actual = new DataOutputSerializer(128);
+            try (var batch = ArrowRowDataBatch.transpose(rows, INPUT, allocator)) {
+                dispatcher.process(0, batch, output -> append(output, actual));
+            }
+            compare(actual);
+        }
+
+        void watermark(long value) throws Exception {
+            flink.processWatermark(new Watermark(value));
+            control(NativeStageControl.newBuilder().setPlanNodeId(3).setWatermarkMillis(value));
+        }
+
+        void checkpoint(long id) throws Exception {
+            flink.prepareSnapshotPreBarrier(id);
+            control(NativeStageControl.newBuilder().setPlanNodeId(3).setBeforeCheckpoint(id));
+        }
+
+        void control(NativeStageControl.Builder stage) throws Exception {
+            var actual = new DataOutputSerializer(128);
+            dispatcher.control(
+                    NativeControlInvocation.newBuilder()
+                            .setProtocolVersion(1)
+                            .addStages(stage)
+                            .build()
+                            .toByteArray(),
+                    output -> append(output, actual));
+            compare(actual);
+        }
+
+        void append(ArrowRowDataBatch output, DataOutputSerializer target) {
+            try {
+                for (int row = 0; row < output.size(); row++) {
+                    assertThat(output.hasTimestamp(row)).isFalse();
+                    assertThat(output.rowKind(row)).isEqualTo(RowKind.INSERT);
+                    var value = output.rowView(row);
+                    var encoded = value.getBinary(1);
+                    assertThat(encoded).hasSize(26);
+                    assertThat(java.util.Arrays.copyOf(encoded, 5))
+                            .containsExactly((byte) 'S', (byte) 'F', (byte) 'G', (byte) 'A', (byte) 6);
+                    var state = ByteBuffer.wrap(encoded).order(ByteOrder.LITTLE_ENDIAN);
+                    long count = state.getLong(5);
+                    assertThat(state.getInt(13)).isEqualTo(1);
+                    assertThat(state.get(17)).isEqualTo((byte) 1);
+                    assertThat(state.getLong(18)).isEqualTo(count);
+                    assertThat(value.getLong(2)).isEqualTo(value.getLong(3) - 2000);
+                    serializer.serialize(
+                            GenericRowData.of(value.isNullAt(0) ? null : value.getLong(0), count, value.getLong(3)),
+                            target);
+                }
+            } catch (java.io.IOException failure) {
+                throw new RuntimeException(failure);
+            }
+        }
+
+        void compare(DataOutputSerializer actual) throws Exception {
+            var expected = new DataOutputSerializer(128);
+            for (var event : flink.getOutput())
+                if (event instanceof StreamRecord<?>) {
+                    var record = (StreamRecord<?>) event;
+                    assertThat(record.hasTimestamp()).isFalse();
+                    serializer.serialize((RowData) record.getValue(), expected);
+                    outputs++;
+                }
+            flink.getOutput().clear();
+            assertThat(actual.getCopyOfBuffer()).isEqualTo(expected.getCopyOfBuffer());
+            assertThat(context.metricSnapshot())
+                    .containsExactly(4, outputs, outputs, 3, inputs, outputs, 2, inputs, inputs, 1, 0, inputs);
+        }
+
+        @Override
+        public void close() throws Exception {
+            try {
+                dispatcher.close();
+            } finally {
+                try {
+                    context.close();
+                } finally {
+                    try {
+                        allocator.close();
+                    } finally {
+                        flink.close();
+                    }
+                }
+            }
+            assertThat(memory.available()).isEqualTo(memory.limit());
+        }
+    }
+
+    private static byte[] resources() {
+        return NativeTaskBindings.newBuilder()
+                .setProtocolVersion(1)
+                .addBindings(NativeTaskBinding.newBuilder()
+                        .setPlanNodeId(3)
+                        .setLocalWindowBuffer(NativeLocalWindowBuffer.newBuilder()
+                                .setFlinkBufferMemoryBytes(3L << 20)
+                                .setFlinkPageBytes(32 << 10)))
+                .build()
+                .toByteArray();
+    }
+
+    private static byte[] plan() {
+        var input = Operator.newBuilder()
+                .setPlanNodeId(1)
+                .setInput(Input.newBuilder())
+                .build();
+        var local = LocalWindowAggregate.newBuilder()
+                .setInput(calc(2, input, 2))
+                .addGroupingIndices(0)
+                .setInputSchema(schema(INPUT))
+                .setOutputSchema(schema(PARTIAL))
+                .setTimeAttributeIndex(1)
+                .setKind(WindowKind.WINDOW_KIND_HOP)
+                .setSizeMillis(6000)
+                .setSlideOrStepMillis(2000)
+                .setShiftTimeZone("UTC")
+                .addAggregateCalls(AggregateCall.newBuilder()
+                        .setFunction(AggregateFunction.AGGREGATE_FUNCTION_COUNT_STAR)
+                        .setOutputType(FlinkLogicalTypeProto.serialize(new BigIntType(false))));
+        return NativePlan.newBuilder()
+                .setProtocolVersion(2)
+                .setRoot(calc(
+                        4,
+                        Operator.newBuilder()
+                                .setPlanNodeId(3)
+                                .setLocalWindowAggregate(local)
+                                .build(),
+                        4))
+                .build()
+                .toByteArray();
+    }
+
+    private static Schema schema(RowType type) {
+        var result = Schema.newBuilder();
+        for (int i = 0; i < type.getFieldCount(); i++)
+            result.addFields(
+                    Field.newBuilder().setName("f" + i).setType(FlinkLogicalTypeProto.serialize(type.getTypeAt(i))));
+        return result.build();
+    }
+
+    private static Operator calc(long id, Operator child, int width) {
+        var result = Calc.newBuilder().setInput(child).setPreserveInputEnvelope(true);
+        for (int i = 0; i < width; i++)
+            result.addProjections(Expression.newBuilder()
+                    .setInputReference(InputReference.newBuilder().setIndex(i)));
+        return Operator.newBuilder().setPlanNodeId(id).setCalc(result).build();
+    }
+}

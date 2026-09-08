@@ -26,7 +26,9 @@ impl BufferLayout {
     /// `memory_bytes` is this physical Flink operator's managed-memory share, after consumer
     /// weights and operator fractions. It is not a StreamFusion deployment budget.
     pub(super) fn new(memory_bytes: usize, page_bytes: usize) -> Result<Self> {
-        if !page_bytes.is_power_of_two() || !(32..=INITIAL_BUCKET_BYTES).contains(&page_bytes) {
+        if !page_bytes.is_power_of_two()
+            || !((4 * 1024)..=INITIAL_BUCKET_BYTES).contains(&page_bytes)
+        {
             return Err(DataFusionError::Plan(
                 "unsupported Flink window buffer page size".into(),
             ));

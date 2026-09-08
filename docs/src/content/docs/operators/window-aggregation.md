@@ -42,7 +42,7 @@ A native capacity calculation now matches shared fixtures checked against Flink'
 `WindowBytesMultiMap`, including fixed-width rows, large variable-width keys/values, hash-table
 growth and reset. It counts Flink page geometry without constructing or serializing RowData.
 This is semantic flush-capacity bookkeeping, separate from coarse native buffer reservations.
-A test-only buffered implementation now uses this capacity model with DataFusion grouped state
+A buffered implementation, available through explicit task-resource bindings, uses this capacity model with DataFusion grouped state
 retained across Arrow batches. It probes Arrow row encodings by reference and copies keys only
 when a new group appears. It matches the SQL-generated Flink watermark/pre-barrier oracle and
 all partials from the 180,000-row pressure fixture with Arrow batch sizes 127, 4,096 and 100,000.
@@ -53,8 +53,13 @@ buffered subset uses UTC, non-null time/bound columns, append-only grouped accum
 fixed-width Flink row geometry. Nullable time/bound admission remains deferred until the streaming
 Flink parity contract is verified.
 
-A manually bound Calc → local window → Calc test now runs this buffer through the shared native
-unary execution tree. Watermarks and checkpoint pre-barriers drain its bounded output before the
+A Calc → local window → Calc test runs this buffer through the shared native unary execution tree.
+`NativeTaskBindings` v1 binds each local-window plan-node ID to Flink's resolved buffer-memory
+share and page size before capability negotiation and execution. The JNI constructor keeps these
+non-keyed resources separate from keyed-state bindings; malformed, duplicate, missing, unsupported
+or late bindings are rejected transactionally. Direct Java tests compare generated control
+changelogs and pressure-flush outputs with the real SQL-generated Flink slicer through Arrow C
+Data/C Stream. Watermarks and checkpoint pre-barriers drain its bounded output before the
 control completes; invocation EOF and end-input alone do not flush. Partials carry timestamp-less
 INSERT metadata, each stage counts logical records, and invalid RowKinds or cancellation require
 recovery. Payload buffers retain their existing native leases; only new metadata receives another

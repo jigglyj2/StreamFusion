@@ -32,6 +32,12 @@ public final class NativeExecutionContext implements AutoCloseable {
 
     /** Binds Flink-owned resources to identified physical nodes before any native execution. */
     public NativeExecutionContext(byte[] serializedPlan, NativeMemoryManager memoryManager, byte[] stateBindings) {
+        this(serializedPlan, memoryManager, stateBindings, null);
+    }
+
+    /** Binds keyed state and non-keyed Flink execution resources before capability negotiation. */
+    public NativeExecutionContext(
+            byte[] serializedPlan, NativeMemoryManager memoryManager, byte[] stateBindings, byte[] taskBindings) {
         stateful = stateBindings != null;
         Objects.requireNonNull(serializedPlan, "serializedPlan");
         Objects.requireNonNull(memoryManager, "memoryManager");
@@ -40,16 +46,22 @@ public final class NativeExecutionContext implements AutoCloseable {
         }
         identifiedPlan = NativePlanNodeIdentity.assign(serializedPlan);
         rootPlanNodeId = NativePlanNodeIdentity.rootId(identifiedPlan);
-        long controlBytes =
-                Math.addExact((long) identifiedPlan.length, stateBindings == null ? 0 : stateBindings.length);
+        long controlBytes = Math.addExact(
+                Math.addExact((long) identifiedPlan.length, stateBindings == null ? 0 : stateBindings.length),
+                taskBindings == null ? 0 : taskBindings.length);
         if (!memoryManager.tryReserve(controlBytes)) {
             throw new IllegalStateException(
                     "Flink denied " + controlBytes + " bytes for native plan/state-binding JNI copies");
         }
         try {
-            handle = stateBindings == null
-                    ? createExecutionContext(identifiedPlan, memoryManager, memoryManager.limit())
-                    : NativePlanState.create(identifiedPlan, stateBindings, memoryManager, memoryManager.limit());
+            if (taskBindings != null) {
+                handle = NativeTaskResources.create(
+                        identifiedPlan, stateBindings, taskBindings, memoryManager, memoryManager.limit());
+            } else {
+                handle = stateBindings == null
+                        ? createExecutionContext(identifiedPlan, memoryManager, memoryManager.limit())
+                        : NativePlanState.create(identifiedPlan, stateBindings, memoryManager, memoryManager.limit());
+            }
         } finally {
             memoryManager.release(controlBytes);
         }

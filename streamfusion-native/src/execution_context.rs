@@ -51,6 +51,7 @@ mod state_conformance_tests;
 pub(crate) mod stream;
 #[cfg(test)]
 mod stream_tests;
+mod task_resources;
 
 pub(crate) struct NativeExecutionContext {
     plan: proto::NativePlan,
@@ -65,6 +66,7 @@ pub(crate) struct NativeExecutionContext {
     schema_reservation: Mutex<MemoryReservation>,
     persistent: Vec<PersistentBinding>,
     state_resources: Option<state::StateResources>,
+    task_resources_installed: bool,
     invocation: AtomicU8,
     controls: Arc<crate::planner::persistent::control::ControlEvents>,
     _control_reservation: MemoryReservation,
@@ -129,6 +131,7 @@ impl NativeExecutionContext {
             schema_reservation: Mutex::new(schema_reservation),
             persistent,
             state_resources: None,
+            task_resources_installed: false,
             invocation: AtomicU8::new(0),
             controls,
             _control_reservation: control_reservation,
@@ -521,6 +524,17 @@ pub(crate) fn register_with_state(
     memory_manager: Global<JObject<'static>>,
     memory_limit: usize,
 ) -> Result<i64> {
+    register_with_resources(bytes, bindings, None, java_vm, memory_manager, memory_limit)
+}
+
+pub(crate) fn register_with_resources(
+    bytes: &[u8],
+    bindings: Option<&[u8]>,
+    task_bindings: Option<&[u8]>,
+    java_vm: JavaVM,
+    memory_manager: Global<JObject<'static>>,
+    memory_limit: usize,
+) -> Result<i64> {
     let broker = Arc::new(JvmMemoryReservationBroker::new(java_vm, memory_manager));
     let memory_pool: Arc<dyn MemoryPool> =
         Arc::new(FlinkMemoryPool::new(broker.clone(), memory_limit));
@@ -528,7 +542,16 @@ pub(crate) fn register_with_state(
     if let Some(bindings) = bindings {
         context.install_state(
             bindings,
-            crate::memory_pool::HostMemoryReservation::new(broker, "native region state bindings"),
+            crate::memory_pool::HostMemoryReservation::new(
+                broker.clone(),
+                "native region state bindings",
+            ),
+        )?;
+    }
+    if let Some(bindings) = task_bindings {
+        context.install_task_resources(
+            bindings,
+            crate::memory_pool::HostMemoryReservation::new(broker, "native task bindings"),
         )?;
     }
     let context = Arc::new(context);

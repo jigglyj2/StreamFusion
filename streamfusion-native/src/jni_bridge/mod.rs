@@ -28,6 +28,7 @@ mod plan_stream;
 mod regular_join;
 mod regular_join_stream;
 mod session_window_table_function;
+mod task_resources;
 mod temporal_join;
 mod temporal_sort;
 mod top_n;
