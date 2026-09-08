@@ -7,8 +7,10 @@ sidebar:
 
 **Current status:** Partial. Synchronous binary `INNER` joins represented by Flink's
 `StreamExecMultiJoin` use the shared native plan with in-memory or default RocksDB state when their complete
-condition is covered by the common equi keys. Both inputs must use non-unique multiset state.
-Additional residual predicates, outer joins, TTL, mini-batching, async/changelog state, enabled
+condition is covered by common equi keys and optional boolean combinations of direct
+column/literal comparisons or null checks. Computed residual operands retain a specific workspace
+fallback. Both inputs must use non-unique multiset state.
+Outer joins, TTL, mini-batching, async/changelog state, enabled
 state-latency metrics, and checkpointing during channel recovery retain whole-plan fallback.
 RocksDB requires its optional native component, a compatible verified CPU artifact, and supported
 default backend settings. Unsupported settings retain their precise fallback reason.
@@ -29,7 +31,7 @@ Generated shared-region conformance tests also cover binary inner joins with a n
 negative epochs, null and non-matching bounds, a 5,000-row fan-out crossing the bounded
 expression chunks, all four RowKinds, complete registered metrics, backend-switch savepoints,
 1-to-2-to-1 rescaling, incremental SST reuse, and actual aligned/unaligned channel replay.
-This establishes direct runtime evidence; residual-predicate production admission remains gated.
+These tests support production admission for the bounded residual-comparison subset above.
 
 ## SQL example
 

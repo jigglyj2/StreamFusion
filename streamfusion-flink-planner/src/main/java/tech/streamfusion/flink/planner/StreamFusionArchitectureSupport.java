@@ -79,11 +79,16 @@ final class StreamFusionArchitectureSupport {
             "StreamExecGlobalGroupAggregate");
 
     static void collect(ExecNodeGraph graph, List<String> rejections) {
+        collect(graph, rejections, null);
+    }
+
+    static void collect(
+            ExecNodeGraph graph, List<String> rejections, org.apache.flink.configuration.ReadableConfig config) {
         Set<ExecNode<?>> visited = Collections.newSetFromMap(new IdentityHashMap<>());
         Map<ExecNode<?>, List<String>> shared = StreamFusionNativeRegionOwnership.sharedInternalStages(
                 graph, node -> isNative(node.getClass().getSimpleName()));
         for (int index = 0; index < graph.getRootNodes().size(); index++) {
-            visit(graph.getRootNodes().get(index), "root[" + index + "]", visited, shared, rejections);
+            visit(graph.getRootNodes().get(index), "root[" + index + "]", visited, shared, rejections, config);
         }
     }
 
@@ -92,7 +97,8 @@ final class StreamFusionArchitectureSupport {
             String path,
             Set<ExecNode<?>> visited,
             Map<ExecNode<?>, List<String>> shared,
-            List<String> rejections) {
+            List<String> rejections,
+            org.apache.flink.configuration.ReadableConfig config) {
         if (!visited.add(node)) {
             return;
         }
@@ -121,10 +127,9 @@ final class StreamFusionArchitectureSupport {
                         + failure.getMessage());
             }
         }
-        if (persistent && !verifiedPersistentOwner(node)) {
-            rejections.add(nodePath + "\narchitecture: native persistent state is temporarily disabled; "
-                    + "large retained-state/buffer admission, Flink backend configuration parity, "
-                    + "and checkpoint/metric conformance are not yet verified for this physical family");
+        if (persistent) {
+            String reason = StreamFusionPersistentAdmission.unsupportedReason(node, config);
+            if (reason != null) rejections.add(nodePath + "\narchitecture: " + reason);
         }
         // Flink also represents two-table joins as MultiJoin. Use the same shape
         // decision as semantic lowering, not the original node's class name.
@@ -141,7 +146,7 @@ final class StreamFusionArchitectureSupport {
                         + " is not admitted as a general fused native ExecutionPlan region with complete per-stage "
                         + "metric parity; intermediate JNI/Java handoff is not allowed");
             }
-            visit(edge.getSource(), nodePath + "/input[" + index + "]", visited, shared, rejections);
+            visit(edge.getSource(), nodePath + "/input[" + index + "]", visited, shared, rejections, config);
         }
     }
 
@@ -157,18 +162,6 @@ final class StreamFusionArchitectureSupport {
             rejections.add(
                     path + "\narchitecture: could not determine native join implementation: " + failure.getMessage());
             return true;
-        }
-    }
-
-    private static boolean verifiedPersistentOwner(ExecNode<?> node) {
-        if (!(node instanceof StreamExecMultiJoin)) return false;
-        try {
-            var join = FlinkExecNodeAccess.binaryMultiJoinSpec((StreamExecMultiJoin) node);
-            // Generated comparisons cover the binary INNER multiset contract. Pure equi keys
-            // need no candidate-expression workspace. Backend readiness is checked separately.
-            return join != null && join.getNonEquiCondition().isEmpty();
-        } catch (RuntimeException unsupportedShape) {
-            return false;
         }
     }
 

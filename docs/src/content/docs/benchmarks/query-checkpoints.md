@@ -25,8 +25,13 @@ corrected release measurements/profiles have been verified. The
 median gains and slower one-million-event results, including dispersion and limitations.
 Mini-batched joins and the other unsupported subsets remain explicit whole-plan fallbacks.
 
-Q4 is next. Its ordinary EXPLAIN blockers determine the next prerequisites; retained operator
-implementations alone do not establish acceleration.
+Q4 is the current checkpoint. Its binary range join and keyed MAX/AVG stages now pass ordinary
+admission on both backends. Controlled shared-runtime tests compare exact changelog bytes and
+registered metrics, backend-switch savepoints, rescaling, and actual aligned/unaligned channel
+replay. Opt-in integration compares materialized Q4 results at parallelism one and four and
+requires native activity through blackhole. Separate jobs can interleave the two join inputs
+differently, so those end-to-end materialized results supplement the deterministic changelog tests.
+Release measurements, profiles, and justified optimization remain before Q4 is delivered.
 
 ## Initial diagnostic baseline
 
@@ -59,8 +64,8 @@ The actual RowData Q3 plan uses Flink's binary `StreamExecMultiJoin` for the auc
 The existing semantic lowering can represent that binary shape as the native regular join;
 it must not be confused with the separate native multi-way join algorithm. The early architecture
 gate uses the same binary-shape decision as semantic lowering. The verified pure equi subset
-is admitted with in-memory and default RocksDB state. Additional residuals retain the
-persistent-state restriction; non-default RocksDB settings and incompatible native artifacts
+is admitted with in-memory and default RocksDB state. Computed residual operands retain a workspace restriction; direct column/literal comparisons
+now have separate generated conformance coverage; non-default RocksDB settings and incompatible native artifacts
 retain their specific backend restrictions. Genuine multi-way and
 non-lowerable binary shapes still require their paged-state/output cursor to join the common
 execution, metric and checkpoint lifecycle.

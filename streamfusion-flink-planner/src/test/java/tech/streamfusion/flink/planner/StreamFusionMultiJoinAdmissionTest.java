@@ -72,14 +72,13 @@ class StreamFusionMultiJoinAdmissionTest {
     }
 
     @Test
-    void additionalPredicatesRetainThePersistentWorkspaceGate() {
+    void directResidualComparisonsSatisfyBoundedWorkspaceAdmission() {
         var join = join(2, true, FlinkJoinType.INNER, true);
         assertThat(FlinkExecNodeAccess.binaryMultiJoinSpec(join).getNonEquiCondition())
                 .isPresent();
         var reasons = new ArrayList<String>();
         StreamFusionArchitectureSupport.collect(new ExecNodeGraph(List.of(join)), reasons);
-        assertThat(reasons).hasSize(1);
-        assertThat(reasons.get(0)).contains("retained-state/buffer admission");
+        assertThat(reasons).isEmpty();
     }
 
     private StreamExecMultiJoin join(int inputs, boolean equiKeys, FlinkJoinType type) {

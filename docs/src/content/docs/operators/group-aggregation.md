@@ -5,9 +5,16 @@ sidebar:
   order: 6
 ---
 
-**Current status:** Temporarily uses whole-plan Flink fallback under the
-[architecture admission requirements](/StreamFusion/development/architecture-admission/). The native paths
-described below are retained for development and direct parity tests; SQL planning does not select them.
+**Current status:** Partial. Ordinary planning admits synchronous keyed `StreamExecGroupAggregate`
+with non-DISTINCT BIGINT `COUNT`, `SUM`, `SUM0`, `MIN`, `MAX`, and `AVG`; aggregate arguments must
+be BIGINT, and grouping keys must be BIGINT, INTEGER, or VARCHAR. Both in-memory and supported
+default RocksDB state use the common native execution tree. Existing semantic checks still
+reject unsupported TTL, async state, metrics, and backend configurations.
+
+Mini-batch, singleton/global, SELECT DISTINCT, other argument/result/key types, and other physical
+aggregate families retain whole-plan fallback under the
+[architecture admission requirements](/StreamFusion/development/architecture-admission/).
+The broader native paths below remain development implementations, not production coverage.
 
 **Retained implementation scope:** Partial implementation for timer-free keyed and global streaming aggregates and
 bounded hash aggregates, including grouping sets, `ROLLUP`, and `CUBE` in both runtime modes.
@@ -36,7 +43,7 @@ represent the same signed/retractable state. Mixed-changelog bundles use the sam
 ordered state updates and resetting the temporary cache at each Flink bundle boundary. These are specific semantic exceptions; wrapping custom computation in
 an `ExecutionPlan` is not itself DataFusion compute reuse. Generated direct-native tests compare
 bounded results to unmodified Flink SQL on both state backends, and the existing generated
-streaming suites compare every changelog record. Production admission remains gated.
+streaming suites compare every changelog record. Production admission is limited to the synchronous keyed BIGINT subset above.
 
 Planned schemas and row codecs now have a separate shape-based admission before Arrow type
 lowering, including recursive codec construction's temporary null arrays. Compact protobuf byte
@@ -46,7 +53,7 @@ shrinks to a conservative retained schema/call/codec estimate after initializati
 Rust allocator tests cover 1/64/512-field keys, additional row/array nesting, and nested `COUNT`
 payloads; they check decode admission separately, peak/live coverage, allocation-free sizing,
 temporary-credit release, and cleanup when Flink denies schema construction. This is not yet a
-complete shared-plan or C++/cross-thread allocation profile, and does not lift production admission.
+complete shared-plan or C++/cross-thread allocation profile, and does not expand the supported production subset.
 
 A generated SQL integration matrix now exercises 22 grouping-key families and nullable `COUNT`
 payloads through the common native region, on memory and RocksDB with mini-batching disabled and
@@ -88,8 +95,7 @@ checkpoints, and 1-to-2-to-1 rescaling. Mini-batch and partial-input fixtures al
 A real Flink mailbox/network harness additionally snapshots a partly aligned two-channel input,
 restores its keyed state, and replays the captured Arrow IPC frame through Flink’s channel-state
 reader. It checks every resulting aggregate changelog byte, including overflow and later
-retractions, on both backends with aligned and unaligned checkpoints. Production admission
-remains gated pending the final supported-subset check.
+retractions, on both backends with aligned and unaligned checkpoints. This evidence supports the synchronous keyed BIGINT admission subset above.
 
 The selected synchronous aggregation node now contributes a protobuf fragment to the common
 region collector instead of constructing a legacy per-operator Java runtime. Direct selected-graph
@@ -245,7 +251,7 @@ local/aggregate invocation counters, and check Arrow topology plus original stag
 A separate common-unary harness compares the complete default local metric surface with Flink's
 SQL-generated `MapBundleOperator`, including count triggers, empty arrivals, watermark/pre-barrier
 drains, finish and timestamp-less INSERT partials. This is not full-type, arbitrary failure-path,
-two-phase in-flight recovery or end-to-end allocation/performance parity. Production admission remains gated.
+two-phase in-flight recovery or end-to-end allocation/performance parity. Production admission is limited to the synchronous keyed BIGINT subset above.
 
 The generated retained-kernel JNI test also compares ordered `RowDataSerializer` changelog bytes
 against the original SQL-planned Flink mini-batch operator for both backends, three seeds and
@@ -452,7 +458,7 @@ sizing is allocation-free and shares the encoder with persistence, with no state
 The sparse-extremum unit case (2,048 groups) reserves less than a quarter of the previous scratch
 allowance. This is an admission-size comparison, not measured throughput. Controlled native heap
 observations cover shared-tree lifetimes with numeric groups and nullable/wide-string hot keys;
-full end-to-end allocation profiles and production memory admission remain unfinished.
+production admission for mini-batch aggregation remains unfinished.
 
 Stateful aggregate stages declare a larger Flink `OPERATOR` managed-memory weight than stateless
 Arrow stages, while the bounded local bundle declares a smaller intermediate weight. These are

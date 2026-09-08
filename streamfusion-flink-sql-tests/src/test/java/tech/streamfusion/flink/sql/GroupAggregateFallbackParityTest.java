@@ -230,16 +230,6 @@ class GroupAggregateFallbackParityTest extends SqlParityTestSupport {
     }
 
     @Test
-    void filteredAggregatesWithRetractionsMatchFlinkByteForByte() throws Exception {
-        byte[] flink = executeFilteredRetractions(false);
-        byte[] streamFusion = executeFilteredRetractions(true);
-
-        assertThat(streamFusion).isEqualTo(flink);
-        SqlFallbackAssertions.nativeBatchesAreZero(StreamFusionPlannerFactory.nativeGroupAggregateBatchCount());
-        SqlFallbackAssertions.admission();
-    }
-
-    @Test
     void distinctAggregatesWithFiltersAndRetractionsMatchFlinkByteForByte() throws Exception {
         byte[] flink = executeDistinctRetractions(false);
         byte[] streamFusion = executeDistinctRetractions(true);
@@ -409,46 +399,6 @@ class GroupAggregateFallbackParityTest extends SqlParityTestSupport {
                 + "MIN(DISTINCT amount), MAX(DISTINCT amount), "
                 + "COUNT(DISTINCT label) FILTER (WHERE selected) "
                 + "FROM distinct_aggregate_input GROUP BY category"));
-    }
-
-    private static byte[] executeFilteredRetractions(boolean streamFusion) throws Exception {
-        configurePlanner(streamFusion);
-        StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();
-        environment.setParallelism(1);
-        StreamTableEnvironment tables = StreamTableEnvironment.create(
-                environment, EnvironmentSettings.newInstance().inStreamingMode().build());
-        tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
-        Row selected = Row.of("a", 5L, true);
-        Row rejected = Row.of("a", 7L, false);
-        Row selectedNull = Row.of("a", null, true);
-        Row nullPredicate = Row.of("a", 2L, null);
-        DataStream<Row> changes = environment.fromCollection(
-                List.of(
-                        withKind(selected, RowKind.INSERT),
-                        withKind(rejected, RowKind.INSERT),
-                        withKind(selectedNull, RowKind.INSERT),
-                        withKind(nullPredicate, RowKind.INSERT),
-                        withKind(selected, RowKind.DELETE),
-                        withKind(rejected, RowKind.DELETE),
-                        withKind(selectedNull, RowKind.DELETE),
-                        withKind(nullPredicate, RowKind.DELETE)),
-                Types.ROW_NAMED(
-                        new String[] {"category", "amount", "selected"}, Types.STRING, Types.LONG, Types.BOOLEAN));
-        tables.createTemporaryView(
-                "filtered_aggregate_input",
-                tables.fromChangelogStream(
-                        changes,
-                        Schema.newBuilder()
-                                .column("category", "STRING NOT NULL")
-                                .column("amount", "BIGINT")
-                                .column("selected", "BOOLEAN")
-                                .build()));
-        return collect(tables.executeSql("SELECT category, "
-                + "COUNT(*) FILTER (WHERE selected), COUNT(amount) FILTER (WHERE selected), "
-                + "SUM(amount) FILTER (WHERE selected), AVG(amount) FILTER (WHERE selected), "
-                + "MIN(amount) FILTER (WHERE selected), "
-                + "MAX(amount) FILTER (WHERE selected) "
-                + "FROM filtered_aggregate_input GROUP BY category"));
     }
 
     private static byte[] executeOverflow(boolean streamFusion) throws Exception {

@@ -21,7 +21,9 @@ class NexmarkBlackholeBenchmarkIT {
         "q2,hashmap",
         "q2,rocksdb",
         "q3,hashmap",
-        "q3,rocksdb"
+        "q3,rocksdb",
+        "q4,hashmap",
+        "q4,rocksdb"
     })
     void admittedQueriesExecuteThroughFlinksBlackhole(String query, String backend) throws Exception {
         NexmarkBlackholeBenchmark.main(new String[] {"10000", query, "flink", backend, "4"});
@@ -43,13 +45,26 @@ class NexmarkBlackholeBenchmarkIT {
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
     }
 
+    @ParameterizedTest
+    @CsvSource({"hashmap,1", "rocksdb,1", "hashmap,4", "rocksdb,4"})
+    void admittedQ4MatchesFlinksMaterializedResults(String backend, int parallelism) throws Exception {
+        var flink = LocalRowDataNexmarkBenchmark.run(10_000, "q4", false, backend, parallelism);
+        var nativeResult = LocalRowDataNexmarkBenchmark.run(10_000, "q4", true, backend, parallelism);
+        assertThat(nativeResult.completed()).isTrue();
+        assertThat(nativeResult.nativePlanBatches()).isPositive();
+        assertThat(nativeResult.materializedRows()).isPositive().isEqualTo(flink.materializedRows());
+        assertThat(nativeResult.materializedSha256()).isEqualTo(flink.materializedSha256());
+        assertThat(nativeResult.materializedDebugRows()).containsExactlyElementsOf(flink.materializedDebugRows());
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+    }
+
     @Test
     void unadmittedQueryIsExplainedAndMeasurementRejectsFallback() throws Exception {
-        NexmarkBlackholeBenchmark.main(new String[] {"100", "q4", "streamfusion", "rocksdb", "4", "explain"});
+        NexmarkBlackholeBenchmark.main(new String[] {"100", "q5", "streamfusion", "rocksdb", "4", "explain"});
         assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isZero();
         assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: no");
         assertThatThrownBy(() ->
-                        NexmarkBlackholeBenchmark.main(new String[] {"100", "q4", "streamfusion", "rocksdb", "4"}))
+                        NexmarkBlackholeBenchmark.main(new String[] {"100", "q5", "streamfusion", "rocksdb", "4"}))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("Refusing to measure a StreamFusion fallback");
     }

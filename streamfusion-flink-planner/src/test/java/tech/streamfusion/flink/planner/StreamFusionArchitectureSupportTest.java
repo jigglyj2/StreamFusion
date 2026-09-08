@@ -172,7 +172,9 @@ class StreamFusionArchitectureSupportTest {
                 child);
         var reasons = new ArrayList<String>();
         StreamFusionArchitectureSupport.collect(new ExecNodeGraph(List.of(root)), reasons);
-        assertThat(reasons).hasSize(2).allMatch(reason -> reason.contains("retained-state/buffer admission"));
+        assertThat(reasons)
+                .hasSize(2)
+                .allMatch(reason -> reason.contains("SELECT DISTINCT retains its separate production gate"));
         assertThat(String.join("\n", reasons)).doesNotContain("intermediate JNI", "fused native ExecutionPlan");
     }
 

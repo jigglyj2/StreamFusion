@@ -106,7 +106,7 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             List<String> rejections = new ArrayList<>();
             // Inspect the original complete graph, including nodes that semantic lowering folds
             // away. Architecture readiness must not be bypassed by a specialized conversion.
-            StreamFusionArchitectureSupport.collect(graph, rejections);
+            StreamFusionArchitectureSupport.collect(graph, rejections, activeTableConfig);
             String runtimeRejection = runtimePreflightRejection(context);
             if (runtimeRejection != null) {
                 rejections.add("runtime-preflight\n" + runtimeRejection);

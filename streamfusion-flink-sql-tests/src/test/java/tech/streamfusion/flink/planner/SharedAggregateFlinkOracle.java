@@ -53,6 +53,12 @@ final class SharedAggregateFlinkOracle {
     @SuppressWarnings("unchecked")
     static KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> create(boolean rocks, long bundleSize)
             throws Exception {
+        return create(rocks, bundleSize, true);
+    }
+
+    @SuppressWarnings("unchecked")
+    static KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> create(
+            boolean rocks, long bundleSize, boolean retractable) throws Exception {
         String factory = System.getProperty(StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY);
         String processor = System.getProperty(StreamFusionPlannerFactory.EXEC_GRAPH_PROCESSOR_PROPERTY);
         System.clearProperty(StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY);
@@ -80,7 +86,10 @@ final class SharedAggregateFlinkOracle {
                     List.of(Row.of("unused", 0L)), Types.ROW_NAMED(new String[] {"k", "v"}, Types.STRING, Types.LONG));
             tables.createTemporaryView(
                     "aggregate_input",
-                    tables.fromChangelogStream(source, Schema.newBuilder().build(), ChangelogMode.all()));
+                    tables.fromChangelogStream(
+                            source,
+                            Schema.newBuilder().build(),
+                            retractable ? ChangelogMode.all() : ChangelogMode.insertOnly()));
             var output = tables.toChangelogStream(
                     tables.sqlQuery(
                             "SELECT k, COUNT(*) AS n, SUM(v) AS s, MIN(v) AS lo, MAX(v) AS hi, AVG(v) AS mean FROM aggregate_input GROUP BY k"));

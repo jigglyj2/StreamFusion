@@ -29,12 +29,13 @@ budget, and backend configuration constraints.
 
 ## Current selection gates
 
-Calc, UNION ALL and verified binary inner equi MultiJoin compose through the common native region.
-That join subset is admitted with in-memory or default RocksDB state; other persistent operator families
-remain on whole-plan Flink fallback until their large state/buffer admission, backend settings,
-checkpoint behavior, and complete Flink metric contracts are verified through that region.
-Some retained implementations, including deduplication and aggregation, already have direct
-shared-plan conformance coverage; that does not remove the production gate.
+Calc, UNION ALL, verified binary inner MultiJoin, and synchronous keyed BIGINT aggregation
+compose through the common native region. The join and aggregate subsets are admitted with
+in-memory or supported default RocksDB state. Aggregation admits non-DISTINCT BIGINT
+COUNT/SUM/SUM0/MIN/MAX/AVG, BIGINT arguments, and BIGINT/INTEGER/VARCHAR grouping keys.
+Mini-batch, singleton/global and other aggregate subsets retain explicit production restrictions.
+Other persistent families remain on whole-plan fallback until their state/buffer admission,
+backend settings, checkpoint behavior, and complete Flink metric contracts are verified.
 
 Other implemented families also require general region composition and per-stage metric parity.
 Shared internal stages with multiple consumers are rejected until native multi-output ownership
@@ -44,8 +45,10 @@ edge adapters; an internal RowData operator or an intermediate JNI round trip is
 
 A binary Flink `StreamExecMultiJoin` with a common equi key lowers to the regular join algorithm.
 Its shared-region composition is admitted after generated metric/changelog comparisons, keyed
-rescaling and channel replay tests. Persistent state is admitted when its complete
-condition is covered by the common equality keys; additional residuals retain the state gate.
+rescaling and channel replay tests. Persistent state permits the common equality keys plus
+boolean combinations of direct column/literal comparisons and null checks. Residual predicates
+use DataFusion in bounded Arrow chunks with reserved workspace and match masks. Computed operands
+retain a precise workspace fallback; this is a general expression subset, not a Nexmark special case.
 A separate backend guard checks the packaged RocksDB library's CPU compatibility and checksum.
 TaskManager log relocation matches Flink. Unsupported typed RocksDB settings still report their
 specific option first.
