@@ -38,6 +38,13 @@ memory fixture verifies pressure flushing and preservation of all 180,000 genera
 These upstream-oracle tests define the required native behavior; they do not claim its migration
 is complete.
 
+A native capacity calculation now matches shared fixtures checked against Flink's actual
+`WindowBytesMultiMap`, including fixed-width rows, large variable-width keys/values, hash-table
+growth and reset. It counts Flink page geometry without constructing or serializing RowData.
+This is semantic flush-capacity bookkeeping, separate from coarse native buffer reservations.
+It is currently test-only and will be wired into the shared local-window lifecycle; the legacy
+kernel's per-batch flush behavior and production fallback remain unchanged.
+
 The local kernel now uses shared DataFusion aggregate adapters for reusable integer COUNT/SUM/AVG
 and append-only MIN/MAX computation. Ordered retractions and numeric subsets that require Flink
 semantics retain the existing adapters. A coarse workspace covers row encodings, selections,

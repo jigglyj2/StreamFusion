@@ -18,6 +18,10 @@ use crate::memory_pool::HostMemoryReservation;
 use crate::proto;
 
 mod admission;
+// Tested prerequisite for the shared Flink buffer/control lifecycle; the legacy kernel stays
+// gated and does not yet use this capacity model.
+#[cfg(test)]
+mod buffer_layout;
 mod planning;
 
 const INSERT: i8 = 0;

@@ -1,0 +1,6 @@
+memory_mib,distinct_keys,key_payload_bytes,input_payload_bytes,key_fixed_bytes,key_bytes,input_fixed_bytes,input_bytes,rows_before_flush
+3,17,0,0,16,16,24,24,64529
+2,1000000,0,0,16,16,24,24,15872
+16,1000000,0,0,16,16,24,24,196608
+3,17,0,4097,16,16,32,4136,499
+3,1000000,4097,0,24,4128,24,24,494
