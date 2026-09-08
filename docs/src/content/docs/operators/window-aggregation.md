@@ -95,7 +95,9 @@ Arrow frames at real barriers and replay them after restore, including late inpu
 partials. The shared COUNT/MIN/MAX channel suites also guard the common control machinery.
 Official Q8 now passes ordinary selection and complete collected/materialized parity for
 10,000 events at parallelism one and four on both backends, with positive native plan activity
-and zero standalone local-window JNI batches. Release performance remains under investigation.
+and zero standalone local-window JNI batches. The [Q8 release comparison](/StreamFusion/benchmarks/q8-rowdata/)
+records measurements at one and ten million events and separate longer profiles, including its
+in-memory median regression and larger RocksDB median improvement.
 
 Global input admission includes logical grouping-column spans before allocating Arrow row keys,
 state mutations or timer keys. A shared IPC parent is still owned by its producer. The grouping

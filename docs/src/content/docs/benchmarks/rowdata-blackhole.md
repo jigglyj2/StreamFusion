@@ -53,6 +53,10 @@ MAX, including general memory improvements and larger-workload capacity limits.
 The [Q7 release comparison](/StreamFusion/benchmarks/q7-rowdata/) covers TUMBLE MAX and timestamp
 join predicates, smaller-workload results and the remaining million-event memory limitation.
 
+The [Q8 release comparison](/StreamFusion/benchmarks/q8-rowdata/) covers DISTINCT TUMBLE and its
+window-bound join, with one-/ten-million-event measurements and separate longer profiles on both
+backends. It reports the in-memory regression alongside the larger RocksDB median improvement.
+
 ## Q3 in-memory measurements, September 7, 2026
 
 These historical tables predate the diagnostic-counter timing correction. The counter reset

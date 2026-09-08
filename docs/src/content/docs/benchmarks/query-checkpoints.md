@@ -70,7 +70,11 @@ logical key payloads and avoids a duplicate-key index. Ordinary selection admits
 DISTINCT TUMBLE subset; VARCHAR aggregate calls and DISTINCT HOP remain gated. Official Q8
 parity passes at 10,000 events, parallelism one and four, on both backends: complete collected
 changelog bytes, materialized results, positive native plan activity and no standalone local-window
-JNI batches. Release measurements are the current checkpoint; no Q8 performance result is claimed yet.
+JNI batches. The [Q8 release comparison](/StreamFusion/benchmarks/q8-rowdata/) records one- and
+ten-million-event measurements and separate two-/twenty-million-event profiles on both backends.
+At ten million, median throughput is 12.4% below Flink in memory and 26.3% above on RocksDB, with
+wide overlapping timing ranges. All twenty-million-event profiles finish without capacity failure;
+profile timings are excluded from results. Q8 is delivered within these documented limits; Q9 is next.
 
 ## Q6 has no Flink streaming baseline
 
