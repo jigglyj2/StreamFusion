@@ -149,6 +149,10 @@ and view columns retain their existing conservative estimate. A shared-IPC regre
 2,048 rows with 512-byte payloads, including a non-zero-offset slice, within a 16 MiB share and
 checks allocation peaks and joined payloads; the prior estimate requested over 18 MiB at input
 admission alone. Wide nullable flat-schema tests verify encoding/decoding and workspace bounds.
+The lookup-directory allowance covers its largest overlapping phase: the temporary unique-key
+table is dropped before constructing staged state. A 16,384-row test with one, 512 and 16,384
+distinct keys fits input admission within 12 MiB and verifies allocation peaks and cancellation.
+The previous allowance requested over 17 MiB even for the single-key input.
 
 Paged decoding admits payload bytes and coarse row-vector/Arc headroom once for the complete
 read batch, using the page headers. Original and updated state share payload Arcs, so wide rows
@@ -173,7 +177,7 @@ compact keys with 512-byte payloads in one state read, verifies original/current
 and releases all credit; the previous directory estimate requested more than 9 MiB for decoding.
 Mutation staging likewise counts only records present in the old and new physical layouts:
 one root for a non-empty compact entry, with external-page metadata only for paged entries.
-A 16,384-key batch now fits a 32 MiB share; its allocation peak is covered by coarse reservations,
+A 16,384-key batch now fits a 20 MiB share; its allocation peak is covered by coarse reservations,
 and retained payloads are probed after flushing. The previous estimate added almost 25 MiB for
 mutation metadata alone by counting absent roots and external pages. Layout transitions and
 canonical bytes remain covered by the same both-backend parity and recovery fixtures.

@@ -8,7 +8,7 @@ fn compact_batch_flush_does_not_admit_nonexistent_external_page_mutations() {
     use super::coarse_memory::CountingBroker;
     use std::sync::atomic::{AtomicUsize, Ordering};
     let broker = Arc::new(CountingBroker {
-        inner: TestBroker::new(32 << 20),
+        inner: TestBroker::new(20 << 20),
         calls: AtomicUsize::new(0),
         peak: AtomicUsize::new(0),
     });

@@ -4,6 +4,36 @@
 use super::*;
 
 #[test]
+fn large_batch_lookup_directories_fit_a_coarse_managed_share_at_any_key_cardinality() {
+    for cardinality in [1, 512, 16_384] {
+        let keys = (0..16_384).map(|i| i % cardinality).collect::<Vec<i64>>();
+        let input = batch(&keys, &vec![""; keys.len()], &vec![INSERT; keys.len()]);
+        let broker = Arc::new(TestBroker::new(12 << 20));
+        let mut join = RegularJoinProcessor::new(
+            &plan(proto::RegularJoinType::Inner),
+            128,
+            0,
+            127,
+            HostMemoryReservation::new(broker.clone(), "large input directory"),
+        )
+        .unwrap();
+        let before = broker.reserved();
+        let ((), observed) = crate::allocation_test_support::measure(|| {
+            join.begin_streaming_batch(0, input).unwrap();
+        });
+        assert!(
+            observed.peak <= broker.reserved() - before,
+            "cardinality={cardinality}, observed {}, admitted {}",
+            observed.peak,
+            broker.reserved() - before
+        );
+        join.cancel_streaming_batch();
+        drop(join);
+        assert_eq!(broker.reserved(), 0);
+    }
+}
+
+#[test]
 fn flat_encoding_allowance_covers_wide_nullable_schemas_and_nonzero_offsets() {
     use arrow::array::{BooleanArray, Decimal128Array, TimestampMillisecondArray};
     let rows = 257;

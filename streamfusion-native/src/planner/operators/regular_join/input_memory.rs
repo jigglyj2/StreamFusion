@@ -7,7 +7,11 @@ use super::*;
 /// Input Arrow buffers retain their producer's ownership and reservation. Flat columns
 /// may share a much larger IPC allocation; only their logical spans are encoded here.
 pub(super) fn workspace(batch: &RecordBatch, visible: usize) -> Result<usize> {
-    let mut bytes = batch.num_rows().saturating_mul(1024).saturating_add(4096);
+    // The unique-key table is dropped before the manifest and staged-state directories
+    // are built. Budget their largest overlapping phase, rather than adding both peaks.
+    // 512 bytes per input row covers the directory/vector headers conservatively even
+    // when every row has a distinct key; payload bytes have their separate allowance.
+    let mut bytes = batch.num_rows().saturating_mul(512).saturating_add(4096);
     for column in &batch.columns()[..visible] {
         let data_type = column.data_type();
         let flat = data_type.is_primitive()
