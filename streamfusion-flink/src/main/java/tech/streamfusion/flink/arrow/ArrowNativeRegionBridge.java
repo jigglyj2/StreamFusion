@@ -29,7 +29,7 @@ public final class ArrowNativeRegionBridge {
     }
 
     public ArrowNativeRegionOutput executeStream(List<ArrowRowDataBatch> inputs) {
-        return execute(inputs, null);
+        return execute(inputs, (byte[]) null);
     }
 
     public ArrowNativeRegionOutput executeControlStream(List<ArrowRowDataBatch> inputs, byte[] controls) {
@@ -39,9 +39,35 @@ public final class ArrowNativeRegionBridge {
         return execute(inputs, controls);
     }
 
+    public ArrowNativeRegionOutput executeExchangeStream(
+            List<ArrowRowDataBatch> emptyInputs,
+            int port,
+            byte[] exchangePlan,
+            tech.streamfusion.flink.exchange.NativeExchangeFrame frame,
+            java.util.function.LongConsumer inputRows) {
+        Objects.checkIndex(port, emptyInputs.size());
+        if (emptyInputs.stream().anyMatch(input -> input.size() != 0))
+            throw new IllegalArgumentException("Native exchange invocation requires empty input placeholders");
+        Objects.requireNonNull(frame, "frame");
+        Objects.requireNonNull(inputRows, "inputRows");
+        return execute(
+                emptyInputs,
+                (arrays, schemas) ->
+                        frame.executeNativeRegion(context, port, exchangePlan, arrays, schemas, inputRows));
+    }
+
     private ArrowNativeRegionOutput execute(List<ArrowRowDataBatch> inputs, byte[] controls) {
+        return execute(inputs, (arrays, schemas) -> NativeRegionStream.open(context, arrays, schemas, controls));
+    }
+
+    @FunctionalInterface
+    private interface Invocation {
+        NativeRegionStream open(long[] arrays, long[] schemas);
+    }
+
+    private ArrowNativeRegionOutput execute(List<ArrowRowDataBatch> inputs, Invocation invocation) {
         try (var prepared = inputEdge.prepare(inputs)) {
-            var stream = NativeRegionStream.open(context, prepared.arrayAddresses, prepared.schemaAddresses, controls);
+            var stream = invocation.open(prepared.arrayAddresses, prepared.schemaAddresses);
             try {
                 var output = new ArrowNativeRegionOutput(stream, outputTypes, allocator, outputSchemas);
                 output.ownInputs(prepared.transferToOutput());

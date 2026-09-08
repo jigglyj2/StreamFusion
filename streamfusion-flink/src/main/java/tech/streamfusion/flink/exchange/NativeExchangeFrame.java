@@ -128,6 +128,29 @@ public final class NativeExchangeFrame {
                 output);
     }
 
+    /** Decode and execute once in a shared native region with independently typed output ports. */
+    public tech.streamfusion.nativebridge.NativeRegionStream executeNativeRegion(
+            tech.streamfusion.nativebridge.NativeExecutionContext context,
+            int port,
+            byte[] plan,
+            long[] arrays,
+            long[] schemas,
+            java.util.function.LongConsumer inputRows) {
+        if (bodyOffset != metadataOffset + metadataLength)
+            throw new IllegalStateException("Native IPC region input requires contiguous metadata and body");
+        return tech.streamfusion.nativebridge.NativeRegionStream.openExchange(
+                context,
+                port,
+                plan,
+                payload,
+                metadataOffset,
+                Math.addExact(metadataLength, bodyLength),
+                metadataLength,
+                arrays,
+                schemas,
+                inputRows);
+    }
+
     /** Sends this schema-free IPC frame directly into a bounded native regular join. */
     public long processBoundedRegularJoinNative(long handle, int side, byte[] exchangePlan) {
         return NativeRegularJoinBridge.processBoundedExchangeFrame(

@@ -26,6 +26,7 @@ mod plan_gauges;
 mod plan_state;
 mod plan_stream;
 mod region;
+mod region_exchange;
 mod region_output;
 mod regular_join;
 mod regular_join_stream;

@@ -70,7 +70,7 @@ public final class NativeExecutionContext implements AutoCloseable {
         }
         try {
             if (region) {
-                if (NativeRegionStream.edgeVersion() != 1)
+                if (NativeRegionStream.edgeVersion() != 2)
                     throw new IllegalStateException("Unsupported native region C Data edge version");
                 handle = NativeRegionStream.createContext(
                         identifiedPlan, stateBindings, taskBindings, memoryManager, memoryManager.limit());

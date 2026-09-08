@@ -153,5 +153,5 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeRegionStream_na
     _: EnvUnowned<'_>,
     _: JClass<'_>,
 ) -> jint {
-    1
+    2
 }

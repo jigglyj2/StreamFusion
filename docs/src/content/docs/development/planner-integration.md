@@ -206,7 +206,7 @@ three seeds and both backends, including canonical snapshots and cross-backend r
 COUNT -> Calc -> attached local MAX region binds global keyed state and the original Flink local
 buffer capacity in the same context, and matches the tree's outputs and stage counters through
 watermark, pre-checkpoint, and end-input controls. These are native integration prerequisites;
-the version-1 JNI region edge now exposes port-tagged Arrow C Data outputs with a separate schema
+the version-2 JNI region edge now exposes port-tagged Arrow C Data outputs with a separate schema
 negotiation for each exit. It reuses the tree edge's C Data input importer, buffer accounting, and
 producer-owned release callbacks. An output handle owns the native invocation even if the Java
 context handle closes first; exported arrays remain valid after output-handle close. Cancellation,
@@ -220,9 +220,15 @@ and release behavior. The Java Arrow region wrapper shares input negotiation/exp
 with the single-output tree edge, caches each exit schema, and returns port-tagged batches with
 owned RowKind/timestamp envelopes. It releases all exits on import failure and permits returned
 batches to outlive the input, context, and invocation handles. Empty invocations and repeated
-schema negotiation have generated boundary coverage. Full Flink runtime routing, topology/recovery/parity validation, and the
-direct exchange-input region edge remain outstanding. No additional whole-plan query is admitted
-by this change.
+schema negotiation have generated boundary coverage. Edge version 2 adds direct IPC input to
+version 1's C Data input/output contract. A network frame can also enter the region
+through the shared tree/region IPC decoder: it copies the frame once into a body-aligned native
+buffer, decodes there, and keeps that buffer shared through the native graph. Only the final
+port-tagged outputs return to Java. Generated boundary checks compare direct IPC with C Data
+inputs across alternating external ports, singleton/hash exchanges, RowKinds, timestamps, and
+stage counts; failed decode remains retryable and failed output setup cancels the invocation.
+Full Flink runtime routing and topology/recovery/parity validation remain outstanding. No
+additional whole-plan query is admitted by this change.
 
 Ordinary planner use of this layout remains limited to ownership admission. Wiring the native
 region edge into Flink transformations, exchanges, and output control routing is still required;

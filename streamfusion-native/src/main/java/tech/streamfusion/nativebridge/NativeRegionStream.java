@@ -47,6 +47,49 @@ public final class NativeRegionStream implements AutoCloseable {
         }
     }
 
+    /** Decode one network frame into the region and report its logical input row count. */
+    public static NativeRegionStream openExchange(
+            NativeExecutionContext context,
+            int port,
+            byte[] plan,
+            byte[] payload,
+            int offset,
+            int length,
+            int metadataLength,
+            long[] arrays,
+            long[] schemas,
+            java.util.function.LongConsumer inputRows) {
+        Objects.requireNonNull(inputRows, "inputRows");
+        if (!context.hasRegionOutputs())
+            throw new IllegalArgumentException("Native exchange requires a region context");
+        long[] opened = openExchangeInputs(
+                context.handle(), port, plan, payload, offset, length, metadataLength, arrays, schemas);
+        var stream = new NativeRegionStream(opened[0]);
+        NativeExecutionDiagnostics.PLAN_STREAMS.incrementAndGet();
+        try {
+            inputRows.accept(opened[1]);
+            return stream;
+        } catch (RuntimeException | Error failure) {
+            try {
+                stream.close();
+            } catch (RuntimeException cleanup) {
+                failure.addSuppressed(cleanup);
+            }
+            throw failure;
+        }
+    }
+
+    private static native long[] openExchangeInputs(
+            long handle,
+            int port,
+            byte[] plan,
+            byte[] payload,
+            int offset,
+            int length,
+            int metadataLength,
+            long[] arrays,
+            long[] schemas);
+
     private static native int nativeEdgeVersion();
 
     static native long createContext(byte[] plan, byte[] state, byte[] task, NativeMemoryManager memory, long limit);
