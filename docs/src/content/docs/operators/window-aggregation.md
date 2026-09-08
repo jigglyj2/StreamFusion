@@ -23,14 +23,15 @@ FROM TABLE(HOP(TABLE bid, DESCRIPTOR(dateTime), INTERVAL '2' SECOND, INTERVAL '1
 GROUP BY window_start, window_end, bidder;
 ```
 
-## Q5 admission work
+## Q5 checkpoint
 
 Q5's local/global HOP COUNT, attached MAX/COUNT and binary join now use ordinary planner
 selection. Its reused global aggregate has one native owner and two Arrow exits; one branch
 continues through Calc and local MAX in the same native plan. Original Flink resource shares,
 state identity, metrics and network boundaries are retained. Generated SQL and channel recovery
-coverage is described below. The release benchmark and profiling checkpoint is still pending;
-there is no current Q5 performance result. The opt-in official Nexmark test compares 10,000
+coverage is described below. The [Q5 release comparison](/StreamFusion/benchmarks/q5-rowdata/)
+records one-million-event measurements, separate longer profiles and larger-workload memory
+limits on the verified plan. The opt-in official Nexmark test compares 10,000
 input events at parallelism one and four on both backends: complete collected changelog bytes,
 materialized results, ordinary acceleration and native plan activity. It also checks that the
 retained standalone local-window JNI path receives no batches.
@@ -90,7 +91,8 @@ selection through the ordinary planner, without a test admission bypass. Topolog
 original identities, original memory fractions including weighted source/sink boundaries, serialized
 factories, and direct Arrow input to source-side local regions. The shared single-input runtime also
 passes the pressure/control parity fixture; the existing aligned/unaligned channel and restore/rescale
-fixtures cover its common control path. These are prerequisites, not a full Q5 delivery or benchmark.
+fixtures cover its common control path. These controlled fixtures supplement the separate full-query
+integration and release comparison.
 
 The buffered local path reserves compact DataFusion group vectors, its ordered key index,
 and batch scratch together. It borrows incoming Arrow arrays and admits serialized partial
@@ -105,8 +107,8 @@ The selected-graph path now runs a reused global COUNT through one native owner 
 Calc and attached local MAX consumer. The raw COUNT and local partial exits use separate Arrow
 outputs feeding the existing exchanges. Generated SQL comparisons with the benchmark's binary
 MultiJoin setting match Flink on both backends, for 6-second/10-second HOP windows and parallelism
-one/two. These fixtures now require ordinary whole-plan admission. Release benchmark validation remains
-required before the Q5 performance checkpoint is delivered.
+one/two. These fixtures require ordinary whole-plan admission. The release comparison uses the
+same production path with the official Nexmark RowData source and Flink blackhole sink.
 
 Global slice merging reserves workspace from the logical partial bytes it decodes and the
 number of rows it processes. Incoming Arrow buffers retain their producer's accounting; a small
@@ -216,10 +218,10 @@ production sink adapters and network writers capture each branch. Both exit chan
 watermarks and checkpoint barriers match Flink after aligned and unaligned input-channel replay
 on each backend. The local Flink oracle receives the same global output and checkpoint flushes.
 
-These checks support ordinary admission of the verified subset. Full-query release performance
-validation remains outstanding. Unsupported state/backend metric settings and sampled latency routing
-must retain precise fallback reasons. Q5 delivery still requires release benchmarks and mixed
-JVM/native profiling on both backends.
+These checks support ordinary admission of the verified subset. Full-query release measurements
+and mixed JVM/native profiles are recorded for both backends on the Q5 comparison page.
+Unsupported state/backend metric settings and sampled latency routing retain precise fallback
+reasons; a measured Q5 result does not admit the remaining window families.
 
 ## Retained semantic implementation
 

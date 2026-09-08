@@ -34,12 +34,15 @@ differently, so those end-to-end materialized results supplement the determinist
 The [Q4 release comparison](/StreamFusion/benchmarks/q4-rowdata/) records a general batched
 join-predicate optimization, approximate in-memory parity and a 15.5% RocksDB median throughput
 gain at one million events, with overlapping ranges. Separate longer profiles cover both engines
-and backends. Q5 is the next performance checkpoint. Its ordinary plan now accelerates local/global
+and backends. Q5's ordinary plan now accelerates local/global
 HOP COUNT, attached MAX and a reused aggregate with two Arrow exits on both backends. Generated
 SQL and channel-recovery tests cover that shared ownership and control path. Opt-in official
 Nexmark tests match complete changelog and materialized results at 10,000 events, parallelism one
-and four, on both backends. Release measurements remain pending; no current Q5 performance result
-is published yet. The optimizer and whole-plan fallback for unsupported subsets stay intact.
+and four, on both backends. The [Q5 release comparison](/StreamFusion/benchmarks/q5-rowdata/)
+reports approximate in-memory parity and a 10.8% RocksDB median throughput gain at one million
+events, including dispersion, separate longer profiles and larger-workload memory limitations.
+General fixes reduce duplicate retained keys and inflated batch/state reservations. The optimizer
+and whole-plan fallback for unsupported subsets stay intact. Q6 is the next query checkpoint.
 
 ## Initial diagnostic baseline
 
