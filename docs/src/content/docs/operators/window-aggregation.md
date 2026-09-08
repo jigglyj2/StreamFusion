@@ -88,6 +88,15 @@ backends, including nullable keys/timestamps/values and integer overflow. Native
 compare ordered accumulator bytes for all RowKinds and verify memory-denial cleanup. This is a
 prerequisite, not Q5 admission.
 
+The SQL-generated global HOP oracle additionally pins shared-slice state and late-input behavior
+on both Flink backends, before and after checkpoint restore. One buffered partial becomes one
+slice state and one initial timer, rather than one state per overlapping window. A partial arriving
+after its base slice fired is still accepted until its last overlapping window fires; the late-drop
+counter increments once only when that last window has fired. An extra empty-window timer ends
+the trigger chain after the final nonempty window. Flink restores its checkpointed watermark
+before processing replayed input. The existing native global kernel expands slices into windows
+and needs these state/control/metric corrections before shared-plan admission.
+
 ## Retained semantic implementation
 
 The retained implementation supports direct time-attribute window aggregation for event time and processing
