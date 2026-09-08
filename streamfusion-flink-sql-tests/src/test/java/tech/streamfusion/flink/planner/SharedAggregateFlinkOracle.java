@@ -30,9 +30,14 @@ final class SharedAggregateFlinkOracle {
             new String[] {"k", "v"});
     static final RowType OUTPUT = RowType.of(
             new org.apache.flink.table.types.logical.LogicalType[] {
-                new VarCharType(), new BigIntType(false), new BigIntType(), new BigIntType(), new BigIntType()
+                new VarCharType(),
+                new BigIntType(false),
+                new BigIntType(),
+                new BigIntType(),
+                new BigIntType(),
+                new BigIntType()
             },
-            new String[] {"k", "n", "s", "lo", "hi"});
+            new String[] {"k", "n", "s", "lo", "hi", "mean"});
 
     private SharedAggregateFlinkOracle() {}
 
@@ -78,7 +83,7 @@ final class SharedAggregateFlinkOracle {
                     tables.fromChangelogStream(source, Schema.newBuilder().build(), ChangelogMode.all()));
             var output = tables.toChangelogStream(
                     tables.sqlQuery(
-                            "SELECT k, COUNT(*) AS n, SUM(v) AS s, MIN(v) AS lo, MAX(v) AS hi FROM aggregate_input GROUP BY k"));
+                            "SELECT k, COUNT(*) AS n, SUM(v) AS s, MIN(v) AS lo, MAX(v) AS hi, AVG(v) AS mean FROM aggregate_input GROUP BY k"));
             var stage = find(output.getTransformation());
             var operator = (OneInputStreamOperator<RowData, RowData>) stage.getOperator();
             if (!operator.getClass()

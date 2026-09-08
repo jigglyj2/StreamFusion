@@ -90,7 +90,7 @@ class SharedAggregateRegionParityTest {
                                     } else {
                                         row = GenericRowData.of(
                                                 i % 7 == 0 ? null : StringData.fromString("é-" + random.nextInt(5)),
-                                                i % 4 == 0 ? null : (long) random.nextInt(17) - 8);
+                                                generatedValue(random, i));
                                         row.setRowKind(i % 2 == 0 ? RowKind.INSERT : RowKind.UPDATE_AFTER);
                                         live.add(GenericRowData.of(row.getField(0), row.getField(1)));
                                     }
@@ -141,6 +141,25 @@ class SharedAggregateRegionParityTest {
             }
     }
 
+    // Exercise Flink's wrapping BIGINT sum and truncating AVG, including MIN_VALUE
+    // retractions; DataFusion's default checked overflow/average semantics differ.
+    static Long generatedValue(Random random, int ordinal) {
+        switch (ordinal % 8) {
+            case 0:
+                return null;
+            case 1:
+                return Long.MAX_VALUE;
+            case 2:
+                return Long.MIN_VALUE;
+            case 3:
+                return -1L;
+            case 4:
+                return 1L;
+            default:
+                return (long) random.nextInt(31) - 15;
+        }
+    }
+
     static byte[] plan() {
         var input = Operator.newBuilder()
                 .setPlanNodeId(1)
@@ -155,7 +174,8 @@ class SharedAggregateRegionParityTest {
                 AggregateFunction.AGGREGATE_FUNCTION_COUNT_STAR,
                 AggregateFunction.AGGREGATE_FUNCTION_SUM,
                 AggregateFunction.AGGREGATE_FUNCTION_MIN,
-                AggregateFunction.AGGREGATE_FUNCTION_MAX)) {
+                AggregateFunction.AGGREGATE_FUNCTION_MAX,
+                AggregateFunction.AGGREGATE_FUNCTION_AVG)) {
             boolean count = function == AggregateFunction.AGGREGATE_FUNCTION_COUNT_STAR;
             var type = LogicalType.newBuilder()
                     .setBigint(EmptyType.getDefaultInstance())
@@ -172,7 +192,7 @@ class SharedAggregateRegionParityTest {
                 Operator.newBuilder().setPlanNodeId(3).setGroupAggregate(group).build();
         return NativePlan.newBuilder()
                 .setProtocolVersion(2)
-                .setRoot(calc(4, aggregate, 5))
+                .setRoot(calc(4, aggregate, SharedAggregateFlinkOracle.OUTPUT.getFieldCount()))
                 .build()
                 .toByteArray();
     }

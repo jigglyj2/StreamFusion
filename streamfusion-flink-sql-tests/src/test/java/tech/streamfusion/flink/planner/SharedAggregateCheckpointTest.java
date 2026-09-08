@@ -98,7 +98,7 @@ class SharedAggregateCheckpointTest {
             } else {
                 row = GenericRowData.of(
                         i % 7 == 0 ? null : StringData.fromString("é-" + random.nextInt(7)),
-                        i % 4 == 0 ? null : (long) random.nextInt(19) - 9);
+                        SharedAggregateRegionParityTest.generatedValue(random, i));
                 row.setRowKind(i % 2 == 0 ? RowKind.INSERT : RowKind.UPDATE_AFTER);
                 live.add(GenericRowData.of(row.getField(0), row.getField(1)));
             }

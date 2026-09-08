@@ -55,9 +55,13 @@ final class GlobalPartialFixtures {
         config.set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ENABLED, true);
         config.set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_SIZE, (long) trigger);
         var types = new FlinkTypeFactory(GlobalPartialFixtures.class.getClassLoader(), RelDataTypeSystem.DEFAULT);
-        var calls = new AggregateCall[4];
+        var calls = new AggregateCall[5];
         var functions = List.of(
-                SqlStdOperatorTable.COUNT, SqlStdOperatorTable.SUM, SqlStdOperatorTable.MIN, SqlStdOperatorTable.MAX);
+                SqlStdOperatorTable.COUNT,
+                SqlStdOperatorTable.SUM,
+                SqlStdOperatorTable.MIN,
+                SqlStdOperatorTable.MAX,
+                SqlStdOperatorTable.AVG);
         for (int index = 0; index < calls.length; index++) {
             calls[index] = AggregateCall.create(
                     functions.get(index),
@@ -73,7 +77,7 @@ final class GlobalPartialFixtures {
                 SharedAggregateFlinkOracle.OUTPUT,
                 1,
                 calls,
-                new boolean[] {true, true, true, true},
+                new boolean[] {true, true, true, true, true},
                 true,
                 true,
                 0,

@@ -140,7 +140,8 @@ class SharedMiniBatchControlTest {
                         allocator)) {
             long portBytes = allocator.getAllocatedMemory();
             var rows = new ArrayList<RowData>();
-            for (int i = 0; i < 5000; i++) rows.add(GenericRowData.of(StringData.fromString("key-" + i), (long) i));
+            // More than one 2,048-row output chunk, within the fixture budget with AVG state.
+            for (int i = 0; i < 3000; i++) rows.add(GenericRowData.of(StringData.fromString("key-" + i), (long) i));
             try (var input = ArrowRowDataBatch.transpose(rows, SharedAggregateFlinkOracle.INPUT, allocator)) {
                 dispatcher.process(0, input, output -> {
                     throw new AssertionError("unexpected count flush");

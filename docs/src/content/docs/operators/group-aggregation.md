@@ -78,11 +78,15 @@ estimate retains base credit for empty maps too. Low-budget tests verify rejecti
 reads/writes and release of batch reservations. This is allocation
 regression evidence, not an end-to-end JVM/native allocation profile or a measured throughput gain.
 
-Generated Calc/Aggregate/Calc tests compare `COUNT(*)`, `SUM`, `MIN`, and `MAX` against an
+Generated Calc/Aggregate/Calc tests compare `COUNT(*)`, `SUM`, `MIN`, `MAX`, and `AVG` against an
 operator produced by Flink's SQL planner, including its generated handler. They cover null and
 Unicode keys, null values, all four input RowKinds, empty batches, timestamp presence/values,
-logical stage counts, and canonical restore in both memory/RocksDB directions. This is direct
-shared-runtime evidence, not yet planner-selected acceleration or a full metric-surface audit.
+and logical stage counts. BIGINT boundary values exercise wrapping sums and truncating averages,
+including retraction of the minimum representable integer. The same aggregate fixture participates
+in full registered-metric comparisons, canonical backend switches, aligned/unaligned keyed-state
+checkpoints, and 1-to-2-to-1 rescaling. Mini-batch and partial-input fixtures also include AVG.
+This is direct shared-runtime evidence; production admission and actual in-flight channel replay
+remain separate requirements.
 
 The selected synchronous aggregation node now contributes a protobuf fragment to the common
 region collector instead of constructing a legacy per-operator Java runtime. Direct selected-graph

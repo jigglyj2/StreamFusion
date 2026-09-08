@@ -74,7 +74,7 @@ class SharedAggregateRescalingTest {
             } else {
                 row = GenericRowData.of(
                         i % 17 == 0 ? null : StringData.fromString("é-" + (i % 96)),
-                        i % 5 == 0 ? null : (long) random.nextInt(31) - 15);
+                        SharedAggregateRegionParityTest.generatedValue(random, i));
                 row.setRowKind(i % 2 == 0 ? RowKind.INSERT : RowKind.UPDATE_AFTER);
                 live.add(GenericRowData.of(row.getField(0), row.getField(1)));
             }
