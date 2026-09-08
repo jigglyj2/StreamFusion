@@ -24,6 +24,7 @@ public final class NativeExecutionContext implements AutoCloseable {
     private final long rootPlanNodeId;
     private final byte[] identifiedPlan;
     private final boolean stateful;
+    private final boolean region;
     private final boolean inputEnvelopeRequired;
 
     public NativeExecutionContext(byte[] serializedPlan, NativeMemoryManager memoryManager) {
@@ -38,14 +39,28 @@ public final class NativeExecutionContext implements AutoCloseable {
     /** Binds keyed state and non-keyed Flink execution resources before capability negotiation. */
     public NativeExecutionContext(
             byte[] serializedPlan, NativeMemoryManager memoryManager, byte[] stateBindings, byte[] taskBindings) {
+        this(serializedPlan, memoryManager, stateBindings, taskBindings, false);
+    }
+
+    public static NativeExecutionContext region(byte[] plan, NativeMemoryManager memory, byte[] state, byte[] task) {
+        return new NativeExecutionContext(plan, memory, state, task, true);
+    }
+
+    private NativeExecutionContext(
+            byte[] serializedPlan,
+            NativeMemoryManager memoryManager,
+            byte[] stateBindings,
+            byte[] taskBindings,
+            boolean region) {
+        this.region = region;
         stateful = stateBindings != null;
         Objects.requireNonNull(serializedPlan, "serializedPlan");
         Objects.requireNonNull(memoryManager, "memoryManager");
         if (memoryManager.limit() <= 0) {
             throw new IllegalArgumentException("Native memory limit must be positive");
         }
-        identifiedPlan = NativePlanNodeIdentity.assign(serializedPlan);
-        rootPlanNodeId = NativePlanNodeIdentity.rootId(identifiedPlan);
+        identifiedPlan = region ? serializedPlan.clone() : NativePlanNodeIdentity.assign(serializedPlan);
+        rootPlanNodeId = region ? 0 : NativePlanNodeIdentity.rootId(identifiedPlan);
         long controlBytes = Math.addExact(
                 Math.addExact((long) identifiedPlan.length, stateBindings == null ? 0 : stateBindings.length),
                 taskBindings == null ? 0 : taskBindings.length);
@@ -54,7 +69,12 @@ public final class NativeExecutionContext implements AutoCloseable {
                     "Flink denied " + controlBytes + " bytes for native plan/state-binding JNI copies");
         }
         try {
-            if (taskBindings != null) {
+            if (region) {
+                if (NativeRegionStream.edgeVersion() != 1)
+                    throw new IllegalStateException("Unsupported native region C Data edge version");
+                handle = NativeRegionStream.createContext(
+                        identifiedPlan, stateBindings, taskBindings, memoryManager, memoryManager.limit());
+            } else if (taskBindings != null) {
                 handle = NativeTaskResources.create(
                         identifiedPlan, stateBindings, taskBindings, memoryManager, memoryManager.limit());
             } else {
@@ -92,6 +112,10 @@ public final class NativeExecutionContext implements AutoCloseable {
         return new NativePlanState(this);
     }
 
+    public boolean hasRegionOutputs() {
+        return region;
+    }
+
     public boolean hasStateBindings() {
         return stateful;
     }
@@ -102,6 +126,7 @@ public final class NativeExecutionContext implements AutoCloseable {
     }
 
     public long metricValue(String name) {
+        if (region) throw new IllegalStateException("Region metrics require an explicit physical stage ID");
         return metricValue(rootPlanNodeId, name);
     }
 

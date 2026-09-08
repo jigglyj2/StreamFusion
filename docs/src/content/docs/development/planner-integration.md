@@ -206,12 +206,23 @@ three seeds and both backends, including canonical snapshots and cross-backend r
 COUNT -> Calc -> attached local MAX region binds global keyed state and the original Flink local
 buffer capacity in the same context, and matches the tree's outputs and stage counters through
 watermark, pre-checkpoint, and end-input controls. These are native integration prerequisites;
-per-port JVM Arrow C Data routing and full Flink topology/recovery/parity validation remain
-outstanding. No additional whole-plan query is admitted by this change.
+the version-1 JNI region edge now exposes port-tagged Arrow C Data outputs with a separate schema
+negotiation for each exit. It reuses the tree edge's C Data input importer, buffer accounting, and
+producer-owned release callbacks. An output handle owns the native invocation even if the Java
+context handle closes first; exported arrays remain valid after output-handle close. Cancellation,
+export failure, and partial import release their native work before Java receives an exception.
 
-This layout is currently used for ownership admission. Executing multiple exits still requires
-integration of native fan-out, output transport, and corresponding control/metric/recovery handling; the
-multi-output fallback gate remains active. Comet retains Spark's exchange reuse, while Flink can
+An Arrow C Stream has one schema. Flink's reuse before different exchanges requires differently
+typed exits from one owner, so this edge returns a port number with a standard Arrow C Data batch.
+It does not serialize a batch or introduce another exchange. Generated Java boundary tests check
+nullable strings, nested arrays, RowKinds, timestamps, payload buffer identity, schema negotiation,
+and release behavior. Full Flink runtime routing, topology/recovery/parity validation, and the
+direct exchange-input region edge remain outstanding. No additional whole-plan query is admitted
+by this change.
+
+Ordinary planner use of this layout remains limited to ownership admission. Wiring the native
+region edge into Flink transformations, exchanges, and output control routing is still required;
+the multi-output fallback gate remains active. Comet retains Spark's exchange reuse, while Flink can
 reuse an intermediate stage before two different exchanges. Supporting that Flink topology must
 keep the shared computation in one native owner and preserve the existing exchanges; it must not
 duplicate the stage or insert an artificial exchange to avoid native sharing.
@@ -227,6 +238,6 @@ invocation's ownership.
 Native tests exercise generated reader schedules, array identity, a single large-buffer Flink
 lease through successful and cancelled consumption, and different downstream DataFusion projection
 schemas. Control-output tests verify watermark, pre-barrier, and end-input computation and metrics
-once per stage, including cancellation and panic cleanup. This primitive is not yet wired to the
-multi-output planner or JNI output routing. It does not change ordinary Q5 admission or establish
-full-query recovery/performance results.
+once per stage, including cancellation and panic cleanup. Fan-out now backs the native region
+driver and JNI edge described above. Flink's multi-output planner/runtime wiring remains gated;
+this does not change ordinary Q5 admission or establish full-query recovery/performance results.

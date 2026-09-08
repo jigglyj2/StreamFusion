@@ -513,10 +513,53 @@ pub(crate) fn register_with_resources(
     memory_manager: Global<JObject<'static>>,
     memory_limit: usize,
 ) -> Result<i64> {
+    register_context(
+        bytes,
+        bindings,
+        task_bindings,
+        java_vm,
+        memory_manager,
+        memory_limit,
+        false,
+    )
+}
+
+pub(crate) fn register_region_with_resources(
+    bytes: &[u8],
+    bindings: Option<&[u8]>,
+    task_bindings: Option<&[u8]>,
+    java_vm: JavaVM,
+    memory_manager: Global<JObject<'static>>,
+    memory_limit: usize,
+) -> Result<i64> {
+    register_context(
+        bytes,
+        bindings,
+        task_bindings,
+        java_vm,
+        memory_manager,
+        memory_limit,
+        true,
+    )
+}
+
+fn register_context(
+    bytes: &[u8],
+    bindings: Option<&[u8]>,
+    task_bindings: Option<&[u8]>,
+    java_vm: JavaVM,
+    memory_manager: Global<JObject<'static>>,
+    memory_limit: usize,
+    region: bool,
+) -> Result<i64> {
     let broker = Arc::new(JvmMemoryReservationBroker::new(java_vm, memory_manager));
     let memory_pool: Arc<dyn MemoryPool> =
         Arc::new(FlinkMemoryPool::new(broker.clone(), memory_limit));
-    let mut context = NativeExecutionContext::new(bytes, memory_pool)?;
+    let mut context = if region {
+        NativeExecutionContext::new_region(bytes, memory_pool)?
+    } else {
+        NativeExecutionContext::new(bytes, memory_pool)?
+    };
     if let Some(bindings) = bindings {
         context.install_state(
             bindings,

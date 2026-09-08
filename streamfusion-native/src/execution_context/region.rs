@@ -30,6 +30,15 @@ impl Drop for Completion {
 }
 
 impl NativeExecutionContext {
+    pub(crate) fn region_input_count(&self) -> Result<usize> {
+        match &self.plan {
+            Definition::Region(plan) => Ok(plan.message.input_count as usize),
+            Definition::Tree(_) => Err(DataFusionError::Plan(
+                "native tree requires the single-output execution API".into(),
+            )),
+        }
+    }
+
     pub(crate) fn start_region(
         self: &Arc<Self>,
         batches: Vec<RecordBatch>,

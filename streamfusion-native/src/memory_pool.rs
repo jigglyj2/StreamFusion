@@ -16,7 +16,7 @@ use jni::{jni_sig, jni_str, JValue, JavaVM};
 
 pub(crate) mod arrow_lease;
 pub(crate) mod buffer_size;
-mod c_data;
+pub(crate) mod c_data;
 pub(crate) mod c_stream;
 pub(crate) mod selection;
 

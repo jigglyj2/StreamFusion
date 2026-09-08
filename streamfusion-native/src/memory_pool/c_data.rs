@@ -11,7 +11,7 @@ use datafusion::execution::memory_pool::MemoryReservation;
 use std::ffi::c_void;
 use std::sync::Arc;
 
-pub(super) fn array(batch: RecordBatch, memory: MemoryReservation) -> Result<FFI_ArrowArray> {
+pub(crate) fn array(batch: RecordBatch, memory: MemoryReservation) -> Result<FFI_ArrowArray> {
     let data = StructArray::from(batch).to_data();
     // Arrow may rebase a validity bitmap whose offset differs from its array offset.
     // Admit that actual transport compatibility copy before FFI_ArrowArray::new does it.
@@ -25,7 +25,7 @@ pub(super) fn array(batch: RecordBatch, memory: MemoryReservation) -> Result<FFI
     Ok(output)
 }
 
-pub(super) fn schema(schema: &Schema, _memory: MemoryReservation) -> Result<FFI_ArrowSchema> {
+pub(crate) fn schema(schema: &Schema, _memory: MemoryReservation) -> Result<FFI_ArrowSchema> {
     Ok(FFI_ArrowSchema::try_from(schema)?)
 }
 

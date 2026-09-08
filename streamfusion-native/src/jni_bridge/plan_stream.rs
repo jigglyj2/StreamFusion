@@ -186,7 +186,30 @@ pub(super) unsafe fn execute_inputs(
     decoded: Option<(usize, RecordBatch)>,
     output: *mut FFI_ArrowArrayStream,
 ) -> datafusion::error::Result<()> {
+    let (batches, reservations) =
+        unsafe { import_inputs(context, arrays, schemas, controls, decoded) }?;
+    let stream = match events {
+        Some(events) => context.start_control(batches, events)?,
+        None => context.start(batches)?,
+    };
+    unsafe { export_plan_stream(context, stream, reservations, output) }
+}
+
+/// Shared C Data import for single-output trees and port-tagged regions.
+/// Inactive ports still use the negotiated schema; their Flink channels remain distinct.
+pub(super) unsafe fn import_inputs(
+    context: &std::sync::Arc<execution_context::NativeExecutionContext>,
+    arrays: &[jlong],
+    schemas: &[jlong],
+    controls: MemoryReservation,
+    decoded: Option<(usize, RecordBatch)>,
+) -> datafusion::error::Result<(Vec<RecordBatch>, Vec<MemoryReservation>)> {
     use datafusion::error::DataFusionError;
+    if arrays.len() != schemas.len() {
+        return Err(DataFusionError::Execution(
+            "native C Data input arity mismatch".into(),
+        ));
+    }
     let mut batches = Vec::with_capacity(arrays.len());
     let mut reservations = Vec::with_capacity(arrays.len() + 1);
     let mut row_offset = 0usize;
@@ -228,9 +251,5 @@ pub(super) unsafe fn execute_inputs(
         batches[index] = batch;
     }
     reservations.push(controls);
-    let stream = match events {
-        Some(events) => context.start_control(batches, events)?,
-        None => context.start(batches)?,
-    };
-    unsafe { export_plan_stream(context, stream, reservations, output) }
+    Ok((batches, reservations))
 }

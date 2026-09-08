@@ -60,6 +60,9 @@ impl PhysicalRegion {
     }
 }
 impl RegionOutput {
+    pub(crate) fn schemas(&self) -> Vec<SchemaRef> {
+        self.owner.output_schemas()
+    }
     fn finish(&mut self, successful: bool) {
         let Some(streams) = self.streams.take() else {
             return;
