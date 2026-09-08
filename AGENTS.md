@@ -219,6 +219,15 @@ Exchange columnar data between native components directly through the Arrow C Da
 C Stream interfaces, including their release callbacks; do not route native-to-native
 batches through JNI or Java. Never expose Rust's unstable ABI across module boundaries.
 
+Use Arrow row encoding for sortable native state keys wherever bytewise ordering preserves
+Flink semantics. Keep Flink's partition identity/key-group hashing separate from sort keys,
+frame partition prefixes unambiguously, and retain deterministic tie-breakers. Range-oriented
+operators should use ordered state access on both in-memory and RocksDB backends and write
+changed entries in batches instead of rewriting whole growing partition values. Keep payloads
+separate from the ordering index. Version persisted encodings explicitly and test old-state
+migration, cross-backend restore/rescaling, null ordering, and unsupported comparator semantics.
+Do not treat Arrow-encoding a large opaque state value as an ordered-state optimization.
+
 Give every native operator its own Rust source file. When an operator becomes complex,
 split expression conversion, state, algorithms, or other coherent responsibilities into
 an operator-specific submodule; do not accumulate unrelated operators or a large

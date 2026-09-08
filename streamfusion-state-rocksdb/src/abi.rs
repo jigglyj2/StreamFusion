@@ -98,12 +98,16 @@ unsafe extern "C" fn scan_key_group(
         let after = column::<BinaryArray>(&input, 1, "after")?;
         let rows = column::<UInt32Array>(&input, 2, "max_rows")?;
         let bytes = column::<UInt64Array>(&input, 3, "max_bytes")?;
-        if groups.is_null(0) || rows.is_null(0) || bytes.is_null(0) {
+        let start = column::<BinaryArray>(&input, 4, "start")?;
+        let end = column::<BinaryArray>(&input, 5, "end")?;
+        if groups.is_null(0) || rows.is_null(0) || bytes.is_null(0) || start.is_null(0) {
             return Err("state scan bounds must be non-null".to_string());
         }
         let entries = backend(handle)?
-            .scan_key_group(
+            .scan_range(
                 groups.value(0),
+                start.value(0),
+                (!end.is_null(0)).then(|| end.value(0)),
                 (!after.is_null(0)).then(|| after.value(0)),
                 rows.value(0) as usize,
                 usize::try_from(bytes.value(0)).map_err(|error| error.to_string())?,

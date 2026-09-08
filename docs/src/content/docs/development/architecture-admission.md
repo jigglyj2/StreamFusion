@@ -72,7 +72,7 @@ represent a sliced buffer safely. Descriptor-only exports do not require new pay
 Control requests address stable stage IDs for watermarks, pre-checkpoint flush, and end-of-input.
 Ordinary invocation EOF does not substitute for a control event. Unknown stages, invalid bindings,
 and unsupported protocol versions fail closed. Plan protocol 3, control-edge API 2, and gauge-edge
-API 1 are required; the state plugin ABI is version 6, including the Flink resource-scope identity.
+API 1 are required; the state plugin ABI is version 7, including the Flink resource-scope identity and bounded ordered ranges.
 
 ## Evidence and next milestone
 

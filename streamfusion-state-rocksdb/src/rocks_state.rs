@@ -211,6 +211,18 @@ impl RocksStateBackend {
         max_rows: usize,
         max_bytes: usize,
     ) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+        self.scan_range(key_group, &[], None, after, max_rows, max_bytes)
+    }
+
+    pub fn scan_range(
+        &self,
+        key_group: u32,
+        start: &[u8],
+        end: Option<&[u8]>,
+        after: Option<&[u8]>,
+        max_rows: usize,
+        max_bytes: usize,
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
         self.check_owned(key_group)?;
         if max_rows == 0 || max_bytes == 0 {
             return Err(Error::new(
@@ -219,10 +231,14 @@ impl RocksStateBackend {
             ));
         }
         let prefix = key_group.to_be_bytes();
-        let seek = after.map(|key| database_key_parts(key_group, key));
+        if end.is_some_and(|end| start >= end) {
+            return Ok(Vec::new());
+        }
+        let lower = after.filter(|key| *key >= start).unwrap_or(start);
+        let seek = database_key_parts(key_group, lower);
         let mut iterator = self.db.raw_iterator();
-        iterator.seek(seek.as_deref().unwrap_or(&prefix));
-        if let Some(seek) = &seek {
+        iterator.seek(&seek);
+        if after.is_some_and(|after| after >= start) {
             if iterator.key() == Some(seek.as_slice()) {
                 iterator.next();
             }
@@ -231,7 +247,7 @@ impl RocksStateBackend {
         let mut bytes = 0usize;
         while iterator.valid() && entries.len() < max_rows {
             let key = iterator.key().expect("valid iterator has key");
-            if !key.starts_with(&prefix) {
+            if !key.starts_with(&prefix) || end.is_some_and(|end| &key[4..] >= end) {
                 break;
             }
             let value = iterator.value().expect("valid iterator has value");

@@ -9,7 +9,7 @@ use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 mod snapshot_writer;
 pub use snapshot_writer::SnapshotWriter;
 
-pub const STATE_BACKEND_ABI_VERSION: u32 = 6;
+pub const STATE_BACKEND_ABI_VERSION: u32 = 7;
 pub const STATE_BACKEND_OK: i32 = 0;
 
 /// Transfers owned values into Arrow BinaryView buffers without concatenating payloads.
@@ -89,7 +89,8 @@ pub struct StateBackendApiV1 {
     /// Creates a consistent physical backend checkpoint at the path supplied as one Binary row.
     pub checkpoint: ArrowOperation,
     /// Bounded key-group scan. Input: group UInt32, exclusive after-key Binary (nullable),
-    /// maximum rows UInt32, maximum payload bytes UInt64. Output: key/value BinaryView.
+    /// maximum rows UInt32, maximum payload bytes UInt64, inclusive start Binary,
+    /// exclusive end Binary (nullable). Output: key/value BinaryView.
     /// An empty output ends the scan. The caller holds the backend stable until completion.
     pub scan_key_group: ArrowOperation,
     pub last_error: LastError,

@@ -254,6 +254,21 @@ impl KeyedState for RocksPluginKeyedState {
         max_bytes: usize,
         visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<()>,
     ) -> Result<()> {
+        self.visit_range(key_group, &[], None, max_rows, max_bytes, &mut |page| {
+            visitor(page)?;
+            Ok(true)
+        })
+    }
+
+    fn visit_range(
+        &self,
+        key_group: u32,
+        start: &[u8],
+        end: Option<&[u8]>,
+        max_rows: usize,
+        max_bytes: usize,
+        visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<bool>,
+    ) -> Result<()> {
         let rows = u32::try_from(max_rows).map_err(|_| {
             DataFusionError::Execution("state scan row limit exceeds UInt32".to_string())
         })?;
@@ -262,6 +277,8 @@ impl KeyedState for RocksPluginKeyedState {
             Field::new("after", DataType::Binary, true),
             Field::new("max_rows", DataType::UInt32, false),
             Field::new("max_bytes", DataType::UInt64, false),
+            Field::new("start", DataType::Binary, false),
+            Field::new("end", DataType::Binary, true),
         ]));
         let mut after: Option<Vec<u8>> = None;
         loop {
@@ -272,6 +289,8 @@ impl KeyedState for RocksPluginKeyedState {
                     Arc::new(BinaryArray::from(vec![after.as_deref()])),
                     Arc::new(UInt32Array::from(vec![rows])),
                     Arc::new(UInt64Array::from(vec![max_bytes as u64])),
+                    Arc::new(BinaryArray::from(vec![start])),
+                    Arc::new(BinaryArray::from(vec![end])),
                 ],
             )?;
             let output = self.invoke(self.api.scan_key_group, input)?;
@@ -283,7 +302,9 @@ impl KeyedState for RocksPluginKeyedState {
             let entries = (0..output.num_rows())
                 .map(|row| (keys.value(row), values.value(row)))
                 .collect::<Vec<_>>();
-            visitor(&entries)?;
+            if !visitor(&entries)? {
+                return Ok(());
+            }
             after = Some(keys.value(keys.len() - 1).to_vec());
         }
     }

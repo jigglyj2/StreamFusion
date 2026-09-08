@@ -138,7 +138,8 @@ Flink recovery parity for a multi-state runtime region or Nexmark performance pa
 ## Backend contract
 
 Native operators use a small backend-neutral Rust interface over opaque key and value bytes:
-batched get, batched mutation, canonical key-group snapshot, and canonical key-group restore.
+batched get, batched mutation, bounded ordered range visitation, canonical key-group snapshot,
+and canonical key-group restore.
 The in-memory backend can return borrowed values. The RocksDB backend implements a batch get with
 one `multi_get` and a batch mutation with one `WriteBatch`.
 
@@ -146,17 +147,32 @@ Keys are prefixed or partitioned by the key group computed with StreamFusion's F
 Rust key-group logic. This makes key-group ownership independent of the backend and lets Flink's
 normal redistribution assign intersections during rescaling.
 
-State component ABI version 6 transports read results and owned mutation keys/values as Arrow
+State component ABI version 7 transports read results and owned mutation keys/values as Arrow
 `BinaryView` arrays. Large payloads retain producer-owned buffers across the C Data boundary;
 the runtime does not concatenate mutations or copy every returned value into a second byte
 vector. Inline values use Arrow's standard short-value representation. Runtime and plugin ABI
 versions must match; incompatible components are rejected before use.
 
-The ABI also supports bounded key-group scans. A request carries an exclusive continuation key,
-a row limit, and an admitted byte limit; replies contain standard Arrow `BinaryView` key/value
-columns. Full sort uses these pages rather than decoding whole key-group snapshots. The memory
-backend visits its existing tables directly. Scanning holds the backend stable until the operation
-completes and does not change the canonical checkpoint representation.
+The ABI supports bounded key-group and ordered range scans. A request carries an inclusive start,
+exclusive end, exclusive continuation key, row limit, and admitted byte limit; replies contain
+standard Arrow `BinaryView` key/value columns. RocksDB seeks directly to the lower bound with its
+bytewise comparator and stops at the upper bound. Callers may stop after any page. An entry larger
+than the admitted page budget produces a recoverable resource error rather than exceeding the
+budget. Scanning holds the backend stable until the operation completes.
+
+Range-oriented operators use a separately budgeted B-tree in-memory backend. Point-only operators
+retain the existing hash-table backend. Both ordered backends read and write the same canonical
+SFS1 snapshots, so key-group redistribution and backend changes preserve keys byte-for-byte.
+Ordered entries include the existing Flink key-group identity, a length-framed operator partition
+prefix, encoded ordering columns, and a deterministic sequence/row identity. Partition hashing is
+unchanged. Payloads and small partition metadata are separate state entries.
+
+The ordered operator format identifies StreamFusion encoding version 1 and Arrow row encoding
+major version 59. Runtime and plugin ABI versions must match. Unknown operator encoding versions
+are rejected. Existing operator state formats are read for migration; a migration and its triggering
+input changes are committed in the same state batch. This does not establish savepoint
+compatibility with arbitrary future Arrow versions. No deployment setting or separate memory
+budget is introduced.
 
 The optional RocksDB module is not linked into the central runtime. The runtime loads its versioned
 C function table, exchanges batch requests through Arrow C Data, and calls RocksDB directly from

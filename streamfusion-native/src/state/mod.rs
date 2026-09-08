@@ -2,6 +2,10 @@
 // Licensed under the Apache License, Version 2.0
 
 mod memory;
+#[cfg(test)]
+pub(crate) mod observed_tests;
+mod ordered_memory;
+pub(crate) use ordered_memory::OrderedMemoryKeyedState;
 mod read_batch;
 mod read_keys;
 pub(crate) use read_batch::StateReadBatch;
@@ -22,7 +26,7 @@ use datafusion::error::Result;
 pub(crate) use memory::MemoryKeyedState;
 pub(crate) use rocks_plugin::RocksPluginKeyedState;
 pub(crate) use snapshot::decode as decode_key_group_snapshot;
-pub(crate) use timer::{NativeTimerService, TimerDomain, TimerKey};
+pub(crate) use timer::{FiredTimer, NativeTimerService, TimerDomain, TimerKey};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct StateKeyRef<'a> {
@@ -68,6 +72,23 @@ pub(crate) trait KeyedState: Send {
         max_bytes: usize,
         visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<()>,
     ) -> Result<()>;
+
+    /// Visits [start, end) in bytewise key order. Pages are bounded by both limits;
+    /// returning false stops without visiting another page. The caller reserves the page
+    /// budget and retained results before reading, and holds state stable during visitation.
+    fn visit_range(
+        &self,
+        _key_group: u32,
+        _start: &[u8],
+        _end: Option<&[u8]>,
+        _max_rows: usize,
+        _max_bytes: usize,
+        _visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<bool>,
+    ) -> Result<()> {
+        Err(datafusion::error::DataFusionError::Execution(
+            "ordered ranges require an ordered state backend".into(),
+        ))
+    }
 
     fn snapshot_key_group(
         &self,
