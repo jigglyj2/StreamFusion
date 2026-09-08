@@ -137,6 +137,24 @@ class StreamFusionArrowArchitectureTest {
     }
 
     @Test
+    void multiOutputRegionsShareArrowInputsAndRouteBatchesWithoutRowOrIpcConversion() throws Exception {
+        Path arrow = Path.of("src/main/java/tech/streamfusion/flink/arrow");
+        for (String file : java.util.List.of(
+                "ArrowNativePlanBridge.java",
+                "ArrowNativeRegionBridge.java",
+                "ArrowNativeRegionOutput.java",
+                "NativePlanInputs.java")) {
+            assertThat(Files.readString(arrow.resolve(file)))
+                    .doesNotContain(
+                            "rowView(", "ArrowRowDataBatch.transpose(", "ArrowStreamWriter", "ArrowStreamReader");
+        }
+        assertThat(Files.readString(arrow.resolve("ArrowNativeRegionBridge.java")))
+                .contains("NativePlanInputs", "NativeRegionStream.open(");
+        assertThat(Files.readString(arrow.resolve("ArrowNativeRegionOutput.java")))
+                .contains("NativePlanOutputEnvelope.read(", "Data.importIntoVectorSchemaRoot(");
+    }
+
+    @Test
     void plannerCollectsFragmentsWithoutCalcCorrelateCombinationDrivers() throws IOException {
         Path planner = Path.of("../streamfusion-flink-planner/src/main/java/tech/streamfusion/flink/planner");
         String region = Files.readString(planner.resolve("StreamFusionStatelessRegion.java"));

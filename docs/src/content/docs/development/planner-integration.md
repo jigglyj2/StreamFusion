@@ -216,7 +216,11 @@ An Arrow C Stream has one schema. Flink's reuse before different exchanges requi
 typed exits from one owner, so this edge returns a port number with a standard Arrow C Data batch.
 It does not serialize a batch or introduce another exchange. Generated Java boundary tests check
 nullable strings, nested arrays, RowKinds, timestamps, payload buffer identity, schema negotiation,
-and release behavior. Full Flink runtime routing, topology/recovery/parity validation, and the
+and release behavior. The Java Arrow region wrapper shares input negotiation/export ownership
+with the single-output tree edge, caches each exit schema, and returns port-tagged batches with
+owned RowKind/timestamp envelopes. It releases all exits on import failure and permits returned
+batches to outlive the input, context, and invocation handles. Empty invocations and repeated
+schema negotiation have generated boundary coverage. Full Flink runtime routing, topology/recovery/parity validation, and the
 direct exchange-input region edge remain outstanding. No additional whole-plan query is admitted
 by this change.
 

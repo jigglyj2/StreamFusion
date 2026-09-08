@@ -4,12 +4,8 @@
  */
 package tech.streamfusion.flink.arrow;
 
-import java.util.ArrayList;
 import java.util.List;
-import org.apache.arrow.c.ArrowArray;
 import org.apache.arrow.c.ArrowArrayStream;
-import org.apache.arrow.c.ArrowSchema;
-import org.apache.arrow.c.Data;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.types.pojo.Schema;
 import org.apache.flink.table.types.logical.RowType;
@@ -20,7 +16,7 @@ public final class ArrowNativePlanBridge {
     private final NativeExecutionContext context;
     private final RowType outputType;
     private final BufferAllocator allocator;
-    private List<Schema> inputSchemas;
+    private final NativePlanInputs inputEdge;
     private Schema outputSchema;
 
     @FunctionalInterface
@@ -47,6 +43,7 @@ public final class ArrowNativePlanBridge {
         this.context = context;
         this.outputType = outputType;
         this.allocator = allocator;
+        inputEdge = new NativePlanInputs(context.requiresInputEnvelope());
     }
 
     public ArrowCDataBridge.NativeOutputStream executeStream(List<ArrowRowDataBatch> inputs) {
@@ -67,107 +64,24 @@ public final class ArrowNativePlanBridge {
 
     private ArrowCDataBridge.NativeOutputStream executeStream(
             List<ArrowRowDataBatch> inputs, byte[] controls, ExchangeInvocation exchange) {
-        if (!context.requiresInputEnvelope()) return executeRawStream(inputs, controls, exchange);
-        List<tech.streamfusion.flink.exchange.ArrowExchangeBatch.EnvelopeBatch> envelopes = new ArrayList<>();
-        List<ArrowRowDataBatch> nativeInputs = new ArrayList<>();
-        try {
-            for (ArrowRowDataBatch input : inputs) {
-                if (input.size() == 0 && inputSchemas != null) {
-                    nativeInputs.add(null);
-                    continue;
-                }
-                for (var field : input.root().getSchema().getFields()) {
-                    if (NativePlanOutputEnvelope.isReservedInputField(field.getName())) {
-                        throw new IllegalArgumentException(
-                                "Native state input payload uses reserved metadata field " + field.getName());
-                    }
-                }
-                var envelope = tech.streamfusion.flink.exchange.ArrowExchangeBatch.withEnvelope(input, input.rowType());
-                envelopes.add(envelope);
-                nativeInputs.add(envelope.batch());
-            }
-            var stream = executeRawStream(nativeInputs, controls, exchange);
-            stream.ownInputs(envelopes);
-            return stream;
-        } catch (RuntimeException | Error failure) {
-            try {
-                org.apache.flink.util.IOUtils.closeAll(envelopes);
-            } catch (Exception cleanup) {
-                failure.addSuppressed(cleanup);
-            }
-            throw failure;
-        }
-    }
-
-    private ArrowCDataBridge.NativeOutputStream executeRawStream(
-            List<ArrowRowDataBatch> inputs, byte[] controls, ExchangeInvocation exchange) {
-        List<Schema> schemas = new ArrayList<>(inputs.size());
-        for (int index = 0; index < inputs.size(); index++) {
-            ArrowRowDataBatch input = inputs.get(index);
-            schemas.add(input == null ? inputSchemas.get(index) : input.root().getSchema());
-        }
-        if (inputSchemas != null && !inputSchemas.equals(schemas)) {
-            throw new IllegalStateException("Arrow input schemas or arity changed after native negotiation");
-        }
-        boolean negotiate = inputSchemas == null;
-        List<ArrowArray> arrays = new ArrayList<>(inputs.size());
-        List<ArrowSchema> schemaHandles = new ArrayList<>(inputs.size());
-        try {
-            long[] arrayAddresses = new long[inputs.size()];
-            long[] schemaAddresses = new long[inputs.size()];
-            for (int index = 0; index < inputs.size(); index++) {
-                ArrowRowDataBatch input = inputs.get(index);
-                // Zero addresses mean an inactive port with a previously negotiated schema.
-                if (!negotiate && (input == null || input.size() == 0)) continue;
-                ArrowArray array = ArrowArray.allocateNew(input.allocator());
-                arrays.add(array);
-                ArrowSchema schema = negotiate ? ArrowSchema.allocateNew(input.allocator()) : null;
-                if (schema != null) {
-                    schemaHandles.add(schema);
-                    schemaAddresses[index] = schema.memoryAddress();
-                }
-                Data.exportVectorSchemaRoot(input.allocator(), input.root(), null, array, schema);
-                arrayAddresses[index] = array.memoryAddress();
-            }
+        try (var prepared = inputEdge.prepare(inputs)) {
             ArrowArrayStream stream = ArrowArrayStream.allocateNew(allocator);
             try {
-                if (exchange != null) exchange.execute(arrayAddresses, schemaAddresses, stream.memoryAddress());
+                if (exchange != null)
+                    exchange.execute(prepared.arrayAddresses, prepared.schemaAddresses, stream.memoryAddress());
                 else if (controls == null)
-                    context.executeArrowStream(arrayAddresses, schemaAddresses, stream.memoryAddress());
+                    context.executeArrowStream(
+                            prepared.arrayAddresses, prepared.schemaAddresses, stream.memoryAddress());
                 else
                     context.executeArrowControlStream(
-                            arrayAddresses, schemaAddresses, controls, stream.memoryAddress());
+                            prepared.arrayAddresses, prepared.schemaAddresses, controls, stream.memoryAddress());
                 var output = new ArrowCDataBridge.NativeOutputStream(stream, outputType, allocator, outputSchema);
-                inputSchemas = List.copyOf(schemas);
+                output.ownInputs(prepared.transferToOutput());
                 outputSchema = output.schema();
                 return output;
             } catch (RuntimeException | Error failure) {
                 ArrowCDataBridge.releaseStream(stream);
                 throw failure;
-            }
-        } finally {
-            // Rust clears a consumed C handle's release pointer. On partial import or early
-            // admission failure, Java is still the owner of every handle left unconsumed.
-            try {
-                for (ArrowArray array : arrays) {
-                    try {
-                        if (array.snapshot().release != 0) {
-                            array.release();
-                        }
-                    } finally {
-                        array.close();
-                    }
-                }
-            } finally {
-                for (ArrowSchema schema : schemaHandles) {
-                    try {
-                        if (schema.snapshot().release != 0) {
-                            schema.release();
-                        }
-                    } finally {
-                        schema.close();
-                    }
-                }
             }
         }
     }
