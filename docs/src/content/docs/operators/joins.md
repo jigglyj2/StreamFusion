@@ -10,7 +10,7 @@ sidebar:
 condition is covered by the common equi keys. Both inputs must use non-unique multiset state.
 Additional residual predicates, outer joins, TTL, mini-batching, async/changelog state, enabled
 state-latency metrics, and checkpointing during channel recovery retain whole-plan fallback.
-RocksDB remains on Flink pending equivalent default cache/write-buffer and database settings.
+RocksDB remains on Flink pending equivalent TaskManager log-directory handling.
 Sources and sinks use the normal Arrow boundary adapters; join and downstream Calc exchange Arrow
 directly within one native plan. Generated changelog/metric, rescaling, checkpoint and channel replay
 tests cover this path. Q3 has passed ordinary in-memory admission and collecting/blackhole integration;

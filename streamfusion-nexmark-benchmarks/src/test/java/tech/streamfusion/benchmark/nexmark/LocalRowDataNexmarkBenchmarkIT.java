@@ -371,7 +371,7 @@ class LocalRowDataNexmarkBenchmarkIT {
             assertThat(streamFusion.nativePlanBatches()).isPositive();
         } else {
             assertThat(StreamFusionPlanningDiagnostics.explain())
-                    .contains("Accelerated: no", "default cache/write-buffer ratios");
+                    .contains("Accelerated: no", "TaskManager log-directory settings");
             assertThat(streamFusion.nativePlanBatches()).isZero();
         }
     }

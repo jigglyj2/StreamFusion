@@ -1,0 +1,141 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 7c8b4a9..81055a3 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -27,0 +28 @@ snappy = ["librocksdb-sys/snappy"]
++cache-priority = ["librocksdb-sys/cache-priority"]
+diff --git a/librocksdb-sys/Cargo.toml b/librocksdb-sys/Cargo.toml
+index ada5886..35bedc6 100644
+--- a/librocksdb-sys/Cargo.toml
++++ b/librocksdb-sys/Cargo.toml
+@@ -26,0 +27 @@ snappy = []
++cache-priority = []
+diff --git a/librocksdb-sys/build.rs b/librocksdb-sys/build.rs
+index b12291a..36b39cd 100644
+--- a/librocksdb-sys/build.rs
++++ b/librocksdb-sys/build.rs
+@@ -34,0 +35,5 @@ fn bindgen_rocksdb() {
++    let header = if cfg!(feature = "cache-priority") {
++        "cache_priority.h".to_string()
++    } else {
++        rocksdb_include_dir() + "/rocksdb/c.h"
++    };
+@@ -36 +41,2 @@ fn bindgen_rocksdb() {
+-        .header(rocksdb_include_dir() + "/rocksdb/c.h")
++        .header(header)
++        .clang_arg(format!("-I{}", rocksdb_include_dir()))
+@@ -374 +380,7 @@ fn build_rocksdb() {
+-        config.file(format!("rocksdb/{file}"));
++        if file == "db/c.cc" && cfg!(feature = "cache-priority") {
++            // Compile the upstream C API and its extension in one translation unit. The
++            // extension uses upstream's actual opaque-handle definition, never a copied layout.
++            config.file("cache_priority.cc");
++        } else {
++            config.file(format!("rocksdb/{file}"));
++        }
+@@ -493,0 +506,5 @@ fn main() {
++    println!("cargo:rerun-if-changed=cache_priority.h");
++    println!("cargo:rerun-if-changed=cache_priority.cc");
++    if cfg!(feature = "cache-priority") && env::var_os("ROCKSDB_LIB_DIR").is_some() {
++        panic!("cache-priority requires the bundled RocksDB build, not a prebuilt library");
++    }
+diff --git a/src/db_options.rs b/src/db_options.rs
+index 9d535b4..89a1b6a 100644
+--- a/src/db_options.rs
++++ b/src/db_options.rs
+@@ -4036,0 +4037,14 @@ impl LruCacheOptions {
++    /// Fraction of cache capacity reserved for high-priority entries, between zero and one.
++    ///
++    /// Panics if the ratio is outside that interval or is NaN. The default is 0.5.
++    #[cfg(feature = "cache-priority")]
++    pub fn set_high_pri_pool_ratio(&mut self, ratio: f64) {
++        assert!(
++            (0.0..=1.0).contains(&ratio),
++            "cache priority ratio must be between zero and one"
++        );
++        unsafe {
++            ffi::rocksdb_lru_cache_options_set_high_pri_pool_ratio(self.inner, ratio);
++        }
++    }
++
+diff --git a/librocksdb-sys/cache_priority.h b/librocksdb-sys/cache_priority.h
+new file mode 100644
+index 0000000..009753b
+--- /dev/null
++++ b/librocksdb-sys/cache_priority.h
+@@ -0,0 +1,12 @@
++// Copyright 2026 StreamFusion Authors
++// Licensed under the Apache License, Version 2.0
++#pragma once
++#include <rocksdb/c.h>
++#ifdef __cplusplus
++extern "C" {
++#endif
++ROCKSDB_LIBRARY_API void rocksdb_lru_cache_options_set_high_pri_pool_ratio(
++    rocksdb_lru_cache_options_t* options, double ratio);
++#ifdef __cplusplus
++}
++#endif
+diff --git a/librocksdb-sys/cache_priority.cc b/librocksdb-sys/cache_priority.cc
+new file mode 100644
+index 0000000..2a701be
+--- /dev/null
++++ b/librocksdb-sys/cache_priority.cc
+@@ -0,0 +1,9 @@
++// Copyright 2026 StreamFusion Authors
++// Licensed under the Apache License, Version 2.0
++#include "cache_priority.h"
++#include "rocksdb/db/c.cc"
++
++void rocksdb_lru_cache_options_set_high_pri_pool_ratio(
++    rocksdb_lru_cache_options_t* options, double ratio) {
++  options->rep.high_pri_pool_ratio = ratio;
++}
+diff --git a/tests/test_cache_priority.rs b/tests/test_cache_priority.rs
+new file mode 100644
+index 0000000..3cb7e0f
+--- /dev/null
++++ b/tests/test_cache_priority.rs
+@@ -0,0 +1,42 @@
++// Copyright 2026 StreamFusion Authors
++// Licensed under the Apache License, Version 2.0
++#![cfg(feature = "cache-priority")]
++
++use rocksdb::{BlockBasedOptions, Cache, LruCacheOptions, Options, DB};
++
++#[test]
++fn configured_priority_reaches_the_opened_database_cache() {
++    let directory = tempfile::tempdir().unwrap();
++    let mut cache_options = LruCacheOptions::default();
++    cache_options.set_capacity(8 << 20);
++    cache_options.set_high_pri_pool_ratio(0.1);
++    let cache = Cache::new_lru_cache_opts(&cache_options);
++    let mut table = BlockBasedOptions::default();
++    table.set_block_cache(&cache);
++    table.set_cache_index_and_filter_blocks(true);
++    let mut options = Options::default();
++    options.create_if_missing(true);
++    options.set_block_based_table_factory(&table);
++    {
++        let db = DB::open(&options, directory.path()).unwrap();
++        db.put(b"key", b"value").unwrap();
++        assert_eq!(db.get(b"key").unwrap().unwrap(), b"value");
++        assert_eq!(
++            db.property_int_value("rocksdb.block-cache-capacity")
++                .unwrap(),
++            Some(8 << 20)
++        );
++    }
++    let log = std::fs::read_to_string(directory.path().join("LOG")).unwrap();
++    assert!(log.contains("high_pri_pool_ratio: 0.100"), "{log}");
++}
++
++#[test]
++fn invalid_ratios_are_rejected_before_calling_rocksdb() {
++    for ratio in [f64::NAN, f64::INFINITY, -0.1, 1.1] {
++        assert!(std::panic::catch_unwind(
++            || LruCacheOptions::default().set_high_pri_pool_ratio(ratio)
++        )
++        .is_err());
++    }
++}

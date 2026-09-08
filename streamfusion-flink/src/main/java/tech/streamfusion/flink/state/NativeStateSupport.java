@@ -18,7 +18,7 @@ public final class NativeStateSupport {
             return "state backend: native keyed regions have not verified checkpointing during channel recovery";
         }
         if (StreamFusionStateBackendFactory.configuredBackend(config).equals("rocksdb")) {
-            return "state backend: native RocksDB default cache/write-buffer ratios and database options "
+            return "state backend: native RocksDB TaskManager log-directory settings "
                     + "are not yet equivalent to Flink; retain Flink until default configuration parity is verified";
         }
         return null;

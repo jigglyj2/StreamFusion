@@ -16,7 +16,7 @@ native defaults. Ordinary Flink managed-memory size/consumer weights and increme
 selection remain configurable. RocksDB-specific options do not reject an in-memory backend.
 This configuration guard supplements the existing metric and physical-family admission gates;
 it does not establish default-option parity. A separate production guard keeps RocksDB on Flink
-until its default cache/write-buffer ratios and database options are equivalent. The guard resolves
+until its TaskManager log-directory settings are equivalent. The guard resolves
 the user's original backend even after the internal wrapper is installed, so repeated planning
 does not mistake that wrapper for a new backend. Checkpointing during channel recovery remains
 unsupported; ordinary aligned/unaligned recovery uses the tested non-overlapping lifecycle.
@@ -39,9 +39,24 @@ rotation limits, disabled statistics dumps, level-compaction sizing and periodic
 interval. Closing the native database skips the redundant memtable flush, as Flink does with
 WAL-disabled state: checkpoints establish durability. Tests inspect the opened database's
 persisted OPTIONS file and verify both the absence of shutdown-created SSTs and successful
-restore from a physical checkpoint. Shared cache/write-buffer ratios and sizing, and Flink log
-directory relocation, still require equivalent handling; this prerequisite keeps the RocksDB
-production gate in place.
+restore from a physical checkpoint. Flink log-directory relocation still requires equivalent runtime handling; this prerequisite
+keeps the RocksDB production gate in place.
+
+The shared pools now use Flink's default sizing formula: five sixths of the assigned lease
+for the LRU cache and one third for the write-buffer manager, which charges its entries to
+that cache. The remaining one sixth allows for the write-buffer manager's over-capacity
+threshold. Each column family retains Flink's 64 MiB write-buffer setting and two-buffer limit;
+shared memory pressure can trigger flushing earlier. Index/filter blocks use the same cache,
+with a 0.1 high-priority pool, matching Flink's default. Tests check actual database cache
+capacity, the write-buffer manager and the cache description emitted by RocksDB.
+
+Rust/RocksDB 0.25.0 does not expose the priority ratio through its C/Rust API. The optional
+state module carries a small documented binding extension, with the unmodified RocksDB 11.8.1
+and Snappy sources pinned as Git submodules. Initialize them with
+`git submodule update --init`; routine CI does this at checkout. The extension adds a safe
+validated setter and preserves upstream shared cache/WBM ownership. It does not change
+RocksDB's execution algorithms. The retained patch and source provenance are in
+`streamfusion-state-rocksdb/vendor/rocksdb/VENDOR.md`.
 
 ## Shared native-plan state bindings
 

@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, Weak};
 
 use rocksdb::checkpoint::Checkpoint;
-use rocksdb::{BlockBasedOptions, Cache, WriteBatch, WriteBufferManager, DB};
+use rocksdb::{BlockBasedOptions, Cache, LruCacheOptions, WriteBatch, WriteBufferManager, DB};
 use streamfusion_state_abi::decode_key_group_snapshot;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,16 +89,17 @@ impl RocksStateBackend {
         let shared_memory = shared_rocks_memory(memory_limit, scope)?;
         let mut options = crate::flink_options::base_options().map_err(rocks_error)?;
         let mut table_options = BlockBasedOptions::default();
+        table_options.set_block_size(4096);
+        table_options.set_metadata_block_size(4096);
         table_options.set_block_cache(&shared_memory.cache);
         // Keep index and filter blocks inside the same Flink-reserved cache instead of letting
         // RocksDB allocate an invisible second pool. Pinning L0 metadata avoids cache churn while
         // still charging those bytes to the shared cache.
         table_options.set_cache_index_and_filter_blocks(true);
+        table_options.set_cache_index_and_filter_blocks_with_high_priority(true);
         table_options.set_pin_l0_filter_and_index_blocks_in_cache(true);
         options.set_block_based_table_factory(&table_options);
         options.set_write_buffer_manager(&shared_memory.write_buffers);
-        options.set_write_buffer_size(memory_limit / 4);
-        options.set_max_write_buffer_number(2);
         // Open the default family explicitly so batched pinned reads can address it. `open_cf`
         // replaces column options with Options::default(), silently dropping this shared cache,
         // its charged index/filter blocks, compression, and the configured memtable limit.
@@ -384,15 +385,18 @@ fn shared_rocks_memory(memory_limit: usize, scope: [u64; 2]) -> Result<Arc<Share
         }
         return Ok(existing);
     }
-    // Match Flink's shared RocksDB design: one cache and one write-buffer manager cap memory
-    // across DB instances sharing one Flink memory resource instead of multiplying the budget per operator.
-    // Charging memtables to the cache keeps their combined footprint within this single limit.
-    // The Java lease reserves the full memory_limit from Flink. Keep one quarter as headroom for
-    // RocksDB DB/iterator/table-reader metadata that is not cache- or memtable-owned.
-    let cache_capacity = memory_limit - memory_limit / 4;
-    let cache = Cache::new_lru_cache(cache_capacity);
+    // Flink RocksDBMemoryControllerUtils reserves headroom for WBM's 50% over-capacity
+    // threshold: cache=(3-write_ratio)*budget/3, WBM=2*budget*write_ratio/3.
+    // The default write ratio is 0.5 and high-priority cache ratio is 0.1. These pools
+    // share one Flink resource across DBs; WBM charges its entries to that same cache.
+    let cache_capacity = (2.5 * memory_limit as f64 / 3.0) as usize;
+    let mut cache_options = LruCacheOptions::default();
+    cache_options.set_capacity(cache_capacity);
+    cache_options.set_num_shard_bits(-1);
+    cache_options.set_high_pri_pool_ratio(0.1);
+    let cache = Cache::new_lru_cache_opts(&cache_options);
     let write_buffers = WriteBufferManager::new_write_buffer_manager_with_cache(
-        memory_limit / 4,
+        (memory_limit as f64 / 3.0) as usize,
         false,
         cache.clone(),
     );
@@ -601,7 +605,7 @@ mod tests {
         assert!(Arc::ptr_eq(&first._shared_memory, &second._shared_memory));
         // Check the databases, not merely the Rust owner. An unconfigured column family opens
         // a separate default cache despite retaining the intended SharedRocksMemory wrapper.
-        let expected_capacity = (1 << 20) - (1 << 18);
+        let expected_capacity = (2.5 * (1 << 20) as f64 / 3.0) as u64;
         for backend in [&first, &second] {
             assert_eq!(
                 backend
@@ -609,6 +613,10 @@ mod tests {
                     .property_int_value("rocksdb.block-cache-capacity")
                     .unwrap(),
                 Some(expected_capacity)
+            );
+            assert_eq!(
+                backend._shared_memory.write_buffers.get_buffer_size(),
+                (1 << 20) / 3
             );
         }
     }

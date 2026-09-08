@@ -18,6 +18,8 @@ jobs:
     steps:
       - name: Check out StreamFusion
         uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - name: Set up Java 17 with Maven cache
         uses: actions/setup-java@v4

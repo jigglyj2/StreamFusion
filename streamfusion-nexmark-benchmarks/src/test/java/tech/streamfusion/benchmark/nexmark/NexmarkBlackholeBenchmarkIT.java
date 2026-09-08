@@ -36,7 +36,7 @@ class NexmarkBlackholeBenchmarkIT {
     void rocksDbJoinReportsRemainingBackendRequirementAndMeasurementRejectsFallback() throws Exception {
         NexmarkBlackholeBenchmark.main(new String[] {"100", "q3", "streamfusion", "rocksdb", "4", "explain"});
         assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isZero();
-        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("default cache/write-buffer ratios");
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("TaskManager log-directory settings");
         assertThatThrownBy(() ->
                         NexmarkBlackholeBenchmark.main(new String[] {"100", "q3", "streamfusion", "rocksdb", "4"}))
                 .isInstanceOf(IllegalStateException.class)

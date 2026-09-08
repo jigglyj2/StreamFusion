@@ -4,7 +4,7 @@
 use rocksdb::{DBCompactionStyle, DBCompressionType, LogLevel, Options};
 
 /// Flink 2.3 RocksDBResourceContainer / RocksDBConfigurableOptions defaults. Cache and
-/// memtable sizing are attached separately by the shared managed-memory owner; these defaults
+/// write-buffer-manager pools are attached by the shared managed-memory owner; these defaults
 /// alone do not establish full configuration parity or permit production admission.
 pub(crate) fn base_options() -> Result<Options, rocksdb::Error> {
     // The safe upstream binding has no dedicated shutdown-flush setter. Parse this before
@@ -24,6 +24,8 @@ pub(crate) fn base_options() -> Result<Options, rocksdb::Error> {
     options.set_target_file_size_base(64 << 20);
     options.set_max_bytes_for_level_base(256 << 20);
     options.set_min_write_buffer_number_to_merge(1);
+    options.set_write_buffer_size(64 << 20);
+    options.set_max_write_buffer_number(2);
     options.set_periodic_compaction_seconds(30 * 24 * 60 * 60);
     // Snappy must also be compiled into RocksDB; the checkpoint test verifies actual SSTs.
     options.set_compression_type(DBCompressionType::Snappy);
@@ -40,7 +42,7 @@ mod tests {
     #[test]
     fn opened_database_persists_flink_database_and_compaction_defaults() {
         let directory = tempfile::tempdir().unwrap();
-        let _state = RocksStateBackend::open(directory.path(), 0, 0).unwrap();
+        let state = RocksStateBackend::open(directory.path(), 0, 0).unwrap();
         let path = std::fs::read_dir(directory.path())
             .unwrap()
             .map(|entry| entry.unwrap().path())
@@ -73,10 +75,17 @@ mod tests {
             ("target_file_size_base", "67108864"),
             ("max_bytes_for_level_base", "268435456"),
             ("min_write_buffer_number_to_merge", "1"),
+            ("write_buffer_size", "67108864"),
+            ("max_write_buffer_number", "2"),
             ("periodic_compaction_seconds", "2592000"),
         ] {
             assert_eq!(options.get(key).copied(), Some(expected), "{key}");
         }
+        // The cache description in LOG comes from the opened RocksDB instance, not a
+        // Rust-side option mirror. The C API extension must reach the real cache.
+        drop(state);
+        let log = std::fs::read_to_string(directory.path().join("LOG")).unwrap();
+        assert!(log.contains("high_pri_pool_ratio: 0.100"), "{log}");
     }
 
     #[test]

@@ -11,7 +11,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 arrow = { version = "59.2.0", features = ["ffi"] }
-rocksdb = { version = "0.25.0", default-features = false, features = ["snappy"] }
+rocksdb = { path = "vendor/rocksdb", version = "0.25.0", default-features = false, features = ["snappy", "cache-priority"] }
 streamfusion-state-abi = { path = "../streamfusion-state-abi" }
 
 [dev-dependencies]

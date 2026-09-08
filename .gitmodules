@@ -1,0 +1,6 @@
+[submodule "streamfusion-rocksdb"]
+	path = streamfusion-state-rocksdb/vendor/rocksdb/librocksdb-sys/rocksdb
+	url = https://github.com/facebook/rocksdb.git
+[submodule "streamfusion-snappy"]
+	path = streamfusion-state-rocksdb/vendor/rocksdb/librocksdb-sys/snappy
+	url = https://github.com/google/snappy.git
