@@ -182,14 +182,21 @@ pub(super) fn batch_mutations(
     owner: &mut HostMemoryReservation,
 ) -> Result<Vec<StateMutation>> {
     // One batch admission covers all changed keys; no JNI call per state entry.
-    owner.try_grow(
-        entries
-            .iter()
-            .filter(|entry| entry.touched)
-            .fold(0usize, |bytes, entry| {
-                bytes.saturating_add(mutation_workspace(entry))
-            }),
-    )?;
+    owner
+        .try_grow(
+            entries
+                .iter()
+                .filter(|entry| entry.touched)
+                .fold(0usize, |bytes, entry| {
+                    bytes.saturating_add(mutation_workspace(entry))
+                }),
+        )
+        .map_err(|error| match error {
+            DataFusionError::ResourcesExhausted(message) => DataFusionError::ResourcesExhausted(
+                format!("regular join state mutation encoding: {message}"),
+            ),
+            error => error,
+        })?;
     let mut changes = Vec::new();
     for entry in entries.iter().filter(|entry| entry.touched) {
         changes.extend(mutations(entry)?);
@@ -200,14 +207,26 @@ pub(super) fn batch_mutations(
 fn mutation_workspace(entry: &StagedState) -> usize {
     // Derived page keys repeat the logical equality key. Its size need not be proportional to
     // the stored payload (a bounded projection may retain no payload at all).
+    // A compact entry has one physical record, including its payload. Admit directories
+    // for external pages only in layouts that actually encode those pages. The original
+    // and current roots can coexist during comparison; empty states encode no root.
     let count = [
-        &entry.original.left,
-        &entry.original.right,
-        &entry.value.left,
-        &entry.value.right,
+        (&entry.original, entry.original_compact),
+        (&entry.value, compact_eligible(&entry.value)),
     ]
     .into_iter()
-    .fold(2usize, |n, rows| n.saturating_add(pages(rows).count()));
+    .fold(0usize, |count, (state, compact)| {
+        if state.left.is_empty() && state.right.is_empty() {
+            return count;
+        }
+        count.saturating_add(1).saturating_add(if compact {
+            0
+        } else {
+            pages(&state.left)
+                .count()
+                .saturating_add(pages(&state.right).count())
+        })
+    });
     count.saturating_mul(entry.key.key.len().saturating_add(512))
 }
 

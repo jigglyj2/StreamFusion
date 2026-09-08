@@ -171,6 +171,12 @@ row-vector/Arc headroom. It does not apply the external-directory multiplier to 
 The first decoded page moves directly into its state vector. An 8 MiB regression loads 2,048
 compact keys with 512-byte payloads in one state read, verifies original/current payload sharing,
 and releases all credit; the previous directory estimate requested more than 9 MiB for decoding.
+Mutation staging likewise counts only records present in the old and new physical layouts:
+one root for a non-empty compact entry, with external-page metadata only for paged entries.
+A 16,384-key batch now fits a 32 MiB share; its allocation peak is covered by coarse reservations,
+and retained payloads are probed after flushing. The previous estimate added almost 25 MiB for
+mutation metadata alone by counting absent roots and external pages. Layout transitions and
+canonical bytes remain covered by the same both-backend parity and recovery fixtures.
 Restore rejects missing, duplicate, orphan, and malformed page records before changing backend state.
 Physical RocksDB checkpoints retain the paged layout and the existing incremental checkpoint protocol.
 The `StreamFusion.stateReadBatches` diagnostic counts actual backend lookups: one for a batch of
