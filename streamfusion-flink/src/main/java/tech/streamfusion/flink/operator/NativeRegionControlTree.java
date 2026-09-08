@@ -15,7 +15,7 @@ import tech.streamfusion.flink.proto.NativePhysicalPlan;
 import tech.streamfusion.proto.plan.v1.NativePlan;
 import tech.streamfusion.proto.plan.v1.Operator;
 
-/** Flink control-event propagation for a native tree of control-preserving physical stages. */
+/** Flink control propagation through identified native stages, including shared region outputs. */
 final class NativeRegionControlTree {
     interface Listener {
         default void inputWatermark(long nodeId, int port, long timestamp) throws Exception {}
@@ -29,10 +29,10 @@ final class NativeRegionControlTree {
         void latency(long nodeId, LatencyMarker marker) throws Exception;
     }
 
-    private final Node[] inputs;
+    private final Edge[] inputs;
     private final Listener listener;
     private final Set<Long> identities = new HashSet<>();
-    private final Node root;
+    private final List<Node> outputs;
     private final java.util.Map<Long, Long> restoredWindowWatermarks;
 
     NativeRegionControlTree(byte[] identifiedPlan, int inputCount, Listener listener) {
@@ -48,21 +48,25 @@ final class NativeRegionControlTree {
         if (inputCount <= 0) {
             throw new IllegalArgumentException("A native control tree needs external inputs");
         }
-        inputs = new Node[inputCount];
+        inputs = new Edge[inputCount];
         this.listener = java.util.Objects.requireNonNull(listener);
         try {
             NativePlan plan = NativePlan.parseFrom(identifiedPlan);
             if (!plan.hasRoot()) {
                 throw new IllegalArgumentException("Native control tree is missing its root");
             }
-            root = build(plan.getRoot(), null, 0);
+            outputs = List.of(build(plan.getRoot(), null, 0));
         } catch (com.google.protobuf.InvalidProtocolBufferException failure) {
             throw new IllegalArgumentException("Invalid native control plan", failure);
         }
+        validateInputsAndClocks();
+    }
+
+    private void validateInputsAndClocks() {
         if (!identities.containsAll(restoredWindowWatermarks.keySet())) {
             throw new IllegalArgumentException("Restored window clock has no matching native stage");
         }
-        for (Node input : inputs) {
+        for (Edge input : inputs) {
             if (input == null) {
                 throw new IllegalArgumentException("Native control tree has an unbound external input");
             }
@@ -70,23 +74,26 @@ final class NativeRegionControlTree {
     }
 
     long rootId() {
-        return root.id;
+        return onlyOutput().id;
     }
 
     long watermark() {
-        return root.lastWatermark;
+        return onlyOutput().lastWatermark;
     }
 
     void watermark(int input, long timestamp) throws Exception {
-        port(input).watermark(0, timestamp);
+        var edge = port(input);
+        edge.node.watermark(edge.port, timestamp);
     }
 
     void status(int input, WatermarkStatus status) throws Exception {
-        port(input).status(0, status);
+        var edge = port(input);
+        edge.node.status(edge.port, status);
     }
 
     void endInput(int input) throws Exception {
-        port(input).endInput(0);
+        var edge = port(input);
+        edge.node.endInput(edge.port);
     }
 
     boolean contains(long id) {
@@ -94,13 +101,63 @@ final class NativeRegionControlTree {
     }
 
     void latency(int input, LatencyMarker marker) throws Exception {
-        for (Node node = port(input); node != null; node = node.parent) {
-            listener.latency(node.id, marker);
-        }
+        latency(port(input).node, marker);
     }
 
-    private Node port(int input) {
+    private void latency(Node node, LatencyMarker marker) throws Exception {
+        listener.latency(node.id, marker);
+        for (var parent : node.parents) latency(parent.node, marker);
+    }
+
+    private Edge port(int input) {
         return inputs[java.util.Objects.checkIndex(input, inputs.length)];
+    }
+
+    List<Long> outputIds() {
+        return outputs.stream().map(node -> node.id).collect(java.util.stream.Collectors.toList());
+    }
+
+    private Node onlyOutput() {
+        if (outputs.size() != 1)
+            throw new IllegalStateException("Shared native controls require an explicit output port");
+        return outputs.get(0);
+    }
+
+    NativeRegionControlTree(
+            tech.streamfusion.proto.plan.v1.NativeRegionPlan plan,
+            java.util.Map<Long, Long> restoredWindowWatermarks,
+            Listener listener) {
+        NativeRegionPlanComposer.validate(plan);
+        this.restoredWindowWatermarks = java.util.Map.copyOf(restoredWindowWatermarks);
+        this.listener = java.util.Objects.requireNonNull(listener);
+        inputs = new Edge[plan.getInputCount()];
+        var nodes = new java.util.LinkedHashMap<Long, Node>();
+        for (var stage : plan.getStagesList()) {
+            var operator = stage.getOperator();
+            register(operator);
+            var node = new Node(
+                    operator.getPlanNodeId(),
+                    null,
+                    0,
+                    stage.getInputsCount(),
+                    operator.hasUnion(),
+                    operator.hasWindowAggregate());
+            nodes.put(node.id, node);
+            for (int port = 0; port < stage.getInputsCount(); port++) {
+                var reference = stage.getInputs(port);
+                if (reference.hasExternalInput()) inputs[reference.getExternalInput()] = new Edge(node, port);
+                else {
+                    var child = nodes.get(reference.getStageId());
+                    // CommonExecUnion is wiring: nested unions flatten their physical channels.
+                    // The region runtime must establish that layout before admitting this subset.
+                    if (node.union != null && child.union != null)
+                        throw new IllegalArgumentException("Shared native controls require flattened UNION channels");
+                    child.parents.add(new Edge(node, port));
+                }
+            }
+        }
+        outputs = plan.getOutputStageIdsList().stream().map(nodes::get).collect(java.util.stream.Collectors.toList());
+        validateInputsAndClocks();
     }
 
     private Node build(Operator operator, Node parent, int parentPort) {
@@ -130,7 +187,7 @@ final class NativeRegionControlTree {
             if (port < 0 || port >= inputs.length || inputs[port] != null) {
                 throw new IllegalArgumentException("Native control input slots must be unique and in range");
             }
-            inputs[port] = node;
+            inputs[port] = new Edge(node, 0);
         }
         for (int index = 0; index < children.size(); index++) {
             build(children.get(index), node, index);
@@ -162,10 +219,19 @@ final class NativeRegionControlTree {
         }
     }
 
+    private final class Edge {
+        final Node node;
+        final int port;
+
+        Edge(Node node, int port) {
+            this.node = node;
+            this.port = port;
+        }
+    }
+
     private final class Node {
         private final long id;
-        private final Node parent;
-        private final int parentPort;
+        private final List<Edge> parents = new ArrayList<>();
         private final IndexedCombinedWatermarkStatus combined;
         private final tech.streamfusion.flink.union.UnionInputWatermarks union;
         private long lastWatermark = Long.MIN_VALUE;
@@ -176,8 +242,7 @@ final class NativeRegionControlTree {
             this.id = id;
             this.window = window;
             lastWatermark = restoredWindowWatermarks.getOrDefault(id, Long.MIN_VALUE);
-            this.parent = parent;
-            this.parentPort = parentPort;
+            if (parent != null) parents.add(new Edge(parent, parentPort));
             ended = new boolean[arity];
             combined = unionInput ? null : IndexedCombinedWatermarkStatus.forInputsCount(arity);
             union = unionInput
@@ -204,7 +269,7 @@ final class NativeRegionControlTree {
             ended[port] = true;
             for (boolean complete : ended) if (!complete) return;
             listener.endInput(id);
-            if (parent != null) parent.endInput(parentPort);
+            for (var parent : parents) parent.node.endInput(parent.port);
         }
 
         private void status(int port, WatermarkStatus status) throws Exception {
@@ -224,9 +289,7 @@ final class NativeRegionControlTree {
 
         private void emitStatus(WatermarkStatus status) throws Exception {
             listener.status(id, status);
-            if (parent != null) {
-                parent.status(parentPort, status);
-            }
+            for (var parent : parents) parent.node.status(parent.port, status);
         }
 
         private void emitWatermark(long timestamp) throws Exception {
@@ -235,9 +298,7 @@ final class NativeRegionControlTree {
             if (window) timestamp = Math.max(timestamp, lastWatermark);
             lastWatermark = timestamp;
             listener.watermark(id, timestamp);
-            if (parent != null) {
-                parent.watermark(parentPort, timestamp);
-            }
+            for (var parent : parents) parent.node.watermark(parent.port, timestamp);
         }
     }
 }

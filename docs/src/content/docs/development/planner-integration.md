@@ -227,7 +227,20 @@ buffer, decodes there, and keeps that buffer shared through the native graph. On
 port-tagged outputs return to Java. Generated boundary checks compare direct IPC with C Data
 inputs across alternating external ports, singleton/hash exchanges, RowKinds, timestamps, and
 stage counts; failed decode remains retryable and failed output setup cancels the invocation.
-Full Flink runtime routing and topology/recovery/parity validation remain outstanding. No
+Java control propagation can now consume the flat region definition directly: each physical
+stage has one control node, external inputs retain their own ports, and shared stages propagate
+to each downstream consumer. All exits remain separately identified. The existing scheduler
+coalesces each control wave into one native invocation and drains it before forwarding output
+watermarks or end-input events; a failed drain forwards neither. Generated control sequences
+match real Flink operators at every stage, including idleness and latency markers. Restored
+window-clock clamping reaches every downstream exit. Nested UNION control graphs are rejected
+until their physical channels are flattened with Flink's wiring semantics.
+
+The Java metric publisher also consumes flat physical definitions directly. It binds each
+original stage scope once, omits anonymous local Input slots, and verifies the complete native
+snapshot without doubling a reused producer's counts. The runtime owner counts external I/O
+separately. This is control/metric infrastructure; binding it to the multi-output Flink runtime
+and validating the full topology and recovery behavior remain outstanding. No
 additional whole-plan query is admitted by this change.
 
 Ordinary planner use of this layout remains limited to ownership admission. Wiring the native

@@ -53,59 +53,86 @@ final class NativeRegionControlScheduler {
             Map<Long, Long> restoredWindowWatermarks,
             Invocation invocation,
             NativeRegionControlTree.Listener listener) {
+        this(
+                wrapped -> new NativeRegionControlTree(plan, inputCount, restoredWindowWatermarks, wrapped),
+                inputCount,
+                encodedCapabilities,
+                invocation,
+                listener);
+    }
+
+    NativeRegionControlScheduler(
+            tech.streamfusion.proto.plan.v1.NativeRegionPlan plan,
+            byte[] encodedCapabilities,
+            Map<Long, Long> restoredWindowWatermarks,
+            Invocation invocation,
+            NativeRegionControlTree.Listener listener) {
+        this(
+                wrapped -> new NativeRegionControlTree(plan, restoredWindowWatermarks, wrapped),
+                plan.getInputCount(),
+                encodedCapabilities,
+                invocation,
+                listener);
+    }
+
+    private NativeRegionControlScheduler(
+            java.util.function.Function<NativeRegionControlTree.Listener, NativeRegionControlTree> factory,
+            int inputCount,
+            byte[] encodedCapabilities,
+            Invocation invocation,
+            NativeRegionControlTree.Listener listener) {
         this.inputCount = inputCount;
         this.invocation = java.util.Objects.requireNonNull(invocation);
-        tree = new NativeRegionControlTree(
-                plan, inputCount, restoredWindowWatermarks, new NativeRegionControlTree.Listener() {
-                    @Override
-                    public void inputWatermark(long id, int port, long timestamp) throws Exception {
-                        listener.inputWatermark(id, port, timestamp);
-                    }
+        tree = factory.apply(new NativeRegionControlTree.Listener() {
+            @Override
+            public void inputWatermark(long id, int port, long timestamp) throws Exception {
+                listener.inputWatermark(id, port, timestamp);
+            }
 
-                    @Override
-                    public void watermark(long id, long timestamp) throws Exception {
-                        var capability = capabilities.get(id);
-                        if (capability != null && capability.getWatermark()) {
-                            if (pending.containsKey(id)) flush();
-                            pending.put(
-                                    id,
-                                    NativeStageControl.newBuilder()
-                                            .setPlanNodeId(id)
-                                            .setWatermarkMillis(timestamp)
-                                            .build());
-                        }
-                        // Mini-batch output precedes the watermark and its output gauge update.
-                        forwarding.add(() -> listener.watermark(id, timestamp));
-                    }
+            @Override
+            public void watermark(long id, long timestamp) throws Exception {
+                var capability = capabilities.get(id);
+                if (capability != null && capability.getWatermark()) {
+                    if (pending.containsKey(id)) flush();
+                    pending.put(
+                            id,
+                            NativeStageControl.newBuilder()
+                                    .setPlanNodeId(id)
+                                    .setWatermarkMillis(timestamp)
+                                    .build());
+                }
+                // Mini-batch output precedes the watermark and its output gauge update.
+                forwarding.add(() -> listener.watermark(id, timestamp));
+            }
 
-                    @Override
-                    public void status(long id, WatermarkStatus status) throws Exception {
-                        // All-idle input completion may first advance this subtree to its maximum
-                        // watermark, then advance an ancestor again when that subtree becomes idle.
-                        // Do not merge those two ordered watermarks into one native timer event.
-                        flush();
-                        forwarding.add(() -> listener.status(id, status));
-                    }
+            @Override
+            public void status(long id, WatermarkStatus status) throws Exception {
+                // All-idle input completion may first advance this subtree to its maximum
+                // watermark, then advance an ancestor again when that subtree becomes idle.
+                // Do not merge those two ordered watermarks into one native timer event.
+                flush();
+                forwarding.add(() -> listener.status(id, status));
+            }
 
-                    @Override
-                    public void endInput(long id) {
-                        var capability = capabilities.get(id);
-                        if (capability != null && capability.getEndInput()) {
-                            pending.put(
-                                    id,
-                                    NativeStageControl.newBuilder()
-                                            .setPlanNodeId(id)
-                                            .setEndInput(NativeControlEndInput.getDefaultInstance())
-                                            .build());
-                        }
-                        forwarding.add(() -> listener.endInput(id));
-                    }
+            @Override
+            public void endInput(long id) {
+                var capability = capabilities.get(id);
+                if (capability != null && capability.getEndInput()) {
+                    pending.put(
+                            id,
+                            NativeStageControl.newBuilder()
+                                    .setPlanNodeId(id)
+                                    .setEndInput(NativeControlEndInput.getDefaultInstance())
+                                    .build());
+                }
+                forwarding.add(() -> listener.endInput(id));
+            }
 
-                    @Override
-                    public void latency(long id, LatencyMarker marker) throws Exception {
-                        listener.latency(id, marker);
-                    }
-                });
+            @Override
+            public void latency(long id, LatencyMarker marker) throws Exception {
+                listener.latency(id, marker);
+            }
+        });
         try {
             var decoded = NativeControlCapabilities.parseFrom(encodedCapabilities);
             if (decoded.getProtocolVersion() != 1)
@@ -119,6 +146,10 @@ final class NativeRegionControlScheduler {
         } catch (com.google.protobuf.InvalidProtocolBufferException error) {
             throw new IllegalArgumentException("Invalid native control capability protobuf", error);
         }
+    }
+
+    List<Long> outputIds() {
+        return tree.outputIds();
     }
 
     long rootId() {

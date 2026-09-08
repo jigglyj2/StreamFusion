@@ -12,18 +12,9 @@ import java.util.List;
 import java.util.Random;
 import org.apache.flink.api.common.typeutils.base.StringSerializer;
 import org.apache.flink.runtime.jobgraph.OperatorID;
-import org.apache.flink.streaming.api.operators.AbstractInput;
-import org.apache.flink.streaming.api.operators.AbstractStreamOperatorFactory;
-import org.apache.flink.streaming.api.operators.AbstractStreamOperatorV2;
-import org.apache.flink.streaming.api.operators.Input;
-import org.apache.flink.streaming.api.operators.MultipleInputStreamOperator;
-import org.apache.flink.streaming.api.operators.StreamOperator;
-import org.apache.flink.streaming.api.operators.StreamOperatorParameters;
 import org.apache.flink.streaming.api.watermark.Watermark;
 import org.apache.flink.streaming.runtime.streamrecord.LatencyMarker;
-import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.runtime.watermarkstatus.WatermarkStatus;
-import org.apache.flink.streaming.util.MultiInputStreamOperatorTestHarness;
 import org.junit.jupiter.api.Test;
 import tech.streamfusion.proto.plan.v1.Calc;
 import tech.streamfusion.proto.plan.v1.NativePlan;
@@ -36,11 +27,11 @@ class NativeRegionControlTreeTest {
             var actual = new ArrayList<String>();
             var expected = new ArrayList<String>();
             var controls = new NativeRegionControlTree(plan(), 3, listener(actual));
-            try (var inner = new Harness(2);
-                    var right = new Harness(1);
-                    var outer = new Harness(2);
-                    var root = new Harness(1)) {
-                for (Harness harness : List.of(inner, right, outer, root)) {
+            try (var inner = new FlinkControlHarness(2);
+                    var right = new FlinkControlHarness(1);
+                    var outer = new FlinkControlHarness(2);
+                    var root = new FlinkControlHarness(1)) {
+                for (FlinkControlHarness harness : List.of(inner, right, outer, root)) {
                     harness.setup(StringSerializer.INSTANCE);
                     harness.open();
                 }
@@ -48,7 +39,7 @@ class NativeRegionControlTreeTest {
                 long[] times = {0, 0, 0};
                 for (int step = 0; step < 120; step++) {
                     int port = random.nextInt(3);
-                    Harness entry = port == 2 ? right : inner;
+                    FlinkControlHarness entry = port == 2 ? right : inner;
                     int input = port == 2 ? 0 : port;
                     switch (step % 4) {
                         case 0:
@@ -130,7 +121,8 @@ class NativeRegionControlTreeTest {
         };
     }
 
-    private static void drain(Harness from, long id, Harness to, int port, List<String> events) throws Exception {
+    private static void drain(FlinkControlHarness from, long id, FlinkControlHarness to, int port, List<String> events)
+            throws Exception {
         Object event;
         while ((event = from.getOutput().poll()) != null) {
             if (event instanceof Watermark) {
@@ -186,56 +178,5 @@ class NativeRegionControlTreeTest {
                 .setPlanNodeId(10 + index)
                 .setInput(tech.streamfusion.proto.plan.v1.Input.newBuilder().setInputIndex(index))
                 .build();
-    }
-
-    static final class Harness extends MultiInputStreamOperatorTestHarness<String> {
-        Harness(int arity) throws Exception {
-            super(new Factory(arity));
-        }
-
-        private Input input(int index) {
-            return getCastedOperator().getInputs().get(index);
-        }
-    }
-
-    private static final class Factory extends AbstractStreamOperatorFactory<String> {
-        private final int arity;
-
-        private Factory(int arity) {
-            this.arity = arity;
-        }
-
-        @Override
-        @SuppressWarnings("unchecked")
-        public <T extends StreamOperator<String>> T createStreamOperator(StreamOperatorParameters<String> parameters) {
-            return (T) new ReferenceOperator(parameters, arity);
-        }
-
-        @Override
-        public Class<? extends StreamOperator> getStreamOperatorClass(ClassLoader loader) {
-            return ReferenceOperator.class;
-        }
-    }
-
-    private static final class ReferenceOperator extends AbstractStreamOperatorV2<String>
-            implements MultipleInputStreamOperator<String> {
-        private final List<Input> inputs = new ArrayList<>();
-
-        private ReferenceOperator(StreamOperatorParameters<String> parameters, int arity) {
-            super(parameters, arity);
-            for (int index = 1; index <= arity; index++) {
-                inputs.add(new AbstractInput<String, String>(this, index) {
-                    @Override
-                    public void processElement(StreamRecord<String> record) {
-                        output.collect(record);
-                    }
-                });
-            }
-        }
-
-        @Override
-        public List<Input> getInputs() {
-            return inputs;
-        }
     }
 }

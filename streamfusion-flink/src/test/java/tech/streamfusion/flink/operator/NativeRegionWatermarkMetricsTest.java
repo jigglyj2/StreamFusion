@@ -111,13 +111,13 @@ class NativeRegionWatermarkMetricsTest {
     }
 
     private static final class Reference implements AutoCloseable {
-        final NativeRegionControlTreeTest.Harness harness;
+        final FlinkControlHarness harness;
         final WatermarkGauge[] inputs;
         final MinWatermarkGauge minimum;
         final WatermarkGauge output = new WatermarkGauge();
 
         Reference(int arity) throws Exception {
-            harness = new NativeRegionControlTreeTest.Harness(arity);
+            harness = new FlinkControlHarness(arity);
             harness.setup(StringSerializer.INSTANCE);
             harness.open();
             inputs = new WatermarkGauge[arity];

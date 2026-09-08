@@ -76,17 +76,47 @@ public final class StreamFusionNativeMetricTree implements AutoCloseable {
             int subtaskIndex,
             long ownerPlanNodeId,
             boolean separateRuntimeOwner) {
-        final NativePlan plan;
-        try {
-            plan = NativePlan.parseFrom(identifiedPlan);
-        } catch (com.google.protobuf.InvalidProtocolBufferException failure) {
-            throw new IllegalArgumentException("Invalid native metric plan", failure);
-        }
-        if (!plan.hasRoot()) throw new IllegalArgumentException("Native metric plan is missing its root");
-        ownerId =
-                separateRuntimeOwner ? 0 : ownerPlanNodeId == 0 ? plan.getRoot().getPlanNodeId() : ownerPlanNodeId;
-        List<Operator> operators = new ArrayList<>();
-        collect(plan, operators);
+        this(
+                treeOperators(identifiedPlan),
+                rootId,
+                taskMetrics,
+                taskManagerConfig,
+                subtaskIndex,
+                ownerPlanNodeId,
+                separateRuntimeOwner);
+    }
+
+    /** Shared definitions carry physical IDs once; anonymous local Input slots have no Flink scope. */
+    public static StreamFusionNativeMetricTree forSharedRegion(
+            tech.streamfusion.proto.plan.v1.NativeRegionPlan plan,
+            OperatorID runtimeId,
+            TaskMetricGroup taskMetrics,
+            Configuration taskManagerConfig,
+            int subtaskIndex) {
+        tech.streamfusion.flink.operator.NativeRegionPlanComposer.validate(plan);
+        return new StreamFusionNativeMetricTree(
+                plan.getStagesList().stream()
+                        .map(tech.streamfusion.proto.plan.v1.NativeRegionStage::getOperator)
+                        .collect(java.util.stream.Collectors.toList()),
+                runtimeId,
+                taskMetrics,
+                taskManagerConfig,
+                subtaskIndex,
+                0,
+                true);
+    }
+
+    private StreamFusionNativeMetricTree(
+            List<Operator> operators,
+            OperatorID rootId,
+            TaskMetricGroup taskMetrics,
+            Configuration taskManagerConfig,
+            int subtaskIndex,
+            long ownerPlanNodeId,
+            boolean separateRuntimeOwner) {
+        ownerId = separateRuntimeOwner
+                ? 0
+                : ownerPlanNodeId == 0 ? operators.get(0).getPlanNodeId() : ownerPlanNodeId;
         int historySize = taskManagerConfig.get(MetricOptions.LATENCY_HISTORY_SIZE);
         if (historySize <= 0) {
             historySize = MetricOptions.LATENCY_HISTORY_SIZE.defaultValue();
@@ -328,6 +358,18 @@ public final class StreamFusionNativeMetricTree implements AutoCloseable {
                 return "Expand";
             default:
                 return operator.getOperatorCase().name();
+        }
+    }
+
+    private static List<Operator> treeOperators(byte[] bytes) {
+        try {
+            var plan = NativePlan.parseFrom(bytes);
+            if (!plan.hasRoot()) throw new IllegalArgumentException("Native metric plan is missing its root");
+            var operators = new ArrayList<Operator>();
+            collect(plan, operators);
+            return operators;
+        } catch (com.google.protobuf.InvalidProtocolBufferException failure) {
+            throw new IllegalArgumentException("Invalid native metric plan", failure);
         }
     }
 
