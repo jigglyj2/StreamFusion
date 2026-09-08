@@ -132,6 +132,12 @@ are still decoded for touched keys, so this is a write-amplification fix, not a 
 read or working-set cost for arbitrarily large keys. Checkpoints cannot observe a partially drained
 batch. Cancellation or failure
 requires task recovery; the stream safely retains native ownership if its Java handle is released.
+After the final row has produced owned state mutations, the join drops decoded state, lookup
+indices, input encodings and exhausted predicate masks before admitting backend growth. Mutation
+buffers retain one coarse allowance, and final output payload Arcs retain their separate output
+allowance. A constrained-budget regression verifies this handoff and probes all retained payloads
+from the opposite input. This preserves one atomic write per incoming batch and the existing
+failure/recovery boundary.
 Logical Flink I/O counters count records across all output chunks; StreamFusion's processed-batch
 diagnostic counts each input once, not each output pull.
 

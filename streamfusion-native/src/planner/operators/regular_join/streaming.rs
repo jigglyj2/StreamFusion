@@ -286,6 +286,27 @@ impl RegularJoinProcessor {
             let done = cursor.row == cursor.batch.num_rows();
             if done {
                 let mutations = paged_state::batch_mutations(&cursor.staged, &mut cursor._memory)?;
+                // The write owns its encoded keys and values. Final output rows own payload
+                // Arcs under output_memory, so decoded state and input encodings can now go.
+                // Do not overlap an entire drained batch's workspace with backend growth.
+                let mutation_bytes = mutations.iter().fold(
+                    mutations
+                        .capacity()
+                        .saturating_mul(std::mem::size_of::<StateMutation>())
+                        .saturating_add(4096),
+                    |bytes, mutation| {
+                        bytes
+                            .saturating_add(mutation.key.key.capacity())
+                            .saturating_add(mutation.value.as_ref().map_or(0, Vec::capacity))
+                            .saturating_add(64)
+                    },
+                );
+                cursor.staged = Vec::new();
+                cursor.indices = Vec::new();
+                cursor.encoded = self.row_converters[cursor.side].empty_rows(0, 0);
+                cursor.batch = RecordBatch::new_empty(cursor.batch.schema());
+                cursor.candidate_batch = CandidateBatch::default();
+                cursor._memory.resize(mutation_bytes)?;
                 if !mutations.is_empty() {
                     self.state.write_batch(mutations)?;
                     self.state_write_batches = self.state_write_batches.saturating_add(1);
