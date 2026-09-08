@@ -174,8 +174,10 @@ impl UnaryBatchProcessor for TopNProcessor {
                     bytes.saturating_add(array.to_data().get_slice_memory_size()?),
                 )
             })?;
+        // Sort-key rows, gathered changed winners, state encoding and output buffers may
+        // overlap. Admit the growing payload workspace once at the incoming batch boundary.
         let base = payload
-            .saturating_mul(3)
+            .saturating_mul(5)
             .saturating_add(input.num_rows().saturating_mul(512))
             .saturating_add(64 << 10);
         self.scratch_reservation.resize(base)?;

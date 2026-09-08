@@ -80,8 +80,10 @@ Q9's ordinary plan currently falls back on `StreamExecRank`; its binary join is 
 The append-only Top-1 compute prerequisite uses DataFusion sort and cumulative MIN with fixed-width
 ordinals and per-arrival changelog parity. Its shared Calc → Top-1 → Calc binding now verifies
 native ownership/lifecycle, canonical cross-backend restore and the complete Flink stage metric
-and control surface. Ordinary admission remains gated while batched Top-1 state access and
-managed checkpoint recovery/rescaling/channel replay are completed. No Q9 performance result is claimed.
+and control surface. Top-1 now batches point-state reads and writes only changed winners, with
+migration from older ordered state. Generated managed-checkpoint/backend-switch/rescaling and
+actual Arrow channel-replay tests pass on both backends. Ordinary admission remains gated pending
+selected SQL/Q9 integration checks. No Q9 performance result is claimed.
 
 ## Q6 has no Flink streaming baseline
 

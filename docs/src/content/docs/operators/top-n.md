@@ -93,8 +93,27 @@ flags. The cache gauges retain Flink 2.3's registration-time definitions: its Fa
 registers an empty cache and captured request/hit counters, yielding size 0 and hit rate 1.0.
 The topology guard verifies one Arrow runtime and one state owner for Calc → Top-1 → Calc.
 
-Ordinary admission remains gated. Shared managed-checkpoint recovery/rescaling/channel replay
-and batched Top-1 state access still need verification before Q9 can be selected. The shared
+The shared Top-1 path now stores one winner in one point value per partition, matching Flink's
+FastTop1 ValueState specialization. One backend read batch loads every touched winner; one write
+batch stores only partitions whose final winner changed. Losing arrivals write no payload or
+sequence metadata. Only final changed winners are gathered and Arrow-row-encoded for state;
+intermediate changelog transitions still retain every original arrival. This is a bounded
+single-candidate state specialization, not an opaque growing Top-N partition value.
+
+The point value reuses versioned SFTN v5 and reads v4/v5 snapshots. Older ordered Top-1 entries
+are loaded and removed on their first touched batch; subsequent batches perform no range scans.
+General Top-N keeps its ordered index and separate candidate payloads. Both memory and RocksDB
+instrumentation verify one read batch for 128 keys, zero writes for losing arrivals, and one
+changed-winner write. Coarse batch admission covers overlapping sort keys, winner gathers,
+state encoding and output buffers.
+
+Generated recovery tests compare complete changelog bytes against uninterrupted Flink across
+canonical backend switches, aligned and unaligned checkpoints, incremental RocksDB snapshots,
+and 1→2→1 key-group rescaling. Real Flink task tests capture Arrow IPC channel state between
+barriers and replay winning updates exactly once alongside the restored native state. Both
+backends run three input seeds, including nullable keys, equal order keys and timestamp envelopes.
+
+Ordinary admission remains gated pending selected SQL/Q9 integration checks. The shared
 fragment accepts only explicitly ordered append-only range [1,1], synchronous state, no
 mini-batching and disabled TTL; other modes retain the production gate. The existing `topNComparatorCalls`
 diagnostic counts adapter comparator calls; it does not count comparisons inside DataFusion kernels.

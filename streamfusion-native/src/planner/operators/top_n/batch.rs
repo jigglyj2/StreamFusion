@@ -402,97 +402,13 @@ impl TopNProcessor {
                 .first()
                 .is_some_and(|group| group.next_sequence >= self.plan.rank_end.unwrap());
 
-        let converter = self.row_converter.as_ref().expect("input schema prepared");
-        let encoded_sources = sources
-            .iter()
-            .map(|source| converter.convert_columns(source.columns()))
-            .collect::<std::result::Result<Vec<Rows>, _>>()?;
-        let touched_group_count = groups.len();
-        let mut mutations = Vec::with_capacity(groups.len());
-        for (group_index, group) in groups.into_iter().enumerate() {
-            let sequences = group
-                .candidates
-                .iter()
-                .map(|candidate| candidate.sequence)
-                .collect::<Vec<_>>();
-            let row_kinds = self.plan.physical_input_semantics.then(|| {
-                group
-                    .candidates
-                    .iter()
-                    .map(|candidate| candidate.kind)
-                    .collect::<Vec<_>>()
-            });
-            let preserve_empty = group.rank_end.is_some();
-            if let Some(orders) = &sources.orders {
-                let prefix =
-                    crate::planner::operators::sortable_state::prefix(0xf0, &group.state_key.key)?;
-                let mut entries = crate::planner::operators::ordered_partition::Entries::new();
-                index_credit.try_grow(
-                    group
-                        .candidates
-                        .iter()
-                        .map(|c| {
-                            prefix.len()
-                                + orders[c.source].row(c.row).data().len()
-                                + encoded_sources[c.source].row(c.row).data().len()
-                                + 201
-                        })
-                        .sum(),
-                )?;
-                for c in &group.candidates {
-                    let key = crate::planner::operators::sortable_state::row_key(
-                        &prefix,
-                        orders[c.source].row(c.row).data(),
-                        c.sequence,
-                    );
-                    let mut value = vec![c.kind as u8];
-                    value.extend_from_slice(encoded_sources[c.source].row(c.row).data());
-                    entries.insert(key, value);
-                }
-                crate::planner::operators::ordered_partition::write_delta(
-                    &group.state_key,
-                    std::mem::take(&mut indexed[group_index]),
-                    entries,
-                    &mut mutations,
-                );
-                let value = if !sequences.is_empty() || preserve_empty {
-                    let mut bytes = crate::planner::operators::sortable_state::FORMAT.to_vec();
-                    bytes.extend_from_slice(&encode_state_rows_with_kinds(
-                        group.next_sequence,
-                        group.rank_end,
-                        now_millis,
-                        &[],
-                        None,
-                        std::iter::empty::<arrow_row::Row<'_>>(),
-                    )?);
-                    Some(bytes)
-                } else {
-                    None
-                };
-                mutations.push(StateMutation {
-                    key: group.state_key,
-                    value,
-                });
-                continue;
-            }
-            mutations.push(StateMutation {
-                key: group.state_key,
-                value: (!sequences.is_empty() || preserve_empty)
-                    .then(|| {
-                        encode_state_rows_with_kinds(
-                            group.next_sequence,
-                            group.rank_end,
-                            now_millis,
-                            &sequences,
-                            row_kinds.as_deref(),
-                            group.candidates.iter().map(|candidate| {
-                                encoded_sources[candidate.source].row(candidate.row)
-                            }),
-                        )
-                    })
-                    .transpose()?,
-            });
-        }
+        let (mutations, touched_group_count) = self.state_mutations(
+            &sources,
+            groups,
+            &mut indexed,
+            &mut index_credit,
+            now_millis,
+        )?;
         self.groups_written = self
             .groups_written
             .saturating_add(touched_group_count as u64);

@@ -11,12 +11,18 @@ use std::sync::{
 
 #[derive(Default)]
 pub(crate) struct Io {
+    pub(crate) read_batches: AtomicUsize,
+    pub(crate) write_batches: AtomicUsize,
+    pub(crate) range_reads: AtomicUsize,
     pub(crate) read_bytes: AtomicUsize,
     pub(crate) scanned_rows: AtomicUsize,
     pub(crate) written_bytes: AtomicUsize,
 }
 impl Io {
     pub(crate) fn reset(&self) {
+        self.read_batches.store(0, Ordering::Relaxed);
+        self.write_batches.store(0, Ordering::Relaxed);
+        self.range_reads.store(0, Ordering::Relaxed);
         self.read_bytes.store(0, Ordering::Relaxed);
         self.scanned_rows.store(0, Ordering::Relaxed);
         self.written_bytes.store(0, Ordering::Relaxed);
@@ -32,6 +38,7 @@ impl KeyedState for Observed {
         keys: &[StateKeyRef<'_>],
         owner: &HostMemoryReservation,
     ) -> Result<StateReadBatch<'a>> {
+        self.io.read_batches.fetch_add(1, Ordering::Relaxed);
         let result = self.inner.get_batch(keys, owner)?;
         self.io.read_bytes.fetch_add(
             result.iter().flatten().map(|v| v.len()).sum::<usize>(),
@@ -40,6 +47,7 @@ impl KeyedState for Observed {
         Ok(result)
     }
     fn write_batch(&mut self, mutations: Vec<StateMutation>) -> Result<()> {
+        self.io.write_batches.fetch_add(1, Ordering::Relaxed);
         self.io.written_bytes.fetch_add(
             mutations
                 .iter()
@@ -67,6 +75,7 @@ impl KeyedState for Observed {
         bytes: usize,
         f: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<bool>,
     ) -> Result<()> {
+        self.io.range_reads.fetch_add(1, Ordering::Relaxed);
         self.inner
             .visit_range(group, start, end, rows, bytes, &mut |page| {
                 self.io
