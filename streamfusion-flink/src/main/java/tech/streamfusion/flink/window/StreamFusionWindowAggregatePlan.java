@@ -100,6 +100,8 @@ final class StreamFusionWindowAggregatePlan {
                 .setOutputSchema(schema(outputType));
         if (attachedWindowStartIndex >= 0) {
             aggregate.setAttachedWindowStartIndex(attachedWindowStartIndex);
+        }
+        if (attachedWindowEndIndex >= 0) {
             aggregate.setAttachedWindowEndIndex(attachedWindowEndIndex);
         }
         for (int index : grouping) {

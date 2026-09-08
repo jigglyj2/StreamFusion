@@ -46,6 +46,14 @@ The buffered subset currently requires UTC, non-null time/bound columns, fixed-w
 geometry and compatible append-only DataFusion aggregates. Nullable time/bound streaming parity
 and automatic binding of the original physical operator's memory share remain outstanding.
 
+The shared local fragment builder supports direct and attached HOP COUNT/MIN/MAX for that
+verified subset. Attached windows follow Flink's `WindowedSliceAssigner`: only the attached end
+is consumed, and the start is derived as end minus the full window size. A start column can be
+pruned or retained without changing grouping or assignment. The versioned local protobuf accepts
+end-only UTC TUMBLE/HOP attachment; an explicit pair retains the legacy supplied-bound contract.
+Start-only, end-only CUMULATE, and end-only non-UTC contracts are rejected. Local fragments still
+require explicit task resources; their automatic physical-node selection is not yet connected.
+
 The retained legacy local handle still flushes per Arrow batch. Its reusable integer COUNT/SUM/AVG
 and append-only MIN/MAX computation uses DataFusion, with ordered Flink adapters for retractions
 and incompatible numeric semantics. It is not the buffered shared-runtime path.
@@ -116,7 +124,11 @@ and no Java transformation for an internal native stage. The generated global an
 fixtures build their plans through the same public global fragment builder.
 
 Direct Java tests compare the SQL-generated Flink local slicer with the native tree for generated
-control sequences and every partial from a 180,000-row pressure fixture. Direct global HOP COUNT
+control sequences and every partial from a 180,000-row pressure fixture, using the public fragment
+builder. Generated grouped/ungrouped attached MAX/COUNT tests use Flink's SQL-generated local
+stage with retained start values that assignment must ignore, and compare every serialized partial, timestamp/RowKind and
+logical I/O counter across input batches, watermarks and checkpoint pre-barriers. Native tests
+also verify signed-long wrapping when deriving an attached start. Direct global HOP COUNT
 tests compare complete serialized changelog records at each input/control boundary on both
 backends, including nullable keys, negative times, late inputs, large watermark jumps and restore
 before replayed input. Attached MAX/COUNT tests use the SQL-generated Flink attached stage and

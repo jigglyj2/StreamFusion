@@ -301,3 +301,69 @@ fn cancelled_pressure_cursor_frees_allocations_before_returning_workspace_credit
     broker.active.store(false, Ordering::Relaxed);
     assert_eq!(broker.inner.reserved(), 0);
 }
+
+#[test]
+fn end_only_attached_hop_uses_window_size_instead_of_reassigning_a_slice() {
+    let source = buffer();
+    let mut plan = source.kernel.plan.clone();
+    plan.attached_window_end_index = Some(1);
+    // Deliberately invalid unused direct-time index: only the attached end is accessed.
+    plan.time_attribute_index = u32::MAX;
+    let kernel = LocalWindowAggregateProcessor::from_plan(
+        plan,
+        source.kernel.reservation.sibling("attached workspace"),
+        source.kernel.reservation.sibling("attached plan"),
+    )
+    .unwrap();
+    let mut attached = BufferedWindow::new(kernel, 3 << 20, 32 << 10).unwrap();
+    let batch = input(
+        &attached,
+        &[(1, 2000), (1, 2000), (2, -2000), (3, i64::MIN)],
+    );
+    assert!(attached.push(batch).unwrap().is_none());
+    let output = attached
+        .control(ControlEvent::BeforeCheckpoint(1))
+        .unwrap()
+        .unwrap();
+    let starts = output
+        .column(2)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap();
+    assert_eq!(
+        starts.values().as_ref(),
+        &[-4000, -8000, i64::MIN.wrapping_sub(6000)]
+    );
+    assert_eq!(
+        partials(output),
+        vec![(1, 2, 2000), (2, 1, -2000), (3, 1, i64::MIN)]
+    );
+    assert!(!attached.has_pending());
+}
+
+#[test]
+fn rejects_ambiguous_or_unverified_attached_bound_contracts() {
+    let source = buffer();
+    for variant in 0..4 {
+        let mut plan = source.kernel.plan.clone();
+        plan.attached_window_end_index = Some(1);
+        match variant {
+            0 => {
+                plan.attached_window_start_index = Some(1);
+                plan.attached_window_end_index = None;
+            }
+            1 => plan.kind = proto::WindowKind::Cumulate as i32,
+            2 => plan.shift_time_zone = "America/New_York".into(),
+            _ => plan.attached_window_end_index = Some(0),
+        }
+        let result = LocalWindowAggregateProcessor::from_plan(
+            plan,
+            source
+                .kernel
+                .reservation
+                .sibling("invalid attached workspace"),
+            source.kernel.reservation.sibling("invalid attached plan"),
+        );
+        assert!(result.is_err(), "invalid attached variant {variant}");
+    }
+}

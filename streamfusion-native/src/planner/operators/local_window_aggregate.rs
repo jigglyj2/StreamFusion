@@ -133,6 +133,14 @@ impl LocalWindowAggregateProcessor {
     }
 
     fn slice_bounds(&self, batch: &RecordBatch, row: usize) -> Result<Option<(i64, i64)>> {
+        // Flink's WindowedSliceAssigner consumes only the attached end. For fixed-size
+        // windows its inner assigner derives the start using wrapping Java-long arithmetic.
+        if self.plan.attached_window_start_index.is_none() {
+            if let Some(end_index) = self.plan.attached_window_end_index {
+                return Ok(timestamp_millis(batch.column(end_index as usize), row)?
+                    .map(|end| (end.wrapping_sub(self.plan.size_millis), end)));
+            }
+        }
         let attached_columns = self
             .plan
             .attached_window_start_index

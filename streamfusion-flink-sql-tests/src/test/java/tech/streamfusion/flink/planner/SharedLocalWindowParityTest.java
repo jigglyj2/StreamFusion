@@ -29,7 +29,6 @@ import org.apache.flink.types.RowKind;
 import org.junit.jupiter.api.Test;
 import tech.streamfusion.flink.arrow.ArrowNativePlanDispatcher;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
-import tech.streamfusion.flink.proto.FlinkLogicalTypeProto;
 import tech.streamfusion.nativebridge.NativeExecutionContext;
 import tech.streamfusion.proto.plan.v1.*;
 
@@ -220,50 +219,25 @@ class SharedLocalWindowParityTest {
                 .toByteArray();
     }
 
-    private static byte[] plan() {
-        var input = Operator.newBuilder()
-                .setPlanNodeId(1)
-                .setInput(Input.newBuilder())
-                .build();
-        var local = LocalWindowAggregate.newBuilder()
-                .setInput(calc(2, input, 2))
-                .addGroupingIndices(0)
-                .setInputSchema(schema(INPUT))
-                .setOutputSchema(schema(PARTIAL))
-                .setTimeAttributeIndex(1)
-                .setKind(WindowKind.WINDOW_KIND_HOP)
-                .setSizeMillis(6000)
-                .setSlideOrStepMillis(2000)
-                .setShiftTimeZone("UTC")
-                .addAggregateCalls(AggregateCall.newBuilder()
-                        .setFunction(AggregateFunction.AGGREGATE_FUNCTION_COUNT_STAR)
-                        .setOutputType(FlinkLogicalTypeProto.serialize(new BigIntType(false))));
-        return NativePlan.newBuilder()
-                .setProtocolVersion(2)
-                .setRoot(calc(
-                        4,
-                        Operator.newBuilder()
-                                .setPlanNodeId(3)
-                                .setLocalWindowAggregate(local)
-                                .build(),
-                        4))
-                .build()
-                .toByteArray();
-    }
-
-    private static Schema schema(RowType type) {
-        var result = Schema.newBuilder();
-        for (int i = 0; i < type.getFieldCount(); i++)
-            result.addFields(
-                    Field.newBuilder().setName("f" + i).setType(FlinkLogicalTypeProto.serialize(type.getTypeAt(i))));
-        return result.build();
-    }
-
-    private static Operator calc(long id, Operator child, int width) {
-        var result = Calc.newBuilder().setInput(child).setPreserveInputEnvelope(true);
-        for (int i = 0; i < width; i++)
-            result.addProjections(Expression.newBuilder()
-                    .setInputReference(InputReference.newBuilder().setIndex(i)));
-        return Operator.newBuilder().setPlanNodeId(id).setCalc(result).build();
+    private static byte[] plan() throws Exception {
+        return SharedSlicingWindowFixture.compose(
+                tech.streamfusion.flink.window.StreamFusionLocalWindowAggregateTranslator.createStagePlan(
+                        INPUT,
+                        PARTIAL,
+                        new int[] {0},
+                        new org.apache.calcite.rel.core.AggregateCall[] {
+                            SharedSlicingWindowFixture.call(
+                                    org.apache.calcite.sql.fun.SqlStdOperatorTable.COUNT,
+                                    List.of(),
+                                    new BigIntType(false))
+                        },
+                        new org.apache.flink.table.planner.plan.logical.TimeAttributeWindowingStrategy(
+                                SharedSlicingWindowFixture.hop(),
+                                new TimestampType(false, org.apache.flink.table.types.logical.TimestampKind.ROWTIME, 3),
+                                1),
+                        false,
+                        SharedSlicingWindowFixture.config()),
+                2,
+                4);
     }
 }

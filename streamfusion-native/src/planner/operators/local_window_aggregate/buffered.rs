@@ -73,14 +73,17 @@ impl BufferedWindow {
                 "buffered local window timezone control parity is limited to UTC".into(),
             ));
         }
-        let time_columns = kernel
-            .plan
-            .attached_window_start_index
-            .zip(kernel.plan.attached_window_end_index)
-            .map_or_else(
-                || vec![kernel.plan.time_attribute_index],
-                |(start, end)| vec![start, end],
-            );
+        let time_columns = kernel.plan.attached_window_end_index.map_or_else(
+            || vec![kernel.plan.time_attribute_index],
+            |end| {
+                kernel
+                    .plan
+                    .attached_window_start_index
+                    .into_iter()
+                    .chain([end])
+                    .collect()
+            },
+        );
         if time_columns
             .iter()
             .any(|&index| kernel.input_schema.field(index as usize).is_nullable())

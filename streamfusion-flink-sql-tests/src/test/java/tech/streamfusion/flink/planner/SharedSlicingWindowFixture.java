@@ -108,17 +108,17 @@ final class SharedSlicingWindowFixture {
                 .setPlanNodeId(1)
                 .setInput(Input.newBuilder())
                 .build();
-        var window = NativePlan.parseFrom(fragment).getRoot().getWindowAggregate().toBuilder()
-                .setInput(calc(2, input, inputWidth));
+        var window = NativePlan.parseFrom(fragment).getRoot().toBuilder().setPlanNodeId(3);
+        if (window.hasLocalWindowAggregate()) {
+            window.getLocalWindowAggregateBuilder().setInput(calc(2, input, inputWidth));
+        } else if (window.hasWindowAggregate()) {
+            window.getWindowAggregateBuilder().setInput(calc(2, input, inputWidth));
+        } else {
+            throw new IllegalArgumentException("Expected a local or global window fragment");
+        }
         return NativePlan.newBuilder()
                 .setProtocolVersion(2)
-                .setRoot(calc(
-                        4,
-                        Operator.newBuilder()
-                                .setPlanNodeId(3)
-                                .setWindowAggregate(window)
-                                .build(),
-                        outputWidth))
+                .setRoot(calc(4, window.build(), outputWidth))
                 .build()
                 .toByteArray();
     }

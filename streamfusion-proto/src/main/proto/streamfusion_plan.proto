@@ -486,6 +486,9 @@ message LocalWindowAggregate {
   Schema input_schema = 10;
   Schema output_schema = 11;
   string shift_time_zone = 12;
+  // End-only attachment follows Flink's WindowedSliceAssigner: UTC TUMBLE/HOP
+  // derive start = end - size using signed 64-bit wrapping. An explicit pair
+  // retains the legacy supplied-bound semantics. Start without end is invalid.
   optional uint32 attached_window_start_index = 13;
   optional uint32 attached_window_end_index = 14;
 }

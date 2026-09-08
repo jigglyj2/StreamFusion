@@ -133,14 +133,15 @@ impl LocalWindowAggregateProcessor {
                 }
             }
         }
-        let time_indices = if let Some(start) = plan.attached_window_start_index {
-            vec![
-                start,
-                plan.attached_window_end_index.expect("validated bounds"),
-            ]
-        } else {
-            vec![plan.time_attribute_index]
-        };
+        let time_indices = plan.attached_window_end_index.map_or_else(
+            || vec![plan.time_attribute_index],
+            |end| {
+                plan.attached_window_start_index
+                    .into_iter()
+                    .chain([end])
+                    .collect()
+            },
+        );
         for index in time_indices {
             if input_schema
                 .fields()
@@ -187,9 +188,18 @@ impl LocalWindowAggregateProcessor {
 fn validate_plan(plan: &proto::LocalWindowAggregate) -> Result<()> {
     let kind = proto::WindowKind::try_from(plan.kind)
         .map_err(|_| DataFusionError::Plan(format!("unknown local window kind {}", plan.kind)))?;
-    if plan.attached_window_start_index.is_some() != plan.attached_window_end_index.is_some() {
+    if plan.attached_window_start_index.is_some() && plan.attached_window_end_index.is_none() {
         return Err(DataFusionError::Plan(
-            "attached local window aggregate requires both window bounds".to_string(),
+            "attached local window aggregate requires a window end".to_string(),
+        ));
+    }
+    if plan.attached_window_end_index.is_some()
+        && plan.attached_window_start_index.is_none()
+        && (!matches!(kind, proto::WindowKind::Tumble | proto::WindowKind::Hop)
+            || (!plan.shift_time_zone.is_empty() && plan.shift_time_zone != "UTC"))
+    {
+        return Err(DataFusionError::Plan(
+            "end-only attached local windows require UTC TUMBLE or HOP semantics".into(),
         ));
     }
     match kind {

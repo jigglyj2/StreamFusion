@@ -19,13 +19,17 @@ final class LocalWindowFlinkOracle {
     @SuppressWarnings("unchecked")
     static OneInputStreamOperatorTestHarness<RowData, RowData> create(long memoryBytes) throws Exception {
         var stage = SlicingWindowFlinkPlan.stage("LocalWindowAggregate");
+        return create(stage, memoryBytes);
+    }
+
+    @SuppressWarnings("unchecked")
+    static OneInputStreamOperatorTestHarness<RowData, RowData> create(
+            org.apache.flink.streaming.api.transformations.OneInputTransformation<?, ?> stage, long memoryBytes)
+            throws Exception {
         var operator = (OneInputStreamOperator<RowData, RowData>) stage.getOperator();
         if (!operator.getClass().getSimpleName().equals("LocalSlicingWindowAggOperator"))
             throw new AssertionError("Expected original Flink local slicer, got " + operator.getClass());
-        var inputType = ((InternalTypeInfo<RowData>) stage.getInputType()).toRowType();
         var outputType = ((InternalTypeInfo<RowData>) stage.getOutputType()).toRowType();
-        if (inputType.getFieldCount() != 2 || outputType.getFieldCount() != 3)
-            throw new AssertionError("Unexpected Flink COUNT partial schemas: " + inputType + " / " + outputType);
         var environment =
                 new MockEnvironmentBuilder().setManagedMemorySize(memoryBytes).build();
         var harness = new OneInputStreamOperatorTestHarness<RowData, RowData>(operator, environment) {
