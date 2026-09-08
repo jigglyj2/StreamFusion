@@ -115,6 +115,33 @@ callback, including when the timer service closes first; failed admission leaves
 unchanged. Canonical timer bytes and firing order are unchanged. This does not yet implement
 shared-slice storage or change ordinary planner admission.
 
+A separate development implementation now stores each HOP base slice once, using versioned
+Arrow row keys for the grouping identity and sortable slice end. Flink BinaryRow hashing still
+selects the key group. DataFusion grouped accumulators merge COUNT and compatible append-only
+extrema on input and when windows fire. Input state reads/writes are batched; firing reads at most
+4,096 requested slice keys per page and emits at most 1,024 windows per pull. It advances one timer
+timestamp at a time so timers created during firing run before later windows delete their slices.
+The extra empty-window timer is preserved.
+
+This development path eagerly merges each incoming Arrow batch into slice state instead of
+retaining Flink's additional global raw-row buffer. This follows the native batch execution and
+batched-state contract: emission still waits for the watermark. Unlike the local buffer, the global
+buffer does not emit intermediate partial rows. Full shared-runtime metric and lifecycle parity
+must still verify this adaptation before admission. The heap timer index is serialized at Flink's
+canonical or physical checkpoint boundary, rather than rewritten after every input batch.
+Snapshot markers fingerprint the window contract and pin the slice/Arrow encoding; restoration
+rejects expanded-window state, whose original slices cannot generally be recovered from merged
+extrema. Flink must supply the restored operator watermark separately from keyed snapshots.
+
+Native development tests cover the SQL-generated Flink global HOP control contract, generated
+inputs compared with the existing Flink-verified expanded kernel, memory/RocksDB restore,
+1→2→1 rescaling, physical RocksDB checkpoints, memory denial, and a 5,000-slice window read in
+bounded pages. Storage instrumentation checks one retained value per slice and writes that do
+not grow with the entire timer index. This implementation is currently compiled only for tests;
+shared execution-tree/resource bindings, direct generated Flink SQL parity through that tree,
+complete metric/control recovery checks and ordinary planner admission remain outstanding.
+There is no Q5 acceleration or new Q5 benchmark result yet.
+
 ## Retained semantic implementation
 
 The retained implementation supports direct time-attribute window aggregation for event time and processing

@@ -7,6 +7,8 @@ use std::sync::Arc;
 mod partial;
 mod planning;
 mod session_changes;
+#[cfg(test)]
+mod shared_slices;
 mod state_codec;
 mod time;
 use planning::validate_plan;

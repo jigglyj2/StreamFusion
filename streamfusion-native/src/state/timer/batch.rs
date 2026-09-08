@@ -18,6 +18,26 @@ impl std::ops::Deref for FiredTimerBatch {
 }
 
 impl NativeTimerService {
+    #[cfg(test)]
+    pub(crate) fn key_group_range(&self) -> std::ops::RangeInclusive<u32> {
+        self.first_key_group..=self.first_key_group + self.groups.len() as u32 - 1
+    }
+
+    /// Serialized size is available without constructing the checkpoint buffer.
+    #[cfg(test)]
+    pub(crate) fn snapshot_size(&self, key_group: u32) -> Result<usize> {
+        let group = self.group(key_group)?;
+        Ok(group
+            .event_time
+            .iter()
+            .chain(&group.processing_time)
+            .fold(13usize, |size, timer| {
+                size.saturating_add(17)
+                    .saturating_add(timer.key.len())
+                    .saturating_add(timer.namespace.len())
+            }))
+    }
+
     /// Register the distinct new timers with one host admission. The caller admits the input
     /// vector and deduplication workspace at its Arrow/control batch boundary. Returned key groups
     /// identify successful registrations, in input order, for timer counters and checkpoint dirtiness.

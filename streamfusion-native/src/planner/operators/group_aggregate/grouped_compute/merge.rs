@@ -119,6 +119,11 @@ impl GroupedMerge {
     pub(in crate::planner::operators) fn finish(&mut self) -> Result<GroupedOutput> {
         self.0.finish()
     }
+
+    #[cfg(test)]
+    pub(in crate::planner::operators) fn size(&self) -> usize {
+        self.0.size()
+    }
 }
 
 #[cfg(test)]
