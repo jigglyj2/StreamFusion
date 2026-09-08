@@ -13,7 +13,9 @@ use crate::memory_pool::HostMemoryReservation;
 
 use super::{snapshot, KeyedState, StateKeyRef, StateMutation};
 
-type KeyGroupMap = HashMap<Vec<u8>, Vec<u8>, RandomState>;
+// Stored keys/values are immutable; keep capacity words out of every hash-table bucket.
+type StateBytes = Box<[u8]>;
+type KeyGroupMap = HashMap<StateBytes, StateBytes, RandomState>;
 
 /// In-memory state is independently owned by key group, making raw snapshots directly
 /// redistributable when Flink changes parallelism.
@@ -96,7 +98,7 @@ impl KeyedState for MemoryKeyedState {
                 Ok(self
                     .group(key.key_group)?
                     .get(key.key)
-                    .map(|value| StateValue::Borrowed(value.as_slice())))
+                    .map(|value| StateValue::Borrowed(value.as_ref())))
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(super::StateReadBatch::new(values, reservation))
@@ -105,10 +107,12 @@ impl KeyedState for MemoryKeyedState {
     fn write_batch(&mut self, mutations: Vec<StateMutation>) -> Result<()> {
         let current = self.estimated_heap_size();
         let grows = mutations.iter().try_fold(0usize, |growth, mutation| {
-            let old = self.group(mutation.key.key_group)?.get(&mutation.key.key);
+            let old = self
+                .group(mutation.key.key_group)?
+                .get(mutation.key.key.as_slice());
             Ok::<_, DataFusionError>(match (&mutation.value, old) {
                 (Some(value), Some(old)) => {
-                    growth.saturating_add(value.capacity().saturating_sub(old.capacity()))
+                    growth.saturating_add(value.capacity().saturating_sub(old.len()))
                 }
                 (Some(value), None) => growth
                     .saturating_add(mutation.key.key.capacity())
@@ -130,7 +134,7 @@ impl KeyedState for MemoryKeyedState {
                     && !self
                         .group(mutation.key.key_group)
                         .expect("validated key group")
-                        .contains_key(&mutation.key.key)
+                        .contains_key(mutation.key.key.as_slice())
             })
             .count();
         workspace.try_grow(additions_bound.min(self.groups.len()).saturating_mul(512))?;
@@ -139,7 +143,7 @@ impl KeyedState for MemoryKeyedState {
             if mutation.value.is_some()
                 && !self
                     .group(mutation.key.key_group)?
-                    .contains_key(&mutation.key.key)
+                    .contains_key(mutation.key.key.as_slice())
             {
                 *additions.entry(mutation.key.key_group).or_default() += 1;
             }
@@ -173,22 +177,25 @@ impl KeyedState for MemoryKeyedState {
             let (added, removed) = {
                 let group = self.group_mut(mutation.key.key_group)?;
                 match mutation.value {
-                    Some(value) => match group.entry(mutation.key.key) {
-                        Entry::Occupied(mut entry) => {
-                            let old_value_capacity = entry.get().capacity();
-                            let new_value_capacity = value.capacity();
-                            entry.insert(value);
-                            (new_value_capacity, old_value_capacity)
+                    Some(value) => {
+                        let value = value.into_boxed_slice();
+                        match group.entry(mutation.key.key.into_boxed_slice()) {
+                            Entry::Occupied(mut entry) => {
+                                let old_length = entry.get().len();
+                                let new_length = value.len();
+                                entry.insert(value);
+                                (new_length, old_length)
+                            }
+                            Entry::Vacant(entry) => {
+                                let added = entry.key().len().saturating_add(value.len());
+                                entry.insert(value);
+                                (added, 0)
+                            }
                         }
-                        Entry::Vacant(entry) => {
-                            let added = entry.key().capacity().saturating_add(value.capacity());
-                            entry.insert(value);
-                            (added, 0)
-                        }
-                    },
+                    }
                     None => group
                         .remove_entry(mutation.key.key.as_slice())
-                        .map(|(key, value)| (0, key.capacity().saturating_add(value.capacity())))
+                        .map(|(key, value)| (0, key.len().saturating_add(value.len())))
                         .unwrap_or((0, 0)),
                 }
             };
@@ -227,7 +234,7 @@ impl KeyedState for MemoryKeyedState {
                 page.clear();
                 bytes = 0;
             }
-            page.push((key.as_slice(), value.as_slice()));
+            page.push((key.as_ref(), value.as_ref()));
             bytes += size;
         }
         if !page.is_empty() {
@@ -257,7 +264,7 @@ impl KeyedState for MemoryKeyedState {
         sort_reservation.resize(
             group
                 .len()
-                .saturating_mul(size_of::<(&Vec<u8>, &Vec<u8>)>()),
+                .saturating_mul(size_of::<(&StateBytes, &StateBytes)>()),
         )?;
         let mut entries = group.iter().collect::<Vec<_>>();
         entries.sort_unstable_by(|left, right| left.0.cmp(right.0));
@@ -309,10 +316,14 @@ impl KeyedState for MemoryKeyedState {
         self.entry_bytes = self.entry_bytes.saturating_add(
             entries
                 .iter()
-                .map(|(key, value)| key.capacity().saturating_add(value.capacity()))
+                .map(|(key, value)| key.len().saturating_add(value.len()))
                 .sum::<usize>(),
         );
-        self.group_mut(key_group)?.extend(entries);
+        self.group_mut(key_group)?.extend(
+            entries
+                .into_iter()
+                .map(|(key, value)| (key.into_boxed_slice(), value.into_boxed_slice())),
+        );
         self.reservation.resize(self.estimated_heap_size())?;
         Ok(())
     }
@@ -352,7 +363,7 @@ fn table_size_for_entries(entries: usize) -> usize {
 }
 
 const fn bucket_bytes() -> usize {
-    size_of::<(Vec<u8>, Vec<u8>)>() + 1
+    size_of::<(StateBytes, StateBytes)>() + 1
 }
 
 #[cfg(test)]

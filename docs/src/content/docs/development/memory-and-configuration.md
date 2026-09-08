@@ -35,6 +35,14 @@ A 100,000-entry constrained-memory regression
 checks range values, sparse occupancy after deletion, observed retained allocations, and restore;
 the cross-backend fixtures continue to compare identical snapshot bytes.
 
+The hash-based in-memory backend also stores immutable key/value bytes in boxed slices.
+Removing vector capacity fields reduces each key/value bucket's descriptors from 48 to 32
+bytes on 64-bit hosts and releases unused payload capacity. Updates retain the original key.
+Reservations still cover the full allocated hash table, including empty buckets after deletion
+and replacement tables during growth. A 100,000-entry regression fits eight-byte keys and
+32-byte values within a 10 MiB state share, then verifies identical canonical snapshot bytes
+after restore. This changes neither the snapshot protocol nor Flink's managed-memory budget.
+
 Filters evaluate their predicate once. All-pass output retains the input buffers; all-rejected
 input needs no gathered payload. Partial selections reserve gather space from the projected
 logical buffer spans, avoiding multiplication of a shared IPC allocation by the schema width.
