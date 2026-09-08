@@ -6,15 +6,21 @@ use crate::memory_pool::MemoryReservationBroker;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Debug)]
-struct CountingBroker {
-    inner: TestBroker,
-    calls: AtomicUsize,
+pub(super) struct CountingBroker {
+    pub(super) inner: TestBroker,
+    pub(super) calls: AtomicUsize,
+    pub(super) peak: AtomicUsize,
 }
 
 impl MemoryReservationBroker for CountingBroker {
     fn try_reserve(&self, bytes: usize) -> Result<bool> {
         self.calls.fetch_add(1, Ordering::Relaxed);
-        self.inner.try_reserve(bytes)
+        let accepted = self.inner.try_reserve(bytes)?;
+        if accepted {
+            self.peak
+                .fetch_max(self.inner.reserved(), Ordering::Relaxed);
+        }
+        Ok(accepted)
     }
 
     fn release(&self, bytes: usize) -> Result<()> {
@@ -35,6 +41,7 @@ fn streaming_reservation_calls_follow_buffer_growth_instead_of_rows_or_state_key
         let broker = Arc::new(CountingBroker {
             inner: TestBroker::new(128 << 20),
             calls: AtomicUsize::new(0),
+            peak: AtomicUsize::new(0),
         });
         let mut join = RegularJoinProcessor::new(
             &plan_contract(proto::RegularJoinType::Inner, true, residual),

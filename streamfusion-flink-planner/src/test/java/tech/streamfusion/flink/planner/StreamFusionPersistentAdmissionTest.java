@@ -77,6 +77,49 @@ class StreamFusionPersistentAdmissionTest {
                 .isFalse();
     }
 
+    @Test
+    void timestampLiteralOffsetsAreBoundedButUnverifiedArithmeticStaysGated() {
+        var types = new org.apache.flink.table.planner.calcite.FlinkTypeFactory(
+                getClass().getClassLoader(), org.apache.flink.table.planner.calcite.FlinkTypeSystem.INSTANCE);
+        var rex = new RexBuilder(types);
+        var interval = rex.makeIntervalLiteral(
+                java.math.BigDecimal.valueOf(10000),
+                new org.apache.calcite.sql.SqlIntervalQualifier(
+                        org.apache.calcite.avatica.util.TimeUnit.SECOND,
+                        null,
+                        org.apache.calcite.sql.parser.SqlParserPos.ZERO));
+        for (int precision : new int[] {0, 3, 6, 9}) {
+            var timestamp = rex.makeInputRef(types.createSqlType(SqlTypeName.TIMESTAMP, precision), 0);
+            for (var operator : List.of(SqlStdOperatorTable.PLUS, SqlStdOperatorTable.MINUS)) {
+                var offset = rex.makeCall(operator, timestamp, interval);
+                assertThat(StreamFusionPersistentAdmission.boundedPredicate(
+                                rex.makeCall(SqlStdOperatorTable.GREATER_THAN_OR_EQUAL, timestamp, offset)))
+                        .isEqualTo(precision == 3);
+                assertThat(StreamFusionPersistentAdmission.boundedPredicate(
+                                rex.makeCall(SqlStdOperatorTable.IS_NULL, rex.makeCall(operator, offset, interval))))
+                        .isFalse();
+                assertThat(StreamFusionPersistentAdmission.boundedPredicate(rex.makeCall(
+                                SqlStdOperatorTable.IS_NULL,
+                                rex.makeCall(operator, timestamp, rex.makeInputRef(interval.getType(), 1)))))
+                        .isFalse();
+                assertThat(StreamFusionPersistentAdmission.boundedPredicate(rex.makeCall(
+                                SqlStdOperatorTable.IS_NULL,
+                                rex.makeCall(operator, timestamp, rex.makeNullLiteral(interval.getType())))))
+                        .isFalse();
+            }
+        }
+        var timestamp = rex.makeInputRef(types.createSqlType(SqlTypeName.TIMESTAMP, 3), 0);
+        var month = rex.makeIntervalLiteral(
+                java.math.BigDecimal.ONE,
+                new org.apache.calcite.sql.SqlIntervalQualifier(
+                        org.apache.calcite.avatica.util.TimeUnit.MONTH,
+                        null,
+                        org.apache.calcite.sql.parser.SqlParserPos.ZERO));
+        assertThat(StreamFusionPersistentAdmission.boundedPredicate(rex.makeCall(
+                        SqlStdOperatorTable.IS_NULL, rex.makeCall(SqlStdOperatorTable.PLUS, timestamp, month))))
+                .isFalse();
+    }
+
     private StreamExecGroupAggregate aggregate(
             SqlAggFunction function, boolean distinct, LogicalType value, LogicalType key, boolean keyed) {
         var config = new Configuration();

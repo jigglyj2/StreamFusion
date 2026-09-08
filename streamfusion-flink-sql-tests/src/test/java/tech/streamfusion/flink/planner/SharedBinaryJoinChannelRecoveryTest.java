@@ -28,18 +28,22 @@ import tech.streamfusion.flink.exchange.ArrowExchangeBatch;
 class SharedBinaryJoinChannelRecoveryTest {
     @ParameterizedTest
     @CsvSource({
-        "false,false,false",
-        "false,true,false",
-        "true,false,false",
-        "true,true,false",
-        "false,false,true",
-        "false,true,true",
-        "true,false,true",
-        "true,true,true"
+        "false,false,EQUALITY",
+        "false,true,EQUALITY",
+        "true,false,EQUALITY",
+        "true,true,EQUALITY",
+        "false,false,RANGE",
+        "false,true,RANGE",
+        "true,false,RANGE",
+        "true,true,RANGE",
+        "false,false,TIMESTAMP_OFFSET",
+        "false,true,TIMESTAMP_OFFSET",
+        "true,false,TIMESTAMP_OFFSET",
+        "true,true,TIMESTAMP_OFFSET"
     })
-    void flinkReplaysInflightArrowFramesAgainstRestoredJoinState(boolean rocks, boolean unaligned, boolean range)
+    void flinkReplaysInflightArrowFramesAgainstRestoredJoinState(boolean rocks, boolean unaligned, Predicate predicate)
             throws Exception {
-        var fixture = range ? SharedBinaryJoinMetricFixture.rangeJoin() : new SharedBinaryJoinMetricFixture(false);
+        var fixture = SharedBinaryJoinMetricFixture.forPredicate(predicate);
         try (var oracle = fixture.join(rocks);
                 var calc = fixture.calc();
                 var allocator = new RootAllocator(64L << 20)) {

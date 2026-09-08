@@ -47,8 +47,13 @@ Q7 is the next executable query checkpoint.
 
 Q7's demonstrated blockers are two-phase TUMBLE and a timestamp-arithmetic join residual. The
 TUMBLE COUNT/MIN/MAX path now has shared-runtime Flink parity, metrics and recovery coverage;
-its generated SQL tests require ordinary admission on both backends. The computed join predicate
-remains gated. Q7 is not yet delivered or measured.
+its generated SQL tests require ordinary admission on both backends. Literal day-time offsets on
+`TIMESTAMP(3)` join columns now have Flink-generated metric/changelog and both-backend recovery
+coverage, with bounded native workspace checks. Other computed predicates retain their gate.
+The opt-in `NexmarkQ7ProductionIT` verifies ordinary whole-plan admission and exact complete
+changelog/materialized-result parity for the official RowData query at 10,000 events, parallelism
+1 and 4, on both state backends. Native plan counters are positive and standalone local-window
+counters remain zero. Q7 release measurements and profiling are the next checkpoint.
 
 ## Q6 has no Flink streaming baseline
 
@@ -102,8 +107,9 @@ The actual RowData Q3 plan uses Flink's binary `StreamExecMultiJoin` for the auc
 The existing semantic lowering can represent that binary shape as the native regular join;
 it must not be confused with the separate native multi-way join algorithm. The early architecture
 gate uses the same binary-shape decision as semantic lowering. The verified pure equi subset
-is admitted with in-memory and default RocksDB state. Computed residual operands retain a workspace restriction; direct column/literal comparisons
-now have separate generated conformance coverage; non-default RocksDB settings and incompatible native artifacts
+is admitted with in-memory and default RocksDB state. Direct column/literal comparisons and
+literal day-time offsets on `TIMESTAMP(3)` columns have separate generated conformance coverage;
+other computed residual operands retain a workspace restriction. Non-default RocksDB settings and incompatible native artifacts
 retain their specific backend restrictions. Genuine multi-way and
 non-lowerable binary shapes still require their paged-state/output cursor to join the common
 execution, metric and checkpoint lifecycle.

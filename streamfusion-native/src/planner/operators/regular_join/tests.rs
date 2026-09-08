@@ -11,6 +11,7 @@ mod coarse_memory;
 mod planning_memory;
 mod region;
 mod streaming;
+mod timestamp_predicate;
 
 #[test]
 fn residual_candidates_use_bounded_arrow_workspace_and_release_the_mask() {

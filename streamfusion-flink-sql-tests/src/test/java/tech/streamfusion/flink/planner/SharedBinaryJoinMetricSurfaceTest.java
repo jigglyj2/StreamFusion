@@ -23,10 +23,17 @@ import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 
 class SharedBinaryJoinMetricSurfaceTest {
     @ParameterizedTest
-    @CsvSource({"false,false", "true,false", "false,true", "true,true"})
-    void defaultMetricsAndChangelogMatchFlinkAcrossBothInputsAndBackends(boolean rocks, boolean range)
+    @CsvSource({
+        "false,EQUALITY",
+        "true,EQUALITY",
+        "false,RANGE",
+        "true,RANGE",
+        "false,TIMESTAMP_OFFSET",
+        "true,TIMESTAMP_OFFSET"
+    })
+    void defaultMetricsAndChangelogMatchFlinkAcrossBothInputsAndBackends(boolean rocks, Predicate predicate)
             throws Exception {
-        var fixture = range ? SharedBinaryJoinMetricFixture.rangeJoin() : new SharedBinaryJoinMetricFixture(false);
+        var fixture = SharedBinaryJoinMetricFixture.forPredicate(predicate);
         try (var join = fixture.join(rocks);
                 var calc = fixture.calc();
                 var target = new KeyedNativeMetricHarness(

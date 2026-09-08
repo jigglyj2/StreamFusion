@@ -53,9 +53,11 @@ edge adapters; an internal RowData operator or an intermediate JNI round trip is
 A binary Flink `StreamExecMultiJoin` with a common equi key lowers to the regular join algorithm.
 Its shared-region composition is admitted after generated metric/changelog comparisons, keyed
 rescaling and channel replay tests. Persistent state permits the common equality keys plus
-boolean combinations of direct column/literal comparisons and null checks. Residual predicates
-use DataFusion in bounded Arrow chunks with reserved workspace and match masks. Computed operands
-retain a precise workspace fallback; this is a general expression subset, not a Nexmark special case.
+boolean combinations of direct column/literal comparisons and null checks, including a
+`TIMESTAMP(3)` column plus/minus a non-null literal day-time interval. Residual predicates
+use DataFusion in bounded Arrow chunks with reserved workspace and match masks. Nested arithmetic,
+dynamic intervals, other timestamp precisions/time zones, and other computed operands retain a
+precise workspace fallback; this is a general expression subset, not a Nexmark special case.
 A separate backend guard checks the packaged RocksDB library's CPU compatibility and checksum.
 TaskManager log relocation matches Flink. Unsupported typed RocksDB settings still report their
 specific option first.

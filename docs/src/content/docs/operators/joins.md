@@ -8,8 +8,9 @@ sidebar:
 **Current status:** Partial. Synchronous binary `INNER` joins represented by Flink's
 `StreamExecMultiJoin` use the shared native plan with in-memory or default RocksDB state when their complete
 condition is covered by common equi keys and optional boolean combinations of direct
-column/literal comparisons or null checks. Computed residual operands retain a specific workspace
-fallback. Both inputs must use non-unique multiset state.
+column/literal comparisons or null checks. Comparison/null-check operands may also use a
+`TIMESTAMP(3)` column plus or minus a non-null literal day-time interval. Other computed residual
+operands retain a specific workspace fallback. Both inputs must use non-unique multiset state.
 Outer joins, TTL, mini-batching, async/changelog state, enabled
 state-latency metrics, and checkpointing during channel recovery retain whole-plan fallback.
 RocksDB requires its optional native component, a compatible verified CPU artifact, and supported
@@ -37,6 +38,11 @@ Generated shared-region conformance tests also cover binary inner joins with a n
 negative epochs, null and non-matching bounds, a 5,000-row fan-out crossing the bounded
 expression chunks, all four RowKinds, complete registered metrics, backend-switch savepoints,
 1-to-2-to-1 rescaling, incremental SST reuse, and actual aligned/unaligned channel replay.
+The same matrix covers literal timestamp offsets using Flink-generated join conditions, including
+overflow at the internal signed-millisecond limits. DataFusion evaluates those offsets with wrapping
+integer arithmetic and zero-copy timestamp casts. A native regression checks both batched candidate
+masks and a 50,003-candidate hot key: measured temporary allocation peaks fit the reserved Arrow
+workspace, budget denial releases credit, and broker calls follow chunks rather than rows.
 These tests support production admission for the bounded residual-comparison subset above.
 
 Residual evaluation now also batches candidate pairs across consecutive incoming rows. A cache

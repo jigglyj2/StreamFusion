@@ -30,24 +30,30 @@ import tech.streamfusion.flink.operator.StreamFusionNativeRegionOperatorFactory;
 
 /** Actual Rust routing, shared keyed region, and Flink snapshot/repartition/restore APIs. */
 class SharedBinaryJoinRecoveryTest {
-    @ParameterizedTest(name = "rocks={0}, mode={1}, range={2}")
+    @ParameterizedTest(name = "rocks={0}, mode={1}, predicate={2}")
     @CsvSource({
-        "false,0,false",
-        "true,0,false",
-        "false,1,false",
-        "true,1,false",
-        "false,2,false",
-        "true,2,false",
-        "false,0,true",
-        "true,0,true",
-        "false,1,true",
-        "true,1,true",
-        "false,2,true",
-        "true,2,true"
+        "false,0,EQUALITY",
+        "true,0,EQUALITY",
+        "false,1,EQUALITY",
+        "true,1,EQUALITY",
+        "false,2,EQUALITY",
+        "true,2,EQUALITY",
+        "false,0,RANGE",
+        "true,0,RANGE",
+        "false,1,RANGE",
+        "true,1,RANGE",
+        "false,2,RANGE",
+        "true,2,RANGE",
+        "false,0,TIMESTAMP_OFFSET",
+        "true,0,TIMESTAMP_OFFSET",
+        "false,1,TIMESTAMP_OFFSET",
+        "true,1,TIMESTAMP_OFFSET",
+        "false,2,TIMESTAMP_OFFSET",
+        "true,2,TIMESTAMP_OFFSET"
     })
-    void canonicalBackendSwitchAndAlignedUnalignedRescalingPreserveJoinChangelog(boolean rocks, int mode, boolean range)
-            throws Exception {
-        var fixture = range ? SharedBinaryJoinMetricFixture.rangeJoin() : new SharedBinaryJoinMetricFixture(false);
+    void canonicalBackendSwitchAndAlignedUnalignedRescalingPreserveJoinChangelog(
+            boolean rocks, int mode, Predicate predicate) throws Exception {
+        var fixture = SharedBinaryJoinMetricFixture.forPredicate(predicate);
         try (var oracle = fixture.join(rocks);
                 var calc = fixture.calc();
                 var allocator = new RootAllocator(64L << 20)) {

@@ -31,8 +31,8 @@ final class StreamFusionPersistentAdmission {
                             .map(StreamFusionPersistentAdmission::boundedPredicate)
                             .orElse(true)) return null;
                     return "binary join residual workspace: only boolean combinations of direct column/literal "
-                            + "comparisons and null checks have verified bounded Arrow workspace; "
-                            + "computed predicate operands remain on Flink";
+                            + "comparisons and null checks, including TIMESTAMP(3) column +/- literal day-time intervals, "
+                            + "have verified bounded Arrow workspace; other computed predicate operands remain on Flink";
                 }
             }
             if (node instanceof org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecLocalWindowAggregate
@@ -81,6 +81,27 @@ final class StreamFusionPersistentAdmission {
         return null;
     }
 
+    private static boolean boundedOperand(RexNode operand) {
+        if (operand.getKind() == SqlKind.INPUT_REF || operand.getKind() == SqlKind.LITERAL) return true;
+        if (!(operand instanceof RexCall)) return false;
+        var call = (RexCall) operand;
+        if ((call.getKind() != SqlKind.PLUS && call.getKind() != SqlKind.MINUS)
+                || call.getOperands().size() != 2) return false;
+        var timestamp = call.getOperands().get(0);
+        var interval = call.getOperands().get(1);
+        // One fixed-width arithmetic result. Dynamic intervals, nested arithmetic, other
+        // precisions and calendar/time-zone operations retain their semantic/workspace gate.
+        return timestamp.getKind() == SqlKind.INPUT_REF
+                && timestamp.getType().getSqlTypeName() == org.apache.calcite.sql.type.SqlTypeName.TIMESTAMP
+                && timestamp.getType().getPrecision() == 3
+                && call.getType().getSqlTypeName() == org.apache.calcite.sql.type.SqlTypeName.TIMESTAMP
+                && call.getType().getPrecision() == 3
+                && interval.getKind() == SqlKind.LITERAL
+                && !org.apache.calcite.rex.RexLiteral.isNullLiteral(interval)
+                && interval.getType().getSqlTypeName().getFamily()
+                        == org.apache.calcite.sql.type.SqlTypeFamily.INTERVAL_DAY_TIME;
+    }
+
     static boolean boundedPredicate(RexNode expression) {
         if (expression.getKind() == SqlKind.LITERAL) return true;
         if (!(expression instanceof RexCall)) return false;
@@ -98,9 +119,7 @@ final class StreamFusionPersistentAdmission {
             case GREATER_THAN_OR_EQUAL:
             case IS_NULL:
             case IS_NOT_NULL:
-                return call.getOperands().stream()
-                        .allMatch(operand ->
-                                operand.getKind() == SqlKind.INPUT_REF || operand.getKind() == SqlKind.LITERAL);
+                return call.getOperands().stream().allMatch(StreamFusionPersistentAdmission::boundedOperand);
             default:
                 return false;
         }

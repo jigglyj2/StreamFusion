@@ -40,15 +40,23 @@ final class SharedBinaryJoinMetricFixture {
     private final boolean outer;
     final RowType input;
     final RowType output;
-    private final boolean range;
+
+    enum Predicate {
+        EQUALITY,
+        RANGE,
+        TIMESTAMP_OFFSET
+    }
+
+    private final Predicate predicate;
     private final RexNode condition;
     private final List<RexNode> projections;
 
     SharedBinaryJoinMetricFixture(boolean outer) {
-        this(outer, INPUT, OUTPUT, false);
+        this(outer, INPUT, OUTPUT, Predicate.EQUALITY);
     }
 
-    static SharedBinaryJoinMetricFixture rangeJoin() {
+    static SharedBinaryJoinMetricFixture forPredicate(Predicate predicate) {
+        if (predicate == Predicate.EQUALITY) return new SharedBinaryJoinMetricFixture(false);
         var input = RowType.of(
                 new BigIntType(false),
                 new org.apache.flink.table.types.logical.TimestampType(3),
@@ -60,14 +68,14 @@ final class SharedBinaryJoinMetricFixture {
                 input.getTypeAt(0),
                 input.getTypeAt(1),
                 input.getTypeAt(2));
-        return new SharedBinaryJoinMetricFixture(false, input, output, true);
+        return new SharedBinaryJoinMetricFixture(false, input, output, predicate);
     }
 
-    private SharedBinaryJoinMetricFixture(boolean outer, RowType input, RowType output, boolean range) {
+    private SharedBinaryJoinMetricFixture(boolean outer, RowType input, RowType output, Predicate predicate) {
         this.outer = outer;
         this.input = input;
         this.output = output;
-        this.range = range;
+        this.predicate = predicate;
         var types = new FlinkTypeFactory(getClass().getClassLoader(), FlinkTypeSystem.INSTANCE);
         var rex = new RexBuilder(types);
         int width = input.getFieldCount();
@@ -76,28 +84,40 @@ final class SharedBinaryJoinMetricFixture {
                 .mapToObj(index -> (RexNode)
                         rex.makeInputRef(types.createFieldTypeFromLogicalType(output.getTypeAt(index)), index))
                 .collect(java.util.stream.Collectors.toList());
-        if (range) {
+        if (predicate != Predicate.EQUALITY) {
             var timestamp = types.createFieldTypeFromLogicalType(input.getTypeAt(1));
             var value = rex.makeInputRef(timestamp, width + 1);
+            RexNode start = rex.makeInputRef(timestamp, 1);
+            RexNode end = rex.makeInputRef(timestamp, 2);
+            if (predicate == Predicate.TIMESTAMP_OFFSET) {
+                var interval = rex.makeIntervalLiteral(
+                        java.math.BigDecimal.TEN,
+                        new org.apache.calcite.sql.SqlIntervalQualifier(
+                                org.apache.calcite.avatica.util.TimeUnit.SECOND,
+                                null,
+                                org.apache.calcite.sql.parser.SqlParserPos.ZERO));
+                // The same inclusive range, expressed through both fixed-width operations.
+                start = rex.makeCall(org.apache.calcite.sql.fun.SqlStdOperatorTable.MINUS, end, interval);
+                end = rex.makeCall(
+                        org.apache.calcite.sql.fun.SqlStdOperatorTable.PLUS, rex.makeInputRef(timestamp, 1), interval);
+            }
             condition = rex.makeCall(
                     org.apache.calcite.sql.fun.SqlStdOperatorTable.AND,
-                    rex.makeCall(
-                            org.apache.calcite.sql.fun.SqlStdOperatorTable.GREATER_THAN_OR_EQUAL,
-                            value,
-                            rex.makeInputRef(timestamp, 1)),
-                    rex.makeCall(
-                            org.apache.calcite.sql.fun.SqlStdOperatorTable.LESS_THAN_OR_EQUAL,
-                            value,
-                            rex.makeInputRef(timestamp, 2)));
+                    rex.makeCall(org.apache.calcite.sql.fun.SqlStdOperatorTable.GREATER_THAN_OR_EQUAL, value, start),
+                    rex.makeCall(org.apache.calcite.sql.fun.SqlStdOperatorTable.LESS_THAN_OR_EQUAL, value, end));
         } else condition = null;
     }
 
     org.apache.flink.table.data.GenericRowData row(long key, int port) {
-        if (!range)
+        if (predicate == Predicate.EQUALITY)
             return org.apache.flink.table.data.GenericRowData.of(
                     key,
                     key % 7 == 0 ? null : org.apache.flink.table.data.StringData.fromString("é-" + port + "-" + key));
         long start = key * 1000 - 32000;
+        if (predicate == Predicate.TIMESTAMP_OFFSET) {
+            if (key % 17 == 3) start = Long.MIN_VALUE + 3;
+            if (key % 17 == 4) start = Long.MAX_VALUE - 3;
+        }
         // Null, below range, inclusive boundaries, inside and above range; negative epochs too.
         Long value = start;
         if (port != 0)
@@ -154,26 +174,25 @@ final class SharedBinaryJoinMetricFixture {
     FlinkMultiInputMetricOracle join(boolean rocks) throws Exception {
         var attributes = Map.of(1, List.of(new ConditionAttributeRef(0, 0, 1, 0)));
         var extractor = new AttributeBasedJoinKeyExtractor(attributes, List.of(input, input));
-        String code =
-                "public class MetricBinaryJoinCondition extends org.apache.flink.api.common.functions.AbstractRichFunction "
-                        + "implements org.apache.flink.table.runtime.generated.JoinCondition { public MetricBinaryJoinCondition(Object[] refs) {} "
-                        + "public boolean apply(org.apache.flink.table.data.RowData left, org.apache.flink.table.data.RowData right) "
-                        + "{ return left.getLong(0) == right.getLong(0)"
-                        + (range
-                                ? " && !left.isNullAt(1) && !left.isNullAt(2) && !right.isNullAt(1)"
-                                        + " && right.getTimestamp(1, 3).compareTo(left.getTimestamp(1, 3)) >= 0"
-                                        + " && right.getTimestamp(1, 3).compareTo(left.getTimestamp(2, 3)) <= 0"
-                                : "")
-                        + "; }}";
+        var types = new FlinkTypeFactory(getClass().getClassLoader(), FlinkTypeSystem.INSTANCE);
+        var rex = new RexBuilder(types);
+        var keyType = types.createFieldTypeFromLogicalType(input.getTypeAt(0));
+        var equality = rex.makeCall(
+                org.apache.calcite.sql.fun.SqlStdOperatorTable.EQUALS,
+                rex.makeInputRef(keyType, 0),
+                rex.makeInputRef(keyType, input.getFieldCount()));
+        var completeCondition = condition == null
+                ? equality
+                : rex.makeCall(org.apache.calcite.sql.fun.SqlStdOperatorTable.AND, equality, condition);
+        var generated = org.apache.flink.table.planner.plan.utils.JoinUtil.generateConditionFunction(
+                config, getClass().getClassLoader(), completeCondition, input, input);
         var factory = new StreamingMultiJoinOperatorFactory(
                 List.of(InternalTypeInfo.of(input), InternalTypeInfo.of(input)),
                 List.of(JoinInputSideSpec.withoutUniqueKey(), JoinInputSideSpec.withoutUniqueKey()),
                 List.of(FlinkJoinType.INNER, outer ? FlinkJoinType.LEFT : FlinkJoinType.INNER),
                 null,
                 new long[] {0, 0},
-                new GeneratedJoinCondition[] {
-                    null, new GeneratedJoinCondition("MetricBinaryJoinCondition", code, new Object[0])
-                },
+                new GeneratedJoinCondition[] {null, generated},
                 extractor,
                 attributes);
         var keys = KeySelectorUtil.getRowDataSelector(
