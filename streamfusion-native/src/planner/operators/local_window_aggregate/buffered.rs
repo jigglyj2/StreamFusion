@@ -145,7 +145,7 @@ impl BufferedWindow {
         // Also admit replacement hash/group vectors during growth before touching state.
         let allowance = self
             .kernel
-            .batch_admission(&batch)?
+            .buffered_batch_admission(batch.num_rows())?
             .checked_add(self.retained.size())
             .ok_or_else(overflow)?;
         self.kernel.reservation.resize(allowance)?;
@@ -321,17 +321,38 @@ impl BufferedWindow {
 
     fn emit_chunk(&mut self) -> Result<RecordBatch> {
         let flush = self.flushing.as_ref().expect("active flush");
-        let end = (flush.offset + OUTPUT_ROWS).min(self.order.len());
-        let rows = end - flush.offset;
-        let allowance = rows
-            .checked_mul(
-                512 + self.kernel.calls.len() * 256 + self.kernel.plan.grouping_indices.len() * 256,
-            )
-            .and_then(|bytes| bytes.checked_add(64 * 1024))
+        let per_row = self
+            .kernel
+            .calls
+            .len()
+            .checked_mul(256)
+            .and_then(|bytes| {
+                self.kernel
+                    .plan
+                    .grouping_indices
+                    .len()
+                    .checked_mul(256)?
+                    .checked_add(bytes)
+            })
+            .and_then(|bytes| bytes.checked_add(512))
             .ok_or_else(overflow)?;
         let mut output_memory = self
             .retained
             .sibling("local window bounded output workspace");
+        // Arrow batch boundaries are internal: preserve Flink's partial/control order
+        // while allowing a large flush to drain through a smaller managed-memory share.
+        // Admission still fails normally if even one row cannot fit.
+        let capacity = output_memory
+            .available_capacity()?
+            .map_or(OUTPUT_ROWS, |available| {
+                (available.saturating_sub(64 * 1024) / per_row).clamp(1, OUTPUT_ROWS)
+            });
+        let end = (flush.offset + capacity).min(self.order.len());
+        let rows = end - flush.offset;
+        let allowance = rows
+            .checked_mul(per_row)
+            .and_then(|bytes| bytes.checked_add(64 * 1024))
+            .ok_or_else(overflow)?;
         output_memory.resize(allowance)?;
         let output = self.kernel.output_partials((flush.offset..end).map(|row| {
             flush

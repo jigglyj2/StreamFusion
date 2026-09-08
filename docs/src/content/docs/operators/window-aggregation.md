@@ -73,6 +73,15 @@ factories, and direct Arrow input to source-side local regions. The shared singl
 passes the pressure/control parity fixture; the existing aligned/unaligned channel and restore/rescale
 fixtures cover its common control path. These are prerequisites, not a full Q5 delivery or benchmark.
 
+The buffered local path reserves compact DataFusion group vectors, its ordered key index,
+and batch scratch together. It borrows incoming Arrow arrays and admits serialized partial
+output separately when Flink's buffer or control event triggers a flush. It does not reserve
+the eager compatibility path's hypothetical input copies and simultaneous output. A large
+flush chooses Arrow chunk sizes within the currently available managed-memory share while
+preserving partial order and the original Flink flush boundary. If even one output row cannot
+be admitted, execution fails for recovery. A constrained-memory regression covers both hot
+and distinct keys in a 1 MiB share; no deployment option or memory bypass is added.
+
 ### Global HOP slicer
 
 The global fragment builder admits append-only UTC event-time HOP partials for COUNT and

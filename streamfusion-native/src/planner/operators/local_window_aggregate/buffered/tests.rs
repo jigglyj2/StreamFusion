@@ -367,3 +367,36 @@ fn rejects_ambiguous_or_unverified_attached_bound_contracts() {
         assert!(result.is_err(), "invalid attached variant {variant}");
     }
 }
+
+#[test]
+fn compact_buffered_admission_fits_small_flink_shares_without_eager_output_credit() {
+    use crate::memory_pool::tests_support::TestBroker;
+    for unique in [false, true] {
+        let broker = Arc::new(TestBroker::new(1 << 20));
+        let mut buffer = buffer_with_broker(broker.clone());
+        let rows = (0..1025)
+            .map(|row| (if unique { row } else { row % 17 }, 1000))
+            .collect::<Vec<_>>();
+        let batch = input(&buffer, &rows);
+        assert!(buffer.kernel.batch_admission(&batch).unwrap() > 1 << 20);
+        assert!(buffer.push(batch).unwrap().is_none());
+        let first = buffer.control(ControlEvent::BeforeCheckpoint(1)).unwrap();
+        if unique {
+            assert!(first.as_ref().unwrap().num_rows() < 1025);
+        }
+        let actual = drain(&mut buffer, first);
+        let groups = if unique { 1025 } else { 17 };
+        let expected = (0..groups)
+            .map(|key| {
+                (
+                    key,
+                    rows.iter().filter(|row| row.0 == key).count() as i64,
+                    2000,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+        drop(buffer);
+        assert_eq!(broker.reserved(), 0);
+    }
+}

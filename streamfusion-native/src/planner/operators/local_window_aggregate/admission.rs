@@ -4,6 +4,31 @@
 use super::*;
 
 impl LocalWindowAggregateProcessor {
+    /// Buffered fixed-width execution retains compact DataFusion group vectors and an
+    /// ordered key index. It borrows input arrays and emits partials separately at a
+    /// Flink buffer/control boundary, so the eager path's input-copy and serialized-
+    /// output allowance is not needed here. Reserve growth and batch scratch together.
+    pub(super) fn buffered_batch_admission(&self, rows: usize) -> Result<usize> {
+        let per_row = self
+            .calls
+            .len()
+            .checked_mul(64)
+            .and_then(|bytes| {
+                self.plan
+                    .grouping_indices
+                    .len()
+                    .checked_mul(32)?
+                    .checked_add(bytes)
+            })
+            // Hash-table/order-vector growth, selection indices, row offsets and counts.
+            // The key term includes owned index keys and the Arrow row-encoding buffer.
+            .and_then(|bytes| bytes.checked_add(256))
+            .ok_or_else(overflow)?;
+        rows.checked_mul(per_row)
+            .and_then(|bytes| bytes.checked_add(64 * 1024))
+            .ok_or_else(overflow)
+    }
+
     /// Admit derived Arrow selections, row encodings, hash entries, accumulator deltas and
     /// serialized partials together. Count variable-width input once per use: several calls
     /// may retain the same column independently. The borrowed input remains producer-owned.
