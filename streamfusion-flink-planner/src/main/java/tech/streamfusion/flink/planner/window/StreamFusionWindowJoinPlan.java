@@ -2,7 +2,7 @@
  * Copyright 2026 StreamFusion Authors
  * Licensed under the Apache License, Version 2.0
  */
-package tech.streamfusion.flink.window;
+package tech.streamfusion.flink.planner.window;
 
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.flink.proto.FlinkLogicalTypeProto;
@@ -13,10 +13,10 @@ import tech.streamfusion.proto.plan.v1.Schema;
 import tech.streamfusion.proto.plan.v1.WindowJoin;
 
 /** Builds the versioned native Window Join state contract. */
-final class StreamFusionWindowJoinPlan {
+public final class StreamFusionWindowJoinPlan {
     private StreamFusionWindowJoinPlan() {}
 
-    static byte[] create(
+    public static byte[] create(
             RowType leftType,
             RowType rightType,
             int[] leftKeys,

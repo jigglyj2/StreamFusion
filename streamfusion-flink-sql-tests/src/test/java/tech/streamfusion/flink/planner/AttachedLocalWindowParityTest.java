@@ -29,7 +29,7 @@ import org.apache.flink.types.RowKind;
 import org.junit.jupiter.api.Test;
 import tech.streamfusion.flink.arrow.ArrowNativePlanDispatcher;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
-import tech.streamfusion.flink.window.StreamFusionLocalWindowAggregateTranslator;
+import tech.streamfusion.flink.planner.window.StreamFusionLocalWindowAggregateTranslator;
 import tech.streamfusion.nativebridge.NativeExecutionContext;
 import tech.streamfusion.proto.plan.v1.*;
 

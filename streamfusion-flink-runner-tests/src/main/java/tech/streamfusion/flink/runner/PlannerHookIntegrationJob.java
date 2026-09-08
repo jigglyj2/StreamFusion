@@ -59,7 +59,7 @@ public final class PlannerHookIntegrationJob {
                     "The submitted job did not execute a native calc batch\n" + tables.explainSql(calcSql));
         }
 
-        long batchesBeforeUnion = StreamFusionPlannerFactory.nativeCalcBatchCount();
+        long batchesBeforeUnion = StreamFusionPlannerFactory.nativePlanBatchCount();
         List<Integer> unionValues = new ArrayList<>();
         String unionSql = "SELECT id + 10 FROM (VALUES (1), (2)) AS left_input(id) WHERE id >= 1 "
                 + "UNION ALL "
@@ -73,11 +73,13 @@ public final class PlannerHookIntegrationJob {
         if (!unionValues.equals(List.of(11, 12, 22, 23))) {
             throw new IllegalStateException("Unexpected UNION ALL result: " + unionValues);
         }
-        if (StreamFusionPlannerFactory.nativeCalcBatchCount() < batchesBeforeUnion + 2) {
-            throw new IllegalStateException("UNION ALL did not execute both native Calc branches");
+        if (StreamFusionPlannerFactory.nativePlanBatchCount() < batchesBeforeUnion + 2) {
+            throw new IllegalStateException("UNION ALL did not execute both inputs through the shared native plan\n"
+                    + tables.explainSql(unionSql));
         }
 
         long acceleratedBatches = StreamFusionPlannerFactory.nativeCalcBatchCount();
+        long acceleratedStreams = StreamFusionPlannerFactory.nativePlanBatchCount();
         PlannerFallbackFixture.register(tables);
         List<Integer> fallbackValues = new ArrayList<>();
         try (CloseableIterator<Row> rows =
@@ -90,7 +92,8 @@ public final class PlannerHookIntegrationJob {
         if (!fallbackValues.equals(List.of(-2, -1))) {
             throw new IllegalStateException("Unexpected Flink fallback result: " + fallbackValues);
         }
-        if (StreamFusionPlannerFactory.nativeCalcBatchCount() != acceleratedBatches) {
+        if (StreamFusionPlannerFactory.nativeCalcBatchCount() != acceleratedBatches
+                || StreamFusionPlannerFactory.nativePlanBatchCount() != acceleratedStreams) {
             throw new IllegalStateException("The runner-only fallback fixture unexpectedly ran in StreamFusion");
         }
 

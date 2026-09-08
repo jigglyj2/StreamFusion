@@ -22,7 +22,7 @@ import tech.streamfusion.flink.state.AbstractStreamFusionArrowKeyedStateOperator
 import tech.streamfusion.nativebridge.NativeOverAggregateBridge;
 
 /** Hash-partitioned bounded OVER with its required sort fused behind one native boundary. */
-final class StreamFusionArrowBoundedOverAggregateOperator extends AbstractStreamFusionArrowKeyedStateOperator
+public final class StreamFusionArrowBoundedOverAggregateOperator extends AbstractStreamFusionArrowKeyedStateOperator
         implements OneInputStreamOperator<NativeExchangeFrame, ArrowRowDataBatch>, BoundedOneInput {
     private final RowType inputType;
     private final RowType outputType;
@@ -34,7 +34,7 @@ final class StreamFusionArrowBoundedOverAggregateOperator extends AbstractStream
     private transient Counter nativeInvocations;
     private transient boolean finished;
 
-    StreamFusionArrowBoundedOverAggregateOperator(
+    public StreamFusionArrowBoundedOverAggregateOperator(
             RowType inputType, RowType outputType, byte[] plan, byte[] exchangePlan) {
         super(plan, "bounded over aggregate", NativeOverAggregateBridge.keyedStateBridge());
         this.inputType = inputType;

@@ -2,7 +2,7 @@
  * Copyright 2026 StreamFusion Authors
  * Licensed under the Apache License, Version 2.0
  */
-package tech.streamfusion.flink.window;
+package tech.streamfusion.flink.planner.window;
 
 import static org.apache.flink.runtime.state.KeyGroupRangeAssignment.DEFAULT_LOWER_BOUND_MAX_PARALLELISM;
 
@@ -40,6 +40,7 @@ import tech.streamfusion.flink.exchange.StreamFusionExchangeTranslator;
 import tech.streamfusion.flink.memory.StreamFusionTaskMemory;
 import tech.streamfusion.flink.operator.StreamFusionArrowNativeOperator;
 import tech.streamfusion.flink.state.StreamFusionStateBackendFactory;
+import tech.streamfusion.flink.window.StreamFusionArrowSessionWindowTableFunctionOperator;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.Input;
 import tech.streamfusion.proto.plan.v1.Operator;
@@ -279,13 +280,13 @@ public final class StreamFusionWindowTableFunctionTranslator {
         return duration == null ? 0 : duration.toMillis();
     }
 
-    static final class WindowParameters {
+    public static final class WindowParameters {
         final WindowKind kind;
         final long sizeMillis;
         final long slideOrStepMillis;
         final long offsetMillis;
 
-        WindowParameters(WindowKind kind, long sizeMillis, long slideOrStepMillis, long offsetMillis) {
+        public WindowParameters(WindowKind kind, long sizeMillis, long slideOrStepMillis, long offsetMillis) {
             this.kind = kind;
             this.sizeMillis = sizeMillis;
             this.slideOrStepMillis = slideOrStepMillis;

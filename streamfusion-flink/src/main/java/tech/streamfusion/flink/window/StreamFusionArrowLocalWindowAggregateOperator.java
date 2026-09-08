@@ -16,7 +16,7 @@ import tech.streamfusion.flink.metrics.FlinkMetricParity;
 import tech.streamfusion.nativebridge.NativeLocalWindowAggregateBridge;
 
 /** State-free per-Arrow-batch slicing aggregation for Flink's local window stage. */
-final class StreamFusionArrowLocalWindowAggregateOperator extends AbstractStreamOperator<ArrowRowDataBatch>
+public final class StreamFusionArrowLocalWindowAggregateOperator extends AbstractStreamOperator<ArrowRowDataBatch>
         implements OneInputStreamOperator<ArrowRowDataBatch, ArrowRowDataBatch> {
     private final byte[] serializedPlan;
     private final RowType outputType;
@@ -25,7 +25,8 @@ final class StreamFusionArrowLocalWindowAggregateOperator extends AbstractStream
     private transient FlinkManagedMemory managedMemory;
     private transient long nativeHandle;
 
-    StreamFusionArrowLocalWindowAggregateOperator(byte[] serializedPlan, RowType outputType, boolean inputChangelog) {
+    public StreamFusionArrowLocalWindowAggregateOperator(
+            byte[] serializedPlan, RowType outputType, boolean inputChangelog) {
         this.serializedPlan = serializedPlan.clone();
         this.outputType = outputType;
         this.inputChangelog = inputChangelog;

@@ -54,6 +54,7 @@ import org.junit.jupiter.api.Test;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatchSerializer;
 import tech.streamfusion.flink.deduplicate.ArrowBatchKeySelector;
+import tech.streamfusion.flink.planner.window.StreamFusionWindowDeduplicatePlan;
 import tech.streamfusion.flink.state.StreamFusionStateBackend;
 
 class StreamFusionArrowWindowDeduplicateOperatorTest {

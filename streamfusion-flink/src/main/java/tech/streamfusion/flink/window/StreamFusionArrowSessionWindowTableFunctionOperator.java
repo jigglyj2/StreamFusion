@@ -28,7 +28,8 @@ import tech.streamfusion.flink.state.AbstractStreamFusionArrowKeyedStateOperator
 import tech.streamfusion.nativebridge.NativeSessionWindowTableFunctionBridge;
 
 /** Native keyed merging SESSION Window TVF with event-time and processing-time timers. */
-final class StreamFusionArrowSessionWindowTableFunctionOperator extends AbstractStreamFusionArrowKeyedStateOperator
+public final class StreamFusionArrowSessionWindowTableFunctionOperator
+        extends AbstractStreamFusionArrowKeyedStateOperator
         implements OneInputStreamOperator<ArrowRowDataBatch, ArrowRowDataBatch>,
                 BoundedOneInput,
                 ProcessingTimeCallback {
@@ -48,7 +49,7 @@ final class StreamFusionArrowSessionWindowTableFunctionOperator extends Abstract
     private transient long observedNativeNullRowtimes;
     private transient long[] observedNativeStatistics;
 
-    StreamFusionArrowSessionWindowTableFunctionOperator(
+    public StreamFusionArrowSessionWindowTableFunctionOperator(
             RowType inputType,
             RowType outputType,
             int[] partitionKeys,

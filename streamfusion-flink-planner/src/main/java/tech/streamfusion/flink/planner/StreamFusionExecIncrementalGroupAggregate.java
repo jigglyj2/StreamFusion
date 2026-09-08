@@ -27,7 +27,7 @@ import org.apache.flink.table.types.logical.RowType;
 public final class StreamFusionExecIncrementalGroupAggregate extends ExecNodeBase<RowData>
         implements StreamExecNode<RowData> {
     private static final String TRANSLATOR =
-            "tech.streamfusion.flink.aggregate.StreamFusionIncrementalGroupAggregateTranslator";
+            "tech.streamfusion.flink.planner.aggregate.StreamFusionIncrementalGroupAggregateTranslator";
 
     private final RowType partialOriginalInputType;
     private final int partialGroupingCount;
@@ -81,8 +81,7 @@ public final class StreamFusionExecIncrementalGroupAggregate extends ExecNodeBas
         RowDataKeySelector selector = KeySelectorUtil.getRowDataSelector(
                 planner.getFlinkContext().getClassLoader(), grouping, InternalTypeInfo.of(internalInputType));
         try {
-            Method method = Class.forName(
-                            TRANSLATOR, true, planner.getFlinkContext().getClassLoader())
+            Method method = Class.forName(TRANSLATOR, true, StreamFusionRuntimeClasses.class.getClassLoader())
                     .getMethod(
                             "translate",
                             Transformation.class,

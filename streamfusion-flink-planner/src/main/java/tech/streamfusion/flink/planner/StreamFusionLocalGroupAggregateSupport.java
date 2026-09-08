@@ -28,9 +28,9 @@ final class StreamFusionLocalGroupAggregateSupport {
         config.addAll(Configuration.fromMap(local.getPersistedConfig().toMap()));
         try {
             return (String) Class.forName(
-                            "tech.streamfusion.flink.aggregate.StreamFusionLocalGroupAggregateTranslator",
+                            "tech.streamfusion.flink.planner.aggregate.StreamFusionLocalGroupAggregateTranslator",
                             true,
-                            context.getPlanner().getFlinkContext().getClassLoader())
+                            StreamFusionRuntimeClasses.class.getClassLoader())
                     .getMethod(
                             "unsupportedStageReason",
                             RowType.class,

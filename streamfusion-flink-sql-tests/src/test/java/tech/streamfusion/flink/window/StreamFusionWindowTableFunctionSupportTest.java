@@ -17,6 +17,7 @@ import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.TimestampKind;
 import org.apache.flink.table.types.logical.TimestampType;
 import org.junit.jupiter.api.Test;
+import tech.streamfusion.flink.planner.window.StreamFusionWindowTableFunctionTranslator;
 
 class StreamFusionWindowTableFunctionSupportTest {
     @Test

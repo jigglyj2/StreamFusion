@@ -9,8 +9,8 @@ fi
 flink_home=$(cd "$1" && pwd)
 project_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 flink_source_home=${FLINK_SOURCE_HOME:-"$project_root/flink"}
-mapfile -t streamfusion_jars < <(find "$project_root/streamfusion-flink/target" -maxdepth 1 -type f -name 'streamfusion-flink-*.jar')
-mapfile -t planner_extension_jars < <(find "$project_root/streamfusion-flink-planner/target" -maxdepth 1 -type f -name 'streamfusion-flink-planner-*.jar')
+mapfile -t streamfusion_jars < <(find "$project_root/streamfusion-flink/target" -maxdepth 1 -type f -name 'streamfusion-flink-*-bundle.jar')
+mapfile -t planner_extension_jars < <(find "$project_root/streamfusion-flink-planner/target" -maxdepth 1 -type f -name 'streamfusion-flink-planner-*-bundle.jar')
 mapfile -t job_jars < <(find "$project_root/streamfusion-flink-runner-tests/target" -maxdepth 1 -type f -name 'streamfusion-flink-runner-tests-*.jar')
 mapfile -t installed_api_jars < <(find "$flink_home/lib" -maxdepth 1 -type f -name 'flink-table-api-java-*.jar')
 mapfile -t planner_loader_jars < <(find "$flink_home/lib" -maxdepth 1 -type f -name 'flink-table-planner-loader-*.jar')
@@ -56,11 +56,14 @@ fi
 
 cp "$patched_api_jar" "${installed_api_jars[0]}"
 planner_staging=$(mktemp -d)
-mkdir -p "$planner_staging/org/apache/flink/table/factories"
+mkdir -p "$planner_staging/org/apache/flink/table/factories" "$planner_staging/org/apache/flink/table/planner/loader"
 cp "$flink_source_home/flink-table/flink-table-api-java/target/classes/org/apache/flink/table/factories/PlannerFactoryUtil.class" \
   "$planner_staging/org/apache/flink/table/factories/"
+cp "$flink_source_home/flink-table/flink-table-api-java/target/classes/org/apache/flink/table/planner/loader/PlannerModule.class" \
+  "$planner_staging/org/apache/flink/table/planner/loader/"
 jar --update --file "${installed_api_jars[0]}" \
-  -C "$planner_staging" org/apache/flink/table/factories/PlannerFactoryUtil.class
+  -C "$planner_staging" org/apache/flink/table/factories/PlannerFactoryUtil.class \
+  -C "$planner_staging" org/apache/flink/table/planner/loader/PlannerModule.class
 (
   cd "$planner_staging"
   jar --extract --file "${planner_loader_jars[0]}" flink-table-planner.jar
@@ -71,10 +74,12 @@ jar --update --file "${installed_api_jars[0]}" \
   zip -dq flink-table-planner.jar META-INF/versions/9/module-info.class || true
   jar --update --file flink-table-planner.jar \
     org/apache/flink/table/planner/delegation/PlannerBase.class
-  jar --update --file flink-table-planner.jar \
-    -C "$project_root/streamfusion-flink-planner/target/classes" tech/streamfusion/flink/planner
+  # Use the packaged classes, including their runtime-compatible protobuf relocation.
+  jar --extract --file "${planner_extension_jars[0]}" tech/streamfusion/flink/planner
+  jar --update --file flink-table-planner.jar tech/streamfusion/flink/planner
 )
 jar --update --file "${planner_loader_jars[0]}" -C "$planner_staging" flink-table-planner.jar
+find "$flink_home/lib" -maxdepth 1 -type f -name 'streamfusion-flink-[0-9]*.jar' -delete
 cp "${streamfusion_jars[0]}" "$flink_home/lib/"
 
 runner_output=$(mktemp)

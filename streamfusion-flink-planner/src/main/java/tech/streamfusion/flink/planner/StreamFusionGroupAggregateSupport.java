@@ -51,9 +51,7 @@ final class StreamFusionGroupAggregateSupport {
         }
         try {
             Class<?> translator = Class.forName(
-                    GROUP_AGGREGATE_TRANSLATOR_CLASS,
-                    true,
-                    context.getPlanner().getFlinkContext().getClassLoader());
+                    GROUP_AGGREGATE_TRANSLATOR_CLASS, true, StreamFusionRuntimeClasses.class.getClassLoader());
             Method method = translator.getMethod(
                     "unsupportedBatchReason",
                     RowType.class,
@@ -97,9 +95,7 @@ final class StreamFusionGroupAggregateSupport {
         }
         try {
             Class<?> translator = Class.forName(
-                    GROUP_AGGREGATE_TRANSLATOR_CLASS,
-                    true,
-                    context.getPlanner().getFlinkContext().getClassLoader());
+                    GROUP_AGGREGATE_TRANSLATOR_CLASS, true, StreamFusionRuntimeClasses.class.getClassLoader());
             Method method = translator.getMethod(
                     "unsupportedBatchReason",
                     RowType.class,
@@ -131,9 +127,7 @@ final class StreamFusionGroupAggregateSupport {
                 ExecNodeConfig.ofNodeConfig(config, false), aggregateStateMetadata(aggregate));
         try {
             Class<?> translator = Class.forName(
-                    GROUP_AGGREGATE_TRANSLATOR_CLASS,
-                    true,
-                    context.getPlanner().getFlinkContext().getClassLoader());
+                    GROUP_AGGREGATE_TRANSLATOR_CLASS, true, StreamFusionRuntimeClasses.class.getClassLoader());
             Method method = translator.getMethod(
                     "unsupportedStageReason",
                     RowType.class,
@@ -180,9 +174,7 @@ final class StreamFusionGroupAggregateSupport {
         }
         try {
             Class<?> translator = Class.forName(
-                    GROUP_AGGREGATE_TRANSLATOR_CLASS,
-                    true,
-                    context.getPlanner().getFlinkContext().getClassLoader());
+                    GROUP_AGGREGATE_TRANSLATOR_CLASS, true, StreamFusionRuntimeClasses.class.getClassLoader());
             Method method = translator.getMethod(
                     "unsupportedReason",
                     RowType.class,
@@ -260,9 +252,7 @@ final class StreamFusionGroupAggregateSupport {
             ReadableConfig config) {
         try {
             Class<?> translator = Class.forName(
-                    GROUP_AGGREGATE_TRANSLATOR_CLASS,
-                    true,
-                    context.getPlanner().getFlinkContext().getClassLoader());
+                    GROUP_AGGREGATE_TRANSLATOR_CLASS, true, StreamFusionRuntimeClasses.class.getClassLoader());
             Method method = translator.getMethod(
                     "unsupportedReason",
                     RowType.class,

@@ -2,7 +2,7 @@
  * Copyright 2026 StreamFusion Authors
  * Licensed under the Apache License, Version 2.0
  */
-package tech.streamfusion.flink.window;
+package tech.streamfusion.flink.planner.window;
 
 import org.apache.flink.table.planner.plan.nodes.exec.spec.SortSpec;
 import org.apache.flink.table.types.logical.RowType;
@@ -15,10 +15,10 @@ import tech.streamfusion.proto.plan.v1.Schema;
 import tech.streamfusion.proto.plan.v1.WindowRank;
 
 /** Builds the versioned protobuf control contract for native Window Top-N. */
-final class StreamFusionWindowRankPlan {
+public final class StreamFusionWindowRankPlan {
     private StreamFusionWindowRankPlan() {}
 
-    static byte[] create(
+    public static byte[] create(
             RowType inputType,
             int[] partitionKeys,
             SortSpec sortSpec,

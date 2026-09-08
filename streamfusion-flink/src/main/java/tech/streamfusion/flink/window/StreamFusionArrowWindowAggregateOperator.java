@@ -28,7 +28,7 @@ import tech.streamfusion.flink.state.AbstractStreamFusionArrowKeyedStateOperator
 import tech.streamfusion.nativebridge.NativeWindowAggregateBridge;
 
 /** Key-grouped native window aggregation with batch-native state access and timer firing. */
-final class StreamFusionArrowWindowAggregateOperator extends AbstractStreamFusionArrowKeyedStateOperator
+public final class StreamFusionArrowWindowAggregateOperator extends AbstractStreamFusionArrowKeyedStateOperator
         implements OneInputStreamOperator<ArrowRowDataBatch, ArrowRowDataBatch>,
                 BoundedOneInput,
                 ProcessingTimeCallback {
@@ -49,7 +49,7 @@ final class StreamFusionArrowWindowAggregateOperator extends AbstractStreamFusio
     private transient long observedNativeLateRecords;
     private transient long[] observedNativeStatistics;
 
-    StreamFusionArrowWindowAggregateOperator(
+    public StreamFusionArrowWindowAggregateOperator(
             RowType inputType,
             RowType outputType,
             int[] grouping,

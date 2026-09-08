@@ -28,7 +28,7 @@ import org.apache.flink.table.types.logical.RowType;
 public final class StreamFusionExecWindowTableFunction extends CommonExecWindowTableFunction
         implements StreamExecNode<RowData> {
     private static final String TRANSLATOR_CLASS =
-            "tech.streamfusion.flink.window.StreamFusionWindowTableFunctionTranslator";
+            "tech.streamfusion.flink.planner.window.StreamFusionWindowTableFunctionTranslator";
     private final TimeAttributeWindowingStrategy streamFusionStrategy;
 
     public StreamFusionExecWindowTableFunction(
@@ -62,8 +62,8 @@ public final class StreamFusionExecWindowTableFunction extends CommonExecWindowT
                     InternalTypeInfo.of(inputType));
         }
         try {
-            Class<?> translator = Class.forName(
-                    TRANSLATOR_CLASS, true, planner.getFlinkContext().getClassLoader());
+            Class<?> translator =
+                    Class.forName(TRANSLATOR_CLASS, true, StreamFusionRuntimeClasses.class.getClassLoader());
             Method method = translator.getMethod(
                     "translate",
                     Transformation.class,

@@ -2,7 +2,7 @@
  * Copyright 2026 StreamFusion Authors
  * Licensed under the Apache License, Version 2.0
  */
-package tech.streamfusion.flink.aggregate;
+package tech.streamfusion.flink.planner.aggregate;
 
 import org.apache.calcite.rel.core.AggregateCall;
 import org.apache.flink.configuration.ReadableConfig;

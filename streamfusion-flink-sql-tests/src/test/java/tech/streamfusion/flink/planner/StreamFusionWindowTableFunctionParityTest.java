@@ -2,7 +2,7 @@
  * Copyright 2026 StreamFusion Authors
  * Licensed under the Apache License, Version 2.0
  */
-package tech.streamfusion.flink.window;
+package tech.streamfusion.flink.planner;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -31,6 +31,8 @@ import org.junit.jupiter.api.Test;
 import tech.streamfusion.flink.arrow.ArrowCDataBridge;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.NativeCalcResult;
+import tech.streamfusion.flink.planner.window.StreamFusionWindowTableFunctionPlan;
+import tech.streamfusion.flink.planner.window.StreamFusionWindowTableFunctionTranslator;
 import tech.streamfusion.flink.proto.FlinkLogicalTypeProto;
 import tech.streamfusion.nativebridge.NativeExecutionContext;
 import tech.streamfusion.nativebridge.NativeMemoryManager;
@@ -111,7 +113,7 @@ class StreamFusionWindowTableFunctionParityTest {
                 .setRoot(Operator.newBuilder().setPlanNodeId(11).setCalc(calc))
                 .build()
                 .toByteArray();
-        NativeMemoryManager memoryManager = tech.streamfusion.flink.TestingNativeMemoryManager.create();
+        NativeMemoryManager memoryManager = new SharedAggregateRegionParityTest.Memory();
         try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
                 NativeExecutionContext context = new NativeExecutionContext(plan, memoryManager);
                 ArrowRowDataBatch input =
@@ -142,7 +144,7 @@ class StreamFusionWindowTableFunctionParityTest {
                 "UTC",
                 new StreamFusionWindowTableFunctionTranslator.WindowParameters(
                         testCase.kind, testCase.size, testCase.slideOrStep, testCase.offset));
-        NativeMemoryManager memoryManager = tech.streamfusion.flink.TestingNativeMemoryManager.create();
+        NativeMemoryManager memoryManager = new SharedAggregateRegionParityTest.Memory();
         try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
                 NativeExecutionContext context = new NativeExecutionContext(plan, memoryManager);
                 ArrowRowDataBatch input = ArrowRowDataBatch.transpose(rows, INPUT_TYPE, allocator)

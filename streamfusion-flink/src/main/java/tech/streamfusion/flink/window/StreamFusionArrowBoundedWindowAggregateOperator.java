@@ -22,7 +22,7 @@ import tech.streamfusion.flink.state.AbstractStreamFusionArrowKeyedStateOperator
 import tech.streamfusion.nativebridge.NativeWindowAggregateBridge;
 
 /** Bounded one-phase window aggregation over an in-task Arrow input. */
-final class StreamFusionArrowBoundedWindowAggregateOperator extends AbstractStreamFusionArrowKeyedStateOperator
+public final class StreamFusionArrowBoundedWindowAggregateOperator extends AbstractStreamFusionArrowKeyedStateOperator
         implements OneInputStreamOperator<ArrowRowDataBatch, ArrowRowDataBatch>, BoundedOneInput {
     private final RowType inputType;
     private final RowType outputType;
@@ -33,7 +33,7 @@ final class StreamFusionArrowBoundedWindowAggregateOperator extends AbstractStre
     private transient long[] observedNativeStatistics;
     private transient boolean finished;
 
-    StreamFusionArrowBoundedWindowAggregateOperator(
+    public StreamFusionArrowBoundedWindowAggregateOperator(
             RowType inputType,
             RowType outputType,
             int[] grouping,

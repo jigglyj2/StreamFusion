@@ -2,7 +2,7 @@
  * Copyright 2026 StreamFusion Authors
  * Licensed under the Apache License, Version 2.0
  */
-package tech.streamfusion.flink.window;
+package tech.streamfusion.flink.planner.window;
 
 import static org.apache.flink.runtime.state.KeyGroupRangeAssignment.DEFAULT_LOWER_BOUND_MAX_PARALLELISM;
 
@@ -41,6 +41,9 @@ import tech.streamfusion.flink.exchange.NativeExchangeFrame;
 import tech.streamfusion.flink.exchange.NativeExchangeFrameKeySelector;
 import tech.streamfusion.flink.exchange.StreamFusionExchangeTranslator;
 import tech.streamfusion.flink.state.StreamFusionStateBackendFactory;
+import tech.streamfusion.flink.window.StreamFusionArrowBoundedWindowAggregateOperator;
+import tech.streamfusion.flink.window.StreamFusionArrowFramedWindowAggregateOperator;
+import tech.streamfusion.flink.window.StreamFusionArrowWindowAggregateOperator;
 import tech.streamfusion.proto.plan.v1.WindowKind;
 
 /** Lowers legacy group-window syntax onto the canonical native window state machine. */

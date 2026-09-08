@@ -37,7 +37,11 @@ public final class SelectedAggregateSqlProbe implements ExecNodeGraphProcessor {
         if (recordOnly) return graph;
         var processor = new StreamFusionExecGraphProcessor();
         var result = processor.process(graph, context);
-        if (result != graph) throw new AssertionError("Expected the original production admission gate: " + inputGraph);
+        if (result != graph) {
+            convertedRoots = List.copyOf(result.getRootNodes());
+            convertedGraphs++;
+            return result;
+        }
         var report = StreamFusionPlanningDiagnostics.explain();
         var reasons =
                 report.lines().filter(line -> line.startsWith("Fallback:")).toArray(String[]::new);

@@ -2,7 +2,7 @@
  * Copyright 2026 StreamFusion Authors
  * Licensed under the Apache License, Version 2.0
  */
-package tech.streamfusion.flink.window;
+package tech.streamfusion.flink.planner.window;
 
 import org.apache.calcite.rel.core.AggregateCall;
 import org.apache.calcite.sql.SqlKind;
@@ -20,8 +20,8 @@ import org.apache.flink.table.runtime.groupwindow.WindowStart;
 import org.apache.flink.table.runtime.util.TimeWindowUtil;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
-import tech.streamfusion.flink.aggregate.StreamFusionGroupAggregateTranslator;
 import tech.streamfusion.flink.metrics.NativeStateMetricSupport;
+import tech.streamfusion.flink.planner.aggregate.StreamFusionGroupAggregateTranslator;
 import tech.streamfusion.proto.plan.v1.NativePlan;
 import tech.streamfusion.proto.plan.v1.WindowKind;
 

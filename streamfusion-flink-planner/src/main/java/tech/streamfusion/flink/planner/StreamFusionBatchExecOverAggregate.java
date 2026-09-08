@@ -22,7 +22,8 @@ import org.apache.flink.table.types.logical.RowType;
 
 /** Distinct StreamFusion node for BatchExecOverAggregate with its input sort absorbed. */
 public final class StreamFusionBatchExecOverAggregate extends ExecNodeBase<RowData> implements BatchExecNode<RowData> {
-    private static final String TRANSLATOR = "tech.streamfusion.flink.over.StreamFusionBoundedOverAggregateTranslator";
+    private static final String TRANSLATOR =
+            "tech.streamfusion.flink.planner.over.StreamFusionBoundedOverAggregateTranslator";
 
     private final OverSpec overSpec;
 
@@ -48,8 +49,7 @@ public final class StreamFusionBatchExecOverAggregate extends ExecNodeBase<RowDa
         ExecEdge edge = getInputEdges().get(0);
         Transformation<RowData> input = (Transformation<RowData>) edge.translateToPlan(planner);
         try {
-            Class<?> translator =
-                    Class.forName(TRANSLATOR, true, planner.getFlinkContext().getClassLoader());
+            Class<?> translator = Class.forName(TRANSLATOR, true, StreamFusionRuntimeClasses.class.getClassLoader());
             Method method = translator.getMethod(
                     "translate",
                     Transformation.class,

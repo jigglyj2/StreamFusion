@@ -27,7 +27,7 @@ import org.apache.flink.table.types.logical.RowType;
 public final class StreamFusionBatchExecLocalGroupAggregate extends ExecNodeBase<RowData>
         implements BatchExecNode<RowData> {
     private static final String TRANSLATOR =
-            "tech.streamfusion.flink.aggregate.StreamFusionLocalGroupAggregateTranslator";
+            "tech.streamfusion.flink.planner.aggregate.StreamFusionLocalGroupAggregateTranslator";
 
     private final int[] grouping;
     private final AggregateCall[] calls;
@@ -61,8 +61,7 @@ public final class StreamFusionBatchExecLocalGroupAggregate extends ExecNodeBase
         RowDataKeySelector selector = KeySelectorUtil.getRowDataSelector(
                 planner.getFlinkContext().getClassLoader(), grouping, InternalTypeInfo.of(inputType));
         try {
-            Method method = Class.forName(
-                            TRANSLATOR, true, planner.getFlinkContext().getClassLoader())
+            Method method = Class.forName(TRANSLATOR, true, StreamFusionRuntimeClasses.class.getClassLoader())
                     .getMethod(
                             "translateBatch",
                             Transformation.class,

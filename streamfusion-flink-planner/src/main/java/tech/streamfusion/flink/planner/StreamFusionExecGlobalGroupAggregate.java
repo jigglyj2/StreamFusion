@@ -77,7 +77,7 @@ public final class StreamFusionExecGlobalGroupAggregate extends ExecNodeBase<Row
                 StateMetadata.getStateTtlForOneInputOperator(ExecNodeConfig.ofNodeConfig(config, false), stateMetadata);
         return StreamFusionNativePlanNode.invokeBuilder(
                 planner,
-                "tech.streamfusion.flink.aggregate.StreamFusionGlobalGroupAggregateTranslator",
+                "tech.streamfusion.flink.planner.aggregate.StreamFusionGlobalGroupAggregateTranslator",
                 new Class<?>[] {
                     RowType.class, RowType.class, RowType.class, int.class, AggregateCall[].class,
                     boolean[].class, boolean.class, boolean.class, long.class, ReadableConfig.class

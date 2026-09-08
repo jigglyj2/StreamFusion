@@ -27,7 +27,7 @@ import tech.streamfusion.flink.state.AbstractStreamFusionArrowKeyedStateOperator
 import tech.streamfusion.nativebridge.NativeOverAggregateBridge;
 
 /** Ordered native OVER aggregation with canonical raw keyed state. */
-final class StreamFusionArrowOverAggregateOperator extends AbstractStreamFusionArrowKeyedStateOperator
+public final class StreamFusionArrowOverAggregateOperator extends AbstractStreamFusionArrowKeyedStateOperator
         implements OneInputStreamOperator<ArrowRowDataBatch, ArrowRowDataBatch>,
                 BoundedOneInput,
                 ProcessingTimeCallback {
@@ -47,7 +47,7 @@ final class StreamFusionArrowOverAggregateOperator extends AbstractStreamFusionA
     private transient long currentWatermark = Long.MIN_VALUE;
     private transient long registeredProcessingTimer = Long.MAX_VALUE;
 
-    StreamFusionArrowOverAggregateOperator(
+    public StreamFusionArrowOverAggregateOperator(
             RowType inputType,
             RowType outputType,
             int[] partitionKeys,

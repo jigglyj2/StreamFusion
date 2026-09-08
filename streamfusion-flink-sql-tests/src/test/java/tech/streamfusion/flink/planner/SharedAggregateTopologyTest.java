@@ -29,9 +29,9 @@ import org.apache.flink.table.types.logical.BigIntType;
 import org.apache.flink.table.types.logical.RowType;
 import org.junit.jupiter.api.Test;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
-import tech.streamfusion.flink.aggregate.StreamFusionGroupAggregateTranslator;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatchTypeInfo;
 import tech.streamfusion.flink.operator.StreamFusionNativeRegionOperatorFactory;
+import tech.streamfusion.flink.planner.aggregate.StreamFusionGroupAggregateTranslator;
 import tech.streamfusion.proto.plan.v1.NativePlan;
 
 /** Selected physical nodes, not a bypass of the separate all-or-nothing admission gate. */

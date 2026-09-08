@@ -54,7 +54,7 @@ final class SharedSlicingWindowFixture {
         var strategy =
                 new org.apache.flink.table.planner.plan.logical.TimeAttributeWindowingStrategy(hop(), rowtime, 1);
         return compose(
-                tech.streamfusion.flink.window.StreamFusionGlobalWindowAggregateTranslator.createStagePlan(
+                tech.streamfusion.flink.planner.window.StreamFusionGlobalWindowAggregateTranslator.createStagePlan(
                         RowType.of(new BigIntType(), rowtime),
                         INPUT,
                         OUTPUT,

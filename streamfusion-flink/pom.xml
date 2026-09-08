@@ -109,6 +109,8 @@
                         <goals><goal>shade</goal></goals>
                         <configuration>
                             <createDependencyReducedPom>false</createDependencyReducedPom>
+                            <shadedArtifactAttached>true</shadedArtifactAttached>
+                            <shadedClassifierName>bundle</shadedClassifierName>
                             <relocations>
                                 <relocation>
                                     <pattern>io.netty</pattern>

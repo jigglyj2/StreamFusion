@@ -27,7 +27,7 @@ import tech.streamfusion.flink.state.AbstractStreamFusionArrowKeyedStateOperator
 import tech.streamfusion.nativebridge.NativeWindowRankBridge;
 
 /** Key-grouped native Window Top-N with native Flink-compatible ordering and Arrow output. */
-final class StreamFusionArrowWindowRankOperator extends AbstractStreamFusionArrowKeyedStateOperator
+public final class StreamFusionArrowWindowRankOperator extends AbstractStreamFusionArrowKeyedStateOperator
         implements OneInputStreamOperator<ArrowRowDataBatch, ArrowRowDataBatch>, BoundedOneInput {
     private final RowType outputType;
     private final RowDataKeySelector partitionSelector;
@@ -41,7 +41,7 @@ final class StreamFusionArrowWindowRankOperator extends AbstractStreamFusionArro
     private transient long observedNativeLateRecords;
     private transient long[] observedNativeStatistics;
 
-    StreamFusionArrowWindowRankOperator(
+    public StreamFusionArrowWindowRankOperator(
             RowType inputType,
             RowType outputType,
             int[] partitionKeys,

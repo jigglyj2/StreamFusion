@@ -27,7 +27,7 @@ import org.apache.flink.table.types.logical.RowType;
 public final class StreamFusionBatchExecWindowTableFunction extends CommonExecWindowTableFunction
         implements BatchExecNode<RowData> {
     private static final String TRANSLATOR_CLASS =
-            "tech.streamfusion.flink.window.StreamFusionWindowTableFunctionTranslator";
+            "tech.streamfusion.flink.planner.window.StreamFusionWindowTableFunctionTranslator";
     private final TimeAttributeWindowingStrategy streamFusionStrategy;
 
     public StreamFusionBatchExecWindowTableFunction(
@@ -60,8 +60,8 @@ public final class StreamFusionBatchExecWindowTableFunction extends CommonExecWi
                 : inputCalcs.get(0).getInputEdges().get(0);
         Transformation<RowData> input = (Transformation<RowData>) boundaryEdge.translateToPlan(planner);
         try {
-            Class<?> translator = Class.forName(
-                    TRANSLATOR_CLASS, true, planner.getFlinkContext().getClassLoader());
+            Class<?> translator =
+                    Class.forName(TRANSLATOR_CLASS, true, StreamFusionRuntimeClasses.class.getClassLoader());
             Method method;
             Transformation<RowData> result;
             if (inputCalcs.isEmpty()) {

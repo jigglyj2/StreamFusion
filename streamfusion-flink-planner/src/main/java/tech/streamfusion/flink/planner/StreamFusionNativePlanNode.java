@@ -23,7 +23,7 @@ interface StreamFusionNativePlanNode extends ExecNode<RowData> {
 
     static byte[] invokeBuilder(PlannerBase planner, String owner, Class<?>[] types, Object... arguments) {
         try {
-            return (byte[]) Class.forName(owner, true, planner.getFlinkContext().getClassLoader())
+            return (byte[]) Class.forName(owner, true, StreamFusionRuntimeClasses.class.getClassLoader())
                     .getMethod("createStagePlan", types)
                     .invoke(null, arguments);
         } catch (InvocationTargetException failure) {

@@ -17,7 +17,7 @@ final class SharedLocalWindowFixture {
 
     static byte[] plan() throws Exception {
         return SharedSlicingWindowFixture.compose(
-                tech.streamfusion.flink.window.StreamFusionLocalWindowAggregateTranslator.createStagePlan(
+                tech.streamfusion.flink.planner.window.StreamFusionLocalWindowAggregateTranslator.createStagePlan(
                         INPUT,
                         PARTIAL,
                         new int[] {0},

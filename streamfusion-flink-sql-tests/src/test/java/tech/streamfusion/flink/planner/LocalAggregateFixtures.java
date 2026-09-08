@@ -10,8 +10,8 @@ import org.apache.flink.configuration.Configuration;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
 import org.apache.flink.table.planner.calcite.FlinkTypeFactory;
 import org.apache.flink.table.types.logical.BigIntType;
-import tech.streamfusion.flink.aggregate.StreamFusionLocalGroupAggregateTranslator;
 import tech.streamfusion.flink.operator.StreamFusionNativeRegionTranslator;
+import tech.streamfusion.flink.planner.aggregate.StreamFusionLocalGroupAggregateTranslator;
 import tech.streamfusion.proto.plan.v1.*;
 
 /** Production local fragment surrounded by ordinary payload-only Calc fragments. */

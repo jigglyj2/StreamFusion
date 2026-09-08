@@ -74,7 +74,7 @@ public final class StreamFusionExecGlobalWindowAggregate extends ExecNodeBase<Ro
         config.addAll(Configuration.fromMap(getPersistedConfig().toMap()));
         return StreamFusionNativePlanNode.invokeBuilder(
                 planner,
-                "tech.streamfusion.flink.window.StreamFusionGlobalWindowAggregateTranslator",
+                "tech.streamfusion.flink.planner.window.StreamFusionGlobalWindowAggregateTranslator",
                 new Class<?>[] {
                     RowType.class,
                     RowType.class,

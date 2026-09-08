@@ -23,7 +23,7 @@ public final class StreamFusionExecLocalGroupAggregate extends ExecNodeBase<RowD
         implements StreamExecNode<RowData>, StreamFusionNativePlanNode {
     private final StreamFusionNativeNodeMetadata nativeMetadata = new StreamFusionNativeNodeMetadata();
     private static final String TRANSLATOR =
-            "tech.streamfusion.flink.aggregate.StreamFusionLocalGroupAggregateTranslator";
+            "tech.streamfusion.flink.planner.aggregate.StreamFusionLocalGroupAggregateTranslator";
 
     private final int[] grouping;
     private final AggregateCall[] calls;

@@ -2,7 +2,7 @@
  * Copyright 2026 StreamFusion Authors
  * Licensed under the Apache License, Version 2.0
  */
-package tech.streamfusion.flink.window;
+package tech.streamfusion.flink.planner.window;
 
 import static org.apache.flink.runtime.state.KeyGroupRangeAssignment.DEFAULT_LOWER_BOUND_MAX_PARALLELISM;
 
@@ -28,6 +28,7 @@ import tech.streamfusion.flink.arrow.StreamFusionArrowBoundaries;
 import tech.streamfusion.flink.deduplicate.ArrowBatchKeySelector;
 import tech.streamfusion.flink.exchange.StreamFusionExchangeTranslator;
 import tech.streamfusion.flink.state.StreamFusionStateBackendFactory;
+import tech.streamfusion.flink.window.StreamFusionArrowWindowRankOperator;
 
 /** Reflection entry point for native event-time Window Top-N. */
 public final class StreamFusionWindowRankTranslator {

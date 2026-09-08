@@ -18,9 +18,9 @@ import org.apache.flink.table.planner.plan.nodes.exec.InputProperty;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.VarBinaryType;
 import org.junit.jupiter.api.Test;
-import tech.streamfusion.flink.aggregate.StreamFusionLocalGroupAggregateTranslator;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatchTypeInfo;
 import tech.streamfusion.flink.operator.StreamFusionArrowNativeOperator;
+import tech.streamfusion.flink.planner.aggregate.StreamFusionLocalGroupAggregateTranslator;
 import tech.streamfusion.proto.plan.v1.NativePlan;
 
 class SharedLocalAggregateTopologyTest {

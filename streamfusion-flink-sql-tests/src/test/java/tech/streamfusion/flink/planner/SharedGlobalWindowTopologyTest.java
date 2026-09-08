@@ -36,7 +36,7 @@ import org.junit.jupiter.api.Test;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatchTypeInfo;
 import tech.streamfusion.flink.operator.StreamFusionNativeRegionOperatorFactory;
-import tech.streamfusion.flink.window.StreamFusionGlobalWindowAggregateTranslator;
+import tech.streamfusion.flink.planner.window.StreamFusionGlobalWindowAggregateTranslator;
 import tech.streamfusion.proto.plan.v1.NativePlan;
 
 /** Global-window nodes compose through the normal selected-region path; no admission bypass is installed. */
@@ -45,17 +45,17 @@ class SharedGlobalWindowTopologyTest {
     static final RowType RAW = RowType.of(new BigIntType(), ROWTIME);
 
     @Test
-    void runtimePreflightRejectsAMissingGlobalWindowFragmentBuilder() {
+    void runtimePreflightLoadsWindowBuilderFromPlannerInsteadOfApplicationLoader() {
         var loader = new ClassLoader(getClass().getClassLoader()) {
             @Override
             protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
-                if (name.equals("tech.streamfusion.flink.window.StreamFusionGlobalWindowAggregateTranslator"))
+                if (name.startsWith("tech.streamfusion.flink.planner.") || name.startsWith("org.apache.calcite."))
                     throw new ClassNotFoundException(name);
                 return super.loadClass(name, resolve);
             }
         };
         assertThat(StreamFusionExecGraphProcessor.runtimePreflightRejection(loader))
-                .contains("StreamFusionGlobalWindowAggregateTranslator");
+                .isNull();
     }
 
     @Test

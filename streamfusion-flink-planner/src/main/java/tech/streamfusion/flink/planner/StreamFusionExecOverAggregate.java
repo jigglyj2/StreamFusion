@@ -27,7 +27,8 @@ import org.apache.flink.table.types.logical.RowType;
 
 /** Distinct StreamFusion physical node for streaming OVER aggregation. */
 public final class StreamFusionExecOverAggregate extends ExecNodeBase<RowData> implements StreamExecNode<RowData> {
-    private static final String TRANSLATOR_CLASS = "tech.streamfusion.flink.over.StreamFusionOverAggregateTranslator";
+    private static final String TRANSLATOR_CLASS =
+            "tech.streamfusion.flink.planner.over.StreamFusionOverAggregateTranslator";
 
     private final OverSpec overSpec;
     private final boolean processingTime;
@@ -61,8 +62,8 @@ public final class StreamFusionExecOverAggregate extends ExecNodeBase<RowData> i
                 planner.getFlinkContext().getClassLoader(), partitionKeys, InternalTypeInfo.of(inputType));
         long stateTtl = config.get(ExecutionConfigOptions.IDLE_STATE_RETENTION).toMillis();
         try {
-            Class<?> translator = Class.forName(
-                    TRANSLATOR_CLASS, true, planner.getFlinkContext().getClassLoader());
+            Class<?> translator =
+                    Class.forName(TRANSLATOR_CLASS, true, StreamFusionRuntimeClasses.class.getClassLoader());
             Method method = translator.getMethod(
                     "translate",
                     Transformation.class,

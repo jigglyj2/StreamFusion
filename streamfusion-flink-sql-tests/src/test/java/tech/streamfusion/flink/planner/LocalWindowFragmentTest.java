@@ -17,7 +17,7 @@ import org.apache.flink.table.types.logical.TimestampKind;
 import org.apache.flink.table.types.logical.TimestampType;
 import org.apache.flink.table.types.logical.VarBinaryType;
 import org.junit.jupiter.api.Test;
-import tech.streamfusion.flink.window.StreamFusionLocalWindowAggregateTranslator;
+import tech.streamfusion.flink.planner.window.StreamFusionLocalWindowAggregateTranslator;
 import tech.streamfusion.proto.plan.v1.NativePlan;
 
 class LocalWindowFragmentTest {

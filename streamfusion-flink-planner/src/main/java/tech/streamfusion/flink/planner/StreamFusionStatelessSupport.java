@@ -221,10 +221,8 @@ final class StreamFusionStatelessSupport {
     static String unsupportedWindowTableFunctionReason(CommonExecWindowTableFunction window, ProcessorContext context) {
         ExecEdge input = window.getInputEdges().get(0);
         try {
-            Class<?> translator = Class.forName(
-                    WINDOW_TRANSLATOR_CLASS,
-                    true,
-                    context.getPlanner().getFlinkContext().getClassLoader());
+            Class<?> translator =
+                    Class.forName(WINDOW_TRANSLATOR_CLASS, true, StreamFusionRuntimeClasses.class.getClassLoader());
             Method method = translator.getMethod(
                     "unsupportedReason",
                     RowType.class,

@@ -107,6 +107,12 @@ class SelectedAggregateSqlIntegrationTest extends SqlParityTestSupport {
         SelectedAggregateSqlProbe.convertedGraphs = 0;
         var environment = StreamExecutionEnvironment.getExecutionEnvironment();
         environment.setParallelism(1);
+        // TestStreamEnvironment randomizes restore settings; compare the same supported
+        // production default on both engines, as in ordinary aggregate admission coverage.
+        var backendConfig = new org.apache.flink.configuration.Configuration();
+        var ingest = org.apache.flink.state.rocksdb.RocksDBConfigurableOptions.USE_INGEST_DB_RESTORE_MODE;
+        backendConfig.set(ingest, ingest.defaultValue());
+        environment.configure(backendConfig);
         var tables = StreamTableEnvironment.create(environment);
         tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ENABLED, bundleSize > 0);
         if (bundleSize > 0) {

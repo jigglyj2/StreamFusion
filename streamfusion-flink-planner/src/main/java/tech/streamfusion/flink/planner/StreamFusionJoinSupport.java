@@ -88,9 +88,7 @@ final class StreamFusionJoinSupport {
         ExecEdge right = join.getInputEdges().get(1);
         try {
             Class<?> translator = Class.forName(
-                    WINDOW_JOIN_TRANSLATOR_CLASS,
-                    true,
-                    context.getPlanner().getFlinkContext().getClassLoader());
+                    WINDOW_JOIN_TRANSLATOR_CLASS, true, StreamFusionRuntimeClasses.class.getClassLoader());
             Method method = translator.getMethod(
                     "unsupportedReason",
                     RowType.class,

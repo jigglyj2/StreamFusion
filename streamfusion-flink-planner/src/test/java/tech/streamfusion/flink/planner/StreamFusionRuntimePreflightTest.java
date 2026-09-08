@@ -15,12 +15,11 @@ import org.junit.jupiter.api.Test;
 
 class StreamFusionRuntimePreflightTest {
     @Test
-    void rejectsNativeOnlyClasspathWithoutTheFlinkRegionRuntime() {
-        // This planner module deliberately has only the native bridge as a test dependency.
-        // The SQL integration module verifies the complete runtime classpath.
+    void acceptsThePlannerAndRuntimeDependencyClasspath() {
+        // Plan construction depends on the runtime contract, which stays in its own module.
         assertThat(StreamFusionExecGraphProcessor.runtimePreflightRejection(
                         getClass().getClassLoader()))
-                .contains("StreamFusionNativeRegionTranslator");
+                .isNull();
     }
 
     @Test

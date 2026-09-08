@@ -23,7 +23,7 @@ import tech.streamfusion.flink.state.AbstractStreamFusionArrowKeyedStateOperator
 import tech.streamfusion.nativebridge.NativeGroupAggregateBridge;
 
 /** Bounded keyed aggregate that decodes its framed network input in the consuming task. */
-final class StreamFusionArrowFramedGroupAggregateOperator extends AbstractStreamFusionArrowKeyedStateOperator
+public final class StreamFusionArrowFramedGroupAggregateOperator extends AbstractStreamFusionArrowKeyedStateOperator
         implements OneInputStreamOperator<NativeExchangeFrame, ArrowRowDataBatch>, BoundedOneInput {
     private final RowType inputType;
     private final RowType outputType;
@@ -35,7 +35,7 @@ final class StreamFusionArrowFramedGroupAggregateOperator extends AbstractStream
     private transient long[] observedNativeStatistics;
     private transient boolean finished;
 
-    StreamFusionArrowFramedGroupAggregateOperator(
+    public StreamFusionArrowFramedGroupAggregateOperator(
             RowType inputType,
             RowType outputType,
             int[] grouping,

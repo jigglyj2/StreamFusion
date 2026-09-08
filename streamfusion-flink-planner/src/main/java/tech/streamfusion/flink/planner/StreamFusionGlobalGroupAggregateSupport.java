@@ -38,9 +38,9 @@ final class StreamFusionGlobalGroupAggregateSupport {
                 ExecNodeConfig.ofNodeConfig(config, false), globalGroupStateMetadata(global));
         try {
             return (String) Class.forName(
-                            "tech.streamfusion.flink.aggregate.StreamFusionGlobalGroupAggregateTranslator",
+                            "tech.streamfusion.flink.planner.aggregate.StreamFusionGlobalGroupAggregateTranslator",
                             true,
-                            context.getPlanner().getFlinkContext().getClassLoader())
+                            StreamFusionRuntimeClasses.class.getClassLoader())
                     .getMethod(
                             "unsupportedStageReason",
                             RowType.class,

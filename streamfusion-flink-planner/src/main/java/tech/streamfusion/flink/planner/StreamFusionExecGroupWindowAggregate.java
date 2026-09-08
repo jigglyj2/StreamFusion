@@ -29,7 +29,7 @@ import org.apache.flink.table.types.logical.RowType;
 public final class StreamFusionExecGroupWindowAggregate extends ExecNodeBase<RowData>
         implements StreamExecNode<RowData> {
     private static final String TRANSLATOR_CLASS =
-            "tech.streamfusion.flink.window.StreamFusionGroupWindowAggregateTranslator";
+            "tech.streamfusion.flink.planner.window.StreamFusionGroupWindowAggregateTranslator";
 
     private final int[] grouping;
     private final AggregateCall[] aggregateCalls;
@@ -70,8 +70,8 @@ public final class StreamFusionExecGroupWindowAggregate extends ExecNodeBase<Row
         RowDataKeySelector selector = KeySelectorUtil.getRowDataSelector(
                 planner.getFlinkContext().getClassLoader(), grouping, InternalTypeInfo.of(inputType));
         try {
-            Class<?> translator = Class.forName(
-                    TRANSLATOR_CLASS, true, planner.getFlinkContext().getClassLoader());
+            Class<?> translator =
+                    Class.forName(TRANSLATOR_CLASS, true, StreamFusionRuntimeClasses.class.getClassLoader());
             Method method = translator.getMethod(
                     "translate",
                     Transformation.class,

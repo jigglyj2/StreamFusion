@@ -112,3 +112,15 @@ index e65ec1246ea..ad9ed84e6d9 100644
      private void setDynamic(final StreamGraph graph) {
          Optional<JobManagerOptions.SchedulerType> schedulerTypeOptional =
                  executionConfig.getSchedulerType();
+diff --git a/flink-table/flink-table-api-java/src/main/java/org/apache/flink/table/planner/loader/PlannerModule.java b/flink-table/flink-table-api-java/src/main/java/org/apache/flink/table/planner/loader/PlannerModule.java
+index 1a8375b5039..cf0ef67406b 100644
+--- a/flink-table/flink-table-api-java/src/main/java/org/apache/flink/table/planner/loader/PlannerModule.java
++++ b/flink-table/flink-table-api-java/src/main/java/org/apache/flink/table/planner/loader/PlannerModule.java
+@@ -82,5 +82,6 @@ public class PlannerModule {
+                     .toArray(String[]::new);
+
+-    private static final String[] COMPONENT_CLASSPATH = new String[] {"org.apache.flink"};
++    private static final String[] COMPONENT_CLASSPATH =
++            new String[] {"org.apache.flink", "tech.streamfusion"};
+
+     private static final Map<String, String> KNOWN_MODULE_ASSOCIATIONS = new HashMap<>();

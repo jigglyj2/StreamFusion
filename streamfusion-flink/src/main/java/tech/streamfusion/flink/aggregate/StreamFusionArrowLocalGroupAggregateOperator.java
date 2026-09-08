@@ -21,7 +21,7 @@ import tech.streamfusion.flink.state.FlinkBinaryRowKeyEncoder;
 import tech.streamfusion.nativebridge.NativeLocalGroupAggregateBridge;
 
 /** Native, state-free local half of Flink's local/global mini-batch aggregate pair. */
-final class StreamFusionArrowLocalGroupAggregateOperator extends AbstractStreamOperator<ArrowRowDataBatch>
+public final class StreamFusionArrowLocalGroupAggregateOperator extends AbstractStreamOperator<ArrowRowDataBatch>
         implements OneInputStreamOperator<ArrowRowDataBatch, ArrowRowDataBatch>, BoundedOneInput {
     private final byte[] serializedPlan;
     private final RowType outputType;
@@ -33,7 +33,7 @@ final class StreamFusionArrowLocalGroupAggregateOperator extends AbstractStreamO
     private transient FlinkManagedMemory managedMemory;
     private transient long nativeHandle;
 
-    StreamFusionArrowLocalGroupAggregateOperator(
+    public StreamFusionArrowLocalGroupAggregateOperator(
             byte[] serializedPlan,
             RowType inputType,
             RowType outputType,

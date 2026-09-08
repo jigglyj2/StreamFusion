@@ -37,9 +37,7 @@ final class StreamFusionOverSupport {
                 .toMillis();
         try {
             Class<?> translator = Class.forName(
-                    OVER_AGGREGATE_TRANSLATOR_CLASS,
-                    true,
-                    context.getPlanner().getFlinkContext().getClassLoader());
+                    OVER_AGGREGATE_TRANSLATOR_CLASS, true, StreamFusionRuntimeClasses.class.getClassLoader());
             Method method = translator.getMethod(
                     "unsupportedReason",
                     RowType.class,
@@ -69,9 +67,7 @@ final class StreamFusionOverSupport {
         }
         try {
             Class<?> translator = Class.forName(
-                    OVER_AGGREGATE_TRANSLATOR_CLASS,
-                    true,
-                    context.getPlanner().getFlinkContext().getClassLoader());
+                    OVER_AGGREGATE_TRANSLATOR_CLASS, true, StreamFusionRuntimeClasses.class.getClassLoader());
             Method method = translator.getMethod(
                     "unsupportedBoundedReason", RowType.class, RowType.class, OverSpec.class, ReadableConfig.class);
             return (String) method.invoke(
@@ -158,9 +154,7 @@ final class StreamFusionOverSupport {
                 .toMillis();
         try {
             Class<?> translator = Class.forName(
-                    OVER_AGGREGATE_TRANSLATOR_CLASS,
-                    true,
-                    context.getPlanner().getFlinkContext().getClassLoader());
+                    OVER_AGGREGATE_TRANSLATOR_CLASS, true, StreamFusionRuntimeClasses.class.getClassLoader());
             Method method = translator.getMethod(
                     "unsupportedReason",
                     RowType.class,

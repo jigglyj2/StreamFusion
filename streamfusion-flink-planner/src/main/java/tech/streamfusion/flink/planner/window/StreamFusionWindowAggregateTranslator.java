@@ -2,7 +2,7 @@
  * Copyright 2026 StreamFusion Authors
  * Licensed under the Apache License, Version 2.0
  */
-package tech.streamfusion.flink.window;
+package tech.streamfusion.flink.planner.window;
 
 import static org.apache.flink.runtime.state.KeyGroupRangeAssignment.DEFAULT_LOWER_BOUND_MAX_PARALLELISM;
 
@@ -32,7 +32,6 @@ import org.apache.flink.table.runtime.keyselector.RowDataKeySelector;
 import org.apache.flink.table.runtime.util.TimeWindowUtil;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.RowType;
-import tech.streamfusion.flink.aggregate.StreamFusionGroupAggregateTranslator;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatchTypeInfo;
 import tech.streamfusion.flink.arrow.StreamFusionArrowBoundaries;
@@ -42,7 +41,11 @@ import tech.streamfusion.flink.exchange.NativeExchangeFrameKeySelector;
 import tech.streamfusion.flink.exchange.NativeExchangeFrameTypeInfo;
 import tech.streamfusion.flink.exchange.NativeExchangeReaderOperator;
 import tech.streamfusion.flink.exchange.StreamFusionExchangeTranslator;
+import tech.streamfusion.flink.planner.aggregate.StreamFusionGroupAggregateTranslator;
 import tech.streamfusion.flink.state.StreamFusionStateBackendFactory;
+import tech.streamfusion.flink.window.StreamFusionArrowFramedWindowAggregateOperator;
+import tech.streamfusion.flink.window.StreamFusionArrowLocalWindowAggregateOperator;
+import tech.streamfusion.flink.window.StreamFusionArrowWindowAggregateOperator;
 
 /** Reflection entry point for native TUMBLE, HOP, and CUMULATE SQL window aggregation. */
 public final class StreamFusionWindowAggregateTranslator {

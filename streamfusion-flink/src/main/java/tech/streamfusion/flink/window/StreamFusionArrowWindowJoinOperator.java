@@ -34,7 +34,7 @@ import tech.streamfusion.flink.state.AbstractStreamFusionArrowKeyedStateOperator
 import tech.streamfusion.nativebridge.NativeWindowJoinBridge;
 
 /** Native two-input Window Join state with Arrow-native Flink-condition result materialization. */
-final class StreamFusionArrowWindowJoinOperator extends AbstractStreamFusionArrowKeyedStateOperator
+public final class StreamFusionArrowWindowJoinOperator extends AbstractStreamFusionArrowKeyedStateOperator
         implements TwoInputStreamOperator<NativeExchangeFrame, NativeExchangeFrame, ArrowRowDataBatch>,
                 BoundedMultiInput {
     private final RowType leftType;
@@ -58,7 +58,7 @@ final class StreamFusionArrowWindowJoinOperator extends AbstractStreamFusionArro
     private transient long[] observedNativeStatistics;
     private transient Counter conditionEvaluations;
 
-    StreamFusionArrowWindowJoinOperator(
+    public StreamFusionArrowWindowJoinOperator(
             RowType leftType,
             RowType rightType,
             RowType outputType,

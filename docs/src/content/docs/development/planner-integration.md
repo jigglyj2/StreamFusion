@@ -130,11 +130,20 @@ the application's context classloader. Both acceleration and precise fallback re
 available at that boundary. The launcher integration job includes EXPLAIN in its failure output
 when a submitted Calc does not execute natively.
 
-The current Flink 2.3.0 distribution launcher check still falls back during runtime preflight:
-the runtime loader cannot resolve Calcite's `AggregateCall`, which is available only inside the
-isolated planner loader. Separating planner-dependent plan builders from runtime classes remains
-outstanding. Passing the SQL harness or local Nexmark benchmark does not establish that the
-isolated distribution packaging accelerates a submitted job.
+Aggregate, window, and OVER plan builders live in `streamfusion-flink-planner` under its
+`planner.aggregate`, `planner.window`, and `planner.over` packages. Their Calcite and Flink planner
+dependencies stay inside the isolated planner loader. Runtime operators receive protobuf plans
+and runtime types. A source guard rejects new planner dependencies in those runtime families.
+The Flink loader patch delegates the `tech.streamfusion` namespace component-first: planner
+classes come from the component, while shared runtime, Arrow wrappers, and protobuf classes
+come from the runtime owner. This does not expose Calcite through the runtime loader.
+
+Both modules publish normal Maven JARs for compilation and explicit `-bundle.jar` distribution
+artifacts. The runtime bundle owns Arrow, native bridges, and protobuf dependencies; the planner
+bundle contains only planner classes and relocates protobuf references to match the runtime.
+The launcher installs those matching bundles and checks native Calc, shared-plan UNION inputs,
+and whole-plan fallback. This packaging check supplements the generated SQL parity tests;
+it does not establish coverage for operators still gated by their semantic or runtime contracts.
 
 The `streamfusion-flink` module supplies the planner-side integration under `tech.streamfusion.flink`. Tests can select the StreamFusion implementation for one execution and clear that selection for the native Flink baseline.
 

@@ -27,7 +27,8 @@ import org.apache.flink.table.types.logical.RowType;
 /** Native bounded global aggregation that merges opaque partials and emits terminal INSERT rows. */
 public final class StreamFusionBatchExecGlobalGroupAggregate extends ExecNodeBase<RowData>
         implements BatchExecNode<RowData> {
-    private static final String TRANSLATOR = "tech.streamfusion.flink.aggregate.StreamFusionGroupAggregateTranslator";
+    private static final String TRANSLATOR =
+            "tech.streamfusion.flink.planner.aggregate.StreamFusionGroupAggregateTranslator";
 
     private final RowType originalInputType;
     private final int groupingCount;
@@ -65,8 +66,7 @@ public final class StreamFusionBatchExecGlobalGroupAggregate extends ExecNodeBas
         RowDataKeySelector selector = KeySelectorUtil.getRowDataSelector(
                 planner.getFlinkContext().getClassLoader(), grouping, InternalTypeInfo.of(internalType));
         try {
-            Method method = Class.forName(
-                            TRANSLATOR, true, planner.getFlinkContext().getClassLoader())
+            Method method = Class.forName(TRANSLATOR, true, StreamFusionRuntimeClasses.class.getClassLoader())
                     .getMethod(
                             "translateBatchGlobal",
                             Transformation.class,

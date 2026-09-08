@@ -2,7 +2,7 @@
  * Copyright 2026 StreamFusion Authors
  * Licensed under the Apache License, Version 2.0
  */
-package tech.streamfusion.flink.window;
+package tech.streamfusion.flink.planner.window;
 
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.flink.proto.FlinkLogicalTypeProto;
@@ -14,10 +14,10 @@ import tech.streamfusion.proto.plan.v1.Schema;
 import tech.streamfusion.proto.plan.v1.WindowDeduplicate;
 
 /** Builds the versioned protobuf contract for native window deduplication. */
-final class StreamFusionWindowDeduplicatePlan {
+public final class StreamFusionWindowDeduplicatePlan {
     private StreamFusionWindowDeduplicatePlan() {}
 
-    static byte[] create(
+    public static byte[] create(
             RowType inputType,
             int[] partitionKeys,
             int orderIndex,

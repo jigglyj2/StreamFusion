@@ -71,7 +71,7 @@ final class AttachedSlicingWindowFixture {
         var input = type(INPUT, grouping);
         var output = type(OUTPUT, grouping);
         return SharedSlicingWindowFixture.compose(
-                tech.streamfusion.flink.window.StreamFusionGlobalWindowAggregateTranslator.createStagePlan(
+                tech.streamfusion.flink.planner.window.StreamFusionGlobalWindowAggregateTranslator.createStagePlan(
                         raw,
                         input,
                         output,

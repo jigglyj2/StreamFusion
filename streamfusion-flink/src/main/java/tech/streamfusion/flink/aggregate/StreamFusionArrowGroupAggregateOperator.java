@@ -18,7 +18,7 @@ import tech.streamfusion.flink.state.AbstractStreamFusionArrowKeyedStateOperator
 import tech.streamfusion.nativebridge.NativeGroupAggregateBridge;
 
 /** Timer-free keyed group aggregate whose input and output remain Arrow-backed. */
-final class StreamFusionArrowGroupAggregateOperator extends AbstractStreamFusionArrowKeyedStateOperator
+public final class StreamFusionArrowGroupAggregateOperator extends AbstractStreamFusionArrowKeyedStateOperator
         implements OneInputStreamOperator<ArrowRowDataBatch, ArrowRowDataBatch>, BoundedOneInput {
     private final RowType outputType;
     private final boolean inputChangelog;
@@ -30,7 +30,7 @@ final class StreamFusionArrowGroupAggregateOperator extends AbstractStreamFusion
     private transient long[] observedNativeStatistics;
     private transient boolean terminalOutputEmitted;
 
-    StreamFusionArrowGroupAggregateOperator(
+    public StreamFusionArrowGroupAggregateOperator(
             RowType inputType,
             RowType outputType,
             int[] grouping,
@@ -40,7 +40,7 @@ final class StreamFusionArrowGroupAggregateOperator extends AbstractStreamFusion
         this(inputType, outputType, grouping, serializedPlan, inputChangelog, keySelector, 0L);
     }
 
-    StreamFusionArrowGroupAggregateOperator(
+    public StreamFusionArrowGroupAggregateOperator(
             RowType inputType,
             RowType outputType,
             int[] grouping,
@@ -60,7 +60,7 @@ final class StreamFusionArrowGroupAggregateOperator extends AbstractStreamFusion
                 false);
     }
 
-    StreamFusionArrowGroupAggregateOperator(
+    public StreamFusionArrowGroupAggregateOperator(
             RowType inputType,
             RowType outputType,
             int[] grouping,
@@ -81,7 +81,7 @@ final class StreamFusionArrowGroupAggregateOperator extends AbstractStreamFusion
                 false);
     }
 
-    StreamFusionArrowGroupAggregateOperator(
+    public StreamFusionArrowGroupAggregateOperator(
             RowType inputType,
             RowType outputType,
             int[] grouping,

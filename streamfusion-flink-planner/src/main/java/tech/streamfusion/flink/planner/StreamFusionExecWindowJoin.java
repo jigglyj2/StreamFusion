@@ -29,7 +29,8 @@ import org.apache.flink.table.types.logical.RowType;
 
 /** Distinct StreamFusion physical node for event-time Window Join. */
 public final class StreamFusionExecWindowJoin extends ExecNodeBase<RowData> implements StreamExecNode<RowData> {
-    private static final String TRANSLATOR_CLASS = "tech.streamfusion.flink.window.StreamFusionWindowJoinTranslator";
+    private static final String TRANSLATOR_CLASS =
+            "tech.streamfusion.flink.planner.window.StreamFusionWindowJoinTranslator";
 
     private final JoinSpec joinSpec;
     private final WindowingStrategy leftWindowing;
@@ -73,8 +74,8 @@ public final class StreamFusionExecWindowJoin extends ExecNodeBase<RowData> impl
         GeneratedJoinCondition condition = JoinUtil.generateConditionFunction(
                 config, planner.getFlinkContext().getClassLoader(), joinSpec, leftType, rightType);
         try {
-            Class<?> translator = Class.forName(
-                    TRANSLATOR_CLASS, true, planner.getFlinkContext().getClassLoader());
+            Class<?> translator =
+                    Class.forName(TRANSLATOR_CLASS, true, StreamFusionRuntimeClasses.class.getClassLoader());
             Method method = translator.getMethod(
                     "translate",
                     Transformation.class,

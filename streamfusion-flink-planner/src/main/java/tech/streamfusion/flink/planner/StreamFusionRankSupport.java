@@ -103,9 +103,7 @@ final class StreamFusionRankSupport {
         ExecEdge input = deduplicate.getInputEdges().get(0);
         try {
             Class<?> translator = Class.forName(
-                    WINDOW_DEDUPLICATE_TRANSLATOR_CLASS,
-                    true,
-                    context.getPlanner().getFlinkContext().getClassLoader());
+                    WINDOW_DEDUPLICATE_TRANSLATOR_CLASS, true, StreamFusionRuntimeClasses.class.getClassLoader());
             Method method = translator.getMethod(
                     "unsupportedReason",
                     RowType.class,
@@ -201,9 +199,7 @@ final class StreamFusionRankSupport {
         ExecEdge input = rank.getInputEdges().get(0);
         try {
             Class<?> translator = Class.forName(
-                    WINDOW_RANK_TRANSLATOR_CLASS,
-                    true,
-                    context.getPlanner().getFlinkContext().getClassLoader());
+                    WINDOW_RANK_TRANSLATOR_CLASS, true, StreamFusionRuntimeClasses.class.getClassLoader());
             Method method = translator.getMethod(
                     "unsupportedReason",
                     RowType.class,

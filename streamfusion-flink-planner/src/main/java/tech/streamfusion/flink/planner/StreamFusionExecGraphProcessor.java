@@ -196,7 +196,7 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     "tech.streamfusion.flink.operator.StreamFusionNativeRegionOperatorFactory", true, classLoader);
             Class.forName(UNION_TRANSLATOR_CLASS, true, classLoader)
                     .getMethod("createStagePlan", RowType.class, int.class);
-            Class.forName(GROUP_AGGREGATE_TRANSLATOR_CLASS, true, classLoader)
+            Class.forName(GROUP_AGGREGATE_TRANSLATOR_CLASS, true, StreamFusionRuntimeClasses.class.getClassLoader())
                     .getMethod(
                             "createStagePlan",
                             RowType.class,
@@ -209,9 +209,9 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                             long.class,
                             org.apache.flink.configuration.ReadableConfig.class);
             Class.forName(
-                            "tech.streamfusion.flink.window.StreamFusionGlobalWindowAggregateTranslator",
+                            "tech.streamfusion.flink.planner.window.StreamFusionGlobalWindowAggregateTranslator",
                             true,
-                            classLoader)
+                            StreamFusionRuntimeClasses.class.getClassLoader())
                     .getMethod(
                             "createStagePlan",
                             RowType.class,

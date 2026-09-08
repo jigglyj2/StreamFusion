@@ -2,7 +2,7 @@
  * Copyright 2026 StreamFusion Authors
  * Licensed under the Apache License, Version 2.0
  */
-package tech.streamfusion.flink.over;
+package tech.streamfusion.flink.planner.over;
 
 import static org.apache.flink.runtime.state.KeyGroupRangeAssignment.DEFAULT_LOWER_BOUND_MAX_PARALLELISM;
 import static org.apache.flink.table.types.logical.utils.LogicalTypeChecks.isProctimeAttribute;
@@ -23,12 +23,13 @@ import org.apache.flink.table.planner.plan.utils.OverAggregateUtil;
 import org.apache.flink.table.runtime.keyselector.RowDataKeySelector;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.RowType;
-import tech.streamfusion.flink.aggregate.StreamFusionGroupAggregateTranslator;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatchTypeInfo;
 import tech.streamfusion.flink.arrow.StreamFusionArrowBoundaries;
 import tech.streamfusion.flink.deduplicate.ArrowBatchKeySelector;
 import tech.streamfusion.flink.exchange.StreamFusionExchangeTranslator;
+import tech.streamfusion.flink.over.StreamFusionArrowOverAggregateOperator;
+import tech.streamfusion.flink.planner.aggregate.StreamFusionGroupAggregateTranslator;
 import tech.streamfusion.flink.state.StreamFusionStateBackendFactory;
 
 /** Reflection entry point for native unbounded streaming OVER aggregation. */

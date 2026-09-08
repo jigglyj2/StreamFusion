@@ -2,7 +2,7 @@
  * Copyright 2026 StreamFusion Authors
  * Licensed under the Apache License, Version 2.0
  */
-package tech.streamfusion.flink.window;
+package tech.streamfusion.flink.planner.window;
 
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.flink.proto.FlinkLogicalTypeProto;
@@ -14,10 +14,10 @@ import tech.streamfusion.proto.plan.v1.Schema;
 import tech.streamfusion.proto.plan.v1.WindowTableFunction;
 
 /** Builds an Arrow-native aligned Window TVF protobuf plan. */
-final class StreamFusionWindowTableFunctionPlan {
+public final class StreamFusionWindowTableFunctionPlan {
     private StreamFusionWindowTableFunctionPlan() {}
 
-    static byte[] create(
+    public static byte[] create(
             RowType inputType,
             int timeAttributeIndex,
             int[] partitionKeys,
@@ -34,7 +34,7 @@ final class StreamFusionWindowTableFunctionPlan {
                 parameters);
     }
 
-    static byte[] create(
+    public static byte[] create(
             Operator input,
             RowType inputType,
             int timeAttributeIndex,

@@ -24,7 +24,8 @@ import org.apache.flink.table.types.logical.RowType;
 /** Native state-free local slice stage of Flink's two-phase window aggregate. */
 public final class StreamFusionExecLocalWindowAggregate extends ExecNodeBase<RowData>
         implements StreamExecNode<RowData> {
-    private static final String TRANSLATOR = "tech.streamfusion.flink.window.StreamFusionWindowAggregateTranslator";
+    private static final String TRANSLATOR =
+            "tech.streamfusion.flink.planner.window.StreamFusionWindowAggregateTranslator";
 
     private final int[] grouping;
     private final AggregateCall[] calls;
@@ -58,8 +59,7 @@ public final class StreamFusionExecLocalWindowAggregate extends ExecNodeBase<Row
         ExecEdge edge = getInputEdges().get(0);
         Transformation<RowData> input = (Transformation<RowData>) edge.translateToPlan(planner);
         try {
-            Method method = Class.forName(
-                            TRANSLATOR, true, planner.getFlinkContext().getClassLoader())
+            Method method = Class.forName(TRANSLATOR, true, StreamFusionRuntimeClasses.class.getClassLoader())
                     .getMethod(
                             "translateLocal",
                             Transformation.class,

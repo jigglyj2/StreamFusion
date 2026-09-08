@@ -16,7 +16,7 @@ import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.VarBinaryType;
 import org.apache.flink.table.types.logical.VarCharType;
-import tech.streamfusion.flink.aggregate.StreamFusionGlobalGroupAggregateTranslator;
+import tech.streamfusion.flink.planner.aggregate.StreamFusionGlobalGroupAggregateTranslator;
 import tech.streamfusion.flink.proto.FlinkLogicalTypeProto;
 import tech.streamfusion.proto.plan.v1.Input;
 import tech.streamfusion.proto.plan.v1.LocalGroupAggregate;

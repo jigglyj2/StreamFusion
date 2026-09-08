@@ -30,7 +30,7 @@ import org.apache.flink.table.types.logical.RowType;
 public final class StreamFusionBatchExecGlobalWindowAggregate extends ExecNodeBase<RowData>
         implements BatchExecNode<RowData> {
     private static final String TRANSLATOR =
-            "tech.streamfusion.flink.window.StreamFusionGroupWindowAggregateTranslator";
+            "tech.streamfusion.flink.planner.window.StreamFusionGroupWindowAggregateTranslator";
 
     private final RowType originalInputType;
     private final int groupingCount;
@@ -71,8 +71,7 @@ public final class StreamFusionBatchExecGlobalWindowAggregate extends ExecNodeBa
         RowDataKeySelector selector = KeySelectorUtil.getRowDataSelector(
                 planner.getFlinkContext().getClassLoader(), grouping, InternalTypeInfo.of(internalType));
         try {
-            Method method = Class.forName(
-                            TRANSLATOR, true, planner.getFlinkContext().getClassLoader())
+            Method method = Class.forName(TRANSLATOR, true, StreamFusionRuntimeClasses.class.getClassLoader())
                     .getMethod(
                             "translateBatchGlobal",
                             Transformation.class,

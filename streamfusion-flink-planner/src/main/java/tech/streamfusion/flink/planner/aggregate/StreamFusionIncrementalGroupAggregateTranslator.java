@@ -2,7 +2,7 @@
  * Copyright 2026 StreamFusion Authors
  * Licensed under the Apache License, Version 2.0
  */
-package tech.streamfusion.flink.aggregate;
+package tech.streamfusion.flink.planner.aggregate;
 
 import org.apache.calcite.rel.core.AggregateCall;
 import org.apache.flink.api.dag.Transformation;
@@ -11,6 +11,7 @@ import org.apache.flink.streaming.api.transformations.OneInputTransformation;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.runtime.keyselector.RowDataKeySelector;
 import org.apache.flink.table.types.logical.RowType;
+import tech.streamfusion.flink.aggregate.StreamFusionArrowGroupAggregateOperator;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatchTypeInfo;
 import tech.streamfusion.flink.arrow.StreamFusionArrowBoundaries;

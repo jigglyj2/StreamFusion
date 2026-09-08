@@ -31,7 +31,7 @@ final class StreamFusionRuntimeClasses {
     static final String UNION_TRANSLATOR_CLASS = "tech.streamfusion.flink.union.StreamFusionUnionTranslator";
 
     static final String WINDOW_TRANSLATOR_CLASS =
-            "tech.streamfusion.flink.window.StreamFusionWindowTableFunctionTranslator";
+            "tech.streamfusion.flink.planner.window.StreamFusionWindowTableFunctionTranslator";
 
     static final String DEDUPLICATE_TRANSLATOR_CLASS =
             "tech.streamfusion.flink.deduplicate.StreamFusionDeduplicateTranslator";
@@ -40,24 +40,24 @@ final class StreamFusionRuntimeClasses {
             "tech.streamfusion.flink.changelog.StreamFusionChangelogNormalizeTranslator";
 
     static final String GROUP_AGGREGATE_TRANSLATOR_CLASS =
-            "tech.streamfusion.flink.aggregate.StreamFusionGroupAggregateTranslator";
+            "tech.streamfusion.flink.planner.aggregate.StreamFusionGroupAggregateTranslator";
 
     static final String WINDOW_AGGREGATE_TRANSLATOR_CLASS =
-            "tech.streamfusion.flink.window.StreamFusionWindowAggregateTranslator";
+            "tech.streamfusion.flink.planner.window.StreamFusionWindowAggregateTranslator";
 
     static final String GROUP_WINDOW_AGGREGATE_TRANSLATOR_CLASS =
-            "tech.streamfusion.flink.window.StreamFusionGroupWindowAggregateTranslator";
+            "tech.streamfusion.flink.planner.window.StreamFusionGroupWindowAggregateTranslator";
 
     static final String WINDOW_DEDUPLICATE_TRANSLATOR_CLASS =
-            "tech.streamfusion.flink.window.StreamFusionWindowDeduplicateTranslator";
+            "tech.streamfusion.flink.planner.window.StreamFusionWindowDeduplicateTranslator";
 
     static final String WINDOW_RANK_TRANSLATOR_CLASS =
-            "tech.streamfusion.flink.window.StreamFusionWindowRankTranslator";
+            "tech.streamfusion.flink.planner.window.StreamFusionWindowRankTranslator";
 
     static final String TOP_N_TRANSLATOR_CLASS = "tech.streamfusion.flink.topn.StreamFusionTopNTranslator";
 
     static final String WINDOW_JOIN_TRANSLATOR_CLASS =
-            "tech.streamfusion.flink.window.StreamFusionWindowJoinTranslator";
+            "tech.streamfusion.flink.planner.window.StreamFusionWindowJoinTranslator";
 
     static final String REGULAR_JOIN_TRANSLATOR_CLASS =
             "tech.streamfusion.flink.join.StreamFusionRegularJoinTranslator";
@@ -71,7 +71,7 @@ final class StreamFusionRuntimeClasses {
             "tech.streamfusion.flink.join.StreamFusionTemporalJoinTranslator";
 
     static final String OVER_AGGREGATE_TRANSLATOR_CLASS =
-            "tech.streamfusion.flink.over.StreamFusionOverAggregateTranslator";
+            "tech.streamfusion.flink.planner.over.StreamFusionOverAggregateTranslator";
 
     static final String TEMPORAL_SORT_TRANSLATOR_CLASS =
             "tech.streamfusion.flink.sort.StreamFusionTemporalSortTranslator";

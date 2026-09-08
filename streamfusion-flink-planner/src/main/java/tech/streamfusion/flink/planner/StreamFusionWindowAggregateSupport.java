@@ -57,9 +57,7 @@ final class StreamFusionWindowAggregateSupport {
         }
         try {
             Class<?> translator = Class.forName(
-                    GROUP_WINDOW_AGGREGATE_TRANSLATOR_CLASS,
-                    true,
-                    context.getPlanner().getFlinkContext().getClassLoader());
+                    GROUP_WINDOW_AGGREGATE_TRANSLATOR_CLASS, true, StreamFusionRuntimeClasses.class.getClassLoader());
             Method method = translator.getMethod(
                     "unsupportedBatchReason",
                     RowType.class,
@@ -103,9 +101,7 @@ final class StreamFusionWindowAggregateSupport {
         }
         try {
             Class<?> translator = Class.forName(
-                    GROUP_WINDOW_AGGREGATE_TRANSLATOR_CLASS,
-                    true,
-                    context.getPlanner().getFlinkContext().getClassLoader());
+                    GROUP_WINDOW_AGGREGATE_TRANSLATOR_CLASS, true, StreamFusionRuntimeClasses.class.getClassLoader());
             Method method = translator.getMethod(
                     "unsupportedBatchOnePhaseReason",
                     RowType.class,
@@ -136,9 +132,7 @@ final class StreamFusionWindowAggregateSupport {
         ExecEdge input = aggregate.getInputEdges().get(0);
         try {
             Class<?> translator = Class.forName(
-                    WINDOW_AGGREGATE_TRANSLATOR_CLASS,
-                    true,
-                    context.getPlanner().getFlinkContext().getClassLoader());
+                    WINDOW_AGGREGATE_TRANSLATOR_CLASS, true, StreamFusionRuntimeClasses.class.getClassLoader());
             Method method = translator.getMethod(
                     "unsupportedReason",
                     RowType.class,
@@ -169,9 +163,7 @@ final class StreamFusionWindowAggregateSupport {
     static String unsupportedReason(LegacyGroupWindowAggregate aggregate, ProcessorContext context) {
         try {
             Class<?> translator = Class.forName(
-                    GROUP_WINDOW_AGGREGATE_TRANSLATOR_CLASS,
-                    true,
-                    context.getPlanner().getFlinkContext().getClassLoader());
+                    GROUP_WINDOW_AGGREGATE_TRANSLATOR_CLASS, true, StreamFusionRuntimeClasses.class.getClassLoader());
             Method method = translator.getMethod(
                     "unsupportedReason",
                     RowType.class,
@@ -204,9 +196,7 @@ final class StreamFusionWindowAggregateSupport {
     static String unsupportedReason(ProcessingTimeWindowAggregate aggregate, ProcessorContext context) {
         try {
             Class<?> translator = Class.forName(
-                    WINDOW_AGGREGATE_TRANSLATOR_CLASS,
-                    true,
-                    context.getPlanner().getFlinkContext().getClassLoader());
+                    WINDOW_AGGREGATE_TRANSLATOR_CLASS, true, StreamFusionRuntimeClasses.class.getClassLoader());
             Method method = translator.getMethod(
                     "unsupportedReason",
                     RowType.class,
@@ -238,9 +228,9 @@ final class StreamFusionWindowAggregateSupport {
     static String unsupportedReason(TwoPhaseWindowAggregate aggregate, ProcessorContext context) {
         try {
             Class<?> translator = Class.forName(
-                    "tech.streamfusion.flink.window.StreamFusionGlobalWindowAggregateTranslator",
+                    "tech.streamfusion.flink.planner.window.StreamFusionGlobalWindowAggregateTranslator",
                     true,
-                    context.getPlanner().getFlinkContext().getClassLoader());
+                    StreamFusionRuntimeClasses.class.getClassLoader());
             Method method = translator.getMethod(
                     "unsupportedStageReason",
                     RowType.class,

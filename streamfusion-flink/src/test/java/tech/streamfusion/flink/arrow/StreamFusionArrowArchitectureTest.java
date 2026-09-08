@@ -16,6 +16,20 @@ import org.junit.jupiter.api.Test;
 /** Prevents a StreamFusion internal operator from silently becoming row-shaped again. */
 class StreamFusionArrowArchitectureTest {
     @Test
+    void aggregateAndWindowRuntimeDoNotLinkIsolatedPlannerClasses() throws IOException {
+        for (String family : List.of("aggregate", "window", "over")) {
+            try (var sources = Files.walk(Path.of("src/main/java/tech/streamfusion/flink", family))) {
+                for (Path source : sources.filter(path -> path.toString().endsWith(".java"))
+                        .collect(Collectors.toList())) {
+                    assertThat(Files.readString(source))
+                            .as("%s must receive a runtime/protobuf contract", source)
+                            .doesNotContain("org.apache.calcite.", "org.apache.flink.table.planner.");
+                }
+            }
+        }
+    }
+
+    @Test
     void multiInputRuntimeKeepsControlInFlinkAndPayloadInOneSharedNativeTree() throws Exception {
         String operator = Files.readString(
                 Path.of("src/main/java/tech/streamfusion/flink/operator/StreamFusionArrowNativeRegionOperator.java"));

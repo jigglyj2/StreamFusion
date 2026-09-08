@@ -25,7 +25,8 @@ import org.apache.flink.table.types.logical.RowType;
 
 /** Distinct StreamFusion physical node for a final, one-phase bounded hash aggregate. */
 public final class StreamFusionBatchExecHashAggregate extends ExecNodeBase<RowData> implements BatchExecNode<RowData> {
-    private static final String TRANSLATOR = "tech.streamfusion.flink.aggregate.StreamFusionGroupAggregateTranslator";
+    private static final String TRANSLATOR =
+            "tech.streamfusion.flink.planner.aggregate.StreamFusionGroupAggregateTranslator";
 
     private final int[] grouping;
     private final AggregateCall[] calls;
@@ -57,8 +58,7 @@ public final class StreamFusionBatchExecHashAggregate extends ExecNodeBase<RowDa
         RowDataKeySelector selector = KeySelectorUtil.getRowDataSelector(
                 planner.getFlinkContext().getClassLoader(), grouping, InternalTypeInfo.of(inputType));
         try {
-            Method method = Class.forName(
-                            TRANSLATOR, true, planner.getFlinkContext().getClassLoader())
+            Method method = Class.forName(TRANSLATOR, true, StreamFusionRuntimeClasses.class.getClassLoader())
                     .getMethod(
                             "translateBatch",
                             Transformation.class,

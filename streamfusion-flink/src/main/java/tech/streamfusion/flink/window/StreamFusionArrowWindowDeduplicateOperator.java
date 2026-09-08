@@ -27,7 +27,7 @@ import tech.streamfusion.flink.state.AbstractStreamFusionArrowKeyedStateOperator
 import tech.streamfusion.nativebridge.NativeWindowDeduplicateBridge;
 
 /** Key-grouped native window first/last-row deduplication. */
-final class StreamFusionArrowWindowDeduplicateOperator extends AbstractStreamFusionArrowKeyedStateOperator
+public final class StreamFusionArrowWindowDeduplicateOperator extends AbstractStreamFusionArrowKeyedStateOperator
         implements OneInputStreamOperator<ArrowRowDataBatch, ArrowRowDataBatch>, BoundedOneInput {
     private final RowType rowType;
     private final int[] partitionKeys;
@@ -42,7 +42,7 @@ final class StreamFusionArrowWindowDeduplicateOperator extends AbstractStreamFus
     private transient long observedNativeLateRecords;
     private transient long[] observedNativeStatistics;
 
-    StreamFusionArrowWindowDeduplicateOperator(
+    public StreamFusionArrowWindowDeduplicateOperator(
             RowType rowType, int[] partitionKeys, byte[] plan, RowDataKeySelector keySelector) {
         super(plan, "window deduplicate", NativeWindowDeduplicateBridge.keyedStateBridge());
         this.rowType = rowType;

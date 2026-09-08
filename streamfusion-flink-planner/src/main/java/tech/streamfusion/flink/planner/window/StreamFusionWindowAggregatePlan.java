@@ -2,7 +2,7 @@
  * Copyright 2026 StreamFusion Authors
  * Licensed under the Apache License, Version 2.0
  */
-package tech.streamfusion.flink.window;
+package tech.streamfusion.flink.planner.window;
 
 import java.util.List;
 import org.apache.calcite.rel.core.AggregateCall;
@@ -32,10 +32,10 @@ import tech.streamfusion.proto.plan.v1.WindowAggregate;
 import tech.streamfusion.proto.plan.v1.WindowProperty;
 
 /** Builds the versioned protobuf contract for native SQL window aggregation. */
-final class StreamFusionWindowAggregatePlan {
+public final class StreamFusionWindowAggregatePlan {
     private StreamFusionWindowAggregatePlan() {}
 
-    static byte[] create(
+    public static byte[] create(
             RowType inputType,
             RowType outputType,
             int[] grouping,
@@ -75,7 +75,7 @@ final class StreamFusionWindowAggregatePlan {
         return nativePlan(Operator.newBuilder().setWindowAggregate(aggregate));
     }
 
-    static byte[] createLocal(
+    public static byte[] createLocal(
             RowType inputType,
             RowType outputType,
             int[] grouping,
@@ -113,7 +113,7 @@ final class StreamFusionWindowAggregatePlan {
         return nativePlan(Operator.newBuilder().setLocalWindowAggregate(aggregate));
     }
 
-    static byte[] createGlobal(
+    public static byte[] createGlobal(
             RowType originalInputType,
             RowType internalInputType,
             RowType outputType,

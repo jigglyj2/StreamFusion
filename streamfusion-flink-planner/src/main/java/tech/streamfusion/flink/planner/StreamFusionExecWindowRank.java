@@ -26,7 +26,8 @@ import org.apache.flink.table.types.logical.RowType;
 
 /** Distinct StreamFusion physical node for event-time Window Top-N/ROW_NUMBER. */
 public final class StreamFusionExecWindowRank extends ExecNodeBase<RowData> implements StreamExecNode<RowData> {
-    private static final String TRANSLATOR_CLASS = "tech.streamfusion.flink.window.StreamFusionWindowRankTranslator";
+    private static final String TRANSLATOR_CLASS =
+            "tech.streamfusion.flink.planner.window.StreamFusionWindowRankTranslator";
 
     private final int[] partitionKeys;
     private final SortSpec sortSpec;
@@ -71,8 +72,8 @@ public final class StreamFusionExecWindowRank extends ExecNodeBase<RowData> impl
         RowDataKeySelector partitionSelector = KeySelectorUtil.getRowDataSelector(
                 planner.getFlinkContext().getClassLoader(), partitionKeys, inputInfo);
         try {
-            Class<?> translator = Class.forName(
-                    TRANSLATOR_CLASS, true, planner.getFlinkContext().getClassLoader());
+            Class<?> translator =
+                    Class.forName(TRANSLATOR_CLASS, true, StreamFusionRuntimeClasses.class.getClassLoader());
             Method method = translator.getMethod(
                     "translate",
                     Transformation.class,

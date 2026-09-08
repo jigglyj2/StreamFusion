@@ -26,7 +26,7 @@ import org.apache.flink.table.types.logical.RowType;
 /** Distinct StreamFusion physical node for window-scoped first/last-row deduplication. */
 public final class StreamFusionExecWindowDeduplicate extends ExecNodeBase<RowData> implements StreamExecNode<RowData> {
     private static final String TRANSLATOR_CLASS =
-            "tech.streamfusion.flink.window.StreamFusionWindowDeduplicateTranslator";
+            "tech.streamfusion.flink.planner.window.StreamFusionWindowDeduplicateTranslator";
 
     private final int[] partitionKeys;
     private final int orderKey;
@@ -64,8 +64,8 @@ public final class StreamFusionExecWindowDeduplicate extends ExecNodeBase<RowDat
         RowDataKeySelector selector = KeySelectorUtil.getRowDataSelector(
                 planner.getFlinkContext().getClassLoader(), partitionKeys, InternalTypeInfo.of(inputType));
         try {
-            Class<?> translator = Class.forName(
-                    TRANSLATOR_CLASS, true, planner.getFlinkContext().getClassLoader());
+            Class<?> translator =
+                    Class.forName(TRANSLATOR_CLASS, true, StreamFusionRuntimeClasses.class.getClassLoader());
             Method method = translator.getMethod(
                     "translate",
                     Transformation.class,

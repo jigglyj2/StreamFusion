@@ -191,11 +191,15 @@ class SharedGlobalAggregateTopologyTest {
     void globalFragmentRejectsMalformedAccumulatorAndUnsupportedStateContracts() {
         var config = config();
         var nullable = RowType.of(new BigIntType(false), new VarBinaryType());
-        assertThat(tech.streamfusion.flink.aggregate.StreamFusionGlobalGroupAggregateTranslator.unsupportedStageReason(
-                        RAW, nullable, OUTPUT, 1, calls(), new boolean[] {true, true}, true, 0, config))
+        assertThat(
+                        tech.streamfusion.flink.planner.aggregate.StreamFusionGlobalGroupAggregateTranslator
+                                .unsupportedStageReason(
+                                        RAW, nullable, OUTPUT, 1, calls(), new boolean[] {true, true}, true, 0, config))
                 .contains("non-null VARBINARY");
-        assertThat(tech.streamfusion.flink.aggregate.StreamFusionGlobalGroupAggregateTranslator.unsupportedStageReason(
-                        RAW, PARTIAL, OUTPUT, 1, calls(), new boolean[] {true, false}, true, 0, config))
+        assertThat(
+                        tech.streamfusion.flink.planner.aggregate.StreamFusionGlobalGroupAggregateTranslator
+                                .unsupportedStageReason(
+                                        RAW, PARTIAL, OUTPUT, 1, calls(), new boolean[] {true, false}, true, 0, config))
                 .contains("retractable accumulator");
         config.set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_SIZE, 0L);
         assertThat(reason(config)).contains("size must be positive");
@@ -208,8 +212,8 @@ class SharedGlobalAggregateTopologyTest {
     }
 
     private static String reason(Configuration config) {
-        return tech.streamfusion.flink.aggregate.StreamFusionGlobalGroupAggregateTranslator.unsupportedStageReason(
-                RAW, PARTIAL, OUTPUT, 1, calls(), new boolean[] {true, true}, true, 0, config);
+        return tech.streamfusion.flink.planner.aggregate.StreamFusionGlobalGroupAggregateTranslator
+                .unsupportedStageReason(RAW, PARTIAL, OUTPUT, 1, calls(), new boolean[] {true, true}, true, 0, config);
     }
 
     private static Configuration config() {
