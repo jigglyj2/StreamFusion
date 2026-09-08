@@ -30,6 +30,14 @@ batches and flushes on applicable watermarks, checkpoint pre-barriers or memory 
 That difference must be corrected and tested before admission. Duplicating the reused aggregate
 or disabling Flink's reuse optimizer is not an acceptable workaround.
 
+An extracted SQL-generated Flink local slicer now pins the control contract in focused tests.
+A triggering watermark flushes every buffered slice in first-appearance order, including future
+slices, and emits timestamp-less INSERT partials. A later row for an already-due slice can remain
+buffered until the next scheduled trigger or checkpoint pre-barrier. A 3 MiB operator-only managed
+memory fixture verifies pressure flushing and preservation of all 180,000 generated contributions.
+These upstream-oracle tests define the required native behavior; they do not claim its migration
+is complete.
+
 The local kernel now uses shared DataFusion aggregate adapters for reusable integer COUNT/SUM/AVG
 and append-only MIN/MAX computation. Ordered retractions and numeric subsets that require Flink
 semantics retain the existing adapters. A coarse workspace covers row encodings, selections,
