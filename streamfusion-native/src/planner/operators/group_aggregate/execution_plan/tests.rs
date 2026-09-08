@@ -86,6 +86,7 @@ fn binding(rocks: Option<(&str, &std::path::Path)>) -> proto::NativeStateBinding
     proto::NativeStateBindings {
         protocol_version: 1,
         bindings: vec![proto::NativeStateBinding {
+            restored_watermark: None,
             plan_node_id: 3,
             max_parallelism: 16,
             first_key_group: 0,

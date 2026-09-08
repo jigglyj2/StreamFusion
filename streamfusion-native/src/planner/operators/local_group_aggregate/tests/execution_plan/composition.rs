@@ -63,6 +63,7 @@ fn non_keyed_and_keyed_factories_share_tree_controls_metrics_and_recovery() {
         let bindings = proto::NativeStateBindings {
             protocol_version: 1,
             bindings: vec![proto::NativeStateBinding {
+                restored_watermark: None,
                 plan_node_id: 5,
                 max_parallelism: 16,
                 first_key_group: 0,

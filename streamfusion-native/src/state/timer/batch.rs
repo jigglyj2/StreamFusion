@@ -18,13 +18,11 @@ impl std::ops::Deref for FiredTimerBatch {
 }
 
 impl NativeTimerService {
-    #[cfg(test)]
     pub(crate) fn key_group_range(&self) -> std::ops::RangeInclusive<u32> {
         self.first_key_group..=self.first_key_group + self.groups.len() as u32 - 1
     }
 
     /// Serialized size is available without constructing the checkpoint buffer.
-    #[cfg(test)]
     pub(crate) fn snapshot_size(&self, key_group: u32) -> Result<usize> {
         let group = self.group(key_group)?;
         Ok(group

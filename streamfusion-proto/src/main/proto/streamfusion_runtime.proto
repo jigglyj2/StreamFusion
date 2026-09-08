@@ -20,6 +20,9 @@ message NativeStateBinding {
     NativeMemoryState memory = 5;
     NativeRocksDbState rocksdb = 6;
   }
+  // Protocol 3: Flink's restored union-operator watermark for a slicing window.
+  // This clock is independent of keyed state and must be supplied before keyed restore.
+  optional int64 restored_watermark = 7;
 }
 
 message NativeMemoryState {}

@@ -82,7 +82,8 @@ owners (currently 8 per shared streaming owner). Fusion therefore preserves thei
 in Flink's allocation calculation, independently of the number of external inputs. The runtime
 still uses one Flink-assigned allowance and one shared RocksDB memory lease.
 
-Deduplication, regular-join, and streaming raw/global group-aggregate constructors currently implement this shared contract. A
+Deduplication, regular-join, streaming raw/global group-aggregate, and the verified global HOP
+slice constructor implement this shared contract. A
 common constructor configures the backend once and passes it to each family, which provides
 snapshot/restore/checkpoint methods; recursive
 physical lowering, Arrow stream execution, and node-addressed control dispatch are shared.
@@ -90,6 +91,18 @@ Canonical snapshots remain independently addressable by `(plan_node_id, key_grou
 native regions does not merge their SQL state namespaces. Snapshot and restore cannot race an
 active stream. A failed mutating restore requires a fresh context and recovery rather than reuse
 of possibly partial state.
+
+The HOP window binding currently accepts append-only UTC event-time partials with DataFusion
+COUNT or compatible append-only extrema. It uses ordered in-memory state or the configured RocksDB
+backend, emits through the common unary stream, and snapshots its timer index at Flink's checkpoint
+boundary. State-binding protocol 3 adds an optional restored operator watermark for this family.
+Flink supplies the minimum restored union-operator watermark before replay, independently of keyed
+state; it applies even if no keyed entries need importing. A window restore without this clock is
+rejected, as is attaching it to another operator family or an older binding protocol. Existing
+protocols 1 and 2 remain supported. Direct generated tests compare the shared HOP COUNT tree with
+Flink's SQL-generated global slicer on both backends, including restored input and logical stage I/O.
+The complete window metric surface, Java resource/clock lifecycle and ordinary planner admission
+remain outstanding; see [Window aggregation](/StreamFusion/operators/window-aggregation/).
 
 The group-aggregate binding accepts synchronous and mini-batch streaming raw input, including
 retractions, and mini-batch global partial-accumulator input. Raw/global bundles drain through the

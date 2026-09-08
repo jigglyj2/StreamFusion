@@ -6,7 +6,7 @@ use crate::memory_pool::tests_support::TestBroker;
 use crate::planner::operators::group_aggregate::Accumulator;
 use prost::Message;
 
-fn plan() -> Vec<u8> {
+pub(super) fn plan() -> Vec<u8> {
     use super::super::tests::{field, logical_bigint, plan};
     let mut native =
         proto::NativePlan::decode(plan(proto::WindowKind::Hop, 6000, 2000, false).as_slice())
@@ -70,7 +70,7 @@ fn processor(
     .unwrap()
 }
 
-fn batch(rows: &[(i64, i64, i64)]) -> RecordBatch {
+pub(super) fn batch(rows: &[(i64, i64, i64)]) -> RecordBatch {
     let encoded = rows
         .iter()
         .map(|&(_, count, _)| {

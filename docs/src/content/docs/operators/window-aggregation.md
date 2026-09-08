@@ -22,125 +22,86 @@ GROUP BY window_start, window_end, bidder;
 
 ## Q5 admission work
 
-Ordinary Q5 EXPLAIN on both backends currently reports blocked local/global window stages and
-an aggregate reused by two consumers. The retained standalone handles do not yet participate in
-the common native execution, control and metric lifecycle. In particular, the existing local
-kernel emits partials per Arrow batch; Flink's `LocalSlicingWindowAggOperator` buffers across
-batches and flushes on applicable watermarks, checkpoint pre-barriers or memory pressure.
-That difference must be corrected and tested before admission. Duplicating the reused aggregate
-or disabling Flink's reuse optimizer is not an acceptable workaround.
+Ordinary Q5 EXPLAIN on both backends still reports blocked local/global window stages and an
+aggregate reused by two consumers. Explicit native resource bindings now run the local buffer
+and global HOP slicer through the common DataFusion execution tree. These development paths do
+not yet change ordinary planner selection, and there is no Q5 performance result.
 
-An extracted SQL-generated Flink local slicer now pins the control contract in focused tests.
-A triggering watermark flushes every buffered slice in first-appearance order, including future
-slices, and emits timestamp-less INSERT partials. A later row for an already-due slice can remain
-buffered until the next scheduled trigger or checkpoint pre-barrier. A 3 MiB operator-only managed
-memory fixture verifies pressure flushing and preservation of all 180,000 generated contributions.
-These upstream-oracle tests define the required native behavior; they do not claim its migration
-is complete.
+### Local buffer
 
-A native capacity calculation now matches shared fixtures checked against Flink's actual
-`WindowBytesMultiMap`, including fixed-width rows, large variable-width keys/values, hash-table
-growth and reset. It counts Flink page geometry without constructing or serializing RowData.
-This is semantic flush-capacity bookkeeping, separate from coarse native buffer reservations.
-A buffered implementation, available through explicit task-resource bindings, uses this capacity model with DataFusion grouped state
-retained across Arrow batches. It probes Arrow row encodings by reference and copies keys only
-when a new group appears. It matches the SQL-generated Flink watermark/pre-barrier oracle and
-all partials from the 180,000-row pressure fixture with Arrow batch sizes 127, 4,096 and 100,000.
-Flush output is limited to 2,048 partials per pull and preserves first-appearance order; pending
-input must drain before another batch or control. Coarse admitted workspace transfers credit to
-retained state and Arrow output owners, with denial and cancellation/last-owner tests. The tested
-buffered subset uses UTC, non-null time/bound columns, append-only grouped accumulators and
-fixed-width Flink row geometry. Nullable time/bound admission remains deferred until the streaming
-Flink parity contract is verified.
+The buffered local implementation retains DataFusion `GroupsAccumulator` vectors across Arrow
+batches. It probes Arrow row keys by reference and copies retained keys only for new groups.
+Flink-compatible watermark, checkpoint pre-barrier and memory-pressure boundaries flush partials
+in first-appearance order, including future slices when a trigger flushes the buffer. Outputs are
+timestamp-less INSERT partials, limited to 2,048 rows per pull. Invocation EOF and end-input alone
+do not flush; a terminal watermark uses the normal event-time path.
 
-A Calc → local window → Calc test runs this buffer through the shared native unary execution tree.
-`NativeTaskBindings` v1 binds each local-window plan-node ID to Flink's resolved buffer-memory
-share and page size before capability negotiation and execution. The JNI constructor keeps these
-non-keyed resources separate from keyed-state bindings; malformed, duplicate, missing, unsupported
-or late bindings are rejected transactionally. Direct Java tests compare generated control
-changelogs and pressure-flush outputs with the real SQL-generated Flink slicer through Arrow C
-Data/C Stream. Watermarks and checkpoint pre-barriers drain its bounded output before the
-control completes; invocation EOF and end-input alone do not flush. Partials carry timestamp-less
-INSERT metadata, each stage counts logical records, and invalid RowKinds or cancellation require
-recovery. Payload buffers retain their existing native leases; only new metadata receives another
-allocation allowance. Binding the original Flink operator memory share from Java and checking the
-complete Flink metric surface and replay lifecycle remain required. The legacy production handle still flushes per batch, and Q5
-continues to fall back.
+`NativeTaskBindings` v1 binds each local stage to the original Flink operator's resolved memory
+share and page size before lowering. A capacity model matches Flink's `WindowBytesMultiMap`
+geometry without constructing RowData. This bookkeeping preserves observable pressure-flush
+boundaries; actual native buffers and retained state use coarse Flink memory reservations.
+The buffered subset currently requires UTC, non-null time/bound columns, fixed-width Flink row
+geometry and compatible append-only DataFusion aggregates. Nullable time/bound streaming parity
+and automatic binding of the original physical operator's memory share remain outstanding.
 
-Compatible append-only local windows now use DataFusion's `GroupsAccumulator` vectors across
-all keys in a batch. The native handle prepares these adapters once and reuses them after each
-flush. SQL columns are shared directly with the kernels; nullable timestamp and FILTER masks
-select contributions without gathering or copying the whole input batch. Canonical Flink
-accumulator objects are constructed only while encoding each output partial, rather than retained
-for every key. The grouped-state test covers 4,096 groups across four batches, overflow, nulls and
-nullable filters; observed-allocation tests check the coarse workspace on hot and unique keys.
-The real Flink SQL matrix also includes FILTER predicates. This does not yet change the legacy
-per-batch flush lifecycle or admit Q5.
+The retained legacy local handle still flushes per Arrow batch. Its reusable integer COUNT/SUM/AVG
+and append-only MIN/MAX computation uses DataFusion, with ordered Flink adapters for retractions
+and incompatible numeric semantics. It is not the buffered shared-runtime path.
 
-The local kernel now uses shared DataFusion aggregate adapters for reusable integer COUNT/SUM/AVG
-and append-only MIN/MAX computation. Ordered retractions and numeric subsets that require Flink
-semantics retain the existing adapters. A coarse workspace covers row encodings, selections,
-accumulator deltas and partial-output buffers before allocation; output ownership moves from that
-allowance to the compatibility C Data edge without a post-allocation reservation. Plan decoding
-and schema/codec construction are separately admitted. Generated direct-kernel tests compare
-TUMBLE/HOP/CUMULATE outputs byte-for-byte with real Flink SQL across two batch sizes and both
-backends, including nullable keys/timestamps/values and integer overflow. Native tests additionally
-compare ordered accumulator bytes for all RowKinds and verify memory-denial cleanup. This is a
-prerequisite, not Q5 admission.
+### Global HOP slicer
 
-The SQL-generated global HOP oracle additionally pins shared-slice state and late-input behavior
-on both Flink backends, before and after checkpoint restore. One buffered partial becomes one
-slice state and one initial timer, rather than one state per overlapping window. A partial arriving
-after its base slice fired is still accepted until its last overlapping window fires; the late-drop
-counter increments once only when that last window has fired. An extra empty-window timer ends
-the trigger chain after the final nonempty window. Flink restores its checkpointed watermark
-before processing replayed input. The retained native global-partial kernel now matches that input-level late counter on both
-backends, including partially late inputs that still contribute to later windows. Its partial-input
-logic and tests live in a separate operator submodule. It still expands slices into windows and
-needs shared-slice state, restored-watermark and shared-control corrections before admission.
+The shared global HOP implementation stores each base slice once using versioned Arrow row keys
+for grouping and sortable slice ends. Flink BinaryRow hashing independently selects the key group.
+Both the ordered in-memory backend and RocksDB batch reads and writes at incoming Arrow batch
+boundaries. DataFusion grouped accumulators merge COUNT and compatible append-only extrema on
+input and when a window fires. Firing reads at most 4,096 requested slice keys per page and emits
+at most 1,024 windows per pull. One timestamp is drained at a time so timers created during firing
+run before later windows delete their slices. Flink's extra empty-window timer is preserved.
 
-Global partial batches containing COUNT and compatible append-only MIN/MAX now merge through
-DataFusion grouped accumulators. Each accepted input accumulator is decoded once, and temporary
-merge columns are built in chunks of at most 2,048 contributions. COUNT partials use DataFusion's
-wrapping BIGINT SUM kernel; SQL FILTER is already represented in the partial and is not reapplied.
-Flink's ordered empty-group and timer transitions remain separate from aggregate computation.
-Delta inputs, cardinality overflow, DISTINCT, retractable extrema and other aggregate families
-retain the existing ordered merge path. Generated SQL parity covers both this grouped subset and
-the mixed SUM/AVG path on both backends, with nullable values, filters and different batch sizes.
-Coarse partial workspace accounts for overlapping-window fanout and encoded payload size before
-allocation. New timers from these append-only partial batches are deduplicated before one host
-reservation. Window timer firing transfers existing key/namespace credit into a bounded callback
-owner and admits its descriptor vector before removing timers. Credit stays live through the
-callback, including when the timer service closes first; failed admission leaves the timer index
-unchanged. Canonical timer bytes and firing order are unchanged. This does not yet implement
-shared-slice storage or change ordinary planner admission.
+A late partial remains eligible until its last overlapping window fires; the late-drop counter
+increments once only when the complete input partial is dropped. Unlike Flink's additional global
+raw-row buffer, this implementation merges each incoming Arrow batch directly into slice state.
+That adaptation follows the native batch and batched-state contract while preserving watermark
+emission boundaries. The global buffer emits no intermediate partial rows. Full metric and
+Flink-managed runtime recovery parity remain admission requirements for this adaptation.
 
-A separate development implementation now stores each HOP base slice once, using versioned
-Arrow row keys for the grouping identity and sortable slice end. Flink BinaryRow hashing still
-selects the key group. DataFusion grouped accumulators merge COUNT and compatible append-only
-extrema on input and when windows fire. Input state reads/writes are batched; firing reads at most
-4,096 requested slice keys per page and emits at most 1,024 windows per pull. It advances one timer
-timestamp at a time so timers created during firing run before later windows delete their slices.
-The extra empty-window timer is preserved.
+The timer index stays in admitted native memory and is serialized at Flink's canonical or physical
+checkpoint boundary, instead of being rewritten after every input batch. Snapshot markers
+fingerprint the window contract and pin the slice/Arrow encoding. Restore rejects expanded-window
+state: original slices cannot generally be recovered from merged extrema. `NativeStateBindings`
+protocol 3 carries Flink's restored union-operator watermark separately from keyed snapshots,
+even when keyed state contains no entries. Missing restore clocks, unsupported versions and clocks attached to
+other operator families are rejected. Versions 1 and 2 remain valid for their existing contracts.
 
-This development path eagerly merges each incoming Arrow batch into slice state instead of
-retaining Flink's additional global raw-row buffer. This follows the native batch execution and
-batched-state contract: emission still waits for the watermark. Unlike the local buffer, the global
-buffer does not emit intermediate partial rows. Full shared-runtime metric and lifecycle parity
-must still verify this adaptation before admission. The heap timer index is serialized at Flink's
-canonical or physical checkpoint boundary, rather than rewritten after every input batch.
-Snapshot markers fingerprint the window contract and pin the slice/Arrow encoding; restoration
-rejects expanded-window state, whose original slices cannot generally be recovered from merged
-extrema. Flink must supply the restored operator watermark separately from keyed snapshots.
+The shared execution adapter preserves Arrow ownership through adjacent Calc stages and attaches
+timestamp-less INSERT metadata without re-admitting or copying payload buffers. Watermark output
+drains before control propagation. EOF/end-input alone does not fire windows; checkpoint
+pre-barriers do not emit rows. Invalid RowKinds and cancelled invocations require recovery. New
+timers use batch admission, and fired keys retain their memory credit through the callback.
 
-Native development tests cover the SQL-generated Flink global HOP control contract, generated
-inputs compared with the existing Flink-verified expanded kernel, memory/RocksDB restore,
-1→2→1 rescaling, physical RocksDB checkpoints, memory denial, and a 5,000-slice window read in
-bounded pages. Storage instrumentation checks one retained value per slice and writes that do
-not grow with the entire timer index. This implementation is currently compiled only for tests;
-shared execution-tree/resource bindings, direct generated Flink SQL parity through that tree,
-complete metric/control recovery checks and ordinary planner admission remain outstanding.
-There is no Q5 acceleration or new Q5 benchmark result yet.
+### Validation and remaining admission work
+
+Direct Java tests compare the SQL-generated Flink local slicer with the native tree for generated
+control sequences and every partial from a 180,000-row pressure fixture. Direct global HOP COUNT
+tests compare complete serialized changelog records at each input/control boundary on both
+backends, including nullable keys, negative times, late inputs, large watermark jumps and restore
+before replayed input. They verify timestamp/RowKind metadata and logical I/O counts for each
+native stage. Timer ties between independent keys are compared without imposing an order Flink
+does not guarantee.
+
+Native tests additionally cover memory/RocksDB restore, 1→2→1 rescaling, physical RocksDB
+checkpoints, memory denial and cancellation, and a 5,000-slice window read in bounded pages.
+Storage instrumentation verifies one retained value per slice and input writes independent of
+the growing timer index. These checks do not establish full production admission yet. Remaining
+Q5 requirements include:
+
+- Automatic Java fragment/resource binding, including the original local memory share and
+  Flink's restored union-operator clock.
+- Shared execution for the attached-window MAX stage and ownership of the reused aggregate's
+  two outputs, without duplicating computation or disabling Flink reuse.
+- The complete Flink metric surface and runtime checkpoint/replay contracts, including aligned
+  and unaligned recovery through the selected physical topology.
+- Ordinary whole-plan admission, followed by release benchmarks and profiling on both backends.
 
 ## Retained semantic implementation
 

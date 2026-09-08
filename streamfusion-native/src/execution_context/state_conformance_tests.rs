@@ -50,6 +50,7 @@ fn resources() -> proto::NativeStateBindings {
     proto::NativeStateBindings {
         protocol_version: 1,
         bindings: vec![proto::NativeStateBinding {
+            restored_watermark: None,
             plan_node_id: 2,
             max_parallelism: 16,
             first_key_group: 0,
@@ -95,8 +96,12 @@ fn failed_state_binding_is_transactional_and_retry_does_not_consume_the_task_bud
         range.bindings[0].last_key_group = 16;
         let mut missing = valid.clone();
         missing.bindings[0].plan_node_id = 100;
+        let mut wrong_clock_owner = valid.clone();
+        wrong_clock_owner.protocol_version = 3;
+        wrong_clock_owner.bindings[0].restored_watermark = Some(1999);
         for bytes in [
             vec![0xff],
+            wrong_clock_owner.encode_to_vec(),
             wrong_protocol.encode_to_vec(),
             duplicate.encode_to_vec(),
             range.encode_to_vec(),

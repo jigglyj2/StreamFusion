@@ -52,11 +52,13 @@ public final class NativeStateResources {
     public static byte[] serialize(List<NativeStateBinding> bindings) {
         return NativeStateBindings.newBuilder()
                 .setProtocolVersion(
-                        bindings.stream()
-                                        .anyMatch(binding -> binding.hasRocksdb()
-                                                && binding.getRocksdb().hasLogDirectory())
-                                ? 2
-                                : 1)
+                        bindings.stream().anyMatch(NativeStateBinding::hasRestoredWatermark)
+                                ? 3
+                                : bindings.stream()
+                                                .anyMatch(binding -> binding.hasRocksdb()
+                                                        && binding.getRocksdb().hasLogDirectory())
+                                        ? 2
+                                        : 1)
                 .addAllBindings(bindings)
                 .build()
                 .toByteArray();

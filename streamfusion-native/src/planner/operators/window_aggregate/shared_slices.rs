@@ -3,7 +3,8 @@
 
 //! Shared HOP slice execution. Flink retains each base slice once and combines the slices
 //! when a window fires; it does not expand incoming partials into all overlapping windows.
-//! Shared-plan/control binding remains a separate admission prerequisite.
+//! Explicit shared-plan bindings are available; ordinary planner admission still requires
+//! the complete Flink resource, operator-clock and metric lifecycle.
 
 use super::*;
 use crate::planner::operators::group_aggregate::grouped_compute::GroupedMerge;
@@ -11,6 +12,7 @@ use crate::planner::operators::sortable_state;
 
 mod checkpoint;
 mod codec;
+pub(crate) mod execution_plan;
 mod firing;
 mod input;
 #[cfg(test)]

@@ -202,6 +202,7 @@ fn installing_more_state_owners_has_linear_retained_configuration_cost() {
                 ..Default::default()
             };
             bindings.push(proto::NativeStateBinding {
+                restored_watermark: None,
                 plan_node_id: id,
                 max_parallelism: 1,
                 first_key_group: 0,

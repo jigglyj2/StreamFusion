@@ -10,6 +10,9 @@ use crate::planner::operators::{
         GroupAggregateProcessor,
     },
     regular_join::{execution_plan::RegularJoinFactory, RegularJoinProcessor},
+    window_aggregate::shared_slices::execution_plan::{
+        self as slicing_window, SlicingWindowFactory,
+    },
 };
 use crate::planner::persistent::{find_unique, PersistentBinding, PersistentOperatorFactory};
 use crate::{proto, state::SnapshotBytes};
@@ -56,7 +59,7 @@ impl NativeExecutionContext {
         )?;
         let options = proto::NativeStateBindings::decode(bytes)
             .map_err(|error| invalid(format!("invalid state-binding protobuf: {error}")))?;
-        if !matches!(options.protocol_version, 1 | 2)
+        if !matches!(options.protocol_version, 1 | 2 | 3)
             || self.plan().protocol_version < crate::ENVELOPE_PLAN_PROTOCOL_VERSION
             || options.bindings.is_empty()
         {
@@ -97,6 +100,7 @@ impl NativeExecutionContext {
                         | proto::operator::Operator::GroupAggregate(_)
                         | proto::operator::Operator::GlobalGroupAggregate(_)
                         | proto::operator::Operator::RegularJoin(_)
+                        | proto::operator::Operator::WindowAggregate(_)
                 )
             ) {
                 return Err(invalid(format!(
@@ -112,6 +116,18 @@ impl NativeExecutionContext {
                 )
             ) {
                 validate_native_node(node)?;
+            }
+            let window = matches!(
+                node.operator,
+                Some(proto::operator::Operator::WindowAggregate(_))
+            );
+            if binding.restored_watermark.is_some() && (options.protocol_version < 3 || !window) {
+                return Err(invalid(
+                    "restored operator watermarks require a window binding and protocol 3",
+                ));
+            }
+            if window {
+                slicing_window::validate_node(node, binding.max_parallelism)?;
             }
             match binding.backend.as_ref() {
                 Some(proto::native_state_binding::Backend::Memory(_)) => {}
@@ -293,7 +309,16 @@ fn create(
     let scratch = memory.sibling("native state batch scratch and output");
     let state: Box<dyn KeyedState> = match binding.backend.as_ref() {
         Some(proto::native_state_binding::Backend::Memory(_)) => {
-            Box::new(MemoryKeyedState::new(first, last, memory)?)
+            if matches!(
+                node.operator,
+                Some(proto::operator::Operator::WindowAggregate(_))
+            ) {
+                Box::new(crate::state::OrderedMemoryKeyedState::new(
+                    first, last, memory,
+                )?)
+            } else {
+                Box::new(MemoryKeyedState::new(first, last, memory)?)
+            }
         }
         Some(proto::native_state_binding::Backend::Rocksdb(rocks)) => Box::new(
             RocksPluginKeyedState::open_configured(rocks, first, last, Some(&memory))?,
@@ -301,6 +326,9 @@ fn create(
         None => return Err(invalid("unsupported native state binding")),
     };
     match &node.operator {
+        Some(proto::operator::Operator::WindowAggregate(_)) => Ok(Arc::new(
+            SlicingWindowFactory::new(node, bytes, binding, state, scratch)?,
+        )),
         Some(
             proto::operator::Operator::GroupAggregate(_)
             | proto::operator::Operator::GlobalGroupAggregate(_),
@@ -333,6 +361,7 @@ fn require_bindings(node: &proto::Operator, ids: &HashSet<u64>) -> Result<()> {
                 | proto::operator::Operator::RegularJoin(_)
                 | proto::operator::Operator::GroupAggregate(_)
                 | proto::operator::Operator::GlobalGroupAggregate(_)
+                | proto::operator::Operator::WindowAggregate(_)
         )
     ) && !ids.contains(&node.plan_node_id)
     {
