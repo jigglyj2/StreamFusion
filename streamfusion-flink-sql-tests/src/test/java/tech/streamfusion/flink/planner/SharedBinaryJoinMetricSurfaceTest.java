@@ -15,22 +15,22 @@ import org.apache.flink.streaming.runtime.streamrecord.LatencyMarker;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.runtime.watermarkstatus.WatermarkStatus;
 import org.apache.flink.table.data.GenericRowData;
-import org.apache.flink.table.data.StringData;
 import org.apache.flink.table.runtime.typeutils.RowDataSerializer;
 import org.apache.flink.types.RowKind;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.CsvSource;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 
 class SharedBinaryJoinMetricSurfaceTest {
     @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void defaultMetricsAndChangelogMatchFlinkAcrossBothInputsAndBackends(boolean rocks) throws Exception {
-        var fixture = new SharedBinaryJoinMetricFixture(false);
+    @CsvSource({"false,false", "true,false", "false,true", "true,true"})
+    void defaultMetricsAndChangelogMatchFlinkAcrossBothInputsAndBackends(boolean rocks, boolean range)
+            throws Exception {
+        var fixture = range ? SharedBinaryJoinMetricFixture.rangeJoin() : new SharedBinaryJoinMetricFixture(false);
         try (var join = fixture.join(rocks);
                 var calc = fixture.calc();
                 var target = new KeyedNativeMetricHarness(
-                        rocks, fixture.plan(), List.of(INPUT, INPUT), OUTPUT, List.of(id(0)));
+                        rocks, fixture.plan(), List.of(fixture.input, fixture.input), fixture.output, List.of(id(0)));
                 var allocator = new RootAllocator(64L << 20)) {
             var expected = new DataOutputSerializer(128);
             compare(join, calc, target);
@@ -41,7 +41,7 @@ class SharedBinaryJoinMetricSurfaceTest {
                 int count = arrival == 0 ? 5000 : 1;
                 var rows = new ArrayList<GenericRowData>();
                 for (int row = 0; row < count; row++) {
-                    var value = GenericRowData.of(7L, port == 0 ? null : StringData.fromString("é-person"));
+                    var value = fixture.row(7L, port);
                     value.setRowKind(
                             arrival < 2
                                     ? RowKind.INSERT
@@ -52,18 +52,18 @@ class SharedBinaryJoinMetricSurfaceTest {
                     join.accept(
                             port,
                             new StreamRecord<>(
-                                    new RowDataSerializer(INPUT)
+                                    new RowDataSerializer(fixture.input)
                                             .toBinaryRow(value)
                                             .copy(),
                                     123 + row));
                 }
-                drain(join, calc, expected);
+                drain(fixture, join, calc, expected);
                 var present = new boolean[count];
                 java.util.Arrays.fill(present, true);
                 var timestamps = java.util.stream.IntStream.range(0, count)
                         .mapToLong(row -> 123L + row)
                         .toArray();
-                try (var batch = ArrowRowDataBatch.transpose(rows, INPUT, allocator)
+                try (var batch = ArrowRowDataBatch.transpose(rows, fixture.input, allocator)
                         .withEnvelope(
                                 rows.stream().map(GenericRowData::getRowKind).toArray(RowKind[]::new),
                                 present,
@@ -80,7 +80,7 @@ class SharedBinaryJoinMetricSurfaceTest {
                         new LatencyMarker(0, new OperatorID(7, 9), port));
                 for (var control : controls) {
                     join.accept(port, control);
-                    drain(join, calc, expected);
+                    drain(fixture, join, calc, expected);
                     if (control instanceof Watermark) target.processWatermark(port, (Watermark) control);
                     else if (control instanceof WatermarkStatus)
                         target.processWatermarkStatus(port, (WatermarkStatus) control);
@@ -97,10 +97,14 @@ class SharedBinaryJoinMetricSurfaceTest {
         }
     }
 
-    private static void drain(FlinkMultiInputMetricOracle join, FlinkStageMetricOracle calc, DataOutputSerializer bytes)
+    private static void drain(
+            SharedBinaryJoinMetricFixture fixture,
+            FlinkMultiInputMetricOracle join,
+            FlinkStageMetricOracle calc,
+            DataOutputSerializer bytes)
             throws Exception {
         for (var event : join.drain()) calc.accept(event);
-        for (var event : calc.drain()) StageEventBytes.encode(OUTPUT, event, bytes);
+        for (var event : calc.drain()) StageEventBytes.encode(fixture.output, event, bytes);
     }
 
     private static void compare(

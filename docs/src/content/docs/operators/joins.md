@@ -24,6 +24,13 @@ All other join paths described below are retained for development and direct par
 **Retained implementation scope:** Partial implementation for bounded hash/adaptive/sort-merge/nested-loop joins and for
 synchronous regular, multi-way, time-bounded, and temporal streaming joins.
 
+Generated shared-region conformance tests also cover binary inner joins with a nullable
+`TIMESTAMP(3)` range predicate evaluated by DataFusion. They exercise inclusive endpoints,
+negative epochs, null and non-matching bounds, a 5,000-row fan-out crossing the bounded
+expression chunks, all four RowKinds, complete registered metrics, backend-switch savepoints,
+1-to-2-to-1 rescaling, incremental SST reuse, and actual aligned/unaligned channel replay.
+This establishes direct runtime evidence; residual-predicate production admission remains gated.
+
 ## SQL example
 
 ```sql

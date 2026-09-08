@@ -19,8 +19,6 @@ import org.apache.flink.runtime.state.memory.MemCheckpointStreamFactory;
 import org.apache.flink.streaming.api.operators.OperatorSnapshotFinalizer;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.util.AbstractStreamOperatorTestHarness;
-import org.apache.flink.table.data.GenericRowData;
-import org.apache.flink.table.data.StringData;
 import org.apache.flink.table.runtime.typeutils.RowDataSerializer;
 import org.apache.flink.types.RowKind;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -32,18 +30,31 @@ import tech.streamfusion.flink.operator.StreamFusionNativeRegionOperatorFactory;
 
 /** Actual Rust routing, shared keyed region, and Flink snapshot/repartition/restore APIs. */
 class SharedBinaryJoinRecoveryTest {
-    @ParameterizedTest(name = "rocks={0}, mode={1}")
-    @CsvSource({"false,0", "true,0", "false,1", "true,1", "false,2", "true,2"})
-    void canonicalBackendSwitchAndAlignedUnalignedRescalingPreserveJoinChangelog(boolean rocks, int mode)
+    @ParameterizedTest(name = "rocks={0}, mode={1}, range={2}")
+    @CsvSource({
+        "false,0,false",
+        "true,0,false",
+        "false,1,false",
+        "true,1,false",
+        "false,2,false",
+        "true,2,false",
+        "false,0,true",
+        "true,0,true",
+        "false,1,true",
+        "true,1,true",
+        "false,2,true",
+        "true,2,true"
+    })
+    void canonicalBackendSwitchAndAlignedUnalignedRescalingPreserveJoinChangelog(boolean rocks, int mode, boolean range)
             throws Exception {
-        var fixture = new SharedBinaryJoinMetricFixture(false);
+        var fixture = range ? SharedBinaryJoinMetricFixture.rangeJoin() : new SharedBinaryJoinMetricFixture(false);
         try (var oracle = fixture.join(rocks);
                 var calc = fixture.calc();
                 var allocator = new RootAllocator(64L << 20)) {
             OperatorSubtaskState initial;
             try (var source = region(fixture, rocks, null, 1, 0)) {
-                compare(List.of(source), oracle, calc, allocator, 0, RowKind.INSERT);
-                compare(List.of(source), oracle, calc, allocator, 1, RowKind.INSERT);
+                compare(fixture, List.of(source), oracle, calc, allocator, 0, RowKind.INSERT);
+                compare(fixture, List.of(source), oracle, calc, allocator, 1, RowKind.INSERT);
                 initial = snapshot(source, mode, 1);
                 if (rocks && mode != 0) {
                     var first = (IncrementalRemoteKeyedStateHandle)
@@ -63,14 +74,14 @@ class SharedBinaryJoinRecoveryTest {
             boolean scaledRocks = mode == 0 ? !rocks : rocks;
             try (var first = region(fixture, scaledRocks, assigned0, 2, 0);
                     var second = region(fixture, scaledRocks, assigned1, 2, 1)) {
-                compare(List.of(first, second), oracle, calc, allocator, 0, RowKind.DELETE);
-                compare(List.of(first, second), oracle, calc, allocator, 0, RowKind.UPDATE_AFTER);
+                compare(fixture, List.of(first, second), oracle, calc, allocator, 0, RowKind.DELETE);
+                compare(fixture, List.of(first, second), oracle, calc, allocator, 0, RowKind.UPDATE_AFTER);
                 combined = AbstractStreamOperatorTestHarness.repackageState(
                         snapshot(first, mode, 3), snapshot(second, mode, 3));
             }
             var assignedBack = AbstractStreamOperatorTestHarness.repartitionOperatorState(combined, 16, 2, 1, 0);
             try (var target = region(fixture, rocks, assignedBack, 1, 0)) {
-                compare(List.of(target), oracle, calc, allocator, 1, RowKind.UPDATE_BEFORE);
+                compare(fixture, List.of(target), oracle, calc, allocator, 1, RowKind.UPDATE_BEFORE);
             }
             assertThat(allocator.getAllocatedMemory()).isZero();
         }
@@ -83,14 +94,18 @@ class SharedBinaryJoinRecoveryTest {
             int parallelism,
             int subtask)
             throws Exception {
-        byte[] exchange = exchange(parallelism);
+        byte[] exchange = exchange(fixture, parallelism);
         var factory = new StreamFusionNativeRegionOperatorFactory(
-                List.of(INPUT, INPUT), OUTPUT, fixture.plan(), List.of(id(0)), List.of(exchange, exchange));
-        return new KeyedNativeMetricHarness(rocks, factory, 2, OUTPUT, state, parallelism, subtask);
+                List.of(fixture.input, fixture.input),
+                fixture.output,
+                fixture.plan(),
+                List.of(id(0)),
+                List.of(exchange, exchange));
+        return new KeyedNativeMetricHarness(rocks, factory, 2, fixture.output, state, parallelism, subtask);
     }
 
-    private static byte[] exchange(int parallelism) {
-        return NativeExchangePlanSerializer.hash(INPUT, new int[] {0}, 16, parallelism, true);
+    private static byte[] exchange(SharedBinaryJoinMetricFixture fixture, int parallelism) {
+        return NativeExchangePlanSerializer.hash(fixture.input, new int[] {0}, 16, parallelism, true);
     }
 
     private static OperatorSubtaskState snapshot(KeyedNativeMetricHarness source, int mode, long id) throws Exception {
@@ -108,6 +123,7 @@ class SharedBinaryJoinRecoveryTest {
     }
 
     private static void compare(
+            SharedBinaryJoinMetricFixture fixture,
             List<KeyedNativeMetricHarness> targets,
             FlinkMultiInputMetricOracle oracle,
             FlinkStageMetricOracle calc,
@@ -118,22 +134,22 @@ class SharedBinaryJoinRecoveryTest {
         var seenGroups = new java.util.HashSet<Integer>();
         var seenTasks = new java.util.HashSet<Integer>();
         for (int key = 0; key < 64; key++) {
-            var value =
-                    GenericRowData.of((long) key, key % 7 == 0 ? null : StringData.fromString("é-" + port + "-" + key));
+            var value = fixture.row(key, port);
             value.setRowKind(kind);
             oracle.accept(
                     port,
-                    new StreamRecord<>(
-                            new RowDataSerializer(INPUT).toBinaryRow(value).copy()));
+                    new StreamRecord<>(new RowDataSerializer(fixture.input)
+                            .toBinaryRow(value)
+                            .copy()));
             for (var event : oracle.drain()) calc.accept(event);
             var expected = new DataOutputSerializer(128);
-            for (var event : calc.drain()) StageEventBytes.encode(OUTPUT, event, expected);
-            try (var batch = ArrowRowDataBatch.transpose(List.of(value), INPUT, allocator)
+            for (var event : calc.drain()) StageEventBytes.encode(fixture.output, event, expected);
+            try (var batch = ArrowRowDataBatch.transpose(List.of(value), fixture.input, allocator)
                             .withRowKinds(new RowKind[] {kind});
-                    var envelope =
-                            tech.streamfusion.flink.exchange.ArrowExchangeBatch.withEnvelope(batch, INPUT, null)) {
+                    var envelope = tech.streamfusion.flink.exchange.ArrowExchangeBatch.withEnvelope(
+                            batch, fixture.input, null)) {
                 for (var frame : ArrowExchangeCDataBridge.route(
-                        exchange(targets.size()), envelope.batch(), allocator, targets.get(0).memory)) {
+                        exchange(fixture, targets.size()), envelope.batch(), allocator, targets.get(0).memory)) {
                     int subtask = KeyGroupRangeAssignment.computeOperatorIndexForKeyGroup(
                             16, targets.size(), frame.keyGroup());
                     seenGroups.add(frame.keyGroup());

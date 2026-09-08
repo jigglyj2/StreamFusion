@@ -15,10 +15,10 @@ import org.apache.flink.runtime.io.network.buffer.Buffer;
 public final class StreamFusionRecoveredTestChannel extends RecoveredInputChannel {
     private final InputChannel live;
 
-    private StreamFusionRecoveredTestChannel(SingleInputGate gate, InputChannel live) {
+    private StreamFusionRecoveredTestChannel(SingleInputGate gate, int index, InputChannel live) {
         super(
                 gate,
-                0,
+                index,
                 live.getPartitionId(),
                 live.getConsumedSubpartitionIndexSet(),
                 0,
@@ -30,15 +30,18 @@ public final class StreamFusionRecoveredTestChannel extends RecoveredInputChanne
     }
 
     public static void install(SingleInputGate gate) {
-        var live = gate.getChannel(0);
-        try {
-            // The mailbox gate installs a reusable provider, not a queued buffer. Prime it so
-            // conversion does not count that provider as buffered data and suppress notification.
-            if (live.getNextBuffer().isPresent()) throw new AssertionError("Live test channel must be empty");
-        } catch (Exception failure) {
-            throw new RuntimeException(failure);
+        var recovered = new InputChannel[gate.getNumberOfInputChannels()];
+        for (int index = 0; index < recovered.length; index++) {
+            var live = gate.getChannel(index);
+            try {
+                // Prime the reusable mailbox provider before converting this channel.
+                if (live.getNextBuffer().isPresent()) throw new AssertionError("Live test channel must be empty");
+            } catch (Exception failure) {
+                throw new RuntimeException(failure);
+            }
+            recovered[index] = new StreamFusionRecoveredTestChannel(gate, index, live);
         }
-        gate.setInputChannels(new StreamFusionRecoveredTestChannel(gate, live));
+        gate.setInputChannels(recovered);
     }
 
     public static MemorySegmentProvider memorySegments(int size) {

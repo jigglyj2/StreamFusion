@@ -85,8 +85,11 @@ and logical stage counts. BIGINT boundary values exercise wrapping sums and trun
 including retraction of the minimum representable integer. The same aggregate fixture participates
 in full registered-metric comparisons, canonical backend switches, aligned/unaligned keyed-state
 checkpoints, and 1-to-2-to-1 rescaling. Mini-batch and partial-input fixtures also include AVG.
-This is direct shared-runtime evidence; production admission and actual in-flight channel replay
-remain separate requirements.
+A real Flink mailbox/network harness additionally snapshots a partly aligned two-channel input,
+restores its keyed state, and replays the captured Arrow IPC frame through Flink’s channel-state
+reader. It checks every resulting aggregate changelog byte, including overflow and later
+retractions, on both backends with aligned and unaligned checkpoints. Production admission
+remains gated pending the final supported-subset check.
 
 The selected synchronous aggregation node now contributes a protobuf fragment to the common
 region collector instead of constructing a legacy per-operator Java runtime. Direct selected-graph

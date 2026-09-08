@@ -38,16 +38,74 @@ final class SharedBinaryJoinMetricFixture {
     static final RowType OUTPUT = RowType.of(new BigIntType(), new VarCharType(), new BigIntType(), new VarCharType());
     private final Configuration config = new Configuration();
     private final boolean outer;
+    final RowType input;
+    final RowType output;
+    private final boolean range;
+    private final RexNode condition;
     private final List<RexNode> projections;
 
     SharedBinaryJoinMetricFixture(boolean outer) {
+        this(outer, INPUT, OUTPUT, false);
+    }
+
+    static SharedBinaryJoinMetricFixture rangeJoin() {
+        var input = RowType.of(
+                new BigIntType(false),
+                new org.apache.flink.table.types.logical.TimestampType(3),
+                new org.apache.flink.table.types.logical.TimestampType(3));
+        var output = RowType.of(
+                input.getTypeAt(0),
+                input.getTypeAt(1),
+                input.getTypeAt(2),
+                input.getTypeAt(0),
+                input.getTypeAt(1),
+                input.getTypeAt(2));
+        return new SharedBinaryJoinMetricFixture(false, input, output, true);
+    }
+
+    private SharedBinaryJoinMetricFixture(boolean outer, RowType input, RowType output, boolean range) {
         this.outer = outer;
+        this.input = input;
+        this.output = output;
+        this.range = range;
         var types = new FlinkTypeFactory(getClass().getClassLoader(), FlinkTypeSystem.INSTANCE);
         var rex = new RexBuilder(types);
-        projections = java.util.stream.IntStream.of(2, 3, 0, 1)
+        int width = input.getFieldCount();
+        projections = java.util.stream.IntStream.range(0, output.getFieldCount())
+                .map(index -> (index + width) % output.getFieldCount())
                 .mapToObj(index -> (RexNode)
-                        rex.makeInputRef(types.createFieldTypeFromLogicalType(OUTPUT.getTypeAt(index)), index))
+                        rex.makeInputRef(types.createFieldTypeFromLogicalType(output.getTypeAt(index)), index))
                 .collect(java.util.stream.Collectors.toList());
+        if (range) {
+            var timestamp = types.createFieldTypeFromLogicalType(input.getTypeAt(1));
+            var value = rex.makeInputRef(timestamp, width + 1);
+            condition = rex.makeCall(
+                    org.apache.calcite.sql.fun.SqlStdOperatorTable.AND,
+                    rex.makeCall(
+                            org.apache.calcite.sql.fun.SqlStdOperatorTable.GREATER_THAN_OR_EQUAL,
+                            value,
+                            rex.makeInputRef(timestamp, 1)),
+                    rex.makeCall(
+                            org.apache.calcite.sql.fun.SqlStdOperatorTable.LESS_THAN_OR_EQUAL,
+                            value,
+                            rex.makeInputRef(timestamp, 2)));
+        } else condition = null;
+    }
+
+    org.apache.flink.table.data.GenericRowData row(long key, int port) {
+        if (!range)
+            return org.apache.flink.table.data.GenericRowData.of(
+                    key,
+                    key % 7 == 0 ? null : org.apache.flink.table.data.StringData.fromString("é-" + port + "-" + key));
+        long start = key * 1000 - 32000;
+        // Null, below range, inclusive boundaries, inside and above range; negative epochs too.
+        Long value = start;
+        if (port != 0)
+            value = key % 6 == 0 ? null : Long.valueOf(start + new long[] {0, 0, 5, 10, -1, 11}[(int) (key % 6)]);
+        return org.apache.flink.table.data.GenericRowData.of(
+                key,
+                value == null ? null : org.apache.flink.table.data.TimestampData.fromEpochMillis(value),
+                key % 11 == 0 ? null : org.apache.flink.table.data.TimestampData.fromEpochMillis(start + 10));
     }
 
     static long id(int stage) {
@@ -68,15 +126,15 @@ final class SharedBinaryJoinMetricFixture {
 
     byte[] plan() {
         byte[] join = StreamFusionRegularJoinTranslator.createStagePlan(
-                INPUT,
-                INPUT,
-                OUTPUT,
+                input,
+                input,
+                output,
                 new JoinSpec(
                         outer ? FlinkJoinType.LEFT : FlinkJoinType.INNER,
                         new int[] {0},
                         new int[] {0},
                         new boolean[] {true},
-                        null),
+                        condition),
                 List.of(),
                 List.of(),
                 0,
@@ -88,21 +146,27 @@ final class SharedBinaryJoinMetricFixture {
                 List.of(
                         StreamFusionNativeRegionTranslator.inputPlan(0),
                         StreamFusionNativeRegionTranslator.inputPlan(1)));
-        byte[] calc = StreamFusionCalcTranslator.createStagePlan(OUTPUT, OUTPUT, projections, null);
+        byte[] calc = StreamFusionCalcTranslator.createStagePlan(output, output, projections, null);
         calc = StreamFusionNativeRegionTranslator.identifyStage(calc, 2, name(1), uid(1));
         return StreamFusionNativeRegionTranslator.composeWithInputs(calc, List.of(join));
     }
 
     FlinkMultiInputMetricOracle join(boolean rocks) throws Exception {
         var attributes = Map.of(1, List.of(new ConditionAttributeRef(0, 0, 1, 0)));
-        var extractor = new AttributeBasedJoinKeyExtractor(attributes, List.of(INPUT, INPUT));
+        var extractor = new AttributeBasedJoinKeyExtractor(attributes, List.of(input, input));
         String code =
                 "public class MetricBinaryJoinCondition extends org.apache.flink.api.common.functions.AbstractRichFunction "
                         + "implements org.apache.flink.table.runtime.generated.JoinCondition { public MetricBinaryJoinCondition(Object[] refs) {} "
                         + "public boolean apply(org.apache.flink.table.data.RowData left, org.apache.flink.table.data.RowData right) "
-                        + "{ return left.getLong(0) == right.getLong(0); }}";
+                        + "{ return left.getLong(0) == right.getLong(0)"
+                        + (range
+                                ? " && !left.isNullAt(1) && !left.isNullAt(2) && !right.isNullAt(1)"
+                                        + " && right.getTimestamp(1, 3).compareTo(left.getTimestamp(1, 3)) >= 0"
+                                        + " && right.getTimestamp(1, 3).compareTo(left.getTimestamp(2, 3)) <= 0"
+                                : "")
+                        + "; }}";
         var factory = new StreamingMultiJoinOperatorFactory(
-                List.of(InternalTypeInfo.of(INPUT), InternalTypeInfo.of(INPUT)),
+                List.of(InternalTypeInfo.of(input), InternalTypeInfo.of(input)),
                 List.of(JoinInputSideSpec.withoutUniqueKey(), JoinInputSideSpec.withoutUniqueKey()),
                 List.of(FlinkJoinType.INNER, outer ? FlinkJoinType.LEFT : FlinkJoinType.INNER),
                 null,
@@ -113,7 +177,7 @@ final class SharedBinaryJoinMetricFixture {
                 extractor,
                 attributes);
         var keys = KeySelectorUtil.getRowDataSelector(
-                getClass().getClassLoader(), new int[] {0}, InternalTypeInfo.of(INPUT));
+                getClass().getClassLoader(), new int[] {0}, InternalTypeInfo.of(input));
         var harness = new FlinkMultiInputMetricOracle.Harness(factory);
         harness.getStreamConfig()
                 .setStateKeySerializer(keys.getProducedType()
@@ -126,13 +190,13 @@ final class SharedBinaryJoinMetricFixture {
                         : new org.apache.flink.runtime.state.hashmap.HashMapStateBackend());
         harness.getStreamConfig().setOperatorID(operatorId(0));
         harness.getStreamConfig().setOperatorName(name(0));
-        harness.setup(new RowDataSerializer(OUTPUT));
+        harness.setup(new RowDataSerializer(output));
         harness.open();
         return new FlinkMultiInputMetricOracle(harness, 2);
     }
 
     FlinkStageMetricOracle calc() throws Exception {
-        var input = new Transformation<RowData>("input", InternalTypeInfo.of(OUTPUT), 1) {
+        var transformation = new Transformation<RowData>("input", InternalTypeInfo.of(output), 1) {
             @Override
             protected List<Transformation<?>> getTransitivePredecessorsInternal() {
                 return List.of(this);
@@ -145,8 +209,8 @@ final class SharedBinaryJoinMetricFixture {
         };
         var factory = CalcCodeGenerator.generateCalcOperator(
                 new CodeGeneratorContext(config, getClass().getClassLoader()),
-                input,
-                OUTPUT,
+                transformation,
+                output,
                 scala.collection.JavaConverters.asScalaBufferConverter(projections)
                         .asScala()
                         .toSeq(),
@@ -156,7 +220,7 @@ final class SharedBinaryJoinMetricFixture {
         var harness = new OneInputStreamOperatorTestHarness<RowData, RowData>(factory, 16, 1, 0);
         harness.getStreamConfig().setOperatorID(operatorId(1));
         harness.getStreamConfig().setOperatorName(name(1));
-        harness.setup(new RowDataSerializer(OUTPUT));
+        harness.setup(new RowDataSerializer(output));
         harness.open();
         return new FlinkStageMetricOracle(harness);
     }

@@ -8,53 +8,48 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.flink.core.memory.DataOutputSerializer;
-import org.apache.flink.core.memory.MemorySegmentFactory;
 import org.apache.flink.runtime.checkpoint.CheckpointOptions;
 import org.apache.flink.runtime.checkpoint.CheckpointType;
 import org.apache.flink.runtime.checkpoint.TaskStateSnapshot;
-import org.apache.flink.runtime.checkpoint.channel.ChannelStateWriter;
-import org.apache.flink.runtime.checkpoint.channel.InputChannelInfo;
 import org.apache.flink.runtime.io.network.api.CheckpointBarrier;
-import org.apache.flink.runtime.io.network.api.writer.RecordWriter;
-import org.apache.flink.runtime.io.network.buffer.Buffer;
-import org.apache.flink.runtime.io.network.buffer.FreeingBufferRecycler;
-import org.apache.flink.runtime.io.network.buffer.NetworkBuffer;
-import org.apache.flink.runtime.plugable.SerializationDelegate;
 import org.apache.flink.runtime.state.CheckpointStorageLocationReference;
-import org.apache.flink.streaming.runtime.streamrecord.StreamElement;
-import org.apache.flink.streaming.runtime.streamrecord.StreamElementSerializer;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.runtime.tasks.StreamTaskMailboxTestHarness;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
-import org.apache.flink.table.data.StringData;
 import org.apache.flink.table.runtime.typeutils.RowDataSerializer;
 import org.apache.flink.types.RowKind;
-import org.apache.flink.util.CloseableIterator;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import tech.streamfusion.flink.arrow.ArrowExchangeCDataBridge;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.exchange.ArrowExchangeBatch;
-import tech.streamfusion.flink.exchange.NativeExchangeFrame;
-import tech.streamfusion.flink.exchange.NativeExchangeFrameSerializer;
-import tech.streamfusion.nativebridge.NativeMemoryManager;
 
 class SharedBinaryJoinChannelRecoveryTest {
     @ParameterizedTest
-    @CsvSource({"false,false", "false,true", "true,false", "true,true"})
-    void flinkReplaysInflightArrowFramesAgainstRestoredJoinState(boolean rocks, boolean unaligned) throws Exception {
-        var fixture = new SharedBinaryJoinMetricFixture(false);
+    @CsvSource({
+        "false,false,false",
+        "false,true,false",
+        "true,false,false",
+        "true,true,false",
+        "false,false,true",
+        "false,true,true",
+        "true,false,true",
+        "true,true,true"
+    })
+    void flinkReplaysInflightArrowFramesAgainstRestoredJoinState(boolean rocks, boolean unaligned, boolean range)
+            throws Exception {
+        var fixture = range ? SharedBinaryJoinMetricFixture.rangeJoin() : new SharedBinaryJoinMetricFixture(false);
         try (var oracle = fixture.join(rocks);
                 var calc = fixture.calc();
                 var allocator = new RootAllocator(64L << 20)) {
             TaskStateSnapshot checkpoint;
             var expected = new DataOutputSerializer(128);
-            var memory = new RoutingMemory();
-            try (var task = SharedBinaryJoinChannelHarness.create(rocks, unaligned, null)) {
-                var left = row(0, RowKind.INSERT);
-                oracle.accept(0, binary(left));
-                send(task, allocator, memory, 0, left);
+            var memory = new SharedChannelStateIO.RoutingMemory();
+            try (var task = SharedBinaryJoinChannelHarness.create(fixture, rocks, unaligned, null)) {
+                var left = row(fixture, 0, RowKind.INSERT);
+                oracle.accept(0, binary(fixture, left));
+                send(fixture, task, allocator, memory, 0, left);
                 var options = unaligned
                         ? CheckpointOptions.unaligned(
                                 CheckpointType.CHECKPOINT, CheckpointStorageLocationReference.getDefault())
@@ -64,9 +59,9 @@ class SharedBinaryJoinChannelRecoveryTest {
                 task.processEvent(barrier, 0);
                 // Input 1 has not delivered its barrier: unaligned checkpoints must retain this
                 // Arrow IPC frame in channel state, not include its mutation in the keyed snapshot.
-                var right = row(1, RowKind.INSERT);
-                oracle.accept(1, binary(right));
-                send(task, allocator, memory, 1, right, unaligned);
+                var right = row(fixture, 1, RowKind.INSERT);
+                oracle.accept(1, binary(fixture, right));
+                send(fixture, task, allocator, memory, 1, right, unaligned);
                 task.processEvent(barrier, 1);
                 long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15);
                 while (task.getTaskStateManager().getReportedCheckpointId() != 1 && System.nanoTime() < deadline) {
@@ -80,118 +75,74 @@ class SharedBinaryJoinChannelRecoveryTest {
                         .getInputChannelState();
                 assertThat(channelState.isEmpty()).isEqualTo(!unaligned);
                 for (var event : oracle.drain()) calc.accept(event);
-                for (var event : calc.drain()) StageEventBytes.encode(OUTPUT, event, expected);
-                assertThat(bytes(task)).containsExactly(expected.getCopyOfBuffer());
+                for (var event : calc.drain()) StageEventBytes.encode(fixture.output, event, expected);
+                assertThat(bytes(fixture, task)).containsExactly(expected.getCopyOfBuffer());
                 if (!unaligned) expected.clear();
                 task.endInput();
                 task.waitForTaskCompletion();
             }
-            try (var restored = SharedBinaryJoinChannelHarness.create(rocks, unaligned, checkpoint)) {
+            try (var restored = SharedBinaryJoinChannelHarness.create(fixture, rocks, unaligned, checkpoint)) {
                 restored.processAll();
-                var retract = row(0, RowKind.DELETE);
-                oracle.accept(0, binary(retract));
-                send(restored, allocator, memory, 0, retract);
+                var retract = row(fixture, 0, RowKind.DELETE);
+                oracle.accept(0, binary(fixture, retract));
+                send(fixture, restored, allocator, memory, 0, retract);
                 for (var event : oracle.drain()) calc.accept(event);
-                for (var event : calc.drain()) StageEventBytes.encode(OUTPUT, event, expected);
-                assertThat(bytes(restored)).containsExactly(expected.getCopyOfBuffer());
+                for (var event : calc.drain()) StageEventBytes.encode(fixture.output, event, expected);
+                assertThat(bytes(fixture, restored)).containsExactly(expected.getCopyOfBuffer());
                 restored.endInput();
                 restored.waitForTaskCompletion();
             }
-            assertThat(memory.reserved).isZero();
+            assertThat(memory.available()).isEqualTo(memory.limit());
         }
     }
 
-    private static GenericRowData row(int port, RowKind kind) {
-        var row = GenericRowData.of(7L, StringData.fromString("payload-" + port + "-é"));
+    private static GenericRowData row(SharedBinaryJoinMetricFixture fixture, int port, RowKind kind) {
+        var row = fixture.row(7L, port);
         row.setRowKind(kind);
         return row;
     }
 
-    private static StreamRecord<RowData> binary(RowData row) {
-        return new StreamRecord<>(new RowDataSerializer(INPUT).toBinaryRow(row).copy());
+    private static StreamRecord<RowData> binary(SharedBinaryJoinMetricFixture fixture, RowData row) {
+        return new StreamRecord<>(
+                new RowDataSerializer(fixture.input).toBinaryRow(row).copy());
     }
 
     private static void send(
+            SharedBinaryJoinMetricFixture fixture,
             StreamTaskMailboxTestHarness<RowData> task,
             RootAllocator allocator,
-            RoutingMemory memory,
+            SharedChannelStateIO.RoutingMemory memory,
             int port,
             GenericRowData row)
             throws Exception {
-        send(task, allocator, memory, port, row, false);
+        send(fixture, task, allocator, memory, port, row, false);
     }
 
     private static void send(
+            SharedBinaryJoinMetricFixture fixture,
             StreamTaskMailboxTestHarness<RowData> task,
             RootAllocator allocator,
-            RoutingMemory memory,
+            SharedChannelStateIO.RoutingMemory memory,
             int port,
             GenericRowData row,
             boolean capture)
             throws Exception {
-        try (var batch = ArrowRowDataBatch.transpose(List.of(row), INPUT, allocator)
+        try (var batch = ArrowRowDataBatch.transpose(List.of(row), fixture.input, allocator)
                         .withRowKinds(new RowKind[] {row.getRowKind()});
-                var envelope = ArrowExchangeBatch.withEnvelope(batch, INPUT, null)) {
+                var envelope = ArrowExchangeBatch.withEnvelope(batch, fixture.input, null)) {
             for (var frame : ArrowExchangeCDataBridge.route(
-                    SharedBinaryJoinChannelHarness.exchange(), envelope.batch(), allocator, memory)) {
-                if (capture) capture(task, port, frame);
+                    SharedBinaryJoinChannelHarness.exchange(fixture), envelope.batch(), allocator, memory)) {
+                if (capture) SharedChannelStateIO.capture(task, port, 0, frame);
                 task.processElement(new StreamRecord<>(frame), port);
             }
         }
     }
 
-    private static void capture(StreamTaskMailboxTestHarness<RowData> task, int port, NativeExchangeFrame frame)
+    private static byte[] bytes(SharedBinaryJoinMetricFixture fixture, StreamTaskMailboxTestHarness<RowData> task)
             throws Exception {
-        // TestInputChannel has no network capture implementation. Hand its exact serialized
-        // frame to Flink's real channel-state writer, as LocalInputChannel does during alignment.
-        var serializer = new StreamElementSerializer<>(NativeExchangeFrameSerializer.INSTANCE);
-        var delegate = new SerializationDelegate<StreamElement>(serializer);
-        delegate.setInstance(new StreamRecord<>(frame));
-        var serialized = RecordWriter.serializeRecord(new DataOutputSerializer(4096), delegate);
-        byte[] bytes = new byte[serialized.remaining()];
-        serialized.get(bytes);
-        Buffer buffer = new NetworkBuffer(MemorySegmentFactory.wrap(bytes), FreeingBufferRecycler.INSTANCE);
-        buffer.setSize(bytes.length);
-        task.getStreamMockEnvironment()
-                .getChannelStateWriter()
-                .addInputData(
-                        1,
-                        new InputChannelInfo(port, 0),
-                        ChannelStateWriter.SEQUENCE_NUMBER_UNKNOWN,
-                        CloseableIterator.ofElement(buffer, Buffer::recycleBuffer));
-    }
-
-    private static byte[] bytes(StreamTaskMailboxTestHarness<RowData> task) throws Exception {
         var bytes = new DataOutputSerializer(128);
         for (var event : task.getOutput())
-            if (event instanceof StreamRecord) StageEventBytes.encode(OUTPUT, (StreamRecord<?>) event, bytes);
+            if (event instanceof StreamRecord) StageEventBytes.encode(fixture.output, (StreamRecord<?>) event, bytes);
         return bytes.getCopyOfBuffer();
-    }
-
-    private static final class RoutingMemory implements NativeMemoryManager {
-        private long reserved;
-
-        @Override
-        public synchronized boolean tryReserve(long bytes) {
-            if (bytes < 0 || bytes > limit() - reserved) return false;
-            reserved += bytes;
-            return true;
-        }
-
-        @Override
-        public synchronized void release(long bytes) {
-            if (bytes < 0 || bytes > reserved) throw new IllegalStateException("Invalid routing memory release");
-            reserved -= bytes;
-        }
-
-        @Override
-        public long limit() {
-            return 64L << 20;
-        }
-
-        @Override
-        public synchronized long available() {
-            return limit() - reserved;
-        }
     }
 }
