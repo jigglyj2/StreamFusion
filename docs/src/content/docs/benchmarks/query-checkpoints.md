@@ -45,6 +45,11 @@ General fixes reduce duplicate retained keys and inflated batch/state reservatio
 and whole-plan fallback for unsupported subsets stay intact. Q6 has the upstream limitation below;
 Q7 is the next executable query checkpoint.
 
+Q7's demonstrated blockers are two-phase TUMBLE and a timestamp-arithmetic join residual. The
+TUMBLE COUNT/MIN/MAX path now has shared-runtime Flink parity, metrics and recovery coverage;
+its generated SQL tests require ordinary admission on both backends. The computed join predicate
+remains gated. Q7 is not yet delivered or measured.
+
 ## Q6 has no Flink streaming baseline
 
 The upstream Nexmark Q6 query computes a bounded ordered AVG after winning-bid rank selection.

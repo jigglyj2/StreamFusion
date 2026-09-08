@@ -4,9 +4,9 @@
 use super::*;
 use crate::planner::operators::envelope::{Envelope, INPUT_ROW, OWNED_TIMESTAMP_V1, ROW_KIND};
 use crate::planner::persistent::{
-    PersistentOperatorFactory,
     control::ControlEvent,
     unary::{InvocationState, UnaryBatchProcessor, UnaryExec},
+    PersistentOperatorFactory,
 };
 use arrow::array::Int32Array;
 use datafusion::physical_plan::ExecutionPlan;
@@ -29,14 +29,14 @@ pub(crate) fn validate_node(node: &proto::Operator, max_parallelism: u32) -> Res
         ));
     };
     validate_plan(plan, max_parallelism)?;
-    if plan.kind != proto::WindowKind::Hop as i32
+    if (plan.kind != proto::WindowKind::Hop as i32 && plan.kind != proto::WindowKind::Tumble as i32)
         || plan.partial_accumulator_index.is_none()
         || plan.input_changelog
         || plan.processing_time
         || !(plan.shift_time_zone.is_empty() || plan.shift_time_zone == "UTC")
     {
         return Err(DataFusionError::Plan(
-            "shared window requires append-only UTC event-time HOP partials".into(),
+            "shared window requires append-only UTC event-time TUMBLE/HOP partials".into(),
         ));
     }
     let calls = plan

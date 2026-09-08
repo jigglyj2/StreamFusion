@@ -22,13 +22,17 @@ import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 
 /** Compare the complete registered Flink global-window surface, including real counter/meter types. */
 class SharedWindowMetricSurfaceTest {
+    protected boolean tumbling() {
+        return false;
+    }
+
     @Test
     void generatedPartialsMatchAllMetricsChangelogsAndLiveClockSemantics() throws Exception {
         for (boolean attached : List.of(false, true))
             for (boolean rocks : List.of(false, true))
                 for (int seed = 0; seed < 3; seed++)
                     for (int batchSize : List.of(7, 31))
-                        try (var comparison = new Comparison(attached, rocks)) {
+                        try (var comparison = new Comparison(attached, rocks, tumbling())) {
                             var random = new Random(seed);
                             comparison.compare();
                             for (int phase = 0; phase < 8; phase++) {
@@ -66,7 +70,7 @@ class SharedWindowMetricSurfaceTest {
         final WatermarkGauge input = new WatermarkGauge();
         final WatermarkGauge output = new WatermarkGauge();
 
-        Comparison(boolean attached, boolean rocks) throws Exception {
+        Comparison(boolean attached, boolean rocks, boolean tumble) throws Exception {
             this.attached = attached;
             flink = attached
                     ? GlobalWindowFlinkOracle.create(
@@ -74,10 +78,10 @@ class SharedWindowMetricSurfaceTest {
                                     "GlobalWindowAggregate", AttachedSlicingWindowFixture.sql(true)),
                             rocks,
                             null)
-                    : GlobalWindowFlinkOracle.create(rocks, null);
+                    : GlobalWindowFlinkOracle.create(rocks, null, tumble);
             target = new KeyedNativeMetricHarness(
                     rocks,
-                    attached ? AttachedSlicingWindowFixture.plan(true) : SharedSlicingWindowFixture.plan(),
+                    attached ? AttachedSlicingWindowFixture.plan(true) : SharedSlicingWindowFixture.plan(tumble),
                     List.of(SharedSlicingWindowFixture.INPUT),
                     outputType(),
                     List.of(3L));

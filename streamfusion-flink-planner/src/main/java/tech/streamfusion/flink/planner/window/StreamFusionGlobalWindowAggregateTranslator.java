@@ -75,17 +75,17 @@ public final class StreamFusionGlobalWindowAggregateTranslator {
             ReadableConfig config) {
         if (!(strategy instanceof TimeAttributeWindowingStrategy)
                 && !(strategy instanceof WindowAttachedWindowingStrategy))
-            return "window strategy: shared global execution requires direct or attached HOP windows";
+            return "window strategy: shared global execution requires direct or attached TUMBLE/HOP windows";
         if (strategy.isProctime() || !"UTC".equals(shiftTimeZone(strategy, config)))
             return "window time: shared global execution requires UTC event time";
         if (retractable) return "changelog: shared global window partials must be append-only";
         try {
             var window = StreamFusionWindowTableFunctionTranslator.parameters(strategy.getWindow());
-            if (window.kind != WindowKind.WINDOW_KIND_HOP
+            if ((window.kind != WindowKind.WINDOW_KIND_TUMBLE && window.kind != WindowKind.WINDOW_KIND_HOP)
                     || window.sizeMillis <= 0
-                    || window.slideOrStepMillis <= 0
-                    || window.sizeMillis % window.slideOrStepMillis != 0)
-                return "window: shared global execution requires an integral HOP size/slide";
+                    || (window.kind == WindowKind.WINDOW_KIND_HOP
+                            && (window.slideOrStepMillis <= 0 || window.sizeMillis % window.slideOrStepMillis != 0)))
+                return "window: shared global execution requires positive TUMBLE size or integral HOP size/slide";
         } catch (IllegalArgumentException unsupported) {
             return "window: " + unsupported.getMessage();
         }

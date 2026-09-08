@@ -33,6 +33,10 @@ import tech.streamfusion.flink.operator.StreamFusionNativeRegionOperatorFactory;
 
 /** Actual network barriers, channel-state writer/reader and Arrow IPC replay after a window clock restore. */
 class SharedWindowChannelRecoveryTest {
+    protected boolean tumbling() {
+        return false;
+    }
+
     private int outputBarriers;
 
     @ParameterizedTest
@@ -55,7 +59,7 @@ class SharedWindowChannelRecoveryTest {
                                             "GlobalWindowAggregate", AttachedSlicingWindowFixture.sql(true)),
                                     rocks,
                                     null)
-                            : GlobalWindowFlinkOracle.create(rocks, null);
+                            : GlobalWindowFlinkOracle.create(rocks, null, tumbling());
                     var allocator = new RootAllocator(64L << 20);
                     var additional = additionalOracle(attached)) {
                 var memory = new SharedChannelStateIO.RoutingMemory();
@@ -140,7 +144,7 @@ class SharedWindowChannelRecoveryTest {
         var factory = new StreamFusionNativeRegionOperatorFactory(
                 List.of(SharedSlicingWindowFixture.INPUT),
                 output(attached),
-                attached ? AttachedSlicingWindowFixture.plan(true) : SharedSlicingWindowFixture.plan(),
+                attached ? AttachedSlicingWindowFixture.plan(true) : SharedSlicingWindowFixture.plan(tumbling()),
                 List.of(3L),
                 List.of(exchange()));
         return SharedKeyedChannelHarness.create(factory, output(attached), new int[] {2}, rocks, unaligned, state);

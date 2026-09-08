@@ -34,7 +34,7 @@ compose through the common native region. The join and aggregate subsets are adm
 in-memory or supported default RocksDB state. Aggregation admits non-DISTINCT BIGINT
 COUNT/SUM/SUM0/MIN/MAX/AVG, BIGINT arguments, and BIGINT/INTEGER/VARCHAR grouping keys.
 Mini-batch, singleton/global and other aggregate subsets retain explicit production restrictions.
-Two-phase UTC event-time HOP windows also compose through this runtime: append-only BIGINT
+Two-phase UTC event-time TUMBLE/HOP windows also compose through this runtime: append-only BIGINT
 COUNT/MIN/MAX with BIGINT arguments and BIGINT/INTEGER keys (or no keys), synchronous state,
 and mini-batch disabled. Semantic lowering rejects other time, accumulator and buffer layouts.
 Other persistent families remain on whole-plan fallback until their state/buffer admission,

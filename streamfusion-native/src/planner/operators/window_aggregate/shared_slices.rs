@@ -1,7 +1,7 @@
 // Copyright 2026 StreamFusion Authors
 // Licensed under the Apache License, Version 2.0.
 
-//! Shared and attached HOP slice execution. Flink retains each base slice once and combines the slices
+//! TUMBLE and shared/attached HOP slice execution. Flink retains each base slice once and combines the slices
 //! when a window fires. Attached windows retain one completed namespace and fire once.
 //! Explicit shared-plan bindings are available; ordinary planner admission still requires
 //! the complete Flink resource, operator-clock and metric lifecycle.
@@ -36,14 +36,16 @@ struct SharedSlices {
 impl SharedSlices {
     fn new(kernel: WindowAggregateProcessor) -> Result<Self> {
         let plan = &kernel.plan;
-        if plan.kind != proto::WindowKind::Hop as i32
+        if (plan.kind != proto::WindowKind::Hop as i32
+            && plan.kind != proto::WindowKind::Tumble as i32)
             || plan.partial_accumulator_index.is_none()
             || plan.input_changelog
             || plan.processing_time
             || kernel.shift_time_zone != chrono_tz::UTC
         {
             return Err(DataFusionError::Plan(
-                "shared slice execution requires append-only UTC event-time HOP partials".into(),
+                "shared slice execution requires append-only UTC event-time TUMBLE/HOP partials"
+                    .into(),
             ));
         }
         let compute = GroupedMerge::new(&kernel.calls)?.ok_or_else(|| {
@@ -104,8 +106,13 @@ impl SharedSlices {
         result
     }
 
+    fn shares_slices(&self) -> bool {
+        self.kernel.plan.kind == proto::WindowKind::Hop as i32
+            && self.kernel.plan.partial_windows_are_slices
+    }
+
     fn last_window_end(&self, slice_end: i64) -> i64 {
-        if !self.kernel.plan.partial_windows_are_slices {
+        if !self.shares_slices() {
             return slice_end;
         }
         slice_end
@@ -115,7 +122,7 @@ impl SharedSlices {
 
     fn first_unfired(&self, slice_end: i64) -> i64 {
         let watermark = self.kernel.current_event_time;
-        if slice_end.wrapping_sub(1) > watermark {
+        if !self.shares_slices() || slice_end.wrapping_sub(1) > watermark {
             return slice_end;
         }
         let interval = i128::from(self.kernel.plan.slide_or_step_millis);

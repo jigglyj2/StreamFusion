@@ -50,9 +50,13 @@ final class SharedSlicingWindowFixture {
     }
 
     static byte[] plan() throws Exception {
+        return plan(false);
+    }
+
+    static byte[] plan(boolean tumble) throws Exception {
         var rowtime = new TimestampType(false, org.apache.flink.table.types.logical.TimestampKind.ROWTIME, 3);
-        var strategy =
-                new org.apache.flink.table.planner.plan.logical.TimeAttributeWindowingStrategy(hop(), rowtime, 1);
+        var strategy = new org.apache.flink.table.planner.plan.logical.TimeAttributeWindowingStrategy(
+                window(tumble), rowtime, 1);
         return compose(
                 tech.streamfusion.flink.planner.window.StreamFusionGlobalWindowAggregateTranslator.createStagePlan(
                         RowType.of(new BigIntType(), rowtime),
@@ -68,6 +72,13 @@ final class SharedSlicingWindowFixture {
                         config()),
                 4,
                 4);
+    }
+
+    static org.apache.flink.table.planner.plan.logical.WindowSpec window(boolean tumble) {
+        return tumble
+                ? new org.apache.flink.table.planner.plan.logical.TumblingWindowSpec(
+                        java.time.Duration.ofSeconds(2), null)
+                : hop();
     }
 
     static org.apache.flink.configuration.Configuration config() {

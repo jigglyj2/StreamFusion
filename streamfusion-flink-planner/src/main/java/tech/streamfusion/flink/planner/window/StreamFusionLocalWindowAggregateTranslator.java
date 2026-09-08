@@ -69,7 +69,7 @@ public final class StreamFusionLocalWindowAggregateTranslator {
             ReadableConfig config) {
         if (!(strategy instanceof TimeAttributeWindowingStrategy)
                 && !(strategy instanceof WindowAttachedWindowingStrategy))
-            return "window strategy: buffered local execution requires direct or attached HOP windows";
+            return "window strategy: buffered local execution requires direct or attached TUMBLE/HOP windows";
         if (strategy.isProctime()
                 || !"UTC"
                         .equals(TimeWindowUtil.getShiftTimeZone(
@@ -78,11 +78,11 @@ public final class StreamFusionLocalWindowAggregateTranslator {
         if (retractable) return "changelog: buffered local windows require append-only input";
         try {
             var window = StreamFusionWindowTableFunctionTranslator.parameters(strategy.getWindow());
-            if (window.kind != WindowKind.WINDOW_KIND_HOP
+            if ((window.kind != WindowKind.WINDOW_KIND_TUMBLE && window.kind != WindowKind.WINDOW_KIND_HOP)
                     || window.sizeMillis <= 0
-                    || window.slideOrStepMillis <= 0
-                    || window.sizeMillis % window.slideOrStepMillis != 0)
-                return "window: buffered local execution requires an integral HOP size/slide";
+                    || (window.kind == WindowKind.WINDOW_KIND_HOP
+                            && (window.slideOrStepMillis <= 0 || window.sizeMillis % window.slideOrStepMillis != 0)))
+                return "window: buffered local execution requires positive TUMBLE size or integral HOP size/slide";
         } catch (IllegalArgumentException failure) {
             return "window: " + failure.getMessage();
         }

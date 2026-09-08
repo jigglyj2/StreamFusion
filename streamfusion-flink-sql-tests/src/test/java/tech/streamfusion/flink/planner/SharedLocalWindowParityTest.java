@@ -38,41 +38,43 @@ class SharedLocalWindowParityTest {
 
     @Test
     void generatedControlChangelogsMatchFlinkAcrossArrowBatchSizes() throws Exception {
-        for (int seed = 0; seed < 3; seed++)
-            for (int batchSize : List.of(7, 31)) {
-                try (var run = new Comparison()) {
-                    var random = new Random(seed);
-                    for (int phase = 0; phase < 12; phase++) {
-                        var rows = new ArrayList<RowData>();
-                        for (int row = 0; row < 31; row++)
-                            rows.add(GenericRowData.of(
-                                    row % 11 == 0 ? null : (long) random.nextInt(17),
-                                    TimestampData.fromEpochMillis(random.nextInt(16001) - 8000)));
-                        for (int offset = 0; offset < rows.size(); offset += batchSize)
-                            run.process(rows.subList(offset, Math.min(rows.size(), offset + batchSize)));
-                        if (phase % 3 == 2) run.watermark(phase * 1000L - 3000);
-                        if (phase == 6) run.checkpoint(7);
+        for (boolean tumble : List.of(false, true))
+            for (int seed = 0; seed < 3; seed++)
+                for (int batchSize : List.of(7, 31)) {
+                    try (var run = new Comparison(tumble)) {
+                        var random = new Random(seed);
+                        for (int phase = 0; phase < 12; phase++) {
+                            var rows = new ArrayList<RowData>();
+                            for (int row = 0; row < 31; row++)
+                                rows.add(GenericRowData.of(
+                                        row % 11 == 0 ? null : (long) random.nextInt(17),
+                                        TimestampData.fromEpochMillis(random.nextInt(16001) - 8000)));
+                            for (int offset = 0; offset < rows.size(); offset += batchSize)
+                                run.process(rows.subList(offset, Math.min(rows.size(), offset + batchSize)));
+                            if (phase % 3 == 2) run.watermark(phase * 1000L - 3000);
+                            if (phase == 6) run.checkpoint(7);
+                        }
+                        run.watermark(Long.MAX_VALUE);
+                        run.checkpoint(8);
                     }
-                    run.watermark(Long.MAX_VALUE);
-                    run.checkpoint(8);
                 }
-            }
     }
 
     @Test
     void pressureFlushChangelogMatchesFlinkWithResolvedThreeMebibyteCapacity() throws Exception {
-        for (int batchSize : List.of(4096, 16384))
-            try (var run = new Comparison()) {
-                for (int start = 0; start < 180000; start += batchSize) {
-                    var rows = new ArrayList<RowData>();
-                    for (int row = start; row < Math.min(180000, start + batchSize); row++)
-                        rows.add(GenericRowData.of((long) (row % 17), TimestampData.fromEpochMillis(1000)));
-                    run.process(rows);
+        for (boolean tumble : List.of(false, true))
+            for (int batchSize : List.of(4096, 16384))
+                try (var run = new Comparison(tumble)) {
+                    for (int start = 0; start < 180000; start += batchSize) {
+                        var rows = new ArrayList<RowData>();
+                        for (int row = start; row < Math.min(180000, start + batchSize); row++)
+                            rows.add(GenericRowData.of((long) (row % 17), TimestampData.fromEpochMillis(1000)));
+                        run.process(rows);
+                    }
+                    assertThat(run.outputs).isEqualTo(34);
+                    run.checkpoint(1);
+                    assertThat(run.outputs).isEqualTo(51);
                 }
-                assertThat(run.outputs).isEqualTo(34);
-                run.checkpoint(1);
-                assertThat(run.outputs).isEqualTo(51);
-            }
     }
 
     @Test
@@ -121,10 +123,11 @@ class SharedLocalWindowParityTest {
         final RowDataSerializer serializer = new RowDataSerializer(FLINK_PARTIAL);
         long inputs, outputs;
 
-        Comparison() throws Exception {
-            flink = LocalWindowFlinkOracle.create(3L << 20);
+        Comparison(boolean tumble) throws Exception {
+            flink = LocalWindowFlinkOracle.create(
+                    SlicingWindowFlinkPlan.stage("LocalWindowAggregate", tumble), 3L << 20);
             allocator = new RootAllocator(64L << 20);
-            context = new NativeExecutionContext(plan(), memory, null, resources());
+            context = new NativeExecutionContext(plan(INPUT, tumble), memory, null, resources());
             dispatcher = new ArrowNativePlanDispatcher(context, List.of(INPUT), PARTIAL, allocator);
             assertThat(context.hasStateBindings()).isFalse();
             assertThat(context.requiresInputEnvelope()).isTrue();

@@ -6,11 +6,19 @@ sidebar:
 ---
 
 **Current status:** Partial acceleration through ordinary whole-plan selection. Verified two-phase,
-append-only UTC event-time HOP windows use DataFusion grouped COUNT/MIN/MAX with BIGINT results
+append-only UTC event-time TUMBLE/HOP windows use DataFusion grouped COUNT/MIN/MAX with BIGINT results
 and arguments, BIGINT/INTEGER grouping keys (or no keys), synchronous state and mini-batch disabled.
 Other window families retain whole-plan fallback under the
 [architecture admission requirements](/StreamFusion/development/architecture-admission/).
 Both in-memory and supported default RocksDB state use the common native runtime.
+
+TUMBLE uses one unshared slice per window: a watermark at end minus one emits it once and removes
+its state, without HOP's follow-up timers. The local DataFusion buffer retains the same Flink
+pressure and checkpoint flush boundaries. Generated two-phase SQL comparisons include all-null
+COUNT/MIN/MAX windows, grouped and ungrouped layouts, and both backends. The common metric,
+canonical restore/backend-switch/rescaling and aligned/unaligned channel-replay matrices also run
+with TUMBLE. This is a Q7 prerequisite; Q7's computed join predicate remains a separate admission
+blocker and no Q7 performance result is claimed here.
 
 **Retained implementation scope:** Partial implementation for native `TUMBLE`, `HOP`, `CUMULATE`, and `SESSION`
 aggregation, including Flink's legacy group-window physical node.

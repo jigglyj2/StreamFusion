@@ -20,6 +20,10 @@ final class SharedLocalWindowFixture {
     }
 
     static byte[] plan(RowType input) throws Exception {
+        return plan(input, false);
+    }
+
+    static byte[] plan(RowType input, boolean tumble) throws Exception {
         return SharedSlicingWindowFixture.compose(
                 tech.streamfusion.flink.planner.window.StreamFusionLocalWindowAggregateTranslator.createStagePlan(
                         input,
@@ -32,7 +36,7 @@ final class SharedLocalWindowFixture {
                                     new BigIntType(false))
                         },
                         new org.apache.flink.table.planner.plan.logical.TimeAttributeWindowingStrategy(
-                                SharedSlicingWindowFixture.hop(),
+                                SharedSlicingWindowFixture.window(tumble),
                                 new TimestampType(false, org.apache.flink.table.types.logical.TimestampKind.ROWTIME, 3),
                                 1),
                         false,

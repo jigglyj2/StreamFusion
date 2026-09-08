@@ -43,7 +43,7 @@ impl SharedSlices {
             })
             .collect::<Result<Vec<_>>>()?;
         let interval = self.kernel.plan.slide_or_step_millis;
-        let shared = self.kernel.plan.partial_windows_are_slices;
+        let shared = self.shares_slices();
         let slices = if shared {
             usize::try_from(self.kernel.plan.size_millis / interval).map_err(|_| {
                 DataFusionError::Execution("shared-slice window cardinality exceeds usize".into())

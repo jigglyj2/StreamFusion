@@ -33,6 +33,10 @@ import tech.streamfusion.flink.operator.StreamFusionNativeRegionOperatorFactory;
 
 /** Real Flink union clocks and keyed checkpoints through the shared Java/native region lifecycle. */
 class SharedWindowRuntimeRecoveryTest {
+    protected boolean tumbling() {
+        return false;
+    }
+
     @ParameterizedTest
     @CsvSource({
         "false,false,0",
@@ -132,14 +136,14 @@ class SharedWindowRuntimeRecoveryTest {
         }
     }
 
-    private static KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> oracle(
+    private KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> oracle(
             boolean attached, boolean rocks, OperatorSubtaskState restore) throws Exception {
         return attached
                 ? GlobalWindowFlinkOracle.create(
                         SlicingWindowFlinkPlan.stage("GlobalWindowAggregate", AttachedSlicingWindowFixture.sql(true)),
                         rocks,
                         restore)
-                : GlobalWindowFlinkOracle.create(rocks, restore);
+                : GlobalWindowFlinkOracle.create(rocks, restore, tumbling());
     }
 
     private static RowType output(boolean attached) {
@@ -152,7 +156,7 @@ class SharedWindowRuntimeRecoveryTest {
         var factory = new StreamFusionNativeRegionOperatorFactory(
                 List.of(SharedSlicingWindowFixture.INPUT),
                 output(attached),
-                attached ? AttachedSlicingWindowFixture.plan(true) : SharedSlicingWindowFixture.plan(),
+                attached ? AttachedSlicingWindowFixture.plan(true) : SharedSlicingWindowFixture.plan(tumbling()),
                 List.of(3L));
         return new KeyedNativeMetricHarness(rocks, factory, 1, output(attached), restore, parallelism, subtask);
     }

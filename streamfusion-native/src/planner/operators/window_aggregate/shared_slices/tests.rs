@@ -173,6 +173,7 @@ fn backends() -> Vec<bool> {
 mod attached;
 mod checkpoint;
 mod generated;
+mod tumble;
 
 #[test]
 fn borrowed_partial_slices_do_not_reserve_the_parent_arrow_buffers_again() {

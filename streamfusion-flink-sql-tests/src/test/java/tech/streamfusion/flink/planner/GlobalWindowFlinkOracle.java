@@ -21,7 +21,12 @@ final class GlobalWindowFlinkOracle {
 
     static KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> create(
             boolean rocks, OperatorSubtaskState restored) throws Exception {
-        var stage = SlicingWindowFlinkPlan.stage("GlobalWindowAggregate");
+        return create(rocks, restored, false);
+    }
+
+    static KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> create(
+            boolean rocks, OperatorSubtaskState restored, boolean tumble) throws Exception {
+        var stage = SlicingWindowFlinkPlan.stage("GlobalWindowAggregate", tumble);
         return create(stage, rocks, restored);
     }
 

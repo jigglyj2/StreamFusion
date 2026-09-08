@@ -31,7 +31,9 @@ class WindowProductionAdmissionTest extends SqlParityTestSupport {
         assertThat(tables.explainSql(counts("k", "COUNT(*)")
                         .replace("HOP(TABLE", "TUMBLE(TABLE")
                         .replace("INTERVAL '2' SECOND, ", "")))
-                .contains("Accelerated: no", "integral HOP size/slide");
+                .contains("Accelerated: yes", "StreamFusionGlobalWindowAggregate");
+        assertThat(tables.explainSql(counts("k", "COUNT(*)").replace("HOP(TABLE", "CUMULATE(TABLE")))
+                .contains("Accelerated: no", "positive TUMBLE size or integral HOP size/slide");
     }
 
     @Test

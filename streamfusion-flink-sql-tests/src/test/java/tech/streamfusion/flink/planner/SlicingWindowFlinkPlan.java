@@ -23,11 +23,17 @@ final class SlicingWindowFlinkPlan {
     private SlicingWindowFlinkPlan() {}
 
     static OneInputTransformation<?, ?> stage(String name) throws Exception {
+        return stage(name, false);
+    }
+
+    static OneInputTransformation<?, ?> stage(String name, boolean tumble) throws Exception {
         return stage(
                 name,
-                "SELECT k, COUNT(*) AS n, window_start, window_end "
-                        + "FROM TABLE(HOP(TABLE local_window_input, DESCRIPTOR(ts), INTERVAL '2' SECOND, INTERVAL '6' SECOND)) "
-                        + "GROUP BY k, window_start, window_end");
+                "SELECT k, COUNT(*) AS n, window_start, window_end FROM TABLE("
+                        + (tumble ? "TUMBLE" : "HOP")
+                        + "(TABLE local_window_input, DESCRIPTOR(ts), INTERVAL '2' SECOND"
+                        + (tumble ? "" : ", INTERVAL '6' SECOND")
+                        + ")) GROUP BY k, window_start, window_end");
     }
 
     static OneInputTransformation<?, ?> stage(String name, String sql) throws Exception {
