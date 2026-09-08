@@ -43,7 +43,7 @@ reports approximate in-memory parity and a 10.8% RocksDB median throughput gain 
 events, including dispersion, separate longer profiles and larger-workload memory limitations.
 General fixes reduce duplicate retained keys and inflated batch/state reservations. The optimizer
 and whole-plan fallback for unsupported subsets stay intact. Q6 has the upstream limitation below;
-Q7 is the next executable query checkpoint.
+Q7's supported execution and remaining capacity limits are recorded below.
 
 Q7's demonstrated blockers are two-phase TUMBLE and a timestamp-arithmetic join residual. The
 TUMBLE COUNT/MIN/MAX path now has shared-runtime Flink parity, metrics and recovery coverage;
@@ -55,8 +55,13 @@ changelog/materialized-result parity for the official RowData query at 10,000 ev
 1 and 4, on both state backends. Native plan counters are positive and standalone local-window
 counters remain zero. The first million-event release attempt exhausted the in-memory join's
 retained-state allowance. Small join keys now use one compact backend entry to reduce storage
-and lookup overhead; the same Flink budget applies. Q7 release measurements and profiling remain
-the next checkpoint.
+and lookup overhead; the same Flink budget applies. The
+[Q7 release comparison](/StreamFusion/benchmarks/q7-rowdata/) records three alternating pairs at
+250,000 events and separate longer 500,000-event mixed profiles on both backends. Median throughput
+is 9.4% lower in memory and 13.6% higher on RocksDB, whose ranges overlap substantially. The
+million-event in-memory attempt still exhausts join workspace; no large-input capacity or general
+speedup is claimed. General state/buffer improvements and that remaining limit are documented.
+Q7's supported semantic path is delivered within these limits; Q8 is the next query checkpoint.
 
 ## Q6 has no Flink streaming baseline
 

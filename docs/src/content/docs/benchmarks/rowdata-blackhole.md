@@ -50,6 +50,8 @@ profiles on both backends. The [Q4 release comparison](/StreamFusion/benchmarks/
 covers the range join and keyed MAX/AVG pipeline. The
 [Q5 release comparison](/StreamFusion/benchmarks/q5-rowdata/) covers reused HOP COUNT and attached
 MAX, including general memory improvements and larger-workload capacity limits.
+The [Q7 release comparison](/StreamFusion/benchmarks/q7-rowdata/) covers TUMBLE MAX and timestamp
+join predicates, smaller-workload results and the remaining million-event memory limitation.
 
 ## Q3 in-memory measurements, September 7, 2026
 
