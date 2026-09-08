@@ -76,14 +76,23 @@ At ten million, median throughput is 12.4% below Flink in memory and 26.3% above
 wide overlapping timing ranges. All twenty-million-event profiles finish without capacity failure;
 profile timings are excluded from results. Q8 is delivered within these documented limits; Q9 is next.
 
-Q9's ordinary plan currently falls back on `StreamExecRank`; its binary join is already admitted.
+Q9's ordinary plan now accelerates its binary range join and append-only partitioned Top-1.
 The append-only Top-1 compute prerequisite uses DataFusion sort and cumulative MIN with fixed-width
 ordinals and per-arrival changelog parity. Its shared Calc → Top-1 → Calc binding now verifies
 native ownership/lifecycle, canonical cross-backend restore and the complete Flink stage metric
 and control surface. Top-1 now batches point-state reads and writes only changed winners, with
 migration from older ordered state. Generated managed-checkpoint/backend-switch/rescaling and
-actual Arrow channel-replay tests pass on both backends. Ordinary admission remains gated pending
-selected SQL/Q9 integration checks. No Q9 performance result is claimed.
+actual Arrow channel-replay tests pass on both backends. Generated Top-1 SQL compares complete
+collected changelog bytes with ordinary selection. Official Q9 integration compares final keyed
+result bytes at 10,000 events, parallelism one/four, on both backends and requires positive shared
+plan activity with zero standalone Top-N invocations.
+
+Q9's independent jobs do not have a deterministic transient changelog: repeated unmodified Flink
+runs in the scheduling diagnostic emitted 1,537 and 1,495 changelog records at parallelism one,
+while each ended with the same 593 rows. All sixteen diagnostic runs (two per engine/backend/
+parallelism combination) matched final result bytes within their configuration. Identical-arrival
+operator tests still compare every changelog transition. Release measurement and profiling remain
+the next Q9 checkpoint; no Q9 performance result is claimed yet.
 
 ## Q6 has no Flink streaming baseline
 

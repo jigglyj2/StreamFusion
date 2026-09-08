@@ -69,6 +69,7 @@ final class StreamFusionArchitectureSupport {
     // Admission is a capability of each physical family, never an operator-pair fusion rule.
     // Composition coverage is distinct from the persistent-memory gate and semantic/config checks.
     private static final Set<String> REGION_READY = Set.of(
+            "StreamExecRank",
             "StreamExecCalc",
             "BatchExecCalc",
             "StreamExecUnion",

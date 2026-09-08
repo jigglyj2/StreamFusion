@@ -74,6 +74,9 @@ public final class StreamFusionTopNTranslator {
             throw new IllegalArgumentException(
                     "Shared Top-1 requires synchronous state, disabled mini-batching and disabled state TTL");
         }
+        if (!config.get(TABLE_EXEC_RANK_TOPN_CACHE_SIZE).equals(TABLE_EXEC_RANK_TOPN_CACHE_SIZE.defaultValue()))
+            throw new IllegalArgumentException(
+                    "Shared Top-1 does not represent custom table.exec.rank.topn-cache-size");
         String metrics = tech.streamfusion.flink.metrics.NativeStateMetricSupport.unsupportedReason(config);
         if (metrics != null) throw new IllegalArgumentException(metrics);
         return StreamFusionTopNPlan.create(

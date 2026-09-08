@@ -381,8 +381,11 @@ fixture uses disjoint right inputs so its complete changelog is deterministic de
 bounded-source scheduling.
 
 Official Nexmark q4 and q9 integration cases compare the final keyed table against Flink on both
-state backends, require accelerated EXPLAIN output, and require non-zero native regular-join plus
-aggregate or Top-N batch counters. The result collector retains separate raw sorted and
+state backends and require accelerated EXPLAIN output with positive shared native-plan counters.
+Standalone join/aggregate/Top-N invocation counts are not acceleration evidence for a fused plan.
+Independently scheduled join inputs can produce different intermediate aggregation/rank transitions,
+including across repeated unmodified Flink runs; fixed-arrival harnesses separately compare complete
+changelog bytes. The result collector retains separate raw sorted and
 arrival-order changelog hashes; its primary-key-aware materialization applies upserts before sorting
 so a legal `UPDATE_AFTER` is not miscounted as another table row.
 

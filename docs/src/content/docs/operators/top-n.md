@@ -5,9 +5,9 @@ sidebar:
   order: 14
 ---
 
-**Current status:** Temporarily uses whole-plan Flink fallback under the
-[architecture admission requirements](/StreamFusion/development/architecture-admission/). The native paths
-described below are retained for development and direct parity tests; SQL planning does not select them.
+**Current status:** The verified append-only, partitioned `ROW_NUMBER` Top-1 subset accelerates
+through the shared native runtime on memory and default RocksDB state. Other Top-N/Rank subsets
+retain whole-plan fallback under the [architecture admission requirements](/StreamFusion/development/architecture-admission/).
 
 **Retained implementation scope:** Implementation for Flink streaming `ROW_NUMBER` Top-N, including partitioned and
 global Top-N, constant ranges (including `OFFSET`), variable per-partition upper bounds, rank-number
@@ -28,15 +28,24 @@ FROM (
   ) AS rank_num
   FROM bid
 )
-WHERE rank_num <= 3;
+WHERE rank_num <= 1;
 ```
 
 ## Acceleration and fallback
 
-StreamFusion replaces `StreamExecRank` only when Flink selected `ROW_NUMBER` and a constant or
-variable rank range. Flink 2.3 does not implement streaming `RANK` or `DENSE_RANK` in this physical
-operator, so those shapes retain Flink's own planning error/fallback rather than being approximated.
-General OVER expressions remain separate operators.
+Production selection requires Flink's append-fast strategy, constant range `[1,1]`, a nonempty
+partition key and explicit ordering. Partition keys accept BIGINT/INTEGER; payload and order
+columns accept BIGINT, INTEGER, VARCHAR and TIMESTAMP(3) without processing-time attributes.
+Nullable keys, mixed order directions, optional rank output and optional UPDATE_BEFORE are
+verified. State TTL, asynchronous state and mini-batching must be disabled; a nondefault
+`table.exec.rank.topn-cache-size` retains fallback because its cache configuration is not
+represented by the native point-state implementation. Common backend and metric-option gates
+still apply. EXPLAIN reports the reason for every unsupported node in the complete fallback plan.
+
+Global rank/LIMIT, larger/variable ranges, retract/update-fast strategies and other types remain
+gated. Flink 2.3 does not implement streaming `RANK` or `DENSE_RANK` in this physical operator;
+those shapes retain Flink's own planning error. The following broader implementations remain
+available for direct development/parity tests and are not production-admitted.
 
 For bounded `RANK`, the planner retains Flink's hash or singleton exchange and replaces the paired
 local/global sort-rank stages with one keyed, tie-aware bounded selection. It only performs this
@@ -113,25 +122,29 @@ and 1→2→1 key-group rescaling. Real Flink task tests capture Arrow IPC chann
 barriers and replay winning updates exactly once alongside the restored native state. Both
 backends run three input seeds, including nullable keys, equal order keys and timestamp envelopes.
 
-Ordinary admission remains gated pending selected SQL/Q9 integration checks. The shared
-fragment accepts only explicitly ordered append-only range [1,1], synchronous state, no
-mini-batching and disabled TTL; other modes retain the production gate. The existing `topNComparatorCalls`
+Generated SQL tests require ordinary selection and match complete collected changelog bytes
+on both backends, including nullable/tied keys and parallelism one/two. Official Q9 integration
+requires acceleration and identical final keyed result bytes at parallelism one/four on both
+backends. Its independently scheduled join inputs can produce different intermediate winning-bid
+transitions even across repeated unmodified Flink runs. The fixed-arrival operator tests retain
+complete changelog comparisons; the independent-job test does not claim identical transient
+changelogs. The shared fragment remains restricted to the production subset described above. The existing `topNComparatorCalls`
 diagnostic counts adapter comparator calls; it does not count comparisons inside DataFusion kernels.
 
 
-Each incoming Arrow batch crosses JNI once. Rust computes Flink-compatible key groups, reads the
+Arrow batches cross JNI only at native-plan edges; adjacent native stages share Arrow buffers. Rust computes Flink-compatible key groups, reads the
 touched partitions, maintains candidate sets, and commits changes in one backend batch. For
 supported scalar sort keys (excluding floats), sort columns are Arrow-row-encoded once per input
 or restored batch and compared as bytes. Top-level null placement is independent of ascending or
 descending direction, matching Flink.
 
-These partitions store small versioned metadata separately from individually ordered candidate
+The retained general Top-N partitions store small versioned metadata separately from individually ordered candidate
 entries. RocksDB uses its bytewise comparator; the in-memory implementation uses a B-tree.
 Unchanged candidates are not rewritten. Legacy whole-partition values migrate when first touched.
 Float/nested sort keys retain the custom comparator and whole-partition representation; unordered
 LIMIT retains its existing specialized behavior. Native state never passes through JNI.
 
-Top-N still loads the retained candidate set of each touched partition and uses a sorted candidate
+The retained general Top-N path still loads the retained candidate set of each touched partition and uses a sorted candidate
 vector. This change does not implement RisingWave's bounded low/middle/high cache or eliminate
 large retractable-group working sets. Terminal rank discovery scans only partition metadata,
 then reads the corresponding ordered candidates. Payload decoding/output remain vectorized.
@@ -141,7 +154,7 @@ keep deterministic `(ORDER BY, remaining primary key)` ordering and retain enoug
 the visible range after a retraction. StreamFusion preserves Flink's comparator contract in Rust
 and its backend-neutral key-group state contract instead of adopting RisingWave's table-specific
 low/middle/high caches. Arroyo currently provides windowed Top-N operators, but no corresponding
-unbounded non-window SQL Top-N implementation. The transformation requests a stateful relative
+unbounded non-window SQL Top-N implementation. The legacy standalone transformation requests a stateful relative
 weight of eight from Flink's existing `OPERATOR` managed-memory pool, preventing wide-row state
 from being constrained to the share intended for a stateless unary stage without introducing a
 separate StreamFusion memory budget.

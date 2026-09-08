@@ -37,6 +37,9 @@ Mini-batch, singleton/global and other aggregate subsets retain explicit product
 Two-phase UTC event-time TUMBLE/HOP windows also compose through this runtime: append-only BIGINT
 COUNT/MIN/MAX with BIGINT arguments and BIGINT/INTEGER keys (or no keys), synchronous state,
 and mini-batch disabled. Semantic lowering rejects other time, accumulator and buffer layouts.
+Append-only partitioned ROW_NUMBER range [1,1] also composes through this runtime, using
+DataFusion sort/cumulative MIN and batched point state. Its verified key/payload types, disabled
+TTL/mini-batch/async settings and default cache configuration are listed on the [Top-N page](/StreamFusion/operators/top-n/).
 Other persistent families remain on whole-plan fallback until their state/buffer admission,
 backend settings, checkpoint behavior, and complete Flink metric contracts are verified.
 
