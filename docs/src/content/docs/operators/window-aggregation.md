@@ -77,8 +77,15 @@ checkpoint boundary, instead of being rewritten after every input batch. Snapsho
 fingerprint the window contract and pin the slice/Arrow encoding. Restore rejects expanded-window
 state: original slices cannot generally be recovered from merged extrema. `NativeStateBindings`
 protocol 3 carries Flink's restored union-operator watermark separately from keyed snapshots,
-even when keyed state contains no entries. Missing restore clocks, unsupported versions and clocks attached to
-other operator families are rejected. Versions 1 and 2 remain valid for their existing contracts.
+even when keyed state contains no entries. The shared Java region restores that clock from Flink
+union operator state before constructing native bindings or importing keyed snapshots. Each fused
+window uses its stable plan-node identity to namespace the union state, since several original
+Flink operators share one lifecycle owner. Rescaling takes the minimum of every restored subtask's
+clock, including `Long.MIN_VALUE`. After native output drains successfully, watermark propagation
+updates the checkpointed clock. Replayed older watermarks forward the restored clock, matching
+Flink's `WindowAggOperator`, while input gauges observe the actual arrival. Direct restores with
+missing clocks, unsupported versions and clocks attached to other operator families are rejected.
+Versions 1 and 2 remain valid for their existing contracts.
 
 The shared execution adapter preserves Arrow ownership through adjacent Calc stages and attaches
 timestamp-less INSERT metadata without re-admitting or copying payload buffers. Watermark output
@@ -101,11 +108,14 @@ does not guarantee.
 Native tests additionally cover memory/RocksDB restore, 1→2→1 rescaling, physical RocksDB
 checkpoints, memory denial and cancellation, and a 5,000-slice window read in bounded pages.
 Storage instrumentation verifies one retained value per slice and input writes independent of
-the growing timer index. These checks do not establish full production admission yet. Remaining
+the growing timer index. Shared Java region tests additionally compare generated replayed data
+and watermark output with Flink after canonical, aligned and unaligned operator snapshots, on
+both backends, including canonical backend switching. Real Flink union-state repartitioning tests
+cover 2→1 clock restore with no live window entries. These operator-snapshot checks do not yet
+establish in-flight channel replay for windows or full production admission. Remaining
 Q5 requirements include:
 
-- Automatic Java fragment/resource binding, including the original local memory share and
-  Flink's restored union-operator clock.
+- Automatic Java fragment/resource binding, including the original local memory share.
 - Ownership of the reused aggregate's two outputs, without duplicating computation or disabling
   Flink reuse.
 - The complete Flink metric surface and runtime checkpoint/replay contracts, including aligned

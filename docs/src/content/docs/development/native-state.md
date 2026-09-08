@@ -98,14 +98,19 @@ fixed-size namespaces for attached HOP windows; attached windows expire once wit
 The snapshot fingerprint pins this distinction. It uses ordered in-memory state or the configured RocksDB
 backend, emits through the common unary stream, and snapshots its timer index at Flink's checkpoint
 boundary. State-binding protocol 3 adds an optional restored operator watermark for this family.
-Flink supplies the minimum restored union-operator watermark before replay, independently of keyed
-state; it applies even if no keyed entries need importing. A window restore without this clock is
+The shared Java region stores each window clock in Flink union operator state, namespaced by
+its stable plan-node ID because a fused region has one Flink lifecycle owner. It supplies the
+minimum restored subtask watermark before native context construction and keyed state import;
+the clock applies even if no keyed entries need importing. Successful watermark drains update
+that operator state for the next snapshot. Replayed older watermarks forward the restored window
+clock, while input gauges retain the arrival value. A window restore without this clock is
 rejected, as is attaching it to another operator family or an older binding protocol. Existing
 protocols 1 and 2 remain supported. Direct generated tests compare the shared HOP COUNT tree with
 Flink's SQL-generated global slicer and the attached MAX/COUNT tree with Flink's attached stage on
 both backends, including restored input and logical stage I/O.
-The complete window metric surface, Java resource/clock lifecycle and ordinary planner admission
-remain outstanding; see [Window aggregation](/StreamFusion/operators/window-aggregation/).
+Runtime tests cover canonical backend switching, aligned/unaligned operator snapshots, generated
+replay and Flink union-state 2→1 rescaling. In-flight channel replay, the complete window metric
+surface, original local memory-share binding and ordinary planner admission remain outstanding; see [Window aggregation](/StreamFusion/operators/window-aggregation/).
 
 The group-aggregate binding accepts synchronous and mini-batch streaming raw input, including
 retractions, and mini-batch global partial-accumulator input. Raw/global bundles drain through the

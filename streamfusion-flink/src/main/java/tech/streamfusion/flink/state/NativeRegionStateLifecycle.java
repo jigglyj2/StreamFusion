@@ -31,6 +31,7 @@ public final class NativeRegionStateLifecycle implements AutoCloseable {
     private Path directory;
     private long fallbackReservation;
     private boolean rawSnapshot = true;
+    private NativeRegionWindowClocks windowClocks;
 
     public void initialize(
             StateInitializationContext initialization,
@@ -60,6 +61,7 @@ public final class NativeRegionStateLifecycle implements AutoCloseable {
                 ? (StreamFusionKeyedStateBackend<?>) keyedBackend
                 : null;
         try {
+            windowClocks = new NativeRegionWindowClocks(initialization, plan, stateIds);
             directory = Files.createTempDirectory(
                     environment.getIOManager().getSpillingDirectories()[0].toPath(), "streamfusion-region-state-");
             memory = StreamFusionTaskMemory.createWithState(
@@ -92,6 +94,7 @@ public final class NativeRegionStateLifecycle implements AutoCloseable {
                                                 NativeRocksDbLogDirectory.resolve(directory.resolve("node-" + id)))
                                         : NativeStateResources.memory(
                                                 id, maxParallelism, range.getStartKeyGroup(), range.getEndKeyGroup()))
+                                .map(windowClocks::bind)
                                 .collect(Collectors.toList()));
                     });
             // Flink owns staged checkpoint cleanup after asynchronous upload. Keep those files
@@ -114,6 +117,14 @@ public final class NativeRegionStateLifecycle implements AutoCloseable {
         return memory;
     }
 
+    public java.util.Map<Long, Long> restoredWindowWatermarks() {
+        return windowClocks.restored();
+    }
+
+    public void watermark(long nodeId, long timestamp) {
+        windowClocks.watermark(nodeId, timestamp);
+    }
+
     public void beginSnapshot(CheckpointOptions options) {
         rawSnapshot = backend == null
                 || !backend.usesNativeIncrementalCheckpoints()
@@ -121,6 +132,7 @@ public final class NativeRegionStateLifecycle implements AutoCloseable {
     }
 
     public void writeSnapshot(StateSnapshotContext context) throws Exception {
+        windowClocks.snapshot();
         if (rawSnapshot) participant.writeRawSnapshot(context);
     }
 

@@ -33,8 +33,18 @@ final class NativeRegionControlTree {
     private final Listener listener;
     private final Set<Long> identities = new HashSet<>();
     private final Node root;
+    private final java.util.Map<Long, Long> restoredWindowWatermarks;
 
     NativeRegionControlTree(byte[] identifiedPlan, int inputCount, Listener listener) {
+        this(identifiedPlan, inputCount, java.util.Map.of(), listener);
+    }
+
+    NativeRegionControlTree(
+            byte[] identifiedPlan,
+            int inputCount,
+            java.util.Map<Long, Long> restoredWindowWatermarks,
+            Listener listener) {
+        this.restoredWindowWatermarks = java.util.Map.copyOf(restoredWindowWatermarks);
         if (inputCount <= 0) {
             throw new IllegalArgumentException("A native control tree needs external inputs");
         }
@@ -48,6 +58,9 @@ final class NativeRegionControlTree {
             root = build(plan.getRoot(), null, 0);
         } catch (com.google.protobuf.InvalidProtocolBufferException failure) {
             throw new IllegalArgumentException("Invalid native control plan", failure);
+        }
+        if (!identities.containsAll(restoredWindowWatermarks.keySet())) {
+            throw new IllegalArgumentException("Restored window clock has no matching native stage");
         }
         for (Node input : inputs) {
             if (input == null) {
@@ -105,7 +118,13 @@ final class NativeRegionControlTree {
         if (!input && children.isEmpty()) {
             throw new IllegalArgumentException("Arrival-driven native control stages need physical inputs");
         }
-        Node node = new Node(id, parent, parentPort, input ? 1 : children.size(), operator.hasUnion());
+        Node node = new Node(
+                id,
+                parent,
+                parentPort,
+                input ? 1 : children.size(),
+                operator.hasUnion(),
+                operator.hasWindowAggregate());
         if (input) {
             int port = operator.getInput().getInputIndex();
             if (port < 0 || port >= inputs.length || inputs[port] != null) {
@@ -120,6 +139,9 @@ final class NativeRegionControlTree {
     }
 
     private void register(Operator operator) {
+        if (restoredWindowWatermarks.containsKey(operator.getPlanNodeId()) && !operator.hasWindowAggregate()) {
+            throw new IllegalArgumentException("Restored window clock requires a WindowAggregate stage");
+        }
         if (operator.getPlanNodeId() <= 0 || !identities.add(operator.getPlanNodeId())) {
             throw new IllegalArgumentException("Native control tree needs unique positive stage identities");
         }
@@ -147,10 +169,13 @@ final class NativeRegionControlTree {
         private final IndexedCombinedWatermarkStatus combined;
         private final tech.streamfusion.flink.union.UnionInputWatermarks union;
         private long lastWatermark = Long.MIN_VALUE;
+        private final boolean window;
         private final boolean[] ended;
 
-        private Node(long id, Node parent, int parentPort, int arity, boolean unionInput) {
+        private Node(long id, Node parent, int parentPort, int arity, boolean unionInput, boolean window) {
             this.id = id;
+            this.window = window;
+            lastWatermark = restoredWindowWatermarks.getOrDefault(id, Long.MIN_VALUE);
             this.parent = parent;
             this.parentPort = parentPort;
             ended = new boolean[arity];
@@ -205,6 +230,9 @@ final class NativeRegionControlTree {
         }
 
         private void emitWatermark(long timestamp) throws Exception {
+            // WindowAggOperator forwards its restored clock when replay delivers an older
+            // watermark. Input gauges still observe the actual arrival above.
+            if (window) timestamp = Math.max(timestamp, lastWatermark);
             lastWatermark = timestamp;
             listener.watermark(id, timestamp);
             if (parent != null) {

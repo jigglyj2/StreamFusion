@@ -134,6 +134,7 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
                 memory.executionContext().identifiedPlan(),
                 inputTypes.size(),
                 memory.executionContext().controlCapabilities(),
+                stateLifecycle == null ? java.util.Map.of() : stateLifecycle.restoredWindowWatermarks(),
                 this::dispatchControl,
                 new NativeRegionControlTree.Listener() {
                     @Override
@@ -143,6 +144,7 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
 
                     @Override
                     public void watermark(long nodeId, long timestamp) throws Exception {
+                        if (stateLifecycle != null) stateLifecycle.watermark(nodeId, timestamp);
                         metricTree.watermark(nodeId, timestamp);
                         if (nodeId == controls.rootId()) {
                             processWatermark(new Watermark(timestamp));
