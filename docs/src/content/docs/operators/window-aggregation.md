@@ -49,9 +49,17 @@ all partials from the 180,000-row pressure fixture with Arrow batch sizes 127, 4
 Flush output is limited to 2,048 partials per pull and preserves first-appearance order; pending
 input must drain before another batch or control. Coarse admitted workspace transfers credit to
 retained state and Arrow output owners, with denial and cancellation/last-owner tests. The tested
-buffered subset uses UTC, append-only grouped accumulators and fixed-width Flink row geometry.
-Binding the original Flink operator memory share, native envelope/control lifecycle and complete
-metric surface remains required. The legacy production handle still flushes per batch, and Q5
+buffered subset uses UTC, non-null time/bound columns, append-only grouped accumulators and
+fixed-width Flink row geometry. Nullable time/bound admission remains deferred until the streaming
+Flink parity contract is verified.
+
+A manually bound Calc → local window → Calc test now runs this buffer through the shared native
+unary execution tree. Watermarks and checkpoint pre-barriers drain its bounded output before the
+control completes; invocation EOF and end-input alone do not flush. Partials carry timestamp-less
+INSERT metadata, each stage counts logical records, and invalid RowKinds or cancellation require
+recovery. Payload buffers retain their existing native leases; only new metadata receives another
+allocation allowance. Binding the original Flink operator memory share from Java and checking the
+complete Flink metric surface and replay lifecycle remain required. The legacy production handle still flushes per batch, and Q5
 continues to fall back.
 
 Compatible append-only local windows now use DataFusion's `GroupsAccumulator` vectors across

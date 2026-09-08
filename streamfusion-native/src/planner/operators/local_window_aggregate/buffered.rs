@@ -9,6 +9,7 @@ use super::*;
 use crate::planner::operators::group_aggregate::grouped_compute::GroupedOutput;
 
 mod control;
+pub(crate) mod execution_plan;
 #[cfg(test)]
 mod tests;
 
@@ -70,6 +71,23 @@ impl BufferedWindow {
         if kernel.shift_time_zone != chrono_tz::UTC {
             return Err(DataFusionError::Plan(
                 "buffered local window timezone control parity is limited to UTC".into(),
+            ));
+        }
+        let time_columns = kernel
+            .plan
+            .attached_window_start_index
+            .zip(kernel.plan.attached_window_end_index)
+            .map_or_else(
+                || vec![kernel.plan.time_attribute_index],
+                |(start, end)| vec![start, end],
+            );
+        if time_columns
+            .iter()
+            .any(|&index| kernel.input_schema.field(index as usize).is_nullable())
+        {
+            return Err(DataFusionError::Plan(
+                "buffered local window nullable event-time/window-bound parity is not verified"
+                    .into(),
             ));
         }
         for field in kernel.input_schema.fields() {
@@ -177,18 +195,14 @@ impl BufferedWindow {
     fn consume_segment(&mut self, cursor: &mut InputCursor) -> Result<bool> {
         let start = cursor.offset;
         let mut indices = Vec::with_capacity(cursor.batch.num_rows() - start);
-        let mut valid = Vec::with_capacity(indices.capacity());
         let mut pressure = false;
         while cursor.offset < cursor.batch.num_rows() {
             let row = cursor.offset;
             let Some((window_start, slice_end)) = self.kernel.slice_bounds(&cursor.batch, row)?
             else {
-                // Nullable event-time behavior must be checked at planner admission; the
-                // compute kernel's existing null selection remains shared here.
-                indices.push(0);
-                valid.push(false);
-                cursor.offset += 1;
-                continue;
+                return Err(DataFusionError::Execution(
+                    "buffered local window requires non-null event-time/window bounds".into(),
+                ));
             };
             let encoded = cursor.keys.as_ref().map(|keys| keys.row(row));
             let key = BorrowedSliceKey {
@@ -232,7 +246,6 @@ impl BufferedWindow {
             };
             self.min_slice_end = self.min_slice_end.min(slice_end);
             indices.push(index);
-            valid.push(true);
             cursor.offset += 1;
         }
         if !indices.is_empty() && !self.groups.is_empty() {
@@ -245,7 +258,7 @@ impl BufferedWindow {
                     &self.kernel.calls,
                     &batch,
                     &indices,
-                    Some(&arrow::array::BooleanArray::from(valid)),
+                    None,
                     self.groups.len(),
                 )?;
         }
@@ -342,6 +355,19 @@ impl BufferedWindow {
             }
         }
         Ok(output)
+    }
+}
+
+impl Drop for BufferedWindow {
+    fn drop(&mut self) {
+        // The compatibility kernel owns the input workspace reservation. It is the first
+        // field, so clear every dependent retained/cursor buffer before field destruction
+        // can return that credit during cancellation or a failed invocation.
+        self.cursor = None;
+        self.flushing = None;
+        self.groups = HashMap::with_hasher(RandomState::new());
+        self.order = Vec::new();
+        self.kernel.grouped_compute = None;
     }
 }
 

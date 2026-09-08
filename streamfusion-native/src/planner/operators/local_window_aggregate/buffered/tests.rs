@@ -11,7 +11,7 @@ fn buffer() -> BufferedWindow {
     ))
 }
 fn buffer_with_broker(
-    broker: Arc<crate::memory_pool::tests_support::TestBroker>,
+    broker: Arc<dyn crate::memory_pool::MemoryReservationBroker>,
 ) -> BufferedWindow {
     let source = super::super::tests::processor(false);
     let mut plan = source.plan.clone();
@@ -238,4 +238,66 @@ fn denied_input_admission_leaves_existing_partials_and_credit_intact() {
     assert_eq!(drain(&mut buffer, first), vec![(1, 2, 2000)]);
     drop(buffer);
     assert_eq!(broker.reserved(), 0);
+}
+
+#[test]
+fn nullable_time_plans_are_rejected_before_shared_buffer_mutation() {
+    let mut kernel = crate::planner::operators::local_window_aggregate::tests::processor(false);
+    let mut fields = kernel.input_schema.fields().to_vec();
+    fields[2] = Arc::new(fields[2].as_ref().clone().with_nullable(true));
+    kernel.input_schema = Arc::new(arrow::datatypes::Schema::new(fields));
+    assert!(BufferedWindow::new(kernel, 3 << 20, 32 << 10)
+        .err()
+        .unwrap()
+        .to_string()
+        .contains("nullable event-time"));
+}
+
+#[test]
+fn cancelled_pressure_cursor_frees_allocations_before_returning_workspace_credit() {
+    use crate::memory_pool::{tests_support::TestBroker, MemoryReservationBroker};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    #[derive(Debug)]
+    struct ObservingBroker {
+        inner: TestBroker,
+        active: AtomicBool,
+    }
+    impl MemoryReservationBroker for ObservingBroker {
+        fn try_reserve(&self, bytes: usize) -> Result<bool> {
+            self.inner.try_reserve(bytes)
+        }
+        fn available(&self) -> Result<Option<usize>> {
+            self.inner.available()
+        }
+        fn release(&self, bytes: usize) -> Result<()> {
+            self.inner.release(bytes)?;
+            if self.active.load(Ordering::Relaxed) {
+                let live = crate::allocation_test_support::current().live.max(0) as usize;
+                assert!(
+                    live <= self.inner.reserved(),
+                    "returned live buffer credit: live={live}, reserved={}",
+                    self.inner.reserved()
+                );
+            }
+            Ok(())
+        }
+    }
+    let broker = Arc::new(ObservingBroker {
+        inner: TestBroker::new(256 << 20),
+        active: AtomicBool::new(false),
+    });
+    let mut buffer = buffer_with_broker(broker.clone());
+    broker.active.store(true, Ordering::Relaxed);
+    let (_, _) = crate::allocation_test_support::measure(|| {
+        let batch = input(
+            &buffer,
+            &(0..100_000).map(|row| (row % 17, 1000)).collect::<Vec<_>>(),
+        );
+        let output = buffer.push(batch).unwrap().unwrap();
+        assert!(buffer.has_pending());
+        drop(buffer);
+        drop(output);
+    });
+    broker.active.store(false, Ordering::Relaxed);
+    assert_eq!(broker.inner.reserved(), 0);
 }
