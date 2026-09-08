@@ -2,6 +2,8 @@
 // Licensed under the Apache License, Version 2.0
 
 use super::*;
+
+mod pending_output;
 use crate::memory_pool::{tests_support::TestBroker, FlinkMemoryPool};
 use arrow::array::{ArrayRef, Decimal128Array, Int32Array, Int8Array, ListArray, StringArray};
 use arrow::datatypes::Int32Type;

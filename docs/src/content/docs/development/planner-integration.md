@@ -62,6 +62,14 @@ registry describes single operators, never neighbor combinations. Local buffer c
 only the node's configuration through the descriptor-generated copier also used by keyed binding,
 not its child subtree; keyed snapshot methods remain unsupported for
 that buffer. Native local/Calc/global composition is tested on both global state backends.
+The native unary stream adapter also supports kernels that pause an incoming batch while draining
+bounded output chunks. A kernel retains its admitted input cursor; the adapter drains it before
+polling the next child batch or applying a watermark/checkpoint control. Shared Arrow buffers stay
+owned through those pulls. Cursor failure, cancellation, non-progress and incompatible output
+schemas require recovery. Existing single-output kernels keep their direct path without an extra
+pending-output poll. This enables local-window pressure flushing without a separate execution driver;
+window lifecycle migration and admission remain unfinished.
+
 The common one-input Arrow runtime now uses the same control scheduler and native gauge schema as
 the multi-input runtime; no operator-family control branch was added. It receives the planned input
 type before open so control events can run before the first data batch. Local fragments require

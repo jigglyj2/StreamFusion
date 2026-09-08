@@ -1,9 +1,10 @@
 // Copyright 2026 StreamFusion Authors
 // Licensed under the Apache License, Version 2.0
 
-//! Common DataFusion adapter for synchronous one-batch-in/one-batch-out persistent kernels.
-//! Children may be any native ExecutionPlan; this is not a fusion registry. Cursor-driven and
-//! multi-input kernels keep their own physical operators under the same recursive region driver.
+//! Common DataFusion adapter for synchronous unary persistent kernels with bounded output pulls.
+//! Children may be any native ExecutionPlan; this is not a fusion registry. Unary kernels may
+//! retain an admitted input cursor while draining bounded output. Multi-input kernels keep their
+//! own physical operators under the same recursive region driver.
 //! Invocation EOF is not Flink endInput or a mini-batch flush.
 
 use std::fmt;
@@ -53,6 +54,17 @@ pub(crate) trait UnaryBatchProcessor: Send + 'static {
     /// Output allocations must already retain their admission. Never transfer ownership to
     /// Java here: the next consumer is another native stage.
     fn process_batch(&mut self, input: RecordBatch) -> Result<RecordBatch>;
+
+    /// A kernel that pauses input computation to flush a bounded output chunk retains its
+    /// admitted cursor itself. Drain that cursor before polling another input or any control.
+    /// The default is constant false, so ordinary one-output kernels need no extra lock/pull.
+    fn has_pending_output(&self) -> bool {
+        false
+    }
+
+    fn poll_pending_output(&mut self) -> Result<Option<RecordBatch>> {
+        Ok(None)
+    }
 
     /// Called only for an explicit control invocation, after the child is fully drained.
     /// Return one admitted Arrow output at a time, then None. Cancellation requires recovery.
@@ -173,6 +185,7 @@ impl<P: UnaryBatchProcessor> ExecutionPlan for UnaryExec<P> {
             terminal: false,
             control,
             child_ended: false,
+            pending_output: false,
             _memory: memory,
         };
         match self.input.execute(0, context) {
@@ -195,6 +208,7 @@ struct UnaryStream<P: UnaryBatchProcessor> {
     terminal: bool,
     control: Option<ControlEvent>,
     child_ended: bool,
+    pending_output: bool,
     // Drop after children and processor references, never before their control storage.
     _memory: MemoryReservation,
 }
@@ -221,6 +235,41 @@ impl<P: UnaryBatchProcessor> Stream for UnaryStream<P> {
         if self.terminal {
             return Poll::Ready(None);
         }
+        if self.pending_output {
+            let result =
+                self.processor
+                    .lock()
+                    .map_err(|_| poisoned::<P>())
+                    .and_then(|mut processor| {
+                        let output = processor.poll_pending_output()?;
+                        let pending = processor.has_pending_output();
+                        if output.is_none() && pending {
+                            return Err(DataFusionError::Execution(format!(
+                                "{} pending cursor made no progress",
+                                P::NAME
+                            )));
+                        }
+                        Ok((output, pending))
+                    });
+            match result {
+                Ok((Some(batch), pending)) if batch.schema() == self.schema => {
+                    self.pending_output = pending;
+                    return Poll::Ready(Some(Ok(batch)));
+                }
+                Ok((None, _)) => self.pending_output = false,
+                Ok((Some(_), _)) => {
+                    let _ = self.finish(false);
+                    return Poll::Ready(Some(Err(DataFusionError::Execution(format!(
+                        "{} pending output differs from its native schema",
+                        P::NAME
+                    )))));
+                }
+                Err(error) => {
+                    let _ = self.finish(false);
+                    return Poll::Ready(Some(Err(error)));
+                }
+            }
+        }
         if self.child_ended {
             return self.poll_control();
         }
@@ -239,10 +288,13 @@ impl<P: UnaryBatchProcessor> Stream for UnaryStream<P> {
             }
             Poll::Ready(Some(input)) => {
                 let result = input.and_then(|batch| {
-                    self.processor
-                        .lock()
-                        .map_err(|_| poisoned::<P>())?
-                        .process_batch(batch)
+                    let mut processor = self.processor.lock().map_err(|_| poisoned::<P>())?;
+                    let output = processor.process_batch(batch)?;
+                    Ok((output, processor.has_pending_output()))
+                });
+                let result = result.map(|(output, pending)| {
+                    self.pending_output = pending;
+                    output
                 });
                 if result.is_err() {
                     // Preserve the kernel/child error even if its failure poisoned the lock.
