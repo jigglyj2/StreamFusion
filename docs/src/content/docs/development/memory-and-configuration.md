@@ -76,8 +76,18 @@ they do not reserve raw Flink rows or grant another native memory budget. DataFu
 vectors, retained Arrow row keys, input cursors and output buffers continue to consume the normal
 host pool through coarse reservations.
 
+The shared runtime factory carries a serializable map from each local stage's stable identity to
+its original Flink operator weight, total slot-group weight and managed-memory use cases. At task
+initialization it applies Flink's fraction rounding, configuration precedence, backend managed-memory
+flag and page sizing to that original share. The native runtime's own fraction remains unchanged;
+adding a native state owner or Arrow adapter must not alter the modeled local flush capacity.
+Missing, extra or duplicate local owners are rejected before task startup. A resolved zero capacity
+fails before native allocation.
+
 The task binding is installed once, before native lowering, alongside any separate keyed-state
 bindings. Invalid requests leave existing bindings unchanged and return their temporary credit.
 The Java/native constructor admits all protobuf copies before JNI. Original-plan resource-share
 resolution in ordinary planner translation is still required before admitting the Q5 window plan;
-manual binding/parity tests are not production Nexmark admission.
+runtime binding/parity tests are not production Nexmark admission. Generated runtime tests compare
+pressure flushes and control changelogs with Flink using a 3 MiB original capacity and a larger
+native allowance, both for a local stage alone and for a local/global tree on both backends.

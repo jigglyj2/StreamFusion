@@ -43,6 +43,20 @@ public final class NativeRegionStateLifecycle implements AutoCloseable {
             byte[] plan,
             List<Long> stateIds)
             throws Exception {
+        initialize(initialization, environment, config, metrics, keyedBackend, maxParallelism, plan, stateIds, null);
+    }
+
+    public void initialize(
+            StateInitializationContext initialization,
+            Environment environment,
+            StreamConfig config,
+            OperatorMetricGroup metrics,
+            KeyedStateBackend<?> keyedBackend,
+            int maxParallelism,
+            byte[] plan,
+            List<Long> stateIds,
+            byte[] taskBindings)
+            throws Exception {
         if (manager != null || stateIds.isEmpty()) {
             throw new IllegalStateException("Native region state must initialize once with state-node identities");
         }
@@ -65,7 +79,12 @@ public final class NativeRegionStateLifecycle implements AutoCloseable {
             directory = Files.createTempDirectory(
                     environment.getIOManager().getSpillingDirectories()[0].toPath(), "streamfusion-region-state-");
             memory = StreamFusionTaskMemory.createWithState(
-                    environment, config, metrics, "streamfusion-native-region", plan, assigned -> {
+                    environment,
+                    config,
+                    metrics,
+                    "streamfusion-native-region",
+                    plan,
+                    assigned -> {
                         manager = assigned;
                         if (backend != null && backend.nativeRocksDbMemoryScope() != null) {
                             ((tech.streamfusion.flink.memory.FlinkManagedMemory) assigned)
@@ -96,7 +115,8 @@ public final class NativeRegionStateLifecycle implements AutoCloseable {
                                                 id, maxParallelism, range.getStartKeyGroup(), range.getEndKeyGroup()))
                                 .map(windowClocks::bind)
                                 .collect(Collectors.toList()));
-                    });
+                    },
+                    taskBindings);
             // Flink owns staged checkpoint cleanup after asynchronous upload. Keep those files
             // outside the live database directory that this lifecycle deletes on close.
             participant = new NativeRegionStateParticipant(

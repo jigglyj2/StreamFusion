@@ -38,6 +38,7 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
     private final List<Input> inputs;
     private final boolean[] ended;
     private final List<byte[]> exchangePlans;
+    private final tech.streamfusion.flink.window.NativeLocalWindowResources localWindowResources;
     private StreamFusionTaskMemory memory;
     private ArrowNativePlanDispatcher dispatcher;
     private StreamFusionNativeMetricTree metricTree;
@@ -49,13 +50,15 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
             RowType outputType,
             byte[] plan,
             List<Long> stateIds,
-            List<byte[]> exchangePlans) {
+            List<byte[]> exchangePlans,
+            tech.streamfusion.flink.window.NativeLocalWindowResources localWindowResources) {
         super(parameters, inputTypes.size());
         environment = parameters.getContainingTask().getEnvironment();
         subtaskIndex = parameters.getContainingTask().getIndexInSubtaskGroup();
         this.inputTypes = List.copyOf(inputTypes);
         this.outputType = outputType;
         this.plan = plan.clone();
+        this.localWindowResources = localWindowResources;
         this.stateIds = List.copyOf(stateIds);
         ended = new boolean[inputTypes.size()];
         List<Input> ports = new ArrayList<>();
@@ -80,7 +83,8 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
                     getKeyedStateBackend(),
                     getRuntimeContext().getTaskInfo().getMaxNumberOfParallelSubtasks(),
                     plan,
-                    stateIds);
+                    stateIds,
+                    localWindowResources.resolve(environment, config));
             memory = stateLifecycle.memory();
         }
     }
@@ -119,8 +123,14 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
             throw new IllegalStateException("Native region state initialization did not complete");
         }
         if (memory == null)
-            memory = StreamFusionTaskMemory.create(
-                    environment, config, getMetricGroup(), "streamfusion-native-region", plan);
+            memory = StreamFusionTaskMemory.createWithState(
+                    environment,
+                    config,
+                    getMetricGroup(),
+                    "streamfusion-native-region",
+                    plan,
+                    ignored -> null,
+                    localWindowResources.resolve(environment, config));
         dispatcher =
                 new ArrowNativePlanDispatcher(memory.executionContext(), inputTypes, outputType, memory.allocator());
         metricTree = StreamFusionNativeMetricTree.forRegion(

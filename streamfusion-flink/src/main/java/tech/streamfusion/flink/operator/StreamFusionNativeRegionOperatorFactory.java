@@ -18,6 +18,7 @@ public final class StreamFusionNativeRegionOperatorFactory extends AbstractStrea
     private final byte[] plan;
     private final List<Long> stateIds;
     private final List<byte[]> exchangePlans;
+    private final tech.streamfusion.flink.window.NativeLocalWindowResources localWindowResources;
 
     public StreamFusionNativeRegionOperatorFactory(List<RowType> inputTypes, RowType outputType, byte[] plan) {
         this(inputTypes, outputType, plan, List.of());
@@ -41,12 +42,30 @@ public final class StreamFusionNativeRegionOperatorFactory extends AbstractStrea
             byte[] plan,
             List<Long> stateIds,
             List<byte[]> exchangePlans) {
+        this(
+                inputTypes,
+                outputType,
+                plan,
+                stateIds,
+                exchangePlans,
+                tech.streamfusion.flink.window.NativeLocalWindowResources.NONE);
+    }
+
+    public StreamFusionNativeRegionOperatorFactory(
+            List<RowType> inputTypes,
+            RowType outputType,
+            byte[] plan,
+            List<Long> stateIds,
+            List<byte[]> exchangePlans,
+            tech.streamfusion.flink.window.NativeLocalWindowResources localWindowResources) {
         this.inputTypes = List.copyOf(inputTypes);
         if (inputTypes.isEmpty()) {
             throw new IllegalArgumentException("An arrival-driven native region needs external inputs");
         }
         this.outputType = outputType;
         this.plan = ownedEnvelopePlan(plan);
+        this.localWindowResources = java.util.Objects.requireNonNull(localWindowResources);
+        localWindowResources.validate(this.plan);
         this.stateIds = List.copyOf(stateIds);
         if (exchangePlans.size() != inputTypes.size()) {
             throw new IllegalArgumentException("Native region exchange contracts must match external input arity");
@@ -73,7 +92,7 @@ public final class StreamFusionNativeRegionOperatorFactory extends AbstractStrea
     public <T extends StreamOperator<ArrowRowDataBatch>> T createStreamOperator(
             StreamOperatorParameters<ArrowRowDataBatch> parameters) {
         return (T) new StreamFusionArrowNativeRegionOperator(
-                parameters, inputTypes, outputType, plan, stateIds, exchangePlans);
+                parameters, inputTypes, outputType, plan, stateIds, exchangePlans, localWindowResources);
     }
 
     @Override

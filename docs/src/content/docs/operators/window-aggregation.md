@@ -51,8 +51,10 @@ verified subset. Attached windows follow Flink's `WindowedSliceAssigner`: only t
 is consumed, and the start is derived as end minus the full window size. A start column can be
 pruned or retained without changing grouping or assignment. The versioned local protobuf accepts
 end-only UTC TUMBLE/HOP attachment; an explicit pair retains the legacy supplied-bound contract.
-Start-only, end-only CUMULATE, and end-only non-UTC contracts are rejected. Local fragments still
-require explicit task resources; their automatic physical-node selection is not yet connected.
+Start-only, end-only CUMULATE, and end-only non-UTC contracts are rejected. The shared runtime factory now resolves local capacities at startup from serialized original
+Flink resource weights, slot-group totals and use cases, independently of the fused runtime's
+allocation allowance. Supplying that original resource metadata during ordinary planner selection
+remains outstanding.
 
 The retained legacy local handle still flushes per Arrow batch. Its reusable integer COUNT/SUM/AVG
 and append-only MIN/MAX computation uses DataFusion, with ordered Flink adapters for retractions
@@ -128,7 +130,9 @@ control sequences and every partial from a 180,000-row pressure fixture, using t
 builder. Generated grouped/ungrouped attached MAX/COUNT tests use Flink's SQL-generated local
 stage with retained start values that assignment must ignore, and compare every serialized partial, timestamp/RowKind and
 logical I/O counter across input batches, watermarks and checkpoint pre-barriers. Native tests
-also verify signed-long wrapping when deriving an attached start. Direct global HOP COUNT
+also verify signed-long wrapping when deriving an attached start. Shared runtime startup tests
+serialize the actual operator factory, resolve the local capacity from Flink resources, and compare
+pressure/control changelogs for local-only and local/global trees on both backends. Direct global HOP COUNT
 tests compare complete serialized changelog records at each input/control boundary on both
 backends, including nullable keys, negative times, late inputs, large watermark jumps and restore
 before replayed input. Attached MAX/COUNT tests use the SQL-generated Flink attached stage and

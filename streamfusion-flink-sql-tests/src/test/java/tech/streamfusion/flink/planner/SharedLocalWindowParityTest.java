@@ -6,6 +6,7 @@ package tech.streamfusion.flink.planner;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static tech.streamfusion.flink.planner.SharedLocalWindowFixture.*;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -23,8 +24,6 @@ import org.apache.flink.table.data.TimestampData;
 import org.apache.flink.table.runtime.typeutils.RowDataSerializer;
 import org.apache.flink.table.types.logical.BigIntType;
 import org.apache.flink.table.types.logical.RowType;
-import org.apache.flink.table.types.logical.TimestampType;
-import org.apache.flink.table.types.logical.VarBinaryType;
 import org.apache.flink.types.RowKind;
 import org.junit.jupiter.api.Test;
 import tech.streamfusion.flink.arrow.ArrowNativePlanDispatcher;
@@ -34,12 +33,6 @@ import tech.streamfusion.proto.plan.v1.*;
 
 /** Real SQL-generated Flink local slicer versus Calc -> buffered native local window -> Calc. */
 class SharedLocalWindowParityTest {
-    private static final RowType INPUT = RowType.of(new BigIntType(), new TimestampType(false, 3));
-    private static final RowType PARTIAL = RowType.of(
-            new BigIntType(),
-            new VarBinaryType(false, VarBinaryType.MAX_LENGTH),
-            new BigIntType(false),
-            new BigIntType(false));
     private static final RowType FLINK_PARTIAL =
             RowType.of(new BigIntType(), new BigIntType(false), new BigIntType(false));
 
@@ -217,27 +210,5 @@ class SharedLocalWindowParityTest {
                                 .setFlinkPageBytes(32 << 10)))
                 .build()
                 .toByteArray();
-    }
-
-    private static byte[] plan() throws Exception {
-        return SharedSlicingWindowFixture.compose(
-                tech.streamfusion.flink.window.StreamFusionLocalWindowAggregateTranslator.createStagePlan(
-                        INPUT,
-                        PARTIAL,
-                        new int[] {0},
-                        new org.apache.calcite.rel.core.AggregateCall[] {
-                            SharedSlicingWindowFixture.call(
-                                    org.apache.calcite.sql.fun.SqlStdOperatorTable.COUNT,
-                                    List.of(),
-                                    new BigIntType(false))
-                        },
-                        new org.apache.flink.table.planner.plan.logical.TimeAttributeWindowingStrategy(
-                                SharedSlicingWindowFixture.hop(),
-                                new TimestampType(false, org.apache.flink.table.types.logical.TimestampKind.ROWTIME, 3),
-                                1),
-                        false,
-                        SharedSlicingWindowFixture.config()),
-                2,
-                4);
     }
 }

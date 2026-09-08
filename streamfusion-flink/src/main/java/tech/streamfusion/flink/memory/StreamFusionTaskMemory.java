@@ -43,11 +43,24 @@ public final class StreamFusionTaskMemory implements AutoCloseable {
             String name,
             byte[] serializedPlan,
             java.util.function.Function<tech.streamfusion.nativebridge.NativeMemoryManager, byte[]> bindings) {
+        return createWithState(environment, operatorConfig, metricGroup, name, serializedPlan, bindings, null);
+    }
+
+    /** Original Flink task geometry and native state are bound before the shared tree is lowered. */
+    public static StreamFusionTaskMemory createWithState(
+            Environment environment,
+            StreamConfig operatorConfig,
+            OperatorMetricGroup metricGroup,
+            String name,
+            byte[] serializedPlan,
+            java.util.function.Function<tech.streamfusion.nativebridge.NativeMemoryManager, byte[]> bindings,
+            byte[] taskBindings) {
         FlinkManagedMemory managedMemory = FlinkManagedMemory.create(environment, operatorConfig, metricGroup, name);
         try {
             return new StreamFusionTaskMemory(
                     managedMemory,
-                    new NativeExecutionContext(serializedPlan, managedMemory, bindings.apply(managedMemory)));
+                    new NativeExecutionContext(
+                            serializedPlan, managedMemory, bindings.apply(managedMemory), taskBindings));
         } catch (RuntimeException | Error failure) {
             try {
                 managedMemory.close();
