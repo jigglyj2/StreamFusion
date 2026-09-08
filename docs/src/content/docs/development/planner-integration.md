@@ -245,8 +245,13 @@ budget or state owner. Window union clocks are initialized once per physical def
 the minimum restored subtask clock, and bind that clock before native input can run. Local-window
 resource validation also visits each shared definition once and retains its original Flink
 capacity through factory serialization. Boundary tests cover failed construction/restore cleanup
-on both backends, union-clock restoration, and local capacity binding. Full stateful multi-output runtime
-checkpoint and rescaling parity still needs validation.
+on both backends, union-clock restoration, and local capacity binding. The multi-output window
+fixture now runs the same generated Flink recovery cases on both exits:
+canonical savepoints (including switching backends), aligned and unaligned operator checkpoints,
+late input before the first replayed watermark, and rescaling with the minimum union clock.
+Both exit changelogs and controls match Flink, with one native window state owner and managed
+memory released at teardown. These operator-level checks do not yet validate shared-exit
+network channel replay or the complete COUNT-to-local-MAX topology.
 
 The Java metric publisher also consumes flat physical definitions directly. It binds each
 original stage scope once, omits anonymous local Input slots, and verifies the complete native
@@ -264,8 +269,8 @@ are broadcast once after all exits complete the same control wave; incompatible 
 fail instead of emitting an incorrect watermark. Generated runtime tests compare both
 heterogeneous exit changelogs against Flink-generated Calc operators, with nullable data,
 all row kinds, repeated arrivals, direct Arrow and IPC inputs, stage I/O counts, control
-broadcasting, and managed-memory release on successful and cancelled execution. Stateful
-full-topology recovery and rescaling validation remain outstanding. No additional whole-plan
+broadcasting, and managed-memory release on successful and cancelled execution. Full-topology
+recovery, including shared-exit channel replay, remains outstanding. No additional whole-plan
 query is admitted by this runtime prerequisite.
 
 Ordinary planner use of this layout remains limited to ownership admission. Wiring the native

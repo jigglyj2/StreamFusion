@@ -146,7 +146,7 @@ class SharedWindowRuntimeRecoveryTest {
         return attached ? AttachedSlicingWindowFixture.OUTPUT : SharedSlicingWindowFixture.OUTPUT;
     }
 
-    private static KeyedNativeMetricHarness region(
+    protected KeyedNativeMetricHarness region(
             boolean attached, boolean rocks, OperatorSubtaskState restore, int parallelism, int subtask)
             throws Exception {
         var factory = new StreamFusionNativeRegionOperatorFactory(
@@ -213,8 +213,10 @@ class SharedWindowRuntimeRecoveryTest {
         for (var event : flink.getOutput()) StageEventBytes.encode(output(attached), (StreamElement) event, expected);
         flink.getOutput().clear();
         target.drainControls();
-        assertThat(target.output.getCopyOfBuffer()).containsExactly(expected.getCopyOfBuffer());
-        target.output.clear();
+        for (var output : target.outputs) {
+            assertThat(output.getCopyOfBuffer()).containsExactly(expected.getCopyOfBuffer());
+            output.clear();
+        }
         var referenceMetrics =
                 RegisteredMetricSurface.metrics(flink.getOperator().getMetricGroup());
         var nativeMetrics = RegisteredMetricSurface.metrics(target.stage(3));

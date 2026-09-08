@@ -25,11 +25,12 @@ import tech.streamfusion.flink.state.StreamFusionStateBackend;
 
 /** Common keyed Arrow runtime fixture; SQL families supply only a plan, schemas and state IDs. */
 final class KeyedNativeMetricHarness extends KeyedMultiInputStreamOperatorTestHarness<Integer, ArrowRowDataBatch> {
-    final DataOutputSerializer output = new DataOutputSerializer(128);
+    final DataOutputSerializer output;
+    final List<DataOutputSerializer> outputs = new ArrayList<>();
     final List<StreamElement> controls = new ArrayList<>();
     final FlinkManagedMemory memory;
     int maxOutputBatchRows;
-    private final RowType outputType;
+    private final List<RowType> outputTypes;
 
     KeyedNativeMetricHarness(boolean rocks, byte[] plan, RowType type, List<Long> states) throws Exception {
         this(rocks, plan, List.of(type), type, states);
@@ -56,8 +57,22 @@ final class KeyedNativeMetricHarness extends KeyedMultiInputStreamOperatorTestHa
             int parallelism,
             int subtask)
             throws Exception {
+        this(rocks, factory, inputCount, List.of(type), restore, parallelism, subtask);
+    }
+
+    KeyedNativeMetricHarness(
+            boolean rocks,
+            StreamFusionNativeRegionOperatorFactory factory,
+            int inputCount,
+            List<RowType> types,
+            org.apache.flink.runtime.checkpoint.OperatorSubtaskState restore,
+            int parallelism,
+            int subtask)
+            throws Exception {
         super(factory, 16, parallelism, subtask);
-        outputType = type;
+        outputTypes = List.copyOf(types);
+        for (var ignored : outputTypes) outputs.add(new DataOutputSerializer(128));
+        output = outputs.get(0);
         var previous = getEnvironment().getMemoryManager();
         var field = getEnvironment().getClass().getDeclaredField("memManager");
         field.setAccessible(true);
@@ -82,13 +97,31 @@ final class KeyedNativeMetricHarness extends KeyedMultiInputStreamOperatorTestHa
         setOutputCreator(ignored -> new CollectorOutput<ArrowRowDataBatch>(controls) {
             @Override
             public void collect(StreamRecord<ArrowRowDataBatch> record) {
-                var batch = record.getValue();
+                capture(0, record.getValue());
+            }
+
+            @Override
+            public <X> void collect(org.apache.flink.util.OutputTag<X> tag, StreamRecord<X> record) {
+                for (int port = 1; port < outputTypes.size(); port++)
+                    if (factory.outputTag(port).equals(tag)) {
+                        capture(port, (ArrowRowDataBatch) record.getValue());
+                        return;
+                    }
+                throw new AssertionError("Unknown shared output " + tag);
+            }
+
+            private void capture(int port, ArrowRowDataBatch batch) {
                 maxOutputBatchRows = Math.max(maxOutputBatchRows, batch.size());
                 for (int row = 0; row < batch.size(); row++) {
                     var value = batch.rowView(row);
                     value.setRowKind(batch.rowKind(row));
                     try {
-                        StageEventBytes.row(outputType, value, batch.hasTimestamp(row), batch.timestamp(row), output);
+                        StageEventBytes.row(
+                                outputTypes.get(port),
+                                value,
+                                batch.hasTimestamp(row),
+                                batch.timestamp(row),
+                                outputs.get(port));
                     } catch (java.io.IOException error) {
                         throw new java.io.UncheckedIOException(error);
                     }
@@ -112,7 +145,8 @@ final class KeyedNativeMetricHarness extends KeyedMultiInputStreamOperatorTestHa
     }
 
     void drainControls() throws Exception {
-        for (var event : controls) StageEventBytes.encode(outputType, event, output);
+        for (int port = 0; port < outputs.size(); port++)
+            for (var event : controls) StageEventBytes.encode(outputTypes.get(port), event, outputs.get(port));
         controls.clear();
     }
 
