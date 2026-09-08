@@ -53,8 +53,10 @@ pruned or retained without changing grouping or assignment. The versioned local 
 end-only UTC TUMBLE/HOP attachment; an explicit pair retains the legacy supplied-bound contract.
 Start-only, end-only CUMULATE, and end-only non-UTC contracts are rejected. The shared runtime factory now resolves local capacities at startup from serialized original
 Flink resource weights, slot-group totals and use cases, independently of the fused runtime's
-allocation allowance. Supplying that original resource metadata during ordinary planner selection
-remains outstanding.
+allocation allowance. An original-resource graph calculator now derives that metadata from the complete pipeline,
+with Flink job-graph comparisons for reuse, weighted boundaries, slot groups and operators added
+after SQL translation. Connecting that calculation to ordinary pipeline finalization remains
+outstanding.
 
 The retained legacy local handle still flushes per Arrow batch. Its reusable integer COUNT/SUM/AVG
 and append-only MIN/MAX computation uses DataFusion, with ordered Flink adapters for retractions

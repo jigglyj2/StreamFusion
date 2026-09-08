@@ -91,3 +91,23 @@ resolution in ordinary planner translation is still required before admitting th
 runtime binding/parity tests are not production Nexmark admission. Generated runtime tests compare
 pressure flushes and control changelogs with Flink using a 3 MiB original capacity and a larger
 native allowance, both for a local stage alone and for a local/global tree on both backends.
+
+The planner now has an original-resource graph calculator, verified against Flink-generated
+job graphs. It snapshots physical edges before replacement, counts reused stages once, and
+uses retained boundary transformations for their actual resource declarations. It takes the
+complete pipeline, including DataStream operators added outside the SQL graph, and preserves
+slot-group inheritance and managed-memory use-case membership. Replacement-operator weights
+cannot change the saved original geometry. The verified internal resource contracts cover
+streaming local/global windows, grouping aggregates, joins, and their stateless/wiring stages;
+this resource support does not establish operator acceleration support.
+
+Standard physical boundary transformations and non-committing Sink V2 writers are understood.
+Arbitrary sink pre-write/commit expansions and unknown transformation resource contracts are
+rejected by the calculator without invoking connector topology construction. Eight generated
+job-graph cases cover reuse, weighted sources, unions across distinct slot groups, downstream
+weights added after SQL translation, and legacy/Sink V2 boundaries. These comparisons verify
+Flink's final managed-memory fractions and page-aligned capacities.
+
+The calculator is not yet connected to ordinary pipeline finalization. Resolving only at SQL
+translation would miss later DataStream resource contributions; the complete-pipeline binding
+point must be installed before Q5 admission.
