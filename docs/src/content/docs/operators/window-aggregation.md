@@ -39,6 +39,12 @@ retained standalone local-window JNI path receives no batches.
 
 The buffered local implementation retains DataFusion `GroupsAccumulator` vectors across Arrow
 batches. It probes Arrow row keys by reference and copies retained keys only for new groups.
+Its hash table stores ordinals into the first-appearance key vector, so it does not duplicate
+retained keys. Batch reservations admit replacement index buffers only when the incoming batch
+can cross their capacity, together with conservative DataFusion vector growth and batch scratch.
+A 100,000-distinct-key regression fits a 16 MiB Flink share, preserves partial order and duplicate
+counts across rehashes, and returns all credit after flushing. The previous duplicate-key index
+and blanket replacement reservation exhausted that same allowance before reaching the flush.
 Flink-compatible watermark, checkpoint pre-barrier and memory-pressure boundaries flush partials
 in first-appearance order, including future slices when a trigger flushes the buffer. Outputs are
 timestamp-less INSERT partials, limited to 2,048 rows per pull. Invocation EOF and end-input alone
@@ -261,8 +267,8 @@ Time windows perform one batched state read and one atomic state/timer write per
 hot input loop reuses Flink BinaryRow-key and assigned-window scratch buffers, while canonical
 state keys receive owned storage only when a new key/window is staged.
 
-The current local kernel is state-free across Arrow batches, which is a known lifecycle gap
-relative to Flink and is being replaced before admission. Its
+The retained compatibility local kernel is state-free across Arrow batches and is not the admitted
+buffered implementation described above. Its
 temporary hash table and output buffers are charged to the local stage's Flink managed-memory
 share. The global half is the sole owner of canonical keyed state and timers, so aligned and
 unaligned checkpointing, savepoint restoration, backend switching, and rescaling use exactly the

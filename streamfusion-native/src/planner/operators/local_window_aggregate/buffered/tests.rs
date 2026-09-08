@@ -403,6 +403,34 @@ fn compact_buffered_admission_fits_small_flink_shares_without_eager_output_credi
 }
 
 #[test]
+fn large_distinct_buffer_fits_flink_share_and_preserves_order_across_index_growth() {
+    use crate::memory_pool::tests_support::TestBroker;
+    let broker = Arc::new(TestBroker::new(16 << 20));
+    let mut buffer = buffer_with_broker(broker.clone());
+    buffer.layout = BufferLayout::new(16 << 20, 32 << 10).unwrap();
+    for start in (0..100_000).step_by(1024) {
+        let rows = (start..(start + 1024).min(100_000))
+            .map(|key| (key, 1000))
+            .collect::<Vec<_>>();
+        let batch = input(&buffer, &rows);
+        assert!(buffer.push(batch).unwrap().is_none());
+    }
+    // Probe the same encoded keys after several index rehashes; do not duplicate groups.
+    let batch = input(&buffer, &[(17, 1000), (0, 1000), (99_999, 1000)]);
+    assert!(buffer.push(batch).unwrap().is_none());
+    assert_eq!(buffer.groups.len(), 100_000);
+    assert!(buffer.retained.size() < 10 << 20);
+    let first = buffer.control(ControlEvent::BeforeCheckpoint(1)).unwrap();
+    let actual = drain(&mut buffer, first);
+    let expected = (0..100_000)
+        .map(|key| (key, 1 + i64::from([0, 17, 99_999].contains(&key)), 2000))
+        .collect::<Vec<_>>();
+    assert_eq!(actual, expected);
+    drop(buffer);
+    assert_eq!(broker.reserved(), 0);
+}
+
+#[test]
 fn nullable_rowtime_schema_accepts_values_but_rejects_null_before_state_changes() {
     let template = buffer();
     let mut plan = template.kernel.plan.clone();

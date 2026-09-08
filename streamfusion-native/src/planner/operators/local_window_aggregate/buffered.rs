@@ -1,8 +1,8 @@
 // Copyright 2026 StreamFusion Authors
 // Licensed under the Apache License, Version 2.0.
 
-//! Retained local-window computation and bounded flush cursor. Admission stays gated until
-//! Java supplies the original Flink operator's memory share and shared-plan control binding.
+//! Retained local-window computation and bounded flush cursor. Java supplies the original
+//! Flink operator's memory share and shared-plan control binding.
 
 use super::buffer_layout::BufferLayout;
 use super::*;
@@ -17,7 +17,8 @@ const OUTPUT_ROWS: usize = 2048;
 
 pub(super) struct BufferedWindow {
     kernel: LocalWindowAggregateProcessor,
-    groups: HashMap<SliceKey, usize, RandomState>,
+    groups: hashbrown::HashTable<usize>,
+    hasher: RandomState,
     order: Vec<SliceKey>,
     key_bytes: usize,
     cursor: Option<InputCursor>,
@@ -41,15 +42,15 @@ struct FlushCursor {
     offset: usize,
 }
 
-// Vec<u8> and &[u8] have identical Hash implementations. Probe encoded Arrow rows by
-// reference; allocate a retained key only for a new group, never for every hot-key input.
+// Vec<u8> and &[u8] have identical Hash implementations. The hash table stores only
+// ordinals into first-appearance order; retained encoded keys have exactly one owner.
 #[derive(Hash)]
 struct BorrowedSliceKey<'a> {
     grouping_row: &'a [u8],
     window_start: i64,
     slice_end: i64,
 }
-impl hashbrown::Equivalent<SliceKey> for BorrowedSliceKey<'_> {
+impl BorrowedSliceKey<'_> {
     fn equivalent(&self, key: &SliceKey) -> bool {
         self.grouping_row == key.grouping_row
             && self.window_start == key.window_start
@@ -120,7 +121,8 @@ impl BufferedWindow {
         let input_fixed = fixed_bytes(kernel.input_schema.fields().len())?;
         Ok(Self {
             kernel,
-            groups: HashMap::with_hasher(RandomState::new()),
+            groups: hashbrown::HashTable::new(),
+            hasher: RandomState::new(),
             order: Vec::new(),
             key_bytes: 0,
             cursor: None,
@@ -160,7 +162,7 @@ impl BufferedWindow {
         let allowance = self
             .kernel
             .buffered_batch_admission(batch.num_rows())?
-            .checked_add(self.retained.size())
+            .checked_add(self.growth_headroom(batch.num_rows())?)
             .ok_or_else(overflow)?;
         self.kernel.reservation.resize(allowance)?;
         let keys = if self.kernel.plan.grouping_indices.is_empty() {
@@ -227,7 +229,11 @@ impl BufferedWindow {
                 window_start,
                 slice_end,
             };
-            let existing = self.groups.get(&key).copied();
+            let hash = self.hasher.hash_one(&key);
+            let existing = self
+                .groups
+                .find(hash, |&index| key.equivalent(&self.order[index]))
+                .copied();
             if !self.layout.append(
                 existing.is_none(),
                 self.key_fixed,
@@ -254,10 +260,12 @@ impl BufferedWindow {
                     };
                     self.key_bytes = self
                         .key_bytes
-                        .checked_add(key.grouping_row.capacity() * 2)
+                        .checked_add(key.grouping_row.capacity())
                         .ok_or_else(overflow)?;
-                    self.order.push(key.clone());
-                    self.groups.insert(key, index);
+                    self.order.push(key);
+                    self.groups.insert_unique(hash, index, |&index| {
+                        self.hasher.hash_one(&self.order[index])
+                    });
                     index
                 }
             };
@@ -283,13 +291,42 @@ impl BufferedWindow {
         Ok(pressure)
     }
 
+    // Existing key bytes are never copied on index growth. Reserve replacement buffers
+    // only when this batch can cross their capacity, plus conservative DataFusion growth.
+    // The batch allowance covers new entries, keys, selections and row encodings.
+    fn growth_headroom(&self, rows: usize) -> Result<usize> {
+        let groups = self.groups.len().checked_add(rows).ok_or_else(overflow)?;
+        let table = if groups > self.groups.capacity() {
+            self.groups
+                .allocation_size()
+                .checked_mul(2)
+                .ok_or_else(overflow)?
+        } else {
+            0
+        };
+        let order = if groups > self.order.capacity() {
+            self.order
+                .capacity()
+                .checked_mul(2 * std::mem::size_of::<SliceKey>())
+                .ok_or_else(overflow)?
+        } else {
+            0
+        };
+        self.kernel
+            .grouped_compute
+            .as_ref()
+            .unwrap()
+            .size()
+            .checked_mul(2)
+            .and_then(|bytes| bytes.checked_add(table))
+            .and_then(|bytes| bytes.checked_add(order))
+            .ok_or_else(overflow)
+    }
+
     fn retained_bytes(&self) -> Result<usize> {
         self.groups
-            .capacity()
-            .checked_mul(std::mem::size_of::<(SliceKey, usize)>() + 16)
-            .and_then(|bytes| {
-                bytes.checked_add(self.order.capacity() * std::mem::size_of::<SliceKey>())
-            })
+            .allocation_size()
+            .checked_add(self.order.capacity() * std::mem::size_of::<SliceKey>())
             .and_then(|bytes| bytes.checked_add(self.key_bytes))
             .and_then(|bytes| {
                 bytes.checked_add(self.kernel.grouped_compute.as_ref().unwrap().size())
@@ -382,7 +419,7 @@ impl BufferedWindow {
         self.flushing.as_mut().unwrap().offset = end;
         if end == self.order.len() {
             self.flushing = None;
-            self.groups = HashMap::with_hasher(RandomState::new());
+            self.groups = hashbrown::HashTable::new();
             self.order = Vec::new();
             self.key_bytes = 0;
             self.min_slice_end = i64::MAX;
@@ -403,7 +440,7 @@ impl Drop for BufferedWindow {
         // can return that credit during cancellation or a failed invocation.
         self.cursor = None;
         self.flushing = None;
-        self.groups = HashMap::with_hasher(RandomState::new());
+        self.groups = hashbrown::HashTable::new();
         self.order = Vec::new();
         self.kernel.grouped_compute = None;
     }
