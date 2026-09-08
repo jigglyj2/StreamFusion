@@ -141,6 +141,15 @@ failure/recovery boundary.
 Logical Flink I/O counters count records across all output chunks; StreamFusion's processed-batch
 diagnostic counts each input once, not each output pull.
 
+Streaming join input admission uses the logical byte spans of flat Arrow columns when sizing
+row-encoding workspace. Multiple columns or slices can share one IPC allocation; the original
+buffer retains its producer's reservation and is not counted again for every column. The coarse
+workspace still covers row-format padding, equality keys and lookup metadata. Nested, dictionary
+and view columns retain their existing conservative estimate. A shared-IPC regression processes
+2,048 rows with 512-byte payloads, including a non-zero-offset slice, within a 16 MiB share and
+checks allocation peaks and joined payloads; the prior estimate requested over 18 MiB at input
+admission alone. Wide nullable flat-schema tests verify encoding/decoding and workspace bounds.
+
 Paged decoding admits payload bytes and coarse row-vector/Arc headroom once for the complete
 read batch, using the page headers. Original and updated state share payload Arcs, so wide rows
 are not charged as eight hypothetical decoded copies. Backend read buffers retain their own

@@ -10,6 +10,7 @@ mod change_cursor;
 #[cfg(test)]
 mod change_cursor_tests;
 pub(crate) mod execution_plan;
+mod input_memory;
 mod native_output;
 mod paged_codec;
 #[cfg(test)]

@@ -9,6 +9,7 @@ use prost::Message;
 mod candidate_batch;
 mod coarse_memory;
 mod compact_state;
+mod input_memory;
 mod planning_memory;
 mod region;
 mod streaming;

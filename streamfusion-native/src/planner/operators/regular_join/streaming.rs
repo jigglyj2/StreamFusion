@@ -55,13 +55,7 @@ impl RegularJoinProcessor {
         let mut memory = self
             .scratch_reservation
             .sibling("regular join in-flight batch state");
-        memory.resize(
-            batch
-                .get_array_memory_size()
-                .saturating_mul(4)
-                .saturating_add(batch.num_rows().saturating_mul(1024))
-                .saturating_add(4096),
-        )?;
+        memory.resize(input_memory::workspace(&batch, visible)?)?;
         let encoded = self.row_converters[side].convert_columns(&batch.columns()[..visible])?;
         let mut unique = HashMap::<StateKey, usize, RandomState>::with_capacity_and_hasher(
             batch.num_rows(),
