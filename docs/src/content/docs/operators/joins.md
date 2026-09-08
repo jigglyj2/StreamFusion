@@ -126,6 +126,14 @@ requires task recovery; the stream safely retains native ownership if its Java h
 Logical Flink I/O counters count records across all output chunks; StreamFusion's processed-batch
 diagnostic counts each input once, not each output pull.
 
+Paged decoding admits payload bytes and coarse row-vector/Arc headroom once for the complete
+read batch, using the page headers. Original and updated state share payload Arcs, so wide rows
+are not charged as eight hypothetical decoded copies. Backend read buffers retain their own
+reservation. A constrained 10 MiB regression loads 2,048 historical rows at empty, narrow and
+1 KiB payload widths, verifies shared payload ownership and decoded equality, and checks observed
+allocation peaks against the reservation. Arbitrarily large touched keys can still exceed the
+allowance and require recovery; the change does not bypass Flink's budget or add per-row I/O.
+
 Canonical SFS1 snapshots now carry versioned `SFJM` manifests and `SFJP` pages, identical across native
 memory and RocksDB. Restoring legacy whole-key `SFRJ` v1/v2 snapshots migrates them to the paged layout.
 Restore rejects missing, duplicate, orphan, and malformed page records before changing backend state.

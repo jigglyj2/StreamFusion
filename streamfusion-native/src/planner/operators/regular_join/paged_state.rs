@@ -71,13 +71,11 @@ pub(super) fn load(
     if !page_keys.is_empty() {
         let refs = refs(&page_keys);
         let values = state.get_batch(&refs, owner)?;
-        owner.try_grow(
-            values
-                .iter()
-                .flatten()
-                .fold(0usize, |n, v| n.saturating_add(v.len()))
-                .saturating_mul(8),
-        )?;
+        // One reservation covers decoded payloads, growing row vectors and the shallow
+        // original-state clone. Serialized backend read buffers own their separate credit.
+        owner.try_grow(values.iter().flatten().try_fold(0usize, |n, value| {
+            Ok::<_, DataFusionError>(n.saturating_add(decode_workspace(value)?))
+        })?)?;
         for ((index, side, page), value) in locations.into_iter().zip(values) {
             let value = value.ok_or_else(|| {
                 DataFusionError::Execution("regular join manifest references a missing page".into())

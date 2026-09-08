@@ -35,6 +35,45 @@ fn fixture() -> StagedState {
 }
 
 #[test]
+fn paged_decode_reserves_payload_and_row_vectors_within_a_bounded_share() {
+    for width in [0, 16, 1024] {
+        let broker = Arc::new(TestBroker::new(10 << 20));
+        let mut state = MemoryKeyedState::new(
+            0,
+            0,
+            HostMemoryReservation::new(broker.clone(), "retained join pages"),
+        )
+        .unwrap();
+        let mut entry = fixture();
+        for row in entry.value.left.iter_mut().chain(&mut entry.value.right) {
+            row.row = Arc::from(vec![row.id as u8; width]);
+        }
+        entry.original = JoinState::default();
+        state
+            .write_batch(paged_state::mutations(&entry).unwrap())
+            .unwrap();
+        let mut workspace = HostMemoryReservation::new(broker.clone(), "decoded join pages");
+        let ((loaded, reads), observed) = crate::allocation_test_support::measure(|| {
+            paged_state::load(&state, vec![entry.key.clone()], &mut workspace).unwrap()
+        });
+        assert_eq!(reads, 2);
+        assert_eq!(loaded[0].value, entry.value);
+        assert_eq!(loaded[0].original, entry.value);
+        assert!(
+            observed.peak <= workspace.size(),
+            "width={width} {observed:?}"
+        );
+        for (before, after) in loaded[0].original.left.iter().zip(&loaded[0].value.left) {
+            assert!(Arc::ptr_eq(&before.row, &after.row));
+        }
+        drop(loaded);
+        drop(workspace);
+        drop(state);
+        assert_eq!(broker.reserved(), 0);
+    }
+}
+
+#[test]
 fn hot_key_changes_write_only_stable_dirty_pages() {
     let mut entry = fixture();
     assert!(paged_state::mutations(&entry).unwrap().is_empty());

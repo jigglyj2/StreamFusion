@@ -146,6 +146,20 @@ pub(super) fn decode_page(bytes: &[u8], page: u64, next_id: u64) -> Result<Vec<S
     Ok(rows)
 }
 
+/// Batch admission from page headers: payload bytes plus coarse row-vector/Arc headroom.
+/// Original and updated states share payload Arcs; they do not duplicate wide row bytes.
+pub(super) fn decode_workspace(bytes: &[u8]) -> Result<usize> {
+    let mut reader = Reader::new(bytes, PAGE_MAGIC)?;
+    let count = reader.u32()? as usize;
+    if count == 0 || count > PAGE_ROWS as usize || count > reader.remaining() / 16 {
+        return Err(invalid());
+    }
+    Ok(bytes
+        .len()
+        .saturating_mul(2)
+        .saturating_add(count.saturating_mul(128)))
+}
+
 pub(super) fn is_manifest(bytes: &[u8]) -> bool {
     bytes.starts_with(MANIFEST_MAGIC)
 }
