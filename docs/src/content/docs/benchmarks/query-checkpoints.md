@@ -63,6 +63,13 @@ million-event in-memory attempt still exhausts join workspace; no large-input ca
 speedup is claimed. General state/buffer improvements and that remaining limit are documented.
 Q7's supported semantic path is delivered within these limits; Q8 is the next query checkpoint.
 
+Q8's ordinary plan demonstrates VARCHAR local-buffer geometry and DISTINCT-only window
+admission blockers. Local VARCHAR buffer geometry, pressure/control parity and coarse memory
+bounds are now verified. Global DISTINCT TUMBLE has fragment-level changelog/complete metric
+comparisons for BIGINT and composite BIGINT/VARCHAR keys on both backends. Ordinary Q8 admission
+remains gated pending that subset's global recovery/rescaling/channel contracts and end-to-end
+query verification; no Q8 performance result is claimed.
+
 ## Q6 has no Flink streaming baseline
 
 The upstream Nexmark Q6 query computes a bounded ordered AVG after winning-bid rank selection.

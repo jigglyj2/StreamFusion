@@ -45,7 +45,7 @@ final class SlicingWindowFlinkPlan {
         return stage(name, sql, false);
     }
 
-    private static OneInputTransformation<?, ?> stage(String name, String sql, boolean stringKey) throws Exception {
+    static OneInputTransformation<?, ?> stage(String name, String sql, boolean stringKey) throws Exception {
         String factory = System.getProperty(StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY);
         String processor = System.getProperty(StreamFusionPlannerFactory.EXEC_GRAPH_PROCESSOR_PROPERTY);
         System.clearProperty(StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY);

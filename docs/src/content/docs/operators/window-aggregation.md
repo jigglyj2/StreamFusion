@@ -84,6 +84,17 @@ Variable key bytes have coarse encoding/retention allowances; output chunks incl
 encoded key lengths. Ordinary whole-plan VARCHAR window grouping and DISTINCT-only windows
 remain gated until their global state, metric and recovery contracts are verified.
 
+Global DISTINCT-only TUMBLE now has generated fragment-level changelog and complete registered
+metric-surface comparisons on both backends for nullable BIGINT and composite BIGINT/VARCHAR
+keys. The existing DataFusion grouped row-count state represents group presence without adding a
+SQL aggregate column. These tests do not yet remove the ordinary admission gate: restore,
+rescaling and channel replay for this subset remain prerequisites.
+Flink's `TimerHeapInternalTimer.comparePriorityTo` compares timestamps only. Different keys firing
+at the same window end therefore have no defined relative order. The DISTINCT fixture compares
+their complete serialized records as a multiset within that tied end; it preserves window-end
+order and every control boundary, RowKind, record envelope and duplicate. Separate tests verify
+that normalization cannot hide changed records, multiplicity or control/window ordering.
+
 The shared local fragment builder supports direct and attached HOP COUNT/MIN/MAX for that
 verified subset. Attached windows follow Flink's `WindowedSliceAssigner`: only the attached end
 is consumed, and the start is derived as end minus the full window size. A start column can be
