@@ -208,6 +208,21 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                             boolean.class,
                             long.class,
                             org.apache.flink.configuration.ReadableConfig.class);
+            Class.forName(
+                            "tech.streamfusion.flink.window.StreamFusionGlobalWindowAggregateTranslator",
+                            true,
+                            classLoader)
+                    .getMethod(
+                            "createStagePlan",
+                            RowType.class,
+                            RowType.class,
+                            RowType.class,
+                            int.class,
+                            org.apache.calcite.rel.core.AggregateCall[].class,
+                            org.apache.flink.table.planner.plan.logical.WindowingStrategy.class,
+                            org.apache.flink.table.runtime.groupwindow.NamedWindowProperty[].class,
+                            boolean.class,
+                            org.apache.flink.configuration.ReadableConfig.class);
             Class.forName(NATIVE_PREFLIGHT_CLASS, true, classLoader)
                     .getMethod("verify")
                     .invoke(null);

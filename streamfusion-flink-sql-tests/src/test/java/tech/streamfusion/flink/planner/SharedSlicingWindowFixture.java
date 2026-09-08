@@ -49,29 +49,67 @@ final class SharedSlicingWindowFixture {
         return NativeStateResources.serialize(List.of(binding));
     }
 
-    static byte[] plan() {
+    static byte[] plan() throws Exception {
+        var rowtime = new TimestampType(false, org.apache.flink.table.types.logical.TimestampKind.ROWTIME, 3);
+        var strategy =
+                new org.apache.flink.table.planner.plan.logical.TimeAttributeWindowingStrategy(hop(), rowtime, 1);
+        return compose(
+                tech.streamfusion.flink.window.StreamFusionGlobalWindowAggregateTranslator.createStagePlan(
+                        RowType.of(new BigIntType(), rowtime),
+                        INPUT,
+                        OUTPUT,
+                        1,
+                        new org.apache.calcite.rel.core.AggregateCall[] {
+                            call(org.apache.calcite.sql.fun.SqlStdOperatorTable.COUNT, List.of(), new BigIntType(false))
+                        },
+                        strategy,
+                        properties(),
+                        false,
+                        config()),
+                4,
+                4);
+    }
+
+    static org.apache.flink.configuration.Configuration config() {
+        var config = new org.apache.flink.configuration.Configuration();
+        config.set(org.apache.flink.table.api.config.ExecutionConfigOptions.TABLE_EXEC_ASYNC_STATE_ENABLED, false);
+        return config;
+    }
+
+    static org.apache.flink.table.planner.plan.logical.HoppingWindowSpec hop() {
+        return new org.apache.flink.table.planner.plan.logical.HoppingWindowSpec(
+                java.time.Duration.ofSeconds(6), java.time.Duration.ofSeconds(2), null);
+    }
+
+    static org.apache.flink.table.runtime.groupwindow.NamedWindowProperty[] properties() {
+        var reference = new org.apache.flink.table.runtime.groupwindow.WindowReference(
+                "window", new TimestampType(false, org.apache.flink.table.types.logical.TimestampKind.ROWTIME, 3));
+        return new org.apache.flink.table.runtime.groupwindow.NamedWindowProperty[] {
+            new org.apache.flink.table.runtime.groupwindow.NamedWindowProperty(
+                    "window_start", new org.apache.flink.table.runtime.groupwindow.WindowStart(reference)),
+            new org.apache.flink.table.runtime.groupwindow.NamedWindowProperty(
+                    "window_end", new org.apache.flink.table.runtime.groupwindow.WindowEnd(reference))
+        };
+    }
+
+    static org.apache.calcite.rel.core.AggregateCall call(
+            org.apache.calcite.sql.SqlAggFunction function,
+            List<Integer> inputs,
+            org.apache.flink.table.types.logical.LogicalType output) {
+        var types = new org.apache.flink.table.planner.calcite.FlinkTypeFactory(
+                SharedSlicingWindowFixture.class.getClassLoader(),
+                org.apache.calcite.rel.type.RelDataTypeSystem.DEFAULT);
+        return org.apache.calcite.rel.core.AggregateCall.create(
+                function, false, inputs, -1, types.createFieldTypeFromLogicalType(output), "value");
+    }
+
+    static byte[] compose(byte[] fragment, int inputWidth, int outputWidth) throws Exception {
         var input = Operator.newBuilder()
                 .setPlanNodeId(1)
                 .setInput(Input.newBuilder())
                 .build();
-        var window = WindowAggregate.newBuilder()
-                .setInput(calc(2, input, 4))
-                .addGroupingIndices(0)
-                .setInputSchema(schema(INPUT))
-                .setOutputSchema(schema(OUTPUT))
-                .setKind(WindowKind.WINDOW_KIND_HOP)
-                .setSizeMillis(6000)
-                .setSlideOrStepMillis(2000)
-                .setShiftTimeZone("UTC")
-                .setPartialAccumulatorIndex(1)
-                .setPartialWindowStartIndex(2)
-                .setPartialSliceEndIndex(3)
-                .setPartialWindowsAreSlices(true)
-                .addWindowProperties(WindowProperty.WINDOW_PROPERTY_START)
-                .addWindowProperties(WindowProperty.WINDOW_PROPERTY_END)
-                .addAggregateCalls(AggregateCall.newBuilder()
-                        .setFunction(AggregateFunction.AGGREGATE_FUNCTION_COUNT_STAR)
-                        .setOutputType(FlinkLogicalTypeProto.serialize(new BigIntType(false))));
+        var window = NativePlan.parseFrom(fragment).getRoot().getWindowAggregate().toBuilder()
+                .setInput(calc(2, input, inputWidth));
         return NativePlan.newBuilder()
                 .setProtocolVersion(2)
                 .setRoot(calc(
@@ -80,7 +118,7 @@ final class SharedSlicingWindowFixture {
                                 .setPlanNodeId(3)
                                 .setWindowAggregate(window)
                                 .build(),
-                        4))
+                        outputWidth))
                 .build()
                 .toByteArray();
     }

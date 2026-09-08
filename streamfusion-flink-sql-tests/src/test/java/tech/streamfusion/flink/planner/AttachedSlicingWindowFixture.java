@@ -9,8 +9,6 @@ import java.nio.ByteOrder;
 import org.apache.flink.table.types.logical.BigIntType;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.TimestampType;
-import tech.streamfusion.flink.proto.FlinkLogicalTypeProto;
-import tech.streamfusion.proto.plan.v1.*;
 
 /** Fixed HOP attached-window MAX/COUNT partials, independent of the benchmark query. */
 final class AttachedSlicingWindowFixture {
@@ -59,33 +57,31 @@ final class AttachedSlicingWindowFixture {
     }
 
     static byte[] plan(boolean grouping) throws Exception {
-        var original = NativePlan.parseFrom(SharedSlicingWindowFixture.plan());
-        var node = original.getRoot().getCalc().getInput();
-        var window = node.getWindowAggregate().toBuilder()
-                .setPartialWindowsAreSlices(false)
-                .setOutputSchema(SharedSlicingWindowFixture.schema(type(OUTPUT, grouping)))
-                .clearAggregateCalls()
-                .addAggregateCalls(AggregateCall.newBuilder()
-                        .setFunction(AggregateFunction.AGGREGATE_FUNCTION_MAX)
-                        .setInputIndex(0)
-                        .setInputType(FlinkLogicalTypeProto.serialize(new BigIntType(false)))
-                        .setOutputType(FlinkLogicalTypeProto.serialize(new BigIntType(false))))
-                .addAggregateCalls(AggregateCall.newBuilder()
-                        .setFunction(AggregateFunction.AGGREGATE_FUNCTION_COUNT_STAR)
-                        .setOutputType(FlinkLogicalTypeProto.serialize(new BigIntType(false))));
-        if (!grouping) {
-            window.clearGroupingIndices()
-                    .setInputSchema(SharedSlicingWindowFixture.schema(type(INPUT, false)))
-                    .setPartialAccumulatorIndex(0)
-                    .setPartialWindowStartIndex(1)
-                    .setPartialSliceEndIndex(2)
-                    .setInput(SharedSlicingWindowFixture.calc(
-                            2, window.getInput().getCalc().getInput(), 3));
-        }
-        return original.toBuilder()
-                .setRoot(SharedSlicingWindowFixture.calc(
-                        4, node.toBuilder().setWindowAggregate(window).build(), grouping ? 5 : 4))
-                .build()
-                .toByteArray();
+        var rowtime = new TimestampType(false, org.apache.flink.table.types.logical.TimestampKind.ROWTIME, 3);
+        var raw = RowType.of(
+                new BigIntType(), new BigIntType(false), new TimestampType(false, 3), new TimestampType(false, 3));
+        var strategy = new org.apache.flink.table.planner.plan.logical.WindowAttachedWindowingStrategy(
+                SharedSlicingWindowFixture.hop(), rowtime, 2, 3);
+        var calls = new org.apache.calcite.rel.core.AggregateCall[] {
+            SharedSlicingWindowFixture.call(
+                    org.apache.calcite.sql.fun.SqlStdOperatorTable.MAX, java.util.List.of(1), new BigIntType(false)),
+            SharedSlicingWindowFixture.call(
+                    org.apache.calcite.sql.fun.SqlStdOperatorTable.COUNT, java.util.List.of(), new BigIntType(false))
+        };
+        var input = type(INPUT, grouping);
+        var output = type(OUTPUT, grouping);
+        return SharedSlicingWindowFixture.compose(
+                tech.streamfusion.flink.window.StreamFusionGlobalWindowAggregateTranslator.createStagePlan(
+                        raw,
+                        input,
+                        output,
+                        grouping ? 1 : 0,
+                        calls,
+                        strategy,
+                        SharedSlicingWindowFixture.properties(),
+                        false,
+                        SharedSlicingWindowFixture.config()),
+                input.getFieldCount(),
+                output.getFieldCount());
     }
 }

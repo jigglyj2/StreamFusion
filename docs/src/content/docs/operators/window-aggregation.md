@@ -24,8 +24,10 @@ GROUP BY window_start, window_end, bidder;
 
 Ordinary Q5 EXPLAIN on both backends still reports blocked local/global window stages and an
 aggregate reused by two consumers. Explicit native resource bindings now run the local buffer
-and global HOP slicer, including attached-window MAX/COUNT, through the common DataFusion execution tree. These development paths do
-not yet change ordinary planner selection, and there is no Q5 performance result.
+and global HOP slicer, including attached-window MAX/COUNT, through the common DataFusion execution tree.
+The selected global physical node now produces its own protobuf fragment and joins that shared
+region, retaining the original Flink stage identity and keyed-state binding. These development
+paths do not yet change ordinary planner selection, and there is no Q5 performance result.
 
 ### Local buffer
 
@@ -49,6 +51,15 @@ and append-only MIN/MAX computation uses DataFusion, with ordered Flink adapters
 and incompatible numeric semantics. It is not the buffered shared-runtime path.
 
 ### Global HOP slicer
+
+The global fragment builder admits append-only UTC event-time HOP partials for COUNT and
+compatible DataFusion MIN/MAX calls. It validates canonical partial/bound schemas, grouping and
+call types, window strategy, effective persisted/table configuration, synchronous state, and the
+available state/backend metric surface before lowering. Unsupported windows, retractions,
+DISTINCT/SUM/AVG, floating-point or Boolean grouped extrema, and unsupported properties receive
+specific fallback reasons. The legacy direct kernels retain their separately documented scope.
+No operator-specific Java driver or key selector is created for the selected global node; the
+common native region owns Arrow execution, routing, state, clocks, metrics and checkpoints.
 
 The shared global HOP implementation stores each base slice once using versioned Arrow row keys
 for grouping and sortable slice ends. Flink BinaryRow hashing independently selects the key group.
@@ -99,6 +110,11 @@ timers use batch admission, and fired keys retain their memory credit through th
 
 ### Validation and remaining admission work
 
+A selected-graph topology test places Calc stages on both sides of the global window and verifies
+one keyed Arrow runtime, original physical IDs/names/UIDs, a single external source translation,
+and no Java transformation for an internal native stage. The generated global and attached parity
+fixtures build their plans through the same public global fragment builder.
+
 Direct Java tests compare the SQL-generated Flink local slicer with the native tree for generated
 control sequences and every partial from a 180,000-row pressure fixture. Direct global HOP COUNT
 tests compare complete serialized changelog records at each input/control boundary on both
@@ -127,7 +143,7 @@ state writing/reading, routing, and the Arrow-to-RowData sink boundary use their
 These direct-region checks still leave production planner admission outstanding. Remaining
 Q5 requirements include:
 
-- Automatic Java fragment/resource binding, including the original local memory share.
+- Local-window fragment and resource binding, including the original local memory share.
 - Ownership of the reused aggregate's two outputs, without duplicating computation or disabling
   Flink reuse.
 - Final physical-topology metric and checkpoint/replay contracts, including optional state/backend

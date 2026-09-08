@@ -115,3 +115,12 @@ StreamFusion starts with a narrowly scoped patch to the Flink table planner. The
 The `streamfusion-flink` module supplies the planner-side integration under `tech.streamfusion.flink`. Tests can select the StreamFusion implementation for one execution and clear that selection for the native Flink baseline.
 
 Keeping the hook small matters: the target is to follow Flink's architecture and release line closely, not maintain a broad planner fork. Changes to the upstream patch should therefore be isolated, tested by the SQL harness, and reviewed independently from native operator work.
+
+The selected streaming global-window node now implements the shared native fragment contract.
+Its builder validates append-only UTC HOP partials, supported DataFusion grouped calls, canonical
+bounds, and effective state/metric configuration before producing the protobuf. Shared region
+composition retains the original physical node's identity and discovers its keyed-state owner;
+no standalone global-window Java execution operator is created. Selected topology tests verify
+Calc → global window → Calc with one keyed Arrow runtime, and generated Flink parity/recovery
+fixtures use the same builder. Local-window resource binding and reused-output ownership still
+block ordinary whole-plan Q5 admission; see [Window aggregation](/StreamFusion/operators/window-aggregation/).

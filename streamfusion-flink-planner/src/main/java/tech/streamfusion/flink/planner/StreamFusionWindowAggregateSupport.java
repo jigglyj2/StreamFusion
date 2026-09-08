@@ -238,34 +238,41 @@ final class StreamFusionWindowAggregateSupport {
     static String unsupportedReason(TwoPhaseWindowAggregate aggregate, ProcessorContext context) {
         try {
             Class<?> translator = Class.forName(
-                    WINDOW_AGGREGATE_TRANSLATOR_CLASS,
+                    "tech.streamfusion.flink.window.StreamFusionGlobalWindowAggregateTranslator",
                     true,
                     context.getPlanner().getFlinkContext().getClassLoader());
             Method method = translator.getMethod(
-                    "unsupportedReason",
+                    "unsupportedStageReason",
                     RowType.class,
                     RowType.class,
-                    int[].class,
+                    RowType.class,
+                    int.class,
                     org.apache.calcite.rel.core.AggregateCall[].class,
                     WindowingStrategy.class,
                     NamedWindowProperty[].class,
                     boolean.class,
                     ReadableConfig.class);
+            RowType originalInput = (RowType) aggregate.inputEdge.getOutputType();
+            int[] grouping = localWindowGrouping(aggregate.local);
+            var config = org.apache.flink.configuration.Configuration.fromMap(
+                    context.getPlanner().getTableConfig().getConfiguration().toMap());
+            config.addAll(org.apache.flink.configuration.Configuration.fromMap(
+                    aggregate.global.getPersistedConfig().toMap()));
             return (String) method.invoke(
                     null,
-                    (RowType) aggregate.inputEdge.getOutputType(),
-                    (RowType) aggregate.global.getOutputType(),
-                    localWindowGrouping(aggregate.local),
+                    originalInput,
+                    nativeWindowAccumulatorType(originalInput, grouping),
+                    aggregate.global.getOutputType(),
+                    grouping.length,
                     localWindowAggregateCalls(aggregate.local),
                     localWindowing(aggregate.local),
                     globalWindowProperties(aggregate.global),
                     localWindowNeedRetraction(aggregate.local),
-                    aggregate.global.getPersistedConfig());
+                    config);
         } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
-            throw new IllegalStateException("Could not inspect StreamFusion two-phase WindowAggregate support", e);
+            throw new IllegalStateException("Could not inspect shared two-phase WindowAggregate support", e);
         } catch (InvocationTargetException e) {
-            throw new IllegalStateException(
-                    "StreamFusion two-phase WindowAggregate support inspection failed", e.getCause());
+            throw new IllegalStateException("Shared two-phase WindowAggregate support inspection failed", e.getCause());
         }
     }
 }
