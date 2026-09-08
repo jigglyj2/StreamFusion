@@ -110,7 +110,19 @@ input RowKinds. They compare each physical stage's logical I/O counts and requir
 to its initial allowance at close. This is not complete large-owner lifetime or metric-surface coverage.
 
 
-StreamFusion starts with a narrowly scoped patch to the Flink table planner. The patch permits a planner factory implementation to be selected without forking the rest of Flink's SQL stack.
+StreamFusion uses a small Flink patch for planner-factory selection, exec-graph replacement, and
+complete-pipeline resource finalization. The pipeline callback runs after `StreamGraphGenerator`
+has seen the complete pipeline, before JobGraph serialization. This additional Flink boundary is
+needed because operators added after SQL translation can change the original local-window memory
+share and thus its observable pressure-flush output. It does not execute an intermediate operator
+or add a JVM/native data-plane crossing.
+
+The callback uses the existing planner-factory selection and lives in the runtime classloader;
+it does not reach into Flink's isolated planner loader. It installs resolved native factory copies
+only after all local resource owners succeed, leaves reusable transformations intact, and rejects
+serialization of unresolved local-window resources. Tests generate repeated pipelines with different
+external weights and verify that earlier job graphs keep their original capacities. The distribution
+runner installs the matching patched `StreamGraphGenerator` class alongside the planner/API patches.
 
 The `streamfusion-flink` module supplies the planner-side integration under `tech.streamfusion.flink`. Tests can select the StreamFusion implementation for one execution and clear that selection for the native Flink baseline.
 

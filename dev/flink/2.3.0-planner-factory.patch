@@ -72,3 +72,43 @@ index fe17d1f29d8..354eb3160e5 100644
    }
  
    def getExecNodeGraphProcessors: Seq[ExecNodeGraphProcessor]
+diff --git a/flink-runtime/src/main/java/org/apache/flink/streaming/api/graph/StreamGraphGenerator.java b/flink-runtime/src/main/java/org/apache/flink/streaming/api/graph/StreamGraphGenerator.java
+index e65ec1246ea..ad9ed84e6d9 100644
+--- a/flink-runtime/src/main/java/org/apache/flink/streaming/api/graph/StreamGraphGenerator.java
++++ b/flink-runtime/src/main/java/org/apache/flink/streaming/api/graph/StreamGraphGenerator.java
+@@ -294,6 +294,7 @@ public class StreamGraphGenerator {
+         streamGraph.serializeAndSaveWatermarkDeclarations();
+
+         final StreamGraph builtStreamGraph = streamGraph;
++        applyExternalPipelineProcessor(builtStreamGraph);
+
+         alreadyTransformed.clear();
+         alreadyTransformed = null;
+@@ -302,6 +303,27 @@ public class StreamGraphGenerator {
+         return builtStreamGraph;
+     }
+
++    /** Optional planner extension after the complete pipeline has been materialized. */
++    private void applyExternalPipelineProcessor(final StreamGraph graph) {
++        final String processorClass = System.getProperty("tech.streamfusion.flink.planner.factory");
++        if (processorClass == null || processorClass.isBlank()) {
++            return;
++        }
++        try {
++            Class.forName(processorClass, true, Thread.currentThread().getContextClassLoader())
++                    .getMethod("finalizePipeline", StreamGraph.class, List.class)
++                    .invoke(null, graph, List.copyOf(transformations));
++        } catch (NoSuchMethodException ignored) {
++            // Existing planner decorators do not require a pipeline finalization phase.
++        } catch (java.lang.reflect.InvocationTargetException failure) {
++            throw new IllegalStateException(
++                    "External pipeline finalization failed", failure.getCause());
++        } catch (ClassNotFoundException | IllegalAccessException failure) {
++            throw new IllegalStateException(
++                    "Could not invoke pipeline processor " + processorClass, failure);
++        }
++    }
++
+     private void setDynamic(final StreamGraph graph) {
+         Optional<JobManagerOptions.SchedulerType> schedulerTypeOptional =
+                 executionConfig.getSchedulerType();

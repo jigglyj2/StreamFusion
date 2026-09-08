@@ -106,8 +106,18 @@ Arbitrary sink pre-write/commit expansions and unknown transformation resource c
 rejected by the calculator without invoking connector topology construction. Eight generated
 job-graph cases cover reuse, weighted sources, unions across distinct slot groups, downstream
 weights added after SQL translation, and legacy/Sink V2 boundaries. These comparisons verify
-Flink's final managed-memory fractions and page-aligned capacities.
+Flink's final managed-memory fractions and resolved byte capacities.
 
-The calculator is not yet connected to ordinary pipeline finalization. Resolving only at SQL
-translation would miss later DataStream resource contributions; the complete-pipeline binding
-point must be installed before Q5 admission.
+The patched Flink pipeline generator now invokes a runtime-side finalizer after the complete
+pipeline is available and before JobGraph serialization. Native local-window factories can carry
+a planner-only resolver until that point. The finalizer resolves each shared planner once per
+pipeline and installs resolved factory copies in the generated graph; the reusable transformations
+remain unchanged. Reusing a planned stream with different downstream weights therefore does not
+change a previously generated job's capacity. All owners resolve before any copy is published.
+Unresolved local resources cannot be serialized or opened in a task.
+
+This callback lives in the runtime-side planner factory so it does not require access to Flink's
+isolated planner classloader. The distribution runner patches `StreamGraphGenerator` in the Flink
+distribution JAR as well as the existing planner/API hooks. Ordinary local-window exec-node
+selection still needs to attach the original-resource calculator to this resolver before Q5 can
+be admitted.

@@ -20,27 +20,67 @@ public final class NativeLocalWindowResources implements Serializable {
     private static final long serialVersionUID = 1L;
     public static final NativeLocalWindowResources NONE = new NativeLocalWindowResources(Map.of());
     private final Map<Long, FlinkOperatorMemoryShare> shares;
+    private final Set<Long> owners;
 
     public NativeLocalWindowResources(Map<Long, FlinkOperatorMemoryShare> shares) {
         this.shares = Map.copyOf(shares);
-        if (shares.keySet().stream().anyMatch(id -> id <= 0))
+        this.owners = Set.copyOf(this.shares.keySet());
+        if (owners.stream().anyMatch(id -> id <= 0))
             throw new IllegalArgumentException("Local-window resources require stable positive plan-node identities");
     }
 
+    private NativeLocalWindowResources(Set<Long> owners) {
+        this.owners = Set.copyOf(owners);
+        this.shares = null;
+    }
+
+    public static NativeLocalWindowResources pending(byte[] plan) {
+        var owners = owners(plan);
+        return owners.isEmpty() ? NONE : new NativeLocalWindowResources(owners);
+    }
+
+    public boolean isPending() {
+        return shares == null;
+    }
+
+    public NativeLocalWindowResources resolvedFrom(Map<Long, FlinkOperatorMemoryShare> pipelineShares) {
+        if (!isPending()) return this;
+        var selected = new java.util.HashMap<Long, FlinkOperatorMemoryShare>();
+        for (long owner : owners) {
+            var share = pipelineShares.get(owner);
+            if (share == null)
+                throw new IllegalArgumentException("Complete pipeline is missing local-window share " + owner);
+            selected.put(owner, share);
+        }
+        return new NativeLocalWindowResources(selected);
+    }
+
     public void validate(byte[] bytes) {
+        var expected = owners(bytes);
+        if (!expected.equals(owners))
+            throw new IllegalArgumentException(
+                    "Local-window memory shares must match the native plan exactly: expected " + expected
+                            + ", supplied " + owners);
+    }
+
+    private static Set<Long> owners(byte[] bytes) {
         try {
             var expected = new HashSet<Long>();
             collect(NativePlan.parseFrom(bytes).getRoot(), expected);
-            if (!expected.equals(shares.keySet()))
-                throw new IllegalArgumentException(
-                        "Local-window memory shares must match the native plan exactly: expected " + expected
-                                + ", supplied " + shares.keySet());
+            return expected;
         } catch (com.google.protobuf.InvalidProtocolBufferException failure) {
             throw new IllegalArgumentException("Invalid native local-window resource plan", failure);
         }
     }
 
+    private void writeObject(java.io.ObjectOutputStream output) throws java.io.IOException {
+        if (isPending())
+            throw new java.io.NotSerializableException("Local-window shares require complete-pipeline finalization");
+        output.defaultWriteObject();
+    }
+
     public byte[] resolve(Environment environment, StreamConfig runtime) {
+        if (isPending()) throw new IllegalStateException("Local-window shares require complete-pipeline finalization");
         if (shares.isEmpty()) return null;
         var result = NativeTaskBindings.newBuilder().setProtocolVersion(1);
         shares.entrySet().stream().sorted(Map.Entry.comparingByKey()).forEach(entry -> {

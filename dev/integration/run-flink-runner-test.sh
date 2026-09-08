@@ -6,7 +6,7 @@ if [[ $# -ne 1 ]]; then
   exit 2
 fi
 
-flink_home=$1
+flink_home=$(cd "$1" && pwd)
 project_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 flink_source_home=${FLINK_SOURCE_HOME:-"$project_root/flink"}
 mapfile -t streamfusion_jars < <(find "$project_root/streamfusion-flink/target" -maxdepth 1 -type f -name 'streamfusion-flink-*.jar')
@@ -40,6 +40,19 @@ if [[ ${#planner_loader_jars[@]} -ne 1 ]]; then
   echo "Expected exactly one distribution planner loader JAR" >&2
   exit 1
 fi
+
+mapfile -t runtime_dist_jars < <(find "$flink_home/lib" -maxdepth 1 -type f -name 'flink-dist-*.jar')
+patched_graph_class="$flink_source_home/flink-runtime/target/classes/org/apache/flink/streaming/api/graph/StreamGraphGenerator.class"
+if [[ ${#runtime_dist_jars[@]} -ne 1 || ! -f "$patched_graph_class" ]]; then
+  echo "Expected one Flink distribution JAR and the patched StreamGraphGenerator class" >&2
+  exit 1
+fi
+# Update only this entry; the shaded distribution is a classpath JAR whose embedded
+# dependency module descriptors must not be revalidated by the JDK jar tool.
+(
+  cd "$flink_source_home/flink-runtime/target/classes"
+  zip -q "${runtime_dist_jars[0]}" org/apache/flink/streaming/api/graph/StreamGraphGenerator.class
+)
 
 cp "$patched_api_jar" "${installed_api_jars[0]}"
 planner_staging=$(mktemp -d)

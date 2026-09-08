@@ -62,6 +62,13 @@ public final class StreamFusionPlannerFactory implements PlannerFactory {
         return new StreamFusionPlanner(planner);
     }
 
+    /** Complete-pipeline callback lives in the runtime loader, outside Flink's isolated planner loader. */
+    public static void finalizePipeline(
+            org.apache.flink.streaming.api.graph.StreamGraph graph,
+            java.util.List<org.apache.flink.api.dag.Transformation<?>> roots) {
+        tech.streamfusion.flink.operator.NativePipelineResourceFinalizer.finalizePipeline(graph, roots);
+    }
+
     @Override
     public String factoryIdentifier() {
         return "streamfusion";

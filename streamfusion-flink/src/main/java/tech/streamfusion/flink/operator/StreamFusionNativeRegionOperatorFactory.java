@@ -19,6 +19,10 @@ public final class StreamFusionNativeRegionOperatorFactory extends AbstractStrea
     private final List<Long> stateIds;
     private final List<byte[]> exchangePlans;
     private final tech.streamfusion.flink.window.NativeLocalWindowResources localWindowResources;
+    private transient java.util.function.Function<
+                    List<org.apache.flink.api.dag.Transformation<?>>,
+                    java.util.Map<Long, tech.streamfusion.flink.memory.FlinkOperatorMemoryShare>>
+            resourceResolver;
 
     public StreamFusionNativeRegionOperatorFactory(List<RowType> inputTypes, RowType outputType, byte[] plan) {
         this(inputTypes, outputType, plan, List.of());
@@ -71,6 +75,35 @@ public final class StreamFusionNativeRegionOperatorFactory extends AbstractStrea
             throw new IllegalArgumentException("Native region exchange contracts must match external input arity");
         }
         this.exchangePlans = exchangePlans.stream().map(byte[]::clone).collect(java.util.stream.Collectors.toList());
+    }
+
+    /** Planner-only metadata; resolved copies, never this closure, are shipped to tasks. */
+    public StreamFusionNativeRegionOperatorFactory withResourceResolver(
+            java.util.function.Function<
+                            List<org.apache.flink.api.dag.Transformation<?>>,
+                            java.util.Map<Long, tech.streamfusion.flink.memory.FlinkOperatorMemoryShare>>
+                    resolver) {
+        if (!localWindowResources.isPending() || resourceResolver != null)
+            throw new IllegalStateException("A pending local resource resolver must be installed exactly once");
+        resourceResolver = java.util.Objects.requireNonNull(resolver);
+        return this;
+    }
+
+    java.util.function.Function<
+                    List<org.apache.flink.api.dag.Transformation<?>>,
+                    java.util.Map<Long, tech.streamfusion.flink.memory.FlinkOperatorMemoryShare>>
+            resourceResolver() {
+        if (localWindowResources.isPending() && resourceResolver == null)
+            throw new IllegalStateException("Pending local-window pipeline has no original resource resolver");
+        return resourceResolver;
+    }
+
+    StreamFusionNativeRegionOperatorFactory withResolvedResources(
+            java.util.Map<Long, tech.streamfusion.flink.memory.FlinkOperatorMemoryShare> shares) {
+        var result = new StreamFusionNativeRegionOperatorFactory(
+                inputTypes, outputType, plan, stateIds, exchangePlans, localWindowResources.resolvedFrom(shares));
+        result.setChainingStrategy(getChainingStrategy());
+        return result;
     }
 
     // Every input is an IPC frame. Its envelope must remain native through the complete

@@ -38,6 +38,19 @@ public final class StreamFusionNativeRegionTranslator {
     /** Creates one runtime owner for an already-composed tree, translating only external edges. */
     public static Transformation<RowData> translateInputs(
             List<Transformation<RowData>> inputs, List<RowType> inputTypes, RowType outputType, byte[] plan) {
+        return translateInputsWithResources(inputs, inputTypes, outputType, plan, null);
+    }
+
+    /** Original local capacities are completed only when Flink has the complete pipeline. */
+    public static Transformation<RowData> translateInputsWithResources(
+            List<Transformation<RowData>> inputs,
+            List<RowType> inputTypes,
+            RowType outputType,
+            byte[] plan,
+            java.util.function.Function<
+                            List<Transformation<?>>,
+                            java.util.Map<Long, tech.streamfusion.flink.memory.FlinkOperatorMemoryShare>>
+                    resolver) {
         if (inputs.isEmpty() || inputs.size() != inputTypes.size()) {
             throw new IllegalArgumentException("Native region external inputs and types must have matching arity");
         }
@@ -47,16 +60,19 @@ public final class StreamFusionNativeRegionTranslator {
         for (int index = 0; index < inputs.size(); index++) {
             bindings.add(NativeRegionInput.bind(inputs.get(index), inputTypes.get(index), false));
         }
+        var factory = new StreamFusionNativeRegionOperatorFactory(
+                inputTypes,
+                outputType,
+                plan,
+                List.of(),
+                bindings.stream().map(binding -> binding.exchangePlan).collect(java.util.stream.Collectors.toList()),
+                resolver == null
+                        ? tech.streamfusion.flink.window.NativeLocalWindowResources.NONE
+                        : tech.streamfusion.flink.window.NativeLocalWindowResources.pending(plan));
+        if (resolver != null) factory.withResourceResolver(resolver);
         var result = new org.apache.flink.streaming.api.transformations.MultipleInputTransformation<>(
                 "streamfusion-native-region[inputs=" + inputs.size() + "]",
-                new StreamFusionNativeRegionOperatorFactory(
-                        inputTypes,
-                        outputType,
-                        plan,
-                        List.of(),
-                        bindings.stream()
-                                .map(binding -> binding.exchangePlan)
-                                .collect(java.util.stream.Collectors.toList())),
+                factory,
                 ArrowRowDataBatchTypeInfo.INSTANCE,
                 parallelism,
                 false);
