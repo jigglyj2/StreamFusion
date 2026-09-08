@@ -8,9 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, Weak};
 
 use rocksdb::checkpoint::Checkpoint;
-use rocksdb::{
-    BlockBasedOptions, Cache, DBCompressionType, Options, WriteBatch, WriteBufferManager, DB,
-};
+use rocksdb::{BlockBasedOptions, Cache, WriteBatch, WriteBufferManager, DB};
 use streamfusion_state_abi::decode_key_group_snapshot;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,12 +87,7 @@ impl RocksStateBackend {
             ));
         }
         let shared_memory = shared_rocks_memory(memory_limit, scope)?;
-        let mut options = Options::default();
-        options.create_if_missing(true);
-        // Flink's default RocksDBConfigurableOptions uses Snappy on every level. Compile the
-        // codec explicitly: a RocksDB build without Snappy otherwise silently stores raw SSTs.
-        options.set_compression_type(DBCompressionType::Snappy);
-        options.set_compression_per_level(&[DBCompressionType::Snappy]);
+        let mut options = crate::flink_options::base_options().map_err(rocks_error)?;
         let mut table_options = BlockBasedOptions::default();
         table_options.set_block_cache(&shared_memory.cache);
         // Keep index and filter blocks inside the same Flink-reserved cache instead of letting

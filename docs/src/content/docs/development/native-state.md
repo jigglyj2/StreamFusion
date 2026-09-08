@@ -34,6 +34,15 @@ the cache capacity reported by each actual database, in addition to shared resou
 This restores the intended cache, index/filter accounting, compression and memtable configuration;
 it does not complete the remaining Flink-default configuration audit.
 
+Database defaults now also match Flink's background-job count, open-file limit, log level and
+rotation limits, disabled statistics dumps, level-compaction sizing and periodic-compaction
+interval. Closing the native database skips the redundant memtable flush, as Flink does with
+WAL-disabled state: checkpoints establish durability. Tests inspect the opened database's
+persisted OPTIONS file and verify both the absence of shutdown-created SSTs and successful
+restore from a physical checkpoint. Shared cache/write-buffer ratios and sizing, and Flink log
+directory relocation, still require equivalent handling; this prerequisite keeps the RocksDB
+production gate in place.
+
 ## Shared native-plan state bindings
 
 The common Java `NativeExecutionContext` accepts a separate, versioned `NativeStateBindings`
