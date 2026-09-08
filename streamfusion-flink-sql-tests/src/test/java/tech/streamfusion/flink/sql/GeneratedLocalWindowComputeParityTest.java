@@ -34,7 +34,11 @@ import tech.streamfusion.proto.plan.v1.*;
 
 /** SQL is the oracle for local DataFusion partials merged by the retained window kernel. */
 class GeneratedLocalWindowComputeParityTest extends NativeComputeParitySupport {
-    private static final RowType RAW = RowType.of(new IntType(), new TimestampType(3), new BigIntType());
+    private static final RowType RAW = RowType.of(
+            new IntType(),
+            new TimestampType(3),
+            new BigIntType(),
+            new org.apache.flink.table.types.logical.BooleanType());
     private static final RowType PARTIAL = RowType.of(
             new IntType(),
             new VarBinaryType(false, VarBinaryType.MAX_LENGTH),
@@ -59,24 +63,25 @@ class GeneratedLocalWindowComputeParityTest extends NativeComputeParitySupport {
             throws Exception {
         for (int seed = 0; seed < 3; seed++) {
             var rows = rows(seed);
-            var expected = flink(sql(rows, kind), RESULT);
+            boolean filtered = seed == 1;
+            var expected = flink(sql(rows, kind, filtered), RESULT);
             for (boolean rocks : List.of(false, true)) {
                 for (int batchSize : List.of(7, 31)) {
                     var memory = new Memory();
-                    long local = NativeLocalWindowAggregateBridge.create(localPlan(kind), memory);
+                    long local = NativeLocalWindowAggregateBridge.create(localPlan(kind, filtered), memory);
                     long global = 0;
                     var actual = new ArrayList<byte[]>();
                     try (var allocator = new RootAllocator(128L << 20)) {
                         global = rocks
                                 ? NativeWindowAggregateBridge.createRocksDb(
-                                        globalPlan(kind),
+                                        globalPlan(kind, filtered),
                                         16,
                                         0,
                                         15,
                                         directory.resolve(kind + "-" + seed + "-" + batchSize),
                                         8L << 20,
                                         memory)
-                                : NativeWindowAggregateBridge.create(globalPlan(kind), 16, 0, 15, memory);
+                                : NativeWindowAggregateBridge.create(globalPlan(kind, filtered), 16, 0, 15, memory);
                         for (int offset = 0; offset < rows.size(); offset += batchSize) {
                             try (var input = ArrowRowDataBatch.transpose(
                                             rows.subList(offset, Math.min(rows.size(), offset + batchSize)),
@@ -117,12 +122,13 @@ class GeneratedLocalWindowComputeParityTest extends NativeComputeParitySupport {
             rows.add(GenericRowData.of(
                     i % 13 == 0 ? null : random.nextInt(5),
                     i % 17 == 0 ? null : TimestampData.fromEpochMillis((long) random.nextInt(16001) - 8000),
-                    value));
+                    value,
+                    i % 7 == 0 ? null : i % 7 != 1));
         }
         return rows;
     }
 
-    private static String sql(List<RowData> rows, WindowKind kind) {
+    private static String sql(List<RowData> rows, WindowKind kind, boolean filtered) {
         var values = new ArrayList<String>();
         for (var row : rows) {
             String timestamp = row.isNullAt(1)
@@ -136,7 +142,8 @@ class GeneratedLocalWindowComputeParityTest extends NativeComputeParitySupport {
                                     .replace('T', ' ')
                             + "'";
             values.add("(CAST(" + (row.isNullAt(0) ? "NULL" : row.getInt(0)) + " AS INT), " + timestamp + ", CAST("
-                    + (row.isNullAt(2) ? "NULL" : row.getLong(2)) + " AS BIGINT))");
+                    + (row.isNullAt(2) ? "NULL" : row.getLong(2)) + " AS BIGINT), CAST("
+                    + (row.isNullAt(3) ? "NULL" : row.getBoolean(3) ? "TRUE" : "FALSE") + " AS BOOLEAN))");
         }
         String function = kind == WindowKind.WINDOW_KIND_TUMBLE
                 ? "TUMBLE"
@@ -144,30 +151,35 @@ class GeneratedLocalWindowComputeParityTest extends NativeComputeParitySupport {
         String intervals = kind == WindowKind.WINDOW_KIND_TUMBLE
                 ? "INTERVAL '6' SECOND"
                 : "INTERVAL '2' SECOND, INTERVAL '6' SECOND";
-        return "WITH input(k, ts, v) AS (VALUES " + String.join(",", values) + ") "
-                + "SELECT k, COUNT(*), COUNT(v), SUM(v), MIN(v), MAX(v), AVG(v), window_start, window_end "
+        String filter = filtered ? " FILTER (WHERE f)" : "";
+        return "WITH input(k, ts, v, f) AS (VALUES " + String.join(",", values) + ") "
+                + "SELECT k, COUNT(*)" + filter + ", COUNT(v)" + filter + ", SUM(v)" + filter + ", MIN(v)" + filter
+                + ", MAX(v)" + filter + ", AVG(v)" + filter + ", window_start, window_end "
                 + "FROM TABLE(" + function + "(TABLE input, DESCRIPTOR(ts), " + intervals + ")) "
                 + "GROUP BY k, window_start, window_end";
     }
 
-    private static List<AggregateCall> calls() {
-        return List.of(
+    private static List<AggregateCall> calls(boolean filtered) {
+        var calls = List.of(
                 call(AggregateFunction.AGGREGATE_FUNCTION_COUNT_STAR, false),
                 call(AggregateFunction.AGGREGATE_FUNCTION_COUNT, false),
                 call(AggregateFunction.AGGREGATE_FUNCTION_SUM, false),
                 call(AggregateFunction.AGGREGATE_FUNCTION_MIN, false),
                 call(AggregateFunction.AGGREGATE_FUNCTION_MAX, false),
                 call(AggregateFunction.AGGREGATE_FUNCTION_AVG, false));
+        return calls.stream()
+                .map(call -> filtered ? call.toBuilder().setFilterIndex(3).build() : call)
+                .collect(java.util.stream.Collectors.toList());
     }
 
-    private static byte[] localPlan(WindowKind kind) {
+    private static byte[] localPlan(WindowKind kind, boolean filtered) {
         return plan(Operator.newBuilder()
                 .setLocalWindowAggregate(LocalWindowAggregate.newBuilder()
                         .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
                         .setInputSchema(schema(RAW))
                         .setOutputSchema(schema(PARTIAL))
                         .addGroupingIndices(0)
-                        .addAllAggregateCalls(calls())
+                        .addAllAggregateCalls(calls(filtered))
                         .setTimeAttributeIndex(1)
                         .setKind(kind)
                         .setSizeMillis(6000)
@@ -175,14 +187,14 @@ class GeneratedLocalWindowComputeParityTest extends NativeComputeParitySupport {
                         .setShiftTimeZone("UTC")));
     }
 
-    private static byte[] globalPlan(WindowKind kind) {
+    private static byte[] globalPlan(WindowKind kind, boolean filtered) {
         return plan(Operator.newBuilder()
                 .setWindowAggregate(WindowAggregate.newBuilder()
                         .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
                         .setInputSchema(schema(PARTIAL))
                         .setOutputSchema(schema(RESULT))
                         .addGroupingIndices(0)
-                        .addAllAggregateCalls(calls())
+                        .addAllAggregateCalls(calls(filtered))
                         .setKind(kind)
                         .setSizeMillis(6000)
                         .setSlideOrStepMillis(2000)

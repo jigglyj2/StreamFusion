@@ -38,6 +38,7 @@ const DELETE: i8 = 3;
 pub(crate) struct LocalWindowAggregateProcessor {
     plan: proto::LocalWindowAggregate,
     calls: Vec<Call>,
+    grouped_compute: Option<super::group_aggregate::grouped_compute::GroupedCompute>,
     input_schema: SchemaRef,
     output_schema: SchemaRef,
     grouping_converter: RowConverter,
@@ -63,15 +64,7 @@ impl LocalWindowAggregateProcessor {
         self.finish_legacy_output(result)
     }
 
-    fn process_accounted(&self, batch: &RecordBatch) -> Result<RecordBatch> {
-        let kernels = super::group_aggregate::datafusion_compute::Kernels::new(&self.calls)?;
-        let accumulate = (0..batch.num_rows())
-            .map(|row| self.accumulates(batch, row))
-            .collect::<Result<Vec<_>>>()?;
-        let row_inputs = accumulate
-            .contains(&false)
-            .then(|| super::group_aggregate::datafusion_rows::RowInputs::new(&self.calls, batch))
-            .transpose()?;
+    fn process_accounted(&mut self, batch: &RecordBatch) -> Result<RecordBatch> {
         let grouping_rows = self.grouping_rows(batch)?;
         let attached_columns = self
             .plan
@@ -121,6 +114,39 @@ impl LocalWindowAggregateProcessor {
             };
             pending.entry(key).or_default().push(row);
         }
+        if !self.plan.input_changelog {
+            if let Some(compute) = self.grouped_compute.as_mut() {
+                if pending.is_empty() {
+                    return Ok(RecordBatch::new_empty(self.output_schema.clone()));
+                }
+                let mut indices = vec![0; batch.num_rows()];
+                let mut valid = vec![false; batch.num_rows()];
+                let mut keys = Vec::with_capacity(pending.len());
+                for (key, rows) in pending {
+                    let index = keys.len();
+                    for row in rows {
+                        indices[row] = index;
+                        valid[row] = true;
+                    }
+                    keys.push((index, key));
+                }
+                let valid = arrow::array::BooleanArray::from(valid);
+                compute.update(&self.calls, batch, &indices, Some(&valid), keys.len())?;
+                let output = compute.finish()?;
+                keys.sort_unstable_by(|(_, left), (_, right)| slice_order(left, right));
+                return self.output_partials(keys.into_iter().map(|(index, key)| {
+                    output.state(&self.calls, index).map(|state| (key, state))
+                }));
+            }
+        }
+        let kernels = super::group_aggregate::datafusion_compute::Kernels::new(&self.calls)?;
+        let accumulate = (0..batch.num_rows())
+            .map(|row| self.accumulates(batch, row))
+            .collect::<Result<Vec<_>>>()?;
+        let row_inputs = accumulate
+            .contains(&false)
+            .then(|| super::group_aggregate::datafusion_rows::RowInputs::new(&self.calls, batch))
+            .transpose()?;
         let mut entries = Vec::with_capacity(pending.len());
         for (key, rows) in pending {
             let mut accumulator = AccumulatorState::new(&self.calls);
@@ -137,17 +163,22 @@ impl LocalWindowAggregateProcessor {
                 entries.push((key, accumulator));
             }
         }
-        entries.sort_unstable_by(|(left, _), (right, _)| {
-            left.slice_end
-                .cmp(&right.slice_end)
-                .then_with(|| left.window_start.cmp(&right.window_start))
-                .then_with(|| left.grouping_row.cmp(&right.grouping_row))
-        });
-        let mut grouping = Vec::with_capacity(entries.len());
-        let mut accumulators = Vec::with_capacity(entries.len());
-        let mut window_starts = Vec::with_capacity(entries.len());
-        let mut slice_ends = Vec::with_capacity(entries.len());
-        for (key, accumulator) in entries {
+        entries.sort_unstable_by(|(left, _), (right, _)| slice_order(left, right));
+        self.output_partials(entries.into_iter().map(Ok))
+    }
+
+    fn output_partials(
+        &self,
+        entries: impl IntoIterator<Item = Result<(SliceKey, AccumulatorState)>>,
+    ) -> Result<RecordBatch> {
+        let entries = entries.into_iter();
+        let capacity = entries.size_hint().0;
+        let mut grouping = Vec::with_capacity(capacity);
+        let mut accumulators = Vec::with_capacity(capacity);
+        let mut window_starts = Vec::with_capacity(capacity);
+        let mut slice_ends = Vec::with_capacity(capacity);
+        for entry in entries {
+            let (key, accumulator) = entry?;
             grouping.push(key.grouping_row);
             accumulators.push(encode_state(&accumulator));
             window_starts.push(key.window_start);
@@ -241,6 +272,13 @@ impl LocalWindowAggregateProcessor {
         }
         Ok(())
     }
+}
+
+fn slice_order(left: &SliceKey, right: &SliceKey) -> std::cmp::Ordering {
+    left.slice_end
+        .cmp(&right.slice_end)
+        .then_with(|| left.window_start.cmp(&right.window_start))
+        .then_with(|| left.grouping_row.cmp(&right.grouping_row))
 }
 
 #[cfg(test)]

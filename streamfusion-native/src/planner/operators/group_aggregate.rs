@@ -39,6 +39,7 @@ mod datafusion_compute_tests;
 pub(super) mod datafusion_rows;
 pub(crate) mod execution_plan;
 pub(super) mod flink_udaf;
+pub(super) mod grouped_compute;
 mod mini_batch;
 mod output_admission;
 mod partial_batch;

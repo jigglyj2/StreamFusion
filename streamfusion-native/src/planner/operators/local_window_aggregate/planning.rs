@@ -154,10 +154,16 @@ impl LocalWindowAggregateProcessor {
                 ))
             })?
         };
+        let grouped_compute = if plan.input_changelog {
+            None
+        } else {
+            super::super::group_aggregate::grouped_compute::GroupedCompute::new(&calls)?
+        };
         let output_reservation = reservation.sibling("native local window output");
         Ok(Self {
             plan,
             calls,
+            grouped_compute,
             input_schema,
             output_schema,
             grouping_converter: RowConverter::new(grouping_fields)?,

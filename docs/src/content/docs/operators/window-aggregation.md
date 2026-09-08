@@ -45,6 +45,16 @@ This is semantic flush-capacity bookkeeping, separate from coarse native buffer 
 It is currently test-only and will be wired into the shared local-window lifecycle; the legacy
 kernel's per-batch flush behavior and production fallback remain unchanged.
 
+Compatible append-only local windows now use DataFusion's `GroupsAccumulator` vectors across
+all keys in a batch. The native handle prepares these adapters once and reuses them after each
+flush. SQL columns are shared directly with the kernels; nullable timestamp and FILTER masks
+select contributions without gathering or copying the whole input batch. Canonical Flink
+accumulator objects are constructed only while encoding each output partial, rather than retained
+for every key. The grouped-state test covers 4,096 groups across four batches, overflow, nulls and
+nullable filters; observed-allocation tests check the coarse workspace on hot and unique keys.
+The real Flink SQL matrix also includes FILTER predicates. This does not yet change the legacy
+per-batch flush lifecycle or admit Q5.
+
 The local kernel now uses shared DataFusion aggregate adapters for reusable integer COUNT/SUM/AVG
 and append-only MIN/MAX computation. Ordered retractions and numeric subsets that require Flink
 semantics retain the existing adapters. A coarse workspace covers row encodings, selections,

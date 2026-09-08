@@ -8,10 +8,17 @@ impl LocalWindowAggregateProcessor {
     /// serialized partials together. Count variable-width input once per use: several calls
     /// may retain the same column independently. The borrowed input remains producer-owned.
     pub(super) fn batch_admission(&self, batch: &RecordBatch) -> Result<usize> {
+        // Grouped DataFusion vectors and canonical partial bytes have bounded per-call
+        // storage. The ordered fallback also allows counted extrema and richer states.
+        let per_call = if self.grouped_compute.is_some() {
+            256
+        } else {
+            2048
+        };
         let per_row = self
             .calls
             .len()
-            .checked_mul(2048)
+            .checked_mul(per_call)
             .and_then(|bytes| {
                 self.plan
                     .grouping_indices
@@ -60,6 +67,11 @@ impl LocalWindowAggregateProcessor {
             self.output_reservation.transfer_to_arrow(bytes)?;
             Ok(output)
         });
+        if result.is_err() {
+            // A failed grouped update may retain scratch vectors. Drop those buffers before
+            // returning workspace credit. The enclosing Flink task will recover/replay.
+            self.grouped_compute = None;
+        }
         self.output_reservation.resize(0)?;
         self.reservation.resize(0)?;
         result

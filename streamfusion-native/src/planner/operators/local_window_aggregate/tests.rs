@@ -334,6 +334,14 @@ fn generated_slice_partials_preserve_ordered_flink_accumulator_bytes() {
                 lower_call(&spec).unwrap()
             })
             .collect();
+            processor.grouped_compute = if changelog {
+                None
+            } else {
+                super::super::group_aggregate::grouped_compute::GroupedCompute::new(
+                    &processor.calls,
+                )
+                .unwrap()
+            };
             let length = 257;
             let keys = (0..length)
                 .map(|i| (i % 13 != 0).then_some((i + seed) % 7))
@@ -469,4 +477,64 @@ fn null_row_kind_is_rejected_and_workspace_is_released() {
         .to_string()
         .contains("must not be null"));
     assert_eq!(processor.reservation.size(), 0);
+}
+
+#[test]
+fn grouped_batch_workspace_covers_observed_allocations_for_hot_and_unique_keys() {
+    use crate::allocation_test_support::measure;
+    for rows in [1, 1024, 5000] {
+        for unique in [false, true] {
+            let mut processor = processor(false);
+            processor.calls = [
+                proto::AggregateFunction::CountStar,
+                proto::AggregateFunction::Count,
+                proto::AggregateFunction::Sum,
+                proto::AggregateFunction::Sum0,
+                proto::AggregateFunction::Min,
+                proto::AggregateFunction::Max,
+                proto::AggregateFunction::Avg,
+            ]
+            .into_iter()
+            .map(|function| {
+                let mut spec = call(
+                    function,
+                    (function != proto::AggregateFunction::CountStar).then_some(1),
+                );
+                spec.retractable = false;
+                lower_call(&spec).unwrap()
+            })
+            .collect();
+            processor.grouped_compute =
+                super::super::group_aggregate::grouped_compute::GroupedCompute::new(
+                    &processor.calls,
+                )
+                .unwrap();
+            let input = RecordBatch::try_from_iter(vec![
+                (
+                    "key",
+                    Arc::new(Int64Array::from(
+                        (0..rows)
+                            .map(|row| if unique { row as i64 } else { 1 })
+                            .collect::<Vec<_>>(),
+                    )) as ArrayRef,
+                ),
+                (
+                    "value",
+                    Arc::new(Int64Array::from(vec![i64::MAX; rows])) as ArrayRef,
+                ),
+                (
+                    "ts",
+                    Arc::new(TimestampMillisecondArray::from(vec![1000; rows])) as ArrayRef,
+                ),
+            ])
+            .unwrap();
+            let allowance = processor.batch_admission(&input).unwrap();
+            let (output, observed) = measure(|| processor.process_accounted(&input).unwrap());
+            assert!(
+                observed.peak <= allowance,
+                "rows={rows}, unique={unique}, allowance={allowance}, observed={observed:?}"
+            );
+            assert_eq!(output.num_rows(), if unique { rows } else { 1 });
+        }
+    }
 }
