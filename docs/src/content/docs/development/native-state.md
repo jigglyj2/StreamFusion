@@ -61,6 +61,17 @@ state repartitioning, with per-key SQL changelog/timestamp parity after restore 
 Canonical restore switches memory/RocksDB in both directions; aligned/unaligned operator-state
 restore retains the backend, including physical incremental RocksDB checkpoint handles.
 
+The shared binary join also has a Flink mailbox-task recovery test on both backends. A checkpoint
+barrier arrives on one input, then an Arrow IPC frame arrives on the other before its barrier.
+Aligned restore retains the joined state; unaligned restore replays the captured frame exactly once
+through Flink's sequential channel-state reader and the native exchange edge. Both paths compare
+subsequent retractions byte-for-byte with Flink's generated join/Calc operators. The test uses real
+checkpoint handles, channel-state writer/reader, recovered input channels, and the production sink
+view adapter. The mailbox harness requires explicit insertion of the serialized frame into the
+channel-state writer because its test input queues do not implement network capture. This establishes
+that recovery boundary, not full distributed failure/restart or in-flight rescaling coverage, and
+does not remove the remaining production admission requirements.
+
 Task-lifetime lifecycle registration is distinct from keyed state binding. Local aggregate buffers
 are discovered from the native plan before capability negotiation and use the same stream/control,
 gauge and invocation interfaces. Later keyed bindings merge with these owners and reject duplicate
