@@ -175,6 +175,32 @@ mod checkpoint;
 mod generated;
 
 #[test]
+fn borrowed_partial_slices_do_not_reserve_the_parent_arrow_buffers_again() {
+    for rocks in backends() {
+        let directory = tempfile::tempdir().unwrap();
+        let broker = Arc::new(TestBroker::new((if rocks { 9 } else { 1 }) << 20));
+        let mut window = processor(broker.clone(), rocks.then_some(directory.path()), 0, 127);
+        let parent = batch(&(0..16_384).map(|key| (key, 1, 2000)).collect::<Vec<_>>());
+        let borrowed = parent.slice(8100, 32);
+        window.process(&borrowed).unwrap();
+        assert_eq!(slice_count(&window), 32);
+        for end in [2000, 4000, 6000] {
+            let mut actual = output(&window.advance(end - 1).unwrap());
+            actual.sort();
+            let expected = (8100..8132)
+                .map(|key| (key, 1, end - 6000, end))
+                .collect::<Vec<_>>();
+            assert_eq!(actual, expected);
+        }
+        drop(window);
+        assert_eq!(broker.reserved(), 0);
+        // The producer's retained Arrow batch remains valid after the window is gone.
+        assert_eq!(borrowed.num_rows(), 32);
+        assert_eq!(parent.num_rows(), 16_384);
+    }
+}
+
+#[test]
 fn shared_slices_match_the_flink_global_hop_late_input_and_empty_timer_contract() {
     for rocks in backends() {
         let directory = tempfile::tempdir().unwrap();

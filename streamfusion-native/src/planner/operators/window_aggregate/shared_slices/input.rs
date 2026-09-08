@@ -5,15 +5,6 @@ use super::*;
 
 impl SharedSlices {
     pub(super) fn process_inner(&mut self, batch: &RecordBatch) -> Result<()> {
-        let base = batch
-            .get_array_memory_size()
-            .saturating_mul(8)
-            .saturating_add(
-                batch
-                    .num_rows()
-                    .saturating_mul(512 + self.kernel.calls.len().saturating_mul(1024)),
-            );
-        self.admit(base)?;
         self.kernel.prepare_schema(batch.schema())?;
         if let Some(index) = self.kernel.input_kind_index {
             let kinds = batch
@@ -50,6 +41,21 @@ impl SharedSlices {
                 "shared slice partial and bounds must not be null".into(),
             ));
         }
+        // The producer already owns the Arrow buffers. A slice can retain a much larger
+        // parent allocation; only its logical partial bytes are decoded here. Reserve
+        // that decoding plus per-row keys, indexes, mutations and DataFusion workspace.
+        let offsets = partials.value_offsets();
+        let decoded_input = (offsets[offsets.len() - 1] - offsets[0]) as usize;
+        let base = decoded_input
+            .saturating_mul(8)
+            .saturating_add(64 * 1024)
+            .saturating_add(
+                batch
+                    .num_rows()
+                    .saturating_mul(512 + self.kernel.calls.len().saturating_mul(1024)),
+            );
+        self.admit(base)?;
+        let plan = &self.kernel.plan;
         let end_rows = self.end_codec.convert_columns(&[batch
             .column(plan.partial_slice_end_index.unwrap() as usize)
             .clone()])?;

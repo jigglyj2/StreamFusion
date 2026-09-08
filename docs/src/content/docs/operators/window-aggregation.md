@@ -108,6 +108,12 @@ MultiJoin setting match Flink on both backends, for 6-second/10-second HOP windo
 one/two. These fixtures now require ordinary whole-plan admission. Release benchmark validation remains
 required before the Q5 performance checkpoint is delivered.
 
+Global slice merging reserves workspace from the logical partial bytes it decodes and the
+number of rows it processes. Incoming Arrow buffers retain their producer's accounting; a small
+slice does not reserve its entire parent allocation again. A constrained-memory regression on
+both backends retains a 16,384-row parent, merges a 32-row slice, and verifies every overlapping
+window result plus the producer's lifetime after the window closes.
+
 ### Global HOP slicer
 
 The global fragment builder admits append-only UTC event-time HOP partials for COUNT and
