@@ -19,6 +19,7 @@ import org.apache.flink.table.api.config.AggregatePhaseStrategy;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
 import org.apache.flink.table.api.config.OptimizerConfigOptions;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
+import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 
 /** Runs Nexmark's RowData generator through SQL into a deterministic changelog result sink. */
 public final class NexmarkRowDataJob {
@@ -41,6 +42,29 @@ public final class NexmarkRowDataJob {
     static BenchmarkResultStore.Result run(
             long eventCount, String query, boolean streamFusion, String stateBackend, int parallelism)
             throws Exception {
+        return execute(eventCount, query, streamFusion, stateBackend, parallelism, false, false);
+    }
+
+    static void runBlackhole(
+            long eventCount,
+            String query,
+            boolean streamFusion,
+            String stateBackend,
+            int parallelism,
+            boolean explainOnly)
+            throws Exception {
+        execute(eventCount, query, streamFusion, stateBackend, parallelism, true, explainOnly);
+    }
+
+    private static BenchmarkResultStore.Result execute(
+            long eventCount,
+            String query,
+            boolean streamFusion,
+            String stateBackend,
+            int parallelism,
+            boolean blackhole,
+            boolean explainOnly)
+            throws Exception {
         if (eventCount <= 0) {
             throw new IllegalArgumentException("eventCount must be positive");
         }
@@ -52,7 +76,7 @@ public final class NexmarkRowDataJob {
         }
         configurePlanner(streamFusion);
         String resultRunId = java.util.UUID.randomUUID().toString();
-        BenchmarkResultStore.begin(resultRunId);
+        if (!blackhole) BenchmarkResultStore.begin(resultRunId);
         Path checkpointDirectory = Files.createTempDirectory("streamfusion-nexmark-checkpoints-");
         boolean completed = false;
         try {
@@ -144,16 +168,24 @@ public final class NexmarkRowDataJob {
             if (query.equals("temporal-join")) {
                 tables.executeSql(versionedAuctionViewDdl());
             }
-            tables.executeSql(sinkDdl(query, resultRunId));
+            tables.executeSql(blackhole ? blackholeSinkDdl(query) : sinkDdl(query, resultRunId));
             String statement = "INSERT INTO nexmark_output\n" + NexmarkRowDataQueryCatalog.load(query);
-            if (Boolean.getBoolean("streamfusion.nexmark.debug-plan")) {
-                System.out.println(tables.explainSql(statement));
+            if (blackhole || Boolean.getBoolean("streamfusion.nexmark.debug-plan")) {
+                String plan = tables.explainSql(statement);
+                if (explainOnly || Boolean.getBoolean("streamfusion.nexmark.debug-plan")) System.out.println(plan);
+                if (streamFusion) {
+                    String admission = StreamFusionPlanningDiagnostics.explain();
+                    System.out.println("NEXMARK_EXPLAIN " + query + " " + admission.replace('\n', ' '));
+                    if (!explainOnly && !admission.contains("Accelerated: yes"))
+                        throw new IllegalStateException("Refusing to measure a StreamFusion fallback: " + admission);
+                }
+                if (explainOnly) return null;
             }
             tables.executeSql(statement).await();
             completed = true;
-            return BenchmarkResultStore.finish(resultRunId);
+            return blackhole ? null : BenchmarkResultStore.finish(resultRunId);
         } finally {
-            if (!completed) {
+            if (!completed && !blackhole) {
                 BenchmarkResultStore.finish(resultRunId);
             }
             deleteDirectory(checkpointDirectory);
@@ -192,6 +224,11 @@ public final class NexmarkRowDataJob {
                 + ") WITH ('connector'='streamfusion-benchmark-result','run-id'='"
                 + runId
                 + "')";
+    }
+
+    static String blackholeSinkDdl(String query) throws IOException {
+        return "CREATE TABLE nexmark_output (" + NexmarkRowDataQueryCatalog.sinkColumns(query)
+                + ") WITH ('connector'='blackhole')";
     }
 
     private static void configurePlanner(boolean streamFusion) {

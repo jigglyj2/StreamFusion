@@ -7,6 +7,12 @@ Production coverage advances in increasing numbered-query order. Verify earlier 
 then finish the next query on both state backends before expanding to later queries.
 An implemented native kernel is not an unlocked query.
 
+Performance work uses the [RowData-to-blackhole harness](/StreamFusion/benchmarks/rowdata-blackhole/),
+with separate collecting-sink runs for parity. The blackhole path has passed Q0–Q2 admission
+and native-activity integration checks with both backend settings after the sortable-state
+changes. Q3 still reports the persistent-state and native-region composition restrictions.
+These short integration runs are not performance measurements.
+
 ## Current checkpoint
 
 Q3 is the next target. A September 7, 2026 diagnostic run of the existing local build used
