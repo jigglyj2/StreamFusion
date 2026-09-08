@@ -23,6 +23,13 @@ native dependency build. A checkpoint test verifies actual compression of repeti
 exact value recovery after reopening the saved SSTs. This is a format/configuration check, not
 a throughput result; non-default compression settings still require whole-plan fallback.
 
+Opening the native database now applies the configured options explicitly to its default column
+family. The previous named-family open helper silently substituted RocksDB defaults there, leaving
+the reserved shared-cache wrapper disconnected from the active table cache. A regression checks
+the cache capacity reported by each actual database, in addition to shared resource identity.
+This restores the intended cache, index/filter accounting, compression and memtable configuration;
+it does not complete the remaining Flink-default configuration audit.
+
 ## Shared native-plan state bindings
 
 The common Java `NativeExecutionContext` accepts a separate, versioned `NativeStateBindings`

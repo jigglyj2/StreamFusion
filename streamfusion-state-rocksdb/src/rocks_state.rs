@@ -106,8 +106,11 @@ impl RocksStateBackend {
         options.set_write_buffer_manager(&shared_memory.write_buffers);
         options.set_write_buffer_size(memory_limit / 4);
         options.set_max_write_buffer_number(2);
-        // Open the default family explicitly so batched pinned reads can address it.
-        let db = DB::open_cf(&options, path, ["default"]).map_err(rocks_error)?;
+        // Open the default family explicitly so batched pinned reads can address it. `open_cf`
+        // replaces column options with Options::default(), silently dropping this shared cache,
+        // its charged index/filter blocks, compression, and the configured memtable limit.
+        let db = DB::open_cf_with_opts(&options, path, [("default", options.clone())])
+            .map_err(rocks_error)?;
         Ok(Self {
             db,
             _shared_memory: shared_memory,
@@ -603,6 +606,18 @@ mod tests {
                 .unwrap();
 
         assert!(Arc::ptr_eq(&first._shared_memory, &second._shared_memory));
+        // Check the databases, not merely the Rust owner. An unconfigured column family opens
+        // a separate default cache despite retaining the intended SharedRocksMemory wrapper.
+        let expected_capacity = (1 << 20) - (1 << 18);
+        for backend in [&first, &second] {
+            assert_eq!(
+                backend
+                    .db
+                    .property_int_value("rocksdb.block-cache-capacity")
+                    .unwrap(),
+                Some(expected_capacity)
+            );
+        }
     }
 
     #[test]
