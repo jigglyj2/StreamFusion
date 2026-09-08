@@ -76,6 +76,11 @@ At ten million, median throughput is 12.4% below Flink in memory and 26.3% above
 wide overlapping timing ranges. All twenty-million-event profiles finish without capacity failure;
 profile timings are excluded from results. Q8 is delivered within these documented limits; Q9 is next.
 
+Q9's ordinary plan currently falls back on `StreamExecRank`; its binary join is already admitted.
+The append-only Top-1 compute prerequisite uses DataFusion sort and cumulative MIN with fixed-width
+ordinals and per-arrival changelog parity. Ordinary admission remains gated until the shared
+execution, memory, metric and recovery contracts are verified. No Q9 performance result is claimed.
+
 ## Q6 has no Flink streaming baseline
 
 The upstream Nexmark Q6 query computes a bounded ordered AVG after winning-bid rank selection.

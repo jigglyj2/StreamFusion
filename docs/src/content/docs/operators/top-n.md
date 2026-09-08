@@ -66,6 +66,23 @@ tests cover integer peers and partition boundaries split across batches. This co
 does not remove the existing planner admission gates.
 
 
+The retained append-only `ROW_NUMBER` Top-1 path now delegates winner selection to DataFusion's
+sort kernel and cumulative `MIN` window expression. It sorts Arrow-encoded order keys with stable
+arrival ordinals, then evaluates fixed-width priority ordinals per touched partition. An old winner
+precedes new equal keys; each strict improvement retains its original input position for Flink's
+INSERT/UPDATE changelog. The cumulative result never repeats a large winning string key for every
+later row. A 64 KiB winner followed by 4,095 arrivals stays below 4 MiB of observed native allocation
+in a constrained-memory regression. Other ranges, retract/update strategies, bounded-final modes
+and comparator-incompatible types keep their existing implementations and planner gates.
+
+Generated Flink FastTop1Function comparisons cover complete per-arrival changelog bytes, nullable
+partition/sort keys, mixed sort directions, timestamp endpoints, distinct payloads at tied keys,
+optional rank output and multiple Arrow batch sizes on both backends. This is a Q9 compute
+prerequisite: the shared native-plan binding, full metric/control and managed recovery contracts
+still need verification before ordinary rank admission. The existing `topNComparatorCalls`
+diagnostic counts adapter comparator calls; it does not count comparisons inside DataFusion kernels.
+
+
 Each incoming Arrow batch crosses JNI once. Rust computes Flink-compatible key groups, reads the
 touched partitions, maintains candidate sets, and commits changes in one backend batch. For
 supported scalar sort keys (excluding floats), sort columns are Arrow-row-encoded once per input
