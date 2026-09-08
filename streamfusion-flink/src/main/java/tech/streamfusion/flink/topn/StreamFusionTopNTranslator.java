@@ -29,6 +29,68 @@ import tech.streamfusion.flink.state.StreamFusionStateBackendFactory;
 public final class StreamFusionTopNTranslator {
     private StreamFusionTopNTranslator() {}
 
+    /** Builds one native stage; its shared region owns state, routing and Arrow transport. */
+    public static byte[] createStagePlan(
+            RowType inputType,
+            RowType outputType,
+            int[] partitionKeys,
+            SortSpec sortSpec,
+            int[] primaryKeys,
+            long rankStart,
+            Long rankEnd,
+            Integer variableRankEndIndex,
+            boolean outputRankNumber,
+            boolean generateUpdateBefore,
+            String strategyName,
+            long stateTtlMillis,
+            ReadableConfig config) {
+        String reason = unsupportedReason(
+                inputType,
+                outputType,
+                partitionKeys,
+                sortSpec,
+                primaryKeys,
+                rankStart,
+                rankEnd,
+                variableRankEndIndex,
+                outputRankNumber,
+                strategyName,
+                stateTtlMillis,
+                config);
+        if (reason != null) throw new IllegalArgumentException(reason);
+        if (!"APPEND_FAST".equals(strategyName)
+                || rankStart != 1
+                || !Long.valueOf(1).equals(rankEnd)
+                || variableRankEndIndex != null
+                || sortSpec.getFieldSize() == 0
+                || stateTtlMillis != 0) {
+            throw new IllegalArgumentException(
+                    "Shared Top-1 requires append-only ROW_NUMBER range [1,1], explicit ordering and disabled state TTL");
+        }
+        if (config.get(org.apache.flink.table.api.config.ExecutionConfigOptions.TABLE_EXEC_ASYNC_STATE_ENABLED)
+                || config.get(org.apache.flink.table.api.config.ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ENABLED)
+                || !config.get(org.apache.flink.table.api.config.ExecutionConfigOptions.IDLE_STATE_RETENTION)
+                        .isZero()) {
+            throw new IllegalArgumentException(
+                    "Shared Top-1 requires synchronous state, disabled mini-batching and disabled state TTL");
+        }
+        String metrics = tech.streamfusion.flink.metrics.NativeStateMetricSupport.unsupportedReason(config);
+        if (metrics != null) throw new IllegalArgumentException(metrics);
+        return StreamFusionTopNPlan.create(
+                inputType,
+                outputType,
+                partitionKeys,
+                sortSpec,
+                primaryKeys,
+                rankStart,
+                rankEnd,
+                variableRankEndIndex,
+                outputRankNumber,
+                generateUpdateBefore,
+                StreamFusionTopNStrategy.APPEND_FAST,
+                stateTtlMillis);
+    }
+
     public static Transformation<RowData> translate(
             Transformation<RowData> input,
             RowType inputType,

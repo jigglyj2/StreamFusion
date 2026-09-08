@@ -5,6 +5,7 @@ mod batch;
 mod bounded;
 pub(crate) mod compare;
 mod datafusion_top_one;
+pub(crate) mod execution_plan;
 mod planning;
 mod selection;
 mod state;
@@ -78,6 +79,8 @@ pub(crate) struct TopNProcessor {
     saturated_append_limit: bool,
     bounded_output: Option<BoundedOutput>,
     bounded_drained: bool,
+    invocation: crate::planner::persistent::unary::InvocationState,
+    native_schema: Option<SchemaRef>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -206,7 +209,7 @@ impl TopNProcessor {
         )
     }
 
-    fn with_state_with_range(
+    pub(crate) fn with_state_with_range(
         serialized_plan: &[u8],
         max_parallelism: u32,
         first_key_group: u32,
@@ -262,6 +265,8 @@ impl TopNProcessor {
             saturated_append_limit: false,
             bounded_output: None,
             bounded_drained: false,
+            invocation: Default::default(),
+            native_schema: None,
         })
     }
 

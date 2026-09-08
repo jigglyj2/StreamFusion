@@ -108,7 +108,7 @@ fn batch_with_kinds(keys: Vec<i32>, values: Vec<&str>, kinds: Vec<i8>) -> Record
     .unwrap()
 }
 
-fn top_one_plan(generate_update_before: bool) -> Vec<u8> {
+pub(super) fn top_one_plan(generate_update_before: bool) -> Vec<u8> {
     let bytes = plan();
     let mut native = proto::NativePlan::decode(bytes.as_slice()).unwrap();
     let Some(proto::operator::Operator::TopN(top_n)) =

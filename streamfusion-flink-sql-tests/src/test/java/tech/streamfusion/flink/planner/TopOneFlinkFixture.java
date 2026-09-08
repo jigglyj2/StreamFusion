@@ -88,8 +88,16 @@ final class TopOneFlinkFixture {
         }
     }
 
-    @SuppressWarnings("unchecked")
     KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> oracle(boolean rocks) throws Exception {
+        var harness = harness(rocks, 1, 0);
+        harness.setup(new RowDataSerializer(output));
+        harness.open();
+        return harness;
+    }
+
+    @SuppressWarnings("unchecked")
+    KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> harness(
+            boolean rocks, int parallelism, int subtask) throws Exception {
         var original = ((KeyedProcessOperator<RowData, RowData, RowData>) stage.getOperator()).getUserFunction();
         if (!(original instanceof FastTop1Function)) throw new AssertionError("Flink did not select FastTop1Function");
         // SQL may replace rank 1 with a constant or suppress UPDATE_BEFORE for an upsert sink.
@@ -108,14 +116,16 @@ final class TopOneFlinkFixture {
         var operator = new KeyedProcessOperator<>(function);
         function.setKeyContext(operator);
         var harness = new KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData>(
-                operator, (KeySelector<RowData, RowData>) stage.getStateKeySelector(), (InternalTypeInfo<RowData>)
-                        stage.getStateKeyType());
+                operator,
+                (KeySelector<RowData, RowData>) stage.getStateKeySelector(),
+                (InternalTypeInfo<RowData>) stage.getStateKeyType(),
+                16,
+                parallelism,
+                subtask);
         harness.setStateBackend(
                 rocks
                         ? new org.apache.flink.state.rocksdb.EmbeddedRocksDBStateBackend(true)
                         : new org.apache.flink.runtime.state.hashmap.HashMapStateBackend());
-        harness.setup(new RowDataSerializer(output));
-        harness.open();
         return harness;
     }
 

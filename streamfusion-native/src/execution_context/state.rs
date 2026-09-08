@@ -10,6 +10,10 @@ use crate::planner::operators::{
         GroupAggregateProcessor,
     },
     regular_join::{execution_plan::RegularJoinFactory, RegularJoinProcessor},
+    top_n::{
+        execution_plan::{self as top_one, TopOneFactory},
+        TopNProcessor,
+    },
     window_aggregate::shared_slices::execution_plan::{
         self as slicing_window, SlicingWindowFactory,
     },
@@ -101,6 +105,7 @@ impl NativeExecutionContext {
                         | proto::operator::Operator::GlobalGroupAggregate(_)
                         | proto::operator::Operator::RegularJoin(_)
                         | proto::operator::Operator::WindowAggregate(_)
+                        | proto::operator::Operator::TopN(_)
                 )
             ) {
                 return Err(invalid(format!(
@@ -116,6 +121,9 @@ impl NativeExecutionContext {
                 )
             ) {
                 validate_native_node(node)?;
+            }
+            if matches!(node.operator, Some(proto::operator::Operator::TopN(_))) {
+                top_one::validate_node(node, binding.max_parallelism)?;
             }
             let window = matches!(
                 node.operator,
@@ -307,7 +315,10 @@ fn create(
         Some(proto::native_state_binding::Backend::Memory(_)) => {
             if matches!(
                 node.operator,
-                Some(proto::operator::Operator::WindowAggregate(_))
+                Some(
+                    proto::operator::Operator::WindowAggregate(_)
+                        | proto::operator::Operator::TopN(_)
+                )
             ) {
                 Box::new(crate::state::OrderedMemoryKeyedState::new(
                     first, last, memory,
@@ -331,6 +342,11 @@ fn create(
         ) => Ok(Arc::new(GroupAggregateFactory(Arc::new(Mutex::new(
             GroupAggregateProcessor::with_state(bytes, max, first, last, state, scratch)?,
         ))))),
+        Some(proto::operator::Operator::TopN(_)) => {
+            Ok(Arc::new(TopOneFactory(Arc::new(Mutex::new(
+                TopNProcessor::with_state_with_range(bytes, max, first, last, state, scratch)?,
+            )))))
+        }
         Some(proto::operator::Operator::Deduplicate(_)) => {
             Ok(Arc::new(DeduplicateFactory(Arc::new(Mutex::new(
                 DeduplicateProcessor::with_state(bytes, max, state, scratch)?,
@@ -358,6 +374,7 @@ fn require_bindings(node: &proto::Operator, ids: &HashSet<u64>) -> Result<()> {
                 | proto::operator::Operator::GroupAggregate(_)
                 | proto::operator::Operator::GlobalGroupAggregate(_)
                 | proto::operator::Operator::WindowAggregate(_)
+                | proto::operator::Operator::TopN(_)
         )
     ) && !ids.contains(&node.plan_node_id)
     {

@@ -232,9 +232,11 @@ impl TopNProcessor {
             None
         };
         let mut output = Vec::new();
+        let mut triggering_rows = Vec::new();
         let append_limit_end = is_append_limit(&self.plan)
             .then(|| usize::try_from(self.plan.rank_end.unwrap()).unwrap_or(usize::MAX));
         for row in 0..batch.num_rows() {
+            let output_start = output.len();
             let group = &mut groups[row_groups[row]];
             if let Some(limit_end) = append_limit_end {
                 require_insert(kinds.value(row), "append-fast")?;
@@ -389,6 +391,10 @@ impl TopNProcessor {
                 let after = selected(group, self.plan.rank_start, rank_end);
                 emit_difference(&self.plan, &sources, &before, after, &mut output)?;
             }
+            if self.native_schema.is_some() {
+                triggering_rows
+                    .extend(std::iter::repeat_n(row as u32, output.len() - output_start));
+            }
         }
 
         let saturates_append_limit = is_non_expiring_append_limit(&self.plan)
@@ -495,6 +501,11 @@ impl TopNProcessor {
             self.state_write_batches = self.state_write_batches.saturating_add(1);
         }
         self.saturated_append_limit = saturates_append_limit;
-        output_batch(&self.plan, &self.output_schema, &sources, output)
+        let output = output_batch(&self.plan, &self.output_schema, &sources, output)?;
+        if self.native_schema.is_some() {
+            execution_plan::with_envelope(output, &batch, &triggering_rows)
+        } else {
+            Ok(output)
+        }
     }
 }

@@ -77,9 +77,26 @@ and comparator-incompatible types keep their existing implementations and planne
 
 Generated Flink FastTop1Function comparisons cover complete per-arrival changelog bytes, nullable
 partition/sort keys, mixed sort directions, timestamp endpoints, distinct payloads at tied keys,
-optional rank output and multiple Arrow batch sizes on both backends. This is a Q9 compute
-prerequisite: the shared native-plan binding, full metric/control and managed recovery contracts
-still need verification before ordinary rank admission. The existing `topNComparatorCalls`
+optional rank output and multiple Arrow batch sizes on both backends.
+
+The shared append-only Top-1 binding now composes between native Calc stages. Java emits a
+protobuf fragment and binds its state to the common native runtime; intermediate Arrow output
+retains its native memory credit without transferring it to Java. Native tests cover both envelope
+versions, triggering-record timestamps on UPDATE_BEFORE/UPDATE_AFTER, canonical cross-backend
+restore, active-invocation exclusion, cancellation, invalid changelog input and coarse large-buffer
+admission failure. Invalid shared modes and schemas are rejected before backend construction.
+
+Generated comparisons against Flink's FastTop1Function cover the complete registered stage metric
+surface, logical I/O counts, ordered changelog with timestamp envelopes, watermarks/status, latency
+markers, pre-barrier and terminal controls across both backends and all rank-output/update-before
+flags. The cache gauges retain Flink 2.3's registration-time definitions: its FastTop1 helper
+registers an empty cache and captured request/hit counters, yielding size 0 and hit rate 1.0.
+The topology guard verifies one Arrow runtime and one state owner for Calc → Top-1 → Calc.
+
+Ordinary admission remains gated. Shared managed-checkpoint recovery/rescaling/channel replay
+and batched Top-1 state access still need verification before Q9 can be selected. The shared
+fragment accepts only explicitly ordered append-only range [1,1], synchronous state, no
+mini-batching and disabled TTL; other modes retain the production gate. The existing `topNComparatorCalls`
 diagnostic counts adapter comparator calls; it does not count comparisons inside DataFusion kernels.
 
 

@@ -78,8 +78,10 @@ profile timings are excluded from results. Q8 is delivered within these document
 
 Q9's ordinary plan currently falls back on `StreamExecRank`; its binary join is already admitted.
 The append-only Top-1 compute prerequisite uses DataFusion sort and cumulative MIN with fixed-width
-ordinals and per-arrival changelog parity. Ordinary admission remains gated until the shared
-execution, memory, metric and recovery contracts are verified. No Q9 performance result is claimed.
+ordinals and per-arrival changelog parity. Its shared Calc → Top-1 → Calc binding now verifies
+native ownership/lifecycle, canonical cross-backend restore and the complete Flink stage metric
+and control surface. Ordinary admission remains gated while batched Top-1 state access and
+managed checkpoint recovery/rescaling/channel replay are completed. No Q9 performance result is claimed.
 
 ## Q6 has no Flink streaming baseline
 
