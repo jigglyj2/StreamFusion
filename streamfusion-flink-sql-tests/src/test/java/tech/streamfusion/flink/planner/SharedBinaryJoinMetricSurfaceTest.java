@@ -29,7 +29,9 @@ class SharedBinaryJoinMetricSurfaceTest {
         "false,RANGE",
         "true,RANGE",
         "false,TIMESTAMP_OFFSET",
-        "true,TIMESTAMP_OFFSET"
+        "true,TIMESTAMP_OFFSET",
+        "false,WIDE_RANGE",
+        "true,WIDE_RANGE"
     })
     void defaultMetricsAndChangelogMatchFlinkAcrossBothInputsAndBackends(boolean rocks, Predicate predicate)
             throws Exception {
@@ -43,12 +45,13 @@ class SharedBinaryJoinMetricSurfaceTest {
             compare(join, calc, target);
             for (int arrival = 0; arrival < 8; arrival++) {
                 int port = arrival % 2;
-                // One stored value with high multiplicity exercises bounded fan-out without
-                // asserting an order between distinct MapState entries that SQL does not promise.
-                int count = arrival == 0 ? 5000 : 1;
+                // Narrow rows use one value with high multiplicity. Wide rows use distinct
+                // keys so a single batch crosses the byte quantum with deterministic order.
+                // Neither case assumes an iteration order between distinct MapState entries.
+                int count = predicate == Predicate.WIDE_RANGE ? 96 : (arrival == 0 ? 5000 : 1);
                 var rows = new ArrayList<GenericRowData>();
                 for (int row = 0; row < count; row++) {
-                    var value = fixture.row(7L, port);
+                    var value = fixture.row(predicate == Predicate.WIDE_RANGE ? 7L + 66L * row : 7L, port);
                     value.setRowKind(
                             arrival < 2
                                     ? RowKind.INSERT

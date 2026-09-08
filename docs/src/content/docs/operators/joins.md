@@ -46,10 +46,16 @@ workspace, budget denial releases credit, and broker calls follow chunks rather 
 These tests support production admission for the bounded residual-comparison subset above.
 
 Residual evaluation now also batches candidate pairs across consecutive incoming rows. A cache
-holds at most 4,096 candidate pairs and 4,096 input descriptors, with one coarse reservation for
+holds at most 4,096 candidate pairs and 4,096 input descriptors, with an additional 8 MiB
+coarse workspace limit for wide payloads. It uses one reservation for
 masks/descriptors and one for the Arrow expression workspace. Incoming columns use zero-copy
 slices when pair indices are contiguous and Arrow gathers otherwise. Opposite-side stored payloads
-are decoded in a batch. A single larger fan-out keeps the existing bounded expression chunks.
+are decoded in a batch. A single larger fan-out uses the same row and byte bounds. The byte
+limit is an internal vectorization quantum, not a deployment setting or a smaller accounting
+allowance: the full per-pair reservation is unchanged. A single pair larger than the quantum is
+attempted with its full reservation and fails recoverably if Flink cannot accommodate it.
+Generated wide-payload Flink tests compare all changelog transitions and registered metrics on
+both backends; native tests cover cross-row chunks, hot keys, and oversized-pair admission.
 The state transitions still consume these masks in original input order, including outer/semi/anti
 association counts in retained implementations. State writes and output draining retain their
 existing batch boundaries, and the persisted format is unchanged.
@@ -313,7 +319,7 @@ exchange can retain one frame per key group without changing the state format.
 
 Regular-join residual predicates are encoded in the same versioned protobuf expression contract as
 Calc and lowered to a DataFusion physical expression. Streaming regular joins evaluate candidate
-pairs in Arrow chunks of at most 4,096 rows, retaining only the current input row's match bitmap
+pairs in Arrow chunks bounded by 4,096 rows and an 8 MiB workspace quantum, retaining the match bitmap
 while output drains. Equality-only and null-rejected keys use constant masks without allocating a
 candidate bitmap. Evaluation retains Flink's per-record state-transition order. Association counts and
 outer/semi/anti transitions count only accepted candidates. Predicate scratch, state, and exported

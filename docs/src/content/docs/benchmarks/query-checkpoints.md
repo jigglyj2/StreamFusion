@@ -94,6 +94,14 @@ parallelism combination) matched final result bytes within their configuration. 
 operator tests still compare every changelog transition. Release measurement and profiling remain
 the next Q9 checkpoint; no Q9 performance result is claimed yet.
 
+The first 1,000,000-event Q9 release attempt at `524cf40f` failed on the in-memory backend:
+a 4,096-pair join predicate chunk requested 17,571,236 bytes with 16,059,870 bytes available.
+Its successful Flink fork is diagnostic only. Join predicate chunks now also bound their coarse
+workspace to an internal 8 MiB quantum, preserving the existing per-pair allowance and Flink
+budget. This reduces actual Arrow materialization for wide payloads; it does not change query
+semantics or state retention. The failed run remains under the benchmark module's `target/`.
+A new release comparison is required before reporting Q9 performance.
+
 ## Q6 has no Flink streaming baseline
 
 The upstream Nexmark Q6 query computes a bounded ordered AVG after winning-bid rank selection.

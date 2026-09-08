@@ -6,6 +6,20 @@ use super::*;
 use std::collections::VecDeque;
 
 const MAX_PAIRS: usize = 4096;
+// A row-count limit alone permits very large materializations for wide payloads. This is an
+// internal vectorization quantum, not a memory-budget override. One oversized pair still has
+// to acquire its full reservation in the single-row path.
+pub(super) const MAX_PREDICATE_BYTES: usize = 8 << 20;
+pub(super) const PREDICATE_BASE_BYTES: usize = 4 * 4096;
+pub(super) fn pair_workspace(input: usize, candidate: usize) -> Result<usize> {
+    input
+        .checked_add(candidate)
+        .and_then(|n| n.checked_add(256))
+        .and_then(|n| n.checked_mul(4))
+        .ok_or_else(|| {
+            DataFusionError::ResourcesExhausted("regular join predicate workspace overflow".into())
+        })
+}
 
 #[derive(Default)]
 pub(super) struct CandidateBatch {
@@ -52,6 +66,7 @@ impl RegularJoinProcessor {
             .expect("residual cache only");
         let mut end = start;
         let mut count = 0usize;
+        let mut workspace_bytes = PREDICATE_BASE_BYTES;
         while end < batch.num_rows() && end - start < MAX_PAIRS {
             let len = if self.row_is_matchable(side, batch, end) {
                 candidates(&staged[indices[end]], side).len()
@@ -61,6 +76,34 @@ impl RegularJoinProcessor {
             if len > MAX_PAIRS - count {
                 break;
             }
+            let row_bytes = if len == 0 {
+                0
+            } else {
+                candidates(&staged[indices[end]], side).iter().try_fold(
+                    0usize,
+                    |bytes, candidate| {
+                        bytes
+                            .checked_add(pair_workspace(
+                                encoded.row(end).data().len(),
+                                candidate.row.len(),
+                            )?)
+                            .ok_or_else(|| {
+                                DataFusionError::ResourcesExhausted(
+                                    "regular join predicate workspace overflow".into(),
+                                )
+                            })
+                    },
+                )?
+            };
+            let next_bytes = workspace_bytes.checked_add(row_bytes).ok_or_else(|| {
+                DataFusionError::ResourcesExhausted(
+                    "regular join predicate workspace overflow".into(),
+                )
+            })?;
+            if next_bytes > MAX_PREDICATE_BYTES {
+                break;
+            }
+            workspace_bytes = next_bytes;
             count += len;
             end += 1;
         }
@@ -83,20 +126,7 @@ impl RegularJoinProcessor {
             let mut workspace = self
                 .scratch_reservation
                 .sibling("regular join batch predicate Arrow workspace");
-            let mut bytes = 4096usize;
-            for row in start..end {
-                if !self.row_is_matchable(side, batch, row) {
-                    continue;
-                }
-                for candidate in candidates(&staged[indices[row]], side) {
-                    bytes = bytes
-                        .checked_add(encoded.row(row).data().len())
-                        .and_then(|bytes| bytes.checked_add(candidate.row.len()))
-                        .and_then(|bytes| bytes.checked_add(256))
-                        .ok_or_else(overflow)?;
-                }
-            }
-            workspace.resize(bytes.checked_mul(4).ok_or_else(overflow)?)?;
+            workspace.resize(workspace_bytes)?;
             let mut pairs = Vec::with_capacity(count);
             for row in start..end {
                 if self.row_is_matchable(side, batch, row) {

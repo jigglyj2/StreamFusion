@@ -1,6 +1,7 @@
 // Copyright 2026 StreamFusion Authors
 // Licensed under the Apache License, Version 2.0
 
+use super::candidate_batch::{pair_workspace, MAX_PREDICATE_BYTES, PREDICATE_BASE_BYTES};
 use super::*;
 
 const CONDITION_BATCH_ROWS: usize = 4096;
@@ -113,21 +114,28 @@ impl RegularJoinProcessor {
         let mut workspace = self
             .scratch_reservation
             .sibling("regular join residual Arrow chunk");
-        for (chunk_index, chunk) in candidates.chunks(CONDITION_BATCH_ROWS).enumerate() {
-            // Decoded columns, expression temporaries and array headers coexist. Admit before
-            // converting Arrow rows, and retain the previous chunk's charge until it is dropped.
-            let bytes = chunk.iter().try_fold(4096usize, |bytes, candidate| {
-                bytes
-                    .checked_add(input.len())
-                    .and_then(|bytes| bytes.checked_add(candidate.row.len()))
-                    .and_then(|bytes| bytes.checked_add(256))
+        let mut offset = 0;
+        while offset < candidates.len() {
+            let mut end = offset;
+            let mut bytes = PREDICATE_BASE_BYTES;
+            while end < candidates.len() && end - offset < CONDITION_BATCH_ROWS {
+                let next = bytes
+                    .checked_add(pair_workspace(input.len(), candidates[end].row.len())?)
                     .ok_or_else(|| {
                         DataFusionError::ResourcesExhausted(
-                            "regular join residual workspace overflow".to_string(),
+                            "regular join residual workspace overflow".into(),
                         )
-                    })
-            })?;
-            workspace.resize(bytes.saturating_mul(4))?;
+                    })?;
+                if end > offset && next > MAX_PREDICATE_BYTES {
+                    break;
+                }
+                bytes = next;
+                end += 1;
+            }
+            let chunk = &candidates[offset..end];
+            // Bound both rows and bytes, preserving the same per-pair admission. A single
+            // oversized pair is attempted once and returns a recoverable error if it cannot fit.
+            workspace.resize(bytes)?;
             let mut columns = Vec::with_capacity(self.condition_schema.fields().len());
             for pair_side in 0..2 {
                 let converter = &self.row_converters[pair_side];
@@ -150,11 +158,11 @@ impl RegularJoinProcessor {
                         "regular join residual condition did not evaluate to BooleanArray".into(),
                     )
                 })?;
-            let offset = chunk_index * CONDITION_BATCH_ROWS;
             for index in 0..chunk.len() {
                 values[offset + index] = !evaluated.is_null(index) && evaluated.value(index);
                 result.count += usize::from(values[offset + index]);
             }
+            offset = end;
         }
         Ok(result)
     }

@@ -44,7 +44,8 @@ final class SharedBinaryJoinMetricFixture {
     enum Predicate {
         EQUALITY,
         RANGE,
-        TIMESTAMP_OFFSET
+        TIMESTAMP_OFFSET,
+        WIDE_RANGE
     }
 
     private final Predicate predicate;
@@ -57,17 +58,19 @@ final class SharedBinaryJoinMetricFixture {
 
     static SharedBinaryJoinMetricFixture forPredicate(Predicate predicate) {
         if (predicate == Predicate.EQUALITY) return new SharedBinaryJoinMetricFixture(false);
-        var input = RowType.of(
-                new BigIntType(false),
-                new org.apache.flink.table.types.logical.TimestampType(3),
-                new org.apache.flink.table.types.logical.TimestampType(3));
-        var output = RowType.of(
-                input.getTypeAt(0),
-                input.getTypeAt(1),
-                input.getTypeAt(2),
-                input.getTypeAt(0),
-                input.getTypeAt(1),
-                input.getTypeAt(2));
+        var input = predicate == Predicate.WIDE_RANGE
+                ? RowType.of(
+                        new BigIntType(false),
+                        new org.apache.flink.table.types.logical.TimestampType(3),
+                        new org.apache.flink.table.types.logical.TimestampType(3),
+                        new VarCharType())
+                : RowType.of(
+                        new BigIntType(false),
+                        new org.apache.flink.table.types.logical.TimestampType(3),
+                        new org.apache.flink.table.types.logical.TimestampType(3));
+        var output = RowType.of(java.util.stream.IntStream.range(0, input.getFieldCount() * 2)
+                .mapToObj(index -> input.getTypeAt(index % input.getFieldCount()))
+                .toArray(org.apache.flink.table.types.logical.LogicalType[]::new));
         return new SharedBinaryJoinMetricFixture(false, input, output, predicate);
     }
 
@@ -122,10 +125,15 @@ final class SharedBinaryJoinMetricFixture {
         Long value = start;
         if (port != 0)
             value = key % 6 == 0 ? null : Long.valueOf(start + new long[] {0, 0, 5, 10, -1, 11}[(int) (key % 6)]);
-        return org.apache.flink.table.data.GenericRowData.of(
-                key,
-                value == null ? null : org.apache.flink.table.data.TimestampData.fromEpochMillis(value),
-                key % 11 == 0 ? null : org.apache.flink.table.data.TimestampData.fromEpochMillis(start + 10));
+        var timestamp = value == null ? null : org.apache.flink.table.data.TimestampData.fromEpochMillis(value);
+        var end = key % 11 == 0 ? null : org.apache.flink.table.data.TimestampData.fromEpochMillis(start + 10);
+        if (predicate == Predicate.WIDE_RANGE)
+            return org.apache.flink.table.data.GenericRowData.of(
+                    key,
+                    timestamp,
+                    end,
+                    org.apache.flink.table.data.StringData.fromString(("é-" + port + "-" + key).repeat(2000)));
+        return org.apache.flink.table.data.GenericRowData.of(key, timestamp, end);
     }
 
     static long id(int stage) {
