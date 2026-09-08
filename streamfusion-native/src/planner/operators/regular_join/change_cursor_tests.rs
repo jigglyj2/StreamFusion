@@ -34,8 +34,8 @@ fn bounded_transitions_match_original_changelog_and_state_for_every_join_kind() 
                         ..Default::default()
                     };
                     let matches = match mask_kind {
-                        0 => CandidateMatches::constant(31, false, &owner),
-                        1 => CandidateMatches::constant(31, true, &owner),
+                        0 => CandidateMatches::constant(31, false),
+                        1 => CandidateMatches::constant(31, true),
                         _ => CandidateMatches::from_values(
                             (0..31).map(|i| i % 3 == 0).collect(),
                             &owner,

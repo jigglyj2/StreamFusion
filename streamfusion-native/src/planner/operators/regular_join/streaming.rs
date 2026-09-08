@@ -1,6 +1,7 @@
 // Copyright 2026 StreamFusion Authors
 // Licensed under the Apache License, Version 2.0
 
+use super::candidate_batch::CandidateBatch;
 use super::change_cursor::ChangeCursor;
 use super::native_output::NativeJoinOutput;
 use super::*;
@@ -14,6 +15,7 @@ pub(super) struct StreamingCursor {
     row: usize,
     change: Option<ChangeCursor>,
     matches: Option<CandidateMatches>,
+    candidate_batch: CandidateBatch,
     pair_bytes: usize,
     // Keep decoded state, input encodings and lookup metadata admitted between pulls.
     _memory: HostMemoryReservation,
@@ -94,6 +96,7 @@ impl RegularJoinProcessor {
             row: 0,
             change: None,
             matches: None,
+            candidate_batch: CandidateBatch::default(),
             pair_bytes: 0,
             _memory: memory,
         });
@@ -162,6 +165,19 @@ impl RegularJoinProcessor {
             while cursor.row < cursor.batch.num_rows() {
                 let state_index = cursor.indices[cursor.row];
                 if cursor.change.is_none() {
+                    if self.residual_condition.is_some() && cursor.candidate_batch.is_empty() {
+                        // The previous transition is complete, so release its exhausted cache
+                        // before admitting the next predicate chunk.
+                        cursor.candidate_batch = CandidateBatch::default();
+                        cursor.candidate_batch = self.condition_matches_batch(
+                            cursor.side,
+                            &cursor.batch,
+                            &cursor.encoded,
+                            &cursor.staged,
+                            &cursor.indices,
+                            cursor.row,
+                        )?;
+                    }
                     let state = &cursor.staged[state_index].value;
                     let candidates = if cursor.side == 0 {
                         &state.right
@@ -187,13 +203,16 @@ impl RegularJoinProcessor {
                             )))
                         }
                     };
-                    cursor.matches = Some(self.condition_matches_row(
-                        cursor.side,
-                        &cursor.batch,
-                        cursor.row,
-                        input,
-                        candidates,
-                    )?);
+                    cursor.matches = Some(match cursor.candidate_batch.pop() {
+                        Some(matches) => matches,
+                        None => self.condition_matches_row(
+                            cursor.side,
+                            &cursor.batch,
+                            cursor.row,
+                            input,
+                            candidates,
+                        )?,
+                    });
                     cursor.pair_bytes = candidates
                         .iter()
                         .map(|row| row.row.len())

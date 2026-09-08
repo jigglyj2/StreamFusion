@@ -6,6 +6,7 @@ use crate::memory_pool::{tests_support::TestBroker, HostMemoryReservation};
 use arrow::array::{ArrayRef, Int64Array, Int8Array, ListArray, StringArray};
 use arrow::datatypes::Int32Type;
 use prost::Message;
+mod candidate_batch;
 mod coarse_memory;
 mod planning_memory;
 mod region;
@@ -126,11 +127,7 @@ fn fanout_rows_share_encoded_payloads() {
         0,
         INSERT,
         true,
-        &CandidateMatches::constant(
-            100,
-            true,
-            &HostMemoryReservation::new(Arc::new(TestBroker::new(1 << 20)), "candidate test"),
-        ),
+        &CandidateMatches::constant(100, true),
         input.clone(),
         0,
         &mut state,

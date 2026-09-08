@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 mod bounded_datafusion;
+mod candidate_batch;
 mod candidates;
 mod change_cursor;
 #[cfg(test)]

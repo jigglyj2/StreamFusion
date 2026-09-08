@@ -15,10 +15,10 @@ This matrix follows the query operations documented by Flink 2.3, including the 
 | [VALUES](values/) | **Partial** (streaming and bounded scalar literals) | Yes | Source-free native Arrow batch |
 | [Windowing TVFs](window-tvf/) | **Partial** (standalone aligned TVFs; `SESSION` gated) | Yes | Native aligned assignment and keyed session merging |
 | [Watermark assignment](watermark-assignment/) | **Plan-compatible** | Flink-owned | Distinct StreamFusion node delegating Flink's exact timer and idleness runtime |
-| [Group aggregation](group-aggregation/) | **Temporarily gated** (whole-plan Flink fallback) | Yes | Native keyed state and Arrow aggregate kernels |
+| [Group aggregation](group-aggregation/) | **Partial** (synchronous keyed BIGINT aggregates; memory and default RocksDB) | Yes | DataFusion accumulators with Flink keyed state and changelog adapters |
 | [Window aggregation](window-aggregation/) | **Temporarily gated** (whole-plan Flink fallback) | Yes | Native keyed window state, timers, and Arrow aggregate kernels |
 | [OVER aggregation](over-aggregation/) | **Temporarily gated** (whole-plan Flink fallback) | Yes | Native ordered state, timers, absorbed batch sort, and aggregate kernels |
-| [Joins](joins/) | **Partial** (binary inner equi MultiJoin; in-memory state) | By join type | Native keyed state, vectorized predicates, and timers |
+| [Joins](joins/) | **Partial** (binary inner MultiJoin with bounded comparisons; memory and default RocksDB) | By join type | Native keyed state, vectorized predicates, and timers |
 | [Window joins](window-join/) | **Temporarily gated** (whole-plan Flink fallback) | Yes | Native two-sided window state plus Flink join conditions |
 | [Set operations](set-operations/) | **Partial** (`UNION ALL`; stateful rewrites gated) | By physical rewrite | Arrow IPC at Flink multi-input gates; native aggregate/join state and row replication |
 | [Exchange](exchange/) | **Partial** (hash and singleton) | Yes | Native Flink-compatible key grouping with Flink-owned network transport |

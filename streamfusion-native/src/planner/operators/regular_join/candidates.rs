@@ -11,15 +11,18 @@ pub(super) struct CandidateMatches {
     len: usize,
     constant: bool,
     values: Option<Vec<bool>>,
+    shared: Option<(Arc<SharedMatchMask>, usize)>,
     count: usize,
-    _memory: HostMemoryReservation,
+    _memory: Option<HostMemoryReservation>,
 }
 
 impl CandidateMatches {
     #[cfg(test)]
     pub(super) fn from_values(values: Vec<bool>, owner: &HostMemoryReservation) -> Self {
-        let mut result = Self::constant(values.len(), false, owner);
-        result._memory.try_grow(values.capacity()).unwrap();
+        let mut result = Self::constant(values.len(), false);
+        let mut memory = owner.sibling("regular join candidate mask");
+        memory.try_grow(values.capacity()).unwrap();
+        result._memory = Some(memory);
         result.values = Some(values);
         result.count = result
             .values
@@ -31,14 +34,25 @@ impl CandidateMatches {
         result
     }
 
-    pub(super) fn constant(len: usize, value: bool, owner: &HostMemoryReservation) -> Self {
+    pub(super) fn constant(len: usize, value: bool) -> Self {
         Self {
             len,
             constant: value,
             values: None,
+            shared: None,
             count: if value { len } else { 0 },
-            _memory: owner.sibling("regular join candidate mask"),
+            _memory: None,
         }
+    }
+
+    pub(super) fn shared(len: usize, offset: usize, mask: Arc<SharedMatchMask>) -> Self {
+        let mut result = Self::constant(len, false);
+        result.count = mask.values[offset..offset + len]
+            .iter()
+            .filter(|&&value| value)
+            .count();
+        result.shared = Some((mask, offset));
+        result
     }
 
     pub(super) fn len(&self) -> usize {
@@ -51,14 +65,25 @@ impl CandidateMatches {
     }
 
     pub(super) fn get(&self, index: usize) -> bool {
-        self.values
-            .as_ref()
-            .map_or(self.constant, |values| values[index])
+        if let Some((mask, offset)) = &self.shared {
+            mask.values[offset + index]
+        } else {
+            self.values
+                .as_ref()
+                .map_or(self.constant, |values| values[index])
+        }
     }
 
     pub(super) fn count(&self) -> usize {
         self.count
     }
+}
+
+/// The mask and its batch descriptors share one coarse owner, including while a row's
+/// transition spans several output pulls. No per-input-row reservation crosses JNI.
+pub(super) struct SharedMatchMask {
+    pub(super) values: Vec<bool>,
+    pub(super) _memory: HostMemoryReservation,
 }
 
 impl RegularJoinProcessor {
@@ -71,15 +96,18 @@ impl RegularJoinProcessor {
         candidates: &[StoredRow],
     ) -> Result<CandidateMatches> {
         let matchable = self.row_is_matchable(side, batch, row);
-        let mut result =
-            CandidateMatches::constant(candidates.len(), matchable, &self.scratch_reservation);
+        let mut result = CandidateMatches::constant(candidates.len(), matchable);
         let Some(condition) = &self.residual_condition else {
             return Ok(result);
         };
         if !matchable || candidates.is_empty() {
             return Ok(result);
         }
-        result._memory.try_grow(candidates.len())?;
+        let mut mask_memory = self
+            .scratch_reservation
+            .sibling("regular join candidate mask");
+        mask_memory.try_grow(candidates.len())?;
+        result._memory = Some(mask_memory);
         let values = result.values.insert(vec![false; candidates.len()]);
         result.count = 0;
         let mut workspace = self

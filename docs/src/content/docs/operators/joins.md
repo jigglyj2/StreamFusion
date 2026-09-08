@@ -33,6 +33,20 @@ expression chunks, all four RowKinds, complete registered metrics, backend-switc
 1-to-2-to-1 rescaling, incremental SST reuse, and actual aligned/unaligned channel replay.
 These tests support production admission for the bounded residual-comparison subset above.
 
+Residual evaluation now also batches candidate pairs across consecutive incoming rows. A cache
+holds at most 4,096 candidate pairs and 4,096 input descriptors, with one coarse reservation for
+masks/descriptors and one for the Arrow expression workspace. Incoming columns use zero-copy
+slices when pair indices are contiguous and Arrow gathers otherwise. Opposite-side stored payloads
+are decoded in a batch. A single larger fan-out keeps the existing bounded expression chunks.
+The state transitions still consume these masks in original input order, including outer/semi/anti
+association counts in retained implementations. State writes and output draining retain their
+existing batch boundaries, and the persisted format is unchanged.
+
+The Q4 release profiles before this change attributed about 6–7% of process CPU samples to JVM
+memory reservation callbacks. A native regression test reproduced 4,119 budget callbacks for
+1,024 residual-filtered rows; the same workload now requires fewer than 64. This is callback-count
+and parity evidence, not a throughput claim. Matched release measurements follow separately.
+
 ## SQL example
 
 ```sql

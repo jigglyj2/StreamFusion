@@ -31,38 +31,44 @@ impl MemoryReservationBroker for CountingBroker {
 
 #[test]
 fn streaming_reservation_calls_follow_buffer_growth_instead_of_rows_or_state_keys() {
-    let broker = Arc::new(CountingBroker {
-        inner: TestBroker::new(128 << 20),
-        calls: AtomicUsize::new(0),
-    });
-    let mut join = RegularJoinProcessor::new(
-        &plan(proto::RegularJoinType::Inner),
-        128,
-        0,
-        127,
-        HostMemoryReservation::new(broker.clone(), "coarse join budget"),
-    )
-    .unwrap();
-    let keys = (0..1024).collect::<Vec<i64>>();
-    for (side, expected) in [(0, 0), (1, keys.len()), (0, keys.len())] {
-        broker.calls.store(0, Ordering::Relaxed);
-        join.begin_streaming_batch(
-            side,
-            batch(&keys, &vec!["value"; keys.len()], &vec![INSERT; keys.len()]),
+    for residual in [None, Some(not_equal_value_condition())] {
+        let broker = Arc::new(CountingBroker {
+            inner: TestBroker::new(128 << 20),
+            calls: AtomicUsize::new(0),
+        });
+        let mut join = RegularJoinProcessor::new(
+            &plan_contract(proto::RegularJoinType::Inner, true, residual),
+            128,
+            0,
+            127,
+            HostMemoryReservation::new(broker.clone(), "coarse join budget"),
         )
         .unwrap();
-        let mut rows = 0;
-        while let Some(batch) = join.next_streaming_batch().unwrap() {
-            rows += batch.num_rows();
+        let keys = (0..1024).collect::<Vec<i64>>();
+        for (side, expected) in [(0, 0), (1, keys.len()), (0, keys.len())] {
+            broker.calls.store(0, Ordering::Relaxed);
+            join.begin_streaming_batch(
+                side,
+                batch(
+                    &keys,
+                    &vec![if side == 0 { "left" } else { "right" }; keys.len()],
+                    &vec![INSERT; keys.len()],
+                ),
+            )
+            .unwrap();
+            let mut rows = 0;
+            while let Some(batch) = join.next_streaming_batch().unwrap() {
+                rows += batch.num_rows();
+            }
+            assert_eq!(rows, expected);
+            let calls = broker.calls.load(Ordering::Relaxed);
+            assert!(
+                calls < 64,
+                "{calls} broker calls for {} input rows on side {side}",
+                keys.len()
+            );
         }
-        assert_eq!(rows, expected);
-        let calls = broker.calls.load(Ordering::Relaxed);
-        assert!(
-            calls < 64,
-            "{calls} broker calls for {} input rows on side {side}",
-            keys.len()
-        );
+        drop(join);
+        assert_eq!(broker.inner.reserved(), 0);
     }
-    drop(join);
-    assert_eq!(broker.inner.reserved(), 0);
 }
