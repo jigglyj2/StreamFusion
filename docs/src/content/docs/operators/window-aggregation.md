@@ -94,8 +94,10 @@ slice state and one initial timer, rather than one state per overlapping window.
 after its base slice fired is still accepted until its last overlapping window fires; the late-drop
 counter increments once only when that last window has fired. An extra empty-window timer ends
 the trigger chain after the final nonempty window. Flink restores its checkpointed watermark
-before processing replayed input. The existing native global kernel expands slices into windows
-and needs these state/control/metric corrections before shared-plan admission.
+before processing replayed input. The retained native global-partial kernel now matches that input-level late counter on both
+backends, including partially late inputs that still contribute to later windows. Its partial-input
+logic and tests live in a separate operator submodule. It still expands slices into windows and
+needs shared-slice state, restored-watermark and shared-control corrections before admission.
 
 ## Retained semantic implementation
 
