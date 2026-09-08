@@ -1,6 +1,9 @@
 # Copyright 2026 StreamFusion Authors. Licensed under the Apache License, Version 2.0.
 import hashlib
 from pathlib import Path
+import platform
+import shutil
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -46,18 +49,43 @@ class ArtifactTest(unittest.TestCase):
                 self.assertFalse(library.with_name("library.so.properties").exists())
                 library.write_bytes(b"compiled library")
 
+            def stage(raw, os_name):
+                packaged = raw.parent / "packaged" / raw.name
+                packaged.parent.mkdir()
+                shutil.copy2(raw, packaged)
+                return packaged, {}
+
             argv = ["artifact.py", "--manifest", str(target / "Cargo.toml"), "--target-dir", directory,
                     "--library", "library.so", "--cpu", "x86-64-v3"]
-            with patch("sys.argv", argv), patch.dict("os.environ", {}, clear=True), patch("platform.system", return_value="Linux"), patch("platform.machine", return_value="x86_64"), patch("subprocess.run", side_effect=build):
+            with patch("sys.argv", argv), patch.dict("os.environ", {}, clear=True), patch("platform.system", return_value="Linux"), patch("platform.machine", return_value="x86_64"), patch("subprocess.run", side_effect=build), patch("artifact.stage_library", side_effect=stage):
                 artifact.main()
             command, env = calls[0]
             self.assertIn("--release", command)
             self.assertIn("--locked", command)
             self.assertIn("target-cpu=x86-64-v3", env["RUSTFLAGS"])
             self.assertIn("metadata=sf_cpu_", env["RUSTFLAGS"])
-            metadata = library.with_name("library.so.properties").read_text()
+            metadata = (library.parent / "packaged" / "library.so.properties").read_text()
             self.assertIn("sha256=" + hashlib.sha256(b"compiled library").hexdigest(), metadata)
             self.assertIn("cpu-target=x86-64-v3", metadata)
+
+    @unittest.skipUnless(platform.system() == "Linux" and shutil.which("cc") and shutil.which("objcopy"), "ELF toolchain required")
+    def test_split_debug_artifact_preserves_execution_bytes_and_original_symbols(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "fixture.c"
+            source.write_text("int fixture(int value) { return value + 1; }\n")
+            library = root / "fixture.so"
+            subprocess.run(["cc", "-g", "-O2", "-shared", "-fPIC", str(source), "-o", str(library)], check=True)
+            original = library.read_bytes()
+            packaged, symbols = artifact.stage_library(library, "linux")
+            self.assertEqual(library.read_bytes(), original)
+            debug = root / "symbols" / symbols["debug-file"]
+            self.assertEqual(hashlib.sha256(debug.read_bytes()).hexdigest(), symbols["debug-sha256"])
+            for label, path in [("original", library), ("packaged", packaged)]:
+                subprocess.run(["objcopy", "-O", "binary", "--only-section=.text", str(path), str(root / (label + ".text"))], check=True)
+            self.assertEqual((root / "original.text").read_bytes(), (root / "packaged.text").read_bytes())
+            self.assertIn(symbols["debug-file"].encode(), packaged.read_bytes())
+            self.assertLess(packaged.stat().st_size, library.stat().st_size)
 
 
 if __name__ == "__main__":

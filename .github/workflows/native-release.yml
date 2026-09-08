@@ -76,8 +76,8 @@ jobs:
         run: |
           resource_dir="native-stage/META-INF/native/${{ matrix.os }}/${{ matrix.arch }}/${{ matrix.tier }}"
           mkdir -p "$resource_dir"
-          cp "streamfusion-native/target/release/${{ matrix.library }}" "$resource_dir/"
-          cp "streamfusion-native/target/release/${{ matrix.library }}.properties" "$resource_dir/"
+          cp "streamfusion-native/target/release/packaged/${{ matrix.library }}" "$resource_dir/"
+          cp "streamfusion-native/target/release/packaged/${{ matrix.library }}.properties" "$resource_dir/"
           printf '%s\n' \
             'os=${{ matrix.os }}' \
             'arch=${{ matrix.arch }}' \
@@ -88,8 +88,16 @@ jobs:
       - name: Upload native resource
         uses: actions/upload-artifact@v4
         with:
-          name: native-${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.tier }}
+          name: native-resource-${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.tier }}
           path: native-stage/
+          if-no-files-found: error
+
+      - name: Upload separate ELF profiling symbols
+        if: matrix.os == 'linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-symbols-${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.tier }}
+          path: streamfusion-native/target/release/symbols/*.debug
           if-no-files-found: error
 
   assemble-native-jar:
@@ -103,7 +111,7 @@ jobs:
       - name: Download native resources
         uses: actions/download-artifact@v4
         with:
-          pattern: native-*
+          pattern: native-resource-*
           path: native-stage
           merge-multiple: true
 

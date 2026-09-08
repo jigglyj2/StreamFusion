@@ -13,8 +13,10 @@ Its normal Flink changelog negotiation excludes UPDATE_BEFORE. Both engines use 
 complete changelog validation belongs in the separate collecting-sink and controlled parity tests.
 Blackhole timings alone establish no output correctness claim.
 
-Build the release/native-CPU artifacts and install the reactor dependencies before using the
-standalone classpath, as described on the [Nexmark benchmark page](/StreamFusion/benchmarks/nexmark/).
+Build the release/native-CPU artifacts with their CPU metadata and separate ELF symbols as
+explained in [Native modules and ABI](/StreamFusion/development/native-modules/), then install
+the reactor dependencies before using the standalone classpath as described on the
+[Nexmark benchmark page](/StreamFusion/benchmarks/nexmark/).
 Invoke one query, engine, and backend per JVM:
 
 ```shell

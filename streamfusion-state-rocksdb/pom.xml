@@ -64,7 +64,7 @@
         </plugins>
         <resources>
             <resource>
-                <directory>${project.build.directory}/rust/release</directory>
+                <directory>${project.build.directory}/rust/release/packaged</directory>
                 <targetPath>META-INF/native/linux-x86_64</targetPath>
                 <includes>
                     <include>libstreamfusion_state_rocksdb.so</include>

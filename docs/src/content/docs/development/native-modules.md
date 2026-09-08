@@ -61,8 +61,23 @@ python3 dev/native/artifact.py --manifest streamfusion-native/Cargo.toml \
 The wrapper owns compiler-target flags; remove external `RUSTFLAGS`, target overrides or
 prebuilt RocksDB/Snappy library overrides. `--cpu x86-64-v2`, `x86-64-v3` and `x86-64-v4`
 select portable Linux x86-64 build targets. These are build controls, not runtime options.
-Copy a library together with its adjacent `.properties` file when preparing an isolated
-benchmark checkout. Mixing metadata from another build fails its checksum check.
+JVM artifacts are staged under `target/rust/release/packaged/`; direct Cargo outputs remain
+under `target/rust/release/` for Rust tests. Copy the packaged library together with its adjacent
+`.properties` file when preparing an isolated benchmark checkout. Mixing metadata from another
+build fails its checksum check.
+
+Linux packages keep DWARF in separate, checksum-addressed files under
+`target/rust/release/symbols/`. The runtime library retains its function symbols and a standard
+GNU debug link; removing non-executable debug sections preserves its machine code. This avoids
+extracting hundreds of MiB of debugging data during normal startup. The native release workflow
+uploads these as separate `native-symbols-*` artifacts, outside the platform JAR. macOS currently
+keeps embedded debug information.
+
+For native profiling, install the matching `.debug` file beside the extracted library (or in
+its `.debug/` subdirectory), using the `debug-file` name and `debug-sha256` from the packaged
+metadata. This is ordinary debugger symbol discovery and changes no execution code. Install
+symbols before starting a profiled run; unprofiled measurements use the identical runtime
+library without copying debug files onto their startup path.
 
 This follows Comet's platform-specific `.so`/`.dylib` resource packaging while making
 x86 SIMD baselines explicit. These expensive variants run only for a manually invoked

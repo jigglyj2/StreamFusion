@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import shutil
 import subprocess
 
 
@@ -69,6 +70,29 @@ def requirements(cpu, os_name, arch):
             return features, set()
 
 
+def stage_library(library, os_name):
+    """Keep profiling data separate from the bytes loaded on the execution path."""
+    packaged = library.parent / "packaged" / library.name
+    packaged.parent.mkdir(parents=True, exist_ok=True)
+    symbols = {}
+    if os_name == "linux":
+        objcopy = shutil.which("llvm-objcopy") or shutil.which("objcopy")
+        if objcopy is None:
+            raise ValueError("ELF artifact builds require llvm-objcopy or objcopy")
+        digest = hashlib.sha256(library.read_bytes()).hexdigest()
+        debug = library.parent / "symbols" / f"{library.name}.{digest}.debug"
+        debug.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run([objcopy, "--only-keep-debug", str(library), str(debug)], check=True)
+        subprocess.run([objcopy, "--strip-debug", str(library), str(packaged)], check=True)
+        subprocess.run([objcopy, f"--add-gnu-debuglink={debug}", str(packaged)], check=True)
+        symbols = {"debug-file": debug.name, "debug-sha256": hashlib.sha256(debug.read_bytes()).hexdigest()}
+    else:
+        # Mach-O keeps its profiling information in the native artifact until a dSYM
+        # publication contract is implemented. Never apply ELF stripping to Mach-O.
+        shutil.copy2(library, packaged)
+    return packaged, symbols
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
@@ -98,12 +122,17 @@ def main():
     # when dependencies were compiled with -C debuginfo=1. Retain it on the root
     # library without changing dependency optimization or rebuilding their code.
     subprocess.run(["cargo", "rustc", "--release", "--locked", "--lib", "--manifest-path", str(args.manifest.resolve()), "--", "-C", "strip=none"], env=env, check=True)
-    library = args.target_dir / "release" / args.library
+    raw_library = args.target_dir / "release" / args.library
+    library, symbols = stage_library(raw_library, os_name)
+    config.update(symbols)
     config["sha256"] = hashlib.sha256(library.read_bytes()).hexdigest()
     config["rustflags"] = env["RUSTFLAGS"]
     config["link-rustflags"] = "-C strip=none"
     manifest = library.with_name(library.name + ".properties")
     manifest.write_text("".join(f"{key}={value}\n" for key, value in config.items()))
+    # A direct Cargo output is not the packaged artifact. Remove obsolete manifests
+    # from the former location so scripts cannot accidentally copy the wrong pair.
+    raw_library.with_name(raw_library.name + ".properties").unlink(missing_ok=True)
     print(f"Verified release artifact: {library} ({args.cpu}, {fingerprint})", flush=True)
 
 
