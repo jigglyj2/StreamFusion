@@ -86,6 +86,10 @@ final class StreamFusionGraphRewrite {
     }
 
     void commit() {
+        commit(() -> {});
+    }
+
+    void commit(Runnable validateSelectedGraph) {
         Map<ExecNode<?>, List<ExecEdge>> originals = new IdentityHashMap<>();
         try {
             for (Map.Entry<ExecNode<?>, List<ExecEdge>> entry : pending.entrySet()) {
@@ -93,6 +97,7 @@ final class StreamFusionGraphRewrite {
                 originals.put(node, new ArrayList<>(node.getInputEdges()));
                 node.setInputEdges(entry.getValue());
             }
+            validateSelectedGraph.run();
         } catch (RuntimeException | LinkageError failure) {
             for (Map.Entry<ExecNode<?>, List<ExecEdge>> entry : originals.entrySet()) {
                 entry.getKey().setInputEdges(entry.getValue());

@@ -47,6 +47,26 @@ final class NativeKeyedRegionTranslation {
                             List<Transformation<?>>,
                             java.util.Map<Long, tech.streamfusion.flink.memory.FlinkOperatorMemoryShare>>
                     resolver) {
+        return translate(inputs, inputTypes, stateIds, environment, exchanges -> {
+            var factory = new StreamFusionNativeRegionOperatorFactory(
+                    inputTypes,
+                    outputType,
+                    plan,
+                    stateIds,
+                    exchanges,
+                    resolver == null
+                            ? tech.streamfusion.flink.window.NativeLocalWindowResources.NONE
+                            : tech.streamfusion.flink.window.NativeLocalWindowResources.pending(plan));
+            return resolver == null ? factory : factory.withResourceResolver(resolver);
+        });
+    }
+
+    static Transformation<RowData> translate(
+            List<Transformation<RowData>> inputs,
+            List<RowType> inputTypes,
+            List<Long> stateIds,
+            StreamExecutionEnvironment environment,
+            java.util.function.Function<List<byte[]>, StreamFusionNativeRegionOperatorFactory> factoryBuilder) {
         if (inputs.isEmpty() || inputs.size() != inputTypes.size() || stateIds.isEmpty()) {
             throw new IllegalArgumentException(
                     "A keyed native region requires matching inputs and state-node identities");
@@ -81,16 +101,8 @@ final class NativeKeyedRegionTranslation {
             }
         }
         StreamFusionStateBackendFactory.install(environment);
-        var factory = new StreamFusionNativeRegionOperatorFactory(
-                inputTypes,
-                outputType,
-                plan,
-                stateIds,
-                bindings.stream().map(binding -> binding.exchangePlan).collect(Collectors.toList()),
-                resolver == null
-                        ? tech.streamfusion.flink.window.NativeLocalWindowResources.NONE
-                        : tech.streamfusion.flink.window.NativeLocalWindowResources.pending(plan));
-        if (resolver != null) factory.withResourceResolver(resolver);
+        var factory = factoryBuilder.apply(
+                bindings.stream().map(binding -> binding.exchangePlan).collect(Collectors.toList()));
         var result = new KeyedMultipleInputTransformation<>(
                 "streamfusion-native-region[inputs=" + inputs.size() + ",state=" + stateIds.size() + "]",
                 factory,

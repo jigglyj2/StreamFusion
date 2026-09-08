@@ -143,9 +143,11 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                         return graph;
                     }
                 }
-                graphRewrite.commit();
+                var selected = new ExecNodeGraph(graph.getFlinkVersion(), roots);
+                graphRewrite.commit(() -> StreamFusionSharedNativeRegion.install(
+                        selected, context == null ? null : context.getPlanner()));
                 StreamFusionPlanningDiagnostics.accelerate();
-                return new ExecNodeGraph(graph.getFlinkVersion(), roots);
+                return selected;
             } catch (RuntimeException | LinkageError failure) {
                 StreamFusionPlanningDiagnostics.reject(
                         "replacement-preflight",

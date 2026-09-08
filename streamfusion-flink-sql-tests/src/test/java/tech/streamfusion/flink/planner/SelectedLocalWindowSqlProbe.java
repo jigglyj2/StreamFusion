@@ -31,7 +31,9 @@ public final class SelectedLocalWindowSqlProbe implements ExecNodeGraphProcessor
         if (graph.getRootNodes().size() != 1) throw new AssertionError("This fixture expects one SQL output");
         var roots = List.<ExecNode<?>>of(processor.convert(graph.getRootNodes().get(0)));
         selected = nodes(roots);
-        return new ExecNodeGraph(graph.getFlinkVersion(), roots);
+        var result = new ExecNodeGraph(graph.getFlinkVersion(), roots);
+        StreamFusionSharedNativeRegion.install(result, context.getPlanner());
+        return result;
     }
 
     private static List<ExecNode<?>> nodes(List<ExecNode<?>> roots) {

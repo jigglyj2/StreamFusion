@@ -17,6 +17,17 @@ import org.apache.flink.table.planner.plan.utils.ExecNodeMetadataUtil;
 final class StreamFusionNativeNodeMetadata {
     private ExecNodeBase<?> original;
     private StreamFusionOriginalWindowResources resources;
+    private StreamFusionSharedNativeRegion sharedRegion;
+
+    void bindSharedRegion(StreamFusionSharedNativeRegion owner) {
+        if (sharedRegion != null && sharedRegion != owner)
+            throw new IllegalStateException("A selected native stage cannot belong to two shared regions");
+        sharedRegion = owner;
+    }
+
+    StreamFusionSharedNativeRegion sharedRegion() {
+        return sharedRegion;
+    }
 
     void bindResources(StreamFusionOriginalWindowResources resources) {
         if (this.resources != null && this.resources != resources)

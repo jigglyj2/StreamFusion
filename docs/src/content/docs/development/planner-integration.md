@@ -251,7 +251,7 @@ canonical savepoints (including switching backends), aligned and unaligned opera
 late input before the first replayed watermark, and rescaling with the minimum union clock.
 Both exit changelogs and controls match Flink, with one native window state owner and managed
 memory released at teardown. These operator-level checks do not yet validate shared-exit
-network channel replay or the complete COUNT-to-local-MAX topology.
+network channel replay for the complete COUNT-to-local-MAX topology.
 
 The Java metric publisher also consumes flat physical definitions directly. It binds each
 original stage scope once, omits anonymous local Input slots, and verifies the complete native
@@ -273,12 +273,26 @@ broadcasting, and managed-memory release on successful and cancelled execution. 
 recovery, including shared-exit channel replay, remains outstanding. No additional whole-plan
 query is admitted by this runtime prerequisite.
 
-Ordinary planner use of this layout remains limited to ownership admission. Wiring the native
-region owner and its side outputs into planner-selected Flink transformations is still required;
-the multi-output fallback gate remains active. Comet retains Spark's exchange reuse, while Flink can
-reuse an intermediate stage before two different exchanges. Supporting that Flink topology must
-keep the shared computation in one native owner and preserve the existing exchanges; it must not
-duplicate the stage or insert an artificial exchange to avoid native sharing.
+The selected-graph translator now binds one cached owner to all physical stages in a shared
+region. Translating either exit materializes that owner once; the main output and virtual Flink
+side-output transformations refer to the same runtime operator. Existing exchanges and key-group
+routing remain in place. Every exit records its original Flink resource identity, and factory
+serialization retains the completed local-buffer share. Shared contract and runtime-edge
+preflight run before graph replacement commits; failure restores retained Flink boundary edges.
+Enabled latency tracking is rejected before a shared owner is selected.
+
+Generated complete SQL graphs now compare reused HOP COUNT, attached local/global MAX and binary
+MultiJoin outputs against Flink on both backends. The fixtures use the benchmark's MultiJoin
+optimizer setting and verify that topology explicitly. Three generated inputs cover 6-second
+and 10-second HOP windows and parallelism one and two, with exact external changelog bytes,
+nonzero shared native activity and zero retained local-window bridge calls. Topology tests verify
+one three-stage owner, two Arrow exits, one keyed-state identity, original resource binding, and
+successful JobGraph serialization. Shared-exit channel replay and production benchmark validation
+remain outstanding, so ordinary whole-plan multi-output admission is still gated.
+
+Comet retains Spark's exchange reuse, while Flink can reuse an intermediate stage before two
+different exchanges. This Flink-specific topology keeps the shared computation in one native
+owner; it does not duplicate the stage or insert an artificial exchange to avoid native sharing.
 
 The native stream API now provides a bounded fan-out primitive for that integration. It shares
 one producer execution and holds at most one batch descriptor while waiting for readers; Arrow

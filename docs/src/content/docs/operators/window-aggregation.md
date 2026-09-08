@@ -82,6 +82,13 @@ preserving partial order and the original Flink flush boundary. If even one outp
 be admitted, execution fails for recovery. A constrained-memory regression covers both hot
 and distinct keys in a 1 MiB share; no deployment option or memory bypass is added.
 
+The selected-graph path now runs a reused global COUNT through one native owner with its
+Calc and attached local MAX consumer. The raw COUNT and local partial exits use separate Arrow
+outputs feeding the existing exchanges. Generated SQL comparisons with the benchmark's binary
+MultiJoin setting match Flink on both backends, for 6-second/10-second HOP windows and parallelism
+one/two. This is test-only selected-graph evidence: shared-exit channel replay, ordinary whole-plan
+admission and release benchmark validation remain required before Q5 is delivered.
+
 ### Global HOP slicer
 
 The global fragment builder admits append-only UTC event-time HOP partials for COUNT and

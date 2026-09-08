@@ -49,7 +49,8 @@ final class StreamFusionStatelessRegion {
     }
 
     static Transformation<RowData> translate(ExecNode<?> root, PlannerBase planner) {
-        var result = translateInternal(root, planner);
+        var owner = ((StreamFusionNativePlanNode) root).nativeMetadata().sharedRegion();
+        var result = owner == null ? translateInternal(root, planner) : owner.translate(root, planner);
         ((StreamFusionNativePlanNode) root).nativeMetadata().recordOutput(result);
         return result;
     }

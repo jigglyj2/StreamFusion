@@ -61,6 +61,23 @@ class StreamFusionGraphRewriteTest {
         assertThat(conversions).hasValue(1);
     }
 
+    @Test
+    void sharedRegionPreflightFailureRollsBackRetainedFlinkEdges() {
+        var source = node("source");
+        var sink = node("sink");
+        var replacement = node("replacement");
+        var original = edge(source, sink);
+        sink.setInputEdges(List.of(original));
+        var rewrite = new StreamFusionGraphRewrite();
+        rewrite.replaceInputEdge(sink, 0, edge(replacement, sink));
+        assertThatThrownBy(() -> rewrite.commit(() -> {
+                    assertThat(sink.getInputEdges().get(0).getSource()).isSameAs(replacement);
+                    throw new IllegalArgumentException("shared frontier unsupported");
+                }))
+                .hasMessageContaining("shared frontier unsupported");
+        assertThat(sink.getInputEdges()).containsExactly(original);
+    }
+
     private static StreamExecDropUpdateBefore node(String name) {
         var node = new StreamExecDropUpdateBefore(
                 new Configuration(), InputProperty.DEFAULT, RowType.of(new IntType()), name);
