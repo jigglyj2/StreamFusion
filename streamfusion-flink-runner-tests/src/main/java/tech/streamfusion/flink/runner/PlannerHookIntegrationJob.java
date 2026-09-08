@@ -97,6 +97,8 @@ public final class PlannerHookIntegrationJob {
             throw new IllegalStateException("The runner-only fallback fixture unexpectedly ran in StreamFusion");
         }
 
+        SharedWindowRunnerFixture.verify(tables);
+
         System.out.println(SUCCESS_MARKER
                 + " planners="
                 + StreamFusionPlannerFactory.createdPlannerCount()
@@ -104,6 +106,6 @@ public final class PlannerHookIntegrationJob {
                 + StreamFusionPlannerFactory.translatedPlanCount()
                 + " nativeCalcBatches="
                 + StreamFusionPlannerFactory.nativeCalcBatchCount()
-                + " unionAll=verified fallback=verified");
+                + " unionAll=verified fallback=verified sharedWindows=hashmap,rocksdb");
     }
 }

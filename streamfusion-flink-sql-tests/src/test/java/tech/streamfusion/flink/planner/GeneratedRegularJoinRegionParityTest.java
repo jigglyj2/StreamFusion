@@ -2,7 +2,7 @@
  * Copyright 2026 StreamFusion Authors
  * Licensed under the Apache License, Version 2.0
  */
-package tech.streamfusion.flink.join;
+package tech.streamfusion.flink.planner;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -44,12 +44,12 @@ import org.apache.flink.table.types.logical.VarCharType;
 import org.apache.flink.types.RowKind;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import tech.streamfusion.flink.TestingNativeMemoryManager;
 import tech.streamfusion.flink.arrow.ArrowRegularJoinOutputStream;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.calc.StreamFusionCalcTranslator;
 import tech.streamfusion.flink.exchange.ArrowExchangeInputBatch;
 import tech.streamfusion.flink.operator.StreamFusionNativeRegionTranslator;
+import tech.streamfusion.flink.planner.join.StreamFusionRegularJoinPlan;
 import tech.streamfusion.nativebridge.NativeRegularJoinBridge;
 
 /** Real Flink join and generated Calc operators are the oracle, including the complete changelog. */
@@ -90,7 +90,7 @@ class GeneratedRegularJoinRegionParityTest {
                         .getInput()
                         .getPlanNodeId();
                 for (boolean rocks : List.of(false, true)) {
-                    var memory = TestingNativeMemoryManager.create();
+                    var memory = new SharedAggregateRegionParityTest.Memory();
                     var binding = rocks
                             ? tech.streamfusion.nativebridge.NativeStateResources.rocksDb(
                                     stateId, 128, 0, 127, temporary.resolve("shared-" + outer + "-" + seed), 32L << 20)
@@ -183,7 +183,7 @@ class GeneratedRegularJoinRegionParityTest {
                                 StreamFusionCalcTranslator.createStagePlan(OUTPUT, OUTPUT, reorder, null)));
                 assertThat(plan).isNotNull();
                 for (boolean rocks : List.of(false, true)) {
-                    var memory = TestingNativeMemoryManager.create();
+                    var memory = new SharedAggregateRegionParityTest.Memory();
                     long handle = rocks
                             ? NativeRegularJoinBridge.createRocksDb(
                                     plan,

@@ -32,7 +32,7 @@ import tech.streamfusion.nativebridge.NativeCalcBridge;
 import tech.streamfusion.nativebridge.NativeRegularJoinBridge;
 
 /** Native two-input regular streaming join over ordered Arrow-row multiset state. */
-final class StreamFusionArrowRegularJoinOperator extends AbstractStreamFusionArrowKeyedStateOperator
+public final class StreamFusionArrowRegularJoinOperator extends AbstractStreamFusionArrowKeyedStateOperator
         implements TwoInputStreamOperator<NativeExchangeFrame, NativeExchangeFrame, ArrowRowDataBatch>,
                 BoundedMultiInput {
     private final RowType[] inputTypes;
@@ -55,7 +55,7 @@ final class StreamFusionArrowRegularJoinOperator extends AbstractStreamFusionArr
     private transient long observedJoinOutput;
     private transient long emittedRegionOutput;
 
-    StreamFusionArrowRegularJoinOperator(
+    public StreamFusionArrowRegularJoinOperator(
             RowType leftType,
             RowType rightType,
             RowType outputType,
@@ -80,7 +80,7 @@ final class StreamFusionArrowRegularJoinOperator extends AbstractStreamFusionArr
                 false);
     }
 
-    StreamFusionArrowRegularJoinOperator(
+    public StreamFusionArrowRegularJoinOperator(
             RowType leftType,
             RowType rightType,
             RowType outputType,

@@ -645,6 +645,11 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             }
         } else if (node instanceof StreamExecWatermarkAssigner) {
             // The distinct node retains Flink's generated expression and watermark state machine.
+            // Flink's row representation tolerates precision changes; Arrow may change time units.
+            if (!node.getInputEdges().get(0).getOutputType().equals(node.getOutputType())) {
+                rejections.add(nodePath + "\nArrow watermark assignment requires unchanged input field types; "
+                        + "timestamp precision conversion is not supported");
+            }
         } else if (node instanceof StreamExecExpand) {
             String reason = unsupportedReason((StreamExecExpand) node, context);
             if (reason != null) {

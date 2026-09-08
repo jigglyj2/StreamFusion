@@ -2,7 +2,7 @@
  * Copyright 2026 StreamFusion Authors
  * Licensed under the Apache License, Version 2.0
  */
-package tech.streamfusion.flink.join;
+package tech.streamfusion.flink.planner.join;
 
 import static org.apache.flink.runtime.state.KeyGroupRangeAssignment.DEFAULT_LOWER_BOUND_MAX_PARALLELISM;
 
@@ -31,6 +31,7 @@ import tech.streamfusion.flink.exchange.NativeExchangeFrameKeySelector;
 import tech.streamfusion.flink.exchange.NativeExchangeFrameTypeInfo;
 import tech.streamfusion.flink.exchange.NativeExchangeReaderOperator;
 import tech.streamfusion.flink.exchange.StreamFusionExchangeTranslator;
+import tech.streamfusion.flink.join.StreamFusionArrowRegularJoinOperator;
 import tech.streamfusion.flink.state.StreamFusionStateBackendFactory;
 
 /** Reflection entry point for native synchronous regular streaming joins. */

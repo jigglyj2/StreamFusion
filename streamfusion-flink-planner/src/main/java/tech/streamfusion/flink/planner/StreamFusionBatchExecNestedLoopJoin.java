@@ -28,7 +28,7 @@ import org.apache.flink.table.types.logical.RowType;
 
 /** Distinct StreamFusion physical node for a bounded nested-loop join. */
 public final class StreamFusionBatchExecNestedLoopJoin extends ExecNodeBase<RowData> implements BatchExecNode<RowData> {
-    private static final String TRANSLATOR = "tech.streamfusion.flink.join.StreamFusionRegularJoinTranslator";
+    private static final String TRANSLATOR = "tech.streamfusion.flink.planner.join.StreamFusionRegularJoinTranslator";
 
     private final JoinSpec joinSpec;
 
@@ -73,8 +73,7 @@ public final class StreamFusionBatchExecNestedLoopJoin extends ExecNodeBase<RowD
         RowDataKeySelector rightSelector = KeySelectorUtil.getRowDataSelector(
                 planner.getFlinkContext().getClassLoader(), new int[0], InternalTypeInfo.of(rightType));
         try {
-            Class<?> translator =
-                    Class.forName(TRANSLATOR, true, planner.getFlinkContext().getClassLoader());
+            Class<?> translator = Class.forName(TRANSLATOR, true, getClass().getClassLoader());
             Method method;
             Transformation<RowData> result;
             if (outputCalcs == null) {

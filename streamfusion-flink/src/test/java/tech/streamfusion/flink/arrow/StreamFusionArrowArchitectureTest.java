@@ -16,11 +16,14 @@ import org.junit.jupiter.api.Test;
 /** Prevents a StreamFusion internal operator from silently becoming row-shaped again. */
 class StreamFusionArrowArchitectureTest {
     @Test
-    void aggregateAndWindowRuntimeDoNotLinkIsolatedPlannerClasses() throws IOException {
-        for (String family : List.of("aggregate", "window", "over")) {
+    void nativePlanRuntimeFamiliesDoNotLinkIsolatedPlannerClasses() throws IOException {
+        for (String family : List.of("aggregate", "window", "over", "join")) {
             try (var sources = Files.walk(Path.of("src/main/java/tech/streamfusion/flink", family))) {
                 for (Path source : sources.filter(path -> path.toString().endsWith(".java"))
                         .collect(Collectors.toList())) {
+                    // Other retained join families have separate planner migration gates.
+                    if (family.equals("join")
+                            && !source.getFileName().toString().contains("RegularJoin")) continue;
                     assertThat(Files.readString(source))
                             .as("%s must receive a runtime/protobuf contract", source)
                             .doesNotContain("org.apache.calcite.", "org.apache.flink.table.planner.");

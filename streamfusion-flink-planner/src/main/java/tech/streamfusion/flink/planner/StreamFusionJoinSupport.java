@@ -65,9 +65,7 @@ final class StreamFusionJoinSupport {
         ExecEdge right = join.getInputEdges().get(1);
         try {
             Class<?> translator = Class.forName(
-                    REGULAR_JOIN_TRANSLATOR_CLASS,
-                    true,
-                    context.getPlanner().getFlinkContext().getClassLoader());
+                    REGULAR_JOIN_TRANSLATOR_CLASS, true, StreamFusionRuntimeClasses.class.getClassLoader());
             Method method = translator.getMethod(
                     "unsupportedBatchReason", RowType.class, RowType.class, RowType.class, JoinSpec.class);
             return (String) method.invoke(
@@ -241,9 +239,7 @@ final class StreamFusionJoinSupport {
             ProcessorContext context) {
         try {
             Class<?> translator = Class.forName(
-                    REGULAR_JOIN_TRANSLATOR_CLASS,
-                    true,
-                    context.getPlanner().getFlinkContext().getClassLoader());
+                    REGULAR_JOIN_TRANSLATOR_CLASS, true, StreamFusionRuntimeClasses.class.getClassLoader());
             Method method = translator.getMethod(
                     "unsupportedReason",
                     RowType.class,

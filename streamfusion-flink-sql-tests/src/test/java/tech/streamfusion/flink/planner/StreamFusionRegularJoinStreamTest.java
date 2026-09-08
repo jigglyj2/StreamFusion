@@ -2,7 +2,7 @@
  * Copyright 2026 StreamFusion Authors
  * Licensed under the Apache License, Version 2.0
  */
-package tech.streamfusion.flink.join;
+package tech.streamfusion.flink.planner;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -23,10 +23,10 @@ import org.apache.flink.table.types.logical.VarCharType;
 import org.apache.flink.types.RowKind;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import tech.streamfusion.flink.TestingNativeMemoryManager;
 import tech.streamfusion.flink.arrow.ArrowRegularJoinOutputStream;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.exchange.ArrowExchangeInputBatch;
+import tech.streamfusion.flink.planner.join.StreamFusionRegularJoinPlan;
 import tech.streamfusion.nativebridge.NativeMemoryManager;
 import tech.streamfusion.nativebridge.NativeRegularJoinBridge;
 
@@ -40,7 +40,7 @@ class StreamFusionRegularJoinStreamTest {
     @Test
     void drainsHotKeyInsertAndRetractionThroughBoundedCStreamOnBothBackends(@TempDir Path temporary) {
         for (boolean rocks : List.of(false, true)) {
-            NativeMemoryManager memory = TestingNativeMemoryManager.create();
+            NativeMemoryManager memory = new SharedAggregateRegionParityTest.Memory();
             long handle = rocks
                     ? NativeRegularJoinBridge.createRocksDb(
                             PLAN, 128, 0, 127, temporary.resolve("rocks"), 32L << 20, memory)
@@ -90,7 +90,7 @@ class StreamFusionRegularJoinStreamTest {
 
     @Test
     void streamOwnsNativeProcessorAfterHandleReleaseAndCancelsSafely() {
-        NativeMemoryManager memory = TestingNativeMemoryManager.create();
+        NativeMemoryManager memory = new SharedAggregateRegionParityTest.Memory();
         long handle = NativeRegularJoinBridge.create(PLAN, 128, 0, 127, memory);
         boolean released = false;
         try (RootAllocator allocator = new RootAllocator(128L << 20)) {

@@ -60,7 +60,7 @@ final class StreamFusionRuntimeClasses {
             "tech.streamfusion.flink.planner.window.StreamFusionWindowJoinTranslator";
 
     static final String REGULAR_JOIN_TRANSLATOR_CLASS =
-            "tech.streamfusion.flink.join.StreamFusionRegularJoinTranslator";
+            "tech.streamfusion.flink.planner.join.StreamFusionRegularJoinTranslator";
 
     static final String MULTI_JOIN_TRANSLATOR_CLASS = "tech.streamfusion.flink.join.StreamFusionMultiJoinTranslator";
 

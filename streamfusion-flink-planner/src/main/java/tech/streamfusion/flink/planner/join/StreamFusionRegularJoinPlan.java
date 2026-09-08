@@ -2,7 +2,7 @@
  * Copyright 2026 StreamFusion Authors
  * Licensed under the Apache License, Version 2.0
  */
-package tech.streamfusion.flink.join;
+package tech.streamfusion.flink.planner.join;
 
 import java.util.List;
 import org.apache.flink.table.runtime.operators.join.FlinkJoinType;
@@ -17,10 +17,10 @@ import tech.streamfusion.proto.plan.v1.RegularJoinType;
 import tech.streamfusion.proto.plan.v1.Schema;
 
 /** Builds the versioned native regular streaming join state contract. */
-final class StreamFusionRegularJoinPlan {
+public final class StreamFusionRegularJoinPlan {
     private StreamFusionRegularJoinPlan() {}
 
-    static byte[] create(
+    public static byte[] create(
             RowType leftType,
             RowType rightType,
             int[] leftKeys,
@@ -31,7 +31,7 @@ final class StreamFusionRegularJoinPlan {
         return create(leftType, rightType, leftKeys, rightKeys, filterNulls, joinType, residualCondition, false);
     }
 
-    static byte[] createBounded(
+    public static byte[] createBounded(
             RowType leftType,
             RowType rightType,
             int[] leftKeys,

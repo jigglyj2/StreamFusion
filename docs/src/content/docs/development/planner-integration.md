@@ -131,9 +131,9 @@ the application's context classloader. Both acceleration and precise fallback re
 available at that boundary. The launcher integration job includes EXPLAIN in its failure output
 when a submitted Calc does not execute natively.
 
-Aggregate, window, and OVER plan builders live in `streamfusion-flink-planner` under its
-`planner.aggregate`, `planner.window`, and `planner.over` packages. Their Calcite and Flink planner
-dependencies stay inside the isolated planner loader. Runtime operators receive protobuf plans
+Aggregate, regular-join, window, and OVER plan builders live in `streamfusion-flink-planner`
+under its `planner.aggregate`, `planner.join`, `planner.window`, and `planner.over` packages.
+Their Calcite and Flink planner dependencies stay inside the isolated planner loader. Runtime operators receive protobuf plans
 and runtime types. A source guard rejects new planner dependencies in those runtime families.
 The Flink loader patch delegates the `tech.streamfusion` namespace component-first: planner
 classes come from the component, while shared runtime, Arrow wrappers, and protobuf classes
@@ -142,8 +142,12 @@ come from the runtime owner. This does not expose Calcite through the runtime lo
 Both modules publish normal Maven JARs for compilation and explicit `-bundle.jar` distribution
 artifacts. The runtime bundle owns Arrow, native bridges, and protobuf dependencies; the planner
 bundle contains only planner classes and relocates protobuf references to match the runtime.
-The launcher installs those matching bundles and checks native Calc, shared-plan UNION inputs,
-and whole-plan fallback. This packaging check supplements the generated SQL parity tests;
+The launcher installs those matching bundles plus the independently packaged RocksDB native JAR,
+and allocates two task slots for parallel fixtures. It checks native Calc, shared-plan UNION inputs,
+whole-plan fallback, and shared HOP COUNT/attached MAX followed by a binary join on both state
+backends. The shared-window fixture compares complete collected rows with a Flink baseline and
+requires common-runtime native activity with no standalone local-window calls.
+This packaging check supplements the generated SQL parity tests;
 it does not establish coverage for operators still gated by their semantic or runtime contracts.
 
 The `streamfusion-flink` module supplies the planner-side integration under `tech.streamfusion.flink`. Tests can select the StreamFusion implementation for one execution and clear that selection for the native Flink baseline.

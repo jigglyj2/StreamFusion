@@ -20,6 +20,12 @@ tests cover this path. Q3 passes ordinary admission and collecting/blackhole int
 backends. The [Q3 release comparison](/StreamFusion/benchmarks/q3-rowdata/) records corrected
 measurements and profiles for both, including small larger-run median gains and slower smaller runs.
 
+Regular-join capability checks and protobuf construction belong to the planner bundle, where
+Flink's `JoinSpec` and Calcite classes are visible. Runtime operators remain in the runtime
+bundle and receive the completed native plan. This boundary also applies to the binary MultiJoin
+representation used by Q3–Q5; loading its translator from the runtime classloader would cause
+whole-plan fallback in the packaged distribution even when flat-classpath SQL tests pass.
+
 All other join paths described below are retained for development and direct parity tests under
 [architecture admission](/StreamFusion/development/architecture-admission/).
 

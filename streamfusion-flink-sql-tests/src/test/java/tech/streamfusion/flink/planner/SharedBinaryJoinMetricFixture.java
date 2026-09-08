@@ -29,8 +29,8 @@ import org.apache.flink.table.types.logical.BigIntType;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.VarCharType;
 import tech.streamfusion.flink.calc.StreamFusionCalcTranslator;
-import tech.streamfusion.flink.join.StreamFusionRegularJoinTranslator;
 import tech.streamfusion.flink.operator.StreamFusionNativeRegionTranslator;
+import tech.streamfusion.flink.planner.join.StreamFusionRegularJoinTranslator;
 
 /** Q3's binary MultiJoin shape, using Flink's actual multi-input operator and generated Calc. */
 final class SharedBinaryJoinMetricFixture {

@@ -58,7 +58,8 @@ public final class ArrowNativePlanDispatcher implements AutoCloseable {
         Objects.checkIndex(inputIndex, inputs.size());
         Objects.requireNonNull(output, "output");
         if (!inputTypes.get(inputIndex).equals(input.rowType())) {
-            throw new IllegalArgumentException("Native input type changed at port " + inputIndex);
+            throw new IllegalArgumentException("Native input type changed at port " + inputIndex + ": expected "
+                    + inputTypes.get(inputIndex) + ", received " + input.rowType());
         }
         processing = true;
         inputs.set(inputIndex, input);

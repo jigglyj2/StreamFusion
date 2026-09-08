@@ -2,7 +2,7 @@
  * Copyright 2026 StreamFusion Authors
  * Licensed under the Apache License, Version 2.0
  */
-package tech.streamfusion.flink.join;
+package tech.streamfusion.flink.planner;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -53,6 +53,8 @@ import tech.streamfusion.flink.exchange.ArrowExchangeBatch;
 import tech.streamfusion.flink.exchange.NativeExchangeFrame;
 import tech.streamfusion.flink.exchange.NativeExchangeFrameKeySelector;
 import tech.streamfusion.flink.exchange.NativeExchangePlanSerializer;
+import tech.streamfusion.flink.join.StreamFusionArrowRegularJoinOperator;
+import tech.streamfusion.flink.planner.join.StreamFusionRegularJoinPlan;
 import tech.streamfusion.flink.state.StreamFusionStateBackend;
 
 class StreamFusionArrowRegularJoinOperatorTest {
@@ -399,10 +401,7 @@ class StreamFusionArrowRegularJoinOperatorTest {
                         .withEnvelope(new RowKind[] {row.getRowKind()}, new boolean[] {false}, new long[] {0});
                 ArrowExchangeBatch.EnvelopeBatch envelope = ArrowExchangeBatch.withEnvelope(input, INPUT_TYPE)) {
             List<NativeExchangeFrame> frames = ArrowExchangeCDataBridge.route(
-                    EXCHANGE_PLAN,
-                    envelope.batch(),
-                    allocator,
-                    tech.streamfusion.flink.TestingNativeMemoryManager.create());
+                    EXCHANGE_PLAN, envelope.batch(), allocator, new SharedAggregateRegionParityTest.Memory());
             assertThat(frames).hasSize(1);
             StreamRecord<NativeExchangeFrame> record = new StreamRecord<>(frames.get(0));
             if (side == 0) {
@@ -419,10 +418,7 @@ class StreamFusionArrowRegularJoinOperatorTest {
                         .withEnvelope(new RowKind[] {row.getRowKind()}, new boolean[] {false}, new long[] {0});
                 ArrowExchangeBatch.EnvelopeBatch envelope = ArrowExchangeBatch.withEnvelope(input, INPUT_TYPE)) {
             List<NativeExchangeFrame> frames = ArrowExchangeCDataBridge.route(
-                    EXCHANGE_PLAN,
-                    envelope.batch(),
-                    allocator,
-                    tech.streamfusion.flink.TestingNativeMemoryManager.create());
+                    EXCHANGE_PLAN, envelope.batch(), allocator, new SharedAggregateRegionParityTest.Memory());
             assertThat(frames).hasSize(1);
             StreamRecord<NativeExchangeFrame> record = new StreamRecord<>(frames.get(0));
             if (side == 0) {

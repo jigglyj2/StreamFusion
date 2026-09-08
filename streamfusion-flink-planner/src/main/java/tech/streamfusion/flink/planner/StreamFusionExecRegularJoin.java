@@ -67,7 +67,7 @@ public final class StreamFusionExecRegularJoin extends ExecNodeBase<RowData>
     public byte[] nativePlanFragment(PlannerBase planner) {
         return StreamFusionNativePlanNode.invokeBuilder(
                 planner,
-                "tech.streamfusion.flink.join.StreamFusionRegularJoinTranslator",
+                "tech.streamfusion.flink.planner.join.StreamFusionRegularJoinTranslator",
                 new Class<?>[] {
                     RowType.class,
                     RowType.class,
