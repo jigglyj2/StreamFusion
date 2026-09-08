@@ -160,9 +160,22 @@ final class StreamFusionArchitectureSupport {
         }
     }
 
+    private static boolean isRegionReady(ExecNode<?> node) {
+        if (REGION_READY.contains(node.getClass().getSimpleName())) return true;
+        if (!(node instanceof StreamExecMultiJoin)) return false;
+        try {
+            // Binary INNER MultiJoin is covered by the shared regular-join/Calc metric,
+            // changelog, rescaling and channel-recovery tests. Outer and true multi-way
+            // shapes use a different algorithm and retain their separate integration gate.
+            return FlinkExecNodeAccess.binaryMultiJoinSpec((StreamExecMultiJoin) node) != null;
+        } catch (RuntimeException unsupportedShape) {
+            return false;
+        }
+    }
+
     private static boolean sameReadyRegion(ExecNode<?> parent, ExecNode<?> child) {
-        return REGION_READY.contains(parent.getClass().getSimpleName())
-                && REGION_READY.contains(child.getClass().getSimpleName())
+        return isRegionReady(parent)
+                && isRegionReady(child)
                 && (parent instanceof org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecNode)
                         == (child instanceof org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecNode);
     }

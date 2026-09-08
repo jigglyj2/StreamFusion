@@ -42,7 +42,8 @@ subsets retain their precise fallback reasons. Sources and sinks may use explici
 edge adapters; an internal RowData operator or an intermediate JNI round trip is not admitted.
 
 A binary Flink `StreamExecMultiJoin` with a common equi key lowers to the regular join algorithm.
-It retains the persistent-state and composition gates. Genuine multi-way joins have paged state
+Its shared-region composition is admitted after generated metric/changelog comparisons, keyed
+rescaling and channel replay tests; the independent persistent-state gate remains. Genuine multi-way joins have paged state
 and a bounded output cursor in their retained native implementation, but still require integration
 with the common ExecutionPlan, per-stage metrics, and checkpoint/control lifecycle. Their gate
 must describe this missing integration rather than claiming whole-key rewrites remain implemented.

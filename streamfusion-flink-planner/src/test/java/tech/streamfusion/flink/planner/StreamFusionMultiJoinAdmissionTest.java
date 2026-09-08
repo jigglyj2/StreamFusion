@@ -32,7 +32,7 @@ class StreamFusionMultiJoinAdmissionTest {
     private final RexBuilder rex = new RexBuilder(types);
 
     @Test
-    void binaryJoinKeepsMemoryAndCompositionGatesWithoutMultiWayStorageReasons() {
+    void binaryJoinComposesWithCalcWhileRetainingItsPersistentStateGate() {
         var join = join(2, true);
         var root = new StreamExecCalc(config, List.of(ref(0)), null, InputProperty.DEFAULT, inputType, "projection");
         root.setInputEdges(List.of(ExecEdge.builder().source(join).target(root).build()));
@@ -40,9 +40,10 @@ class StreamFusionMultiJoinAdmissionTest {
         var original = root.getInputEdges().get(0);
         var reasons = new ArrayList<String>();
         StreamFusionArchitectureSupport.collect(graph, reasons);
-        assertThat(reasons).hasSize(2);
+        assertThat(reasons).hasSize(1);
         assertThat(String.join("\n", reasons))
-                .contains("retained-state/buffer admission", "fused native ExecutionPlan")
+                .contains("retained-state/buffer admission")
+                .doesNotContain("fused native ExecutionPlan")
                 .doesNotContain("whole-key", "dirty-page", "fan-out is not yet drained");
         assertThat(new StreamFusionExecGraphProcessor().process(graph, null)).isSameAs(graph);
         assertThat(root.getInputEdges()).containsExactly(original);

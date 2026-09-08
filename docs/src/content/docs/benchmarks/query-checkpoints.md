@@ -10,7 +10,7 @@ An implemented native kernel is not an unlocked query.
 Performance work uses the [RowData-to-blackhole harness](/StreamFusion/benchmarks/rowdata-blackhole/),
 with separate collecting-sink runs for parity. The blackhole path has passed Q0–Q2 admission
 and native-activity integration checks with both backend settings after the sortable-state
-changes. Q3 still reports the persistent-state and native-region composition restrictions.
+changes. Q3 still reports the persistent-state restriction; binary join/Calc region composition is verified.
 These short integration runs are not performance measurements.
 
 ## Current checkpoint
@@ -43,8 +43,8 @@ current planner admits a query.
 The actual RowData Q3 plan uses Flink's binary `StreamExecMultiJoin` for the auction/person join.
 The existing semantic lowering can represent that binary shape as the native regular join;
 it must not be confused with the separate native multi-way join algorithm. The early architecture
-gate now uses the same binary-shape decision as semantic lowering. It retains persistent-memory
-and composition restrictions for the binary regular-join path without incorrectly reporting the
+gate now uses the same binary-shape decision as semantic lowering. It retains the persistent-memory
+restriction for the binary regular-join path without incorrectly reporting the
 multi-way algorithm's separate integration restriction. Genuine multi-way and non-lowerable
 binary shapes still require their paged-state/output cursor to join the common execution, metric,
 and checkpoint lifecycle. This diagnostic correction does not
@@ -61,7 +61,12 @@ through Flink's key-group repartition APIs. Canonical savepoints switch between 
 RocksDB; aligned and unaligned snapshot options preserve state on each backend, and successive
 RocksDB checkpoints verify incremental file reuse. The harness now uses the production frame
 key selector after rescaling. These tests cover keyed-state snapshots, not in-flight network
-channel recovery. Backend option propagation remains an admission prerequisite.
+channel recovery. A separate mailbox-task test now verifies aligned restore and unaligned Arrow
+frame replay on both backends through Flink's channel-state writer/reader, followed by exact
+retraction comparison. Its test input channel inserts captured serialized frames explicitly;
+it does not claim distributed failover or in-flight rescaling coverage. Binary join/Calc composition
+is therefore admitted independently of the remaining persistent-state gate. Backend configuration
+and memory admission remain prerequisites.
 
 The next work is limited to this production path:
 
