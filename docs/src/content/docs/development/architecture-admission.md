@@ -34,13 +34,18 @@ compose through the common native region. The join and aggregate subsets are adm
 in-memory or supported default RocksDB state. Aggregation admits non-DISTINCT BIGINT
 COUNT/SUM/SUM0/MIN/MAX/AVG, BIGINT arguments, and BIGINT/INTEGER/VARCHAR grouping keys.
 Mini-batch, singleton/global and other aggregate subsets retain explicit production restrictions.
+Two-phase UTC event-time HOP windows also compose through this runtime: append-only BIGINT
+COUNT/MIN/MAX with BIGINT arguments and BIGINT/INTEGER keys (or no keys), synchronous state,
+and mini-batch disabled. Semantic lowering rejects other time, accumulator and buffer layouts.
 Other persistent families remain on whole-plan fallback until their state/buffer admission,
 backend settings, checkpoint behavior, and complete Flink metric contracts are verified.
 
 Other implemented families also require general region composition and per-stage metric parity.
-Shared internal stages with multiple consumers remain gated pending production validation.
-Selected-path tests cover input-channel replay through both exits on both backends, including
-a buffered attached local MAX branch. The selected-graph path preserves one native owner
+Shared internal stages are admitted for divergent unary streaming regions with one external
+input and multiple exits, matching restored window-clock frontiers and disabled sampled latency.
+Reconverging regions, multiple-input shared owners and batch reuse retain whole-plan fallback.
+Tests cover input-channel replay through both exits on both backends, including a buffered
+attached local MAX branch. The selected graph preserves one native owner
 and metric identity through multiple Arrow exits. Unsupported schemas, settings, and semantic
 subsets retain their precise fallback reasons. Sources and sinks may use explicit Arrow/RowData
 edge adapters; an internal RowData operator or an intermediate JNI round trip is not admitted.

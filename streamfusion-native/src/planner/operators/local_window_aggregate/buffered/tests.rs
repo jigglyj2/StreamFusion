@@ -241,11 +241,12 @@ fn denied_input_admission_leaves_existing_partials_and_credit_intact() {
 }
 
 #[test]
-fn nullable_time_plans_are_rejected_before_shared_buffer_mutation() {
+fn nullable_attached_end_plans_are_rejected_before_shared_buffer_mutation() {
     let mut kernel = crate::planner::operators::local_window_aggregate::tests::processor(false);
     let mut fields = kernel.input_schema.fields().to_vec();
     fields[2] = Arc::new(fields[2].as_ref().clone().with_nullable(true));
     kernel.input_schema = Arc::new(arrow::datatypes::Schema::new(fields));
+    kernel.plan.attached_window_end_index = Some(2);
     assert!(BufferedWindow::new(kernel, 3 << 20, 32 << 10)
         .err()
         .unwrap()
@@ -399,4 +400,43 @@ fn compact_buffered_admission_fits_small_flink_shares_without_eager_output_credi
         drop(buffer);
         assert_eq!(broker.reserved(), 0);
     }
+}
+
+#[test]
+fn nullable_rowtime_schema_accepts_values_but_rejects_null_before_state_changes() {
+    let template = buffer();
+    let mut plan = template.kernel.plan.clone();
+    plan.input_schema.as_mut().unwrap().fields[1]
+        .r#type
+        .as_mut()
+        .unwrap()
+        .nullable = true;
+    let kernel = LocalWindowAggregateProcessor::from_plan(
+        plan,
+        template
+            .kernel
+            .reservation
+            .sibling("nullable time workspace"),
+        template.kernel.reservation.sibling("nullable time plan"),
+    )
+    .unwrap();
+    let mut buffer = BufferedWindow::new(kernel, 3 << 20, 32 << 10).unwrap();
+    let invalid = RecordBatch::try_new(
+        buffer.kernel.input_schema.clone(),
+        vec![
+            Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef,
+            Arc::new(TimestampMillisecondArray::from(vec![Some(1000), None])) as ArrayRef,
+        ],
+    )
+    .unwrap();
+    assert!(buffer
+        .push(invalid)
+        .unwrap_err()
+        .to_string()
+        .contains("RowTime field should not be null"));
+    assert!(buffer.order.is_empty());
+    let valid = input(&buffer, &[(1, 1000), (2, 1000)]);
+    assert!(buffer.push(valid).unwrap().is_none());
+    let first = buffer.control(ControlEvent::BeforeCheckpoint(1)).unwrap();
+    assert_eq!(drain(&mut buffer, first), vec![(1, 1, 2000), (2, 1, 2000)]);
 }

@@ -35,6 +35,11 @@ final class StreamFusionPersistentAdmission {
                             + "computed predicate operands remain on Flink";
                 }
             }
+            if (node instanceof org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecLocalWindowAggregate
+                    || node
+                            instanceof
+                            org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecGlobalWindowAggregate)
+                return StreamFusionWindowPersistentAdmission.unsupportedReason(node, activeConfig);
             if (node instanceof StreamExecGroupAggregate)
                 return aggregateReason((StreamExecGroupAggregate) node, activeConfig);
         } catch (RuntimeException failure) {

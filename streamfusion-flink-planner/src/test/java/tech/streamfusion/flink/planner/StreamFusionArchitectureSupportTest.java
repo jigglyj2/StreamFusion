@@ -167,6 +167,32 @@ class StreamFusionArchitectureSupportTest {
     }
 
     @Test
+    void admitsDivergentStreamingReuseButRejectsReconvergenceIntoOneExit() {
+        var source = new BatchExecTableSourceScan(config, null, type, "source boundary");
+        source.setInputEdges(List.of());
+        var shared = unary(streamCalc("shared"), source);
+        var left = unary(streamCalc("left"), shared);
+        var right = unary(streamCalc("right"), shared);
+        var reasons = new ArrayList<String>();
+        StreamFusionArchitectureSupport.collect(new ExecNodeGraph(List.of(left, right)), reasons);
+        assertThat(reasons).isEmpty();
+
+        var union = new org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecUnion(
+                config, List.of(InputProperty.DEFAULT, InputProperty.DEFAULT), type, "reconverged");
+        union.setInputEdges(List.of(
+                ExecEdge.builder().source(left).target(union).build(),
+                ExecEdge.builder().source(right).target(union).build()));
+        StreamFusionArchitectureSupport.collect(new ExecNodeGraph(List.of(union)), reasons);
+        assertThat(reasons).hasSize(1);
+        assertThat(reasons.get(0)).contains("divergent unary streaming stages", "multiple consumers");
+    }
+
+    private org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecCalc streamCalc(String name) {
+        return new org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecCalc(
+                config, List.of(reference()), null, InputProperty.DEFAULT, type, name);
+    }
+
+    @Test
     void aggregateCompositionIsAdmittedIndependentlyOfTheRemainingPersistentMemoryGate() {
         var source = new BatchExecTableSourceScan(config, null, type, "source boundary");
         source.setInputEdges(List.of());

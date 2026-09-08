@@ -91,6 +91,27 @@ class SharedLocalWindowParityTest {
         assertThat(memory.available()).isEqualTo(memory.limit());
     }
 
+    @Test
+    void nullableRowtimeSchemaFailsActualNullsLikeTheFlinkSlicer() throws Exception {
+        var input = RowType.of(new BigIntType(), new org.apache.flink.table.types.logical.TimestampType(true, 3));
+        var memory = new SharedAggregateRegionParityTest.Memory();
+        var row = GenericRowData.of(1L, null);
+        try (var flink = LocalWindowFlinkOracle.create(3L << 20);
+                var allocator = new RootAllocator(64L << 20);
+                var context = new NativeExecutionContext(plan(input), memory, null, resources());
+                var dispatcher = new ArrowNativePlanDispatcher(context, List.of(input), PARTIAL, allocator);
+                var batch = ArrowRowDataBatch.transpose(List.of(row), input, allocator)) {
+            assertThatThrownBy(() -> flink.processElement(new StreamRecord<RowData>(row)))
+                    .hasMessageContaining("RowTime field should not be null");
+            assertThatThrownBy(() -> dispatcher.process(0, batch, output -> {
+                        throw new AssertionError("Null rowtime must fail before emitting partials");
+                    }))
+                    .rootCause()
+                    .hasMessageContaining("RowTime field should not be null");
+        }
+        assertThat(memory.available()).isEqualTo(memory.limit());
+    }
+
     private static final class Comparison implements AutoCloseable {
         final SharedAggregateRegionParityTest.Memory memory = new SharedAggregateRegionParityTest.Memory();
         final OneInputStreamOperatorTestHarness<RowData, RowData> flink;

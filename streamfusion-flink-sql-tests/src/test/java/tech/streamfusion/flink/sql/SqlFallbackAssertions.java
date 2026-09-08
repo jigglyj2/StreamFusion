@@ -33,10 +33,19 @@ final class SqlFallbackAssertions {
                 .allSatisfy(reason -> assertThat(reason)
                         .matches(
                                 line -> line.contains(": architecture:")
+                                        || (line.contains(": local window: input[")
+                                                && line.contains(
+                                                        "buffered local window Flink row-size geometry is not verified for"))
+                                        || line.contains(
+                                                ": local window: window: buffered local execution requires an integral HOP size/slide")
+                                        || line.contains(
+                                                ": local window: window time: buffered local execution requires UTC event time")
+                                        || line.contains(
+                                                ": local window: changelog: buffered local windows require append-only input")
                                         || line.contains(
                                                 "frame: bounded native OVER does not yet reproduce Flink's batch-sort tie permutation for ROWS frames")
                                         || line.contains("floating-point ordering; Flink's NaN/signed-zero comparator"),
-                                "a documented architecture restriction, with no unrelated fallback"));
+                                "a documented architecture or window restriction, with no unrelated fallback"));
     }
 
     static void unaccelerated() {

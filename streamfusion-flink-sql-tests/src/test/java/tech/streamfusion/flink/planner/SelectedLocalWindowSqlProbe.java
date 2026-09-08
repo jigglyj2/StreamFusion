@@ -10,7 +10,7 @@ import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeGraph;
 import org.apache.flink.table.planner.plan.nodes.exec.processor.ExecNodeGraphProcessor;
 import org.apache.flink.table.planner.plan.nodes.exec.processor.ProcessorContext;
 
-/** Exercises selected window lowering while production admission retains its architecture gates. */
+/** Records the original and selected graphs while requiring ordinary whole-plan admission. */
 public final class SelectedLocalWindowSqlProbe implements ExecNodeGraphProcessor {
     static List<ExecNode<?>> originals;
     static List<ExecNode<?>> selected;
@@ -20,20 +20,11 @@ public final class SelectedLocalWindowSqlProbe implements ExecNodeGraphProcessor
         originals = nodes(graph.getRootNodes());
         var processor = new StreamFusionExecGraphProcessor();
         var ordinary = processor.process(graph, context);
-        if (ordinary != graph) throw new AssertionError("Window production admission must remain gated");
-        var report = StreamFusionPlanningDiagnostics.explain();
-        var reasons =
-                report.lines().filter(line -> line.startsWith("Fallback:")).toArray(String[]::new);
-        if (reasons.length == 0) throw new AssertionError("Missing window admission evidence: " + report);
-        for (String reason : reasons)
-            if (!reason.contains(": architecture:"))
-                throw new AssertionError("Window semantic preflight failed: " + report);
-        if (graph.getRootNodes().size() != 1) throw new AssertionError("This fixture expects one SQL output");
-        var roots = List.<ExecNode<?>>of(processor.convert(graph.getRootNodes().get(0)));
-        selected = nodes(roots);
-        var result = new ExecNodeGraph(graph.getFlinkVersion(), roots);
-        StreamFusionSharedNativeRegion.install(result, context.getPlanner());
-        return result;
+        if (ordinary == graph)
+            throw new AssertionError(
+                    "Window production admission failed: " + StreamFusionPlanningDiagnostics.explain());
+        selected = nodes(ordinary.getRootNodes());
+        return ordinary;
     }
 
     private static List<ExecNode<?>> nodes(List<ExecNode<?>> roots) {

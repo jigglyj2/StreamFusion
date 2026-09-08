@@ -16,7 +16,7 @@ This matrix follows the query operations documented by Flink 2.3, including the 
 | [Windowing TVFs](window-tvf/) | **Partial** (standalone aligned TVFs; `SESSION` gated) | Yes | Native aligned assignment and keyed session merging |
 | [Watermark assignment](watermark-assignment/) | **Plan-compatible** | Flink-owned | Distinct StreamFusion node delegating Flink's exact timer and idleness runtime |
 | [Group aggregation](group-aggregation/) | **Partial** (synchronous keyed BIGINT aggregates; memory and default RocksDB) | Yes | DataFusion accumulators with Flink keyed state and changelog adapters |
-| [Window aggregation](window-aggregation/) | **Temporarily gated** (whole-plan Flink fallback) | Yes | Native keyed window state, timers, and Arrow aggregate kernels |
+| [Window aggregation](window-aggregation/) | **Partial** (two-phase UTC HOP COUNT/MIN/MAX) | Yes | DataFusion grouped accumulators, native keyed slices and Flink control lifecycle |
 | [OVER aggregation](over-aggregation/) | **Temporarily gated** (whole-plan Flink fallback) | Yes | Native ordered state, timers, absorbed batch sort, and aggregate kernels |
 | [Joins](joins/) | **Partial** (binary inner MultiJoin with bounded comparisons; memory and default RocksDB) | By join type | Native keyed state, vectorized predicates, and timers |
 | [Window joins](window-join/) | **Temporarily gated** (whole-plan Flink fallback) | Yes | Native two-sided window state plus Flink join conditions |

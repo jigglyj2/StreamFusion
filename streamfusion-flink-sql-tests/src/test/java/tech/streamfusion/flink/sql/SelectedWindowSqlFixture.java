@@ -73,7 +73,11 @@ final class SelectedWindowSqlFixture {
                 input,
                 Schema.newBuilder()
                         .column("k", DataTypes.BIGINT())
-                        .column("ts", DataTypes.TIMESTAMP(3).notNull())
+                        .column(
+                                "ts",
+                                seed % 3 == 1
+                                        ? DataTypes.TIMESTAMP(3)
+                                        : DataTypes.TIMESTAMP(3).notNull())
                         .watermark("ts", "ts")
                         .build());
         try {

@@ -86,9 +86,8 @@ fails before native allocation.
 
 The task binding is installed once, before native lowering, alongside any separate keyed-state
 bindings. Invalid requests leave existing bindings unchanged and return their temporary credit.
-The Java/native constructor admits all protobuf copies before JNI. Original-plan resource-share
-resolution in ordinary planner translation is still required before admitting the Q5 window plan;
-runtime binding/parity tests are not production Nexmark admission. Generated runtime tests compare
+The Java/native constructor admits all protobuf copies before JNI. Ordinary planner translation
+resolves original-plan resource shares for each local owner, including Q5's reused region. Generated runtime tests compare
 pressure flushes and control changelogs with Flink using a 3 MiB original capacity and a larger
 native allowance, both for a local stage alone and for a local/global tree on both backends.
 
@@ -122,5 +121,5 @@ distribution JAR as well as the existing planner/API hooks. Selected local-windo
 attach the original-resource calculator to this resolver. All selected regions from one SQL graph
 share its original resource snapshot and record their output aliases without translating original
 internal operators. Generated direct and attached HOP graphs verify the resulting byte capacities,
-including source and downstream weights, and execute against Flink on both state backends. Q5
-still requires reused-output ownership and full-query validation before ordinary admission.
+including source and downstream weights, and execute against Flink on both state backends. Shared
+regions bind each original local owner once and retain that binding through factory serialization.

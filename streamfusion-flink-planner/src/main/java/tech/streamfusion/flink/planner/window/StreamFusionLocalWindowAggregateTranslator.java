@@ -92,9 +92,10 @@ public final class StreamFusionLocalWindowAggregateTranslator {
         if (time < 0
                 || time >= input.getFieldCount()
                 || !(input.getTypeAt(time) instanceof TimestampType)
-                || input.getTypeAt(time).isNullable()
+                || (strategy instanceof WindowAttachedWindowingStrategy
+                        && input.getTypeAt(time).isNullable())
                 || ((TimestampType) input.getTypeAt(time)).getPrecision() != 3)
-            return "window time: buffered local execution requires a non-null TIMESTAMP(3) input";
+            return "window time: buffered local execution requires TIMESTAMP(3), with a non-null attached window end";
         for (int index = 0; index < input.getFieldCount(); index++)
             if (!fixedWidth(input.getTypeAt(index)))
                 return "input[" + index + "]: buffered local window Flink row-size geometry is not verified for "

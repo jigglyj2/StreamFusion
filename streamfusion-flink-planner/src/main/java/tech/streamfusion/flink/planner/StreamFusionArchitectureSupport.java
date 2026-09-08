@@ -76,7 +76,9 @@ final class StreamFusionArchitectureSupport {
             "StreamExecDeduplicate",
             "StreamExecGroupAggregate",
             "StreamExecLocalGroupAggregate",
-            "StreamExecGlobalGroupAggregate");
+            "StreamExecGlobalGroupAggregate",
+            "StreamExecLocalWindowAggregate",
+            "StreamExecGlobalWindowAggregate");
 
     static void collect(ExecNodeGraph graph, List<String> rejections) {
         collect(graph, rejections, null);
@@ -87,7 +89,7 @@ final class StreamFusionArchitectureSupport {
         Set<ExecNode<?>> visited = Collections.newSetFromMap(new IdentityHashMap<>());
         Map<ExecNode<?>, List<String>> shared;
         try {
-            shared = StreamFusionNativeRegionOwnership.sharedInternalStages(
+            shared = StreamFusionNativeRegionOwnership.unsupportedSharedStages(
                     graph, node -> isNative(node.getClass().getSimpleName()));
         } catch (IllegalArgumentException failure) {
             rejections.add("native-region-layout\narchitecture: " + failure.getMessage());
@@ -119,8 +121,8 @@ final class StreamFusionArchitectureSupport {
         }
         if (shared.containsKey(node)) {
             rejections.add(nodePath + "\narchitecture: native stage has multiple consumers " + shared.get(node)
-                    + "; multi-output native region ownership remains gated pending "
-                    + "production validation; independent fusion would "
+                    + "; multi-output native region ownership requires divergent unary streaming stages, "
+                    + "one external input and multiple exits; independent fusion would "
                     + "duplicate execution and per-stage metrics");
         }
         boolean persistent = PERSISTENT_STATE.contains(name);

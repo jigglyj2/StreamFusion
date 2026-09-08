@@ -84,9 +84,10 @@ impl BufferedWindow {
                     .collect()
             },
         );
-        if time_columns
-            .iter()
-            .any(|&index| kernel.input_schema.field(index as usize).is_nullable())
+        if kernel.plan.attached_window_end_index.is_some()
+            && time_columns
+                .iter()
+                .any(|&index| kernel.input_schema.field(index as usize).is_nullable())
         {
             return Err(DataFusionError::Plan(
                 "buffered local window nullable event-time/window-bound parity is not verified"
@@ -142,6 +143,19 @@ impl BufferedWindow {
             ));
         }
         self.kernel.validate_batch(&batch)?;
+        // Flink accepts a nullable schema but fails a record with a null rowtime.
+        // Validate the Arrow bitmap once before any retained grouped state changes.
+        if self.kernel.plan.attached_window_end_index.is_none()
+            && batch
+                .column(self.kernel.plan.time_attribute_index as usize)
+                .null_count()
+                != 0
+        {
+            return Err(DataFusionError::Execution(
+                "RowTime field should not be null, please convert it to a non-null long value."
+                    .into(),
+            ));
+        }
         // Also admit replacement hash/group vectors during growth before touching state.
         let allowance = self
             .kernel

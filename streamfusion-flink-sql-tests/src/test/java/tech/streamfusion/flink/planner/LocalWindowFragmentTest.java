@@ -49,7 +49,16 @@ class LocalWindowFragmentTest {
                         direct,
                         false,
                         SharedSlicingWindowFixture.config()))
-                .contains("non-null TIMESTAMP(3)");
+                .isNull();
+        assertThat(StreamFusionLocalWindowAggregateTranslator.unsupportedStageReason(
+                        RowType.of(new BigIntType(), new TimestampType(true, 3)),
+                        OUTPUT,
+                        new int[0],
+                        count(),
+                        new WindowAttachedWindowingStrategy(SharedSlicingWindowFixture.hop(), ROWTIME, 1),
+                        false,
+                        SharedSlicingWindowFixture.config()))
+                .contains("non-null attached window end");
         assertThat(StreamFusionLocalWindowAggregateTranslator.unsupportedStageReason(
                         RowType.of(new VarBinaryType(), new TimestampType(false, 3)),
                         OUTPUT,

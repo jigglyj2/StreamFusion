@@ -75,7 +75,8 @@ the multi-input runtime; no operator-family control branch was added. It receive
 type before open so control events can run before the first data batch. Local fragments require
 protocol v2 even without an adjacent Calc. Native record-envelope requirements are negotiated once
 at context creation, not inferred from the presence of a keyed backend. Two-phase conversion registers
-the local physical stage with the ordinary rewrite identity/UID registry. Production admission remains gated.
+the local physical stage with the ordinary rewrite identity/UID registry. The verified HOP subset
+is admitted through ordinary planner selection.
 
 Direct selected-graph tests check join → Expand → Calc → deduplication as one runtime with two
 state identities and only external IPC writers. Runtime tests consume hash-exchange frames and
@@ -158,9 +159,8 @@ Calc → global window → Calc with one keyed Arrow runtime, and generated Flin
 fixtures use the same builder. Selected local-window nodes now join this contract and attach the
 original resource calculator to the complete-pipeline finalizer. Their derived local/exchange nodes
 retain original identity, and source-side local regions consume Arrow directly through the shared
-runtime's single input. Generated direct and attached HOP SQL tests verify this wiring on both
-backends. Production validation still blocks ordinary whole-plan Q5
-admission; see [Window aggregation](/StreamFusion/operators/window-aggregation/).
+runtime's single input. Generated direct and attached HOP SQL tests require ordinary planner selection on both
+backends. The verified subset now admits Q5, whose release performance checkpoint is pending; see [Window aggregation](/StreamFusion/operators/window-aggregation/).
 
 Native reuse inspection now builds a graph-wide region layout before replacement. Each physical
 stage appears once, with ordered references to internal stages or external input ports. Separate
@@ -270,7 +270,7 @@ fail instead of emitting an incorrect watermark. Generated runtime tests compare
 heterogeneous exit changelogs against Flink-generated Calc operators, with nullable data,
 all row kinds, repeated arrivals, direct Arrow and IPC inputs, stage I/O counts, control
 broadcasting, and managed-memory release on successful and cancelled execution. These runtime
-checks do not establish production benchmark results or admit additional whole-plan queries.
+checks support admission of the verified shape but do not establish production benchmark results.
 
 The selected-graph translator now binds one cached owner to all physical stages in a shared
 region. Translating either exit materializes that owner once; the main output and virtual Flink
@@ -298,7 +298,7 @@ MAX/COUNT on the second exit. The local stage uses its original 3 MiB buffer cap
 checkpoint flush callback. Each output delivers exactly one checkpoint barrier. Three generated
 inputs include late partials and replayed older watermarks. These tests verify input-channel
 replay through the shared topology; they do not measure full-query performance. Ordinary
-whole-plan multi-output admission remains gated pending production validation.
+whole-plan selection now admits the verified divergent streaming region subset.
 
 Comet retains Spark's exchange reuse, while Flink can reuse an intermediate stage before two
 different exchanges. This Flink-specific topology keeps the shared computation in one native
@@ -316,5 +316,5 @@ Native tests exercise generated reader schedules, array identity, a single large
 lease through successful and cancelled consumption, and different downstream DataFusion projection
 schemas. Control-output tests verify watermark, pre-barrier, and end-input computation and metrics
 once per stage, including cancellation and panic cleanup. Fan-out now backs the native region
-driver and JNI edge described above. Flink's multi-output planner selection remains gated;
-this does not change ordinary Q5 admission or establish full-query recovery/performance results.
+driver and JNI edge described above. Ordinary planner selection uses this integration for the
+verified divergent streaming subset. Q5 release performance validation remains outstanding.

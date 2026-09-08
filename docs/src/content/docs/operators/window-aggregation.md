@@ -5,9 +5,12 @@ sidebar:
   order: 7
 ---
 
-**Current status:** Temporarily uses whole-plan Flink fallback under the
-[architecture admission requirements](/StreamFusion/development/architecture-admission/). The native paths
-described below are retained for development and direct parity tests; SQL planning does not select them.
+**Current status:** Partial acceleration through ordinary whole-plan selection. Verified two-phase,
+append-only UTC event-time HOP windows use DataFusion grouped COUNT/MIN/MAX with BIGINT results
+and arguments, BIGINT/INTEGER grouping keys (or no keys), synchronous state and mini-batch disabled.
+Other window families retain whole-plan fallback under the
+[architecture admission requirements](/StreamFusion/development/architecture-admission/).
+Both in-memory and supported default RocksDB state use the common native runtime.
 
 **Retained implementation scope:** Partial implementation for native `TUMBLE`, `HOP`, `CUMULATE`, and `SESSION`
 aggregation, including Flink's legacy group-window physical node.
@@ -15,19 +18,22 @@ aggregation, including Flink's legacy group-window physical node.
 ## SQL example
 
 ```sql
-SELECT window_start, bidder, SUM(price)
-FROM TABLE(TUMBLE(TABLE bid, DESCRIPTOR(dateTime), INTERVAL '1' MINUTE))
+SELECT window_start, bidder, COUNT(*)
+FROM TABLE(HOP(TABLE bid, DESCRIPTOR(dateTime), INTERVAL '2' SECOND, INTERVAL '10' SECOND))
 GROUP BY window_start, window_end, bidder;
 ```
 
 ## Q5 admission work
 
-Ordinary Q5 EXPLAIN on both backends still reports blocked local/global window stages and an
-aggregate reused by two consumers. Explicit native resource bindings now run the local buffer
-and global HOP slicer, including attached-window MAX/COUNT, through the common DataFusion execution tree.
-The selected global physical node now produces its own protobuf fragment and joins that shared
-region, retaining the original Flink stage identity and keyed-state binding. These development
-paths do not yet change ordinary planner selection, and there is no Q5 performance result.
+Q5's local/global HOP COUNT, attached MAX/COUNT and binary join now use ordinary planner
+selection. Its reused global aggregate has one native owner and two Arrow exits; one branch
+continues through Calc and local MAX in the same native plan. Original Flink resource shares,
+state identity, metrics and network boundaries are retained. Generated SQL and channel recovery
+coverage is described below. The release benchmark and profiling checkpoint is still pending;
+there is no current Q5 performance result. The opt-in official Nexmark test compares 10,000
+input events at parallelism one and four on both backends: complete collected changelog bytes,
+materialized results, ordinary acceleration and native plan activity. It also checks that the
+retained standalone local-window JNI path receives no batches.
 
 ### Local buffer
 
@@ -42,8 +48,11 @@ do not flush; a terminal watermark uses the normal event-time path.
 share and page size before lowering. A capacity model matches Flink's `WindowBytesMultiMap`
 geometry without constructing RowData. This bookkeeping preserves observable pressure-flush
 boundaries; actual native buffers and retained state use coarse Flink memory reservations.
-The buffered subset currently requires UTC, non-null time/bound columns, fixed-width Flink row
-geometry and compatible append-only DataFusion aggregates. Nullable time/bound streaming parity remains outstanding.
+The buffered subset requires UTC, TIMESTAMP(3) time columns, fixed-width Flink row geometry
+and compatible append-only DataFusion aggregates. Direct event-time columns may be declared
+nullable: a batch containing an actual null rowtime fails before changing grouped state, with
+Flink's `RowTime field should not be null` error. The bitmap check runs once per batch.
+Attached window ends must remain non-null.
 
 The shared local fragment builder supports direct and attached HOP COUNT/MIN/MAX for that
 verified subset. Attached windows follow Flink's `WindowedSliceAssigner`: only the attached end
@@ -67,7 +76,7 @@ and incompatible numeric semantics. It is not the buffered shared-runtime path.
 
 Generated SQL comparisons now run direct and attached HOP graphs with three input seeds on each
 backend and compare the complete collected changelog bytes against Flink. These use explicit test
-selection while asserting that ordinary admission remains gated. Topology checks verify stable
+selection through the ordinary planner, without a test admission bypass. Topology checks verify stable
 original identities, original memory fractions including weighted source/sink boundaries, serialized
 factories, and direct Arrow input to source-side local regions. The shared single-input runtime also
 passes the pressure/control parity fixture; the existing aligned/unaligned channel and restore/rescale
@@ -86,8 +95,8 @@ The selected-graph path now runs a reused global COUNT through one native owner 
 Calc and attached local MAX consumer. The raw COUNT and local partial exits use separate Arrow
 outputs feeding the existing exchanges. Generated SQL comparisons with the benchmark's binary
 MultiJoin setting match Flink on both backends, for 6-second/10-second HOP windows and parallelism
-one/two. This is test-only selected-graph evidence. Ordinary whole-plan admission and release benchmark
-validation remain required before Q5 is delivered.
+one/two. These fixtures now require ordinary whole-plan admission. Release benchmark validation remains
+required before the Q5 performance checkpoint is delivered.
 
 ### Global HOP slicer
 
@@ -191,8 +200,8 @@ production sink adapters and network writers capture each branch. Both exit chan
 watermarks and checkpoint barriers match Flink after aligned and unaligned input-channel replay
 on each backend. The local Flink oracle receives the same global output and checkpoint flushes.
 
-These selected-path checks leave ordinary whole-plan admission and full-query production
-validation outstanding. Unsupported state/backend metric settings and sampled latency routing
+These checks support ordinary admission of the verified subset. Full-query release performance
+validation remains outstanding. Unsupported state/backend metric settings and sampled latency routing
 must retain precise fallback reasons. Q5 delivery still requires release benchmarks and mixed
 JVM/native profiling on both backends.
 
@@ -209,7 +218,7 @@ The retained kernel also supports an aggregate over already attached `window_sta
 produced by a preceding window aggregate. Each attached pair is one exact namespace; it is not
 assigned to overlapping windows a second time. This represents the nested hopping aggregation in
 Nexmark Q5 at the kernel level. The shared attached-HOP partial path above now has direct fused
-composition coverage; ordinary admission remains gated.
+composition coverage and ordinary admission for the verified subset above.
 Legacy SQL/Table API time windows lower to the same canonical native state machine. Legacy Table
 API processing-time row-count tumbling and sliding windows also have retained kernels; Flink 2.3's SQL
 grammar does not expose numeric row-count intervals, but its Table API and physical executor do.

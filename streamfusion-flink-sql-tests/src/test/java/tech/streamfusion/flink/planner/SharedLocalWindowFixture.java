@@ -16,9 +16,13 @@ final class SharedLocalWindowFixture {
             new BigIntType(false));
 
     static byte[] plan() throws Exception {
+        return plan(INPUT);
+    }
+
+    static byte[] plan(RowType input) throws Exception {
         return SharedSlicingWindowFixture.compose(
                 tech.streamfusion.flink.planner.window.StreamFusionLocalWindowAggregateTranslator.createStagePlan(
-                        INPUT,
+                        input,
                         PARTIAL,
                         new int[] {0},
                         new org.apache.calcite.rel.core.AggregateCall[] {
