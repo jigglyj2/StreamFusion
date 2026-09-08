@@ -3,6 +3,9 @@
 
 use super::*;
 
+mod compact;
+pub(super) use compact::{eligible as compact_eligible, encode as encode_compact};
+
 pub(super) const PAGE_ROWS: u64 = 64;
 const MANIFEST_MAGIC: &[u8] = b"SFJM\x01";
 const PAGE_MAGIC: &[u8] = b"SFJP\x01";
@@ -11,6 +14,7 @@ pub(super) struct Manifest {
     pub(super) next_row_id: [u64; 2],
     pub(super) matchable: [Option<bool>; 2],
     pub(super) pages: [Vec<u64>; 2],
+    pub(super) inline: Option<[Vec<StoredRow>; 2]>,
 }
 
 pub(super) fn manifest_key(key: &StateKey) -> StateKey {
@@ -65,7 +69,16 @@ pub(super) fn encode_manifest(state: &JoinState) -> Vec<u8> {
 }
 
 pub(super) fn decode_manifest(bytes: &[u8]) -> Result<Manifest> {
+    if compact::is_compact(bytes) {
+        return compact::decode(bytes);
+    }
     let mut reader = Reader::new(bytes, MANIFEST_MAGIC)?;
+    let manifest = read_manifest(&mut reader)?;
+    reader.finish()?;
+    Ok(manifest)
+}
+
+fn read_manifest(reader: &mut Reader<'_>) -> Result<Manifest> {
     let mut matchable = [None; 2];
     for value in &mut matchable {
         *value = match reader.take(1)?[0] {
@@ -94,11 +107,11 @@ pub(super) fn decode_manifest(bytes: &[u8]) -> Result<Manifest> {
             pages[side].push(page);
         }
     }
-    reader.finish()?;
     Ok(Manifest {
         next_row_id,
         matchable,
         pages,
+        inline: None,
     })
 }
 
@@ -111,6 +124,12 @@ pub(super) fn encode_page(rows: &[StoredRow]) -> Result<Vec<u8>> {
     }
     let mut bytes =
         Vec::with_capacity(9 + rows.iter().map(|row| 16 + row.row.len()).sum::<usize>());
+    append_page(&mut bytes, rows);
+    Ok(bytes)
+}
+
+// Callers validate page bounds before reserving output; compact entries also cap total bytes.
+fn append_page(bytes: &mut Vec<u8>, rows: &[StoredRow]) {
     bytes.extend_from_slice(PAGE_MAGIC);
     bytes.extend_from_slice(&(rows.len() as u32).to_le_bytes());
     for row in rows {
@@ -119,7 +138,6 @@ pub(super) fn encode_page(rows: &[StoredRow]) -> Result<Vec<u8>> {
         bytes.extend_from_slice(&(row.row.len() as u32).to_le_bytes());
         bytes.extend_from_slice(&row.row);
     }
-    Ok(bytes)
 }
 
 pub(super) fn decode_page(bytes: &[u8], page: u64, next_id: u64) -> Result<Vec<StoredRow>> {
@@ -161,7 +179,7 @@ pub(super) fn decode_workspace(bytes: &[u8]) -> Result<usize> {
 }
 
 pub(super) fn is_manifest(bytes: &[u8]) -> bool {
-    bytes.starts_with(MANIFEST_MAGIC)
+    bytes.starts_with(MANIFEST_MAGIC) || compact::is_compact(bytes)
 }
 
 fn invalid() -> DataFusionError {

@@ -53,7 +53,10 @@ coverage, with bounded native workspace checks. Other computed predicates retain
 The opt-in `NexmarkQ7ProductionIT` verifies ordinary whole-plan admission and exact complete
 changelog/materialized-result parity for the official RowData query at 10,000 events, parallelism
 1 and 4, on both state backends. Native plan counters are positive and standalone local-window
-counters remain zero. Q7 release measurements and profiling are the next checkpoint.
+counters remain zero. The first million-event release attempt exhausted the in-memory join's
+retained-state allowance. Small join keys now use one compact backend entry to reduce storage
+and lookup overhead; the same Flink budget applies. Q7 release measurements and profiling remain
+the next checkpoint.
 
 ## Q6 has no Flink streaming baseline
 

@@ -12,6 +12,8 @@ mod change_cursor_tests;
 pub(crate) mod execution_plan;
 mod native_output;
 mod paged_codec;
+#[cfg(test)]
+mod paged_compact_tests;
 mod paged_state;
 #[cfg(test)]
 mod paged_state_tests;
@@ -85,6 +87,7 @@ struct StagedState {
     key: StateKey,
     value: JoinState,
     original: JoinState,
+    original_compact: bool,
     touched: bool,
 }
 

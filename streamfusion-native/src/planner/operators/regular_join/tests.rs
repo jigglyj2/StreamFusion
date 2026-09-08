@@ -8,6 +8,7 @@ use arrow::datatypes::Int32Type;
 use prost::Message;
 mod candidate_batch;
 mod coarse_memory;
+mod compact_state;
 mod planning_memory;
 mod region;
 mod streaming;
@@ -463,7 +464,7 @@ fn residual_join_state_moves_from_memory_to_rocksdb_and_batches_io() {
         .process_arrow(1, batch(&[1, 2], &["a", "r2"], &[INSERT, INSERT]))
         .unwrap();
     assert_eq!(kinds(&output), vec![INSERT, DELETE, INSERT]);
-    assert_eq!(rocks.statistics(), [2, 1, 0]);
+    assert_eq!(rocks.statistics(), [1, 1, 0]); // compact keys need only the manifest read
 }
 
 #[test]

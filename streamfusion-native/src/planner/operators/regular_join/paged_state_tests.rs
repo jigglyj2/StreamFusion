@@ -29,6 +29,7 @@ fn fixture() -> StagedState {
             key: b"hot-key".to_vec(),
         },
         original: value.clone(),
+        original_compact: false,
         value,
         touched: true,
     }

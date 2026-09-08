@@ -122,8 +122,11 @@ rows with a smaller row target for wide payloads. It does not first collect the 
 Residual predicates use bounded vectorized candidate chunks, while equality-only/null-rejected
 keys need no match bitmap. Input and historical-state memory remains charged until the input batch
 is fully consumed. State uses stable per-side row IDs and 64-row pages. Batch admission fetches all
-manifests in one lookup, then all referenced pages in a second lookup; the single end-of-batch
-write contains only changed pages and changed manifest metadata. Retracting an early row does not
+manifests in one lookup, then any external pages in a second lookup; the single end-of-batch
+write contains only changed pages and changed manifest metadata. Keys with at most 64 total rows
+and an encoded size of at most 8 KiB keep their directory and payloads in one compact backend
+entry. This removes a second entry and lookup for sparse keys; larger keys keep independently
+writable pages. Growth, shrinkage and deletion switch representations in the same atomic write. Retracting an early row does not
 shift later pages, and association-count changes rewrite only their affected pages. Historical rows
 are still decoded for touched keys, so this is a write-amplification fix, not a claim of constant
 read or working-set cost for arbitrarily large keys. Checkpoints cannot observe a partially drained
@@ -140,12 +143,18 @@ reservation. A constrained 10 MiB regression loads 2,048 historical rows at empt
 allocation peaks against the reservation. Arbitrarily large touched keys can still exceed the
 allowance and require recovery; the change does not bypass Flink's budget or add per-row I/O.
 
-Canonical SFS1 snapshots now carry versioned `SFJM` manifests and `SFJP` pages, identical across native
-memory and RocksDB. Restoring legacy whole-key `SFRJ` v1/v2 snapshots migrates them to the paged layout.
+Canonical SFS1 snapshots carry versioned `SFJM` manifests, `SFJP` pages and `SFJC` v1 compact
+entries, identical across native memory and RocksDB. Existing paged snapshots remain readable;
+small keys adopt the compact form when next written. Restoring legacy whole-key `SFRJ` v1/v2
+snapshots migrates them to the current layout. A runtime predating `SFJC` cannot restore new compact
+entries. Tests cover both-backend restore, sparse stable row IDs, both size thresholds, conversion
+in either direction, complete deletion and malformed/truncated records. A 100,000-key regression
+with 160-byte payloads fits a 36 MiB in-memory share and probes the retained rows; the previous
+separate-entry representation exhausts that same share.
 Restore rejects missing, duplicate, orphan, and malformed page records before changing backend state.
 Physical RocksDB checkpoints retain the paged layout and the existing incremental checkpoint protocol.
-The `StreamFusion.stateReadBatches` diagnostic counts actual backend lookups: one for a new key batch,
-two when historical pages exist. `stateWriteBatches` counts non-empty backend write batches, so a
+The `StreamFusion.stateReadBatches` diagnostic counts actual backend lookups: one for a batch of
+new or compact keys, two when external historical pages exist. `stateWriteBatches` counts non-empty backend write batches, so a
 missing-row retraction that changes no state need not increment it.
 
 Flink `BatchExecHashJoin`, `BatchExecAdaptiveJoin`, and `BatchExecSortMergeJoin` equality joins use

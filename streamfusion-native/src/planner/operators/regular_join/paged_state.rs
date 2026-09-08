@@ -31,7 +31,11 @@ pub(super) fn load(
         .enumerate()
         .fold(0usize, |bytes, (index, manifest)| {
             let count = manifest.as_ref().map_or(0, |manifest| {
-                manifest.pages.iter().map(Vec::len).sum::<usize>()
+                if manifest.inline.is_some() {
+                    0
+                } else {
+                    manifest.pages.iter().map(Vec::len).sum::<usize>()
+                }
             });
             bytes.saturating_add(count.saturating_mul(keys[index].key.len().saturating_add(256)))
         });
@@ -40,6 +44,9 @@ pub(super) fn load(
     let mut locations = Vec::new();
     for (index, manifest) in manifests.iter().enumerate() {
         if let Some(manifest) = manifest {
+            if manifest.inline.is_some() {
+                continue;
+            }
             for side in 0..2 {
                 for &page in &manifest.pages[side] {
                     page_keys.push(page_key(&keys[index], side, page));
@@ -52,18 +59,24 @@ pub(super) fn load(
         .into_iter()
         .zip(manifests)
         .map(|(key, manifest)| {
+            let original_compact = manifest.as_ref().is_some_and(|m| m.inline.is_some());
             let value = manifest
-                .map(|m| JoinState {
-                    next_row_id: m.next_row_id,
-                    left_matchable: m.matchable[0],
-                    right_matchable: m.matchable[1],
-                    ..Default::default()
+                .map(|m| {
+                    let [left, right] = m.inline.unwrap_or_default();
+                    JoinState {
+                        next_row_id: m.next_row_id,
+                        left_matchable: m.matchable[0],
+                        right_matchable: m.matchable[1],
+                        left,
+                        right,
+                    }
                 })
                 .unwrap_or_default();
             StagedState {
                 key,
                 value,
                 original: JoinState::default(),
+                original_compact,
                 touched: false,
             }
         })
@@ -97,6 +110,7 @@ pub(super) fn load(
 
 pub(super) fn mutations(entry: &StagedState) -> Result<Vec<StateMutation>> {
     let mut mutations = Vec::new();
+    let compact = compact_eligible(&entry.value);
     for (side, (before, after)) in [
         (&entry.original.left, &entry.value.left),
         (&entry.original.right, &entry.value.right),
@@ -104,8 +118,8 @@ pub(super) fn mutations(entry: &StagedState) -> Result<Vec<StateMutation>> {
     .into_iter()
     .enumerate()
     {
-        let mut before = pages(before).peekable();
-        let mut after = pages(after).peekable();
+        let mut before = pages(if entry.original_compact { &[] } else { before }).peekable();
+        let mut after = pages(if compact { &[] } else { after }).peekable();
         while before.peek().is_some() || after.peek().is_some() {
             let page = match (before.peek(), after.peek()) {
                 (Some((left, _)), Some((right, _))) => (*left).min(*right),
@@ -141,9 +155,23 @@ pub(super) fn mutations(entry: &StagedState) -> Result<Vec<StateMutation>> {
         }
     }
     let old = (!(entry.original.left.is_empty() && entry.original.right.is_empty()))
-        .then(|| encode_manifest(&entry.original));
+        .then(|| {
+            if entry.original_compact {
+                encode_compact(&entry.original)
+            } else {
+                Ok(encode_manifest(&entry.original))
+            }
+        })
+        .transpose()?;
     let new = (!(entry.value.left.is_empty() && entry.value.right.is_empty()))
-        .then(|| encode_manifest(&entry.value));
+        .then(|| {
+            if compact {
+                encode_compact(&entry.value)
+            } else {
+                Ok(encode_manifest(&entry.value))
+            }
+        })
+        .transpose()?;
     if old != new {
         mutations.push(StateMutation {
             key: manifest_key(&entry.key),
@@ -236,6 +264,7 @@ pub(super) fn restore(
             },
             value,
             original: JoinState::default(),
+            original_compact: false,
             touched: true,
         };
         memory.try_grow(mutation_workspace(&entry))?;
@@ -289,14 +318,20 @@ pub(super) fn decode_entries(
             key_group: group,
             key: key[1..].to_vec(),
         };
+        let compact = manifest.inline.is_some();
+        let [left, right] = manifest.inline.unwrap_or_default();
         let mut state = JoinState {
             next_row_id: manifest.next_row_id,
             left_matchable: manifest.matchable[0],
             right_matchable: manifest.matchable[1],
-            ..Default::default()
+            left,
+            right,
         };
         consumed += 1;
         for side in 0..2 {
+            if compact {
+                break;
+            }
             for &page in &manifest.pages[side] {
                 let key = page_key(&logical, side, page);
                 let bytes = index.get(key.key.as_slice()).ok_or_else(|| {

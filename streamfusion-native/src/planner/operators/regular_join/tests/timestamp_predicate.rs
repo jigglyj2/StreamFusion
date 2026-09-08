@@ -139,6 +139,7 @@ fn timestamp_predicates_keep_bounded_arrow_workspace_for_batched_and_hot_key_can
                     key: vec![],
                 },
                 original: JoinState::default(),
+                original_compact: false,
                 value,
                 touched: false,
             };
