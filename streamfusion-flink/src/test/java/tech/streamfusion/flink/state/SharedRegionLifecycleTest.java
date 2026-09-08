@@ -1,7 +1,4 @@
-/*
- * Copyright 2026 StreamFusion Authors
- * Licensed under the Apache License, Version 2.0
- */
+/* Copyright 2026 StreamFusion Authors. Licensed under the Apache License, Version 2.0. */
 package tech.streamfusion.flink.state;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -19,16 +16,39 @@ import org.apache.flink.runtime.state.KeyGroupRange;
 import org.apache.flink.runtime.state.StateInitializationContext;
 import org.apache.flink.streaming.api.graph.StreamConfig;
 import org.junit.jupiter.api.Test;
-import tech.streamfusion.proto.plan.v1.Deduplicate;
-import tech.streamfusion.proto.plan.v1.Input;
-import tech.streamfusion.proto.plan.v1.NativePlan;
-import tech.streamfusion.proto.plan.v1.Operator;
+import tech.streamfusion.proto.plan.v1.*;
 
-class NativeRegionStateLifecycleFailureTest {
+class SharedRegionLifecycleTest {
     @Test
-    void failedConstructionAndRestoreReturnNativeAndFallbackCacheLeasesBeforeEnvironmentCloses() throws Exception {
+    void sharedConstructionAndRestoreFailuresReleaseStateAndFlinkAllowancesOnBothBackends() throws Exception {
+        var plan = NativeRegionPlan.newBuilder()
+                .setProtocolVersion(1)
+                .setInputCount(1)
+                .addOutputStageIds(2)
+                .addOutputStageIds(4)
+                .addStages(NativeRegionStage.newBuilder()
+                        .setOperator(Operator.newBuilder()
+                                .setPlanNodeId(2)
+                                .setDeduplicate(Deduplicate.newBuilder()
+                                        .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
+                                        .setProcessingTime(true)
+                                        .setGenerateInsert(true)
+                                        .addKeyIndices(0)))
+                        .addInputs(NativeRegionInputReference.newBuilder().setExternalInput(0)))
+                .addStages(NativeRegionStage.newBuilder()
+                        .setOperator(Operator.newBuilder()
+                                .setPlanNodeId(4)
+                                .setCalc(Calc.newBuilder()
+                                        .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
+                                        .addProjections(Expression.newBuilder()
+                                                .setInputReference(InputReference.newBuilder()
+                                                        .setIndex(0)))
+                                        .setPreserveInputEnvelope(true)))
+                        .addInputs(NativeRegionInputReference.newBuilder().setStageId(2)))
+                .build()
+                .toByteArray();
         for (boolean rocks : List.of(false, true))
-            for (boolean duringRestore : List.of(false, true)) {
+            for (boolean restore : List.of(false, true)) {
                 try (var environment = new MockEnvironmentBuilder()
                         .setManagedMemorySize(64L << 20)
                         .build()) {
@@ -49,25 +69,6 @@ class NativeRegionStateLifecycleFailureTest {
                             (proxy, method, args) -> {
                                 throw new IllegalStateException("injected restore failure");
                             });
-                    var input = Operator.newBuilder()
-                            .setPlanNodeId(1)
-                            .setInput(Input.newBuilder())
-                            .build();
-                    var root = duringRestore
-                            ? Operator.newBuilder()
-                                    .setPlanNodeId(2)
-                                    .setDeduplicate(Deduplicate.newBuilder()
-                                            .setInput(input)
-                                            .setProcessingTime(true)
-                                            .setGenerateInsert(true)
-                                            .addKeyIndices(0))
-                                    .build()
-                            : input;
-                    byte[] plan = NativePlan.newBuilder()
-                            .setProtocolVersion(2)
-                            .setRoot(root)
-                            .build()
-                            .toByteArray();
                     var spill = environment
                             .getIOManager()
                             .getSpillingDirectories()[0]
@@ -77,7 +78,7 @@ class NativeRegionStateLifecycleFailureTest {
                         before = paths.count();
                     }
                     try (var lifecycle = new NativeRegionStateLifecycle()) {
-                        assertThatThrownBy(() -> lifecycle.initialize(
+                        assertThatThrownBy(() -> lifecycle.initializeRegion(
                                         initialization,
                                         environment,
                                         config,
@@ -85,11 +86,10 @@ class NativeRegionStateLifecycleFailureTest {
                                         backend,
                                         16,
                                         plan,
-                                        List.of(2L)))
-                                .isInstanceOf(IllegalStateException.class)
+                                        List.of(restore ? 2L : 3L),
+                                        null))
                                 .hasMessageContaining(
-                                        duringRestore ? "injected restore failure" : "no matching physical definition");
-                        // Check now: MockEnvironment.close() would otherwise clear leaked reservations.
+                                        restore ? "injected restore failure" : "no matching physical definition");
                         assertThat(environment.getMemoryManager().verifyEmpty()).isTrue();
                         try (var paths = Files.list(spill)) {
                             assertThat(paths.count()).isEqualTo(before);

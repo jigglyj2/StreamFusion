@@ -55,12 +55,41 @@ public final class StreamFusionTaskMemory implements AutoCloseable {
             byte[] serializedPlan,
             java.util.function.Function<tech.streamfusion.nativebridge.NativeMemoryManager, byte[]> bindings,
             byte[] taskBindings) {
+        return createWithState(
+                environment, operatorConfig, metricGroup, name, serializedPlan, bindings, taskBindings, false);
+    }
+
+    /** Uses the same Flink allowance and release lifecycle for a flat, shared physical region. */
+    public static StreamFusionTaskMemory createRegionWithState(
+            Environment environment,
+            StreamConfig operatorConfig,
+            OperatorMetricGroup metricGroup,
+            String name,
+            byte[] serializedPlan,
+            java.util.function.Function<tech.streamfusion.nativebridge.NativeMemoryManager, byte[]> bindings,
+            byte[] taskBindings) {
+        return createWithState(
+                environment, operatorConfig, metricGroup, name, serializedPlan, bindings, taskBindings, true);
+    }
+
+    private static StreamFusionTaskMemory createWithState(
+            Environment environment,
+            StreamConfig operatorConfig,
+            OperatorMetricGroup metricGroup,
+            String name,
+            byte[] serializedPlan,
+            java.util.function.Function<tech.streamfusion.nativebridge.NativeMemoryManager, byte[]> bindings,
+            byte[] taskBindings,
+            boolean sharedRegion) {
         FlinkManagedMemory managedMemory = FlinkManagedMemory.create(environment, operatorConfig, metricGroup, name);
         try {
             return new StreamFusionTaskMemory(
                     managedMemory,
-                    new NativeExecutionContext(
-                            serializedPlan, managedMemory, bindings.apply(managedMemory), taskBindings));
+                    sharedRegion
+                            ? NativeExecutionContext.region(
+                                    serializedPlan, managedMemory, bindings.apply(managedMemory), taskBindings)
+                            : new NativeExecutionContext(
+                                    serializedPlan, managedMemory, bindings.apply(managedMemory), taskBindings));
         } catch (RuntimeException | Error failure) {
             try {
                 managedMemory.close();

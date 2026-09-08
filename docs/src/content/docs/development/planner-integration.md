@@ -232,9 +232,21 @@ stage has one control node, external inputs retain their own ports, and shared s
 to each downstream consumer. All exits remain separately identified. The existing scheduler
 coalesces each control wave into one native invocation and drains it before forwarding output
 watermarks or end-input events; a failed drain forwards neither. Generated control sequences
-match real Flink operators at every stage, including idleness and latency markers. Restored
+match real Flink operators at every stage, including idleness. Flink samples one outgoing branch
+for latency markers, while it broadcasts watermarks and status. Shared native latency routing is
+therefore rejected until it preserves that sampling; shared-plan admission must reject enabled
+Flink latency tracking rather than broadcasting those markers. Restored
 window-clock clamping reaches every downstream exit. Nested UNION control graphs are rejected
 until their physical channels are flattened with Flink's wiring semantics.
+
+Shared regions can bind the existing Flink memory/state lifecycle directly. The same backend
+leases and checkpoint participants serve tree and shared definitions; they do not create another
+budget or state owner. Window union clocks are initialized once per physical definition, retain
+the minimum restored subtask clock, and bind that clock before native input can run. Local-window
+resource validation also visits each shared definition once and retains its original Flink
+capacity through factory serialization. Boundary tests cover failed construction/restore cleanup
+on both backends, union-clock restoration, and local capacity binding. Full multi-output runtime
+checkpoint and rescaling parity still needs validation after runtime wiring.
 
 The Java metric publisher also consumes flat physical definitions directly. It binds each
 original stage scope once, omits anonymous local Input slots, and verifies the complete native

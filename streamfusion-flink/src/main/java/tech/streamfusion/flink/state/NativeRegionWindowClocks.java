@@ -27,6 +27,15 @@ final class NativeRegionWindowClocks {
         if (root.hasRoot()) initialize(context, root.getRoot(), stateIds);
     }
 
+    NativeRegionWindowClocks(
+            StateInitializationContext context,
+            tech.streamfusion.proto.plan.v1.NativeRegionPlan plan,
+            List<Long> stateIds)
+            throws Exception {
+        tech.streamfusion.flink.operator.NativeRegionPlanComposer.validate(plan);
+        for (var stage : plan.getStagesList()) initialize(context, stage.getOperator(), stateIds);
+    }
+
     private void initialize(StateInitializationContext context, Operator node, List<Long> stateIds) throws Exception {
         if (node.hasWindowAggregate() && stateIds.contains(node.getPlanNodeId())) {
             long id = node.getPlanNodeId();

@@ -57,6 +57,55 @@ public final class NativeRegionStateLifecycle implements AutoCloseable {
             List<Long> stateIds,
             byte[] taskBindings)
             throws Exception {
+        initialize(
+                initialization,
+                environment,
+                config,
+                metrics,
+                keyedBackend,
+                maxParallelism,
+                plan,
+                stateIds,
+                taskBindings,
+                false);
+    }
+
+    public void initializeRegion(
+            StateInitializationContext initialization,
+            Environment environment,
+            StreamConfig config,
+            OperatorMetricGroup metrics,
+            KeyedStateBackend<?> keyedBackend,
+            int maxParallelism,
+            byte[] plan,
+            List<Long> stateIds,
+            byte[] taskBindings)
+            throws Exception {
+        initialize(
+                initialization,
+                environment,
+                config,
+                metrics,
+                keyedBackend,
+                maxParallelism,
+                plan,
+                stateIds,
+                taskBindings,
+                true);
+    }
+
+    private void initialize(
+            StateInitializationContext initialization,
+            Environment environment,
+            StreamConfig config,
+            OperatorMetricGroup metrics,
+            KeyedStateBackend<?> keyedBackend,
+            int maxParallelism,
+            byte[] plan,
+            List<Long> stateIds,
+            byte[] taskBindings,
+            boolean sharedRegion)
+            throws Exception {
         if (manager != null || stateIds.isEmpty()) {
             throw new IllegalStateException("Native region state must initialize once with state-node identities");
         }
@@ -75,48 +124,49 @@ public final class NativeRegionStateLifecycle implements AutoCloseable {
                 ? (StreamFusionKeyedStateBackend<?>) keyedBackend
                 : null;
         try {
-            windowClocks = new NativeRegionWindowClocks(initialization, plan, stateIds);
+            windowClocks = sharedRegion
+                    ? new NativeRegionWindowClocks(
+                            initialization, tech.streamfusion.proto.plan.v1.NativeRegionPlan.parseFrom(plan), stateIds)
+                    : new NativeRegionWindowClocks(initialization, plan, stateIds);
             directory = Files.createTempDirectory(
                     environment.getIOManager().getSpillingDirectories()[0].toPath(), "streamfusion-region-state-");
-            memory = StreamFusionTaskMemory.createWithState(
-                    environment,
-                    config,
-                    metrics,
-                    "streamfusion-native-region",
-                    plan,
-                    assigned -> {
-                        manager = assigned;
-                        if (backend != null && backend.nativeRocksDbMemoryScope() != null) {
-                            ((tech.streamfusion.flink.memory.FlinkManagedMemory) assigned)
-                                    .shareRocksDbMemoryScope(backend.nativeRocksDbMemoryScope());
-                        }
-                        long stateLease = backend == null ? 0 : backend.nativeRocksDbMemoryLimit();
-                        if (rocks && stateLease == 0) {
-                            stateLease = assigned.limit() / 4;
-                            if (!assigned.tryReserve(stateLease)) {
-                                throw new IllegalStateException("Flink denied the native region RocksDB lease");
-                            }
-                            fallbackReservation = stateLease;
-                        }
-                        // The plugin shares its cache/write-buffer manager for this lease, as it
-                        // does for separate Flink native state owners. Do not multiply the budget.
-                        final long lease = stateLease;
-                        return NativeStateResources.serialize(stateIds.stream()
-                                .map(id -> rocks
-                                        ? NativeStateResources.rocksDb(
-                                                id,
-                                                maxParallelism,
-                                                range.getStartKeyGroup(),
-                                                range.getEndKeyGroup(),
-                                                directory.resolve("node-" + id),
-                                                lease,
-                                                NativeRocksDbLogDirectory.resolve(directory.resolve("node-" + id)))
-                                        : NativeStateResources.memory(
-                                                id, maxParallelism, range.getStartKeyGroup(), range.getEndKeyGroup()))
-                                .map(windowClocks::bind)
-                                .collect(Collectors.toList()));
-                    },
-                    taskBindings);
+            java.util.function.Function<NativeMemoryManager, byte[]> bindings = assigned -> {
+                manager = assigned;
+                if (backend != null && backend.nativeRocksDbMemoryScope() != null) {
+                    ((tech.streamfusion.flink.memory.FlinkManagedMemory) assigned)
+                            .shareRocksDbMemoryScope(backend.nativeRocksDbMemoryScope());
+                }
+                long stateLease = backend == null ? 0 : backend.nativeRocksDbMemoryLimit();
+                if (rocks && stateLease == 0) {
+                    stateLease = assigned.limit() / 4;
+                    if (!assigned.tryReserve(stateLease)) {
+                        throw new IllegalStateException("Flink denied the native region RocksDB lease");
+                    }
+                    fallbackReservation = stateLease;
+                }
+                // The plugin shares its cache/write-buffer manager for this lease, as it
+                // does for separate Flink native state owners. Do not multiply the budget.
+                final long lease = stateLease;
+                return NativeStateResources.serialize(stateIds.stream()
+                        .map(id -> rocks
+                                ? NativeStateResources.rocksDb(
+                                        id,
+                                        maxParallelism,
+                                        range.getStartKeyGroup(),
+                                        range.getEndKeyGroup(),
+                                        directory.resolve("node-" + id),
+                                        lease,
+                                        NativeRocksDbLogDirectory.resolve(directory.resolve("node-" + id)))
+                                : NativeStateResources.memory(
+                                        id, maxParallelism, range.getStartKeyGroup(), range.getEndKeyGroup()))
+                        .map(windowClocks::bind)
+                        .collect(Collectors.toList()));
+            };
+            memory = sharedRegion
+                    ? StreamFusionTaskMemory.createRegionWithState(
+                            environment, config, metrics, "streamfusion-native-region", plan, bindings, taskBindings)
+                    : StreamFusionTaskMemory.createWithState(
+                            environment, config, metrics, "streamfusion-native-region", plan, bindings, taskBindings);
             // Flink owns staged checkpoint cleanup after asynchronous upload. Keep those files
             // outside the live database directory that this lifecycle deletes on close.
             participant = new NativeRegionStateParticipant(

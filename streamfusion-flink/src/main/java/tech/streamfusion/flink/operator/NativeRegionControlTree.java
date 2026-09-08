@@ -33,6 +33,7 @@ final class NativeRegionControlTree {
     private final Listener listener;
     private final Set<Long> identities = new HashSet<>();
     private final List<Node> outputs;
+    private boolean sharedRegion;
     private final java.util.Map<Long, Long> restoredWindowWatermarks;
 
     NativeRegionControlTree(byte[] identifiedPlan, int inputCount, Listener listener) {
@@ -101,6 +102,8 @@ final class NativeRegionControlTree {
     }
 
     void latency(int input, LatencyMarker marker) throws Exception {
+        if (sharedRegion)
+            throw new IllegalStateException("Shared native regions do not yet support Flink sampled latency routing");
         latency(port(input).node, marker);
     }
 
@@ -128,6 +131,7 @@ final class NativeRegionControlTree {
             java.util.Map<Long, Long> restoredWindowWatermarks,
             Listener listener) {
         NativeRegionPlanComposer.validate(plan);
+        sharedRegion = true;
         this.restoredWindowWatermarks = java.util.Map.copyOf(restoredWindowWatermarks);
         this.listener = java.util.Objects.requireNonNull(listener);
         inputs = new Edge[plan.getInputCount()];

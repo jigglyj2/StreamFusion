@@ -25,6 +25,10 @@ class NativeRegionControlDagTest {
             var controls = new NativeRegionControlTree(plan(), Map.of(), listener(actual));
             assertThat(controls.outputIds()).containsExactly(11L, 13L, 14L);
             assertThatThrownBy(controls::rootId).hasMessageContaining("explicit output");
+            // Flink's BroadcastingOutputCollector samples one branch for latency, while
+            // watermarks/status are broadcast. Do not approximate that routing as broadcast.
+            assertThatThrownBy(() -> controls.latency(0, new LatencyMarker(1, new OperatorID(), 0)))
+                    .hasMessageContaining("sampled latency routing");
             try (var shared = new FlinkControlHarness(2);
                     var left = new FlinkControlHarness(1);
                     var right = new FlinkControlHarness(1);
@@ -46,9 +50,9 @@ class NativeRegionControlDagTest {
                         controls.status(port, status);
                         shared.processWatermarkStatus(port, status);
                     } else {
-                        var marker = new LatencyMarker(step, new OperatorID(), port);
-                        controls.latency(port, marker);
-                        shared.input(port).processLatencyMarker(marker);
+                        times[port] += random.nextInt(40);
+                        controls.watermark(port, times[port]);
+                        shared.processWatermark(port, new Watermark(times[port]));
                     }
                     drain(shared, 11, List.of(left, right), expected);
                     drain(left, 12, List.of(tail), expected);

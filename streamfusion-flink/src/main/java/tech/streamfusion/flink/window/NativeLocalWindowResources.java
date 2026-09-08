@@ -39,6 +39,22 @@ public final class NativeLocalWindowResources implements Serializable {
         return owners.isEmpty() ? NONE : new NativeLocalWindowResources(owners);
     }
 
+    public static NativeLocalWindowResources pending(tech.streamfusion.proto.plan.v1.NativeRegionPlan plan) {
+        var owners = owners(plan);
+        return owners.isEmpty() ? NONE : new NativeLocalWindowResources(owners);
+    }
+
+    public void validate(tech.streamfusion.proto.plan.v1.NativeRegionPlan plan) {
+        validateOwners(owners(plan));
+    }
+
+    private static Set<Long> owners(tech.streamfusion.proto.plan.v1.NativeRegionPlan plan) {
+        tech.streamfusion.flink.operator.NativeRegionPlanComposer.validate(plan);
+        var owners = new HashSet<Long>();
+        for (var stage : plan.getStagesList()) collect(stage.getOperator(), owners);
+        return owners;
+    }
+
     public boolean isPending() {
         return shares == null;
     }
@@ -56,7 +72,10 @@ public final class NativeLocalWindowResources implements Serializable {
     }
 
     public void validate(byte[] bytes) {
-        var expected = owners(bytes);
+        validateOwners(owners(bytes));
+    }
+
+    private void validateOwners(Set<Long> expected) {
         if (!expected.equals(owners))
             throw new IllegalArgumentException(
                     "Local-window memory shares must match the native plan exactly: expected " + expected
