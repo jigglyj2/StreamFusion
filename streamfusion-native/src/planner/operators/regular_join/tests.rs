@@ -6,6 +6,7 @@ use crate::memory_pool::{tests_support::TestBroker, HostMemoryReservation};
 use arrow::array::{ArrayRef, Int64Array, Int8Array, ListArray, StringArray};
 use arrow::datatypes::Int32Type;
 use prost::Message;
+mod coarse_memory;
 mod planning_memory;
 mod region;
 mod streaming;

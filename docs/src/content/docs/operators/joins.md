@@ -63,6 +63,12 @@ Canonical paged-state restore drops its validation-only decoded pages and allowa
 the backend restore. Both backends have a constrained-budget regression that allows either phase
 but not both workspaces simultaneously; validation still finishes before any state is replaced.
 
+The retained streaming join admits manifest/page lookup descriptors and dirty-state mutations
+once per incoming batch. Output buffer allowances grow geometrically with a 64 KiB minimum
+and remain held until that output chunk is emitted, avoiding a JVM reservation for each row
+or touched key. Admission still precedes allocation, and budget failures require recovery.
+A 1,024-key regression checks bounded broker-call counts alongside changelog and cleanup tests.
+
 The retained two-input streaming runtime emits bounded Arrow C Stream batches, capped at 4,096
 rows with a smaller row target for wide payloads. It does not first collect the complete fan-out.
 Residual predicates use bounded vectorized candidate chunks, while equality-only/null-rejected

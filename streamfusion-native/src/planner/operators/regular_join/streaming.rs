@@ -230,7 +230,8 @@ impl RegularJoinProcessor {
                     .saturating_mul(2)
                     .saturating_add(1)
                     .min(limit - output.len());
-                output_memory.resize(
+                admit_output_capacity(
+                    &mut output_memory,
                     admitted.saturating_add(
                         maximum_rows
                             .saturating_mul(cursor.pair_bytes)
@@ -297,5 +298,23 @@ impl RegularJoinProcessor {
                 done,
             ));
         }
+    }
+}
+
+// Keep the buffer's high-water allowance until this output chunk is emitted. Growing in
+// coarse powers of two avoids a JVM reservation on every input row without weakening admission.
+fn admit_output_capacity(memory: &mut HostMemoryReservation, required: usize) -> Result<()> {
+    if required <= memory.size() {
+        return Ok(());
+    }
+    let capacity = required
+        .checked_next_power_of_two()
+        .unwrap_or(required)
+        .max(64 << 10);
+    match memory.resize(capacity) {
+        Err(DataFusionError::ResourcesExhausted(_)) if capacity != required => {
+            memory.resize(required)
+        }
+        result => result,
     }
 }

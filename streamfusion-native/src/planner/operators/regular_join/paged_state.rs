@@ -26,16 +26,21 @@ pub(super) fn load(
         .iter()
         .map(|value| value.as_ref().map(|v| decode_manifest(v)).transpose())
         .collect::<Result<Vec<_>>>()?;
+    let page_workspace = manifests
+        .iter()
+        .enumerate()
+        .fold(0usize, |bytes, (index, manifest)| {
+            let count = manifest.as_ref().map_or(0, |manifest| {
+                manifest.pages.iter().map(Vec::len).sum::<usize>()
+            });
+            bytes.saturating_add(count.saturating_mul(keys[index].key.len().saturating_add(256)))
+        });
+    owner.try_grow(page_workspace)?;
     let mut page_keys = Vec::new();
     let mut locations = Vec::new();
     for (index, manifest) in manifests.iter().enumerate() {
         if let Some(manifest) = manifest {
             for side in 0..2 {
-                owner.try_grow(
-                    manifest.pages[side]
-                        .len()
-                        .saturating_mul(keys[index].key.len().saturating_add(256)),
-                )?;
                 for &page in &manifest.pages[side] {
                     page_keys.push(page_key(&keys[index], side, page));
                     locations.push((index, side, page));
@@ -154,15 +159,23 @@ pub(super) fn batch_mutations(
     entries: &[StagedState],
     owner: &mut HostMemoryReservation,
 ) -> Result<Vec<StateMutation>> {
+    // One batch admission covers all changed keys; no JNI call per state entry.
+    owner.try_grow(
+        entries
+            .iter()
+            .filter(|entry| entry.touched)
+            .fold(0usize, |bytes, entry| {
+                bytes.saturating_add(mutation_workspace(entry))
+            }),
+    )?;
     let mut changes = Vec::new();
     for entry in entries.iter().filter(|entry| entry.touched) {
-        admit_mutations(entry, owner)?;
         changes.extend(mutations(entry)?);
     }
     Ok(changes)
 }
 
-fn admit_mutations(entry: &StagedState, owner: &mut HostMemoryReservation) -> Result<()> {
+fn mutation_workspace(entry: &StagedState) -> usize {
     // Derived page keys repeat the logical equality key. Its size need not be proportional to
     // the stored payload (a bounded projection may retain no payload at all).
     let count = [
@@ -173,7 +186,7 @@ fn admit_mutations(entry: &StagedState, owner: &mut HostMemoryReservation) -> Re
     ]
     .into_iter()
     .fold(2usize, |n, rows| n.saturating_add(pages(rows).count()));
-    owner.try_grow(count.saturating_mul(entry.key.key.len().saturating_add(512)))
+    count.saturating_mul(entry.key.key.len().saturating_add(512))
 }
 
 fn refs(keys: &[StateKey]) -> Vec<StateKeyRef<'_>> {
@@ -227,7 +240,7 @@ pub(super) fn restore(
             original: JoinState::default(),
             touched: true,
         };
-        admit_mutations(&entry, &mut memory)?;
+        memory.try_grow(mutation_workspace(&entry))?;
         migrated.extend(mutations(&entry)?);
     }
     migrated.sort_by(|left, right| left.key.key.cmp(&right.key.key));
