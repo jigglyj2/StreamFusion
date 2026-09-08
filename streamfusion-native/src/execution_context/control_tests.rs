@@ -404,3 +404,5 @@ fn persistent_stages_reject_owned_envelopes_without_an_explicit_capability() {
         .iter()
         .all(|kernel| kernel.lock().unwrap().controls == 0));
 }
+
+mod fanout;

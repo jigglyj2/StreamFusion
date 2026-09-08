@@ -21,6 +21,8 @@ pub(crate) struct NativePlanStream {
     schema: SchemaRef,
     context: Arc<NativeExecutionContext>,
     reusable: bool,
+    owns_completion: bool,
+    polled: bool,
 }
 impl NativeExecutionContext {
     pub(crate) fn control_capabilities(
@@ -129,6 +131,8 @@ impl NativeExecutionContext {
             schema,
             context: self.clone(),
             reusable,
+            owns_completion: true,
+            polled: false,
         })
     }
 
@@ -168,21 +172,54 @@ impl NativeExecutionContext {
         result
     }
 }
+impl NativePlanStream {
+    /// Share one execution without copying Arrow payloads. All consumers must be driven
+    /// cooperatively and reach EOF before another mailbox invocation may start.
+    pub(crate) fn fan_out(mut self, consumers: usize) -> Result<Vec<SendableRecordBatchStream>> {
+        if self.polled || self.stream.is_none() {
+            return Err(DataFusionError::Plan(
+                "shared native output must be bound before polling".into(),
+            ));
+        }
+        if consumers == 0 {
+            return Err(DataFusionError::Plan(
+                "shared native output requires consumers".into(),
+            ));
+        }
+        let context = self.context.clone();
+        self.owns_completion = false;
+        Ok(super::fanout::split(
+            Box::pin(self),
+            consumers,
+            Box::new(move |successful| {
+                context.finish_invocation(successful);
+            }),
+        ))
+    }
+
+    fn finish(&self, successful: bool) {
+        if self.owns_completion {
+            self.context.finish_invocation(successful);
+        }
+    }
+}
+
 impl Stream for NativePlanStream {
     type Item = Result<RecordBatch>;
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.polled = true;
         let Some(stream) = self.stream.as_mut() else {
             return Poll::Ready(None);
         };
         match stream.as_mut().poll_next(cx) {
             Poll::Ready(None) => {
                 drop(self.stream.take());
-                self.context.finish_invocation(true);
+                self.finish(true);
                 Poll::Ready(None)
             }
             Poll::Ready(Some(Err(error))) => {
                 drop(self.stream.take());
-                self.context.finish_invocation(false);
+                self.finish(false);
                 Poll::Ready(Some(Err(error)))
             }
             Poll::Pending if self.reusable => {
@@ -194,7 +231,7 @@ impl Stream for NativePlanStream {
                     .retained_stream
                     .lock()
                     .unwrap_or_else(|e| e.into_inner()) = stream;
-                self.context.finish_invocation(true);
+                self.finish(true);
                 Poll::Ready(None)
             }
             other => other,
@@ -210,7 +247,7 @@ impl Drop for NativePlanStream {
     fn drop(&mut self) {
         if self.stream.is_some() {
             drop(self.stream.take());
-            self.context.finish_invocation(false);
+            self.finish(false);
         }
     }
 }

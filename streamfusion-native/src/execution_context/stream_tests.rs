@@ -239,3 +239,5 @@ fn successive_arrivals_reuse_one_synchronous_execution_stream() {
     drop(context);
     assert_eq!(broker.reserved(), 0);
 }
+
+mod fanout;

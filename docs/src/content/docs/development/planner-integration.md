@@ -173,8 +173,23 @@ repeated roots, and repeated input references. Fusion that would make a region c
 output through a Flink exchange/control boundary is rejected with an EXPLAIN reason.
 
 This layout is currently used for ownership admission. Executing multiple exits still requires
-native fan-out, output transport, and corresponding control/metric/recovery integration; the
+integration of native fan-out, output transport, and corresponding control/metric/recovery handling; the
 multi-output fallback gate remains active. Comet retains Spark's exchange reuse, while Flink can
 reuse an intermediate stage before two different exchanges. Supporting that Flink topology must
 keep the shared computation in one native owner and preserve the existing exchanges; it must not
 duplicate the stage or insert an artificial exchange to avoid native sharing.
+
+The native stream API now provides a bounded fan-out primitive for that integration. It shares
+one producer execution and holds at most one batch descriptor while waiting for readers; Arrow
+arrays and their existing memory leases remain shared. Consumers must drain cooperatively.
+Completion waits for every consumer's EOF. Cancellation, producer failure, or panic releases
+pending work and fails the invocation; persistent contexts require recovery before reuse.
+Sharing must be bound before the first poll, so an old completed stream cannot release a later
+invocation's ownership.
+
+Native tests exercise generated reader schedules, array identity, a single large-buffer Flink
+lease through successful and cancelled consumption, and different downstream DataFusion projection
+schemas. Control-output tests verify watermark, pre-barrier, and end-input computation and metrics
+once per stage, including cancellation and panic cleanup. This primitive is not yet wired to the
+multi-output planner or JNI output routing. It does not change ordinary Q5 admission or establish
+full-query recovery/performance results.
