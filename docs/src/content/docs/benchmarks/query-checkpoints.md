@@ -56,6 +56,13 @@ all four RowKinds and bounded hot-key fan-out. Outer binary MultiJoin is deliber
 to the regular join: its retraction/null-padding sequence differs. It remains on the separate,
 unadmitted MultiJoin path. Q3 is an inner join and is unaffected by that semantic restriction.
 
+The shared binary join also passes generated 64-key changelog checks while rescaling 1 → 2 → 1
+through Flink's key-group repartition APIs. Canonical savepoints switch between memory and
+RocksDB; aligned and unaligned snapshot options preserve state on each backend, and successive
+RocksDB checkpoints verify incremental file reuse. The harness now uses the production frame
+key selector after rescaling. These tests cover keyed-state snapshots, not in-flight network
+channel recovery. Backend option propagation remains an admission prerequisite.
+
 The next work is limited to this production path:
 
 1. Preserve shape-aware admission and precise whole-plan fallback for unsupported shapes.

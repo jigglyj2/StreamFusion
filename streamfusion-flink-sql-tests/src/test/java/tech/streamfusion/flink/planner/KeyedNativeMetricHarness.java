@@ -37,7 +37,26 @@ final class KeyedNativeMetricHarness extends KeyedMultiInputStreamOperatorTestHa
 
     KeyedNativeMetricHarness(boolean rocks, byte[] plan, List<RowType> inputTypes, RowType type, List<Long> states)
             throws Exception {
-        super(new StreamFusionNativeRegionOperatorFactory(inputTypes, type, plan, states), 16, 1, 0);
+        this(
+                rocks,
+                new StreamFusionNativeRegionOperatorFactory(inputTypes, type, plan, states),
+                inputTypes.size(),
+                type,
+                null,
+                1,
+                0);
+    }
+
+    KeyedNativeMetricHarness(
+            boolean rocks,
+            StreamFusionNativeRegionOperatorFactory factory,
+            int inputCount,
+            RowType type,
+            org.apache.flink.runtime.checkpoint.OperatorSubtaskState restore,
+            int parallelism,
+            int subtask)
+            throws Exception {
+        super(factory, 16, parallelism, subtask);
         outputType = type;
         var previous = getEnvironment().getMemoryManager();
         var field = getEnvironment().getClass().getDeclaredField("memManager");
@@ -49,8 +68,15 @@ final class KeyedNativeMetricHarness extends KeyedMultiInputStreamOperatorTestHa
                         .build());
         previous.shutdown();
         config.setStateKeySerializer(IntSerializer.INSTANCE);
-        // One subtask owns every native key group; Rust performs the real key-group assignment.
-        for (int port = 0; port < inputTypes.size(); port++) setKeySelector(port, ignored -> 0);
+        // Match production routing: Flink must select the frame's native key group after
+        // rescaling. A constant lifecycle anchor can hash outside the assigned subtask range.
+        var frameKeys = new tech.streamfusion.flink.exchange.NativeExchangeFrameKeySelector(16);
+        for (int port = 0; port < inputCount; port++)
+            setKeySelector(
+                    port,
+                    value -> value instanceof tech.streamfusion.flink.exchange.NativeExchangeFrame
+                            ? frameKeys.getKey((tech.streamfusion.flink.exchange.NativeExchangeFrame) value)
+                            : 0);
         setStateBackend(new StreamFusionStateBackend(
                 rocks ? new EmbeddedRocksDBStateBackend(true) : new HashMapStateBackend()));
         setOutputCreator(ignored -> new CollectorOutput<ArrowRowDataBatch>(controls) {
@@ -70,6 +96,7 @@ final class KeyedNativeMetricHarness extends KeyedMultiInputStreamOperatorTestHa
             }
         });
         setup(ArrowRowDataBatchSerializer.INSTANCE);
+        if (restore != null) initializeState(restore);
         open();
         var memoryField = StreamFusionArrowNativeRegionOperator.class.getDeclaredField("memory");
         memoryField.setAccessible(true);
