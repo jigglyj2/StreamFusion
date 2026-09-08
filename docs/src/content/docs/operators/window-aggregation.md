@@ -42,9 +42,13 @@ batches. It probes Arrow row keys by reference and copies retained keys only for
 Its hash table stores ordinals into the first-appearance key vector, so it does not duplicate
 retained keys. Batch reservations admit replacement index buffers only when the incoming batch
 can cross their capacity, together with conservative DataFusion vector growth and batch scratch.
-A 100,000-distinct-key regression fits a 16 MiB Flink share, preserves partial order and duplicate
-counts across rehashes, and returns all credit after flushing. The previous duplicate-key index
+A 100,000-distinct-key regression fits a 16 MiB Flink share with both 1,024-row and 16,384-row
+inputs, preserves partial order and duplicate counts across rehashes, and returns all credit
+after flushing. The previous duplicate-key index
 and blanket replacement reservation exhausted that same allowance before reaching the flush.
+The incoming Arrow batch and its encoded keys remain retained while DataFusion consumes
+zero-copy slices of at most 2,048 rows. Scratch and index-growth reservations are renewed at
+those compute boundaries; finishing a slice does not emit a partial or add a JNI batch crossing.
 Flink-compatible watermark, checkpoint pre-barrier and memory-pressure boundaries flush partials
 in first-appearance order, including future slices when a trigger flushes the buffer. Outputs are
 timestamp-less INSERT partials, limited to 2,048 rows per pull. Invocation EOF and end-input alone

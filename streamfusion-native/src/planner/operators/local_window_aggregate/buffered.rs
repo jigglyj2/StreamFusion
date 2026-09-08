@@ -14,6 +14,7 @@ pub(crate) mod execution_plan;
 mod tests;
 
 const OUTPUT_ROWS: usize = 2048;
+const COMPUTE_ROWS: usize = 2048;
 
 pub(super) struct BufferedWindow {
     kernel: LocalWindowAggregateProcessor,
@@ -159,11 +160,8 @@ impl BufferedWindow {
             ));
         }
         // Also admit replacement hash/group vectors during growth before touching state.
-        let allowance = self
-            .kernel
-            .buffered_batch_admission(batch.num_rows())?
-            .checked_add(self.growth_headroom(batch.num_rows())?)
-            .ok_or_else(overflow)?;
+        let allowance =
+            self.input_workspace(batch.num_rows(), batch.num_rows().min(COMPUTE_ROWS))?;
         self.kernel.reservation.resize(allowance)?;
         let keys = if self.kernel.plan.grouping_indices.is_empty() {
             None
@@ -198,12 +196,13 @@ impl BufferedWindow {
                 return Ok(None);
             };
             let result = self.consume_segment(&mut cursor);
+            let complete = cursor.offset == cursor.batch.num_rows();
             // Keep the producer's Arrow buffers and workspace alive on failure as well.
             self.cursor = Some(cursor);
             let pressure = result?;
             if pressure {
                 self.begin_flush()?;
-            } else {
+            } else if complete {
                 self.cursor = None;
                 self.kernel.reservation.resize(0)?;
                 return Ok(None);
@@ -213,9 +212,14 @@ impl BufferedWindow {
 
     fn consume_segment(&mut self, cursor: &mut InputCursor) -> Result<bool> {
         let start = cursor.offset;
-        let mut indices = Vec::with_capacity(cursor.batch.num_rows() - start);
+        let rows = (cursor.batch.num_rows() - start).min(COMPUTE_ROWS);
+        self.kernel
+            .reservation
+            .resize(self.input_workspace(cursor.batch.num_rows(), rows)?)?;
+        let end = start + rows;
+        let mut indices = Vec::with_capacity(rows);
         let mut pressure = false;
-        while cursor.offset < cursor.batch.num_rows() {
+        while cursor.offset < end {
             let row = cursor.offset;
             let Some((window_start, slice_end)) = self.kernel.slice_bounds(&cursor.batch, row)?
             else {
@@ -289,6 +293,26 @@ impl BufferedWindow {
         }
         self.account_retained()?;
         Ok(pressure)
+    }
+
+    // Keep the batch's encoded keys while advancing bounded zero-copy compute slices.
+    // Chunk completion is internal and must not flush Flink-visible partial records.
+    fn input_workspace(&self, batch_rows: usize, compute_rows: usize) -> Result<usize> {
+        let key_width = self
+            .kernel
+            .plan
+            .grouping_indices
+            .len()
+            .checked_mul(32)
+            .and_then(|bytes| bytes.checked_add(16))
+            .ok_or_else(overflow)?;
+        let keys = batch_rows.checked_mul(key_width).ok_or_else(overflow)?;
+        let growth = self.growth_headroom(compute_rows)?;
+        self.kernel
+            .buffered_batch_admission(compute_rows)?
+            .checked_add(keys)
+            .and_then(|bytes| bytes.checked_add(growth))
+            .ok_or_else(overflow)
     }
 
     // Existing key bytes are never copied on index growth. Reserve replacement buffers
