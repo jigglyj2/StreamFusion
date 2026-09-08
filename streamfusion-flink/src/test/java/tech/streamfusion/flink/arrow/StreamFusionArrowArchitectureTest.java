@@ -36,7 +36,7 @@ class StreamFusionArrowArchitectureTest {
         assertThat(operator)
                 .contains(
                         "MultipleInputStreamOperator<ArrowRowDataBatch>",
-                        "ArrowNativePlanDispatcher",
+                        "ArrowNativeRegionDispatcher",
                         "NativeRegionControlTree",
                         "NativeRegionControlScheduler",
                         "memory.executionContext().controlCapabilities()",
@@ -55,6 +55,22 @@ class StreamFusionArrowArchitectureTest {
                         "OperatorCase");
         assertThat(operator)
                 .contains("NativeRegionStateLifecycle", "stateLifecycle.initialize(", "stateLifecycle.writeSnapshot(");
+        assertThat(operator)
+                .contains(
+                        "StreamFusionNativeMetricTree.forSharedRegion(",
+                        "stateLifecycle.initializeRegion(",
+                        "sharedOutputs.outputTag(port)",
+                        "sharedOutputs.watermark(nodeId, timestamp)");
+        String dispatcher = Files.readString(
+                Path.of("src/main/java/tech/streamfusion/flink/arrow/ArrowNativeRegionDispatcher.java"));
+        assertThat(dispatcher)
+                .contains(
+                        "ArrowNativeRegionBridge",
+                        "shared.executeStream(inputs)",
+                        "shared.executeExchangeStream(",
+                        "shared.executeControlStream(")
+                .doesNotContain(
+                        "rowView(", ".transpose(", "NativeCalcBridge", "NativeWindowAggregateBridge", "executeArrow");
         String lifecycle = Files.readString(
                 Path.of("src/main/java/tech/streamfusion/flink/state/NativeRegionStateLifecycle.java"));
         assertThat(lifecycle)

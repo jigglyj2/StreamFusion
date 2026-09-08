@@ -19,23 +19,50 @@ import tech.streamfusion.flink.arrow.ArrowRowDataBatchSerializer;
 
 /** Copies only at the test sink, while the native output is still borrowed and alive. */
 final class NativeRegionTestHarness extends MultiInputStreamOperatorTestHarness<ArrowRowDataBatch> {
-    final List<RowData> rows = new ArrayList<>();
+    final List<RowData> rows;
+    final List<List<RowData>> outputRows = new ArrayList<>();
+    final List<List<Long>> outputTimes = new ArrayList<>();
     final List<StreamElement> controls = new ArrayList<>();
     RuntimeException sinkFailure;
 
     NativeRegionTestHarness(byte[] plan, List<RowType> inputTypes, RowType outputType) throws Exception {
-        super(new StreamFusionNativeRegionOperatorFactory(inputTypes, outputType, plan));
-        var serializer = new RowDataSerializer(outputType);
+        this(new StreamFusionNativeRegionOperatorFactory(inputTypes, outputType, plan), List.of(outputType));
+    }
+
+    NativeRegionTestHarness(StreamFusionNativeRegionOperatorFactory factory, List<RowType> outputTypes)
+            throws Exception {
+        super(factory);
+        var serializers =
+                outputTypes.stream().map(RowDataSerializer::new).collect(java.util.stream.Collectors.toList());
+        for (int port = 0; port < outputTypes.size(); port++) {
+            outputRows.add(new ArrayList<>());
+            outputTimes.add(new ArrayList<>());
+        }
+        rows = outputRows.get(0);
         setOutputCreator(ignored -> new CollectorOutput<ArrowRowDataBatch>(controls) {
             @Override
             public void collect(StreamRecord<ArrowRowDataBatch> record) {
+                capture(0, record.getValue());
+            }
+
+            @Override
+            public <X> void collect(org.apache.flink.util.OutputTag<X> tag, StreamRecord<X> record) {
+                for (int port = 1; port < outputTypes.size(); port++)
+                    if (factory.outputTag(port).equals(tag)) {
+                        capture(port, (ArrowRowDataBatch) record.getValue());
+                        return;
+                    }
+                throw new AssertionError("Unknown region output " + tag);
+            }
+
+            private void capture(int port, ArrowRowDataBatch batch) {
                 metrics().getIOMetricGroup().getNumRecordsOutCounter().inc();
                 if (sinkFailure != null) throw sinkFailure;
-                var batch = record.getValue();
                 for (int row = 0; row < batch.size(); row++) {
-                    RowData copy = serializer.copy(batch.rowView(row));
+                    RowData copy = serializers.get(port).copy(batch.rowView(row));
                     copy.setRowKind(batch.rowKind(row));
-                    rows.add(copy);
+                    outputRows.get(port).add(copy);
+                    outputTimes.get(port).add(batch.hasTimestamp(row) ? batch.timestamp(row) : null);
                 }
             }
         });
@@ -66,6 +93,10 @@ final class NativeRegionTestHarness extends MultiInputStreamOperatorTestHarness<
         var groupField = stage.getClass().getDeclaredField("group");
         groupField.setAccessible(true);
         return (OperatorMetricGroup) groupField.get(stage);
+    }
+
+    StreamFusionArrowNativeRegionOperator region() {
+        return (StreamFusionArrowNativeRegionOperator) getCastedOperator();
     }
 
     void end(int input) throws Exception {

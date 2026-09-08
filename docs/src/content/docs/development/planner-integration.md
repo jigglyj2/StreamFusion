@@ -245,18 +245,31 @@ budget or state owner. Window union clocks are initialized once per physical def
 the minimum restored subtask clock, and bind that clock before native input can run. Local-window
 resource validation also visits each shared definition once and retains its original Flink
 capacity through factory serialization. Boundary tests cover failed construction/restore cleanup
-on both backends, union-clock restoration, and local capacity binding. Full multi-output runtime
-checkpoint and rescaling parity still needs validation after runtime wiring.
+on both backends, union-clock restoration, and local capacity binding. Full stateful multi-output runtime
+checkpoint and rescaling parity still needs validation.
 
 The Java metric publisher also consumes flat physical definitions directly. It binds each
 original stage scope once, omits anonymous local Input slots, and verifies the complete native
 snapshot without doubling a reused producer's counts. The runtime owner counts external I/O
-separately. This is control/metric infrastructure; binding it to the multi-output Flink runtime
-and validating the full topology and recovery behavior remain outstanding. No
-additional whole-plan query is admitted by this change.
+separately. The common Flink runtime factory now binds either the original tree or a shared
+region to these lifecycle, control, and metric services. One arrival dispatcher drains native
+outputs cooperatively: port zero uses the main Arrow output, and other ports use typed Flink
+side outputs. Each batch is borrowed synchronously and released after collection, including
+when downstream collection fails. The exchange edge feeds its IPC frame directly into the
+same shared invocation.
+
+This runtime subset requires one external input, diverging unary stages, disabled latency
+tracking, and identical restored window-clock ancestry at every exit. Watermarks and status
+are broadcast once after all exits complete the same control wave; incompatible frontiers
+fail instead of emitting an incorrect watermark. Generated runtime tests compare both
+heterogeneous exit changelogs against Flink-generated Calc operators, with nullable data,
+all row kinds, repeated arrivals, direct Arrow and IPC inputs, stage I/O counts, control
+broadcasting, and managed-memory release on successful and cancelled execution. Stateful
+full-topology recovery and rescaling validation remain outstanding. No additional whole-plan
+query is admitted by this runtime prerequisite.
 
 Ordinary planner use of this layout remains limited to ownership admission. Wiring the native
-region edge into Flink transformations, exchanges, and output control routing is still required;
+region owner and its side outputs into planner-selected Flink transformations is still required;
 the multi-output fallback gate remains active. Comet retains Spark's exchange reuse, while Flink can
 reuse an intermediate stage before two different exchanges. Supporting that Flink topology must
 keep the shared computation in one native owner and preserve the existing exchanges; it must not
@@ -274,5 +287,5 @@ Native tests exercise generated reader schedules, array identity, a single large
 lease through successful and cancelled consumption, and different downstream DataFusion projection
 schemas. Control-output tests verify watermark, pre-barrier, and end-input computation and metrics
 once per stage, including cancellation and panic cleanup. Fan-out now backs the native region
-driver and JNI edge described above. Flink's multi-output planner/runtime wiring remains gated;
+driver and JNI edge described above. Flink's multi-output planner selection remains gated;
 this does not change ordinary Q5 admission or establish full-query recovery/performance results.

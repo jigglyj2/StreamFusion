@@ -14,7 +14,8 @@ import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 /** Shared runtime factory for arrival-driven, control-preserving native regions of any arity. */
 public final class StreamFusionNativeRegionOperatorFactory extends AbstractStreamOperatorFactory<ArrowRowDataBatch> {
     private final List<RowType> inputTypes;
-    private final RowType outputType;
+    private final List<RowType> outputTypes;
+    private final boolean sharedRegion;
     private final byte[] plan;
     private final List<Long> stateIds;
     private final List<byte[]> exchangePlans;
@@ -62,14 +63,52 @@ public final class StreamFusionNativeRegionOperatorFactory extends AbstractStrea
             List<Long> stateIds,
             List<byte[]> exchangePlans,
             tech.streamfusion.flink.window.NativeLocalWindowResources localWindowResources) {
+        this(inputTypes, List.of(outputType), plan, stateIds, exchangePlans, localWindowResources, false);
+    }
+
+    public static StreamFusionNativeRegionOperatorFactory shared(
+            List<RowType> inputTypes,
+            List<RowType> outputTypes,
+            byte[] plan,
+            List<Long> stateIds,
+            List<byte[]> exchangePlans,
+            tech.streamfusion.flink.window.NativeLocalWindowResources resources) {
+        return new StreamFusionNativeRegionOperatorFactory(
+                inputTypes, outputTypes, plan, stateIds, exchangePlans, resources, true);
+    }
+
+    public org.apache.flink.util.OutputTag<ArrowRowDataBatch> outputTag(int port) {
+        java.util.Objects.checkIndex(port, outputTypes.size());
+        return NativeSharedRegionOutputs.tag(port);
+    }
+
+    private StreamFusionNativeRegionOperatorFactory(
+            List<RowType> inputTypes,
+            List<RowType> outputTypes,
+            byte[] plan,
+            List<Long> stateIds,
+            List<byte[]> exchangePlans,
+            tech.streamfusion.flink.window.NativeLocalWindowResources localWindowResources,
+            boolean sharedRegion) {
         this.inputTypes = List.copyOf(inputTypes);
         if (inputTypes.isEmpty()) {
             throw new IllegalArgumentException("An arrival-driven native region needs external inputs");
         }
-        this.outputType = outputType;
-        this.plan = ownedEnvelopePlan(plan);
+        this.outputTypes = List.copyOf(outputTypes);
+        this.sharedRegion = sharedRegion;
+        this.plan = sharedRegion ? plan.clone() : ownedEnvelopePlan(plan);
         this.localWindowResources = java.util.Objects.requireNonNull(localWindowResources);
-        localWindowResources.validate(this.plan);
+        if (sharedRegion) {
+            try {
+                var region = tech.streamfusion.proto.plan.v1.NativeRegionPlan.parseFrom(plan);
+                NativeSharedRegionOutputs.validate(region, outputTypes.size());
+                if (region.getInputCount() != inputTypes.size())
+                    throw new IllegalArgumentException("Shared native input arity mismatch");
+                localWindowResources.validate(region);
+            } catch (com.google.protobuf.InvalidProtocolBufferException failure) {
+                throw new IllegalArgumentException("Invalid shared native region", failure);
+            }
+        } else localWindowResources.validate(this.plan);
         this.stateIds = List.copyOf(stateIds);
         if (exchangePlans.size() != inputTypes.size()) {
             throw new IllegalArgumentException("Native region exchange contracts must match external input arity");
@@ -101,7 +140,13 @@ public final class StreamFusionNativeRegionOperatorFactory extends AbstractStrea
     StreamFusionNativeRegionOperatorFactory withResolvedResources(
             java.util.Map<Long, tech.streamfusion.flink.memory.FlinkOperatorMemoryShare> shares) {
         var result = new StreamFusionNativeRegionOperatorFactory(
-                inputTypes, outputType, plan, stateIds, exchangePlans, localWindowResources.resolvedFrom(shares));
+                inputTypes,
+                outputTypes,
+                plan,
+                stateIds,
+                exchangePlans,
+                localWindowResources.resolvedFrom(shares),
+                sharedRegion);
         result.setChainingStrategy(getChainingStrategy());
         return result;
     }
@@ -125,7 +170,7 @@ public final class StreamFusionNativeRegionOperatorFactory extends AbstractStrea
     public <T extends StreamOperator<ArrowRowDataBatch>> T createStreamOperator(
             StreamOperatorParameters<ArrowRowDataBatch> parameters) {
         return (T) new StreamFusionArrowNativeRegionOperator(
-                parameters, inputTypes, outputType, plan, stateIds, exchangePlans, localWindowResources);
+                parameters, inputTypes, outputTypes, plan, stateIds, exchangePlans, localWindowResources, sharedRegion);
     }
 
     @Override

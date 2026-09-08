@@ -93,7 +93,7 @@ class StatefulNativeRegionRuntimeTest {
             lifecycleField.setAccessible(true);
             var dispatcherField = StreamFusionArrowNativeRegionOperator.class.getDeclaredField("dispatcher");
             dispatcherField.setAccessible(true);
-            ((tech.streamfusion.flink.arrow.ArrowNativePlanDispatcher) dispatcherField.get(source.region())).close();
+            ((AutoCloseable) dispatcherField.get(source.region())).close();
             // Closing only the native state owner must preserve the independent Flink upload.
             // Closing the Flink backend itself now deliberately cancels that upload (tested below).
             ((tech.streamfusion.flink.state.NativeRegionStateLifecycle) lifecycleField.get(source.region())).close();

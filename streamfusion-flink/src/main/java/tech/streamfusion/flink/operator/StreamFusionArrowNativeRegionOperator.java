@@ -18,14 +18,14 @@ import org.apache.flink.streaming.runtime.streamrecord.LatencyMarker;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.runtime.watermarkstatus.WatermarkStatus;
 import org.apache.flink.table.types.logical.RowType;
-import tech.streamfusion.flink.arrow.ArrowNativePlanDispatcher;
+import tech.streamfusion.flink.arrow.ArrowNativeRegionDispatcher;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.exchange.NativeExchangeFrame;
 import tech.streamfusion.flink.memory.StreamFusionTaskMemory;
 import tech.streamfusion.flink.metrics.FlinkMetricParity;
 import tech.streamfusion.flink.metrics.StreamFusionNativeMetricTree;
 
-/** One Flink lifecycle owner for a native tree; no per-operator or operator-pair execution driver. */
+/** One Flink lifecycle owner for a native tree or shared region; no per-operator or operator-pair execution driver. */
 public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamOperatorV2<ArrowRowDataBatch>
         implements MultipleInputStreamOperator<ArrowRowDataBatch>,
                 BoundedMultiInput,
@@ -34,7 +34,9 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
     private final Environment environment;
     private final int subtaskIndex;
     private final List<RowType> inputTypes;
-    private final RowType outputType;
+    private final List<RowType> outputTypes;
+    private final tech.streamfusion.proto.plan.v1.NativeRegionPlan sharedPlan;
+    private final NativeSharedRegionOutputs sharedOutputs;
     private final byte[] plan;
     private final List<Long> stateIds;
     private tech.streamfusion.flink.state.NativeRegionStateLifecycle stateLifecycle;
@@ -43,23 +45,45 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
     private final List<byte[]> exchangePlans;
     private final tech.streamfusion.flink.window.NativeLocalWindowResources localWindowResources;
     private StreamFusionTaskMemory memory;
-    private ArrowNativePlanDispatcher dispatcher;
+    private ArrowNativeRegionDispatcher dispatcher;
     private StreamFusionNativeMetricTree metricTree;
     private NativeRegionControlScheduler controls;
 
     StreamFusionArrowNativeRegionOperator(
             StreamOperatorParameters<ArrowRowDataBatch> parameters,
             List<RowType> inputTypes,
-            RowType outputType,
+            List<RowType> outputTypes,
             byte[] plan,
             List<Long> stateIds,
             List<byte[]> exchangePlans,
-            tech.streamfusion.flink.window.NativeLocalWindowResources localWindowResources) {
+            tech.streamfusion.flink.window.NativeLocalWindowResources localWindowResources,
+            boolean sharedRegion) {
         super(parameters, inputTypes.size());
         environment = parameters.getContainingTask().getEnvironment();
         subtaskIndex = parameters.getContainingTask().getIndexInSubtaskGroup();
         this.inputTypes = List.copyOf(inputTypes);
-        this.outputType = outputType;
+        this.outputTypes = List.copyOf(outputTypes);
+        if (sharedRegion) {
+            try {
+                sharedPlan = tech.streamfusion.proto.plan.v1.NativeRegionPlan.parseFrom(plan);
+            } catch (com.google.protobuf.InvalidProtocolBufferException failure) {
+                throw new IllegalArgumentException("Invalid shared native region", failure);
+            }
+            sharedOutputs = new NativeSharedRegionOutputs(sharedPlan, outputTypes.size());
+            long latency = getExecutionConfig().isLatencyTrackingConfigured()
+                    ? getExecutionConfig().getLatencyTrackingInterval()
+                    : environment
+                            .getTaskManagerInfo()
+                            .getConfiguration()
+                            .get(org.apache.flink.configuration.MetricOptions.LATENCY_INTERVAL)
+                            .toMillis();
+            if (latency > 0)
+                throw new IllegalArgumentException(
+                        "Shared native regions do not yet support Flink sampled latency routing");
+        } else {
+            sharedPlan = null;
+            sharedOutputs = null;
+        }
         this.plan = plan.clone();
         this.localWindowResources = localWindowResources;
         this.stateIds = List.copyOf(stateIds);
@@ -78,16 +102,29 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
             super.initializeState(context);
         } else {
             stateLifecycle = new tech.streamfusion.flink.state.NativeRegionStateLifecycle();
-            stateLifecycle.initialize(
-                    context,
-                    environment,
-                    config,
-                    getMetricGroup(),
-                    getKeyedStateBackend(),
-                    getRuntimeContext().getTaskInfo().getMaxNumberOfParallelSubtasks(),
-                    plan,
-                    stateIds,
-                    localWindowResources.resolve(environment, config));
+            if (sharedPlan != null) {
+                stateLifecycle.initializeRegion(
+                        context,
+                        environment,
+                        config,
+                        getMetricGroup(),
+                        getKeyedStateBackend(),
+                        getRuntimeContext().getTaskInfo().getMaxNumberOfParallelSubtasks(),
+                        plan,
+                        stateIds,
+                        localWindowResources.resolve(environment, config));
+            } else {
+                stateLifecycle.initialize(
+                        context,
+                        environment,
+                        config,
+                        getMetricGroup(),
+                        getKeyedStateBackend(),
+                        getRuntimeContext().getTaskInfo().getMaxNumberOfParallelSubtasks(),
+                        plan,
+                        stateIds,
+                        localWindowResources.resolve(environment, config));
+            }
             memory = stateLifecycle.memory();
         }
     }
@@ -125,63 +162,89 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
         if (!stateIds.isEmpty() && memory == null) {
             throw new IllegalStateException("Native region state initialization did not complete");
         }
-        if (memory == null)
-            memory = StreamFusionTaskMemory.createWithState(
-                    environment,
-                    config,
-                    getMetricGroup(),
-                    "streamfusion-native-region",
-                    plan,
-                    ignored -> null,
-                    localWindowResources.resolve(environment, config));
+        if (memory == null) {
+            byte[] resources = localWindowResources.resolve(environment, config);
+            memory = sharedPlan == null
+                    ? StreamFusionTaskMemory.createWithState(
+                            environment,
+                            config,
+                            getMetricGroup(),
+                            "streamfusion-native-region",
+                            plan,
+                            ignored -> null,
+                            resources)
+                    : StreamFusionTaskMemory.createRegionWithState(
+                            environment,
+                            config,
+                            getMetricGroup(),
+                            "streamfusion-native-region",
+                            plan,
+                            ignored -> null,
+                            resources);
+        }
         dispatcher =
-                new ArrowNativePlanDispatcher(memory.executionContext(), inputTypes, outputType, memory.allocator());
-        metricTree = StreamFusionNativeMetricTree.forRegion(
-                memory.executionContext().identifiedPlan(),
-                getOperatorID(),
-                environment.getMetricGroup(),
-                environment.getTaskManagerInfo().getConfiguration(),
-                subtaskIndex);
+                new ArrowNativeRegionDispatcher(memory.executionContext(), inputTypes, outputTypes, memory.allocator());
+        metricTree = sharedPlan == null
+                ? StreamFusionNativeMetricTree.forRegion(
+                        memory.executionContext().identifiedPlan(),
+                        getOperatorID(),
+                        environment.getMetricGroup(),
+                        environment.getTaskManagerInfo().getConfiguration(),
+                        subtaskIndex)
+                : StreamFusionNativeMetricTree.forSharedRegion(
+                        sharedPlan,
+                        getOperatorID(),
+                        environment.getMetricGroup(),
+                        environment.getTaskManagerInfo().getConfiguration(),
+                        subtaskIndex);
         metricTree.bindGauges(
                 memory.executionContext().gaugeSchema(),
                 memory.executionContext()::gaugeSnapshot,
                 getProcessingTimeService()::getCurrentProcessingTime);
-        controls = new NativeRegionControlScheduler(
-                memory.executionContext().identifiedPlan(),
-                inputTypes.size(),
-                memory.executionContext().controlCapabilities(),
-                stateLifecycle == null ? java.util.Map.of() : stateLifecycle.restoredWindowWatermarks(),
-                this::dispatchControl,
-                new NativeRegionControlTree.Listener() {
-                    @Override
-                    public void inputWatermark(long nodeId, int port, long timestamp) {
-                        metricTree.inputWatermark(nodeId, port, timestamp);
-                    }
+        var listener = new NativeRegionControlTree.Listener() {
+            @Override
+            public void inputWatermark(long nodeId, int port, long timestamp) {
+                metricTree.inputWatermark(nodeId, port, timestamp);
+            }
 
-                    @Override
-                    public void watermark(long nodeId, long timestamp) throws Exception {
-                        if (stateLifecycle != null) stateLifecycle.watermark(nodeId, timestamp);
-                        metricTree.watermark(nodeId, timestamp);
-                        if (nodeId == controls.rootId()) {
-                            StreamFusionArrowNativeRegionOperator.super.processWatermark(new Watermark(timestamp));
-                        }
-                    }
+            @Override
+            public void watermark(long nodeId, long timestamp) throws Exception {
+                if (stateLifecycle != null) stateLifecycle.watermark(nodeId, timestamp);
+                metricTree.watermark(nodeId, timestamp);
+                if (sharedOutputs != null ? sharedOutputs.watermark(nodeId, timestamp) : nodeId == controls.rootId())
+                    StreamFusionArrowNativeRegionOperator.super.processWatermark(new Watermark(timestamp));
+            }
 
-                    @Override
-                    public void status(long nodeId, WatermarkStatus status) {
-                        if (nodeId == controls.rootId()) {
-                            output.emitWatermarkStatus(status);
-                        }
-                    }
+            @Override
+            public void status(long nodeId, WatermarkStatus status) {
+                if (sharedOutputs != null ? sharedOutputs.status(nodeId, status) : nodeId == controls.rootId())
+                    output.emitWatermarkStatus(status);
+            }
 
-                    @Override
-                    public void latency(long nodeId, LatencyMarker marker) {
-                        metricTree.latency(nodeId, marker);
-                        if (nodeId == controls.rootId()) {
-                            reportOrForwardLatencyMarker(marker);
-                        }
-                    }
-                });
+            @Override
+            public void latency(long nodeId, LatencyMarker marker) {
+                metricTree.latency(nodeId, marker);
+                if (sharedOutputs == null && nodeId == controls.rootId()) {
+                    reportOrForwardLatencyMarker(marker);
+                }
+            }
+        };
+        var restored =
+                stateLifecycle == null ? java.util.Map.<Long, Long>of() : stateLifecycle.restoredWindowWatermarks();
+        controls = sharedPlan == null
+                ? new NativeRegionControlScheduler(
+                        memory.executionContext().identifiedPlan(),
+                        inputTypes.size(),
+                        memory.executionContext().controlCapabilities(),
+                        restored,
+                        this::dispatchControl,
+                        listener)
+                : new NativeRegionControlScheduler(
+                        sharedPlan,
+                        memory.executionContext().controlCapabilities(),
+                        restored,
+                        this::dispatchControl,
+                        listener);
     }
 
     @Override
@@ -282,10 +345,11 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
         metricTree.update(memory.executionContext());
     }
 
-    private void emitOutput(ArrowRowDataBatch batch) {
+    private void emitOutput(int port, ArrowRowDataBatch batch) {
         FlinkMetricParity.replacePhysicalRecords(
                 getMetricGroup().getIOMetricGroup().getNumRecordsOutCounter(), 1, batch.size());
-        output.collect(new StreamRecord<>(batch));
+        if (port == 0) output.collect(new StreamRecord<>(batch));
+        else output.collect(sharedOutputs.outputTag(port), new StreamRecord<>(batch));
     }
 
     private void process(int port, ArrowRowDataBatch input) {
