@@ -132,10 +132,22 @@ impl RegularJoinProcessor {
                 bytes = next;
                 end += 1;
             }
-            let chunk = &candidates[offset..end];
             // Bound both rows and bytes, preserving the same per-pair admission. A single
             // oversized pair is attempted once and returns a recoverable error if it cannot fit.
-            workspace.resize(bytes)?;
+            loop {
+                match workspace.resize(bytes) {
+                    Ok(()) => break,
+                    Err(DataFusionError::ResourcesExhausted(_)) if end - offset > 1 => {
+                        let middle = offset + (end - offset) / 2;
+                        for candidate in &candidates[middle..end] {
+                            bytes -= pair_workspace(input.len(), candidate.row.len())?;
+                        }
+                        end = middle;
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            let chunk = &candidates[offset..end];
             let mut columns = Vec::with_capacity(self.condition_schema.fields().len());
             for pair_side in 0..2 {
                 let converter = &self.row_converters[pair_side];

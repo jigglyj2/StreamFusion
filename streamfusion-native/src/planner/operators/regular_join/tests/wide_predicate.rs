@@ -21,9 +21,9 @@ fn join(broker: Arc<CountingBroker>) -> RegularJoinProcessor {
 
 #[test]
 fn wide_cross_row_and_hot_key_predicates_bound_bytes_without_changing_masks() {
-    for side in 0..2 {
+    for (side, limit) in [(0, 12 << 20), (1, 12 << 20), (0, 2 << 20), (1, 2 << 20)] {
         let broker = Arc::new(CountingBroker {
-            inner: TestBroker::new(12 << 20),
+            inner: TestBroker::new(limit),
             calls: AtomicUsize::new(0),
             peak: AtomicUsize::new(0),
         });

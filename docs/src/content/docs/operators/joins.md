@@ -54,6 +54,10 @@ are decoded in a batch. A single larger fan-out uses the same row and byte bound
 limit is an internal vectorization quantum, not a deployment setting or a smaller accounting
 allowance: the full per-pair reservation is unchanged. A single pair larger than the quantum is
 attempted with its full reservation and fails recoverably if Flink cannot accommodate it.
+When Flink denies a chunk reservation, the operator halves the candidate work before allocating
+Arrow arrays and retries, down to one pair. This adapts to available budget without changing
+per-pair accounting, materializing a failed chunk, or repeating a state transition. The ordinary
+successful path does not add a budget query.
 Generated wide-payload Flink tests compare all changelog transitions and registered metrics on
 both backends; native tests cover cross-row chunks, hot keys, and oversized-pair admission.
 The state transitions still consume these masks in original input order, including outer/semi/anti

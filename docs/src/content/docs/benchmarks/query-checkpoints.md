@@ -100,7 +100,11 @@ Its successful Flink fork is diagnostic only. Join predicate chunks now also bou
 workspace to an internal 8 MiB quantum, preserving the existing per-pair allowance and Flink
 budget. This reduces actual Arrow materialization for wide payloads; it does not change query
 semantics or state retention. The failed run remains under the benchmark module's `target/`.
-A new release comparison is required before reporting Q9 performance.
+The retry at `da5969c9` also failed: the 8,386,348-byte chunk had only 4,856,345 bytes available.
+Predicate admission now halves actual candidate chunks on budget denial before Arrow allocation,
+retaining full per-pair accounting. Native tests verify both cross-row and hot-key masks under a
+2 MiB allowance and oversized-pair failure. A new release comparison is required before reporting
+Q9 performance.
 
 ## Q6 has no Flink streaming baseline
 

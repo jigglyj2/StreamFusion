@@ -64,69 +64,86 @@ impl RegularJoinProcessor {
             .residual_condition
             .as_ref()
             .expect("residual cache only");
-        let mut end = start;
-        let mut count = 0usize;
-        let mut workspace_bytes = PREDICATE_BASE_BYTES;
-        while end < batch.num_rows() && end - start < MAX_PAIRS {
-            let len = if self.row_is_matchable(side, batch, end) {
-                candidates(&staged[indices[end]], side).len()
-            } else {
-                0
-            };
-            if len > MAX_PAIRS - count {
-                break;
+        let mut row_limit = MAX_PAIRS;
+        let (end, count, retained, workspace) = loop {
+            let mut end = start;
+            let mut count = 0usize;
+            let mut workspace_bytes = PREDICATE_BASE_BYTES;
+            while end < batch.num_rows() && end - start < row_limit {
+                let len = if self.row_is_matchable(side, batch, end) {
+                    candidates(&staged[indices[end]], side).len()
+                } else {
+                    0
+                };
+                if len > MAX_PAIRS - count {
+                    break;
+                }
+                let row_bytes = if len == 0 {
+                    0
+                } else {
+                    candidates(&staged[indices[end]], side).iter().try_fold(
+                        0usize,
+                        |bytes, candidate| {
+                            bytes
+                                .checked_add(pair_workspace(
+                                    encoded.row(end).data().len(),
+                                    candidate.row.len(),
+                                )?)
+                                .ok_or_else(|| {
+                                    DataFusionError::ResourcesExhausted(
+                                        "regular join predicate workspace overflow".into(),
+                                    )
+                                })
+                        },
+                    )?
+                };
+                let next_bytes = workspace_bytes.checked_add(row_bytes).ok_or_else(|| {
+                    DataFusionError::ResourcesExhausted(
+                        "regular join predicate workspace overflow".into(),
+                    )
+                })?;
+                if next_bytes > MAX_PREDICATE_BYTES {
+                    break;
+                }
+                workspace_bytes = next_bytes;
+                count += len;
+                end += 1;
             }
-            let row_bytes = if len == 0 {
-                0
-            } else {
-                candidates(&staged[indices[end]], side).iter().try_fold(
-                    0usize,
-                    |bytes, candidate| {
-                        bytes
-                            .checked_add(pair_workspace(
-                                encoded.row(end).data().len(),
-                                candidate.row.len(),
-                            )?)
-                            .ok_or_else(|| {
-                                DataFusionError::ResourcesExhausted(
-                                    "regular join predicate workspace overflow".into(),
-                                )
-                            })
-                    },
-                )?
-            };
-            let next_bytes = workspace_bytes.checked_add(row_bytes).ok_or_else(|| {
-                DataFusionError::ResourcesExhausted(
-                    "regular join predicate workspace overflow".into(),
-                )
-            })?;
-            if next_bytes > MAX_PREDICATE_BYTES {
-                break;
+            if end == start {
+                return Ok(CandidateBatch::default());
             }
-            workspace_bytes = next_bytes;
-            count += len;
-            end += 1;
-        }
-        if end == start {
-            return Ok(CandidateBatch::default());
-        }
-        let overflow =
-            || DataFusionError::ResourcesExhausted("regular join candidate batch overflow".into());
-        let mut retained = self
-            .scratch_reservation
-            .sibling("regular join batch predicate masks");
-        retained.resize(
-            (end - start)
+            let overflow = || {
+                DataFusionError::ResourcesExhausted("regular join candidate batch overflow".into())
+            };
+            let mut retained = self
+                .scratch_reservation
+                .sibling("regular join batch predicate masks");
+            let mask_bytes = (end - start)
                 .checked_mul(std::mem::size_of::<CandidateMatches>())
                 .and_then(|bytes| bytes.checked_add(count + 4096))
-                .ok_or_else(overflow)?,
-        )?;
-        let mut values = Vec::with_capacity(count);
-        if count != 0 {
+                .ok_or_else(overflow)?;
             let mut workspace = self
                 .scratch_reservation
                 .sibling("regular join batch predicate Arrow workspace");
-            workspace.resize(workspace_bytes)?;
+            match retained
+                .resize(mask_bytes)
+                .and_then(|_| workspace.resize(if count == 0 { 0 } else { workspace_bytes }))
+            {
+                Ok(()) => break (end, count, retained, workspace),
+                Err(DataFusionError::ResourcesExhausted(_)) => {
+                    // No arrays or state transitions have been materialized yet. Reduce actual
+                    // vectorized work under memory pressure, keeping every pair's full charge.
+                    // A single input's larger fan-out uses the row path's adaptive chunks.
+                    if end - start == 1 {
+                        return Ok(CandidateBatch::default());
+                    }
+                    row_limit = (end - start) / 2;
+                }
+                Err(error) => return Err(error),
+            }
+        };
+        let mut values = Vec::with_capacity(count);
+        if count != 0 {
             let mut pairs = Vec::with_capacity(count);
             for row in start..end {
                 if self.row_is_matchable(side, batch, row) {
@@ -191,6 +208,7 @@ impl RegularJoinProcessor {
                 (0..count).map(|index| !evaluated.is_null(index) && evaluated.value(index)),
             );
         }
+        drop(workspace);
         let mask = Arc::new(SharedMatchMask {
             values,
             _memory: retained,
