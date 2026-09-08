@@ -63,10 +63,42 @@ pub(super) fn decode(bytes: &[u8]) -> Result<Manifest> {
             if count > PAGE_ROWS as usize {
                 return Err(invalid());
             }
-            rows.extend(decoded);
+            if rows.is_empty() {
+                *rows = decoded;
+            } else {
+                rows.extend(decoded);
+            }
         }
     }
     reader.finish()?;
     manifest.inline = Some(inline);
     Ok(manifest)
+}
+
+/// Header-only sizing before decoding payload Arcs and current/original row vectors.
+pub(super) fn workspace(bytes: &[u8]) -> Result<usize> {
+    if bytes.len() > MAX_BYTES {
+        return Err(invalid());
+    }
+    let mut reader = Reader::new(bytes, MAGIC)?;
+    reader.take(18)?; // matchability and next row identities
+    let mut pages = 0;
+    for _ in 0..2 {
+        let count = reader.u64()?;
+        if count > PAGE_ROWS {
+            return Err(invalid());
+        }
+        pages += count;
+        reader.take(count as usize * 8)?;
+    }
+    if pages > PAGE_ROWS {
+        return Err(invalid());
+    }
+    let mut workspace = 256usize;
+    for _ in 0..pages {
+        let length = reader.u32()? as usize;
+        workspace = workspace.saturating_add(decode_workspace(reader.take(length)?)?);
+    }
+    reader.finish()?;
+    Ok(workspace)
 }

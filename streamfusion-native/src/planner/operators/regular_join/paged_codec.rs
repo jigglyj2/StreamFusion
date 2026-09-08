@@ -178,6 +178,16 @@ pub(super) fn decode_workspace(bytes: &[u8]) -> Result<usize> {
         .saturating_add(count.saturating_mul(128)))
 }
 
+/// Compact records contain payloads as well as directory metadata. Keep their decoded
+/// payload/row-vector admission separate from the small external-page directory estimate.
+pub(super) fn manifest_workspace(bytes: &[u8]) -> Result<usize> {
+    if compact::is_compact(bytes) {
+        compact::workspace(bytes)
+    } else {
+        Ok(bytes.len().saturating_mul(8))
+    }
+}
+
 pub(super) fn is_manifest(bytes: &[u8]) -> bool {
     bytes.starts_with(MANIFEST_MAGIC) || compact::is_compact(bytes)
 }

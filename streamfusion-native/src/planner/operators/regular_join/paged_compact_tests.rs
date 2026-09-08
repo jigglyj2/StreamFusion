@@ -32,7 +32,10 @@ fn compact_pages_validate_lengths_versions_and_sparse_row_identities() {
         });
         // Backend read buffers retain separate credit. This checks the decoded vectors,
         // payload Arcs and shallow original-state copy admitted from the record bytes.
-        assert!(observed.peak <= bytes.len() * 8, "{observed:?}");
+        assert!(
+            observed.peak <= paged_codec::manifest_workspace(&bytes).unwrap(),
+            "{observed:?}"
+        );
         assert_eq!(manifest.next_row_id, expected.next_row_id);
         let [left, right] = manifest.inline.unwrap();
         assert_eq!(left, expected.left);
@@ -217,6 +220,44 @@ fn mixed_compact_and_external_pages_load_together_without_losing_input_key_order
         assert_eq!(actual.key, expected.key);
         assert_eq!(actual.value, expected.value);
         assert_eq!(actual.original, expected.value);
+    }
+    drop(loaded);
+    drop(state);
+    drop(workspace);
+    assert_eq!(broker.reserved(), 0);
+}
+
+#[test]
+fn compact_payload_decode_does_not_reserve_eight_copies_of_retained_rows() {
+    let broker = Arc::new(TestBroker::new(8 << 20));
+    let owner = HostMemoryReservation::new(broker.clone(), "compact payload admission");
+    let mut state = MemoryKeyedState::new(0, 0, owner.sibling("state")).unwrap();
+    let entries = (0u32..2048)
+        .map(|key| StagedState {
+            key: StateKey {
+                key_group: 0,
+                key: key.to_le_bytes().to_vec(),
+            },
+            value: value(1, 512),
+            original: JoinState::default(),
+            original_compact: false,
+            touched: true,
+        })
+        .collect::<Vec<_>>();
+    let mut workspace = owner.sibling("batch");
+    state
+        .write_batch(paged_state::batch_mutations(&entries, &mut workspace).unwrap())
+        .unwrap();
+    workspace.resize(0).unwrap();
+    let keys = entries.iter().map(|entry| entry.key.clone()).collect();
+    let (loaded, reads) = paged_state::load(&state, keys, &mut workspace).unwrap();
+    assert_eq!(reads, 1);
+    for (actual, expected) in loaded.iter().zip(&entries) {
+        assert_eq!(actual.value, expected.value);
+        assert!(Arc::ptr_eq(
+            &actual.value.left[0].row,
+            &actual.original.left[0].row
+        ));
     }
     drop(loaded);
     drop(state);

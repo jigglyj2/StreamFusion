@@ -15,13 +15,9 @@ pub(super) fn load(
     let manifest_keys = keys.iter().map(manifest_key).collect::<Vec<_>>();
     let manifest_refs = refs(&manifest_keys);
     let values = state.get_batch(&manifest_refs, owner)?;
-    owner.try_grow(
-        values
-            .iter()
-            .flatten()
-            .fold(0usize, |n, v| n.saturating_add(v.len()))
-            .saturating_mul(8),
-    )?;
+    owner.try_grow(values.iter().flatten().try_fold(0usize, |bytes, value| {
+        Ok::<_, DataFusionError>(bytes.saturating_add(manifest_workspace(value)?))
+    })?)?;
     let manifests = values
         .iter()
         .map(|value| value.as_ref().map(|v| decode_manifest(v)).transpose())

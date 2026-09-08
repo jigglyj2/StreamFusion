@@ -151,6 +151,11 @@ entries. Tests cover both-backend restore, sparse stable row IDs, both size thre
 in either direction, complete deletion and malformed/truncated records. A 100,000-key regression
 with 160-byte payloads fits a 36 MiB in-memory share and probes the retained rows; the previous
 separate-entry representation exhausts that same share.
+Compact-record decoding sizes its workspace from embedded page headers: payload bytes and coarse
+row-vector/Arc headroom. It does not apply the external-directory multiplier to embedded payloads.
+The first decoded page moves directly into its state vector. An 8 MiB regression loads 2,048
+compact keys with 512-byte payloads in one state read, verifies original/current payload sharing,
+and releases all credit; the previous directory estimate requested more than 9 MiB for decoding.
 Restore rejects missing, duplicate, orphan, and malformed page records before changing backend state.
 Physical RocksDB checkpoints retain the paged layout and the existing incremental checkpoint protocol.
 The `StreamFusion.stateReadBatches` diagnostic counts actual backend lookups: one for a batch of
