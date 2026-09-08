@@ -58,6 +58,30 @@ class StreamFusionArchitectureSupportTest {
     }
 
     @Test
+    void reportsFusionCyclesAcrossExchangesAsWholePlanFallback() {
+        var source = new BatchExecTableSourceScan(config, null, type, "source");
+        source.setInputEdges(List.of());
+        var shared = unary(calc("shared"), source);
+        var exchange = unary(
+                new org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecExchange(
+                        config, InputProperty.DEFAULT, type, "exchange"),
+                shared);
+        var tail = unary(calc("tail"), exchange);
+        var union = new org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecUnion(
+                config, List.of(InputProperty.DEFAULT, InputProperty.DEFAULT), type, "union");
+        union.setInputEdges(List.of(
+                ExecEdge.builder().source(shared).target(union).build(),
+                ExecEdge.builder().source(tail).target(union).build()));
+        var graph = new ExecNodeGraph(List.of(union));
+        var reasons = new ArrayList<String>();
+        StreamFusionArchitectureSupport.collect(graph, reasons);
+        assertThat(String.join("\n", reasons)).contains("cycle across a Flink boundary");
+        assertThat(new StreamFusionExecGraphProcessor().process(graph, null)).isSameAs(graph);
+        assertThat(exchange.getInputEdges().get(0).getSource()).isSameAs(shared);
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("cycle across a Flink boundary");
+    }
+
+    @Test
     void countsRootOutputsAsConsumersButAllowsSharedSourcesAndRegionOutputs() {
         var source = new BatchExecTableSourceScan(config, null, type, "source");
         source.setInputEdges(List.of());

@@ -161,3 +161,20 @@ retain original identity, and source-side local regions consume Arrow directly t
 runtime's single input. Generated direct and attached HOP SQL tests verify this wiring on both
 backends. Reused-output ownership and full-query validation still block ordinary whole-plan Q5
 admission; see [Window aggregation](/StreamFusion/operators/window-aggregation/).
+
+Native reuse inspection now builds a graph-wide region layout before replacement. Each physical
+stage appears once, with ordered references to internal stages or external input ports. Separate
+external edges retain separate Flink input ports even when their source identity is the same;
+channel scheduling and checkpoint state must not be merged by native reuse.
+Region exits include intermediate results used outside the region as well as terminal stages.
+Generated SQL topology tests cover a reused HOP COUNT feeding both an exchange and an attached
+local MAX, with one shared owner and two exits. Synthetic DAG tests cover reconverging branches,
+repeated roots, and repeated input references. Fusion that would make a region consume its own
+output through a Flink exchange/control boundary is rejected with an EXPLAIN reason.
+
+This layout is currently used for ownership admission. Executing multiple exits still requires
+native fan-out, output transport, and corresponding control/metric/recovery integration; the
+multi-output fallback gate remains active. Comet retains Spark's exchange reuse, while Flink can
+reuse an intermediate stage before two different exchanges. Supporting that Flink topology must
+keep the shared computation in one native owner and preserve the existing exchanges; it must not
+duplicate the stage or insert an artificial exchange to avoid native sharing.

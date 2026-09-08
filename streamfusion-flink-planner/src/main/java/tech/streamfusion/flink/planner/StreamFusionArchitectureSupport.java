@@ -85,8 +85,14 @@ final class StreamFusionArchitectureSupport {
     static void collect(
             ExecNodeGraph graph, List<String> rejections, org.apache.flink.configuration.ReadableConfig config) {
         Set<ExecNode<?>> visited = Collections.newSetFromMap(new IdentityHashMap<>());
-        Map<ExecNode<?>, List<String>> shared = StreamFusionNativeRegionOwnership.sharedInternalStages(
-                graph, node -> isNative(node.getClass().getSimpleName()));
+        Map<ExecNode<?>, List<String>> shared;
+        try {
+            shared = StreamFusionNativeRegionOwnership.sharedInternalStages(
+                    graph, node -> isNative(node.getClass().getSimpleName()));
+        } catch (IllegalArgumentException failure) {
+            rejections.add("native-region-layout\narchitecture: " + failure.getMessage());
+            shared = Map.of();
+        }
         for (int index = 0; index < graph.getRootNodes().size(); index++) {
             visit(graph.getRootNodes().get(index), "root[" + index + "]", visited, shared, rejections, config);
         }
