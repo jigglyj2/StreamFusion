@@ -42,7 +42,29 @@ and four, on both backends. The [Q5 release comparison](/StreamFusion/benchmarks
 reports approximate in-memory parity and a 10.8% RocksDB median throughput gain at one million
 events, including dispersion, separate longer profiles and larger-workload memory limitations.
 General fixes reduce duplicate retained keys and inflated batch/state reservations. The optimizer
-and whole-plan fallback for unsupported subsets stay intact. Q6 is the next query checkpoint.
+and whole-plan fallback for unsupported subsets stay intact. Q6 has the upstream limitation below;
+Q7 is the next executable query checkpoint.
+
+## Q6 has no Flink streaming baseline
+
+The upstream Nexmark Q6 query computes a bounded ordered AVG after winning-bid rank selection.
+After correcting the upstream SQL's alias/filter scopes, Flink 2.3.0 rejects its physical plan:
+`Non-time attribute sort is not supported for bounded OVER window.` The join/rank result's order
+column is a regular timestamp. Flink's non-time OVER support accepts unbounded preceding frames,
+but cannot execute this bounded frame. This is an upstream planning restriction before native
+execution, rather than a StreamFusion gate that can be removed while preserving the baseline.
+
+The opt-in `NexmarkQ6PlanningIT` uses the Nexmark RowData source schema/views and the same multi-join
+setting as the benchmark. It verifies the exact Flink failure on both backends, with StreamFusion
+disabled and enabled, and zero native activity. Its scoped SQL fixture preserves the upstream join,
+ranking and `10 PRECEDING` boundary; it does not substitute a different frame or a batch-mode query.
+The upstream reference is Nexmark commit `6b3646c3baec701f1fa74baf938d235f742e5d3c`,
+`nexmark-flink/src/main/resources/queries/q6.sql`.
+
+Q6 therefore has no acceleration or throughput result and remains outside the runnable RowData
+query catalog. Implementing native bounded non-time OVER alone would not provide an unmodified
+Flink comparison. Resume Q6 when an equivalent supported upstream plan is available; proceed to
+Q7 without claiming that Q6 is accelerated or that fallback can execute it successfully.
 
 ## Initial diagnostic baseline
 
