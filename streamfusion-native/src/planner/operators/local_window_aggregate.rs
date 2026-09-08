@@ -22,6 +22,8 @@ mod admission;
 // gated and does not yet use this capacity model.
 #[cfg(test)]
 mod buffer_layout;
+#[cfg(test)]
+mod buffered;
 mod planning;
 
 const INSERT: i8 = 0;
@@ -49,7 +51,7 @@ pub(crate) struct LocalWindowAggregateProcessor {
     _schema_reservation: HostMemoryReservation,
 }
 
-#[derive(Hash, PartialEq, Eq)]
+#[derive(Clone, Hash, PartialEq, Eq)]
 struct SliceKey {
     grouping_row: Vec<u8>,
     window_start: i64,
@@ -66,47 +68,14 @@ impl LocalWindowAggregateProcessor {
 
     fn process_accounted(&mut self, batch: &RecordBatch) -> Result<RecordBatch> {
         let grouping_rows = self.grouping_rows(batch)?;
-        let attached_columns = self
-            .plan
-            .attached_window_start_index
-            .zip(self.plan.attached_window_end_index)
-            .map(|(start, end)| (batch.column(start as usize), batch.column(end as usize)));
-        let timestamp_column = attached_columns
-            .is_none()
-            .then(|| batch.column(self.plan.time_attribute_index as usize));
-        let slice_size = match proto::WindowKind::try_from(self.plan.kind) {
-            Ok(proto::WindowKind::Tumble) => self.plan.size_millis,
-            Ok(proto::WindowKind::Hop | proto::WindowKind::Cumulate) => {
-                self.plan.slide_or_step_millis
-            }
-            _ => unreachable!("validated local window kind"),
-        };
         let mut pending = HashMap::<SliceKey, Vec<usize>, RandomState>::with_capacity_and_hasher(
             batch.num_rows(),
             RandomState::new(),
         );
         for (row, grouping_row) in grouping_rows.into_iter().enumerate() {
-            let (slice_start, slice_end) =
-                if let Some((start_column, end_column)) = attached_columns {
-                    let Some(start) = timestamp_millis(start_column, row)? else {
-                        continue;
-                    };
-                    let Some(end) = timestamp_millis(end_column, row)? else {
-                        continue;
-                    };
-                    (start, end)
-                } else {
-                    let Some(epoch_millis) = timestamp_millis(
-                        timestamp_column.expect("direct local window has a time column"),
-                        row,
-                    )?
-                    else {
-                        continue;
-                    };
-                    let timestamp = to_window_time(epoch_millis, self.shift_time_zone)?;
-                    let start = window_start(timestamp, self.plan.offset_millis, slice_size);
-                    (start, start.wrapping_add(slice_size))
-                };
+            let Some((slice_start, slice_end)) = self.slice_bounds(batch, row)? else {
+                continue;
+            };
             let key = SliceKey {
                 grouping_row,
                 window_start: slice_start,
@@ -165,6 +134,45 @@ impl LocalWindowAggregateProcessor {
         }
         entries.sort_unstable_by(|(left, _), (right, _)| slice_order(left, right));
         self.output_partials(entries.into_iter().map(Ok))
+    }
+
+    fn slice_bounds(&self, batch: &RecordBatch, row: usize) -> Result<Option<(i64, i64)>> {
+        let attached_columns = self
+            .plan
+            .attached_window_start_index
+            .zip(self.plan.attached_window_end_index)
+            .map(|(start, end)| (batch.column(start as usize), batch.column(end as usize)));
+        let timestamp_column = attached_columns
+            .is_none()
+            .then(|| batch.column(self.plan.time_attribute_index as usize));
+        let slice_size = match proto::WindowKind::try_from(self.plan.kind) {
+            Ok(proto::WindowKind::Tumble) => self.plan.size_millis,
+            Ok(proto::WindowKind::Hop | proto::WindowKind::Cumulate) => {
+                self.plan.slide_or_step_millis
+            }
+            _ => unreachable!("validated local window kind"),
+        };
+        let bounds = if let Some((start_column, end_column)) = attached_columns {
+            let Some(start) = timestamp_millis(start_column, row)? else {
+                return Ok(None);
+            };
+            let Some(end) = timestamp_millis(end_column, row)? else {
+                return Ok(None);
+            };
+            (start, end)
+        } else {
+            let Some(epoch_millis) = timestamp_millis(
+                timestamp_column.expect("direct local window has a time column"),
+                row,
+            )?
+            else {
+                return Ok(None);
+            };
+            let timestamp = to_window_time(epoch_millis, self.shift_time_zone)?;
+            let start = window_start(timestamp, self.plan.offset_millis, slice_size);
+            (start, start.wrapping_add(slice_size))
+        };
+        Ok(Some(bounds))
     }
 
     fn output_partials(

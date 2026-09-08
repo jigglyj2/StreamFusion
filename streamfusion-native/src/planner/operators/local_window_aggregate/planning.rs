@@ -26,6 +26,14 @@ impl LocalWindowAggregateProcessor {
                 ));
             }
         };
+        Self::from_plan(plan, reservation, plan_reservation)
+    }
+
+    pub(super) fn from_plan(
+        plan: proto::LocalWindowAggregate,
+        reservation: HostMemoryReservation,
+        plan_reservation: HostMemoryReservation,
+    ) -> Result<Self> {
         validate_plan(&plan)?;
         let mut schema_reservation = reservation.sibling("local window schemas and codecs");
         schema_reservation.resize(

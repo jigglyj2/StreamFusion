@@ -155,8 +155,7 @@ impl GroupedCompute {
         })
     }
 
-    #[cfg(test)]
-    fn size(&self) -> usize {
+    pub(in crate::planner::operators) fn size(&self) -> usize {
         self.values.iter().map(|value| value.size()).sum::<usize>()
             + self
                 .non_null
@@ -169,6 +168,20 @@ impl GroupedCompute {
 }
 
 impl GroupedOutput {
+    pub(in crate::planner::operators) fn size(&self) -> usize {
+        self.values
+            .iter()
+            .map(|value| value.get_array_memory_size())
+            .sum::<usize>()
+            + self
+                .non_null
+                .iter()
+                .flatten()
+                .map(|count| count.get_array_memory_size())
+                .sum::<usize>()
+            + self.row_count.get_array_memory_size()
+    }
+
     pub(in crate::planner::operators) fn state(
         &self,
         calls: &[Call],

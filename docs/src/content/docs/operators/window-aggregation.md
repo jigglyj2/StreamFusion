@@ -42,8 +42,17 @@ A native capacity calculation now matches shared fixtures checked against Flink'
 `WindowBytesMultiMap`, including fixed-width rows, large variable-width keys/values, hash-table
 growth and reset. It counts Flink page geometry without constructing or serializing RowData.
 This is semantic flush-capacity bookkeeping, separate from coarse native buffer reservations.
-It is currently test-only and will be wired into the shared local-window lifecycle; the legacy
-kernel's per-batch flush behavior and production fallback remain unchanged.
+A test-only buffered implementation now uses this capacity model with DataFusion grouped state
+retained across Arrow batches. It probes Arrow row encodings by reference and copies keys only
+when a new group appears. It matches the SQL-generated Flink watermark/pre-barrier oracle and
+all partials from the 180,000-row pressure fixture with Arrow batch sizes 127, 4,096 and 100,000.
+Flush output is limited to 2,048 partials per pull and preserves first-appearance order; pending
+input must drain before another batch or control. Coarse admitted workspace transfers credit to
+retained state and Arrow output owners, with denial and cancellation/last-owner tests. The tested
+buffered subset uses UTC, append-only grouped accumulators and fixed-width Flink row geometry.
+Binding the original Flink operator memory share, native envelope/control lifecycle and complete
+metric surface remains required. The legacy production handle still flushes per batch, and Q5
+continues to fall back.
 
 Compatible append-only local windows now use DataFusion's `GroupsAccumulator` vectors across
 all keys in a batch. The native handle prepares these adapters once and reuses them after each

@@ -49,7 +49,7 @@ fn call(function: proto::AggregateFunction, input: Option<u32>) -> proto::Aggreg
     }
 }
 
-fn processor(changelog: bool) -> LocalWindowAggregateProcessor {
+pub(super) fn processor(changelog: bool) -> LocalWindowAggregateProcessor {
     let plan = proto::NativePlan {
         protocol_version: crate::PLAN_PROTOCOL_VERSION,
         root: Some(proto::Operator {

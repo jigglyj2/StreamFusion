@@ -59,6 +59,16 @@ class LocalWindowFlinkControlContractTest {
             assertThat(partials).isNotEmpty();
             harness.prepareSnapshotPreBarrier(1);
             partials.addAll(drain(harness));
+            var expected = new ArrayList<String>();
+            int consumed = 0;
+            for (int size : new int[] {64529, 64529, 50942}) {
+                for (int offset = 0; offset < 17; offset++) {
+                    expected.add(
+                            ((consumed + offset) % 17) + ":" + (size / 17 + (offset < size % 17 ? 1 : 0)) + ":2000");
+                }
+                consumed += size;
+            }
+            assertThat(partials).containsExactlyElementsOf(expected);
             var counts = new long[17];
             for (var partial : partials) {
                 var fields = partial.split(":");
