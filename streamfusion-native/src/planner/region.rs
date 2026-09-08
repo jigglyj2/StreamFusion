@@ -4,5 +4,12 @@
 //! One-definition native DAG plans. The caller supplies Flink's distinct external channels;
 //! only internal stage references can share execution. All edges use the owned Arrow envelope.
 
+mod output;
+mod physical;
 mod plan;
+mod shared;
+pub(crate) use physical::PhysicalRegion;
 pub(crate) use plan::{RegionInput, RegionPlan};
+
+#[cfg(test)]
+mod tests;

@@ -37,7 +37,7 @@ pub(crate) mod wire_memory;
 
 #[cfg(test)]
 mod control_tests;
-mod fanout;
+pub(crate) mod fanout;
 mod gauges;
 mod invocation;
 mod lifecycle;

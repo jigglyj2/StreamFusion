@@ -17,7 +17,7 @@ use std::task::{Context, Poll, Waker};
 
 type Completion = Box<dyn FnOnce(bool) + Send>;
 
-pub(super) fn split(
+pub(crate) fn split(
     source: SendableRecordBatchStream,
     consumers: usize,
     completion: Completion,

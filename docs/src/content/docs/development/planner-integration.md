@@ -180,8 +180,24 @@ The existing protocol-3 owned Arrow envelope is required at region edges; protob
 the control plan. Java composition and Rust decoding reject duplicate identities, missing or
 forward references, unused channels, unreachable stages, and malformed fragments. Rust reserves
 the decoded graph under one coarse Flink memory-pool reservation before decoding. A shared wire
-fixture and generated SQL layouts check both implementations. This contract does not yet lower
-or execute a multi-output region.
+fixture and generated SQL layouts check both implementations.
+
+Native region lowering now builds one retained DataFusion graph from this contract. Ordinary
+edges remain direct native children; only reused stages receive bounded shared readers. The
+first reader executes the producer once per invocation, and a cooperative output driver yields
+a port ID alongside each Arrow batch. Different exits retain their own schemas and shared
+buffer ownership. Metric snapshots enumerate the physical definitions once, including shared
+stages. The driver fails incomplete consumption, cancellation, producer errors, and panics;
+a completed output handle cannot release a later invocation. Reconverging shared branches
+remain rejected because a downstream operator could drain its inputs sequentially and deadlock
+a bounded broadcast. Supporting that subset requires demonstrated cooperative input draining.
+
+Native tests exercise nested divergent graphs over repeated invocations, independent external
+channels through DataFusion UNION, different projection schemas, persistent watermark/checkpoint/
+end-input controls, and a multi-megabyte payload with one Flink lease through the last output.
+This lowering and driver are runtime prerequisites. Integration with the shared JVM execution
+context, per-port Arrow C Data output routing, and full Flink recovery/parity validation is still
+outstanding. No additional whole-plan query is admitted by this change.
 
 This layout is currently used for ownership admission. Executing multiple exits still requires
 integration of native fan-out, output transport, and corresponding control/metric/recovery handling; the

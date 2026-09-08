@@ -41,7 +41,7 @@ impl PlanMemory {
     pub(crate) fn decoded(&self) -> Result<usize> {
         self.total(1)
     }
-    pub(super) fn physical(&self) -> Result<usize> {
+    pub(crate) fn physical(&self) -> Result<usize> {
         self.total(2)
     }
     fn total(&self, copies: usize) -> Result<usize> {

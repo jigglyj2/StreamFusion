@@ -22,12 +22,15 @@ pub(crate) struct RegionPlan {
     pub(crate) inputs: Vec<Vec<RegionInput>>,
     pub(crate) outputs: Vec<usize>,
     pub(crate) consumers: Vec<usize>,
+    pub(crate) physical_bytes: usize,
     _memory: MemoryReservation,
 }
 impl RegionPlan {
     pub(crate) fn decode(bytes: &[u8], pool: &Arc<dyn MemoryPool>) -> Result<Self> {
         let memory = MemoryConsumer::new("native region plan and references").register(pool);
-        memory.try_grow(PlanMemory::scan_region(bytes)?.decoded()?)?;
+        let estimate = PlanMemory::scan_region(bytes)?;
+        memory.try_grow(estimate.decoded()?)?;
+        let physical_bytes = estimate.physical()?;
         let message =
             proto::NativeRegionPlan::decode(bytes).map_err(|error| invalid(error.to_string()))?;
         let (inputs, outputs, consumers) = validate(&message)?;
@@ -36,6 +39,7 @@ impl RegionPlan {
             inputs,
             outputs,
             consumers,
+            physical_bytes,
             _memory: memory,
         })
     }
