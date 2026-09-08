@@ -79,6 +79,12 @@ C Data/C Stream release callbacks retain payload leases until the final consumer
 including output held after context close. Compatibility copies remain admitted when Java cannot
 represent a sliced buffer safely. Descriptor-only exports do not require new payload credit.
 
+The Flink runtime advertises only `BoundedMultiInput` for end-of-input, including one-port
+regions. Flink's operator wrapper passes port one to chained single-input stages and the actual
+port to multi-input stages. Advertising `BoundedOneInput` as well would take precedence and
+lose that port identity. Closing one input therefore leaves the remaining inputs usable;
+terminal callbacks are tested through Flink's operator wrapper and network task harnesses.
+
 Control requests address stable stage IDs for watermarks, pre-checkpoint flush, and end-of-input.
 Ordinary invocation EOF does not substitute for a control event. Unknown stages, invalid bindings,
 and unsupported protocol versions fail closed. Plan protocol 3, control-edge API 2, and gauge-edge
@@ -98,7 +104,7 @@ fallback-parity tests require whole-plan fallback and zero native batches. A Fli
 comparison cannot count as evidence that a native operator works.
 
 Production milestones follow increasing Nexmark query order. Q0–Q2 admission and the supported
-synchronous Q3 join checkpoint are verified, including both state backends, output/metric parity,
-recovery and release comparisons. Q4 is the next checkpoint. See
+synchronous Q3 and Q4 checkpoints have recorded output/metric parity, recovery, and release
+comparisons on both state backends. Q5 is the next checkpoint. See
 [Query checkpoints](/StreamFusion/benchmarks/query-checkpoints/). Test-only graph conversion and
 historical benchmark results do not establish current production admission.

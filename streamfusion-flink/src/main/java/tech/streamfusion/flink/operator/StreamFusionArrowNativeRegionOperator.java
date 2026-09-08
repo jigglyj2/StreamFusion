@@ -29,8 +29,7 @@ import tech.streamfusion.flink.metrics.StreamFusionNativeMetricTree;
 public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamOperatorV2<ArrowRowDataBatch>
         implements MultipleInputStreamOperator<ArrowRowDataBatch>,
                 BoundedMultiInput,
-                org.apache.flink.streaming.api.operators.OneInputStreamOperator<Object, ArrowRowDataBatch>,
-                org.apache.flink.streaming.api.operators.BoundedOneInput {
+                org.apache.flink.streaming.api.operators.OneInputStreamOperator<Object, ArrowRowDataBatch> {
     private final Environment environment;
     private final int subtaskIndex;
     private final List<RowType> inputTypes;
@@ -298,12 +297,6 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
     }
 
     @Override
-    public void endInput() throws Exception {
-        singleInput();
-        endInput(1);
-    }
-
-    @Override
     protected void reportWatermark(Watermark watermark, int inputId) throws Exception {
         controls.watermark(inputId - 1, watermark.getTimestamp());
     }
@@ -313,6 +306,8 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
         controls.status(inputId - 1, status);
     }
 
+    // Flink's StreamOperatorWrapper gives BoundedOneInput precedence over BoundedMultiInput.
+    // Use only the port-aware contract: Flink passes port 1 for a chained single-input region too.
     @Override
     public void endInput(int inputId) throws Exception {
         int port = java.util.Objects.checkIndex(inputId - 1, ended.length);
