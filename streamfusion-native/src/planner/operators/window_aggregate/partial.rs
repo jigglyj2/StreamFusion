@@ -135,6 +135,7 @@ impl WindowAggregateProcessor {
         }
         let merged = grouped::merge_append_partials(&self.calls, &staged, &decoded, &row_windows)?;
         let mut dirty_timer_groups = BTreeSet::new();
+        let mut registrations = Vec::new();
         for (row, index, start, end) in row_windows {
             let partial = decoded[row].as_ref().unwrap();
             let entry = &mut staged[index];
@@ -158,7 +159,9 @@ impl WindowAggregateProcessor {
             };
             let domain = self.timer_domain();
             if was_empty && entry.accumulator.row_count != 0 {
-                if self.timers.register(entry.key.key_group, domain, timer)? {
+                if merged.is_some() {
+                    registrations.push((entry.key.key_group, domain, timer));
+                } else if self.timers.register(entry.key.key_group, domain, timer)? {
                     self.timer_registrations = self.timer_registrations.saturating_add(1);
                     dirty_timer_groups.insert(entry.key.key_group);
                 }
@@ -169,6 +172,13 @@ impl WindowAggregateProcessor {
                 dirty_timer_groups.insert(entry.key.key_group);
             }
             entry.touched = true;
+        }
+        if !registrations.is_empty() {
+            let inserted = self.timers.register_batch(registrations)?;
+            self.timer_registrations = self
+                .timer_registrations
+                .saturating_add(inserted.len() as u64);
+            dirty_timer_groups.extend(inserted);
         }
         if let Some(merged) = merged {
             for (index, entry) in staged.iter_mut().enumerate() {

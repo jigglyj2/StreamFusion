@@ -8,6 +8,8 @@ use datafusion::error::{DataFusionError, Result};
 
 use crate::memory_pool::HostMemoryReservation;
 
+mod batch;
+
 const SNAPSHOT_MAGIC: &[u8; 4] = b"SFTM";
 const SNAPSHOT_VERSION: u8 = 1;
 

@@ -926,7 +926,7 @@ impl WindowAggregateProcessor {
     fn fire(&mut self, domain: TimerDomain, progress: i64) -> Result<RecordBatch> {
         let fired = self
             .timers
-            .advance_limited(domain, progress, MAX_TIMERS_PER_OUTPUT)?;
+            .advance_owned_limited(domain, progress, MAX_TIMERS_PER_OUTPUT)?;
         self.timers_fired = self.timers_fired.saturating_add(fired.len() as u64);
         if fired.is_empty() {
             return self.empty_output();
@@ -956,7 +956,7 @@ impl WindowAggregateProcessor {
             proto::WindowKind::try_from(self.plan.kind),
             Ok(proto::WindowKind::Session)
         );
-        for (timer, value) in fired.into_iter().zip(states) {
+        for (timer, value) in fired.iter().zip(states) {
             dirty_groups.insert(timer.key_group);
             let Some(value) = value else {
                 continue;
@@ -990,7 +990,7 @@ impl WindowAggregateProcessor {
             mutations.push(StateMutation {
                 key: StateKey {
                     key_group: timer.key_group,
-                    key: timer.timer.key,
+                    key: timer.timer.key.clone(),
                 },
                 value: None,
             });

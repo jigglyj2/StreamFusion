@@ -108,7 +108,12 @@ Delta inputs, cardinality overflow, DISTINCT, retractable extrema and other aggr
 retain the existing ordered merge path. Generated SQL parity covers both this grouped subset and
 the mixed SUM/AVG path on both backends, with nullable values, filters and different batch sizes.
 Coarse partial workspace accounts for overlapping-window fanout and encoded payload size before
-allocation. This does not yet implement shared-slice storage or change ordinary planner admission.
+allocation. New timers from these append-only partial batches are deduplicated before one host
+reservation. Window timer firing transfers existing key/namespace credit into a bounded callback
+owner and admits its descriptor vector before removing timers. Credit stays live through the
+callback, including when the timer service closes first; failed admission leaves the timer index
+unchanged. Canonical timer bytes and firing order are unchanged. This does not yet implement
+shared-slice storage or change ordinary planner admission.
 
 ## Retained semantic implementation
 
