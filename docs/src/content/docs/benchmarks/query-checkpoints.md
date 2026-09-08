@@ -35,7 +35,10 @@ The [Q4 release comparison](/StreamFusion/benchmarks/q4-rowdata/) records a gene
 join-predicate optimization, approximate in-memory parity and a 15.5% RocksDB median throughput
 gain at one million events, with overlapping ranges. Separate longer profiles cover both engines
 and backends. Q5 is the next checkpoint; its demonstrated ordinary-planner blockers guide the
-next implementation work.
+next implementation work. Its ordinary plan currently requires local/global HOP aggregation,
+a second attached-window aggregation and a reused aggregate output with two consumers. Window
+control/metric lifecycle and shared-output ownership remain prerequisites; the optimizer and
+whole-plan fallback stay intact.
 
 ## Initial diagnostic baseline
 

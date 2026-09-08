@@ -20,23 +20,44 @@ FROM TABLE(TUMBLE(TABLE bid, DESCRIPTOR(dateTime), INTERVAL '1' MINUTE))
 GROUP BY window_start, window_end, bidder;
 ```
 
-## Acceleration and fallback
+## Q5 admission work
 
-StreamFusion accelerates direct time-attribute window aggregation for event time and processing
+Ordinary Q5 EXPLAIN on both backends currently reports blocked local/global window stages and
+an aggregate reused by two consumers. The retained standalone handles do not yet participate in
+the common native execution, control and metric lifecycle. In particular, the existing local
+kernel emits partials per Arrow batch; Flink's `LocalSlicingWindowAggOperator` buffers across
+batches and flushes on applicable watermarks, checkpoint pre-barriers or memory pressure.
+That difference must be corrected and tested before admission. Duplicating the reused aggregate
+or disabling Flink's reuse optimizer is not an acceptable workaround.
+
+The local kernel now uses shared DataFusion aggregate adapters for reusable integer COUNT/SUM/AVG
+and append-only MIN/MAX computation. Ordered retractions and numeric subsets that require Flink
+semantics retain the existing adapters. A coarse workspace covers row encodings, selections,
+accumulator deltas and partial-output buffers before allocation; output ownership moves from that
+allowance to the compatibility C Data edge without a post-allocation reservation. Plan decoding
+and schema/codec construction are separately admitted. Generated direct-kernel tests compare
+TUMBLE/HOP/CUMULATE outputs byte-for-byte with real Flink SQL across two batch sizes and both
+backends, including nullable keys/timestamps/values and integer overflow. Native tests additionally
+compare ordered accumulator bytes for all RowKinds and verify memory-denial cleanup. This is a
+prerequisite, not Q5 admission.
+
+## Retained semantic implementation
+
+The retained implementation supports direct time-attribute window aggregation for event time and processing
 time. It recognizes both Flink's one-phase node and its default local-aggregate, exchange,
 global-aggregate shape. For Flink's two-phase plan, StreamFusion preserves all three stages: a
 state-free native local aggregate emits one opaque canonical accumulator per key and base slice,
 the existing key-group exchange partitions those partials, and the native global aggregate merges
-them into keyed window state. Partial batches stay in Arrow and do not cross JNI between adjacent
-native stages.
-It also accelerates an aggregate over already attached `window_start` and `window_end` columns, as
+them into keyed window state. Partial payloads use Arrow, but these older standalone stages still have intermediate JNI/Java
+handoffs. Their migration into the shared native execution tree remains required.
+The retained kernel also supports an aggregate over already attached `window_start` and `window_end` columns, as
 produced by a preceding window aggregate. Each attached pair is one exact namespace; it is not
-assigned to overlapping windows a second time. This covers the nested hopping aggregation in
-Nexmark q5 while keeping both stages as independently observable nodes in one fused native tree.
+assigned to overlapping windows a second time. This represents the nested hopping aggregation in
+Nexmark Q5 at the kernel level; fused composition and ordinary admission are not yet verified.
 Legacy SQL/Table API time windows lower to the same canonical native state machine. Legacy Table
-API processing-time row-count tumbling and sliding windows are also accelerated; Flink 2.3's SQL
+API processing-time row-count tumbling and sliding windows also have retained kernels; Flink 2.3's SQL
 grammar does not expose numeric row-count intervals, but its Table API and physical executor do.
-In bounded mode, Flink's hash- and sort-based legacy time-window executors are accelerated in both
+In bounded mode, the retained lowering represents Flink's hash- and sort-based legacy time-window executors in both
 one- and two-phase forms. StreamFusion never substitutes one form for the other. A Flink one-phase
 node becomes one stateful native aggregate; a Flink local/exchange/global plan retains all three
 physical stages. In the two-phase form the native local phase emits opaque accumulator bytes, the
@@ -75,7 +96,8 @@ Time windows perform one batched state read and one atomic state/timer write per
 hot input loop reuses Flink BinaryRow-key and assigned-window scratch buffers, while canonical
 state keys receive owned storage only when a new key/window is staged.
 
-The local half of a two-phase time window is deliberately state-free across Arrow batches. Its
+The current local kernel is state-free across Arrow batches, which is a known lifecycle gap
+relative to Flink and is being replaced before admission. Its
 temporary hash table and output buffers are charged to the local stage's Flink managed-memory
 share. The global half is the sole owner of canonical keyed state and timers, so aligned and
 unaligned checkpointing, savepoint restoration, backend switching, and rescaling use exactly the
