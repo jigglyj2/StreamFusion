@@ -115,7 +115,7 @@ pub(super) fn prepare_input(
     row_offset: usize,
 ) -> datafusion::error::Result<RecordBatch> {
     let row_end = input_ordinal_end(row_offset, input_batch.num_rows())?;
-    let owned = context.plan().protocol_version >= crate::RECORD_POLICY_PLAN_PROTOCOL_VERSION;
+    let owned = context.protocol_version() >= crate::RECORD_POLICY_PLAN_PROTOCOL_VERSION;
     let input_batch = if owned {
         crate::planner::operators::envelope::own_edge_timestamp(input_batch)?
     } else if context.requires_input_envelope() {

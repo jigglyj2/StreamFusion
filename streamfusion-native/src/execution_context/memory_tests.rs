@@ -84,9 +84,9 @@ fn original_metric_names_survive_native_decoding_and_share_plan_lifetime_admissi
     assert_eq!(denied.reserved(), 0);
     let broker = Arc::new(TestBroker::new(16 << 20));
     let context = NativeExecutionContext::new(&bytes, pool(&broker)).unwrap();
-    assert_eq!(context.plan().root.as_ref().unwrap().metric_name, name);
+    assert_eq!(context.tree_plan().unwrap().root.as_ref().unwrap().metric_name, name);
     assert_eq!(
-        context.plan().root.as_ref().unwrap().metric_uid,
+        context.tree_plan().unwrap().root.as_ref().unwrap().metric_uid,
         Some(String::new())
     );
     assert!(broker.reserved() >= name.len());

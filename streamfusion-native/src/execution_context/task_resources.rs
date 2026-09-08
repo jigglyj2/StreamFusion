@@ -4,7 +4,6 @@
 use super::*;
 use crate::memory_pool::HostMemoryReservation;
 use crate::planner::operators::local_window_aggregate::buffered::execution_plan::LocalWindowFactory;
-use crate::planner::persistent::find_unique;
 use prost::Message;
 use std::collections::HashSet;
 
@@ -39,7 +38,7 @@ impl NativeExecutionContext {
             .map_err(|error| invalid(format!("invalid native task resource protobuf: {error}")))?;
         if options.protocol_version != 1
             || options.bindings.is_empty()
-            || self.plan.protocol_version < crate::ENVELOPE_PLAN_PROTOCOL_VERSION
+            || self.protocol_version() < crate::ENVELOPE_PLAN_PROTOCOL_VERSION
         {
             return Err(invalid(
                 "unsupported or empty native task resource protocol",
@@ -57,7 +56,7 @@ impl NativeExecutionContext {
                     "native task resources require unique positive unbound node IDs",
                 ));
             }
-            let node = find_unique(&self.plan, |node| node.plan_node_id == id)?;
+            let node = self.plan.find_unique(|node| node.plan_node_id == id)?;
             let Some(proto::native_task_binding::Resource::LocalWindowBuffer(buffer)) =
                 &binding.resource
             else {
@@ -96,7 +95,7 @@ impl NativeExecutionContext {
             }
             Ok(())
         }
-        if let Some(root) = &self.plan.root {
+        for root in self.plan.roots() {
             required(root, &ids)?;
         }
         self.bind_persistent(bindings)?;

@@ -29,7 +29,7 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeExecutionContex
 ) -> jlong {
     env.with_env(|env| -> jni::errors::Result<_> {
         let context = crate::execution_context::get(handle).map_err(|e| throw(env, e))?;
-        if context.plan().protocol_version < crate::RECORD_POLICY_PLAN_PROTOCOL_VERSION {
+        if context.protocol_version() < crate::RECORD_POLICY_PLAN_PROTOCOL_VERSION {
             return Err(throw(
                 env,
                 "direct IPC plan input requires owned record-envelope protocol 3",

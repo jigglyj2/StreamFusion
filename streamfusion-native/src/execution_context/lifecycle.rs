@@ -9,7 +9,7 @@ use super::*;
 use crate::planner::operators::local_group_aggregate::execution_plan::LocalGroupAggregateFactory;
 
 pub(super) fn task_local_bindings(
-    plan: &proto::NativePlan,
+    plan: &Definition,
     pool: &Arc<dyn MemoryPool>,
 ) -> Result<Vec<PersistentBinding>> {
     fn visit(
@@ -35,8 +35,8 @@ pub(super) fn task_local_bindings(
         Ok(())
     }
     let mut bindings = Vec::new();
-    if plan.protocol_version >= crate::ENVELOPE_PLAN_PROTOCOL_VERSION {
-        if let Some(root) = &plan.root {
+    if plan.protocol_version() >= crate::ENVELOPE_PLAN_PROTOCOL_VERSION {
+        for root in plan.roots() {
             visit(root, pool, &mut bindings)?;
         }
     }

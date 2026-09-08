@@ -37,8 +37,15 @@ pub(crate) mod wire_memory;
 
 #[cfg(test)]
 mod control_tests;
+mod definition;
 pub(crate) mod fanout;
 mod gauges;
+mod metrics;
+mod region;
+#[cfg(test)]
+mod region_tests;
+use crate::planner::region::{PhysicalRegion, RegionPlan};
+use definition::Definition;
 mod invocation;
 mod lifecycle;
 pub(crate) mod operator_spec;
@@ -55,7 +62,7 @@ mod stream_tests;
 mod task_resources;
 
 pub(crate) struct NativeExecutionContext {
-    plan: proto::NativePlan,
+    plan: Definition,
     runtime: Arc<tokio::runtime::Runtime>,
     task_context: Arc<TaskContext>,
     memory_pool: Arc<dyn MemoryPool>,
@@ -74,15 +81,20 @@ pub(crate) struct NativeExecutionContext {
     physical_control_bytes: usize,
 }
 
+#[derive(Clone)]
+enum PreparedPlan {
+    Tree(Arc<dyn ExecutionPlan>),
+    Region(Arc<PhysicalRegion>),
+}
 struct CachedPhysicalPlan {
-    plan: Arc<dyn ExecutionPlan>,
+    plan: PreparedPlan,
     inputs: Vec<Arc<ReusableInputExec>>,
     _reservation: MemoryReservation,
 }
 
 impl NativeExecutionContext {
     pub(crate) fn requires_input_envelope(&self) -> bool {
-        self.plan().protocol_version >= crate::RECORD_POLICY_PLAN_PROTOCOL_VERSION
+        self.protocol_version() >= crate::RECORD_POLICY_PLAN_PROTOCOL_VERSION
             || !self.persistent.is_empty()
     }
 
@@ -94,6 +106,33 @@ impl NativeExecutionContext {
         control_reservation.try_grow(plan_memory.decoded()?)?;
         let physical_control_bytes = plan_memory.physical()?;
         let plan = crate::decode_plan(bytes)?;
+        Self::from_definition(
+            Definition::Tree(plan),
+            memory_pool,
+            control_reservation,
+            physical_control_bytes,
+        )
+    }
+
+    pub(crate) fn new_region(bytes: &[u8], memory_pool: Arc<dyn MemoryPool>) -> Result<Self> {
+        let control = MemoryConsumer::new("native region execution context").register(&memory_pool);
+        control.try_grow(EXECUTION_CONTEXT_CONTROL_BYTES)?;
+        let plan = Arc::new(RegionPlan::decode(bytes, &memory_pool)?);
+        let physical_bytes = plan.physical_bytes;
+        Self::from_definition(
+            Definition::Region(plan),
+            memory_pool,
+            control,
+            physical_bytes,
+        )
+    }
+
+    fn from_definition(
+        plan: Definition,
+        memory_pool: Arc<dyn MemoryPool>,
+        control_reservation: MemoryReservation,
+        physical_control_bytes: usize,
+    ) -> Result<Self> {
         let persistent = lifecycle::task_local_bindings(&plan, &memory_pool)?;
         let schema_reservation =
             MemoryConsumer::new("native cached input schemas").register(&memory_pool);
@@ -140,8 +179,11 @@ impl NativeExecutionContext {
         })
     }
 
-    pub(crate) fn plan(&self) -> &proto::NativePlan {
-        &self.plan
+    pub(crate) fn tree_plan(&self) -> Result<&proto::NativePlan> {
+        self.plan.tree()
+    }
+    pub(crate) fn protocol_version(&self) -> u32 {
+        self.plan.protocol_version()
     }
 
     /// Register lifecycle-owned state before the tree is lowered. Recursive planner factories
@@ -316,16 +358,30 @@ impl NativeExecutionContext {
                 .all(|child| synchronous_physical(child))
         }
         self.persistent.is_empty()
-            && self.plan.root.as_ref().is_some_and(synchronous)
+            && self
+                .plan
+                .tree()
+                .ok()
+                .and_then(|plan| plan.root.as_ref())
+                .is_some_and(synchronous)
             && synchronous_physical(plan)
     }
 
-    // Caller must hold the invocation claim before touching reusable input slots. DataFusion
-    // may open children lazily during stream polling, so slots live until invocation teardown.
     fn prepare_plan(
         &self,
         batches: Vec<arrow::array::RecordBatch>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        // Reject the wrong API before mutating slots or lowering a region.
+        self.plan.tree()?;
+        match self.prepare_execution(batches)? {
+            PreparedPlan::Tree(plan) => Ok(plan),
+            PreparedPlan::Region(_) => unreachable!("tree API was checked"),
+        }
+    }
+
+    // Caller must hold the invocation claim before touching reusable input slots. DataFusion
+    // may open children lazily during stream polling, so slots live until invocation teardown.
+    fn prepare_execution(&self, batches: Vec<arrow::array::RecordBatch>) -> Result<PreparedPlan> {
         let mut cached = self.physical_plan.lock().map_err(|_| {
             DataFusionError::Internal("native physical-plan cache lock poisoned".to_string())
         })?;
@@ -361,7 +417,14 @@ impl NativeExecutionContext {
             // The prospective tree owns its allowance locally until lowering succeeds. A failed
             // first batch must not accumulate another reservation on every retry.
             let reservation = self.reservation("native lowered physical plan");
-            reservation.try_grow(physical_plan_bytes)?;
+            // Region lowering owns its graph reservation; the common cache retains only
+            // the input/schema allowance in that case. Construction workspace covers both.
+            let retained_bytes = if matches!(self.plan, Definition::Region(_)) {
+                physical_plan_bytes - self.physical_control_bytes - PHYSICAL_PLAN_BASE_BYTES
+            } else {
+                physical_plan_bytes
+            };
+            reservation.try_grow(retained_bytes)?;
             // DataFusion schema projection/equivalence construction temporarily overlaps
             // input/output expression maps. This common allowance is released after lowering,
             // independent of the physical operator families present in the tree.
@@ -375,12 +438,20 @@ impl NativeExecutionContext {
                 .iter()
                 .map(|input| Arc::clone(input) as Arc<dyn ExecutionPlan>)
                 .collect();
-            let plan = create_plan_with_memory(
-                &self.plan,
-                external_inputs,
-                &self.persistent,
-                Some(self.memory_pool.clone()),
-            )?;
+            let plan = match &self.plan {
+                Definition::Tree(plan) => PreparedPlan::Tree(create_plan_with_memory(
+                    plan,
+                    external_inputs,
+                    &self.persistent,
+                    Some(self.memory_pool.clone()),
+                )?),
+                Definition::Region(plan) => PreparedPlan::Region(PhysicalRegion::lower(
+                    plan.clone(),
+                    external_inputs,
+                    &self.persistent,
+                    self.memory_pool.clone(),
+                )?),
+            };
             *cached = Some(CachedPhysicalPlan {
                 plan,
                 inputs,
@@ -403,101 +474,7 @@ impl NativeExecutionContext {
                 return Err(error);
             }
         }
-        Ok(Arc::clone(&cached.plan))
-    }
-
-    pub(crate) fn metric_value(&self, plan_node_id: u64, name: &str) -> Result<usize> {
-        fn sum_all(plan: &Arc<dyn ExecutionPlan>, name: &str) -> usize {
-            let current = plan
-                .metrics()
-                .and_then(|metrics| metrics.sum_by_name(name))
-                .map(|value| value.as_usize())
-                .unwrap_or(0);
-            current.saturating_add(
-                plan.children()
-                    .into_iter()
-                    .map(|child| sum_all(child, name))
-                    .sum(),
-            )
-        }
-
-        fn sum_stage(plan: &Arc<dyn ExecutionPlan>, name: &str) -> usize {
-            if plan
-                .downcast_ref::<crate::planner::operators::identified::IdentifiedExec>()
-                .is_some()
-            {
-                return 0;
-            }
-            let current = plan
-                .metrics()
-                .and_then(|metrics| metrics.sum_by_name(name))
-                .map(|value| value.as_usize())
-                .unwrap_or(0);
-            current.saturating_add(
-                plan.children()
-                    .into_iter()
-                    .map(|child| sum_stage(child, name))
-                    .sum(),
-            )
-        }
-
-        fn identified_metric(
-            plan: &Arc<dyn ExecutionPlan>,
-            plan_node_id: u64,
-            name: &str,
-        ) -> Option<usize> {
-            if let Some(identified) =
-                plan.downcast_ref::<crate::planner::operators::identified::IdentifiedExec>()
-            {
-                if identified.plan_node_id() == plan_node_id {
-                    return Some(sum_stage(identified.input(), name));
-                }
-            }
-            plan.children()
-                .into_iter()
-                .find_map(|child| identified_metric(child, plan_node_id, name))
-        }
-
-        let cached = self.physical_plan.lock().map_err(|_| {
-            DataFusionError::Internal("native physical-plan cache lock poisoned".to_string())
-        })?;
-        let Some(cached) = cached.as_ref() else {
-            return Ok(0);
-        };
-        if plan_node_id == 0 {
-            return Ok(sum_all(&cached.plan, name));
-        }
-        identified_metric(&cached.plan, plan_node_id, name).ok_or_else(|| {
-            DataFusionError::Execution(format!(
-                "native metric requested unknown plan node {plan_node_id}"
-            ))
-        })
-    }
-
-    pub(crate) fn metric_snapshot(&self) -> Result<Vec<i64>> {
-        let cached = self.physical_plan.lock().map_err(|_| {
-            DataFusionError::Internal("native physical-plan cache lock poisoned".to_string())
-        })?;
-        Ok(cached.as_ref().map_or_else(Vec::new, |cached| {
-            crate::plan_metrics::snapshot(&cached.plan)
-        }))
-    }
-
-    pub(crate) fn input_batch_count(&self, ids: &[u64]) -> Result<u64> {
-        fn count(plan: &Arc<dyn ExecutionPlan>, ids: &[u64]) -> u64 {
-            let own = plan
-                .downcast_ref::<crate::planner::operators::identified::IdentifiedExec>()
-                .filter(|stage| ids.contains(&stage.plan_node_id()))
-                .map_or(0, |stage| stage.input_batches());
-            plan.children()
-                .into_iter()
-                .fold(own, |total, child| total.saturating_add(count(child, ids)))
-        }
-        let cached = self
-            .physical_plan
-            .lock()
-            .map_err(|_| DataFusionError::Internal("native metric-tree lock poisoned".into()))?;
-        Ok(cached.as_ref().map_or(0, |cached| count(&cached.plan, ids)))
+        Ok(cached.plan.clone())
     }
 }
 

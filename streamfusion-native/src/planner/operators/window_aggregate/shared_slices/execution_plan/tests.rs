@@ -7,6 +7,8 @@ use crate::memory_pool::tests_support::TestBroker;
 use futures::StreamExt;
 use prost::Message;
 
+mod region;
+
 fn calc(id: u64, input: proto::Operator, width: u32) -> proto::Operator {
     proto::Operator {
         plan_node_id: id,

@@ -5,6 +5,7 @@
 //! only internal stage references can share execution. All edges use the owned Arrow envelope.
 
 mod output;
+pub(crate) use output::RegionOutput;
 mod physical;
 mod plan;
 mod shared;

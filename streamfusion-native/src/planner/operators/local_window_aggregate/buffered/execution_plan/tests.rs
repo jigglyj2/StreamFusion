@@ -295,7 +295,7 @@ fn invalid_rowkind_and_cancelled_partial_flush_require_recovery() {
 #[test]
 fn resource_binding_rejects_invalid_requests_transactionally() {
     let (original, _, _) = context();
-    let wire = original.plan().encode_to_vec();
+    let wire = original.tree_plan().unwrap().encode_to_vec();
     for case in 0..9 {
         let broker = Arc::new(TestBroker::new(256 << 20));
         let memory = HostMemoryReservation::new(broker.clone(), "resource validation");

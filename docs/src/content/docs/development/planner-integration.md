@@ -195,8 +195,18 @@ a bounded broadcast. Supporting that subset requires demonstrated cooperative in
 Native tests exercise nested divergent graphs over repeated invocations, independent external
 channels through DataFusion UNION, different projection schemas, persistent watermark/checkpoint/
 end-input controls, and a multi-megabyte payload with one Flink lease through the last output.
-This lowering and driver are runtime prerequisites. Integration with the shared JVM execution
-context, per-port Arrow C Data output routing, and full Flink recovery/parity validation is still
+The common Rust execution context now owns either a tree or a region, sharing its Flink memory
+pool, task runtime, input cache, state/resource bindings, control events, and metrics. Lifecycle
+lookup visits each region definition once. Single-output compatibility APIs reject region plans;
+region invocation completion keeps the context busy until every output finishes, and failed
+execution requires recovery. Lowering denial can retry without retaining a partial graph.
+
+Generated native window tests compare a shared HOP COUNT region with the existing tree over
+three seeds and both backends, including canonical snapshots and cross-backend restore. A mixed
+COUNT -> Calc -> attached local MAX region binds global keyed state and the original Flink local
+buffer capacity in the same context, and matches the tree's outputs and stage counters through
+watermark, pre-checkpoint, and end-input controls. These are native integration prerequisites;
+per-port JVM Arrow C Data routing and full Flink topology/recovery/parity validation remain
 outstanding. No additional whole-plan query is admitted by this change.
 
 This layout is currently used for ownership admission. Executing multiple exits still requires

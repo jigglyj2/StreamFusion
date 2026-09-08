@@ -74,6 +74,15 @@ impl NativeExecutionContext {
         batches: Vec<RecordBatch>,
         events: &[(u64, ControlEvent)],
     ) -> Result<NativePlanStream> {
+        self.validate_control_inputs(&batches, events)?;
+        self.start_invocation(batches, Some(events))
+    }
+
+    pub(super) fn validate_control_inputs(
+        &self,
+        batches: &[RecordBatch],
+        events: &[(u64, ControlEvent)],
+    ) -> Result<()> {
         self.require_idle()?;
         if batches.iter().any(|batch| batch.num_rows() != 0) {
             return Err(DataFusionError::Plan(
@@ -96,7 +105,7 @@ impl NativeExecutionContext {
                 )));
             }
         }
-        self.start_invocation(batches, Some(events))
+        Ok(())
     }
 
     fn start_invocation(

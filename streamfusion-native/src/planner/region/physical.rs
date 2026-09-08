@@ -20,15 +20,16 @@ pub(crate) struct PhysicalRegion {
     pub(super) invocation: AtomicU8,
     pub(super) pool: Arc<dyn MemoryPool>,
     _memory: MemoryReservation,
-    _contract: RegionPlan,
+    _contract: Arc<RegionPlan>,
 }
 impl PhysicalRegion {
     pub(crate) fn lower(
-        plan: RegionPlan,
+        plan: impl Into<Arc<RegionPlan>>,
         external: Vec<Arc<dyn ExecutionPlan>>,
         persistent: &[PersistentBinding],
         pool: Arc<dyn MemoryPool>,
     ) -> Result<Arc<Self>> {
+        let plan = plan.into();
         let memory =
             MemoryConsumer::new("native region physical graph and stream control").register(&pool);
         memory.try_grow(plan.physical_bytes.checked_add(64 * 1024).ok_or_else(|| {
@@ -106,6 +107,9 @@ impl PhysicalRegion {
             _memory: memory,
             _contract: plan,
         }))
+    }
+    pub(crate) fn stages(&self) -> &[Arc<dyn ExecutionPlan>] {
+        &self.stages
     }
     pub(crate) fn metrics(&self) -> Vec<i64> {
         self.stages

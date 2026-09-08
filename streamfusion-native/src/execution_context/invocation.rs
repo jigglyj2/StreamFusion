@@ -65,7 +65,11 @@ impl NativeExecutionContext {
             Err(_) => poisoned = true,
         }
         self.invocation.store(
-            if poisoned || (!successful && !self.persistent.is_empty()) {
+            if poisoned
+                || (!successful
+                    && (!self.persistent.is_empty()
+                        || matches!(self.plan, super::Definition::Region(_))))
+            {
                 2
             } else {
                 0

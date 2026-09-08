@@ -26,7 +26,7 @@ impl DeduplicateHandle {
     ) -> Result<Self> {
         let pool = control.datafusion_pool(control.available_capacity()?.unwrap_or(usize::MAX));
         let mut context = NativeExecutionContext::new(bytes, pool)?;
-        let node = find_unique(context.plan(), |node| {
+        let node = find_unique(context.tree_plan()?, |node| {
             matches!(
                 node.operator,
                 Some(proto::operator::Operator::Deduplicate(_))
@@ -34,9 +34,9 @@ impl DeduplicateHandle {
         })?;
         let id = node.plan_node_id;
         let mut copy = control.sibling("deduplicate lifecycle plan copy");
-        copy.resize(context.plan().encoded_len())?;
+        copy.resize(context.tree_plan()?.encoded_len())?;
         let bare = proto::NativePlan {
-            protocol_version: context.plan().protocol_version,
+            protocol_version: context.tree_plan()?.protocol_version,
             root: Some(node.clone()),
         }
         .encode_to_vec();

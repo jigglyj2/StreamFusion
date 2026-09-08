@@ -14,7 +14,7 @@ use crate::planner::operators::{
         self as slicing_window, SlicingWindowFactory,
     },
 };
-use crate::planner::persistent::{find_unique, PersistentBinding, PersistentOperatorFactory};
+use crate::planner::persistent::{PersistentBinding, PersistentOperatorFactory};
 use crate::{proto, state::SnapshotBytes};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::memory_pool::MemoryReservation;
@@ -60,7 +60,7 @@ impl NativeExecutionContext {
         let options = proto::NativeStateBindings::decode(bytes)
             .map_err(|error| invalid(format!("invalid state-binding protobuf: {error}")))?;
         if !matches!(options.protocol_version, 1 | 2 | 3)
-            || self.plan().protocol_version < crate::ENVELOPE_PLAN_PROTOCOL_VERSION
+            || self.protocol_version() < crate::ENVELOPE_PLAN_PROTOCOL_VERSION
             || options.bindings.is_empty()
         {
             return Err(invalid("unsupported state-binding protocol version"));
@@ -90,9 +90,9 @@ impl NativeExecutionContext {
                     "state binding has an invalid Flink key-group range",
                 ));
             }
-            let node = find_unique(self.plan(), |node| {
-                node.plan_node_id == binding.plan_node_id
-            })?;
+            let node = self
+                .plan
+                .find_unique(|node| node.plan_node_id == binding.plan_node_id)?;
             if !matches!(
                 node.operator,
                 Some(
@@ -156,22 +156,18 @@ impl NativeExecutionContext {
                 None => return Err(invalid("state binding has no supported backend")),
             }
         }
-        require_bindings(
-            self.plan()
-                .root
-                .as_ref()
-                .ok_or_else(|| invalid("native plan has no root"))?,
-            &ids,
-        )?;
+        for root in self.plan.roots() {
+            require_bindings(root, &ids)?;
+        }
         let mut bindings: Vec<PersistentBinding> = Vec::with_capacity(options.bindings.len());
         for binding in &options.bindings {
-            let node = find_unique(self.plan(), |node| {
-                node.plan_node_id == binding.plan_node_id
-            })?;
+            let node = self
+                .plan
+                .find_unique(|node| node.plan_node_id == binding.plan_node_id)?;
             let mut plan_memory = memory.sibling("native state constructor plan");
             plan_memory.resize(super::operator_spec::admission(node)?)?;
             let bare = proto::NativePlan {
-                protocol_version: self.plan().protocol_version,
+                protocol_version: self.protocol_version(),
                 root: Some(super::operator_spec::without_children(node)),
             }
             .encode_to_vec();

@@ -143,13 +143,16 @@ pub(super) fn defer(
     let dropped = Arc::new(AtomicBool::new(false));
     let mut cache = context.physical_plan.lock().unwrap();
     let cached = cache.as_mut().unwrap();
-    cached.plan = Arc::new(Deferred {
-        input: cached.plan.clone(),
+    let super::PreparedPlan::Tree(input) = &cached.plan else {
+        panic!("test expects a tree")
+    };
+    cached.plan = super::PreparedPlan::Tree(Arc::new(Deferred {
+        input: input.clone(),
         opens: opens.clone(),
         fail,
         context: Arc::downgrade(context),
         dropped_while_active: dropped.clone(),
-    });
+    }));
     (opens, dropped)
 }
 
