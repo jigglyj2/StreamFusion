@@ -46,6 +46,25 @@ pub(super) fn scalar(
 }
 
 fn workspace(value: &ScalarValue, rows: usize) -> Result<usize> {
+    let width = match value.data_type() {
+        DataType::Null => Some(0),
+        DataType::Boolean => Some(1),
+        data_type => data_type.primitive_width(),
+    };
+    if let Some(width) = width {
+        // Primitive broadcasts allocate Arrow values and validity, not one Rust
+        // ScalarValue enum per row. Keep coarse builder/array overlap and headroom.
+        return width
+            .checked_add(1)
+            .and_then(|bytes| bytes.checked_mul(rows.max(1)))
+            .and_then(|bytes| bytes.checked_mul(4))
+            .and_then(|bytes| bytes.checked_add(64 * 1024))
+            .ok_or_else(|| {
+                DataFusionError::ResourcesExhausted(
+                    "projection scalar broadcast size overflow".into(),
+                )
+            });
+    }
     // ScalarValue::size walks nested Arrow storage without constructing ArrayData.
     // FixedSizeBinary(NULL) is the exception: its declared width allocates bytes even
     // though the scalar stores no payload. Include that width explicitly.

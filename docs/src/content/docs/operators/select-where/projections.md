@@ -14,6 +14,11 @@ Array output credit follows Arrow buffer ownership through slices and downstream
 results retain their original scalar semantics inside the expression tree. At projection roots,
 scalar broadcasting now reserves capacity before DataFusion materializes the array; existing array
 results pass through unchanged and cached literals are borrowed without a per-batch payload clone.
+Primitive scalar broadcasts reserve from Arrow's physical value width and validity, with coarse
+builder overlap and batch headroom. Rust's scalar enum is not charged once per output row.
+A 16,384-row regression verifies nullable and non-null BIGINT, timestamp, floating-point and Boolean
+broadcasts within 1 MiB, exact DataFusion values, and output-credit lifetime. Variable-width and
+nested broadcasts retain their separate conservative admission and oversized-payload rejection.
 Unlisted large expression workspaces still need admission coverage. Bounded bufferless descriptors
 do not require separate reservations. See
 [memory accounting](/StreamFusion/development/memory-and-configuration/) for the exact scope.

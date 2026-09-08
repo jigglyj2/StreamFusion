@@ -114,6 +114,30 @@ fn large_literal_denial_happens_before_cloning_or_broadcasting_its_payload() {
 }
 
 #[test]
+fn primitive_source_batch_broadcast_fits_one_mib_and_preserves_datafusion_values() {
+    for value in [
+        ScalarValue::Int64(Some(i64::MAX)),
+        ScalarValue::Int64(None),
+        ScalarValue::TimestampMillisecond(Some(-12345), None),
+        ScalarValue::TimestampMillisecond(None, None),
+        ScalarValue::Float64(Some(-0.0)),
+        ScalarValue::Boolean(Some(true)),
+        ScalarValue::Boolean(None),
+    ] {
+        let expected = value.to_array_of_size(16_384).unwrap();
+        let (broker, pool) = broker(1 << 20);
+        let (actual, observed) = measure(|| scalar(&value, 16_384, &pool));
+        let actual = actual.unwrap().into_array(16_384).unwrap();
+        assert_eq!(actual.to_data(), expected.to_data());
+        assert!(observed.peak <= broker.peak.load(Ordering::Relaxed));
+        drop(pool);
+        assert!(broker.inner.reserved() > 0);
+        drop(actual);
+        assert_eq!(broker.inner.reserved(), 0);
+    }
+}
+
+#[test]
 fn projection_borrows_array_results_without_copying_or_new_payload_credit() {
     let input = batch(Arc::new(Int32Array::from(vec![1, 2, 3])));
     let (broker, pool) = broker(0);
