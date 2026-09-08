@@ -35,18 +35,27 @@ struct AdmittedFunction {
 enum Policy {
     Repeat,
     FixedMath,
+    DateFormat(usize),
 }
 impl Policy {
     fn label(self) -> &'static str {
         match self {
             Self::Repeat => "native scalar REPEAT workspace and output",
             Self::FixedMath => "native scalar fixed math workspace and output",
+            Self::DateFormat(_) => "native scalar DATE_FORMAT workspace and output",
         }
     }
     fn workspace(self, args: &ScalarFunctionArgs) -> Result<usize> {
         match self {
             Self::Repeat => repeat::workspace(args),
             Self::FixedMath => fixed_math::workspace(args),
+            Self::DateFormat(bytes) => args
+                .number_rows
+                .checked_mul(bytes)
+                .and_then(|n| n.checked_add(64 << 10))
+                .ok_or_else(|| {
+                    DataFusionError::ResourcesExhausted("DATE_FORMAT workspace overflow".into())
+                }),
         }
     }
 }
@@ -142,7 +151,13 @@ pub(crate) fn install(
             let Some(function) = expression.downcast_ref::<ScalarFunctionExpr>() else {
                 return super::managed_expression::install(expression, pool, schema);
             };
-            let policy = if function.name() == "repeat" {
+            let policy = if let Some(format) = function
+                .fun()
+                .inner()
+                .downcast_ref::<super::date_format::NumericDateFormat>(
+            ) {
+                Policy::DateFormat(format.bytes_per_row()?)
+            } else if function.name() == "repeat" {
                 Policy::Repeat
             } else if fixed_math::supports(function, schema)? {
                 Policy::FixedMath

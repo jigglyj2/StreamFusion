@@ -19,8 +19,7 @@ final class StreamFusionTemporalContextFunctionTranslator extends StreamFusionRe
             return function
                     + " stays on Flink because its value and timezone are bound to Flink's job, row, and session clock lifecycle; native batch evaluation cannot independently sample a parity-equivalent clock";
         }
-        if ("DATE_FORMAT".equals(function)
-                || "FROM_UNIXTIME".equals(function)
+        if ("FROM_UNIXTIME".equals(function)
                 || "UNIX_TIMESTAMP".equals(function)
                 || "TO_DATE".equals(function)
                 || "TO_TIMESTAMP".equals(function)

@@ -56,6 +56,6 @@ class TemporalContextFallbackTest extends SqlParityTestSupport {
                 Arguments.of(
                         "format and timezone",
                         "SELECT DATE_FORMAT(event_timestamp, 'yyyy-MM-dd HH:mm:ss') FROM temporal_input",
-                        "Java pattern parsing, locale, session-zone, DST gap/overlap"));
+                        "DATE_FORMAT requires timezone-free TIMESTAMP(3)"));
     }
 }

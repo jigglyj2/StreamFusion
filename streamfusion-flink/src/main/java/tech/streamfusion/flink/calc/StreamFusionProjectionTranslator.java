@@ -270,6 +270,8 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
         if (jsonFunction != null) {
             return jsonFunction;
         }
+        Expression dateFormat = StreamFusionDateFormatTranslator.translate(expression, inputType, expectedType);
+        if (dateFormat != null) return dateFormat;
         Expression temporalExtract =
                 StreamFusionTemporalFunctionTranslator.extract(expression, inputType, expectedType);
         if (temporalExtract != null) {

@@ -104,6 +104,13 @@ in-memory run still fails during dirty join-state encoding: another 262,416 byte
 no million-event comparison or RocksDB result is claimed. Q9 is delivered within these explicit
 limits. Q10 is next.
 
+Q10's next prerequisite is numeric `DATE_FORMAT` over timezone-free `TIMESTAMP(3)`. Its literal
+pattern subset lowers to DataFusion kernels with full-range calendar-cycle/year-of-era adaptation
+and one coarse memory owner. Unsupported pattern/type/context variants keep precise fallback.
+Generated changelog, memory and native boundary tests cover the scalar contract. Q10's blackhole
+SELECT workload and release measurements are not yet delivered; filesystem sink partition-commit
+and rolling-policy behavior are outside that benchmark's evidence.
+
 ## Q6 has no Flink streaming baseline
 
 The upstream Nexmark Q6 query computes a bounded ordered AVG after winning-bid rank selection.

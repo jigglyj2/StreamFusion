@@ -101,6 +101,7 @@ pub(crate) mod struct_field;
 pub(crate) mod substring;
 pub(crate) mod tangent;
 pub(crate) mod temporal_extract;
+pub(crate) mod date_format;
 pub(crate) mod timestamp_arithmetic;
 pub(crate) mod unhex;
 pub(crate) mod upper;

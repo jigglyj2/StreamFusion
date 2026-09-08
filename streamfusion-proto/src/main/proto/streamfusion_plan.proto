@@ -788,7 +788,15 @@ message Expression {
     Element element = 115;
     IntervalYearMonthLiteral interval_year_month_literal = 116;
     IntervalDayTimeLiteral interval_day_time_literal = 117;
+    DateFormat date_format = 118;
   }
+}
+
+// Locale-independent Java numeric pattern subset over timezone-free millisecond timestamps.
+// Unknown fields, zones, dynamic patterns and string parsing are rejected by the planner.
+message DateFormat {
+  Expression operand = 1;
+  string pattern = 2;
 }
 
 message InetNtoa {

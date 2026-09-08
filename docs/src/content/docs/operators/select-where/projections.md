@@ -463,7 +463,27 @@ until their session-zone and precision contracts are separately proven.
 `CURRENT_ROW_TIMESTAMP`, and `LOCALTIMESTAMP` stay on Flink because their values are bound to
 Flink's job, per-row, and configured session-clock lifecycle. StreamFusion does not independently
 sample a native clock and risk different values within one logical query.
-`DATE_FORMAT`, `FROM_UNIXTIME`, `UNIX_TIMESTAMP`, `TO_DATE`, `TO_TIMESTAMP`,
+`DATE_FORMAT` is accelerated for timezone-free `TIMESTAMP(3)` with literal numeric patterns:
+`yyyy`, `MM`, `dd`, `HH`, `mm`, `ss`, `SSS`, punctuation, and Java single-quoted literals (including
+doubled apostrophes). The empty pattern is supported. Flink's Java planner encodes the literal
+pattern in protobuf; Rust lowers its numeric formatting to DataFusion arithmetic, comparisons,
+`date_part`, `to_char`, padding and concatenation kernels. A 400-year Gregorian cycle rebase
+preserves month/day/time fields across the complete signed-millisecond range, with explicit
+Java year-of-era and expanded-year sign handling. This avoids Arrow/chrono range truncation
+without a handwritten per-row calendar or formatting algorithm. Timestamp values are independent
+of the session zone. Null timestamps remain null, including for empty or literal-only patterns.
+
+The format operation uses one coarse DataFusion memory reservation for its numeric workspace,
+format parts and output; output slices retain credit until their final release. Generated Flink
+changelog tests cover full-range timestamp endpoints, BCE/year zero, extended years, leap days,
+nulls, non-UTC session configuration, quoted Unicode and all four RowKinds. Native tests additionally
+cover empty/sliced/scalar input, large output, early budget denial and exactly retained output credit.
+Dynamic patterns, string parsing, local-time-zone/proctime input, other timestamp precisions,
+locale/month/day names, week-based years, zone fields and optional pattern sections stay on Flink
+with precise whole-plan fallback reasons. Q10's RowData blackhole work measures its SELECT path;
+this scalar support does not implement filesystem sink partition commits or rolling policies.
+
+`FROM_UNIXTIME`, `UNIX_TIMESTAMP`, `TO_DATE`, `TO_TIMESTAMP`,
 `TO_TIMESTAMP_LTZ`, and `CONVERT_TZ` stay on Flink pending exact Java pattern, locale, invalid-input,
 DST gap/overlap, session-zone, and precision parity. `TIMESTAMPDIFF`, temporal overlap, and `AT`
 likewise stay on Flink until their calendar-unit truncation, interval, overflow, and zone contracts
