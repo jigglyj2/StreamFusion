@@ -111,7 +111,7 @@ final class StreamFusionPlanner implements Planner {
         TRANSLATED_PLANS.set(0);
     }
 
-    private static String appendCurrentPlanningStatus(String flinkExplanation) {
+    private String appendCurrentPlanningStatus(String flinkExplanation) {
         return flinkExplanation
                 + System.lineSeparator()
                 + System.lineSeparator()
@@ -120,12 +120,12 @@ final class StreamFusionPlanner implements Planner {
                 + planningDiagnostics();
     }
 
-    private static String planningDiagnostics() {
+    private String planningDiagnostics() {
         try {
             Class<?> diagnostics = Class.forName(
                     "tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics",
                     true,
-                    Thread.currentThread().getContextClassLoader());
+                    delegate.getClass().getClassLoader());
             Method explain = diagnostics.getMethod("explain");
             return (String) explain.invoke(null);
         } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {

@@ -124,6 +124,18 @@ serialization of unresolved local-window resources. Tests generate repeated pipe
 external weights and verify that earlier job graphs keep their original capacities. The distribution
 runner installs the matching patched `StreamGraphGenerator` class alongside the planner/API patches.
 
+EXPLAIN reads planning diagnostics through the actual Flink planner's classloader. In a
+distribution, these diagnostics live inside the isolated planner loader and may be invisible to
+the application's context classloader. Both acceleration and precise fallback reports remain
+available at that boundary. The launcher integration job includes EXPLAIN in its failure output
+when a submitted Calc does not execute natively.
+
+The current Flink 2.3.0 distribution launcher check still falls back during runtime preflight:
+the runtime loader cannot resolve Calcite's `AggregateCall`, which is available only inside the
+isolated planner loader. Separating planner-dependent plan builders from runtime classes remains
+outstanding. Passing the SQL harness or local Nexmark benchmark does not establish that the
+isolated distribution packaging accelerates a submitted job.
+
 The `streamfusion-flink` module supplies the planner-side integration under `tech.streamfusion.flink`. Tests can select the StreamFusion implementation for one execution and clear that selection for the native Flink baseline.
 
 Keeping the hook small matters: the target is to follow Flink's architecture and release line closely, not maintain a broad planner fork. Changes to the upstream patch should therefore be isolated, tested by the SQL harness, and reviewed independently from native operator work.

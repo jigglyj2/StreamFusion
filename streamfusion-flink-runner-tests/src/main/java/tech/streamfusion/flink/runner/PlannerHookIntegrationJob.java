@@ -35,10 +35,9 @@ public final class PlannerHookIntegrationJob {
         StreamFusionPlannerFactory.resetMetrics();
 
         TableEnvironment tables = TableEnvironment.create(EnvironmentSettings.inStreamingMode());
+        String calcSql = "SELECT id FROM (VALUES (1), (2), (3)) AS input(id) WHERE id >= 2";
         List<Integer> ids = new ArrayList<>();
-        try (CloseableIterator<Row> rows = tables.executeSql(
-                        "SELECT id FROM (VALUES (1), (2), (3)) AS input(id) WHERE id >= 2")
-                .collect()) {
+        try (CloseableIterator<Row> rows = tables.executeSql(calcSql).collect()) {
             while (rows.hasNext()) {
                 ids.add((Integer) rows.next().getField(0));
             }
@@ -56,7 +55,8 @@ public final class PlannerHookIntegrationJob {
             throw new IllegalStateException("The StreamFusion planner did not translate the submitted job");
         }
         if (StreamFusionPlannerFactory.nativeCalcBatchCount() == 0) {
-            throw new IllegalStateException("The submitted job did not execute a native calc batch");
+            throw new IllegalStateException(
+                    "The submitted job did not execute a native calc batch\n" + tables.explainSql(calcSql));
         }
 
         long batchesBeforeUnion = StreamFusionPlannerFactory.nativeCalcBatchCount();
