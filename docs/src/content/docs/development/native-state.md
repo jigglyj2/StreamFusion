@@ -3,10 +3,10 @@ title: Native keyed state
 description: Backend contract, checkpoint formats, and implementation references for native operators.
 ---
 
-Persistent native stateful paths currently use whole-plan Flink fallback under
-[architecture admission](/StreamFusion/development/architecture-admission/). Operator-lifetime caches
-and batch/expression workspaces still need complete verified admission and lifetime accounting.
-The implementation details below describe retained code and its target memory contract.
+The binary inner equi `StreamExecMultiJoin` path is admitted with in-memory state under
+[architecture admission](/StreamFusion/development/architecture-admission/). Other persistent
+families and RocksDB-backed plans retain whole-plan Flink fallback. The implementation details
+below distinguish this verified path from retained code and its target memory contract.
 
 Native keyed-region preflight now rejects non-default Flink RocksDB options that the component
 does not propagate, including custom option factories, local directories, memory ratios,
@@ -15,7 +15,11 @@ resolves Flink's typed options and aliases before graph replacement; it does not
 native defaults. Ordinary Flink managed-memory size/consumer weights and incremental-checkpoint
 selection remain configurable. RocksDB-specific options do not reject an in-memory backend.
 This configuration guard supplements the existing metric and physical-family admission gates;
-it does not establish default-option parity or unlock stateful production plans by itself.
+it does not establish default-option parity. A separate production guard keeps RocksDB on Flink
+until its default cache/write-buffer ratios and database options are equivalent. The guard resolves
+the user's original backend even after the internal wrapper is installed, so repeated planning
+does not mistake that wrapper for a new backend. Checkpointing during channel recovery remains
+unsupported; ordinary aligned/unaligned recovery uses the tested non-overlapping lifecycle.
 
 The native RocksDB component now builds and explicitly selects Snappy compression on every SST
 level, matching Flink's default compression choice. Previously the codec was omitted from the
@@ -77,7 +81,7 @@ checkpoint handles, channel-state writer/reader, recovered input channels, and t
 view adapter. The mailbox harness requires explicit insertion of the serialized frame into the
 channel-state writer because its test input queues do not implement network capture. This establishes
 that recovery boundary, not full distributed failure/restart or in-flight rescaling coverage, and
-does not remove the remaining production admission requirements.
+does not remove other physical families' or RocksDB's remaining production admission requirements.
 
 Task-lifetime lifecycle registration is distinct from keyed state binding. Local aggregate buffers
 are discovered from the native plan before capability negotiation and use the same stream/control,
@@ -162,9 +166,10 @@ changelog kinds take precedence over input kinds when propagating an input's tim
 column buffers remain shared. Input-ordinal timestamp propagation is only valid for operators
 whose semantics select an input envelope, not arbitrary timer-created or historical output.
 
-This API is a lifecycle-integration foundation, not production admission. The generic Flink
+These shared APIs establish lifecycle integration; production admission is specific to the verified
+in-memory binary equi-join subset. The generic Flink
 region still needs migration of other physical families, timer/control dispatch for timer-driven operators, per-stage
-state-specific metric integration, and full allocation admission. Existing state operators remain
+state-specific metric integration, and full allocation admission. Other state operators remain
 behind the whole-plan restriction above; the new bindings do not establish complete aligned/unaligned
 Flink recovery parity for a multi-state runtime region or Nexmark performance parity.
 

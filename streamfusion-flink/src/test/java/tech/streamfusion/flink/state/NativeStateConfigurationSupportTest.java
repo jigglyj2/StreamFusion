@@ -20,7 +20,8 @@ class NativeStateConfigurationSupportTest {
             config.set(StateBackendOptions.STATE_BACKEND, backend);
             config.set(TaskManagerOptions.MANAGED_MEMORY_SIZE, MemorySize.ofMebiBytes(512));
             config.set(CheckpointingOptions.INCREMENTAL_CHECKPOINTS, true);
-            assertThat(NativeStateSupport.unsupportedReason(config)).isNull();
+            assertThat(NativeStateConfigurationSupport.unsupportedReason(config))
+                    .isNull();
         }
     }
 
@@ -40,12 +41,38 @@ class NativeStateConfigurationSupportTest {
             var config = new Configuration();
             config.setString("state.backend", "rocksdb"); // Flink's deprecated backend alias.
             config.setString(option[0], option[1]);
-            assertThat(NativeStateSupport.unsupportedReason(config))
+            assertThat(NativeStateConfigurationSupport.unsupportedReason(config))
                     .as(option[0])
                     .contains(option[0]);
             config.set(StateBackendOptions.STATE_BACKEND, "hashmap");
-            assertThat(NativeStateSupport.unsupportedReason(config)).isNull();
+            assertThat(NativeStateConfigurationSupport.unsupportedReason(config))
+                    .isNull();
         }
+    }
+
+    @Test
+    void productionAdmissionRetainsBackendIdentityAfterInstallingTheWrapper() {
+        for (String backend : new String[] {"hashmap", "rocksdb"}) {
+            var config = new Configuration();
+            config.set(StateBackendOptions.STATE_BACKEND, backend);
+            String expected = NativeStateSupport.unsupportedReason(config);
+            if (backend.equals("hashmap")) assertThat(expected).isNull();
+            else assertThat(expected).contains("default cache/write-buffer ratios", "retain Flink");
+            StreamFusionStateBackendFactory.install(config);
+            StreamFusionStateBackendFactory.install(config);
+            assertThat(NativeStateSupport.unsupportedReason(config)).isEqualTo(expected);
+            config.set(RocksDBOptions.USE_MANAGED_MEMORY, false);
+            if (backend.equals("rocksdb"))
+                assertThat(NativeStateSupport.unsupportedReason(config))
+                        .contains(RocksDBOptions.USE_MANAGED_MEMORY.key());
+        }
+    }
+
+    @Test
+    void checkpointingDuringRecoveryRetainsFlinkUntilItsOverlappingLifecycleIsVerified() {
+        var config = new Configuration();
+        config.set(CheckpointingOptions.CHECKPOINTING_DURING_RECOVERY_ENABLED, true);
+        assertThat(NativeStateSupport.unsupportedReason(config)).contains("checkpointing during channel recovery");
     }
 
     @Test
@@ -55,8 +82,8 @@ class NativeStateConfigurationSupportTest {
         config.set(RocksDBOptions.USE_MANAGED_MEMORY, true);
         config.set(RocksDBConfigurableOptions.WRITE_BUFFER_SIZE, MemorySize.ofMebiBytes(64));
         config.setString("unrelated.application.option", "value");
-        assertThat(NativeStateSupport.unsupportedReason(config)).isNull();
+        assertThat(NativeStateConfigurationSupport.unsupportedReason(config)).isNull();
         config.set(StateBackendOptions.STATE_BACKEND, "forst");
-        assertThat(NativeStateSupport.unsupportedReason(config)).contains("forst");
+        assertThat(NativeStateConfigurationSupport.unsupportedReason(config)).contains("forst");
     }
 }

@@ -10,12 +10,22 @@ An implemented native kernel is not an unlocked query.
 Performance work uses the [RowData-to-blackhole harness](/StreamFusion/benchmarks/rowdata-blackhole/),
 with separate collecting-sink runs for parity. The blackhole path has passed Q0–Q2 admission
 and native-activity integration checks with both backend settings after the sortable-state
-changes. Q3 still reports the persistent-state restriction; binary join/Calc region composition is verified.
+changes. Q3 now passes ordinary in-memory admission, complete collected-changelog comparison,
+and native-activity checks through blackhole. RocksDB Q3 still falls back with the specific
+cache/write-buffer and database-default requirement. Its accelerated benchmark refuses that run.
 These short integration runs are not performance measurements.
 
 ## Current checkpoint
 
-Q3 is the next target. A September 7, 2026 diagnostic run of the existing local build used
+Q3 is partially delivered: its synchronous binary inner equi-join path is admitted on the
+in-memory backend. The 10,000-event, parallelism-four integration run matches Flink's complete
+sorted changelog bytes/hash and observes native plan batches. The source-to-blackhole variant
+also executes natively. This is correctness/admission evidence, not a release throughput result.
+RocksDB admission and release measurements/profiles remain required before moving to Q4.
+
+## Initial diagnostic baseline
+
+Q3 was the next target at the start of this work. A September 7, 2026 diagnostic run of the existing local build used
 10,000 deterministic RowData events, streaming mode, parallelism four, and separate Flink
 and StreamFusion JVMs. Each engine ran both backend settings. These were short admission
 checks, not warmed-up, alternating-fork performance measurements.
@@ -43,12 +53,11 @@ current planner admits a query.
 The actual RowData Q3 plan uses Flink's binary `StreamExecMultiJoin` for the auction/person join.
 The existing semantic lowering can represent that binary shape as the native regular join;
 it must not be confused with the separate native multi-way join algorithm. The early architecture
-gate now uses the same binary-shape decision as semantic lowering. It retains the persistent-memory
-restriction for the binary regular-join path without incorrectly reporting the
-multi-way algorithm's separate integration restriction. Genuine multi-way and non-lowerable
-binary shapes still require their paged-state/output cursor to join the common execution, metric,
-and checkpoint lifecycle. This diagnostic correction does not
-unlock Q3 or remove its remaining memory and metric requirements.
+gate uses the same binary-shape decision as semantic lowering. The verified pure equi subset
+is admitted with in-memory state. Additional residuals retain the persistent-state restriction;
+RocksDB retains its backend-specific default-configuration restriction. Genuine multi-way and
+non-lowerable binary shapes still require their paged-state/output cursor to join the common
+execution, metric and checkpoint lifecycle.
 
 The binary **inner** join and its downstream generated Calc now have shared runtime conformance
 for both backends, including the full default metric surface, per-input watermarks, latency,
@@ -65,8 +74,8 @@ channel recovery. A separate mailbox-task test now verifies aligned restore and 
 frame replay on both backends through Flink's channel-state writer/reader, followed by exact
 retraction comparison. Its test input channel inserts captured serialized frames explicitly;
 it does not claim distributed failover or in-flight rescaling coverage. Binary join/Calc composition
-is therefore admitted independently of the remaining persistent-state gate. Backend configuration
-and memory admission remain prerequisites.
+is therefore admitted, including in-memory persistent state for the pure equi subset. RocksDB
+configuration equivalence remains a prerequisite for the second backend.
 
 The next work is limited to this production path:
 

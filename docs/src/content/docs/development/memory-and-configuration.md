@@ -57,7 +57,8 @@ with a precise fallback reason.
 
 ## Current readiness
 
-Persistent stateful families remain gated by
+The verified in-memory binary equi-join path is admitted. Other persistent stateful families
+and RocksDB remain gated by
 [architecture admission](/StreamFusion/development/architecture-admission/). Their large-state
 memory behavior, backend configuration, metrics, and checkpoint/restore contracts must be verified
 before admission. Removing descriptor reservations does not establish those contracts.

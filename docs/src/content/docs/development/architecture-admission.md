@@ -29,7 +29,8 @@ budget, and backend configuration constraints.
 
 ## Current selection gates
 
-Calc and UNION ALL compose through the common native region. Persistent operator families
+Calc, UNION ALL and verified binary inner equi MultiJoin compose through the common native region.
+That join subset is admitted with in-memory state; other persistent operator families
 remain on whole-plan Flink fallback until their large state/buffer admission, backend settings,
 checkpoint behavior, and complete Flink metric contracts are verified through that region.
 Some retained implementations, including deduplication and aggregation, already have direct
@@ -43,7 +44,11 @@ edge adapters; an internal RowData operator or an intermediate JNI round trip is
 
 A binary Flink `StreamExecMultiJoin` with a common equi key lowers to the regular join algorithm.
 Its shared-region composition is admitted after generated metric/changelog comparisons, keyed
-rescaling and channel replay tests; the independent persistent-state gate remains. Genuine multi-way joins have paged state
+rescaling and channel replay tests. In-memory persistent state is admitted when its complete
+condition is covered by the common equality keys; additional residuals retain the state gate.
+A separate backend guard rejects RocksDB until its default cache/write-buffer ratios and database
+options match Flink. Unsupported typed RocksDB settings still report their specific option first.
+Checkpointing during channel recovery remains unsupported on either backend. Genuine multi-way joins have paged state
 and a bounded output cursor in their retained native implementation, but still require integration
 with the common ExecutionPlan, per-stage metrics, and checkpoint/control lifecycle. Their gate
 must describe this missing integration rather than claiming whole-key rewrites remain implemented.

@@ -33,7 +33,7 @@ public final class LocalRowDataNexmarkBenchmark {
                         String runtimeMode =
                                 Boolean.getBoolean("streamfusion.nexmark.batch-mode") ? "batch" : "streaming";
                         System.out.printf(
-                                "%s engine=%s runtime_mode=%s state_backend=%s accelerated=%s input_events=%d elapsed_seconds=%.6f input_events_per_second=%.2f native_calc_batches=%d native_deduplicate_batches=%d native_local_group_aggregate_batches=%d native_group_aggregate_batches=%d native_top_n_batches=%d native_local_window_aggregate_batches=%d native_window_aggregate_batches=%d native_window_join_batches=%d native_regular_join_batches=%d native_multi_join_batches=%d native_interval_join_batches=%d native_temporal_join_batches=%d native_over_aggregate_batches=%d native_temporal_sort_batches=%d native_bounded_sort_batches=%d native_bounded_rank_batches=%d native_match_recognize_batches=%d output_rows=%d output_sha256=%s ordered_sha256=%s materialized_rows=%d materialized_sha256=%s%n",
+                                "%s engine=%s runtime_mode=%s state_backend=%s accelerated=%s input_events=%d elapsed_seconds=%.6f input_events_per_second=%.2f native_plan_batches=%d native_calc_batches=%d native_deduplicate_batches=%d native_local_group_aggregate_batches=%d native_group_aggregate_batches=%d native_top_n_batches=%d native_local_window_aggregate_batches=%d native_window_aggregate_batches=%d native_window_join_batches=%d native_regular_join_batches=%d native_multi_join_batches=%d native_interval_join_batches=%d native_temporal_join_batches=%d native_over_aggregate_batches=%d native_temporal_sort_batches=%d native_bounded_sort_batches=%d native_bounded_rank_batches=%d native_match_recognize_batches=%d output_rows=%d output_sha256=%s ordered_sha256=%s materialized_rows=%d materialized_sha256=%s%n",
                                 query,
                                 streamFusion ? "streamfusion" : "flink",
                                 runtimeMode,
@@ -42,6 +42,7 @@ public final class LocalRowDataNexmarkBenchmark {
                                 events,
                                 result.elapsedSeconds(),
                                 result.recordsPerSecond(events),
+                                result.nativePlanBatches(),
                                 result.nativeCalcBatches(),
                                 result.nativeDeduplicateBatches(),
                                 result.nativeLocalGroupAggregateBatches(),
@@ -97,6 +98,7 @@ public final class LocalRowDataNexmarkBenchmark {
         BenchmarkResultStore.Result output = NexmarkRowDataJob.run(events, query, streamFusion, backend, parallelism);
         return new RunResult(
                 System.nanoTime() - start,
+                StreamFusionPlannerFactory.nativePlanBatchCount(),
                 StreamFusionPlannerFactory.nativeCalcBatchCount(),
                 StreamFusionPlannerFactory.nativeDeduplicateBatchCount(),
                 StreamFusionPlannerFactory.nativeLocalGroupAggregateBatchCount(),
@@ -152,6 +154,7 @@ public final class LocalRowDataNexmarkBenchmark {
 
     static final class RunResult {
         private final long elapsedNanos;
+        private final long nativePlanBatches;
         private final long nativeCalcBatches;
         private final long nativeDeduplicateBatches;
         private final long nativeLocalGroupAggregateBatches;
@@ -179,6 +182,7 @@ public final class LocalRowDataNexmarkBenchmark {
 
         private RunResult(
                 long elapsedNanos,
+                long nativePlanBatches,
                 long nativeCalcBatches,
                 long nativeDeduplicateBatches,
                 long nativeLocalGroupAggregateBatches,
@@ -204,6 +208,7 @@ public final class LocalRowDataNexmarkBenchmark {
                 String materializedSha256,
                 List<String> materializedDebugRows) {
             this.elapsedNanos = elapsedNanos;
+            this.nativePlanBatches = nativePlanBatches;
             this.nativeCalcBatches = nativeCalcBatches;
             this.nativeDeduplicateBatches = nativeDeduplicateBatches;
             this.nativeLocalGroupAggregateBatches = nativeLocalGroupAggregateBatches;
@@ -236,6 +241,10 @@ public final class LocalRowDataNexmarkBenchmark {
 
         private double elapsedSeconds() {
             return elapsedNanos / 1_000_000_000.0;
+        }
+
+        long nativePlanBatches() {
+            return nativePlanBatches;
         }
 
         long nativeCalcBatches() {

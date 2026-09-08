@@ -26,6 +26,11 @@ public final class StreamFusionStateBackendFactory implements StateBackendFactor
             .stringType()
             .defaultValue(StateBackendLoader.HASHMAP_STATE_BACKEND_NAME);
 
+    static String configuredBackend(ReadableConfig configuration) {
+        String backend = configuration.get(StateBackendOptions.STATE_BACKEND);
+        return FACTORY_NAME.equals(backend) ? configuration.get(DELEGATE_BACKEND) : backend;
+    }
+
     public static void install(StreamExecutionEnvironment environment) {
         if (!(environment.getConfiguration() instanceof Configuration)) {
             throw new IllegalStateException("Flink execution configuration is not mutable");

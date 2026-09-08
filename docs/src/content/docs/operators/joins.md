@@ -5,9 +5,19 @@ sidebar:
   order: 9
 ---
 
-**Current status:** Temporarily uses whole-plan Flink fallback under the
-[architecture admission requirements](/StreamFusion/development/architecture-admission/). The native paths
-described below are retained for development and direct parity tests; SQL planning does not select them.
+**Current status:** Partial. Synchronous binary `INNER` joins represented by Flink's
+`StreamExecMultiJoin` use the shared native plan with the in-memory backend when their complete
+condition is covered by the common equi keys. Both inputs must use non-unique multiset state.
+Additional residual predicates, outer joins, TTL, mini-batching, async/changelog state, enabled
+state-latency metrics, and checkpointing during channel recovery retain whole-plan fallback.
+RocksDB remains on Flink pending equivalent default cache/write-buffer and database settings.
+Sources and sinks use the normal Arrow boundary adapters; join and downstream Calc exchange Arrow
+directly within one native plan. Generated changelog/metric, rescaling, checkpoint and channel replay
+tests cover this path. Q3 has passed ordinary in-memory admission and collecting/blackhole integration;
+release performance and the RocksDB checkpoint remain outstanding.
+
+All other join paths described below are retained for development and direct parity tests under
+[architecture admission](/StreamFusion/development/architecture-admission/).
 
 **Retained implementation scope:** Partial implementation for bounded hash/adaptive/sort-merge/nested-loop joins and for
 synchronous regular, multi-way, time-bounded, and temporal streaming joins.
@@ -102,14 +112,14 @@ inputs end. Duplicate rows, null join semantics, residual predicates, and all fo
 are supported. Terminal output is capped at 16,384 rows per Arrow batch, including for one hot
 cross-product key.
 
-Flink `StreamExecIntervalJoin` plans are accelerated for constant row-time or processing-time
+The retained `StreamExecIntervalJoin` implementation supports constant row-time or processing-time
 bounds and `INNER`, `LEFT`, `RIGHT`, or `FULL` joins. Both sides retain timestamp-ordered
 multisets in native keyed state. Native event-time or processing-time cleanup timers delay outer
 null rows until no future match can arrive, and retractions reverse both joined and previously
 emitted outer rows using Flink-compatible association counts. Keys and stored rows have the same
 complete Arrow-representable scalar and nested type coverage as regular joins.
 
-Flink `StreamExecTemporalJoin` plans are accelerated for event-time `INNER` and `LEFT` temporal
+The retained `StreamExecTemporalJoin` implementation supports event-time `INNER` and `LEFT` temporal
 table joins and processing-time `INNER` temporal table-function joins. Event-time probes retain
 their left changelog until the two-input watermark makes the version lookup final; processing-time
 probes read the current right version and honor Flink's idle-state retention interval. The native

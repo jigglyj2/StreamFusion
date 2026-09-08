@@ -6,8 +6,8 @@ description: The north-star Kafka-in/Kafka-out comparison.
 The north-star benchmark compares StreamFusion with native Flink using the Nexmark streaming workload. Both engines consume the same officially generated Nexmark events from Kafka and write results back to Kafka with exactly-once delivery.
 
 Current delivery follows [numbered query checkpoints](/StreamFusion/benchmarks/query-checkpoints/).
-Q0–Q2 have been rechecked for planner admission; Q3 is the next production target on both state
-backends. Performance results below are historical and do not imply current planner admission.
+Q0–Q2 have been rechecked for planner admission. Q3 now passes in-memory admission and parity;
+its RocksDB path and release performance checkpoint remain outstanding. Performance results below are historical and do not imply current planner admission.
 
 ## Benchmark matrix
 
@@ -65,8 +65,9 @@ binary MultiJoin), q9 (residual join plus Top-1), q11
 (event-time session aggregation), q19 (Top-N), q20 (regular join), q22 (URL directory extraction),
 and q23 (two regular joins). A deterministic `interval-join` workload exercises
 Flink's constant-bound event-time interval physical operator.
-This catalog is not production admission: current architecture gates still reject stateful plans,
-including Q3. The query checkpoint page records current selection separately from implementation.
+This catalog is not production admission. Q3's binary inner equi-join path is admitted with in-memory
+state; other stateful families and RocksDB retain their gates. The query checkpoint page records
+current selection separately from implementation.
 q13, q15, q16, and q17 still require an
 unsupported join shape or surrounding operator. q10
 uses unsupported `DATE_FORMAT`; q14 uses a Java UDF, mixed decimal
@@ -93,7 +94,7 @@ mvn -pl streamfusion-nexmark-benchmarks -am \
 
 `LocalRowDataNexmarkBenchmark` also accepts an event count, comma-separated query list, and an
 engine selector (`flink`, `streamfusion`, or `both`) for standalone measurements. It reports
-end-to-end elapsed time, input-event throughput, native calc batches, native group-aggregate
+end-to-end elapsed time, input-event throughput, shared native-plan batches, native calc batches, native group-aggregate
 batches, native local-group-aggregate batches, native window-aggregate batches, native Window Join
 batches, native regular-join batches,
 native multi-join batches, native interval-join batches, native temporal-join batches, native
@@ -101,6 +102,12 @@ OVER-aggregate batches, native Temporal Sort batches, native bounded full-Sort b
 counts plus SHA-256 hashes for the full result changelog and
 final materialized multiset. An additional ordered SHA-256 retains sink arrival order for operators
 whose ordering is semantic.
+`native_plan_batches` counts successfully opened streams at the shared native-plan edge, not
+logical records or individual stage invocations. A Calc inside a branching native tree does not
+invoke a Java Calc operator, so its execution must not be inferred from the legacy
+`native_calc_batches` counter alone. Use whole-plan EXPLAIN, the shared-edge counter, and native
+stage metrics together when checking acceleration. Legacy state-owner entry paths are not
+included in the shared-edge counter; their existing family diagnostics remain separately reported.
 Set `-Dstreamfusion.nexmark.batch-mode=true` to run the finite RowData source through Flink's
 bounded SQL planner. The harness disables periodic checkpoints in that mode. This is an execution-
 mode control applied identically to both engines; it does not create a StreamFusion-only runtime.

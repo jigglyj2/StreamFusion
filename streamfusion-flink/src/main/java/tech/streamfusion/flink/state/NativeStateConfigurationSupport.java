@@ -7,14 +7,13 @@ import java.util.Objects;
 import java.util.TreeMap;
 import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.configuration.ReadableConfig;
-import org.apache.flink.configuration.StateBackendOptions;
 
 /** Rejects backend settings whose behavior has not been implemented by the native state component. */
 public final class NativeStateConfigurationSupport {
     private NativeStateConfigurationSupport() {}
 
     public static String unsupportedReason(ReadableConfig config) {
-        String backend = config.get(StateBackendOptions.STATE_BACKEND);
+        String backend = StreamFusionStateBackendFactory.configuredBackend(config);
         if (backend.equals("hashmap")) return null;
         if (!backend.equals("rocksdb")) {
             return "state backend: native keyed regions do not support configured backend " + backend;

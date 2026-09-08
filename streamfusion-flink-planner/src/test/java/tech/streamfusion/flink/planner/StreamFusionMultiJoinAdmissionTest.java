@@ -32,21 +32,14 @@ class StreamFusionMultiJoinAdmissionTest {
     private final RexBuilder rex = new RexBuilder(types);
 
     @Test
-    void binaryJoinComposesWithCalcWhileRetainingItsPersistentStateGate() {
+    void binaryEquiJoinAndCalcSatisfyArchitectureAdmission() {
         var join = join(2, true);
         var root = new StreamExecCalc(config, List.of(ref(0)), null, InputProperty.DEFAULT, inputType, "projection");
         root.setInputEdges(List.of(ExecEdge.builder().source(join).target(root).build()));
         var graph = new ExecNodeGraph(List.of(root));
-        var original = root.getInputEdges().get(0);
         var reasons = new ArrayList<String>();
         StreamFusionArchitectureSupport.collect(graph, reasons);
-        assertThat(reasons).hasSize(1);
-        assertThat(String.join("\n", reasons))
-                .contains("retained-state/buffer admission")
-                .doesNotContain("fused native ExecutionPlan")
-                .doesNotContain("whole-key", "dirty-page", "fan-out is not yet drained");
-        assertThat(new StreamFusionExecGraphProcessor().process(graph, null)).isSameAs(graph);
-        assertThat(root.getInputEdges()).containsExactly(original);
+        assertThat(reasons).isEmpty();
     }
 
     @Test
@@ -78,7 +71,22 @@ class StreamFusionMultiJoinAdmissionTest {
         assertThat(String.join("\n", reasons)).contains("checkpoint/control lifecycle");
     }
 
+    @Test
+    void additionalPredicatesRetainThePersistentWorkspaceGate() {
+        var join = join(2, true, FlinkJoinType.INNER, true);
+        assertThat(FlinkExecNodeAccess.binaryMultiJoinSpec(join).getNonEquiCondition())
+                .isPresent();
+        var reasons = new ArrayList<String>();
+        StreamFusionArchitectureSupport.collect(new ExecNodeGraph(List.of(join)), reasons);
+        assertThat(reasons).hasSize(1);
+        assertThat(reasons.get(0)).contains("retained-state/buffer admission");
+    }
+
     private StreamExecMultiJoin join(int inputs, boolean equiKeys, FlinkJoinType type) {
+        return join(inputs, equiKeys, type, false);
+    }
+
+    private StreamExecMultiJoin join(int inputs, boolean equiKeys, FlinkJoinType type, boolean residual) {
         var joinTypes = new ArrayList<FlinkJoinType>();
         var conditions = new ArrayList<RexNode>();
         var properties = new ArrayList<InputProperty>();
@@ -86,7 +94,16 @@ class StreamFusionMultiJoinAdmissionTest {
         var attributes = new java.util.HashMap<Integer, List<ConditionAttributeRef>>();
         for (int index = 0; index < inputs; index++) {
             joinTypes.add(index == 0 ? FlinkJoinType.INNER : type);
-            conditions.add(index == 0 ? null : rex.makeCall(SqlStdOperatorTable.EQUALS, ref(0), ref(index)));
+            RexNode condition = index == 0 ? null : rex.makeCall(SqlStdOperatorTable.EQUALS, ref(0), ref(index));
+            if (index > 0 && residual)
+                condition = rex.makeCall(
+                        SqlStdOperatorTable.AND,
+                        condition,
+                        rex.makeCall(
+                                SqlStdOperatorTable.GREATER_THAN,
+                                ref(index),
+                                rex.makeExactLiteral(java.math.BigDecimal.ZERO)));
+            conditions.add(condition);
             properties.add(InputProperty.DEFAULT);
             uniqueKeys.add(List.of());
             if (index > 0 && equiKeys) attributes.put(index, List.of(new ConditionAttributeRef(0, 0, index, 0)));

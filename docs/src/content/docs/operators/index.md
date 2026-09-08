@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-This matrix follows the query operations documented by Flink 2.3, including the specialized operations with their own reference pages. Persistent native state and unverified native combinations are currently [gated during architecture completion](/StreamFusion/development/architecture-admission/). Support is conservative: an unsupported expression causes the containing Calc, and therefore the all-or-nothing StreamFusion plan, to remain on Flink.
+This matrix follows the query operations documented by Flink 2.3, including the specialized operations with their own reference pages. Most persistent native state and unverified native combinations are currently [gated during architecture completion](/StreamFusion/development/architecture-admission/). Support is conservative: an unsupported expression causes the containing Calc, and therefore the all-or-nothing StreamFusion plan, to remain on Flink.
 
 | Operator | Accelerated today? | Future acceleration target | Intended implementation |
 | --- | --- | --- | --- |
@@ -18,7 +18,7 @@ This matrix follows the query operations documented by Flink 2.3, including the 
 | [Group aggregation](group-aggregation/) | **Temporarily gated** (whole-plan Flink fallback) | Yes | Native keyed state and Arrow aggregate kernels |
 | [Window aggregation](window-aggregation/) | **Temporarily gated** (whole-plan Flink fallback) | Yes | Native keyed window state, timers, and Arrow aggregate kernels |
 | [OVER aggregation](over-aggregation/) | **Temporarily gated** (whole-plan Flink fallback) | Yes | Native ordered state, timers, absorbed batch sort, and aggregate kernels |
-| [Joins](joins/) | **Temporarily gated** (whole-plan Flink fallback) | By join type | Native keyed state, vectorized predicates, and timers |
+| [Joins](joins/) | **Partial** (binary inner equi MultiJoin; in-memory state) | By join type | Native keyed state, vectorized predicates, and timers |
 | [Window joins](window-join/) | **Temporarily gated** (whole-plan Flink fallback) | Yes | Native two-sided window state plus Flink join conditions |
 | [Set operations](set-operations/) | **Partial** (`UNION ALL`; stateful rewrites gated) | By physical rewrite | Arrow IPC at Flink multi-input gates; native aggregate/join state and row replication |
 | [Exchange](exchange/) | **Partial** (hash and singleton) | Yes | Native Flink-compatible key grouping with Flink-owned network transport |

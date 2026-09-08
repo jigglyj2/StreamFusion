@@ -121,7 +121,7 @@ final class StreamFusionArchitectureSupport {
                         + failure.getMessage());
             }
         }
-        if (persistent) {
+        if (persistent && !verifiedPersistentOwner(node)) {
             rejections.add(nodePath + "\narchitecture: native persistent state is temporarily disabled; "
                     + "large retained-state/buffer admission, Flink backend configuration parity, "
                     + "and checkpoint/metric conformance are not yet verified for this physical family");
@@ -157,6 +157,18 @@ final class StreamFusionArchitectureSupport {
             rejections.add(
                     path + "\narchitecture: could not determine native join implementation: " + failure.getMessage());
             return true;
+        }
+    }
+
+    private static boolean verifiedPersistentOwner(ExecNode<?> node) {
+        if (!(node instanceof StreamExecMultiJoin)) return false;
+        try {
+            var join = FlinkExecNodeAccess.binaryMultiJoinSpec((StreamExecMultiJoin) node);
+            // Generated comparisons cover the binary INNER multiset contract. Pure equi keys
+            // need no candidate-expression workspace. Backend readiness is checked separately.
+            return join != null && join.getNonEquiCondition().isEmpty();
+        } catch (RuntimeException unsupportedShape) {
+            return false;
         }
     }
 
