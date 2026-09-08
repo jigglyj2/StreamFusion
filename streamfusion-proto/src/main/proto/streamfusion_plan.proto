@@ -10,6 +10,32 @@ message NativePlan {
   Operator root = 2;
 }
 
+// Native DAG control contract. Version 1 uses the existing protocol-3 owned Arrow
+// envelope at every external input/output. Operator computation remains defined below.
+// Stages are in dependency order and each physical identity is defined exactly once.
+message NativeRegionPlan {
+  uint32 protocol_version = 1;
+  uint32 input_count = 2;
+  repeated NativeRegionStage stages = 3;
+  repeated uint64 output_stage_ids = 4;
+}
+
+message NativeRegionStage {
+  // One identified operator with anonymous, contiguous local Input slots. Nested
+  // physical stages are prohibited; dependencies are references, not copied subtrees.
+  Operator operator = 1;
+  repeated NativeRegionInputReference inputs = 2;
+}
+
+message NativeRegionInputReference {
+  oneof source {
+    // A distinct Flink channel port, used exactly once in the region contract.
+    uint32 external_input = 1;
+    // A previously defined stage. Repeated uses share its computation and Arrow buffers.
+    uint64 stage_id = 2;
+  }
+}
+
 message NativeExchangePlan {
   uint32 protocol_version = 1;
   Schema schema = 2;

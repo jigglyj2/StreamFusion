@@ -28,7 +28,7 @@ import tech.streamfusion.flink.StreamFusionPlannerFactory;
 @ResourceLock(Resources.SYSTEM_PROPERTIES)
 public class NativeReuseSqlLayoutTest {
     @Test
-    void reusedHopCountAndAttachedMaxHaveOneOwnerWithTwoExits() {
+    void reusedHopCountAndAttachedMaxHaveOneOwnerWithTwoExits() throws Exception {
         var factory = System.getProperty(StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY);
         var processor = System.getProperty(StreamFusionPlannerFactory.EXEC_GRAPH_PROCESSOR_PROPERTY);
         try {
@@ -79,6 +79,25 @@ public class NativeReuseSqlLayoutTest {
                 assertThat(layout.sharedInternalStages().keySet()).containsExactly(owner.stages.get(0));
                 assertThat(owner.stageInputs.get(1).get(0).index).isZero();
                 assertThat(owner.stageInputs.get(1).get(0).external).isFalse();
+                var contracts = new java.util.ArrayList<tech.streamfusion.proto.plan.v1.NativeRegionPlan>();
+                for (var bytes : Capture.plans)
+                    contracts.add(tech.streamfusion.proto.plan.v1.NativeRegionPlan.parseFrom(bytes));
+                var sharedPlans = contracts.stream()
+                        .filter(plan -> plan.getOutputStageIdsCount() == 2)
+                        .collect(java.util.stream.Collectors.toList());
+                assertThat(sharedPlans).hasSize(1);
+                var contract = sharedPlans.get(0);
+                assertThat(contract.getStagesCount()).isEqualTo(3);
+                assertThat(contract.getInputCount()).isEqualTo(1);
+                long sharedId = (1L << 32) | owner.stages.get(0).getId();
+                assertThat(contract.getStages(0).getOperator().getPlanNodeId()).isEqualTo(sharedId);
+                assertThat(contract.getStages(1).getInputs(0).getStageId()).isEqualTo(sharedId);
+                assertThat(contract.getOutputStageIds(0)).isEqualTo(sharedId);
+                assertThat(contract.getStages(0).getOperator().hasWindowAggregate())
+                        .isTrue();
+                assertThat(contract.getStages(2).getOperator().hasLocalWindowAggregate())
+                        .isTrue();
+
                 // Inspection did not replace or translate a second copy of the original operator.
                 assertThat(((ExecNodeBase<?>) owner.stages.get(0)).getTransformation())
                         .isNotNull();
@@ -91,6 +110,7 @@ public class NativeReuseSqlLayoutTest {
 
     public static final class Capture implements ExecNodeGraphProcessor {
         static StreamFusionNativeRegionLayout layout;
+        static List<byte[]> plans;
 
         @Override
         public ExecNodeGraph process(ExecNodeGraph graph, ProcessorContext context) {
@@ -102,6 +122,29 @@ public class NativeReuseSqlLayoutTest {
                     "StreamExecJoin");
             layout = StreamFusionNativeRegionLayout.discover(
                     graph, node -> names.contains(node.getClass().getSimpleName()));
+            // The test-only conversion helper commits retained source/sink boundary edges.
+            // Snapshot those edges so contract inspection does not accelerate this Flink run.
+            var edges = new java.util.IdentityHashMap<
+                    org.apache.flink.table.planner.plan.nodes.exec.ExecNode<?>,
+                    List<org.apache.flink.table.planner.plan.nodes.exec.ExecEdge>>();
+            var pending = new java.util.ArrayList<>(graph.getRootNodes());
+            while (!pending.isEmpty()) {
+                var node = pending.remove(pending.size() - 1);
+                if (edges.putIfAbsent(node, List.copyOf(node.getInputEdges())) != null) continue;
+                for (var edge : node.getInputEdges()) pending.add(edge.getSource());
+            }
+            try {
+                var selected = new StreamFusionExecGraphProcessor()
+                        .convert(graph.getRootNodes().get(0));
+                var selectedLayout = StreamFusionNativeRegionLayout.discover(
+                        new ExecNodeGraph(List.of(selected)), node -> node instanceof StreamFusionNativePlanNode);
+                selectedLayout.validateBoundaryGraph();
+                plans = selectedLayout.regions.stream()
+                        .map(region -> region.plan(context.getPlanner()))
+                        .collect(java.util.stream.Collectors.toList());
+            } finally {
+                edges.forEach((node, originalEdges) -> node.setInputEdges(originalEdges));
+            }
             return graph;
         }
     }

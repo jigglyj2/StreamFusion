@@ -106,6 +106,43 @@ final class StreamFusionNativeRegionLayout {
         final List<ExecNode<?>> outputs;
         final List<List<Reference>> stageInputs;
 
+        byte[] plan(org.apache.flink.table.planner.delegation.PlannerBase planner) {
+            var fragments = new ArrayList<byte[]>();
+            var identities = new ArrayList<Long>();
+            Map<ExecNode<?>, Long> ids = new IdentityHashMap<>();
+            for (var node : stages) {
+                if (!(node instanceof StreamFusionNativePlanNode))
+                    throw new IllegalStateException("Region protobuf requires selected native physical stages");
+                var nativeNode = (StreamFusionNativePlanNode) node;
+                var metadata = nativeNode.nativeMetadata();
+                int physicalId = metadata.physicalNodeId(node);
+                long id = (1L << 32) | Integer.toUnsignedLong(physicalId);
+                identities.add(id);
+                ids.put(node, id);
+                fragments.add(tech.streamfusion.flink.operator.StreamFusionNativeRegionTranslator.identifyStage(
+                        nativeNode.nativePlanFragment(planner),
+                        physicalId,
+                        metadata.metricName(node, planner.getTableConfig()),
+                        metadata.metricUid(planner.getTableConfig())));
+            }
+            var references = new ArrayList<List<tech.streamfusion.proto.plan.v1.NativeRegionInputReference>>();
+            for (var inputs : stageInputs) {
+                var stage = new ArrayList<tech.streamfusion.proto.plan.v1.NativeRegionInputReference>();
+                for (var input : inputs) {
+                    var reference = tech.streamfusion.proto.plan.v1.NativeRegionInputReference.newBuilder();
+                    if (input.external) reference.setExternalInput(input.index);
+                    else reference.setStageId(identities.get(input.index));
+                    stage.add(reference.build());
+                }
+                references.add(List.copyOf(stage));
+            }
+            return tech.streamfusion.flink.operator.NativeRegionPlanComposer.compose(
+                    this.inputs.size(),
+                    fragments,
+                    references,
+                    outputs.stream().map(ids::get).collect(java.util.stream.Collectors.toList()));
+        }
+
         private Region(
                 List<ExecNode<?>> stages,
                 Map<ExecNode<?>, List<Use>> uses,

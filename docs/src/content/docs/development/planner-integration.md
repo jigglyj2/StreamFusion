@@ -172,6 +172,17 @@ local MAX, with one shared owner and two exits. Synthetic DAG tests cover reconv
 repeated roots, and repeated input references. Fusion that would make a region consume its own
 output through a Flink exchange/control boundary is rejected with an EXPLAIN reason.
 
+The version-1 `NativeRegionPlan` protobuf now represents the selected layout as a flat list of
+identified operators and explicit input references. Each operator fragment contains only anonymous
+local input slots; repeated stage references share one physical definition. Ordered output IDs
+can name an intermediate stage. Every external reference identifies a distinct Flink channel.
+The existing protocol-3 owned Arrow envelope is required at region edges; protobuf carries only
+the control plan. Java composition and Rust decoding reject duplicate identities, missing or
+forward references, unused channels, unreachable stages, and malformed fragments. Rust reserves
+the decoded graph under one coarse Flink memory-pool reservation before decoding. A shared wire
+fixture and generated SQL layouts check both implementations. This contract does not yet lower
+or execute a multi-output region.
+
 This layout is currently used for ownership admission. Executing multiple exits still requires
 integration of native fan-out, output transport, and corresponding control/metric/recovery handling; the
 multi-output fallback gate remains active. Comet retains Spark's exchange reuse, while Flink can

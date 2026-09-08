@@ -33,6 +33,11 @@ impl PlanMemory {
         estimate.message(bytes, ROOT, 0)?;
         Ok(estimate)
     }
+    pub(crate) fn scan_region(bytes: &[u8]) -> Result<Self> {
+        let mut estimate = Self::default();
+        estimate.message(bytes, REGION_ROOT, 0)?;
+        Ok(estimate)
+    }
     pub(crate) fn decoded(&self) -> Result<usize> {
         self.total(1)
     }

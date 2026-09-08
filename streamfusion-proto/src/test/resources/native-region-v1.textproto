@@ -1,0 +1,30 @@
+# Contract fixture: one shared Calc, then two downstream Calcs; two distinct exits.
+# Regenerate with protoc --encode=streamfusion.plan.v1.NativeRegionPlan
+# using src/main/proto/streamfusion_plan.proto.
+protocol_version: 1
+input_count: 1
+stages {
+  operator { plan_node_id: 4294967301 metric_name: "shared" calc {
+    input { input {} }
+    projections { input_reference { index: 0 } }
+    preserve_input_envelope: true
+  } }
+  inputs { external_input: 0 }
+}
+stages {
+  operator { plan_node_id: 4294967302 metric_name: "branch" calc {
+    input { input {} }
+    projections { input_reference { index: 0 } }
+    preserve_input_envelope: true
+  } }
+  inputs { stage_id: 4294967301 }
+}
+stages {
+  operator { plan_node_id: 4294967303 metric_name: "exit" calc {
+    input { input {} }
+    projections { input_reference { index: 0 } }
+    preserve_input_envelope: true
+  } }
+  inputs { stage_id: 4294967302 }
+}
+output_stage_ids: [4294967301, 4294967303]

@@ -16,6 +16,7 @@ use crate::{decode_plan, proto};
 mod expressions;
 pub(crate) mod operators;
 pub(crate) mod persistent;
+pub(crate) mod region;
 pub(crate) mod schema_memory;
 
 pub(crate) fn arrow_schema(schema: &proto::Schema) -> Result<arrow::datatypes::SchemaRef> {

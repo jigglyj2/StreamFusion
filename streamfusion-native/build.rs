@@ -62,6 +62,12 @@ fn main() {
         .position(|message| message.name() == "NativePlan")
         .unwrap();
     generated.push_str(&format!("const ROOT: usize = {root};\n"));
+    let region_root = file
+        .message_type
+        .iter()
+        .position(|message| message.name() == "NativeRegionPlan")
+        .unwrap();
+    generated.push_str(&format!("const REGION_ROOT: usize = {region_root};\n"));
     let output = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
     std::fs::write(output.join("plan_memory_layout.rs"), generated)
         .expect("write plan admission metadata");
