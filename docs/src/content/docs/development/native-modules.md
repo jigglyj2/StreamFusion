@@ -28,10 +28,41 @@ and macOS runners and assembles them into a platform resource JAR:
 | macOS x86-64 | Native feature set of the Intel macOS release runner |
 | macOS ARM64 | Native feature set of the Apple Silicon release runner |
 
-The Linux x86-64 loader reads the host CPU flags and tries v4, v3, then v2. It never
-loads a binary above the detected ISA level. macOS and Linux ARM64 select by operating
-system and architecture. Each resource includes build metadata declaring its Rust
-`target-cpu`; release artifacts include a SHA-256 checksum.
+The loader verifies each library's own CPU metadata and SHA-256 before loading it. It tries
+an eligible native build, followed by eligible v4, v3 and v2 artifacts on Linux x86-64.
+Portable variants require the complete declared feature set, including inherited baseline
+features. Native builds additionally require the recorded CPU identity and all build-host
+features on every worker processor. This is deliberately conservative: a different CPU model
+may need a portable variant or a new native build even if some instruction sets overlap.
+Linux ARM64 and macOS native resources have the same identity/feature checks. Missing metadata,
+unknown metadata versions, mismatched checksums and incompatible CPUs are rejected.
+
+The optional RocksDB Maven module packages its own Linux x86-64 library and CPU metadata;
+it is not included in the core platform JAR. Its planner preflight reports a specific
+whole-plan fallback reason for a missing or incompatible component. Workers repeat validation
+before opening native state. A worker incompatible with the submitted plan fails initialization
+and uses Flink's normal failure handling; Java cannot replan an already deployed task locally.
+Use an artifact compatible with every assigned worker.
+
+Maven and the release workflow build through `dev/native/artifact.py`. This wrapper always
+uses release optimization, frame pointers and profiling symbols, and writes metadata only
+after a successful build. CPU requirements also enter the Cargo fingerprint so a cache moved
+between native build hosts cannot silently retain another machine's code. Direct Cargo builds
+remain useful for Rust unit tests, but JVM execution requires the matching artifact metadata.
+For a focused local rebuild before Java tests with `-Dexec.skip=true`:
+
+```bash
+python3 dev/native/artifact.py --manifest streamfusion-state-rocksdb/Cargo.toml \
+  --target-dir streamfusion-state-rocksdb/target/rust --library libstreamfusion_state_rocksdb.so
+python3 dev/native/artifact.py --manifest streamfusion-native/Cargo.toml \
+  --target-dir streamfusion-native/target/rust --library libstreamfusion_native.so
+```
+
+The wrapper owns compiler-target flags; remove external `RUSTFLAGS`, target overrides or
+prebuilt RocksDB/Snappy library overrides. `--cpu x86-64-v2`, `x86-64-v3` and `x86-64-v4`
+select portable Linux x86-64 build targets. These are build controls, not runtime options.
+Copy a library together with its adjacent `.properties` file when preparing an isolated
+benchmark checkout. Mixing metadata from another build fails its checksum check.
 
 This follows Comet's platform-specific `.so`/`.dylib` resource packaging while making
 x86 SIMD baselines explicit. These expensive variants run only for a manually invoked

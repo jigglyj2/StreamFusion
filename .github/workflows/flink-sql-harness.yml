@@ -53,15 +53,16 @@ jobs:
           -pl flink-table/flink-table-api-java-uber,flink-table/flink-table-planner
           -am
 
+      - name: Check native artifact build contracts
+        run: python3 -m unittest discover -s dev/native -p 'test_*.py'
+
       - name: Build native libraries for JVM tests
         shell: bash
         run: |
-          RUSTFLAGS="-C target-cpu=native -C force-frame-pointers=yes -C debuginfo=1" \
-            CARGO_TARGET_DIR="$PWD/streamfusion-state-rocksdb/target/rust" \
-            cargo build --manifest-path streamfusion-state-rocksdb/Cargo.toml --release --locked
-          RUSTFLAGS="-C target-cpu=native -C force-frame-pointers=yes -C debuginfo=1" \
-            CARGO_TARGET_DIR="$PWD/streamfusion-native/target/rust" \
-            cargo build --manifest-path streamfusion-native/Cargo.toml --release --locked
+          python3 dev/native/artifact.py --manifest streamfusion-state-rocksdb/Cargo.toml \
+            --target-dir streamfusion-state-rocksdb/target/rust --library libstreamfusion_state_rocksdb.so
+          python3 dev/native/artifact.py --manifest streamfusion-native/Cargo.toml \
+            --target-dir streamfusion-native/target/rust --library libstreamfusion_native.so
 
       - name: Prepare Maven reactor artifacts
         run: >-

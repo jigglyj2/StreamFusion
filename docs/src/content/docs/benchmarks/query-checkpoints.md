@@ -10,18 +10,19 @@ An implemented native kernel is not an unlocked query.
 Performance work uses the [RowData-to-blackhole harness](/StreamFusion/benchmarks/rowdata-blackhole/),
 with separate collecting-sink runs for parity. The blackhole path has passed Q0–Q2 admission
 and native-activity integration checks with both backend settings after the sortable-state
-changes. Q3 now passes ordinary in-memory admission, complete collected-changelog comparison,
-and native-activity checks through blackhole. RocksDB Q3 still falls back with the specific
-native-library CPU compatibility requirement. Its accelerated benchmark refuses that run.
+changes. Q3 now passes ordinary admission, complete collected-changelog comparison,
+and native-activity checks through blackhole with in-memory and default RocksDB state.
+Incompatible native artifacts or unsupported backend options retain whole-plan fallback.
 These short integration runs are not performance measurements.
 
 ## Current checkpoint
 
-Q3 is partially delivered: its synchronous binary inner equi-join path is admitted on the
-in-memory backend. The 10,000-event, parallelism-four integration run matches Flink's complete
+Q3 is partially delivered: its synchronous binary inner equi-join path is admitted on both
+in-memory and default RocksDB backends. The 10,000-event, parallelism-four integration run matches Flink's complete
 sorted changelog bytes/hash and observes native plan batches. The source-to-blackhole variant
 also executes natively. This is correctness/admission evidence, not a release throughput result.
-RocksDB admission and release measurements/profiles remain required before moving to Q4.
+In-memory release measurements and profiles are documented in the RowData benchmark.
+RocksDB release measurements/profiles remain required before moving to Q4.
 
 ## Initial diagnostic baseline
 
@@ -54,8 +55,9 @@ The actual RowData Q3 plan uses Flink's binary `StreamExecMultiJoin` for the auc
 The existing semantic lowering can represent that binary shape as the native regular join;
 it must not be confused with the separate native multi-way join algorithm. The early architecture
 gate uses the same binary-shape decision as semantic lowering. The verified pure equi subset
-is admitted with in-memory state. Additional residuals retain the persistent-state restriction;
-RocksDB retains its backend-specific default-configuration restriction. Genuine multi-way and
+is admitted with in-memory and default RocksDB state. Additional residuals retain the
+persistent-state restriction; non-default RocksDB settings and incompatible native artifacts
+retain their specific backend restrictions. Genuine multi-way and
 non-lowerable binary shapes still require their paged-state/output cursor to join the common
 execution, metric and checkpoint lifecycle.
 

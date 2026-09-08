@@ -4,6 +4,7 @@ package tech.streamfusion.flink.state;
 import org.apache.flink.configuration.CheckpointingOptions;
 import org.apache.flink.configuration.ReadableConfig;
 import tech.streamfusion.flink.metrics.NativeStateMetricSupport;
+import tech.streamfusion.nativebridge.NativeStateResources;
 
 /** Common configuration and metric preflight before any native keyed region is selected. */
 public final class NativeStateSupport {
@@ -18,8 +19,8 @@ public final class NativeStateSupport {
             return "state backend: native keyed regions have not verified checkpointing during channel recovery";
         }
         if (StreamFusionStateBackendFactory.configuredBackend(config).equals("rocksdb")) {
-            return "state backend: native RocksDB artifact CPU compatibility "
-                    + "is not yet enforced; retain Flink until its native library has a verified CPU baseline";
+            reason = NativeStateResources.rocksDbUnsupportedReason();
+            if (reason != null) return "state backend: " + reason;
         }
         return null;
     }

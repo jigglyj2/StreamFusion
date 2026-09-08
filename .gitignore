@@ -6,3 +6,4 @@ streamfusion-native/target/
 docs/.astro/
 docs/dist/
 docs/node_modules/
+dev/native/__pycache__/

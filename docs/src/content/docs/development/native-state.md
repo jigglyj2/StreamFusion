@@ -3,9 +3,9 @@ title: Native keyed state
 description: Backend contract, checkpoint formats, and implementation references for native operators.
 ---
 
-The binary inner equi `StreamExecMultiJoin` path is admitted with in-memory state under
+The binary inner equi `StreamExecMultiJoin` path is admitted with in-memory and default RocksDB state under
 [architecture admission](/StreamFusion/development/architecture-admission/). Other persistent
-families and RocksDB-backed plans retain whole-plan Flink fallback. The implementation details
+families retain whole-plan Flink fallback. The implementation details
 below distinguish this verified path from retained code and its target memory contract.
 
 Native keyed-region preflight now rejects non-default Flink RocksDB options that the component
@@ -15,8 +15,8 @@ resolves Flink's typed options and aliases before graph replacement; it does not
 native defaults. Ordinary Flink managed-memory size/consumer weights and incremental-checkpoint
 selection remain configurable. RocksDB-specific options do not reject an in-memory backend.
 This configuration guard supplements the existing metric and physical-family admission gates;
-it does not establish default-option parity. A separate production guard keeps RocksDB on Flink
-until its independently packaged library enforces CPU compatibility. The guard resolves
+default settings have separate runtime conformance coverage. A component guard checks the
+packaged RocksDB library's CPU compatibility and checksum before admission. The guard resolves
 the user's original backend even after the internal wrapper is installed, so repeated planning
 does not mistake that wrapper for a new backend. Checkpointing during channel recovery remains
 unsupported; ordinary aligned/unaligned recovery uses the tested non-overlapping lifecycle.
@@ -65,7 +65,8 @@ libraries must implement ABI 8. Closing a database removes only its current and 
 files after RocksDB closes its logger. Unlike Flink's broad prefix cleanup, neighboring database
 names are preserved; this narrows cleanup ownership without changing execution or checkpoint
 semantics. Cross-backend lifecycle tests exercise relocated logs and exact state restoration.
-The remaining RocksDB production gate concerns CPU compatibility of packaged native artifacts.
+Default RocksDB configuration is now admitted for the verified binary inner equi-join subset.
+Packaged libraries enforce their CPU requirements; see [Native modules and ABI](/StreamFusion/development/native-modules/).
 
 ## Shared native-plan state bindings
 

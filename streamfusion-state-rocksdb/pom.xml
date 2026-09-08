@@ -30,17 +30,16 @@
                         <phase>generate-resources</phase>
                         <goals><goal>exec</goal></goals>
                         <configuration>
-                            <executable>cargo</executable>
+                            <executable>python3</executable>
                             <arguments>
-                                <argument>build</argument>
-                                <argument>--release</argument>
-                                <argument>--locked</argument>
+                                <argument>${project.parent.basedir}/dev/native/artifact.py</argument>
+                                <argument>--manifest</argument>
+                                <argument>${project.basedir}/Cargo.toml</argument>
+                                <argument>--target-dir</argument>
+                                <argument>${project.build.directory}/rust</argument>
+                                <argument>--library</argument>
+                                <argument>libstreamfusion_state_rocksdb.so</argument>
                             </arguments>
-                            <environmentVariables>
-                                <CARGO_TARGET_DIR>${project.build.directory}/rust</CARGO_TARGET_DIR>
-                                <CARGO_BUILD_JOBS>4</CARGO_BUILD_JOBS>
-                                <RUSTFLAGS>-C target-cpu=native -C force-frame-pointers=yes -C debuginfo=1</RUSTFLAGS>
-                            </environmentVariables>
                         </configuration>
                     </execution>
                     <execution>
@@ -69,6 +68,7 @@
                 <targetPath>META-INF/native/linux-x86_64</targetPath>
                 <includes>
                     <include>libstreamfusion_state_rocksdb.so</include>
+                    <include>libstreamfusion_state_rocksdb.so.properties</include>
                 </includes>
             </resource>
         </resources>

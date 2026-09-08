@@ -15,6 +15,11 @@ import tech.streamfusion.proto.plan.v1.NativeStateBindings;
 public final class NativeStateResources {
     private NativeStateResources() {}
 
+    /** Validates the optional component before planner replacement and again on each worker. */
+    public static String rocksDbUnsupportedReason() {
+        return NativeRocksDbLibrary.unsupportedReason();
+    }
+
     public static NativeStateBinding memory(long nodeId, int maxParallelism, int first, int last) {
         return binding(nodeId, maxParallelism, first, last)
                 .setMemory(NativeMemoryState.getDefaultInstance())

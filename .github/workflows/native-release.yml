@@ -66,9 +66,10 @@ jobs:
 
       - name: Build optimized native library
         shell: bash
-        env:
-          RUSTFLAGS: -C target-cpu=${{ matrix.target_cpu }}
-        run: cargo build --manifest-path streamfusion-native/Cargo.toml --release --locked
+        run: >-
+          python3 dev/native/artifact.py --manifest streamfusion-native/Cargo.toml
+          --target-dir streamfusion-native/target --library ${{ matrix.library }}
+          --cpu ${{ matrix.target_cpu }}
 
       - name: Stage platform resource
         shell: bash
@@ -76,6 +77,7 @@ jobs:
           resource_dir="native-stage/META-INF/native/${{ matrix.os }}/${{ matrix.arch }}/${{ matrix.tier }}"
           mkdir -p "$resource_dir"
           cp "streamfusion-native/target/release/${{ matrix.library }}" "$resource_dir/"
+          cp "streamfusion-native/target/release/${{ matrix.library }}.properties" "$resource_dir/"
           printf '%s\n' \
             'os=${{ matrix.os }}' \
             'arch=${{ matrix.arch }}' \

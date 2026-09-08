@@ -357,7 +357,7 @@ class LocalRowDataNexmarkBenchmarkIT {
 
     @ParameterizedTest
     @ValueSource(strings = {"hashmap", "rocksdb"})
-    void q3MatchesFlinkWithNativeInMemoryAndExplicitRocksDbFallback(String backend) throws Exception {
+    void q3MatchesFlinkWithNativeStateOnBothBackends(String backend) throws Exception {
         LocalRowDataNexmarkBenchmark.RunResult flink = LocalRowDataNexmarkBenchmark.run(1_000, "q3", false, backend, 4);
         LocalRowDataNexmarkBenchmark.RunResult streamFusion =
                 LocalRowDataNexmarkBenchmark.run(1_000, "q3", true, backend, 4);
@@ -366,14 +366,8 @@ class LocalRowDataNexmarkBenchmarkIT {
         assertThat(streamFusion.debugRows()).containsExactlyElementsOf(flink.debugRows());
         assertThat(streamFusion.outputRows()).isEqualTo(flink.outputRows());
         assertThat(streamFusion.outputSha256()).isEqualTo(flink.outputSha256());
-        if (backend.equals("hashmap")) {
-            assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
-            assertThat(streamFusion.nativePlanBatches()).isPositive();
-        } else {
-            assertThat(StreamFusionPlanningDiagnostics.explain())
-                    .contains("Accelerated: no", "artifact CPU compatibility");
-            assertThat(streamFusion.nativePlanBatches()).isZero();
-        }
+        assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
+        assertThat(streamFusion.nativePlanBatches()).isPositive();
     }
 
     @ParameterizedTest

@@ -6,15 +6,17 @@ sidebar:
 ---
 
 **Current status:** Partial. Synchronous binary `INNER` joins represented by Flink's
-`StreamExecMultiJoin` use the shared native plan with the in-memory backend when their complete
+`StreamExecMultiJoin` use the shared native plan with in-memory or default RocksDB state when their complete
 condition is covered by the common equi keys. Both inputs must use non-unique multiset state.
 Additional residual predicates, outer joins, TTL, mini-batching, async/changelog state, enabled
 state-latency metrics, and checkpointing during channel recovery retain whole-plan fallback.
-RocksDB remains on Flink pending enforced CPU compatibility for its packaged native library.
+RocksDB requires its optional native component, a compatible verified CPU artifact, and supported
+default backend settings. Unsupported settings retain their precise fallback reason.
 Sources and sinks use the normal Arrow boundary adapters; join and downstream Calc exchange Arrow
 directly within one native plan. Generated changelog/metric, rescaling, checkpoint and channel replay
-tests cover this path. Q3 has passed ordinary in-memory admission and collecting/blackhole integration;
-release performance and the RocksDB checkpoint remain outstanding.
+tests cover this path. Q3 passes ordinary admission and collecting/blackhole integration on both
+backends. Its in-memory release comparison is documented in the RowData benchmark; the RocksDB
+release measurements and profiles remain outstanding.
 
 All other join paths described below are retained for development and direct parity tests under
 [architecture admission](/StreamFusion/development/architecture-admission/).
