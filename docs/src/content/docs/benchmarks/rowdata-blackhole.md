@@ -30,7 +30,10 @@ A StreamFusion measurement fails when preflight reports fallback or execution re
 plan batches. It never labels a fallback timing as accelerated performance.
 
 `NEXMARK_BLACKHOLE` reports end-to-end wall time, including table setup, planning preflight, local
-cluster startup, execution, and cleanup. Input-event throughput divides the configured source
+cluster startup, native artifact initialization for StreamFusion, execution, and cleanup.
+Diagnostic counter reads/resets are Java-only and do not load StreamFusion into the Flink
+baseline. JVM process launch and argument parsing are outside the reported timer; the runner
+retains separate whole-process wall times. Input-event throughput divides the configured source
 event count by that time; it is neither output-row throughput nor a steady-state measurement.
 It also reports runtime mode, mini-batching, backend, parallelism, and native invocation counts.
 
@@ -42,6 +45,11 @@ Q0–Q2 are stateless, so their RocksDB-labelled runs do not measure RocksDB sta
 See [query checkpoints](/StreamFusion/benchmarks/query-checkpoints/) for current admission.
 
 ## Q3 in-memory measurements, September 7, 2026
+
+These historical tables predate the diagnostic-counter timing correction. The counter reset
+initialized StreamFusion's core library in both engines before the reported timer started.
+They compare job setup and execution after that initialization; they are not cold native-startup
+comparisons. Corrected measurements and profiles are required before the Q3 delivery checkpoint.
 
 Commit `2a73881b` restores consumed-field projection at the RowData source edge of common
 native regions. This is a general projection optimization; the query SQL and join algorithm

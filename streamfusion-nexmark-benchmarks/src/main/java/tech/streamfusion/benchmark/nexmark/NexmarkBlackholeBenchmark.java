@@ -3,6 +3,7 @@ package tech.streamfusion.benchmark.nexmark;
 import java.util.Locale;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
 import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
+import tech.streamfusion.nativebridge.NativeExecutionDiagnostics;
 
 /** One engine/query/backend per JVM, using Flink's unmodified blackhole connector. */
 public final class NexmarkBlackholeBenchmark {
@@ -26,8 +27,8 @@ public final class NexmarkBlackholeBenchmark {
             throw new IllegalArgumentException("mode must be run or explain: " + mode);
         }
         boolean nativeEngine = engines.get(0);
-        StreamFusionPlannerFactory.resetMetrics();
         long started = System.nanoTime();
+        NativeExecutionDiagnostics.reset();
         NexmarkRowDataJob.runBlackhole(
                 events, query, nativeEngine, backends.get(0), parallelism, mode.equals("explain"));
         double elapsed = (System.nanoTime() - started) / 1_000_000_000.0;

@@ -21,8 +21,10 @@ Q3 is partially delivered: its synchronous binary inner equi-join path is admitt
 in-memory and default RocksDB backends. The 10,000-event, parallelism-four integration run matches Flink's complete
 sorted changelog bytes/hash and observes native plan batches. The source-to-blackhole variant
 also executes natively. This is correctness/admission evidence, not a release throughput result.
-In-memory release measurements and profiles are documented in the RowData benchmark.
-RocksDB release measurements/profiles remain required before moving to Q4.
+Historical in-memory release measurements and profiles are documented in the RowData benchmark.
+The diagnostic-counter correction now includes native initialization in StreamFusion's timer
+and keeps the Flink baseline from loading StreamFusion libraries. Corrected release comparisons
+and profiles on both backends remain required before moving to Q4.
 
 ## Initial diagnostic baseline
 

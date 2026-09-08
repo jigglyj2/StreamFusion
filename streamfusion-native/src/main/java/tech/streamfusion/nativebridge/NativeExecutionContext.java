@@ -14,7 +14,7 @@ import java.util.Objects;
 /** Task-scoped native plan, runtime, and DataFusion memory-pool owner. */
 public final class NativeExecutionContext implements AutoCloseable {
     private static final java.util.concurrent.atomic.AtomicLong OPENED_STREAMS =
-            new java.util.concurrent.atomic.AtomicLong();
+            NativeExecutionDiagnostics.PLAN_STREAMS;
 
     static {
         NativeLibraryLoader.load();

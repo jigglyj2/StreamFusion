@@ -13,7 +13,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /** JNI boundary for vectorized native calc execution. */
 public final class NativeCalcBridge {
-    private static final AtomicLong EXECUTED_BATCHES = new AtomicLong();
+    private static final AtomicLong EXECUTED_BATCHES = NativeExecutionDiagnostics.CALC_BATCHES;
 
     static {
         NativeLibraryLoader.load();
