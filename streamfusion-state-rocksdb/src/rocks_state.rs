@@ -42,6 +42,8 @@ pub struct RocksStateBackend {
     _shared_memory: Arc<SharedRocksMemory>,
     first_key_group: u32,
     last_key_group: u32,
+    // Drop after DB: RocksDB must finish logging before its owned log files are removed.
+    _logs: crate::log_directory::LogDirectory,
 }
 
 struct SharedRocksMemory {
@@ -74,6 +76,24 @@ impl RocksStateBackend {
         memory_limit: usize,
         scope: [u64; 2],
     ) -> Result<Self> {
+        Self::open_configured(
+            path,
+            first_key_group,
+            last_key_group,
+            memory_limit,
+            scope,
+            None,
+        )
+    }
+
+    pub(crate) fn open_configured(
+        path: &Path,
+        first_key_group: u32,
+        last_key_group: u32,
+        memory_limit: usize,
+        scope: [u64; 2],
+        log_directory: Option<&Path>,
+    ) -> Result<Self> {
         if first_key_group > last_key_group {
             return Err(Error::new(
                 ErrorKind::InvalidInput,
@@ -88,6 +108,15 @@ impl RocksStateBackend {
         }
         let shared_memory = shared_rocks_memory(memory_limit, scope)?;
         let mut options = crate::flink_options::base_options().map_err(rocks_error)?;
+        if let Some(directory) = log_directory {
+            if !directory.is_absolute() || !path.is_absolute() {
+                return Err(Error::new(
+                    ErrorKind::InvalidInput,
+                    "relocated RocksDB logs require absolute paths",
+                ));
+            }
+            options.set_db_log_dir(directory);
+        }
         let mut table_options = BlockBasedOptions::default();
         table_options.set_block_size(4096);
         table_options.set_metadata_block_size(4096);
@@ -110,6 +139,7 @@ impl RocksStateBackend {
             _shared_memory: shared_memory,
             first_key_group,
             last_key_group,
+            _logs: crate::log_directory::LogDirectory::new(path, log_directory),
         })
     }
 

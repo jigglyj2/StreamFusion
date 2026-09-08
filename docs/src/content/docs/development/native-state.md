@@ -16,7 +16,7 @@ native defaults. Ordinary Flink managed-memory size/consumer weights and increme
 selection remain configurable. RocksDB-specific options do not reject an in-memory backend.
 This configuration guard supplements the existing metric and physical-family admission gates;
 it does not establish default-option parity. A separate production guard keeps RocksDB on Flink
-until its TaskManager log-directory settings are equivalent. The guard resolves
+until its independently packaged library enforces CPU compatibility. The guard resolves
 the user's original backend even after the internal wrapper is installed, so repeated planning
 does not mistake that wrapper for a new backend. Checkpointing during channel recovery remains
 unsupported; ordinary aligned/unaligned recovery uses the tested non-overlapping lifecycle.
@@ -39,8 +39,7 @@ rotation limits, disabled statistics dumps, level-compaction sizing and periodic
 interval. Closing the native database skips the redundant memtable flush, as Flink does with
 WAL-disabled state: checkpoints establish durability. Tests inspect the opened database's
 persisted OPTIONS file and verify both the absence of shutdown-created SSTs and successful
-restore from a physical checkpoint. Flink log-directory relocation still requires equivalent runtime handling; this prerequisite
-keeps the RocksDB production gate in place.
+restore from a physical checkpoint.
 
 The shared pools now use Flink's default sizing formula: five sixths of the assigned lease
 for the LRU cache and one third for the write-buffer manager, which charges its entries to
@@ -58,6 +57,16 @@ validated setter and preserves upstream shared cache/WBM ownership. It does not 
 RocksDB's execution algorithms. The retained patch and source provenance are in
 `streamfusion-state-rocksdb/vendor/rocksdb/VENDOR.md`.
 
+Default log relocation is now resolved in the TaskManager JVM using Flink's `log.file`
+property, readable-file checks and database-path length limit. Tests compare this resolution
+with Flink's actual `RocksDBResourceContainer`. The resolved path crosses state-binding protocol
+2 and state-component ABI 8; legacy bindings without relocation still use protocol 1. Both
+libraries must implement ABI 8. Closing a database removes only its current and rotated log
+files after RocksDB closes its logger. Unlike Flink's broad prefix cleanup, neighboring database
+names are preserved; this narrows cleanup ownership without changing execution or checkpoint
+semantics. Cross-backend lifecycle tests exercise relocated logs and exact state restoration.
+The remaining RocksDB production gate concerns CPU compatibility of packaged native artifacts.
+
 ## Shared native-plan state bindings
 
 The common Java `NativeExecutionContext` accepts a separate, versioned `NativeStateBindings`
@@ -72,8 +81,9 @@ owners (currently 8 per shared streaming owner). Fusion therefore preserves thei
 in Flink's allocation calculation, independently of the number of external inputs. The runtime
 still uses one Flink-assigned allowance and one shared RocksDB memory lease.
 
-Deduplication, regular-join, and streaming raw/global group-aggregate constructors currently implement this shared contract. The
-per-family code constructs state and provides snapshot/restore/checkpoint methods; recursive
+Deduplication, regular-join, and streaming raw/global group-aggregate constructors currently implement this shared contract. A
+common constructor configures the backend once and passes it to each family, which provides
+snapshot/restore/checkpoint methods; recursive
 physical lowering, Arrow stream execution, and node-addressed control dispatch are shared.
 Canonical snapshots remain independently addressable by `(plan_node_id, key_group)` so merging
 native regions does not merge their SQL state namespaces. Snapshot and restore cannot race an
@@ -209,7 +219,7 @@ Keys are prefixed or partitioned by the key group computed with StreamFusion's F
 Rust key-group logic. This makes key-group ownership independent of the backend and lets Flink's
 normal redistribution assign intersections during rescaling.
 
-State component ABI version 7 transports read results and owned mutation keys/values as Arrow
+State component ABI version 8 transports read results and owned mutation keys/values as Arrow
 `BinaryView` arrays. Large payloads retain producer-owned buffers across the C Data boundary;
 the runtime does not concatenate mutations or copy every returned value into a second byte
 vector. Inline values use Arrow's standard short-value representation. Runtime and plugin ABI

@@ -10,6 +10,7 @@ use crate::memory_pool::{tests_support::TestBroker, HostMemoryReservation};
 const LIMIT: usize = 32 << 20;
 
 mod lifecycle;
+mod log_configuration;
 
 fn plans() -> Vec<proto::NativePlan> {
     let input = Some(Box::new(proto::Operator {
@@ -179,6 +180,7 @@ fn later_factory_failure_releases_already_constructed_state_and_allows_retry() {
         // Validation succeeds and the first owner is created; opening the second plugin fails.
         invalid.bindings[1].backend = Some(proto::native_state_binding::Backend::Rocksdb(
             proto::NativeRocksDbState {
+                log_directory: None,
                 plugin_path: directory.path().join("missing.so").to_str().unwrap().into(),
                 database_path: directory.path().join("database").to_str().unwrap().into(),
                 memory_limit: 4 << 20,

@@ -88,7 +88,8 @@ public final class NativeRegionStateLifecycle implements AutoCloseable {
                                                 range.getStartKeyGroup(),
                                                 range.getEndKeyGroup(),
                                                 directory.resolve("node-" + id),
-                                                lease)
+                                                lease,
+                                                NativeRocksDbLogDirectory.resolve(directory.resolve("node-" + id)))
                                         : NativeStateResources.memory(
                                                 id, maxParallelism, range.getStartKeyGroup(), range.getEndKeyGroup()))
                                 .collect(Collectors.toList()));

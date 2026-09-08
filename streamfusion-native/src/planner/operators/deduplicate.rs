@@ -92,7 +92,7 @@ impl DeduplicateProcessor {
         Self::with_state(serialized_plan, max_parallelism, state, scratch_reservation)
     }
 
-    fn with_state(
+    pub(crate) fn with_state(
         serialized_plan: &[u8],
         max_parallelism: u32,
         state: Box<dyn KeyedState>,

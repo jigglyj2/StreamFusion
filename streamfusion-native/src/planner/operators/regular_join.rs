@@ -202,7 +202,7 @@ impl RegularJoinProcessor {
         )
     }
 
-    fn with_state(
+    pub(crate) fn with_state(
         serialized_plan: &[u8],
         max_parallelism: u32,
         first_key_group: u32,

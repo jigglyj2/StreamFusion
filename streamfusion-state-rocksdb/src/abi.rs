@@ -13,10 +13,14 @@ use arrow::array::{
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::ffi::{from_ffi, FFI_ArrowArray, FFI_ArrowSchema};
 use streamfusion_state_abi::{
-    StateBackendApiV1, StateMemoryAdmission, STATE_BACKEND_ABI_VERSION, STATE_BACKEND_OK,
+    StateBackendApiV1, StateBackendOpenOptions, StateMemoryAdmission, STATE_BACKEND_ABI_VERSION,
+    STATE_BACKEND_OK,
 };
 
 use crate::RocksStateBackend;
+
+#[cfg(test)]
+mod open_tests;
 
 thread_local! {
     static LAST_ERROR: RefCell<CString> = RefCell::new(CString::new("no RocksDB state error").unwrap());
@@ -48,27 +52,47 @@ pub unsafe extern "C" fn streamfusion_state_backend_init(
 }
 
 unsafe extern "C" fn open(
-    path: *const u8,
-    path_len: usize,
-    first_key_group: u32,
-    last_key_group: u32,
-    memory_limit: usize,
-    memory_scope_high: u64,
-    memory_scope_low: u64,
+    options: *const StateBackendOpenOptions,
     output: *mut *mut c_void,
 ) -> i32 {
+    if !output.is_null() {
+        unsafe { ptr::write(output, ptr::null_mut()) };
+    }
     operation(|| {
-        if path.is_null() || output.is_null() {
+        if options.is_null() || output.is_null() {
             return Err("RocksDB open received a null address".to_string());
         }
-        let path = std::str::from_utf8(unsafe { std::slice::from_raw_parts(path, path_len) })
-            .map_err(|error| error.to_string())?;
-        let backend = RocksStateBackend::open_with_memory_scope(
+        if unsafe { (*options).struct_size } != std::mem::size_of::<StateBackendOpenOptions>() {
+            return Err("RocksDB open received an unsupported options size".to_string());
+        }
+        let options = unsafe { &*options };
+        if options.path.is_null() || options.path_len == 0 {
+            return Err("RocksDB open requires a non-empty database path".to_string());
+        }
+        let path = std::str::from_utf8(unsafe {
+            std::slice::from_raw_parts(options.path, options.path_len)
+        })
+        .map_err(|error| error.to_string())?;
+        let log_directory = if options.log_directory_len == 0 {
+            None
+        } else {
+            if options.log_directory.is_null() {
+                return Err("RocksDB log directory has a null address".to_string());
+            }
+            Some(Path::new(
+                std::str::from_utf8(unsafe {
+                    std::slice::from_raw_parts(options.log_directory, options.log_directory_len)
+                })
+                .map_err(|error| error.to_string())?,
+            ))
+        };
+        let backend = RocksStateBackend::open_configured(
             Path::new(path),
-            first_key_group,
-            last_key_group,
-            memory_limit,
-            [memory_scope_high, memory_scope_low],
+            options.first_key_group,
+            options.last_key_group,
+            options.memory_limit,
+            [options.memory_scope_high, options.memory_scope_low],
+            log_directory,
         )
         .map_err(|error| error.to_string())?;
         unsafe { ptr::write(output, Box::into_raw(Box::new(backend)).cast()) };

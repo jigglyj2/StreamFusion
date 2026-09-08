@@ -17,8 +17,8 @@ use arrow::ffi::{from_ffi, FFI_ArrowArray, FFI_ArrowSchema};
 use datafusion::error::{DataFusionError, Result};
 use libloading::Library;
 use streamfusion_state_abi::{
-    ArrowOperation, InitializeStateBackend, StateBackendApiV1, StateMemoryAdmission,
-    STATE_BACKEND_ABI_VERSION, STATE_BACKEND_OK,
+    ArrowOperation, InitializeStateBackend, StateBackendApiV1, StateBackendOpenOptions,
+    StateMemoryAdmission, STATE_BACKEND_ABI_VERSION, STATE_BACKEND_OK,
 };
 
 use crate::memory_pool::HostMemoryReservation;
@@ -50,6 +50,7 @@ impl RocksPluginKeyedState {
             last_key_group,
             memory_limit,
             [0, 0],
+            None,
         )
     }
 
@@ -68,6 +69,27 @@ impl RocksPluginKeyedState {
             last_key_group,
             memory_limit,
             owner.rocks_scope()?,
+            None,
+        )
+    }
+
+    pub(crate) fn open_configured(
+        resources: &crate::proto::NativeRocksDbState,
+        first_key_group: u32,
+        last_key_group: u32,
+        owner: Option<&HostMemoryReservation>,
+    ) -> Result<Self> {
+        Self::open_scoped(
+            Path::new(&resources.plugin_path),
+            Path::new(&resources.database_path),
+            first_key_group,
+            last_key_group,
+            resources.memory_limit as usize,
+            owner
+                .map(HostMemoryReservation::rocks_scope)
+                .transpose()?
+                .unwrap_or([0, 0]),
+            resources.log_directory.as_deref(),
         )
     }
 
@@ -78,6 +100,7 @@ impl RocksPluginKeyedState {
         last_key_group: u32,
         memory_limit: usize,
         scope: [u64; 2],
+        log_directory: Option<&str>,
     ) -> Result<Self> {
         let library = unsafe { Library::new(library_path) }
             .map_err(|error| DataFusionError::External(Box::new(error)))?;
@@ -103,19 +126,21 @@ impl RocksPluginKeyedState {
         let database_path = database_path.to_str().ok_or_else(|| {
             DataFusionError::Execution("RocksDB state path is not UTF-8".to_string())
         })?;
-        let mut handle = ptr::null_mut();
-        let status = unsafe {
-            (api.open)(
-                database_path.as_ptr(),
-                database_path.len(),
-                first_key_group,
-                last_key_group,
-                memory_limit,
-                scope[0],
-                scope[1],
-                &mut handle,
-            )
+        let log_directory = log_directory.unwrap_or_default();
+        let options = StateBackendOpenOptions {
+            struct_size: std::mem::size_of::<StateBackendOpenOptions>(),
+            path: database_path.as_ptr(),
+            path_len: database_path.len(),
+            first_key_group,
+            last_key_group,
+            memory_limit,
+            memory_scope_high: scope[0],
+            memory_scope_low: scope[1],
+            log_directory: log_directory.as_ptr(),
+            log_directory_len: log_directory.len(),
         };
+        let mut handle = ptr::null_mut();
+        let status = unsafe { (api.open)(&options, &mut handle) };
         check(api, status)?;
         if handle.is_null() {
             return Err(DataFusionError::Execution(

@@ -94,6 +94,7 @@ fn binding(rocks: Option<(&str, &std::path::Path)>) -> proto::NativeStateBinding
                 None => proto::native_state_binding::Backend::Memory(proto::NativeMemoryState {}),
                 Some((plugin, directory)) => {
                     proto::native_state_binding::Backend::Rocksdb(proto::NativeRocksDbState {
+                        log_directory: None,
                         plugin_path: plugin.into(),
                         database_path: directory.to_str().unwrap().into(),
                         memory_limit: 1 << 20,

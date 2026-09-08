@@ -12,7 +12,7 @@ with separate collecting-sink runs for parity. The blackhole path has passed Q0â
 and native-activity integration checks with both backend settings after the sortable-state
 changes. Q3 now passes ordinary in-memory admission, complete collected-changelog comparison,
 and native-activity checks through blackhole. RocksDB Q3 still falls back with the specific
-TaskManager log-directory configuration requirement. Its accelerated benchmark refuses that run.
+native-library CPU compatibility requirement. Its accelerated benchmark refuses that run.
 These short integration runs are not performance measurements.
 
 ## Current checkpoint

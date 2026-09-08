@@ -57,7 +57,7 @@ class NativeStateConfigurationSupportTest {
             config.set(StateBackendOptions.STATE_BACKEND, backend);
             String expected = NativeStateSupport.unsupportedReason(config);
             if (backend.equals("hashmap")) assertThat(expected).isNull();
-            else assertThat(expected).contains("TaskManager log-directory settings", "retain Flink");
+            else assertThat(expected).contains("artifact CPU compatibility", "retain Flink");
             StreamFusionStateBackendFactory.install(config);
             StreamFusionStateBackendFactory.install(config);
             assertThat(NativeStateSupport.unsupportedReason(config)).isEqualTo(expected);

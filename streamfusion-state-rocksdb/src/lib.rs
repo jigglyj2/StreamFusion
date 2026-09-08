@@ -3,6 +3,7 @@
 
 mod abi;
 mod flink_options;
+mod log_directory;
 mod rocks_state;
 
 pub use rocks_state::{

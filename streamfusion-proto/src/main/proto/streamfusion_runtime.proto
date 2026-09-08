@@ -81,4 +81,6 @@ message NativeRocksDbState {
   string database_path = 2;
   // The existing Flink-managed STATE_BACKEND/OPERATOR lease, not an extra budget.
   uint64 memory_limit = 3;
+  // State-binding protocol v2: Flink's TaskManager-resolved RocksDB log directory.
+  optional string log_directory = 4;
 }

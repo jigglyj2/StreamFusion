@@ -23,18 +23,35 @@ public final class NativeStateResources {
 
     public static NativeStateBinding rocksDb(
             long nodeId, int maxParallelism, int first, int last, Path database, long flinkMemoryLease) {
+        return rocksDb(nodeId, maxParallelism, first, last, database, flinkMemoryLease, null);
+    }
+
+    public static NativeStateBinding rocksDb(
+            long nodeId,
+            int maxParallelism,
+            int first,
+            int last,
+            Path database,
+            long flinkMemoryLease,
+            Path logDirectory) {
         if (flinkMemoryLease <= 0) throw new IllegalArgumentException("A RocksDB Flink memory lease must be positive");
-        return binding(nodeId, maxParallelism, first, last)
-                .setRocksdb(NativeRocksDbState.newBuilder()
-                        .setPluginPath(NativeRocksDbLibrary.path().toString())
-                        .setDatabasePath(database.toAbsolutePath().normalize().toString())
-                        .setMemoryLimit(flinkMemoryLease))
-                .build();
+        var rocks = NativeRocksDbState.newBuilder()
+                .setPluginPath(NativeRocksDbLibrary.path().toString())
+                .setDatabasePath(database.toAbsolutePath().normalize().toString())
+                .setMemoryLimit(flinkMemoryLease);
+        if (logDirectory != null)
+            rocks.setLogDirectory(logDirectory.toAbsolutePath().normalize().toString());
+        return binding(nodeId, maxParallelism, first, last).setRocksdb(rocks).build();
     }
 
     public static byte[] serialize(List<NativeStateBinding> bindings) {
         return NativeStateBindings.newBuilder()
-                .setProtocolVersion(1)
+                .setProtocolVersion(
+                        bindings.stream()
+                                        .anyMatch(binding -> binding.hasRocksdb()
+                                                && binding.getRocksdb().hasLogDirectory())
+                                ? 2
+                                : 1)
                 .addAllBindings(bindings)
                 .build()
                 .toByteArray();

@@ -46,8 +46,8 @@ A binary Flink `StreamExecMultiJoin` with a common equi key lowers to the regula
 Its shared-region composition is admitted after generated metric/changelog comparisons, keyed
 rescaling and channel replay tests. In-memory persistent state is admitted when its complete
 condition is covered by the common equality keys; additional residuals retain the state gate.
-A separate backend guard rejects RocksDB until its TaskManager log-directory
-settings match Flink. Unsupported typed RocksDB settings still report their specific option first.
+A separate backend guard rejects RocksDB until its packaged native library
+enforces CPU compatibility. TaskManager log relocation now matches Flink. Unsupported typed RocksDB settings still report their specific option first.
 Checkpointing during channel recovery remains unsupported on either backend. Genuine multi-way joins have paged state
 and a bounded output cursor in their retained native implementation, but still require integration
 with the common ExecutionPlan, per-stage metrics, and checkpoint/control lifecycle. Their gate
@@ -78,7 +78,8 @@ represent a sliced buffer safely. Descriptor-only exports do not require new pay
 Control requests address stable stage IDs for watermarks, pre-checkpoint flush, and end-of-input.
 Ordinary invocation EOF does not substitute for a control event. Unknown stages, invalid bindings,
 and unsupported protocol versions fail closed. Plan protocol 3, control-edge API 2, and gauge-edge
-API 1 are required; the state plugin ABI is version 7, including the Flink resource-scope identity and bounded ordered ranges.
+API 1 are required; the state plugin ABI is version 8, including the Flink resource-scope identity, bounded ordered
+ranges and task-resolved RocksDB log directory.
 
 ## Evidence and next milestone
 

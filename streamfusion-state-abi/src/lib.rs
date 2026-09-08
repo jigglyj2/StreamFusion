@@ -9,7 +9,7 @@ use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 mod snapshot_writer;
 pub use snapshot_writer::SnapshotWriter;
 
-pub const STATE_BACKEND_ABI_VERSION: u32 = 7;
+pub const STATE_BACKEND_ABI_VERSION: u32 = 8;
 pub const STATE_BACKEND_OK: i32 = 0;
 
 /// Transfers owned values into Arrow BinaryView buffers without concatenating payloads.
@@ -38,16 +38,24 @@ pub fn owned_binary_views(
     Ok(builder.finish())
 }
 
-pub type OpenBackend = unsafe extern "C" fn(
-    path: *const u8,
-    path_len: usize,
-    first_key_group: u32,
-    last_key_group: u32,
-    memory_limit: usize,
-    memory_scope_high: u64,
-    memory_scope_low: u64,
-    output: *mut *mut c_void,
-) -> i32;
+/// Borrowed configuration for one synchronous open. Plugins must copy any data they retain.
+/// A zero-length log directory leaves logging in the database's own directory.
+#[repr(C)]
+pub struct StateBackendOpenOptions {
+    pub struct_size: usize,
+    pub path: *const u8,
+    pub path_len: usize,
+    pub first_key_group: u32,
+    pub last_key_group: u32,
+    pub memory_limit: usize,
+    pub memory_scope_high: u64,
+    pub memory_scope_low: u64,
+    pub log_directory: *const u8,
+    pub log_directory_len: usize,
+}
+
+pub type OpenBackend =
+    unsafe extern "C" fn(options: *const StateBackendOpenOptions, output: *mut *mut c_void) -> i32;
 pub type CloseBackend = unsafe extern "C" fn(handle: *mut c_void);
 pub type ArrowOperation = unsafe extern "C" fn(
     handle: *mut c_void,

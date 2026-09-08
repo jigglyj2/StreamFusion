@@ -56,7 +56,7 @@ impl NativeExecutionContext {
         )?;
         let options = proto::NativeStateBindings::decode(bytes)
             .map_err(|error| invalid(format!("invalid state-binding protobuf: {error}")))?;
-        if options.protocol_version != 1
+        if !matches!(options.protocol_version, 1 | 2)
             || self.plan().protocol_version < crate::ENVELOPE_PLAN_PROTOCOL_VERSION
             || options.bindings.is_empty()
         {
@@ -116,6 +116,18 @@ impl NativeExecutionContext {
             match binding.backend.as_ref() {
                 Some(proto::native_state_binding::Backend::Memory(_)) => {}
                 Some(proto::native_state_binding::Backend::Rocksdb(rocks)) => {
+                    if let Some(directory) = &rocks.log_directory {
+                        if options.protocol_version < 2 {
+                            return Err(invalid(
+                                "RocksDB log directory requires state-binding protocol 2",
+                            ));
+                        }
+                        if !Path::new(directory).is_absolute() || directory.contains('\0') {
+                            return Err(invalid(
+                                "RocksDB log directory must be an absolute path without NUL bytes",
+                            ));
+                        }
+                    }
                     if rocks.memory_limit == 0
                         || usize::try_from(rocks.memory_limit).is_err()
                         || !Path::new(&rocks.plugin_path).is_absolute()
@@ -238,7 +250,25 @@ impl NativeExecutionContext {
                     "native state import is missing the RocksDB CURRENT file",
                 ));
             }
-            let source = RocksPluginKeyedState::open(plugin, directory, first, last, reader_limit)?;
+            let log_directory = match binding.backend.as_ref() {
+                Some(proto::native_state_binding::Backend::Rocksdb(rocks)) => {
+                    rocks.log_directory.clone()
+                }
+                _ => None,
+            };
+            let reader = proto::NativeRocksDbState {
+                plugin_path: plugin
+                    .to_str()
+                    .ok_or_else(|| invalid("checkpoint plugin path is not UTF-8"))?
+                    .to_owned(),
+                database_path: directory
+                    .to_str()
+                    .ok_or_else(|| invalid("checkpoint database path is not UTF-8"))?
+                    .to_owned(),
+                memory_limit: reader_limit as u64,
+                log_directory,
+            };
+            let source = RocksPluginKeyedState::open_configured(&reader, first, last, None)?;
             for group in first..=last {
                 let bytes = source.snapshot_key_group(group, &memory)?;
                 owner.restore(group, &bytes)?;
@@ -248,86 +278,45 @@ impl NativeExecutionContext {
     }
 }
 
-// Per-family construction only. Children, execution, streams and control dispatch are generic.
+// Backend configuration is bound once, independently of the operator family. New shared
+// persistent operators receive this configured state object instead of reopening a backend.
 fn create(
     node: &proto::Operator,
     bytes: &[u8],
     binding: &proto::NativeStateBinding,
     memory: HostMemoryReservation,
 ) -> Result<Arc<dyn PersistentOperatorFactory>> {
+    use crate::state::{KeyedState, MemoryKeyedState, RocksPluginKeyedState};
     let max = binding.max_parallelism;
     let first = binding.first_key_group;
     let last = binding.last_key_group;
-    match (&node.operator, binding.backend.as_ref()) {
-        (
-            Some(
-                proto::operator::Operator::GroupAggregate(_)
-                | proto::operator::Operator::GlobalGroupAggregate(_),
-            ),
-            Some(proto::native_state_binding::Backend::Memory(_)),
+    let scratch = memory.sibling("native state batch scratch and output");
+    let state: Box<dyn KeyedState> = match binding.backend.as_ref() {
+        Some(proto::native_state_binding::Backend::Memory(_)) => {
+            Box::new(MemoryKeyedState::new(first, last, memory)?)
+        }
+        Some(proto::native_state_binding::Backend::Rocksdb(rocks)) => Box::new(
+            RocksPluginKeyedState::open_configured(rocks, first, last, Some(&memory))?,
+        ),
+        None => return Err(invalid("unsupported native state binding")),
+    };
+    match &node.operator {
+        Some(
+            proto::operator::Operator::GroupAggregate(_)
+            | proto::operator::Operator::GlobalGroupAggregate(_),
         ) => Ok(Arc::new(GroupAggregateFactory(Arc::new(Mutex::new(
-            GroupAggregateProcessor::new(bytes, max, first, last, memory)?,
+            GroupAggregateProcessor::with_state(bytes, max, first, last, state, scratch)?,
         ))))),
-        (
-            Some(
-                proto::operator::Operator::GroupAggregate(_)
-                | proto::operator::Operator::GlobalGroupAggregate(_),
-            ),
-            Some(proto::native_state_binding::Backend::Rocksdb(rocks)),
-        ) => Ok(Arc::new(GroupAggregateFactory(Arc::new(Mutex::new(
-            GroupAggregateProcessor::new_rocksdb(
-                bytes,
-                max,
-                first,
-                last,
-                Path::new(&rocks.plugin_path),
-                Path::new(&rocks.database_path),
-                rocks.memory_limit as usize,
-                memory,
-            )?,
-        ))))),
-        (
-            Some(proto::operator::Operator::Deduplicate(_)),
-            Some(proto::native_state_binding::Backend::Memory(_)),
-        ) => Ok(Arc::new(DeduplicateFactory(Arc::new(Mutex::new(
-            DeduplicateProcessor::new(bytes, max, first, last, memory)?,
-        ))))),
-        (
-            Some(proto::operator::Operator::RegularJoin(_)),
-            Some(proto::native_state_binding::Backend::Memory(_)),
-        ) => Ok(Arc::new(RegularJoinFactory(Arc::new(Mutex::new(
-            RegularJoinProcessor::new(bytes, max, first, last, memory)?,
-        ))))),
-        (
-            Some(proto::operator::Operator::Deduplicate(_)),
-            Some(proto::native_state_binding::Backend::Rocksdb(rocks)),
-        ) => Ok(Arc::new(DeduplicateFactory(Arc::new(Mutex::new(
-            DeduplicateProcessor::new_rocksdb(
-                bytes,
-                max,
-                first,
-                last,
-                Path::new(&rocks.plugin_path),
-                Path::new(&rocks.database_path),
-                rocks.memory_limit as usize,
-                memory,
-            )?,
-        ))))),
-        (
-            Some(proto::operator::Operator::RegularJoin(_)),
-            Some(proto::native_state_binding::Backend::Rocksdb(rocks)),
-        ) => Ok(Arc::new(RegularJoinFactory(Arc::new(Mutex::new(
-            RegularJoinProcessor::new_rocksdb(
-                bytes,
-                max,
-                first,
-                last,
-                Path::new(&rocks.plugin_path),
-                Path::new(&rocks.database_path),
-                rocks.memory_limit as usize,
-                memory,
-            )?,
-        ))))),
+        Some(proto::operator::Operator::Deduplicate(_)) => {
+            Ok(Arc::new(DeduplicateFactory(Arc::new(Mutex::new(
+                DeduplicateProcessor::with_state(bytes, max, state, scratch)?,
+            )))))
+        }
+        Some(proto::operator::Operator::RegularJoin(_)) => {
+            Ok(Arc::new(RegularJoinFactory(Arc::new(Mutex::new(
+                RegularJoinProcessor::with_state(bytes, max, first, last, state, scratch)?,
+            )))))
+        }
         _ => Err(invalid("unsupported native state binding")),
     }
 }

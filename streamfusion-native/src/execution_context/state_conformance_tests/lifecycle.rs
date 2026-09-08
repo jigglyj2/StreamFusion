@@ -143,12 +143,21 @@ fn shared_stateful_lifecycle_covers_memory_ownership_and_cross_backend_restore()
                 if let Some(plugin) = &plugin {
                     for rocks_source in [false, true] {
                         let directory = tempfile::tempdir().unwrap();
+                        let logs = directory.path().join("logs");
+                        std::fs::create_dir(&logs).unwrap();
                         let mut rocks = resources();
+                        rocks.protocol_version = 2;
                         rocks.bindings[0].backend =
                             Some(proto::native_state_binding::Backend::Rocksdb(
                                 proto::NativeRocksDbState {
+                                    log_directory: Some(logs.to_str().unwrap().into()),
                                     plugin_path: plugin.clone(),
-                                    database_path: directory.path().to_str().unwrap().into(),
+                                    database_path: directory
+                                        .path()
+                                        .join("db")
+                                        .to_str()
+                                        .unwrap()
+                                        .into(),
                                     memory_limit: 4 << 20,
                                 },
                             ));
@@ -159,6 +168,8 @@ fn shared_stateful_lifecycle_covers_memory_ownership_and_cross_backend_restore()
                             (&memory, &rocks)
                         };
                         lifecycle(&plan, source, destination, &batch);
+                        assert_eq!(std::fs::read_dir(&logs).unwrap().count(), 0);
+                        assert!(!directory.path().join("db/LOG").exists());
                     }
                 }
             }

@@ -371,7 +371,7 @@ class LocalRowDataNexmarkBenchmarkIT {
             assertThat(streamFusion.nativePlanBatches()).isPositive();
         } else {
             assertThat(StreamFusionPlanningDiagnostics.explain())
-                    .contains("Accelerated: no", "TaskManager log-directory settings");
+                    .contains("Accelerated: no", "artifact CPU compatibility");
             assertThat(streamFusion.nativePlanBatches()).isZero();
         }
     }
