@@ -8,7 +8,8 @@ sidebar:
 **Current status:** Partial acceleration through ordinary whole-plan selection. Verified two-phase,
 append-only UTC event-time TUMBLE/HOP windows use DataFusion grouped COUNT/MIN/MAX with BIGINT results
 and arguments, BIGINT/INTEGER grouping keys (or no keys), synchronous state and mini-batch disabled.
-Other window families retain whole-plan fallback under the
+DISTINCT-only TUMBLE also accepts nullable BIGINT/INTEGER/VARCHAR grouping keys, including
+composite keys, under the same execution settings. Other window families retain whole-plan fallback under the
 [architecture admission requirements](/StreamFusion/development/architecture-admission/).
 Both in-memory and supported default RocksDB state use the common native runtime.
 
@@ -17,8 +18,8 @@ its state, without HOP's follow-up timers. The local DataFusion buffer retains t
 pressure and checkpoint flush boundaries. Generated two-phase SQL comparisons include all-null
 COUNT/MIN/MAX windows, grouped and ungrouped layouts, and both backends. The common metric,
 canonical restore/backend-switch/rescaling and aligned/unaligned channel-replay matrices also run
-with TUMBLE. This is a Q7 prerequisite; Q7's computed join predicate remains a separate admission
-blocker and no Q7 performance result is claimed here.
+with TUMBLE. The [Q7 release comparison](/StreamFusion/benchmarks/q7-rowdata/) records its
+verified query path, measurements and managed-memory capacity limit.
 
 **Retained implementation scope:** Partial implementation for native `TUMBLE`, `HOP`, `CUMULATE`, and `SESSION`
 aggregation, including Flink's legacy group-window physical node.
@@ -81,14 +82,26 @@ comparisons cover nullable, empty, Unicode, seven/eight-byte and wider strings, 
 checkpoint pre-barriers and pressure flushes across Arrow batch sizes. Native checks cover sliced
 inputs, allocation peaks, output ownership and wide-key output under a constrained share.
 Variable key bytes have coarse encoding/retention allowances; output chunks include their actual
-encoded key lengths. Ordinary whole-plan VARCHAR window grouping and DISTINCT-only windows
-remain gated until their global state, metric and recovery contracts are verified.
+encoded key lengths. Ordinary VARCHAR grouping is admitted for DISTINCT-only TUMBLE; VARCHAR
+COUNT/MIN/MAX and DISTINCT-only HOP retain whole-plan fallback pending equivalent verification.
 
-Global DISTINCT-only TUMBLE now has generated fragment-level changelog and complete registered
+Global DISTINCT-only TUMBLE has generated SQL and fragment-level changelog and complete registered
 metric-surface comparisons on both backends for nullable BIGINT and composite BIGINT/VARCHAR
 keys. The existing DataFusion grouped row-count state represents group presence without adding a
-SQL aggregate column. These tests do not yet remove the ordinary admission gate: restore,
-rescaling and channel replay for this subset remain prerequisites.
+SQL aggregate column. Canonical restore switches between backends; aligned and unaligned
+checkpoints retain live windows and restored clocks. Rescaling exercises one-to-two-to-one
+parallelism through Arrow IPC key-group routing. Mailbox tests capture serialized in-flight
+Arrow frames at real barriers and replay them after restore, including late input and duplicate
+partials. The shared COUNT/MIN/MAX channel suites also guard the common control machinery.
+Official Q8 now passes ordinary selection and complete collected/materialized parity for
+10,000 events at parallelism one and four on both backends, with positive native plan activity
+and zero standalone local-window JNI batches. Release performance remains under investigation.
+
+Global input admission includes logical grouping-column spans before allocating Arrow row keys,
+state mutations or timer keys. A shared IPC parent is still owned by its producer. The grouping
+index stores ordinals into one owned key vector and borrows the Arrow row encoding. Wide nullable
+Unicode/composite-key tests check allocation peaks, sliced duplicate inputs, cross-backend restore,
+output bytes, complete credit return and early budget denial without state mutation.
 Flink's `TimerHeapInternalTimer.comparePriorityTo` compares timestamps only. Different keys firing
 at the same window end therefore have no defined relative order. The DISTINCT fixture compares
 their complete serialized records as a multiset within that tied end; it preserves window-end

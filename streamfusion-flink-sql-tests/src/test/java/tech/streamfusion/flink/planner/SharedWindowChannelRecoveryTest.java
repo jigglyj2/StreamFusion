@@ -53,13 +53,7 @@ class SharedWindowChannelRecoveryTest {
     void inflightPartialsReplayOnceWithTheRestoredWindowClock(boolean rocks, boolean unaligned, boolean attached)
             throws Exception {
         for (int seed = 0; seed < 3; seed++)
-            try (var oracle = attached
-                            ? GlobalWindowFlinkOracle.create(
-                                    SlicingWindowFlinkPlan.stage(
-                                            "GlobalWindowAggregate", AttachedSlicingWindowFixture.sql(true)),
-                                    rocks,
-                                    null)
-                            : GlobalWindowFlinkOracle.create(rocks, null, tumbling());
+            try (var oracle = oracle(attached, rocks);
                     var allocator = new RootAllocator(64L << 20);
                     var additional = additionalOracle(attached)) {
                 var memory = new SharedChannelStateIO.RoutingMemory();
@@ -131,11 +125,11 @@ class SharedWindowChannelRecoveryTest {
         return GenericRowData.of(1L, value, 1L, end);
     }
 
-    private static RowType output(boolean attached) {
+    protected RowType output(boolean attached) {
         return attached ? AttachedSlicingWindowFixture.OUTPUT : SharedSlicingWindowFixture.OUTPUT;
     }
 
-    private static byte[] exchange() {
+    protected byte[] exchange() {
         return NativeExchangePlanSerializer.hash(SharedSlicingWindowFixture.INPUT, new int[] {0}, 1, 1, true);
     }
 
@@ -160,22 +154,15 @@ class SharedWindowChannelRecoveryTest {
             List<RowData> rows,
             boolean capture)
             throws Exception {
-        var serializer = new RowDataSerializer(
-                attached ? AttachedSlicingWindowFixture.FLINK_INPUT : SharedSlicingWindowFixture.FLINK_INPUT);
+        var serializer = new RowDataSerializer(flinkInput(attached));
         var nativeRows = new ArrayList<RowData>();
         for (var row : rows) {
-            var flinkRow = attached ? row : GenericRowData.of(row.getLong(0), row.getLong(1), row.getLong(3));
+            var flinkRow = flinkPartial(attached, row);
             oracle.processElement(new StreamRecord<>(serializer.toBinaryRow(flinkRow), 123));
-            nativeRows.add(GenericRowData.of(
-                    row.getLong(0),
-                    attached
-                            ? AttachedSlicingWindowFixture.partial(row.getLong(1), row.getLong(2))
-                            : SharedSlicingWindowFixture.count(row.getLong(1)),
-                    row.getLong(3) - (attached ? 6000 : 2000),
-                    row.getLong(3)));
+            nativeRows.add(nativePartial(attached, row));
         }
-        try (var batch = ArrowRowDataBatch.transpose(nativeRows, SharedSlicingWindowFixture.INPUT, allocator);
-                var envelope = ArrowExchangeBatch.withEnvelope(batch, SharedSlicingWindowFixture.INPUT, null)) {
+        try (var batch = ArrowRowDataBatch.transpose(nativeRows, nativeInput(), allocator);
+                var envelope = ArrowExchangeBatch.withEnvelope(batch, nativeInput(), null)) {
             for (var frame : ArrowExchangeCDataBridge.route(exchange(), envelope.batch(), allocator, memory)) {
                 if (capture) SharedChannelStateIO.capture(task, 0, channel, frame);
                 task.processElement(new StreamRecord<>(frame), 0, channel);
@@ -212,7 +199,43 @@ class SharedWindowChannelRecoveryTest {
         outputBarriers += task.getOutput().stream()
                 .filter(event -> event instanceof CheckpointBarrier)
                 .count();
-        assertOutput(output(attached), task.getOutput(), expected.getCopyOfBuffer());
+        assertMainOutput(output(attached), task.getOutput(), expected.getCopyOfBuffer());
+    }
+
+    protected KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> oracle(boolean attached, boolean rocks)
+            throws Exception {
+        return attached
+                ? GlobalWindowFlinkOracle.create(
+                        SlicingWindowFlinkPlan.stage("GlobalWindowAggregate", AttachedSlicingWindowFixture.sql(true)),
+                        rocks,
+                        null)
+                : GlobalWindowFlinkOracle.create(rocks, null, tumbling());
+    }
+
+    protected RowType nativeInput() {
+        return SharedSlicingWindowFixture.INPUT;
+    }
+
+    protected RowType flinkInput(boolean attached) {
+        return attached ? AttachedSlicingWindowFixture.FLINK_INPUT : SharedSlicingWindowFixture.FLINK_INPUT;
+    }
+
+    protected RowData flinkPartial(boolean attached, RowData row) {
+        return attached ? row : GenericRowData.of(row.getLong(0), row.getLong(1), row.getLong(3));
+    }
+
+    protected RowData nativePartial(boolean attached, RowData row) {
+        return GenericRowData.of(
+                row.getLong(0),
+                attached
+                        ? AttachedSlicingWindowFixture.partial(row.getLong(1), row.getLong(2))
+                        : SharedSlicingWindowFixture.count(row.getLong(1)),
+                row.getLong(3) - (attached ? 6000 : 2000),
+                row.getLong(3));
+    }
+
+    protected void assertMainOutput(RowType type, java.util.Queue<Object> queue, byte[] expected) throws Exception {
+        assertOutput(type, queue, expected);
     }
 
     protected static void assertOutput(RowType type, java.util.Queue<Object> queue, byte[] expected) throws Exception {

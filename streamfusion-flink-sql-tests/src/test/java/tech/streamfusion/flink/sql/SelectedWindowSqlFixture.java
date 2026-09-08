@@ -35,6 +35,12 @@ final class SelectedWindowSqlFixture {
 
     static byte[] execute(boolean selected, boolean rocks, String sql, int seed, int parallelism, boolean multiJoin)
             throws Exception {
+        return execute(selected, rocks, sql, seed, parallelism, multiJoin, false);
+    }
+
+    static byte[] execute(
+            boolean selected, boolean rocks, String sql, int seed, int parallelism, boolean multiJoin, boolean strings)
+            throws Exception {
         System.clearProperty(StreamFusionPlannerFactory.EXEC_GRAPH_PROCESSOR_PROPERTY);
         if (selected)
             System.setProperty(
@@ -64,22 +70,26 @@ final class SelectedWindowSqlFixture {
             long millis = -9000 + random.nextInt(18000);
             var time = LocalDateTime.ofEpochSecond(
                     Math.floorDiv(millis, 1000), (int) Math.floorMod(millis, 1000) * 1_000_000, ZoneOffset.UTC);
-            rows.add(Row.of(i % 11 == 0 ? null : (long) random.nextInt(17), time));
+            Long key = i % 11 == 0 ? null : (long) random.nextInt(17);
+            String label = !strings || i % 13 == 0 ? null : "界é-" + random.nextInt(7) + "x".repeat(i % 29);
+            rows.add(strings ? Row.of(key, time, label) : Row.of(key, time));
         }
-        var input =
-                env.fromCollection(rows, Types.ROW_NAMED(new String[] {"k", "ts"}, Types.LONG, Types.LOCAL_DATE_TIME));
+        var input = env.fromCollection(
+                rows,
+                strings
+                        ? Types.ROW_NAMED(
+                                new String[] {"k", "ts", "label"}, Types.LONG, Types.LOCAL_DATE_TIME, Types.STRING)
+                        : Types.ROW_NAMED(new String[] {"k", "ts"}, Types.LONG, Types.LOCAL_DATE_TIME));
+        var schema = Schema.newBuilder()
+                .column("k", DataTypes.BIGINT())
+                .column(
+                        "ts",
+                        seed % 3 == 1
+                                ? DataTypes.TIMESTAMP(3)
+                                : DataTypes.TIMESTAMP(3).notNull());
+        if (strings) schema.column("label", DataTypes.STRING());
         tables.createTemporaryView(
-                "window_input",
-                input,
-                Schema.newBuilder()
-                        .column("k", DataTypes.BIGINT())
-                        .column(
-                                "ts",
-                                seed % 3 == 1
-                                        ? DataTypes.TIMESTAMP(3)
-                                        : DataTypes.TIMESTAMP(3).notNull())
-                        .watermark("ts", "ts")
-                        .build());
+                "window_input", input, schema.watermark("ts", "ts").build());
         try {
             return SqlParityTestSupport.collect(tables.executeSql(sql));
         } finally {

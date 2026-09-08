@@ -37,6 +37,22 @@ class WindowProductionAdmissionTest extends SqlParityTestSupport {
     }
 
     @Test
+    void distinctTumbleAllowsCompositeStringsWhileHopAndAggregateStringsStayGated() {
+        var tables = tables();
+        String hop = counts("k", "COUNT(*)").replace("COUNT(*) n, ", "");
+        assertThat(tables.explainSql(hop))
+                .contains("Accelerated: no", "DISTINCT-only windows are verified only for TUMBLE");
+        String tumble = hop.replace("HOP(TABLE", "TUMBLE(TABLE").replace("INTERVAL '2' SECOND, ", "");
+        assertThat(tables.explainSql(tumble)).contains("Accelerated: yes");
+        assertThat(tables.explainSql(tumble.replace("k,", "k, label,")))
+                .contains("Accelerated: yes", "StreamFusionGlobalWindowAggregate");
+        assertThat(tables.explainSql(counts("label", "COUNT(*)")
+                        .replace("HOP(TABLE", "TUMBLE(TABLE")
+                        .replace("INTERVAL '2' SECOND, ", "")))
+                .contains("Accelerated: no", "grouping type VARCHAR");
+    }
+
+    @Test
     void sharedWindowLatencyTrackingRejectsTheCompletePlanBeforeRuntimeConstruction() {
         var tables = tables();
         String query = "WITH counts AS (" + counts("k", "COUNT(*)")

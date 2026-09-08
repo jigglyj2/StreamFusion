@@ -46,8 +46,26 @@ impl SharedSlices {
         // that decoding plus per-row keys, indexes, mutations and DataFusion workspace.
         let offsets = partials.value_offsets();
         let decoded_input = (offsets[offsets.len() - 1] - offsets[0]) as usize;
+        let key_workspace = plan
+            .grouping_indices
+            .iter()
+            .try_fold(0usize, |bytes, &index| {
+                // Row encoding and owned state/timer keys use logical column spans. Shared
+                // IPC parents stay with their producer; large VARCHAR keys need explicit
+                // batch credit before any encoded-key buffers are allocated.
+                let payload = batch
+                    .column(index as usize)
+                    .to_data()
+                    .get_slice_memory_size()?;
+                Ok::<_, DataFusionError>(
+                    bytes
+                        .saturating_add(payload.saturating_mul(8))
+                        .saturating_add(batch.num_rows().saturating_mul(32)),
+                )
+            })?;
         let base = decoded_input
             .saturating_mul(8)
+            .saturating_add(key_workspace)
             .saturating_add(64 * 1024)
             .saturating_add(
                 batch
@@ -59,9 +77,27 @@ impl SharedSlices {
         let end_rows = self.end_codec.convert_columns(&[batch
             .column(plan.partial_slice_end_index.unwrap() as usize)
             .clone()])?;
-        let grouping_rows = self.kernel.encode_grouping_rows(batch)?;
-        let mut unique = HashMap::<StateKey, usize, RandomState>::with_hasher(RandomState::new());
-        let mut keys = Vec::new();
+        let grouping_rows = if plan.grouping_indices.is_empty() {
+            None
+        } else {
+            let columns = plan
+                .grouping_indices
+                .iter()
+                .map(|&index| batch.column(index as usize).clone())
+                .collect::<Vec<_>>();
+            Some(
+                self.kernel
+                    .grouping_converter
+                    .as_ref()
+                    .expect("schema prepared")
+                    .convert_columns(&columns)?,
+            )
+        };
+        // Borrow Arrow row encodings and store only ordinals in the deduplication index.
+        // State mutations own one key vector; the index does not duplicate wide key bytes.
+        let mut unique = hashbrown::HashTable::<usize>::new();
+        let hasher = RandomState::new();
+        let mut keys = Vec::<StateKey>::new();
         let mut groups = Vec::new();
         let mut decoded = Vec::new();
         let mut timers = Vec::new();
@@ -85,23 +121,29 @@ impl SharedSlices {
             }
             self.kernel.group_key_into(batch, row, &mut partition)?;
             let key_group = assign_key_group(&partition, self.kernel.max_parallelism);
-            let prefix = codec::prefix(&grouping_rows[row])?;
+            let grouping = grouping_rows.as_ref().map(|rows| rows.row(row));
+            let prefix = codec::prefix(grouping.as_ref().map_or(&[], |row| row.as_ref()))?;
             let key = codec::key(key_group, &prefix, end_rows.row(row).as_ref());
-            let next = keys.len();
-            let group = *unique.entry(key.clone()).or_insert_with(|| {
-                keys.push(key);
-                let first = self.first_unfired(end);
-                timers.push((
-                    key_group,
-                    TimerDomain::EventTime,
-                    TimerKey {
-                        timestamp: first.wrapping_sub(1),
-                        key: prefix,
-                        namespace: first.to_le_bytes().to_vec(),
-                    },
-                ));
-                next
-            });
+            let hash = hasher.hash_one(&key);
+            let group = match unique.find(hash, |&index| keys[index] == key).copied() {
+                Some(index) => index,
+                None => {
+                    let next = keys.len();
+                    keys.push(key);
+                    unique.insert_unique(hash, next, |&index| hasher.hash_one(&keys[index]));
+                    let first = self.first_unfired(end);
+                    timers.push((
+                        key_group,
+                        TimerDomain::EventTime,
+                        TimerKey {
+                            timestamp: first.wrapping_sub(1),
+                            key: prefix,
+                            namespace: first.to_le_bytes().to_vec(),
+                        },
+                    ));
+                    next
+                }
+            };
             groups.push(group);
             decoded.push(decode_state(partials.value(row), &self.kernel.calls)?);
         }

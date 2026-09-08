@@ -49,7 +49,7 @@ fn processor(
 
 fn processor_with_plan(
     bytes: &[u8],
-    broker: Arc<TestBroker>,
+    broker: Arc<dyn crate::memory_pool::MemoryReservationBroker>,
     rocks: Option<&std::path::Path>,
     first: u32,
     last: u32,
@@ -174,6 +174,7 @@ mod attached;
 mod checkpoint;
 mod generated;
 mod tumble;
+mod distinct;
 
 #[test]
 fn borrowed_partial_slices_do_not_reserve_the_parent_arrow_buffers_again() {

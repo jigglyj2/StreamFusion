@@ -8,6 +8,7 @@ import org.apache.calcite.sql.type.SqlTypeName;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.ReadableConfig;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
+import org.apache.flink.table.planner.plan.logical.TumblingWindowSpec;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNode;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeBase;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecGlobalWindowAggregate;
@@ -33,14 +34,18 @@ final class StreamFusionWindowPersistentAdmission {
         if (config.get(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ENABLED))
             return "window persistent admission: mini-batch topology remains unverified for production";
         var input = (RowType) local.getInputEdges().get(0).getOutputType();
+        var calls = localWindowAggregateCalls(local);
+        boolean distinctTumble = calls.length == 0 && localWindowing(local).getWindow() instanceof TumblingWindowSpec;
         for (int key : localWindowGrouping(local)) {
             var type = input.getTypeAt(key).getTypeRoot();
-            if (type != LogicalTypeRoot.BIGINT && type != LogicalTypeRoot.INTEGER)
+            if (type != LogicalTypeRoot.BIGINT
+                    && type != LogicalTypeRoot.INTEGER
+                    && !(distinctTumble && type == LogicalTypeRoot.VARCHAR))
                 return "window persistent admission: grouping type " + type
                         + " lacks the complete metric/recovery proof for production";
         }
-        var calls = localWindowAggregateCalls(local);
-        if (calls.length == 0) return "window persistent admission: DISTINCT-only windows remain unverified";
+        if (calls.length == 0 && !distinctTumble)
+            return "window persistent admission: DISTINCT-only windows are verified only for TUMBLE";
         for (var call : calls) {
             var kind = call.getAggregation().getKind();
             if (call.isDistinct()

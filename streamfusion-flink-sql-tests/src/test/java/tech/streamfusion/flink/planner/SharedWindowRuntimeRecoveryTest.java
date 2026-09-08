@@ -161,7 +161,7 @@ class SharedWindowRuntimeRecoveryTest {
         return new KeyedNativeMetricHarness(rocks, factory, 1, output(attached), restore, parallelism, subtask);
     }
 
-    private static OperatorSubtaskState snapshot(KeyedNativeMetricHarness source, int mode, long id) throws Exception {
+    static OperatorSubtaskState snapshot(KeyedNativeMetricHarness source, int mode, long id) throws Exception {
         source.region().prepareSnapshotPreBarrier(id);
         if (mode == 0)
             return source.snapshotWithLocalState(id, id, SavepointType.savepoint(SavepointFormatType.CANONICAL))
