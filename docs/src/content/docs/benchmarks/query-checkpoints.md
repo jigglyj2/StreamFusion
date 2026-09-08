@@ -91,24 +91,18 @@ Q9's independent jobs do not have a deterministic transient changelog: repeated 
 runs in the scheduling diagnostic emitted 1,537 and 1,495 changelog records at parallelism one,
 while each ended with the same 593 rows. All sixteen diagnostic runs (two per engine/backend/
 parallelism combination) matched final result bytes within their configuration. Identical-arrival
-operator tests still compare every changelog transition. Release measurement and profiling remain
-the next Q9 checkpoint; no Q9 performance result is claimed yet.
+operator tests still compare every changelog transition.
 
-The first 1,000,000-event Q9 release attempt at `524cf40f` failed on the in-memory backend:
-a 4,096-pair join predicate chunk requested 17,571,236 bytes with 16,059,870 bytes available.
-Its successful Flink fork is diagnostic only. Join predicate chunks now also bound their coarse
-workspace to an internal 8 MiB quantum, preserving the existing per-pair allowance and Flink
-budget. This reduces actual Arrow materialization for wide payloads; it does not change query
-semantics or state retention. The failed run remains under the benchmark module's `target/`.
-The retry at `da5969c9` also failed: the 8,386,348-byte chunk had only 4,856,345 bytes available.
-Predicate admission now halves actual candidate chunks on budget denial before Arrow allocation,
-retaining full per-pair accounting. Native tests verify both cross-row and hot-key masks under a
-2 MiB allowance and oversized-pair failure. The next attempt at `1e44fed9` reached output
-construction, which denied an additional 4,796 bytes with 4,643,496 bytes already reserved for
-output and 3,219 bytes available. Join output now emits an admitted prefix under pressure and
-resumes the existing transition cursor, reducing empty-output fan-out when needed. The Flink
-fork in that failed attempt took 36.006814 seconds; it remains diagnostic, not a comparison.
-A new release comparison is required before reporting Q9 performance.
+[Q9's release report](/StreamFusion/benchmarks/q9-rowdata/) records six alternating measured pairs
+per backend at 250,000 events, separate 500,000-event CPU profiles, and an additional RocksDB
+wall-clock diagnostic. The combined median throughput ratio is 0.766× Flink in memory and 3.107×
+on RocksDB, but the RocksDB sets disagree (3.620× then 0.950×), so no reliable speedup is established.
+General improvements bound wide predicate workspace, shrink candidate chunks on budget denial,
+and drain admitted output prefixes while preserving state-transition order. The million-event
+in-memory run still fails during dirty join-state encoding: another 262,416 bytes are denied with
+7,700,204 already reserved and 139,125 available. Earlier failed attempts are retained in the report;
+no million-event comparison or RocksDB result is claimed. Q9 is delivered within these explicit
+limits. Q10 is next.
 
 ## Q6 has no Flink streaming baseline
 

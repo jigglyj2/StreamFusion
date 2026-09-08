@@ -130,6 +130,8 @@ transitions even across repeated unmodified Flink runs. The fixed-arrival operat
 complete changelog comparisons; the independent-job test does not claim identical transient
 changelogs. The shared fragment remains restricted to the production subset described above. The existing `topNComparatorCalls`
 diagnostic counts adapter comparator calls; it does not count comparisons inside DataFusion kernels.
+The [Q9 release comparison](/StreamFusion/benchmarks/q9-rowdata/) documents bounded measurements,
+profiles, substantial timing variation and the remaining million-event join-state capacity limit.
 
 
 Arrow batches cross JNI only at native-plan edges; adjacent native stages share Arrow buffers. Rust computes Flink-compatible key groups, reads the
