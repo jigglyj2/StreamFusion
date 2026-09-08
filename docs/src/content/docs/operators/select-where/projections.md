@@ -23,6 +23,14 @@ Unlisted large expression workspaces still need admission coverage. Bounded buff
 do not require separate reservations. See
 [memory accounting](/StreamFusion/development/memory-and-configuration/) for the exact scope.
 
+Timezone-free millisecond timestamp addition/subtraction with a literal day-time interval uses
+DataFusion wrapping `BIGINT` arithmetic between zero-copy Arrow timestamp casts. This matches
+Flink's internal signed-long millisecond behavior across negative epochs and overflow; it avoids
+the narrower calendar range of Arrow's timestamp/interval kernel. Generated Flink Calc parity
+covers the full millisecond range, signed intervals, nulls, all changelog kinds, stream timestamps,
+and stage metrics. The existing fixed-width expression workspace and Arrow ownership accounting
+apply. This does not widen support for other timestamp precisions, time zones, or interval families.
+
 ## SQL example
 
 ```sql

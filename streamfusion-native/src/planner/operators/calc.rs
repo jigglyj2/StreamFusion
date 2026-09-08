@@ -871,12 +871,20 @@ pub(super) fn create_expression(
                 })?,
                 schema,
             )?;
-            let right = create_expression(
-                arithmetic.right.as_ref().ok_or_else(|| {
-                    DataFusionError::Plan("arithmetic right operand is empty".to_string())
-                })?,
-                schema,
-            )?;
+            let right_proto = arithmetic.right.as_ref().ok_or_else(|| {
+                DataFusionError::Plan("arithmetic right operand is empty".to_string())
+            })?;
+            if arithmetic.result_type.is_none() {
+                if let Some(expression) = expressions::timestamp_arithmetic::literal_day_time(
+                    Arc::clone(&left),
+                    operator,
+                    right_proto,
+                    schema,
+                )? {
+                    return Ok(expression);
+                }
+            }
+            let right = create_expression(right_proto, schema)?;
             if let Some(result_type) = arithmetic.result_type.as_ref() {
                 let target_type = expressions::null_literal::data_type(result_type)?;
                 if !matches!(target_type, arrow::datatypes::DataType::Decimal128(_, _)) {

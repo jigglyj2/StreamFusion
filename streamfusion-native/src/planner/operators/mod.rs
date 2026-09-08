@@ -10,6 +10,8 @@ pub(super) mod array_unnest;
 pub(crate) mod bounded_rank;
 pub(crate) mod bounded_sort;
 pub(super) mod calc;
+#[cfg(test)]
+mod calc_timestamp_arithmetic_tests;
 pub(crate) mod envelope;
 
 #[cfg(test)]
