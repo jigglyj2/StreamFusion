@@ -38,6 +38,14 @@ precision, strings and binary values, arrays, maps, nested rows, and nulls. Slic
 vectors are rebased to offset zero before crossing into Java because Java consumers do
 not consistently preserve Arrow slice offsets.
 
+When a unary native region begins with a Calc over a RowData source, the source adapter
+writes only the top-level fields and nested paths referenced by that Calc's projection
+and predicate. Nullable parent rows remain nullable in the flattened Arrow fields.
+The planner remaps the first Calc's input references while preserving its physical
+identity, metrics and control policy; DataFusion still evaluates the predicate and
+expressions. Existing Arrow inputs retain their layout and shared buffers. This source
+projection also applies to mixed unary regions, such as Calc followed by expansion.
+
 For filtered Calc batches, Rust is the sole authority on row selection. StreamFusion adds
 a hidden zero-based input ordinal before DataFusion execution, carries it through the
 native filter and projection, and returns the selected ordinals with the output batch.

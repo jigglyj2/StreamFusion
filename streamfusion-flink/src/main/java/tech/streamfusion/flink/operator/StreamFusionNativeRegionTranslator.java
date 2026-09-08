@@ -13,6 +13,7 @@ import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatchTypeInfo;
 import tech.streamfusion.flink.arrow.StreamFusionArrowBoundaries;
+import tech.streamfusion.flink.calc.StreamFusionInputProjection;
 import tech.streamfusion.flink.memory.StreamFusionTaskMemory;
 import tech.streamfusion.proto.plan.v1.NativePlan;
 import tech.streamfusion.proto.plan.v1.Operator;
@@ -78,9 +79,38 @@ public final class StreamFusionNativeRegionTranslator {
 
     public static Transformation<RowData> translate(
             Transformation<RowData> input, RowType inputType, RowType outputType, List<byte[]> stages) {
+        if (stages.isEmpty()) {
+            throw new IllegalArgumentException("A native region must contain at least one stage");
+        }
+        Transformation<ArrowRowDataBatch> arrowInput;
+        NativePlan first = decode(stages.get(0));
+        if (!StreamFusionArrowBoundaries.isArrow(input)
+                && first.getProtocolVersion() >= 2
+                && first.getRoot().hasCalc()
+                && first.getRoot().getCalc().getPreserveInputEnvelope()) {
+            var calc = first.getRoot().getCalc();
+            var projection = StreamFusionInputProjection.create(
+                    inputType, calc.getProjectionsList(), calc.hasCondition() ? calc.getCondition() : null);
+            var rewritten = calc.toBuilder().clearProjections().addAllProjections(projection.projections());
+            if (projection.condition() != null) rewritten.setCondition(projection.condition());
+            // Keep physical identities, control policy and all subsequent stages intact. Only
+            // the first Calc's input layout changes; computation still runs in DataFusion.
+            stages = new java.util.ArrayList<>(stages);
+            stages.set(
+                    0,
+                    first.toBuilder()
+                            .setRoot(first.getRoot().toBuilder().setCalc(rewritten))
+                            .build()
+                            .toByteArray());
+            inputType = projection.inputType();
+            arrowInput = StreamFusionArrowBoundaries.toArrow(
+                    input, inputType, projection.fieldPaths(), projection.rowArities());
+        } else {
+            arrowInput = StreamFusionArrowBoundaries.toArrow(input, inputType);
+        }
         byte[] plan = compose(stages);
         OneInputTransformation<ArrowRowDataBatch, ArrowRowDataBatch> result = new OneInputTransformation<>(
-                StreamFusionArrowBoundaries.toArrow(input, inputType),
+                arrowInput,
                 "streamfusion-native-region[" + stages.size() + "]",
                 StreamFusionArrowNativeOperator.forRegion(inputType, outputType, plan, "streamfusion-native-region"),
                 ArrowRowDataBatchTypeInfo.INSTANCE,
