@@ -27,16 +27,25 @@ final class SlicingWindowFlinkPlan {
     }
 
     static OneInputTransformation<?, ?> stage(String name, boolean tumble) throws Exception {
+        return stage(name, tumble, false);
+    }
+
+    static OneInputTransformation<?, ?> stage(String name, boolean tumble, boolean stringKey) throws Exception {
         return stage(
                 name,
                 "SELECT k, COUNT(*) AS n, window_start, window_end FROM TABLE("
                         + (tumble ? "TUMBLE" : "HOP")
                         + "(TABLE local_window_input, DESCRIPTOR(ts), INTERVAL '2' SECOND"
                         + (tumble ? "" : ", INTERVAL '6' SECOND")
-                        + ")) GROUP BY k, window_start, window_end");
+                        + ")) GROUP BY k, window_start, window_end",
+                stringKey);
     }
 
     static OneInputTransformation<?, ?> stage(String name, String sql) throws Exception {
+        return stage(name, sql, false);
+    }
+
+    private static OneInputTransformation<?, ?> stage(String name, String sql, boolean stringKey) throws Exception {
         String factory = System.getProperty(StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY);
         String processor = System.getProperty(StreamFusionPlannerFactory.EXEC_GRAPH_PROCESSOR_PROPERTY);
         System.clearProperty(StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY);
@@ -50,14 +59,19 @@ final class SlicingWindowFlinkPlan {
             tables.getConfig()
                     .set(OptimizerConfigOptions.TABLE_OPTIMIZER_AGG_PHASE_STRATEGY, AggregatePhaseStrategy.TWO_PHASE);
             var source = env.fromCollection(
-                    List.of(Row.of(1L, LocalDateTime.of(2026, 1, 1, 0, 0))),
-                    Types.ROW_NAMED(new String[] {"k", "ts"}, Types.LONG, Types.LOCAL_DATE_TIME));
+                    List.of(Row.of(stringKey ? "key" : 1L, LocalDateTime.of(2026, 1, 1, 0, 0))),
+                    Types.ROW_NAMED(
+                            new String[] {"k", "ts"}, stringKey ? Types.STRING : Types.LONG, Types.LOCAL_DATE_TIME));
             tables.createTemporaryView(
                     "local_window_input",
                     tables.fromDataStream(
                             source,
                             Schema.newBuilder()
-                                    .column("k", org.apache.flink.table.api.DataTypes.BIGINT())
+                                    .column(
+                                            "k",
+                                            stringKey
+                                                    ? org.apache.flink.table.api.DataTypes.STRING()
+                                                    : org.apache.flink.table.api.DataTypes.BIGINT())
                                     .column("ts", org.apache.flink.table.api.DataTypes.TIMESTAMP(3))
                                     .watermark("ts", "ts")
                                     .build()));

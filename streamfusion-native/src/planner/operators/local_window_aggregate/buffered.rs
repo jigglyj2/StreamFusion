@@ -5,11 +5,14 @@
 //! Flink operator's memory share and shared-plan control binding.
 
 use super::buffer_layout::BufferLayout;
+use super::row_layout::RowLayout;
 use super::*;
 use crate::planner::operators::group_aggregate::grouped_compute::GroupedOutput;
 
 mod control;
 pub(crate) mod execution_plan;
+#[cfg(test)]
+mod string_tests;
 #[cfg(test)]
 mod tests;
 
@@ -25,8 +28,8 @@ pub(super) struct BufferedWindow {
     cursor: Option<InputCursor>,
     flushing: Option<FlushCursor>,
     layout: BufferLayout,
-    key_fixed: usize,
-    input_fixed: usize,
+    key_layout: RowLayout,
+    input_layout: RowLayout,
     min_slice_end: i64,
     current_watermark: i64,
     next_trigger_watermark: i64,
@@ -100,6 +103,7 @@ impl BufferedWindow {
             if !matches!(
                 field.data_type(),
                 DataType::Boolean
+                    | DataType::Utf8
                     | DataType::Int8
                     | DataType::Int16
                     | DataType::Int32
@@ -118,8 +122,19 @@ impl BufferedWindow {
         let retained = kernel
             .reservation
             .sibling("local window retained grouped state");
-        let key_fixed = fixed_bytes(kernel.plan.grouping_indices.len())?;
-        let input_fixed = fixed_bytes(kernel.input_schema.fields().len())?;
+        let key_layout = RowLayout::new(
+            &kernel.input_schema,
+            &kernel
+                .plan
+                .grouping_indices
+                .iter()
+                .map(|&index| index as usize)
+                .collect::<Vec<_>>(),
+        )?;
+        let input_layout = RowLayout::new(
+            &kernel.input_schema,
+            &(0..kernel.input_schema.fields().len()).collect::<Vec<_>>(),
+        )?;
         Ok(Self {
             kernel,
             groups: hashbrown::HashTable::new(),
@@ -129,8 +144,8 @@ impl BufferedWindow {
             cursor: None,
             flushing: None,
             layout: BufferLayout::new(flink_memory_bytes, page_bytes)?,
-            key_fixed,
-            input_fixed,
+            key_layout,
+            input_layout,
             min_slice_end: i64::MAX,
             current_watermark: 0,
             next_trigger_watermark: 0,
@@ -160,8 +175,7 @@ impl BufferedWindow {
             ));
         }
         // Also admit replacement hash/group vectors during growth before touching state.
-        let allowance =
-            self.input_workspace(batch.num_rows(), batch.num_rows().min(COMPUTE_ROWS))?;
+        let allowance = self.input_workspace(&batch, batch.num_rows().min(COMPUTE_ROWS))?;
         self.kernel.reservation.resize(allowance)?;
         let keys = if self.kernel.plan.grouping_indices.is_empty() {
             None
@@ -215,7 +229,7 @@ impl BufferedWindow {
         let rows = (cursor.batch.num_rows() - start).min(COMPUTE_ROWS);
         self.kernel
             .reservation
-            .resize(self.input_workspace(cursor.batch.num_rows(), rows)?)?;
+            .resize(self.input_workspace(&cursor.batch, rows)?)?;
         let end = start + rows;
         let mut indices = Vec::with_capacity(rows);
         let mut pressure = false;
@@ -240,10 +254,10 @@ impl BufferedWindow {
                 .copied();
             if !self.layout.append(
                 existing.is_none(),
-                self.key_fixed,
-                self.key_fixed,
-                self.input_fixed,
-                self.input_fixed,
+                self.key_layout.fixed,
+                self.key_layout.bytes(&cursor.batch, row)?,
+                self.input_layout.fixed,
+                self.input_layout.bytes(&cursor.batch, row)?,
             )? {
                 if self.groups.is_empty() {
                     return Err(DataFusionError::ResourcesExhausted(
@@ -297,7 +311,7 @@ impl BufferedWindow {
 
     // Keep the batch's encoded keys while advancing bounded zero-copy compute slices.
     // Chunk completion is internal and must not flush Flink-visible partial records.
-    fn input_workspace(&self, batch_rows: usize, compute_rows: usize) -> Result<usize> {
+    fn input_workspace(&self, batch: &RecordBatch, compute_rows: usize) -> Result<usize> {
         let key_width = self
             .kernel
             .plan
@@ -306,7 +320,16 @@ impl BufferedWindow {
             .checked_mul(32)
             .and_then(|bytes| bytes.checked_add(16))
             .ok_or_else(overflow)?;
-        let keys = batch_rows.checked_mul(key_width).ok_or_else(overflow)?;
+        let payload = self
+            .key_layout
+            .encoding_payload(batch)?
+            .checked_mul(4)
+            .ok_or_else(overflow)?;
+        let keys = batch
+            .num_rows()
+            .checked_mul(key_width)
+            .and_then(|bytes| bytes.checked_add(payload))
+            .ok_or_else(overflow)?;
         let growth = self.growth_headroom(compute_rows)?;
         self.kernel
             .buffered_batch_admission(compute_rows)?
@@ -417,17 +440,23 @@ impl BufferedWindow {
         // Arrow batch boundaries are internal: preserve Flink's partial/control order
         // while allowing a large flush to drain through a smaller managed-memory share.
         // Admission still fails normally if even one row cannot fit.
-        let capacity = output_memory
-            .available_capacity()?
-            .map_or(OUTPUT_ROWS, |available| {
-                (available.saturating_sub(64 * 1024) / per_row).clamp(1, OUTPUT_ROWS)
-            });
-        let end = (flush.offset + capacity).min(self.order.len());
-        let rows = end - flush.offset;
-        let allowance = rows
-            .checked_mul(per_row)
-            .and_then(|bytes| bytes.checked_add(64 * 1024))
-            .ok_or_else(overflow)?;
+        let available = output_memory.available_capacity()?.unwrap_or(usize::MAX);
+        let mut end = flush.offset;
+        let mut allowance = 64 * 1024usize;
+        while end < (flush.offset + OUTPUT_ROWS).min(self.order.len()) {
+            let next = self.order[end]
+                .grouping_row
+                .len()
+                .checked_mul(4)
+                .and_then(|bytes| bytes.checked_add(per_row))
+                .and_then(|bytes| bytes.checked_add(allowance))
+                .ok_or_else(overflow)?;
+            if end > flush.offset && next > available {
+                break;
+            }
+            allowance = next;
+            end += 1;
+        }
         output_memory.resize(allowance)?;
         let output = self.kernel.output_partials((flush.offset..end).map(|row| {
             flush
@@ -470,14 +499,6 @@ impl Drop for BufferedWindow {
     }
 }
 
-fn fixed_bytes(arity: usize) -> Result<usize> {
-    arity
-        .checked_add(71)
-        .map(|n| n / 64)
-        .and_then(|words| words.checked_add(arity))
-        .and_then(|words| words.checked_mul(8))
-        .ok_or_else(overflow)
-}
 fn overflow() -> DataFusionError {
     DataFusionError::ResourcesExhausted("local window retained buffer admission overflow".into())
 }

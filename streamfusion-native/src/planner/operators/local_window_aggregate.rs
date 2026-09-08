@@ -21,6 +21,7 @@ mod admission;
 mod buffer_layout;
 pub(crate) mod buffered;
 mod planning;
+mod row_layout;
 
 const INSERT: i8 = 0;
 const UPDATE_BEFORE: i8 = 1;

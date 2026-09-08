@@ -4,10 +4,11 @@
 use super::*;
 
 impl LocalWindowAggregateProcessor {
-    /// Buffered fixed-width execution retains compact DataFusion group vectors and an
+    /// Buffered execution retains compact DataFusion group vectors and an
     /// ordered key index. It borrows input arrays and emits partials separately at a
     /// Flink buffer/control boundary, so the eager path's input-copy and serialized-
-    /// output allowance is not needed here. Reserve growth and batch scratch together.
+    /// output allowance is not needed here. Reserve growth and batch scratch together;
+    /// the buffered owner adds variable key payload credit from logical Arrow spans.
     pub(super) fn buffered_batch_admission(&self, rows: usize) -> Result<usize> {
         let per_row = self
             .calls

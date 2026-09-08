@@ -114,21 +114,37 @@ class SharedLocalWindowParityTest {
         assertThat(memory.available()).isEqualTo(memory.limit());
     }
 
-    private static final class Comparison implements AutoCloseable {
+    static final class Comparison implements AutoCloseable {
         final SharedAggregateRegionParityTest.Memory memory = new SharedAggregateRegionParityTest.Memory();
         final OneInputStreamOperatorTestHarness<RowData, RowData> flink;
         final RootAllocator allocator;
         final NativeExecutionContext context;
         final ArrowNativePlanDispatcher dispatcher;
-        final RowDataSerializer serializer = new RowDataSerializer(FLINK_PARTIAL);
+        final RowDataSerializer serializer;
+        final RowType input;
+        final boolean stringKey;
         long inputs, outputs;
 
         Comparison(boolean tumble) throws Exception {
+            this(tumble, false);
+        }
+
+        Comparison(boolean tumble, boolean stringKey) throws Exception {
+            this.stringKey = stringKey;
+            input = RowType.of(
+                    stringKey
+                            ? new org.apache.flink.table.types.logical.VarCharType(
+                                    org.apache.flink.table.types.logical.VarCharType.MAX_LENGTH)
+                            : new BigIntType(),
+                    INPUT.getTypeAt(1));
+            var partial = SharedLocalWindowFixture.partial(input);
+            serializer = new RowDataSerializer(
+                    RowType.of(input.getTypeAt(0), FLINK_PARTIAL.getTypeAt(1), FLINK_PARTIAL.getTypeAt(2)));
             flink = LocalWindowFlinkOracle.create(
-                    SlicingWindowFlinkPlan.stage("LocalWindowAggregate", tumble), 3L << 20);
+                    SlicingWindowFlinkPlan.stage("LocalWindowAggregate", tumble, stringKey), 3L << 20);
             allocator = new RootAllocator(64L << 20);
-            context = new NativeExecutionContext(plan(INPUT, tumble), memory, null, resources());
-            dispatcher = new ArrowNativePlanDispatcher(context, List.of(INPUT), PARTIAL, allocator);
+            context = new NativeExecutionContext(plan(input, tumble), memory, null, resources());
+            dispatcher = new ArrowNativePlanDispatcher(context, List.of(input), partial, allocator);
             assertThat(context.hasStateBindings()).isFalse();
             assertThat(context.requiresInputEnvelope()).isTrue();
         }
@@ -137,7 +153,7 @@ class SharedLocalWindowParityTest {
             for (var row : rows) flink.processElement(new StreamRecord<>(row, 123));
             inputs += rows.size();
             var actual = new DataOutputSerializer(128);
-            try (var batch = ArrowRowDataBatch.transpose(rows, INPUT, allocator)) {
+            try (var batch = ArrowRowDataBatch.transpose(rows, input, allocator)) {
                 dispatcher.process(0, batch, output -> append(output, actual));
             }
             compare(actual);
@@ -182,7 +198,10 @@ class SharedLocalWindowParityTest {
                     assertThat(state.getLong(18)).isEqualTo(count);
                     assertThat(value.getLong(2)).isEqualTo(value.getLong(3) - 2000);
                     serializer.serialize(
-                            GenericRowData.of(value.isNullAt(0) ? null : value.getLong(0), count, value.getLong(3)),
+                            GenericRowData.of(
+                                    value.isNullAt(0) ? null : stringKey ? value.getString(0) : value.getLong(0),
+                                    count,
+                                    value.getLong(3)),
                             target);
                 }
             } catch (java.io.IOException failure) {

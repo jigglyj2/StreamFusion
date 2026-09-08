@@ -27,7 +27,7 @@ final class SharedLocalWindowFixture {
         return SharedSlicingWindowFixture.compose(
                 tech.streamfusion.flink.planner.window.StreamFusionLocalWindowAggregateTranslator.createStagePlan(
                         input,
-                        PARTIAL,
+                        partial(input),
                         new int[] {0},
                         new org.apache.calcite.rel.core.AggregateCall[] {
                             SharedSlicingWindowFixture.call(
@@ -43,5 +43,9 @@ final class SharedLocalWindowFixture {
                         SharedSlicingWindowFixture.config()),
                 2,
                 4);
+    }
+
+    static RowType partial(RowType input) {
+        return RowType.of(input.getTypeAt(0), PARTIAL.getTypeAt(1), PARTIAL.getTypeAt(2), PARTIAL.getTypeAt(3));
     }
 }

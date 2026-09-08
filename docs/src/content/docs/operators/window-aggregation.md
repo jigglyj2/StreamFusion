@@ -67,11 +67,22 @@ do not flush; a terminal watermark uses the normal event-time path.
 share and page size before lowering. A capacity model matches Flink's `WindowBytesMultiMap`
 geometry without constructing RowData. This bookkeeping preserves observable pressure-flush
 boundaries; actual native buffers and retained state use coarse Flink memory reservations.
-The buffered subset requires UTC, TIMESTAMP(3) time columns, fixed-width Flink row geometry
+The buffered subset requires UTC, TIMESTAMP(3) time columns, verified Flink row geometry
 and compatible append-only DataFusion aggregates. Direct event-time columns may be declared
 nullable: a batch containing an actual null rowtime fails before changing grouped state, with
 Flink's `RowTime field should not be null` error. The bitmap check runs once per batch.
 Attached window ends must remain non-null.
+
+The local fragment also supports VARCHAR input and grouping columns. It reads UTF-8 lengths
+directly from Arrow: Flink embeds at most seven bytes in the fixed word and rounds longer values
+to eight-byte variable storage. Null strings add no variable bytes. Key and input row sizes feed
+the existing page model without transposing or serializing rows. Generated Flink local-operator
+comparisons cover nullable, empty, Unicode, seven/eight-byte and wider strings, TUMBLE/HOP controls,
+checkpoint pre-barriers and pressure flushes across Arrow batch sizes. Native checks cover sliced
+inputs, allocation peaks, output ownership and wide-key output under a constrained share.
+Variable key bytes have coarse encoding/retention allowances; output chunks include their actual
+encoded key lengths. Ordinary whole-plan VARCHAR window grouping and DISTINCT-only windows
+remain gated until their global state, metric and recovery contracts are verified.
 
 The shared local fragment builder supports direct and attached HOP COUNT/MIN/MAX for that
 verified subset. Attached windows follow Flink's `WindowedSliceAssigner`: only the attached end
