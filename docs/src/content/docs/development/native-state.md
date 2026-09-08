@@ -111,8 +111,11 @@ both backends, including restored input and logical stage I/O.
 Runtime tests cover canonical backend switching, aligned/unaligned operator snapshots, generated
 replay and Flink union-state 2→1 rescaling. The shared scalar metric channel also publishes real
 late-drop counters/meters and a live Flink-clock watermark-latency gauge, with generated default
-metric-surface parity. In-flight channel replay, final selected-topology metrics, original local
-memory-share binding and ordinary planner admission remain outstanding; see [Window aggregation](/StreamFusion/operators/window-aggregation/).
+metric-surface parity. A shared/attached window mailbox-task matrix uses two Flink input channels,
+aligned/unaligned barriers, generated IPC frames captured by the channel-state writer, and replay
+through Flink's channel-state reader. It verifies exact post-restore rows and watermarks on both
+backends, including late partials and older replayed watermarks. Final selected-topology metrics
+and recovery, original local memory-share binding and ordinary planner admission remain outstanding; see [Window aggregation](/StreamFusion/operators/window-aggregation/).
 
 The group-aggregate binding accepts synchronous and mini-batch streaming raw input, including
 retractions, and mini-batch global partial-accumulator input. Raw/global bundles drain through the

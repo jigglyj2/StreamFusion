@@ -117,15 +117,21 @@ Storage instrumentation verifies one retained value per slice and input writes i
 the growing timer index. Shared Java region tests additionally compare generated replayed data
 and watermark output with Flink after canonical, aligned and unaligned operator snapshots, on
 both backends, including canonical backend switching. Real Flink union-state repartitioning tests
-cover 2→1 clock restore with no live window entries. These operator-snapshot checks do not yet
-establish in-flight channel replay for windows or full production admission. Remaining
+cover 2→1 clock restore with no live window entries. A mailbox-task matrix also exercises aligned
+and unaligned checkpoints with two real Flink input channels. It captures generated Arrow IPC
+partials between their barriers, restores them through Flink's channel-state reader, and compares
+complete changelogs and watermarks with Flink on both backends. Cases include fully late and
+partially late input, shared/attached namespaces, and an older replayed watermark after restore.
+The test seam supplies network capture for Flink's test channel; checkpoint handles, serialization,
+state writing/reading, routing, and the Arrow-to-RowData sink boundary use their real implementations.
+These direct-region checks still leave production planner admission outstanding. Remaining
 Q5 requirements include:
 
 - Automatic Java fragment/resource binding, including the original local memory share.
 - Ownership of the reused aggregate's two outputs, without duplicating computation or disabling
   Flink reuse.
 - Final physical-topology metric and checkpoint/replay contracts, including optional state/backend
-  metric settings, latency scopes, and aligned/unaligned channel recovery.
+  metric settings, latency scopes, and recovery of the complete selected multi-stage topology.
 - Ordinary whole-plan admission, followed by release benchmarks and profiling on both backends.
 
 ## Retained semantic implementation
