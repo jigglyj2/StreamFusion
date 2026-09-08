@@ -17,6 +17,12 @@ selection remain configurable. RocksDB-specific options do not reject an in-memo
 This configuration guard supplements the existing metric and physical-family admission gates;
 it does not establish default-option parity or unlock stateful production plans by itself.
 
+The native RocksDB component now builds and explicitly selects Snappy compression on every SST
+level, matching Flink's default compression choice. Previously the codec was omitted from the
+native dependency build. A checkpoint test verifies actual compression of repetitive state and
+exact value recovery after reopening the saved SSTs. This is a format/configuration check, not
+a throughput result; non-default compression settings still require whole-plan fallback.
+
 ## Shared native-plan state bindings
 
 The common Java `NativeExecutionContext` accepts a separate, versioned `NativeStateBindings`

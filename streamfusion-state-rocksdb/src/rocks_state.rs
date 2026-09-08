@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, Weak};
 
 use rocksdb::checkpoint::Checkpoint;
-use rocksdb::{BlockBasedOptions, Cache, Options, WriteBatch, WriteBufferManager, DB};
+use rocksdb::{
+    BlockBasedOptions, Cache, DBCompressionType, Options, WriteBatch, WriteBufferManager, DB,
+};
 use streamfusion_state_abi::decode_key_group_snapshot;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,6 +91,10 @@ impl RocksStateBackend {
         let shared_memory = shared_rocks_memory(memory_limit, scope)?;
         let mut options = Options::default();
         options.create_if_missing(true);
+        // Flink's default RocksDBConfigurableOptions uses Snappy on every level. Compile the
+        // codec explicitly: a RocksDB build without Snappy otherwise silently stores raw SSTs.
+        options.set_compression_type(DBCompressionType::Snappy);
+        options.set_compression_per_level(&[DBCompressionType::Snappy]);
         let mut table_options = BlockBasedOptions::default();
         table_options.set_block_cache(&shared_memory.cache);
         // Keep index and filter blocks inside the same Flink-reserved cache instead of letting
@@ -437,6 +443,53 @@ fn rocks_error(error: rocksdb::Error) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn checkpoint_ssts_use_flinks_default_snappy_and_reopen_with_exact_values() {
+        let directory = tempfile::tempdir().unwrap();
+        let checkpoint = tempfile::tempdir().unwrap();
+        let saved = checkpoint.path().join("state");
+        let value = b"repeated-state-payload".repeat(2048);
+        let keys = (0u32..128)
+            .map(|index| StateKey {
+                key_group: 0,
+                key: index.to_be_bytes().to_vec(),
+            })
+            .collect::<Vec<_>>();
+        let state = RocksStateBackend::open(directory.path(), 0, 0).unwrap();
+        state
+            .write_batch(
+                keys.iter()
+                    .cloned()
+                    .map(|key| StateMutation {
+                        key,
+                        value: Some(value.clone()),
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        let snapshot = state.checkpoint(&saved).unwrap();
+        let sst_bytes = snapshot
+            .files
+            .iter()
+            .filter(|file| {
+                file.relative_path
+                    .extension()
+                    .is_some_and(|extension| extension == "sst")
+            })
+            .map(|file| file.size)
+            .sum::<u64>();
+        assert!(sst_bytes > 0);
+        assert!(
+            sst_bytes < (keys.len() * value.len() / 4) as u64,
+            "Snappy must be compiled in, not just named in OPTIONS: {sst_bytes} bytes"
+        );
+        let reopened = RocksStateBackend::open(&saved, 0, 0).unwrap();
+        assert_eq!(
+            reopened.get_batch(&keys).unwrap(),
+            vec![Some(value); keys.len()]
+        );
+    }
 
     #[test]
     fn admitted_batch_reads_preserve_order_duplicates_and_missing_values() {
