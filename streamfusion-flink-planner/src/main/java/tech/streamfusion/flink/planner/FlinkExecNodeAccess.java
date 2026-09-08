@@ -680,7 +680,11 @@ final class FlinkExecNodeAccess {
         }
         boolean[] filterNulls = new boolean[leftKeys.length];
         java.util.Arrays.fill(filterNulls, true);
-        return new JoinSpec(joinTypes.get(1), leftKeys, rightKeys, filterNulls, conditions.get(1));
+        // MultiJoin keeps the complete predicate, unlike JoinSpec's non-equi field. The keyed
+        // lookup already enforces every common equi key. Avoid decoding candidate payloads and
+        // evaluating that same equality again when the attribute map covers the whole condition.
+        RexNode residual = multiJoinEquiOnly(join) ? null : conditions.get(1);
+        return new JoinSpec(joinTypes.get(1), leftKeys, rightKeys, filterNulls, residual);
     }
 
     static boolean multiJoinEquiOnly(StreamExecMultiJoin join) {

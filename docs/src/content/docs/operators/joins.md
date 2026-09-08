@@ -126,8 +126,12 @@ left joins. Stored payloads and predicate fields accept every Arrow-representabl
 nested logical type.
 
 A two-input `StreamExecMultiJoin` with a common equi key is lowered to the regular native join.
-This preserves its full generated residual condition and covers Flink's physical form for official
-Nexmark q4 and q9. Three-or-more-input multi-joins use the multi-way cursor and still
+When its entire condition is covered by the common equality keys, lowering omits the redundant
+residual predicate: keyed state lookup already enforces those equalities and null filtering. This
+avoids decoding candidate payloads and evaluating an Arrow comparison for each probe. Conditions
+with additional comparisons retain the complete DataFusion residual, including equalities outside
+the partition-key map. This applies to binary equi-joins generally, including Flink's physical forms
+for Nexmark q3, q4 and q9; it does not change production admission. Three-or-more-input multi-joins use the multi-way cursor and still
 require every predicate to be represented by the attribute map.
 
 Multi-way state now uses a per-key directory and independently persisted 256-row pages. Stable

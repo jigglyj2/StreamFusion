@@ -28,11 +28,14 @@ import org.apache.flink.table.types.logical.BigIntType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.VarCharType;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 class StreamFusionExecMultiJoinTest {
-    @Test
-    void lowersBinaryMultiJoinWithResidualPredicateToRegularJoin() throws Exception {
+    @ParameterizedTest
+    @CsvSource({"false,false", "true,false", "true,true"})
+    void keyedLookupEliminatesOnlyConditionsFullyCoveredByItsEquiKeys(boolean hasResidual, boolean extraEquality)
+            throws Exception {
         Configuration configuration = new Configuration();
         RowType inputType =
                 RowType.of(new LogicalType[] {new BigIntType(false), new VarCharType()}, new String[] {"id", "value"});
@@ -49,10 +52,10 @@ class StreamFusionExecMultiJoinTest {
                 rex.makeInputRef(typeFactory.createSqlType(SqlTypeName.BIGINT), 0),
                 rex.makeInputRef(typeFactory.createSqlType(SqlTypeName.BIGINT), 2));
         RexNode residual = rex.makeCall(
-                SqlStdOperatorTable.NOT_EQUALS,
+                extraEquality ? SqlStdOperatorTable.EQUALS : SqlStdOperatorTable.NOT_EQUALS,
                 rex.makeInputRef(typeFactory.createSqlType(SqlTypeName.VARCHAR), 1),
                 rex.makeInputRef(typeFactory.createSqlType(SqlTypeName.VARCHAR), 3));
-        RexNode condition = rex.makeCall(SqlStdOperatorTable.AND, equi, residual);
+        RexNode condition = hasResidual ? rex.makeCall(SqlStdOperatorTable.AND, equi, residual) : equi;
         StreamExecMultiJoin join = new StreamExecMultiJoin(
                 configuration,
                 List.of(FlinkJoinType.INNER, FlinkJoinType.INNER),
@@ -76,7 +79,9 @@ class StreamFusionExecMultiJoinTest {
         JoinSpec joinSpec = (JoinSpec) joinSpecField.get(replacement);
         assertThat(joinSpec.getLeftKeys()).containsExactly(0);
         assertThat(joinSpec.getRightKeys()).containsExactly(0);
-        assertThat(joinSpec.getNonEquiCondition()).contains(condition);
+        assertThat(joinSpec.getFilterNulls()).containsExactly(true);
+        if (hasResidual) assertThat(joinSpec.getNonEquiCondition()).contains(condition);
+        else assertThat(joinSpec.getNonEquiCondition()).isEmpty();
         assertThat(replacement.getInputEdges()).extracting(ExecEdge::getSource).containsExactly(left, right);
     }
 
