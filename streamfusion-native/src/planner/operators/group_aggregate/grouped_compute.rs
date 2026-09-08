@@ -9,6 +9,9 @@ use super::datafusion_compute::Kernels;
 use super::*;
 use datafusion::logical_expr::{EmitTo, GroupsAccumulator};
 
+mod merge;
+pub(in crate::planner::operators) use merge::GroupedMerge;
+
 pub(in crate::planner::operators) struct GroupedCompute {
     values: Vec<Box<dyn GroupsAccumulator>>,
     non_null: Vec<Option<Box<dyn GroupsAccumulator>>>,

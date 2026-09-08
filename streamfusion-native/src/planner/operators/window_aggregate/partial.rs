@@ -3,6 +3,8 @@
 
 use super::*;
 
+mod grouped;
+
 impl WindowAggregateProcessor {
     pub(super) fn process_partial_batch(&mut self, batch: &RecordBatch) -> Result<RecordBatch> {
         let accumulator_index =
@@ -124,9 +126,17 @@ impl WindowAggregateProcessor {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
+        // Decode each accepted input once, even when it contributes to several windows.
+        let mut decoded = (0..batch.num_rows()).map(|_| None).collect::<Vec<_>>();
+        for &(row, _, _, _) in &row_windows {
+            if decoded[row].is_none() {
+                decoded[row] = Some(decode_state(partials.value(row), &self.calls)?);
+            }
+        }
+        let merged = grouped::merge_append_partials(&self.calls, &staged, &decoded, &row_windows)?;
         let mut dirty_timer_groups = BTreeSet::new();
         for (row, index, start, end) in row_windows {
-            let partial = decode_state(partials.value(row), &self.calls)?;
+            let partial = decoded[row].as_ref().unwrap();
             let entry = &mut staged[index];
             let was_empty = entry.accumulator.row_count == 0;
             if was_empty && partial.row_count <= 0 {
@@ -135,7 +145,12 @@ impl WindowAggregateProcessor {
             if was_empty {
                 entry.grouping_row = grouping_rows[row].clone();
             }
-            entry.accumulator.merge(&self.calls, &partial)?;
+            if merged.is_some() {
+                // Flink timer transitions use input order; aggregate computation is vectorized.
+                entry.accumulator.row_count += partial.row_count;
+            } else {
+                entry.accumulator.merge(&self.calls, partial)?;
+            }
             let timer = TimerKey {
                 timestamp: self.timer_timestamp(end.saturating_sub(1))?,
                 key: entry.key.key.clone(),
@@ -154,6 +169,11 @@ impl WindowAggregateProcessor {
                 dirty_timer_groups.insert(entry.key.key_group);
             }
             entry.touched = true;
+        }
+        if let Some(merged) = merged {
+            for (index, entry) in staged.iter_mut().enumerate() {
+                entry.accumulator = merged.state(&self.calls, index)?;
+            }
         }
         let mut mutations = staged
             .into_iter()

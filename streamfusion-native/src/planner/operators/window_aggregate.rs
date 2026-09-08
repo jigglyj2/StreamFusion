@@ -318,7 +318,9 @@ impl WindowAggregateProcessor {
     ) -> Result<RecordBatch> {
         self.prepare_schema(batch.schema())?;
         self.current_processing_time = self.current_processing_time.max(processing_time);
-        let window_copies = if self.plan.partial_accumulator_index.is_some() {
+        let window_copies = if self.plan.partial_accumulator_index.is_some()
+            && !self.plan.partial_windows_are_slices
+        {
             1
         } else {
             match proto::WindowKind::try_from(self.plan.kind) {
@@ -337,9 +339,19 @@ impl WindowAggregateProcessor {
                 _ => 1,
             }
         };
+        let partial_input = self.plan.partial_accumulator_index.is_some();
+        let bytes_per_call = if partial_input { 512 } else { 64 };
+        let encoded_workspace = if partial_input {
+            batch.get_array_memory_size().saturating_mul(8)
+        } else {
+            0
+        };
         let base_reservation = batch
             .num_rows()
-            .saturating_mul(224usize.saturating_add(self.calls.len().saturating_mul(64)))
+            .saturating_mul(
+                224usize.saturating_add(self.calls.len().saturating_mul(bytes_per_call)),
+            )
+            .saturating_add(encoded_workspace)
             .saturating_mul(usize::try_from(window_copies.max(1)).unwrap_or(usize::MAX));
         self.scratch_reservation.resize(base_reservation)?;
         let result = self.process_arrow_accounted(&batch);

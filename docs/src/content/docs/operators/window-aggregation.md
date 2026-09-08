@@ -99,6 +99,17 @@ backends, including partially late inputs that still contribute to later windows
 logic and tests live in a separate operator submodule. It still expands slices into windows and
 needs shared-slice state, restored-watermark and shared-control corrections before admission.
 
+Global partial batches containing COUNT and compatible append-only MIN/MAX now merge through
+DataFusion grouped accumulators. Each accepted input accumulator is decoded once, and temporary
+merge columns are built in chunks of at most 2,048 contributions. COUNT partials use DataFusion's
+wrapping BIGINT SUM kernel; SQL FILTER is already represented in the partial and is not reapplied.
+Flink's ordered empty-group and timer transitions remain separate from aggregate computation.
+Delta inputs, cardinality overflow, DISTINCT, retractable extrema and other aggregate families
+retain the existing ordered merge path. Generated SQL parity covers both this grouped subset and
+the mixed SUM/AVG path on both backends, with nullable values, filters and different batch sizes.
+Coarse partial workspace accounts for overlapping-window fanout and encoded payload size before
+allocation. This does not yet implement shared-slice storage or change ordinary planner admission.
+
 ## Retained semantic implementation
 
 The retained implementation supports direct time-attribute window aggregation for event time and processing
