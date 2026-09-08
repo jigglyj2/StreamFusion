@@ -62,9 +62,15 @@ impl SharedSlices {
         let mut partition = Vec::new();
         for row in 0..batch.num_rows() {
             let end = ends.value(row);
-            if starts.value(row) != end.wrapping_sub(plan.slide_or_step_millis) {
+            let width = if plan.partial_windows_are_slices {
+                plan.slide_or_step_millis
+            } else {
+                plan.size_millis
+            };
+            if starts.value(row) != end.wrapping_sub(width) {
                 return Err(DataFusionError::Execution(
-                    "HOP partial must describe one base slice".into(),
+                    "HOP partial bounds must match the planned base slice or attached window"
+                        .into(),
                 ));
             }
             if self.last_window_end(end).wrapping_sub(1) <= self.kernel.current_event_time {

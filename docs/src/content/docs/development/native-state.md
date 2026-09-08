@@ -93,14 +93,17 @@ active stream. A failed mutating restore requires a fresh context and recovery r
 of possibly partial state.
 
 The HOP window binding currently accepts append-only UTC event-time partials with DataFusion
-COUNT or compatible append-only extrema. It uses ordered in-memory state or the configured RocksDB
+COUNT or compatible append-only extrema. It retains base slices for shared HOP windows and exact
+fixed-size namespaces for attached HOP windows; attached windows expire once without extra timers.
+The snapshot fingerprint pins this distinction. It uses ordered in-memory state or the configured RocksDB
 backend, emits through the common unary stream, and snapshots its timer index at Flink's checkpoint
 boundary. State-binding protocol 3 adds an optional restored operator watermark for this family.
 Flink supplies the minimum restored union-operator watermark before replay, independently of keyed
 state; it applies even if no keyed entries need importing. A window restore without this clock is
 rejected, as is attaching it to another operator family or an older binding protocol. Existing
 protocols 1 and 2 remain supported. Direct generated tests compare the shared HOP COUNT tree with
-Flink's SQL-generated global slicer on both backends, including restored input and logical stage I/O.
+Flink's SQL-generated global slicer and the attached MAX/COUNT tree with Flink's attached stage on
+both backends, including restored input and logical stage I/O.
 The complete window metric surface, Java resource/clock lifecycle and ordinary planner admission
 remain outstanding; see [Window aggregation](/StreamFusion/operators/window-aggregation/).
 

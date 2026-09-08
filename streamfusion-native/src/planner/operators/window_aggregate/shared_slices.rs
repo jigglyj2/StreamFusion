@@ -1,8 +1,8 @@
 // Copyright 2026 StreamFusion Authors
 // Licensed under the Apache License, Version 2.0.
 
-//! Shared HOP slice execution. Flink retains each base slice once and combines the slices
-//! when a window fires; it does not expand incoming partials into all overlapping windows.
+//! Shared and attached HOP slice execution. Flink retains each base slice once and combines the slices
+//! when a window fires. Attached windows retain one completed namespace and fire once.
 //! Explicit shared-plan bindings are available; ordinary planner admission still requires
 //! the complete Flink resource, operator-clock and metric lifecycle.
 
@@ -37,7 +37,6 @@ impl SharedSlices {
     fn new(kernel: WindowAggregateProcessor) -> Result<Self> {
         let plan = &kernel.plan;
         if plan.kind != proto::WindowKind::Hop as i32
-            || !plan.partial_windows_are_slices
             || plan.partial_accumulator_index.is_none()
             || plan.input_changelog
             || plan.processing_time
@@ -106,6 +105,9 @@ impl SharedSlices {
     }
 
     fn last_window_end(&self, slice_end: i64) -> i64 {
+        if !self.kernel.plan.partial_windows_are_slices {
+            return slice_end;
+        }
         slice_end
             .wrapping_sub(self.kernel.plan.slide_or_step_millis)
             .wrapping_add(self.kernel.plan.size_millis)

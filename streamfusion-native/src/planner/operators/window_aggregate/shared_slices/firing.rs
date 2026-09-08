@@ -43,9 +43,15 @@ impl SharedSlices {
             })
             .collect::<Result<Vec<_>>>()?;
         let interval = self.kernel.plan.slide_or_step_millis;
-        let slices = usize::try_from(self.kernel.plan.size_millis / interval).map_err(|_| {
-            DataFusionError::Execution("shared-slice window cardinality exceeds usize".into())
-        })?;
+        let shared = self.kernel.plan.partial_windows_are_slices;
+        let slices = if shared {
+            usize::try_from(self.kernel.plan.size_millis / interval).map_err(|_| {
+                DataFusionError::Execution("shared-slice window cardinality exceeds usize".into())
+            })?
+        } else {
+            // Flink WindowedSliceAssigner treats an attached window as an unshared slice.
+            1
+        };
         let requests = fired.len().checked_mul(slices).ok_or_else(|| {
             DataFusionError::ResourcesExhausted("shared-slice read cardinality overflow".into())
         })?;
@@ -150,8 +156,12 @@ impl SharedSlices {
         let expired = ends
             .iter()
             .map(|end| {
-                end.wrapping_sub(self.kernel.plan.size_millis)
-                    .wrapping_add(interval)
+                if shared {
+                    end.wrapping_sub(self.kernel.plan.size_millis)
+                        .wrapping_add(interval)
+                } else {
+                    *end
+                }
             })
             .collect::<Vec<_>>();
         let expired_rows = self
@@ -177,16 +187,18 @@ impl SharedSlices {
                 {
                     column.push(value);
                 }
-                let next = ends[index].wrapping_add(interval);
-                registrations.push((
-                    timer.key_group,
-                    TimerDomain::EventTime,
-                    TimerKey {
-                        timestamp: next.wrapping_sub(1),
-                        key: timer.timer.key.clone(),
-                        namespace: next.to_le_bytes().to_vec(),
-                    },
-                ));
+                if shared {
+                    let next = ends[index].wrapping_add(interval);
+                    registrations.push((
+                        timer.key_group,
+                        TimerDomain::EventTime,
+                        TimerKey {
+                            timestamp: next.wrapping_sub(1),
+                            key: timer.timer.key.clone(),
+                            namespace: next.to_le_bytes().to_vec(),
+                        },
+                    ));
+                }
             }
             mutations.push(StateMutation {
                 key: codec::key(

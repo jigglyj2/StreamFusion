@@ -19,17 +19,22 @@ import org.apache.flink.table.runtime.typeutils.RowDataSerializer;
 final class GlobalWindowFlinkOracle {
     private GlobalWindowFlinkOracle() {}
 
-    @SuppressWarnings("unchecked")
     static KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> create(
             boolean rocks, OperatorSubtaskState restored) throws Exception {
         var stage = SlicingWindowFlinkPlan.stage("GlobalWindowAggregate");
+        return create(stage, rocks, restored);
+    }
+
+    @SuppressWarnings("unchecked")
+    static KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> create(
+            org.apache.flink.streaming.api.transformations.OneInputTransformation<?, ?> stage,
+            boolean rocks,
+            OperatorSubtaskState restored)
+            throws Exception {
         var operator = (OneInputStreamOperator<RowData, RowData>) stage.getOperator();
         if (!(operator instanceof WindowAggOperator<?, ?>))
             throw new AssertionError("Expected Flink WindowAggOperator");
-        var inputType = ((InternalTypeInfo<RowData>) stage.getInputType()).toRowType();
         var outputType = ((InternalTypeInfo<RowData>) stage.getOutputType()).toRowType();
-        if (inputType.getFieldCount() != 3 || outputType.getFieldCount() != 4)
-            throw new AssertionError("Unexpected Flink global schemas: " + inputType + " / " + outputType);
         var environment =
                 new MockEnvironmentBuilder().setManagedMemorySize(64L << 20).build();
         var harness =

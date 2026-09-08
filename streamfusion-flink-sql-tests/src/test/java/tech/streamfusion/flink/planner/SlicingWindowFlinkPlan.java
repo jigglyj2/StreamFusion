@@ -23,6 +23,14 @@ final class SlicingWindowFlinkPlan {
     private SlicingWindowFlinkPlan() {}
 
     static OneInputTransformation<?, ?> stage(String name) throws Exception {
+        return stage(
+                name,
+                "SELECT k, COUNT(*) AS n, window_start, window_end "
+                        + "FROM TABLE(HOP(TABLE local_window_input, DESCRIPTOR(ts), INTERVAL '2' SECOND, INTERVAL '6' SECOND)) "
+                        + "GROUP BY k, window_start, window_end");
+    }
+
+    static OneInputTransformation<?, ?> stage(String name, String sql) throws Exception {
         String factory = System.getProperty(StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY);
         String processor = System.getProperty(StreamFusionPlannerFactory.EXEC_GRAPH_PROCESSOR_PROPERTY);
         System.clearProperty(StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY);
@@ -47,9 +55,7 @@ final class SlicingWindowFlinkPlan {
                                     .column("ts", org.apache.flink.table.api.DataTypes.TIMESTAMP(3))
                                     .watermark("ts", "ts")
                                     .build()));
-            var output = tables.toChangelogStream(tables.sqlQuery("SELECT k, COUNT(*) AS n, window_start, window_end "
-                    + "FROM TABLE(HOP(TABLE local_window_input, DESCRIPTOR(ts), INTERVAL '2' SECOND, INTERVAL '6' SECOND)) "
-                    + "GROUP BY k, window_start, window_end"));
+            var output = tables.toChangelogStream(tables.sqlQuery(sql));
             var stage = find(output.getTransformation(), name);
             if (stage == null) throw new AssertionError("Flink did not plan " + name);
             return stage;

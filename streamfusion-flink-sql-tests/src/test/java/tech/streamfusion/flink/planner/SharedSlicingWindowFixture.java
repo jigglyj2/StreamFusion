@@ -85,7 +85,7 @@ final class SharedSlicingWindowFixture {
                 .toByteArray();
     }
 
-    private static Schema schema(RowType type) {
+    static Schema schema(RowType type) {
         var schema = Schema.newBuilder();
         for (int i = 0; i < type.getFieldCount(); i++)
             schema.addFields(
@@ -93,7 +93,7 @@ final class SharedSlicingWindowFixture {
         return schema.build();
     }
 
-    private static Operator calc(long id, Operator child, int width) {
+    static Operator calc(long id, Operator child, int width) {
         var calc = Calc.newBuilder().setInput(child).setPreserveInputEnvelope(true);
         for (int i = 0; i < width; i++)
             calc.addProjections(Expression.newBuilder()

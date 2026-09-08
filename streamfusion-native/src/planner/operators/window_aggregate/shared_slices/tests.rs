@@ -44,6 +44,16 @@ fn processor(
     first: u32,
     last: u32,
 ) -> SharedSlices {
+    processor_with_plan(&plan(), broker, rocks, first, last)
+}
+
+fn processor_with_plan(
+    bytes: &[u8],
+    broker: Arc<TestBroker>,
+    rocks: Option<&std::path::Path>,
+    first: u32,
+    last: u32,
+) -> SharedSlices {
     let reservation = HostMemoryReservation::new(broker.clone(), "shared slice state");
     let timer = reservation.sibling("shared slice timers");
     let scratch = reservation.sibling("shared slice workspace");
@@ -64,7 +74,7 @@ fn processor(
         }
     };
     SharedSlices::new(
-        WindowAggregateProcessor::with_state(&plan(), 128, first, last, state, timer, scratch)
+        WindowAggregateProcessor::with_state(bytes, 128, first, last, state, timer, scratch)
             .unwrap(),
     )
     .unwrap()
@@ -160,6 +170,7 @@ fn backends() -> Vec<bool> {
     }
 }
 
+mod attached;
 mod checkpoint;
 mod generated;
 

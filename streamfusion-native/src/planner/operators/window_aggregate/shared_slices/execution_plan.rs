@@ -30,7 +30,6 @@ pub(crate) fn validate_node(node: &proto::Operator, max_parallelism: u32) -> Res
     };
     validate_plan(plan, max_parallelism)?;
     if plan.kind != proto::WindowKind::Hop as i32
-        || !plan.partial_windows_are_slices
         || plan.partial_accumulator_index.is_none()
         || plan.input_changelog
         || plan.processing_time
