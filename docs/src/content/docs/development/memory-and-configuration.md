@@ -26,6 +26,15 @@ state uses coarse reservations on the same Flink broker. Ordinary buffer ownersh
 release callbacks remain responsible for physical lifetime. Compatibility copies, such as a
 rebased validity bitmap at the C Data boundary, remain budgeted.
 
+The ordered in-memory state backend stores immutable key/value bytes in boxed slices. This
+reduces descriptor size and releases unused vector capacity while retaining bytewise range order
+and the same canonical snapshot format as RocksDB. Batched writes reserve retained bytes plus
+coarse B-tree node/root headroom before mutation. Value updates keep the existing ordered key
+allocation and replace its value without deleting and reinserting the tree entry.
+A 100,000-entry constrained-memory regression
+checks range values, sparse occupancy after deletion, observed retained allocations, and restore;
+the cross-backend fixtures continue to compare identical snapshot bytes.
+
 Filters evaluate their predicate once. All-pass output retains the input buffers; all-rejected
 input needs no gathered payload. Partial selections reserve gather space from the projected
 logical buffer spans, avoiding multiplication of a shared IPC allocation by the schema width.
@@ -57,11 +66,11 @@ with a precise fallback reason.
 
 ## Current readiness
 
-The verified in-memory binary equi-join path is admitted. Other persistent stateful families
-and RocksDB remain gated by
-[architecture admission](/StreamFusion/development/architecture-admission/). Their large-state
-memory behavior, backend configuration, metrics, and checkpoint/restore contracts must be verified
-before admission. Removing descriptor reservations does not establish those contracts.
+Verified join, aggregation and window subsets are admitted on in-memory and supported default
+RocksDB state; see [operator coverage](/StreamFusion/operators/) for their exact limits.
+Unverified subsets remain gated by [architecture admission](/StreamFusion/development/architecture-admission/).
+Their memory behavior, backend configuration, metrics, and checkpoint/restore contracts must be
+verified before admission. Removing descriptor reservations does not establish those contracts.
 
 Native parity tests must require acceleration and native execution. Tests exercising whole-plan
 fallback are explicitly identified as fallback coverage; a successful Flink-versus-Flink comparison

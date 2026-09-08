@@ -10,9 +10,10 @@ use datafusion::error::{DataFusionError, Result};
 use super::{KeyedState, SnapshotBytes, StateKeyRef, StateMutation, StateReadBatch, StateValue};
 use crate::memory_pool::HostMemoryReservation;
 
-type Group = BTreeMap<Vec<u8>, Vec<u8>>;
-// Conservative amortized allowance for B-tree nodes (including sparse nodes).
-const ENTRY_OVERHEAD: usize = 192;
+type Group = BTreeMap<Box<[u8]>, Box<[u8]>>;
+// Immutable boxed keys/values use two-word descriptors instead of growable Vecs.
+// Keep conservative sparse-node/allocator headroom, plus the separate root allowance.
+const ENTRY_OVERHEAD: usize = 128;
 
 pub(crate) struct OrderedMemoryKeyedState {
     first: u32,
@@ -72,7 +73,7 @@ impl KeyedState for OrderedMemoryKeyedState {
             .map(|key| {
                 Ok(self.groups[self.index(key.key_group)?]
                     .get(key.key)
-                    .map(|v| StateValue::Borrowed(v.as_slice())))
+                    .map(|v| StateValue::Borrowed(v.as_ref())))
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(StateReadBatch::new(values, reservation))
@@ -106,12 +107,21 @@ impl KeyedState for OrderedMemoryKeyedState {
         for m in mutations {
             let index = self.index(m.key.key_group)?;
             let was_empty = self.groups[index].is_empty();
-            if let Some((k, v)) = self.groups[index].remove_entry(m.key.key.as_slice()) {
-                self.bytes -= k.capacity() + v.capacity() + ENTRY_OVERHEAD;
-            }
             if let Some(v) = m.value {
-                self.bytes += m.key.key.capacity() + v.capacity() + ENTRY_OVERHEAD;
-                self.groups[index].insert(m.key.key, v);
+                let key = m.key.key.into_boxed_slice();
+                let value = v.into_boxed_slice();
+                let key_bytes = key.len();
+                let value_bytes = value.len();
+                // BTreeMap::insert keeps an existing key and its index position. Updating
+                // a partial must not remove/reinsert that key or rebalance the tree twice.
+                if let Some(previous) = self.groups[index].insert(key, value) {
+                    self.bytes = self.bytes - previous.len() + value_bytes;
+                } else {
+                    self.bytes += key_bytes + value_bytes + ENTRY_OVERHEAD;
+                }
+            } else if let Some((key, value)) = self.groups[index].remove_entry(m.key.key.as_slice())
+            {
+                self.bytes -= key.len() + value.len() + ENTRY_OVERHEAD;
             }
             if was_empty && !self.groups[index].is_empty() {
                 self.bytes += 1024;
@@ -178,7 +188,7 @@ impl KeyedState for OrderedMemoryKeyedState {
                 page.clear();
                 bytes = 0;
             }
-            page.push((k.as_slice(), v.as_slice()));
+            page.push((k.as_ref(), v.as_ref()));
             bytes += size;
         }
         if !page.is_empty() {
@@ -250,128 +260,4 @@ impl KeyedState for OrderedMemoryKeyedState {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::memory_pool::tests_support::TestBroker;
-    use crate::state::{RocksPluginKeyedState, StateKey};
-    use std::sync::Arc;
-
-    #[test]
-    fn ordered_ranges_page_stop_and_restore_identically_on_both_backends() {
-        let broker = Arc::new(TestBroker::new(16 << 20));
-        let owner = HostMemoryReservation::new(broker.clone(), "ordered range test");
-        let memory = OrderedMemoryKeyedState::new(3, 4, owner.sibling("memory")).unwrap();
-        let directory = tempfile::tempdir().unwrap();
-        let mut backends: Vec<Box<dyn KeyedState>> = vec![Box::new(memory)];
-        if let Ok(plugin) = std::env::var("STREAMFUSION_TEST_ROCKSDB_PLUGIN") {
-            backends.push(Box::new(
-                RocksPluginKeyedState::open(
-                    std::path::Path::new(&plugin),
-                    directory.path(),
-                    3,
-                    4,
-                    8 << 20,
-                )
-                .unwrap(),
-            ));
-        }
-        let mut snapshots = Vec::new();
-        for mut state in backends {
-            state
-                .write_batch(
-                    (0..100u32)
-                        .rev()
-                        .map(|i| StateMutation {
-                            key: StateKey {
-                                key_group: 3,
-                                key: i.to_be_bytes().to_vec(),
-                            },
-                            value: Some(vec![i as u8; 40]),
-                        })
-                        .chain(std::iter::once(StateMutation {
-                            key: StateKey {
-                                key_group: 4,
-                                key: 42u32.to_be_bytes().to_vec(),
-                            },
-                            value: Some(vec![255]),
-                        }))
-                        .collect(),
-                )
-                .unwrap();
-            let mut seen = Vec::new();
-            state
-                .visit_range(
-                    3,
-                    &20u32.to_be_bytes(),
-                    Some(&50u32.to_be_bytes()),
-                    7,
-                    500,
-                    &mut |page| {
-                        assert!(page.len() <= 3); // 4-byte key + value + 100 bytes overhead.
-                        seen.extend(
-                            page.iter()
-                                .map(|(k, _)| u32::from_be_bytes((*k).try_into().unwrap())),
-                        );
-                        Ok(true)
-                    },
-                )
-                .unwrap();
-            assert_eq!(seen, (20..50).collect::<Vec<_>>());
-            let mut pages = 0;
-            state
-                .visit_range(3, &[], None, 1, 500, &mut |_| {
-                    pages += 1;
-                    Ok(false)
-                })
-                .unwrap();
-            assert_eq!(pages, 1);
-            state
-                .visit_range(
-                    3,
-                    &50u32.to_be_bytes(),
-                    Some(&20u32.to_be_bytes()),
-                    1,
-                    500,
-                    &mut |_| panic!("empty reversed range"),
-                )
-                .unwrap();
-            assert!(state
-                .visit_range(3, &[], None, 1, 1, &mut |_| panic!("oversize entry"))
-                .is_err());
-            assert!(state
-                .visit_range(2, &[], None, 1, 500, &mut |_| Ok(true))
-                .is_err());
-            let snapshot = state.snapshot_key_group(3, &owner).unwrap();
-            let mut restored =
-                OrderedMemoryKeyedState::new(3, 3, owner.sibling("restored")).unwrap();
-            restored.restore_key_group(3, &snapshot, &owner).unwrap();
-            assert_eq!(restored.snapshot_key_group(3, &owner).unwrap(), snapshot);
-            snapshots.push(snapshot.to_vec());
-        }
-        if snapshots.len() == 2 {
-            assert_eq!(snapshots[0], snapshots[1]);
-        }
-        drop(owner);
-        assert_eq!(broker.reserved(), 0);
-    }
-
-    #[test]
-    fn rejected_write_is_atomic_and_releases_its_budget() {
-        let broker = Arc::new(TestBroker::new(4096));
-        let owner = HostMemoryReservation::new(broker.clone(), "ordered budget test");
-        let mut state = OrderedMemoryKeyedState::new(0, 0, owner.sibling("state")).unwrap();
-        assert!(state
-            .write_batch(vec![StateMutation {
-                key: StateKey {
-                    key_group: 0,
-                    key: vec![1]
-                },
-                value: Some(vec![0; 8192])
-            }])
-            .is_err());
-        assert!(state.groups[0].is_empty());
-        drop(state);
-        drop(owner);
-        assert_eq!(broker.reserved(), 0);
-    }
-}
+mod tests;
