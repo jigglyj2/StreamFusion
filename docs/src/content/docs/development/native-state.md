@@ -8,6 +8,15 @@ Persistent native stateful paths currently use whole-plan Flink fallback under
 and batch/expression workspaces still need complete verified admission and lifetime accounting.
 The implementation details below describe retained code and its target memory contract.
 
+Native keyed-region preflight now rejects non-default Flink RocksDB options that the component
+does not propagate, including custom option factories, local directories, memory ratios,
+fixed or unmanaged budgets, compression settings, and checkpoint transfer thread counts. It
+resolves Flink's typed options and aliases before graph replacement; it does not silently use
+native defaults. Ordinary Flink managed-memory size/consumer weights and incremental-checkpoint
+selection remain configurable. RocksDB-specific options do not reject an in-memory backend.
+This configuration guard supplements the existing metric and physical-family admission gates;
+it does not establish default-option parity or unlock stateful production plans by itself.
+
 ## Shared native-plan state bindings
 
 The common Java `NativeExecutionContext` accepts a separate, versioned `NativeStateBindings`

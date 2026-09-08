@@ -10,7 +10,7 @@ final class StreamFusionStateMetricAdmission {
 
     static String unsupportedReason(ReadableConfig config, ClassLoader loader) {
         try {
-            return (String) Class.forName("tech.streamfusion.flink.metrics.NativeStateMetricSupport", true, loader)
+            return (String) Class.forName("tech.streamfusion.flink.state.NativeStateSupport", true, loader)
                     .getMethod("unsupportedReason", ReadableConfig.class)
                     .invoke(null, config);
         } catch (InvocationTargetException failure) {
