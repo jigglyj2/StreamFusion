@@ -15,8 +15,8 @@ default backend settings. Unsupported settings retain their precise fallback rea
 Sources and sinks use the normal Arrow boundary adapters; join and downstream Calc exchange Arrow
 directly within one native plan. Generated changelog/metric, rescaling, checkpoint and channel replay
 tests cover this path. Q3 passes ordinary admission and collecting/blackhole integration on both
-backends. Its in-memory release comparison is documented in the RowData benchmark; the RocksDB
-release measurements and profiles remain outstanding.
+backends. The [Q3 release comparison](/StreamFusion/benchmarks/q3-rowdata/) records corrected
+measurements and profiles for both, including small larger-run median gains and slower smaller runs.
 
 All other join paths described below are retained for development and direct parity tests under
 [architecture admission](/StreamFusion/development/architecture-admission/).

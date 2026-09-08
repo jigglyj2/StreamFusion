@@ -94,8 +94,8 @@ SQL native-parity assertions require `Accelerated: yes` and the expected native 
 fallback-parity tests require whole-plan fallback and zero native batches. A Flink-versus-Flink
 comparison cannot count as evidence that a native operator works.
 
-Production milestones follow increasing Nexmark query order. Verify Q0–Q2, then complete Q3's
-regular streaming join on both backends, with generated output/metric parity, recovery coverage,
-and release comparison against Flink before advancing. See
+Production milestones follow increasing Nexmark query order. Q0–Q2 admission and the supported
+synchronous Q3 join checkpoint are verified, including both state backends, output/metric parity,
+recovery and release comparisons. Q4 is the next checkpoint. See
 [Query checkpoints](/StreamFusion/benchmarks/query-checkpoints/). Test-only graph conversion and
 historical benchmark results do not establish current production admission.

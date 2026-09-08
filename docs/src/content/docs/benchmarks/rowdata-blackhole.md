@@ -44,14 +44,16 @@ engine order. Record the commit and machine/runtime configuration and report med
 dispersion. Profile a separate longer fork with mixed JVM/native sampling. Keep raw measurements,
 JFR recordings, collapsed stacks, and flame graphs under the benchmark module's `target/`.
 Q0–Q2 are stateless, so their RocksDB-labelled runs do not measure RocksDB state performance.
-See [query checkpoints](/StreamFusion/benchmarks/query-checkpoints/) for current admission.
+See [query checkpoints](/StreamFusion/benchmarks/query-checkpoints/) for current admission and
+the [Q3 release comparison](/StreamFusion/benchmarks/q3-rowdata/) for corrected measurements and
+profiles on both backends.
 
 ## Q3 in-memory measurements, September 7, 2026
 
 These historical tables predate the diagnostic-counter timing correction. The counter reset
 initialized StreamFusion's core library in both engines before the reported timer started.
 They compare job setup and execution after that initialization; they are not cold native-startup
-comparisons. Corrected measurements and profiles are required before the Q3 delivery checkpoint.
+comparisons. The corrected measurements and profiles are on the Q3 release comparison page.
 
 Commit `2a73881b` restores consumed-field projection at the RowData source edge of common
 native regions. This is a general projection optimization; the query SQL and join algorithm
