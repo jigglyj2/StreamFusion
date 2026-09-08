@@ -26,7 +26,9 @@ class StreamFusionArrowArchitectureTest {
                         "NativeRegionControlTree",
                         "NativeRegionControlScheduler",
                         "memory.executionContext().controlCapabilities()",
-                        "metricTree.bindGauges(memory.executionContext().gaugeSchema()",
+                        "metricTree.bindGauges(",
+                        "memory.executionContext().gaugeSchema()",
+                        "getProcessingTimeService()::getCurrentProcessingTime",
                         "dispatcher.control(request, this::emitOutput)",
                         "dispatcher.processFrame(",
                         "StreamFusionNativeMetricTree.forRegion(")

@@ -215,5 +215,13 @@ class SharedWindowRuntimeRecoveryTest {
         target.drainControls();
         assertThat(target.output.getCopyOfBuffer()).containsExactly(expected.getCopyOfBuffer());
         target.output.clear();
+        var referenceMetrics =
+                RegisteredMetricSurface.metrics(flink.getOperator().getMetricGroup());
+        var nativeMetrics = RegisteredMetricSurface.metrics(target.stage(3));
+        var names = List.of("numLateRecordsDropped", "lateRecordsDroppedRate", "watermarkLatency");
+        referenceMetrics.keySet().retainAll(names);
+        nativeMetrics.keySet().retainAll(names);
+        assertThat(referenceMetrics).hasSize(3);
+        RegisteredMetricSurface.compare(referenceMetrics, nativeMetrics);
     }
 }

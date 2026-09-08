@@ -301,3 +301,46 @@ fn cancelling_a_window_control_stream_requires_recovery_and_preserves_output_own
     drop(held);
     assert_eq!(broker.reserved(), 0);
 }
+
+#[test]
+fn window_scalar_channel_carries_counter_rate_and_restored_timer_watermark() {
+    let broker = Arc::new(TestBroker::new(256 << 20));
+    let context = context(broker.clone(), Some(1999), None);
+    let (schema, credit) = context.gauge_schema().unwrap();
+    let schema = proto::NativeGaugeSchema::decode(schema.as_slice()).unwrap();
+    assert_eq!(schema.protocol_version, 2);
+    assert_eq!(schema.gauges.len(), 2);
+    assert!(schema
+        .gauges
+        .iter()
+        .all(|gauge| gauge.plan_node_id == 3 && gauge.groups.is_empty()));
+    assert_eq!(schema.gauges[0].name, "numLateRecordsDropped");
+    assert_eq!(
+        schema.gauges[0].metric_kind,
+        proto::NativeMetricKind::Counter as i32
+    );
+    assert_eq!(schema.gauges[0].meter_name, "lateRecordsDroppedRate");
+    assert_eq!(
+        schema.gauges[1].metric_kind,
+        proto::NativeMetricKind::WatermarkLatency as i32
+    );
+    assert_eq!(context.gauge_snapshot().unwrap().0, [0, 1999]);
+    run(
+        &context,
+        input(&[(1, 9, -2000), (2, 11, -2000), (1, 3, 2000)], INSERT),
+        None,
+    )
+    .unwrap();
+    assert_eq!(context.gauge_snapshot().unwrap().0, [2, 1999]);
+    run(
+        &context,
+        input(&[], INSERT),
+        Some(ControlEvent::Watermark(999)),
+    )
+    .unwrap();
+    assert_eq!(context.gauge_snapshot().unwrap().0, [2, 1999]);
+    drop(schema);
+    drop(credit);
+    drop(context);
+    assert_eq!(broker.reserved(), 0);
+}

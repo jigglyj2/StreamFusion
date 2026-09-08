@@ -163,6 +163,13 @@ public final class StreamFusionNativeMetricTree implements AutoCloseable {
 
     /** Bind native descriptors to stable physical scopes, without operator-family dispatch. */
     public void bindGauges(byte[] schema, java.util.function.Supplier<long[]> snapshot) {
+        bindGauges(schema, snapshot, null);
+    }
+
+    public void bindGauges(
+            byte[] schema,
+            java.util.function.Supplier<long[]> snapshot,
+            java.util.function.LongSupplier processingTime) {
         if (gauges != null) throw new IllegalStateException("Native gauges are already bound");
         gauges = new NativeStageGauges(
                 schema,
@@ -170,7 +177,8 @@ public final class StreamFusionNativeMetricTree implements AutoCloseable {
                     Stage stage = stages.get(id);
                     return stage == null ? null : stage.group;
                 },
-                snapshot);
+                snapshot,
+                processingTime);
     }
 
     public void update(NativeExecutionContext context) {

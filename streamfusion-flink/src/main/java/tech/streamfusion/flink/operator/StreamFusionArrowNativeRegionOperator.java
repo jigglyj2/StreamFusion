@@ -129,7 +129,10 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
                 environment.getMetricGroup(),
                 environment.getTaskManagerInfo().getConfiguration(),
                 subtaskIndex);
-        metricTree.bindGauges(memory.executionContext().gaugeSchema(), memory.executionContext()::gaugeSnapshot);
+        metricTree.bindGauges(
+                memory.executionContext().gaugeSchema(),
+                memory.executionContext()::gaugeSnapshot,
+                getProcessingTimeService()::getCurrentProcessingTime);
         controls = new NativeRegionControlScheduler(
                 memory.executionContext().identifiedPlan(),
                 inputTypes.size(),

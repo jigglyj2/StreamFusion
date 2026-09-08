@@ -48,11 +48,15 @@ impl PersistentOperatorFactory for LocalGroupAggregateFactory {
         use crate::proto::NativeGaugeValueKind;
         Ok(&[
             GaugeDefinition {
+                metric_kind: crate::proto::NativeMetricKind::Gauge,
+                meter_name: "",
                 groups: &[],
                 name: "bundleSize",
                 kind: NativeGaugeValueKind::Int32,
             },
             GaugeDefinition {
+                metric_kind: crate::proto::NativeMetricKind::Gauge,
+                meter_name: "",
                 groups: &[],
                 name: "bundleRatio",
                 kind: NativeGaugeValueKind::Float64,

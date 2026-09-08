@@ -16,7 +16,8 @@ impl NativeExecutionContext {
             for gauge in factory.gauge_definitions()? {
                 bytes = bytes
                     .saturating_add(512)
-                    .saturating_add(gauge.name.len().saturating_mul(4));
+                    .saturating_add(gauge.name.len().saturating_mul(4))
+                    .saturating_add(gauge.meter_name.len().saturating_mul(4));
                 for group in gauge.groups {
                     bytes = bytes
                         .saturating_add(128)
@@ -26,8 +27,14 @@ impl NativeExecutionContext {
         }
         memory.try_grow(bytes)?;
         let mut gauges = Vec::new();
+        let mut protocol_version = 1;
         for (id, factory) in &self.persistent {
             for gauge in factory.gauge_definitions()? {
+                if gauge.metric_kind != proto::NativeMetricKind::Gauge
+                    || !gauge.meter_name.is_empty()
+                {
+                    protocol_version = 2;
+                }
                 gauges.push(proto::NativeGaugeDescriptor {
                     plan_node_id: *id,
                     groups: gauge
@@ -37,12 +44,14 @@ impl NativeExecutionContext {
                         .collect(),
                     name: gauge.name.to_owned(),
                     value_kind: gauge.kind as i32,
+                    metric_kind: gauge.metric_kind as i32,
+                    meter_name: gauge.meter_name.to_owned(),
                 });
             }
         }
         Ok((
             proto::NativeGaugeSchema {
-                protocol_version: 1,
+                protocol_version,
                 gauges,
             }
             .encode_to_vec(),

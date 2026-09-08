@@ -29,6 +29,8 @@ message NativeMemoryState {}
 
 // Names/types/scopes are negotiated once; each gauge snapshot is a packed long[] in this order.
 // INT32 is sign-extended, INT64 is unchanged, FLOAT64 carries raw IEEE-754 bits.
+// Version 2 extends this existing scalar channel with typed counters and clock-based gauges.
+// Version 1 remains gauge-only; no extra per-stage JNI reads are required.
 message NativeGaugeSchema {
   uint32 protocol_version = 1;
   repeated NativeGaugeDescriptor gauges = 2;
@@ -39,6 +41,16 @@ message NativeGaugeDescriptor {
   repeated string groups = 2;
   string name = 3;
   NativeGaugeValueKind value_kind = 4;
+  NativeMetricKind metric_kind = 5;
+  // COUNTER only: register Flink MeterView over this same counter, using its default interval.
+  string meter_name = 6;
+}
+
+enum NativeMetricKind {
+  NATIVE_METRIC_KIND_GAUGE = 0;
+  NATIVE_METRIC_KIND_COUNTER = 1;
+  // Snapshot is the native event-time watermark; Java reads Flink's processing clock on demand.
+  NATIVE_METRIC_KIND_WATERMARK_LATENCY = 2;
 }
 
 enum NativeGaugeValueKind {

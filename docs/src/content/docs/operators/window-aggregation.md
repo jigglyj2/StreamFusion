@@ -69,8 +69,12 @@ A late partial remains eligible until its last overlapping window fires; the lat
 increments once only when the complete input partial is dropped. Unlike Flink's additional global
 raw-row buffer, this implementation merges each incoming Arrow batch directly into slice state.
 That adaptation follows the native batch and batched-state contract while preserving watermark
-emission boundaries. The global buffer emits no intermediate partial rows. Full metric and
-Flink-managed runtime recovery parity remain admission requirements for this adaptation.
+emission boundaries. The global buffer emits no intermediate partial rows. The shared metric
+channel publishes Flink's `numLateRecordsDropped` Counter, its `lateRecordsDroppedRate` MeterView,
+and `watermarkLatency` Long Gauge. The latency gauge reads Flink's processing clock on demand,
+returns zero for a negative timer watermark, and otherwise preserves the signed clock difference.
+Counter/meter values are updated with one batched metric sample at the native plan edge.
+Final selected-topology metrics and Flink-managed recovery remain admission requirements.
 
 The timer index stays in admitted native memory and is serialized at Flink's canonical or physical
 checkpoint boundary, instead of being rewritten after every input batch. Snapshot markers
@@ -102,7 +106,9 @@ backends, including nullable keys, negative times, late inputs, large watermark 
 before replayed input. Attached MAX/COUNT tests use the SQL-generated Flink attached stage and
 cover generated partials, extreme BIGINT values, late inputs and restored clocks on both backends.
 They verify timestamp/RowKind metadata and logical I/O counts for each
-native stage. Timer ties between independent keys are compared without imposing an order Flink
+native stage. Generated shared and attached window tests also discover and compare the complete
+default Flink global-window metric surface, including counter and meter types, rate behavior,
+clock changes without native invocations, pre-barriers, and terminal paths. Timer ties between independent keys are compared without imposing an order Flink
 does not guarantee.
 
 Native tests additionally cover memory/RocksDB restore, 1→2→1 rescaling, physical RocksDB
@@ -118,8 +124,8 @@ Q5 requirements include:
 - Automatic Java fragment/resource binding, including the original local memory share.
 - Ownership of the reused aggregate's two outputs, without duplicating computation or disabling
   Flink reuse.
-- The complete Flink metric surface and runtime checkpoint/replay contracts, including aligned
-  and unaligned recovery through the selected physical topology.
+- Final physical-topology metric and checkpoint/replay contracts, including optional state/backend
+  metric settings, latency scopes, and aligned/unaligned channel recovery.
 - Ordinary whole-plan admission, followed by release benchmarks and profiling on both backends.
 
 ## Retained semantic implementation

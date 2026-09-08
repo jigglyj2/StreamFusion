@@ -98,6 +98,24 @@ Reporters read a published Java snapshot without entering JNI or individual Rust
 Integer, Long and Double values preserve their Java types (Double uses raw IEEE-754 bits).
 Invalid versions, unknown stages, duplicate/reserved metric names and malformed samples are rejected.
 Native schema/value storage is admitted before allocation and released after the JNI copy.
+Version 2 of this same scalar channel adds typed counters and clock-based gauges; version 1
+remains gauge-only. A counter descriptor may request a Flink `MeterView` over that counter,
+using Flink's default rate interval and lifecycle. Counter updates apply batched deltas with
+Flink's long-overflow semantics. Watermark-latency descriptors carry the native timer watermark;
+the reporter reads Flink's processing-time service and computes zero for a negative watermark,
+otherwise processing time minus watermark. The value can be negative and changes while the
+operator receives no input. No additional JNI invocation or per-record metric callback is added.
+Typed values require version 2 and INT64 samples. Meter aliases share duplicate/reserved-name
+validation, and clock-based descriptors require a Flink processing clock before registration.
+
+Shared HOP and attached-HOP global windows expose `numLateRecordsDropped` as a Counter,
+`lateRecordsDroppedRate` as its `MeterView`, and `watermarkLatency` as a Long Gauge. Generated
+parity tests discover and compare the complete default Flink global-window metric surface,
+including logical I/O, changelogs, pre-barriers, end-input, and live processing-clock changes on
+both state backends. Restore tests also compare these three window-specific metrics after
+canonical, aligned/unaligned operator snapshots and union-clock rescaling. Counters restart
+with a new operator; the watermark gauge uses the restored clock. Optional state/backend metric
+settings and final selected-topology latency scopes remain separate admission requirements.
 This is common metric-tree plumbing, not an operator-family or fusion-pair dispatch mechanism.
 
 Raw mini-batch aggregation supplies `bundleSize` (Integer) and `bundleRatio` (Double), matching

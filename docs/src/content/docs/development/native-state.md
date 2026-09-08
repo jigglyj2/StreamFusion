@@ -109,8 +109,10 @@ protocols 1 and 2 remain supported. Direct generated tests compare the shared HO
 Flink's SQL-generated global slicer and the attached MAX/COUNT tree with Flink's attached stage on
 both backends, including restored input and logical stage I/O.
 Runtime tests cover canonical backend switching, aligned/unaligned operator snapshots, generated
-replay and Flink union-state 2→1 rescaling. In-flight channel replay, the complete window metric
-surface, original local memory-share binding and ordinary planner admission remain outstanding; see [Window aggregation](/StreamFusion/operators/window-aggregation/).
+replay and Flink union-state 2→1 rescaling. The shared scalar metric channel also publishes real
+late-drop counters/meters and a live Flink-clock watermark-latency gauge, with generated default
+metric-surface parity. In-flight channel replay, final selected-topology metrics, original local
+memory-share binding and ordinary planner admission remain outstanding; see [Window aggregation](/StreamFusion/operators/window-aggregation/).
 
 The group-aggregate binding accepts synchronous and mini-batch streaming raw input, including
 retractions, and mini-batch global partial-accumulator input. Raw/global bundles drain through the

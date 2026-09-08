@@ -96,6 +96,39 @@ impl SlicingWindowFactory {
     }
 }
 impl PersistentOperatorFactory for SlicingWindowFactory {
+    fn gauge_definitions(
+        &self,
+    ) -> Result<&'static [crate::planner::persistent::gauges::GaugeDefinition]> {
+        use crate::planner::persistent::gauges::GaugeDefinition;
+        Ok(&[
+            GaugeDefinition {
+                groups: &[],
+                name: "numLateRecordsDropped",
+                kind: proto::NativeGaugeValueKind::Int64,
+                metric_kind: proto::NativeMetricKind::Counter,
+                meter_name: "lateRecordsDroppedRate",
+            },
+            GaugeDefinition {
+                groups: &[],
+                name: "watermarkLatency",
+                kind: proto::NativeGaugeValueKind::Int64,
+                metric_kind: proto::NativeMetricKind::WatermarkLatency,
+                meter_name: "",
+            },
+        ])
+    }
+    fn write_gauge_values(&self, values: &mut [i64]) -> Result<()> {
+        let [late, watermark] = values else {
+            return Err(DataFusionError::Execution(
+                "invalid shared window metric snapshot shape".into(),
+            ));
+        };
+        let owner = self.0.lock().map_err(|_| poisoned())?;
+        *late = owner.slices.kernel.late_records_dropped as i64;
+        *watermark = owner.slices.kernel.current_event_time;
+        Ok(())
+    }
+
     fn supports_owned_envelope(&self) -> bool {
         true
     }

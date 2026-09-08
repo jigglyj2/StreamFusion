@@ -141,7 +141,9 @@ public final class StreamFusionArrowNativeOperator extends AbstractStreamOperato
                     outputType,
                     taskMemory.allocator());
             metricTree.bindGauges(
-                    taskMemory.executionContext().gaugeSchema(), taskMemory.executionContext()::gaugeSnapshot);
+                    taskMemory.executionContext().gaugeSchema(),
+                    taskMemory.executionContext()::gaugeSnapshot,
+                    getProcessingTimeService()::getCurrentProcessingTime);
             controls = new NativeRegionControlScheduler(
                     taskMemory.executionContext().identifiedPlan(),
                     1,

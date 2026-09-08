@@ -74,8 +74,7 @@ impl SharedSlices {
                 ));
             }
             if self.last_window_end(end).wrapping_sub(1) <= self.kernel.current_event_time {
-                self.kernel.late_records_dropped =
-                    self.kernel.late_records_dropped.saturating_add(1);
+                self.kernel.late_records_dropped = self.kernel.late_records_dropped.wrapping_add(1);
                 continue;
             }
             self.kernel.group_key_into(batch, row, &mut partition)?;
