@@ -25,13 +25,17 @@ corrected release measurements/profiles have been verified. The
 median gains and slower one-million-event results, including dispersion and limitations.
 Mini-batched joins and the other unsupported subsets remain explicit whole-plan fallbacks.
 
-Q4 is the current checkpoint. Its binary range join and keyed MAX/AVG stages now pass ordinary
+Q4 is delivered on both backends. Its binary range join and keyed MAX/AVG stages pass ordinary
 admission on both backends. Controlled shared-runtime tests compare exact changelog bytes and
 registered metrics, backend-switch savepoints, rescaling, and actual aligned/unaligned channel
 replay. Opt-in integration compares materialized Q4 results at parallelism one and four and
 requires native activity through blackhole. Separate jobs can interleave the two join inputs
 differently, so those end-to-end materialized results supplement the deterministic changelog tests.
-Release measurements, profiles, and justified optimization remain before Q4 is delivered.
+The [Q4 release comparison](/StreamFusion/benchmarks/q4-rowdata/) records a general batched
+join-predicate optimization, approximate in-memory parity and a 15.5% RocksDB median throughput
+gain at one million events, with overlapping ranges. Separate longer profiles cover both engines
+and backends. Q5 is the next checkpoint; its demonstrated ordinary-planner blockers guide the
+next implementation work.
 
 ## Initial diagnostic baseline
 

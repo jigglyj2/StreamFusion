@@ -46,7 +46,8 @@ JFR recordings, collapsed stacks, and flame graphs under the benchmark module's 
 Q0–Q2 are stateless, so their RocksDB-labelled runs do not measure RocksDB state performance.
 See [query checkpoints](/StreamFusion/benchmarks/query-checkpoints/) for current admission and
 the [Q3 release comparison](/StreamFusion/benchmarks/q3-rowdata/) for corrected measurements and
-profiles on both backends.
+profiles on both backends. The [Q4 release comparison](/StreamFusion/benchmarks/q4-rowdata/)
+covers the range join and keyed MAX/AVG pipeline.
 
 ## Q3 in-memory measurements, September 7, 2026
 

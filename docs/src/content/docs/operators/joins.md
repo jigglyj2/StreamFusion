@@ -45,7 +45,8 @@ existing batch boundaries, and the persisted format is unchanged.
 The Q4 release profiles before this change attributed about 6–7% of process CPU samples to JVM
 memory reservation callbacks. A native regression test reproduced 4,119 budget callbacks for
 1,024 residual-filtered rows; the same workload now requires fewer than 64. This is callback-count
-and parity evidence, not a throughput claim. Matched release measurements follow separately.
+and parity evidence. The [Q4 release comparison](/StreamFusion/benchmarks/q4-rowdata/)
+reports matched measurements and separate profiles on both backends.
 
 ## SQL example
 
