@@ -91,24 +91,29 @@ final class StreamFusionWindowAggregateConversions {
             boolean needRetraction = localWindowNeedRetraction(local);
             RowType originalInputType = (RowType) twoPhase.inputEdge.getOutputType();
             RowType internalType = nativeWindowAccumulatorType(originalInputType, grouping);
-            StreamFusionExecLocalWindowAggregate nativeLocal = new StreamFusionExecLocalWindowAggregate(
-                    local.getPersistedConfig(),
-                    grouping,
-                    localWindowAggregateCalls(local),
-                    localWindowing(local),
-                    needRetraction,
-                    local.getInputProperties().get(0),
-                    internalType);
-            nativeLocal.setInputEdges(List.of(
-                    copyEdge(twoPhase.inputEdge, context.convert(twoPhase.inputEdge.getSource()), nativeLocal)));
-
-            StreamFusionExecExchange exchange = new StreamFusionExecExchange(
-                    twoPhase.exchange.getPersistedConfig(),
-                    twoPhase.exchange.getInputProperties().get(0),
-                    internalType,
-                    "StreamFusionExchange");
-            exchange.setInputEdges(
-                    List.of(copyEdge(twoPhase.exchange.getInputEdges().get(0), nativeLocal, exchange)));
+            ExecNode<?> nativeLocal = context.convertDerived(local, () -> {
+                var replacement = new StreamFusionExecLocalWindowAggregate(
+                        local.getPersistedConfig(),
+                        grouping,
+                        localWindowAggregateCalls(local),
+                        localWindowing(local),
+                        needRetraction,
+                        local.getInputProperties().get(0),
+                        internalType);
+                replacement.setInputEdges(List.of(
+                        copyEdge(twoPhase.inputEdge, context.convert(twoPhase.inputEdge.getSource()), replacement)));
+                return replacement;
+            });
+            ExecNode<?> exchange = context.convertDerived(twoPhase.exchange, () -> {
+                var replacement = new StreamFusionExecExchange(
+                        twoPhase.exchange.getPersistedConfig(),
+                        twoPhase.exchange.getInputProperties().get(0),
+                        internalType,
+                        "StreamFusionExchange");
+                replacement.setInputEdges(
+                        List.of(copyEdge(twoPhase.exchange.getInputEdges().get(0), nativeLocal, replacement)));
+                return replacement;
+            });
 
             StreamFusionExecGlobalWindowAggregate replacement = new StreamFusionExecGlobalWindowAggregate(
                     global.getPersistedConfig(),

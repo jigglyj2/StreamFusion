@@ -16,6 +16,21 @@ import org.apache.flink.table.planner.plan.utils.ExecNodeMetadataUtil;
 /** Retains the original physical node's identity without translating its Flink runtime operator. */
 final class StreamFusionNativeNodeMetadata {
     private ExecNodeBase<?> original;
+    private StreamFusionOriginalWindowResources resources;
+
+    void bindResources(StreamFusionOriginalWindowResources resources) {
+        if (this.resources != null && this.resources != resources)
+            throw new IllegalStateException("A native stage cannot change its original resource graph");
+        this.resources = resources;
+    }
+
+    StreamFusionOriginalWindowResources resources() {
+        return resources;
+    }
+
+    void recordOutput(org.apache.flink.api.dag.Transformation<?> output) {
+        if (resources != null) resources.recordOutput(original, output);
+    }
 
     void bindOriginal(ExecNode<?> node) {
         if (!(node instanceof ExecNodeBase<?>)) {

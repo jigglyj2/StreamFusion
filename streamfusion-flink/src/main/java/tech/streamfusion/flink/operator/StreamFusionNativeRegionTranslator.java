@@ -54,6 +54,31 @@ public final class StreamFusionNativeRegionTranslator {
         if (inputs.isEmpty() || inputs.size() != inputTypes.size()) {
             throw new IllegalArgumentException("Native region external inputs and types must have matching arity");
         }
+        if (inputs.size() == 1 && !NativeRegionInput.isExchange(inputs.get(0))) {
+            // No network exchange exists here: the source adapter hands its Arrow batch
+            // directly to the shared runtime's sole port through Arrow C Data.
+            var arrowInput = StreamFusionArrowBoundaries.toArrow(inputs.get(0), inputTypes.get(0));
+            var factory = new StreamFusionNativeRegionOperatorFactory(
+                    inputTypes,
+                    outputType,
+                    plan,
+                    List.of(),
+                    List.of(tech.streamfusion.flink.exchange.NativeExchangePlanSerializer.singleton(inputTypes.get(0))),
+                    resolver == null
+                            ? tech.streamfusion.flink.window.NativeLocalWindowResources.NONE
+                            : tech.streamfusion.flink.window.NativeLocalWindowResources.pending(plan));
+            if (resolver != null) factory.withResourceResolver(resolver);
+            var result = new OneInputTransformation<ArrowRowDataBatch, ArrowRowDataBatch>(
+                    arrowInput,
+                    "streamfusion-native-region[inputs=1]",
+                    factory,
+                    ArrowRowDataBatchTypeInfo.INSTANCE,
+                    inputs.get(0).getParallelism(),
+                    false);
+            result.declareManagedMemoryUseCaseAtOperatorScope(
+                    ManagedMemoryUseCase.OPERATOR, StreamFusionTaskMemory.MANAGED_MEMORY_WEIGHT);
+            return StreamFusionArrowBoundaries.asPlannerTransformation(result);
+        }
         int parallelism =
                 inputs.stream().mapToInt(Transformation::getParallelism).max().orElseThrow();
         java.util.ArrayList<NativeRegionInput> bindings = new java.util.ArrayList<>();
@@ -91,6 +116,21 @@ public final class StreamFusionNativeRegionTranslator {
             List<Long> stateIds,
             org.apache.flink.streaming.api.environment.StreamExecutionEnvironment environment) {
         return NativeKeyedRegionTranslation.translate(inputs, inputTypes, outputType, plan, stateIds, environment);
+    }
+
+    public static Transformation<RowData> translateKeyedInputsWithResources(
+            List<Transformation<RowData>> inputs,
+            List<RowType> inputTypes,
+            RowType outputType,
+            byte[] plan,
+            List<Long> stateIds,
+            org.apache.flink.streaming.api.environment.StreamExecutionEnvironment environment,
+            java.util.function.Function<
+                            List<Transformation<?>>,
+                            java.util.Map<Long, tech.streamfusion.flink.memory.FlinkOperatorMemoryShare>>
+                    resolver) {
+        return NativeKeyedRegionTranslation.translate(
+                inputs, inputTypes, outputType, plan, stateIds, environment, resolver);
     }
 
     public static Transformation<RowData> translate(

@@ -126,7 +126,7 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                 return graph;
             }
             try {
-                graphRewrite = new StreamFusionGraphRewrite(activeTableConfig);
+                graphRewrite = new StreamFusionGraphRewrite(activeTableConfig, graph.getRootNodes());
                 List<ExecNode<?>> roots =
                         graph.getRootNodes().stream().map(this::convertRoot).collect(Collectors.toList());
                 if (context != null) {
@@ -176,6 +176,22 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             region.getMethod("inputPlan", int.class);
             region.getMethod("composeWithInputs", byte[].class, List.class);
             region.getMethod("translateInputs", List.class, List.class, RowType.class, byte[].class);
+            region.getMethod(
+                    "translateInputsWithResources",
+                    List.class,
+                    List.class,
+                    RowType.class,
+                    byte[].class,
+                    java.util.function.Function.class);
+            region.getMethod(
+                    "translateKeyedInputsWithResources",
+                    List.class,
+                    List.class,
+                    RowType.class,
+                    byte[].class,
+                    List.class,
+                    org.apache.flink.streaming.api.environment.StreamExecutionEnvironment.class,
+                    java.util.function.Function.class);
             Class.forName("tech.streamfusion.flink.metrics.StreamFusionNativeMetricTree", true, classLoader)
                     .getMethod(
                             "forRegion",
@@ -697,7 +713,7 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         if (graphRewrite != null) {
             return graphRewrite.convert(node, this::convertNode);
         }
-        graphRewrite = new StreamFusionGraphRewrite(activeTableConfig);
+        graphRewrite = new StreamFusionGraphRewrite(activeTableConfig, List.of(node));
         try {
             ExecNode<?> result = graphRewrite.convert(node, this::convertNode);
             graphRewrite.commit();
@@ -769,6 +785,11 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
     void registerReplacement(ExecNode<?> original, ExecNode<?> replacement) {
         if (graphRewrite == null || graphRewrite.convert(original, ignored -> replacement) != replacement)
             throw new IllegalStateException("A physical stage already has a different replacement");
+    }
+
+    ExecNode<?> convertDerived(ExecNode<?> original, java.util.function.Supplier<ExecNode<?>> converter) {
+        if (graphRewrite == null) throw new IllegalStateException("Derived stages require an active graph rewrite");
+        return graphRewrite.convert(original, ignored -> converter.get());
     }
 
     long miniBatchSize(ExecNodeBase<?> node) {

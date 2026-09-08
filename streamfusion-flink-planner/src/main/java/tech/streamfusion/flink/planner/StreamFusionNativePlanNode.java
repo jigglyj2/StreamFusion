@@ -21,6 +21,11 @@ interface StreamFusionNativePlanNode extends ExecNode<RowData> {
         return false;
     }
 
+    /** Local buffers need the original Flink capacity in addition to the runtime allocation budget. */
+    default boolean ownsLocalWindowBuffer() {
+        return false;
+    }
+
     static byte[] invokeBuilder(PlannerBase planner, String owner, Class<?>[] types, Object... arguments) {
         try {
             return (byte[]) Class.forName(owner, true, StreamFusionRuntimeClasses.class.getClassLoader())

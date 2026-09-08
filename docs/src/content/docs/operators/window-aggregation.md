@@ -43,8 +43,7 @@ share and page size before lowering. A capacity model matches Flink's `WindowByt
 geometry without constructing RowData. This bookkeeping preserves observable pressure-flush
 boundaries; actual native buffers and retained state use coarse Flink memory reservations.
 The buffered subset currently requires UTC, non-null time/bound columns, fixed-width Flink row
-geometry and compatible append-only DataFusion aggregates. Nullable time/bound streaming parity
-and automatic binding of the original physical operator's memory share remain outstanding.
+geometry and compatible append-only DataFusion aggregates. Nullable time/bound streaming parity remains outstanding.
 
 The shared local fragment builder supports direct and attached HOP COUNT/MIN/MAX for that
 verified subset. Attached windows follow Flink's `WindowedSliceAssigner`: only the attached end
@@ -56,12 +55,23 @@ Flink resource weights, slot-group totals and use cases, independently of the fu
 allocation allowance. An original-resource graph calculator now derives that metadata from the complete pipeline,
 with Flink job-graph comparisons for reuse, weighted boundaries, slot groups and operators added
 after SQL translation. A complete-pipeline hook now resolves graph-specific factory copies before
-JobGraph serialization, preserving independent capacities across repeated pipeline builds. Ordinary
-local-window exec-node selection still needs to attach that calculator to its resolver.
+JobGraph serialization, preserving independent capacities across repeated pipeline builds. Selected
+local-window nodes now attach that calculator automatically and produce native fragments. Conversion
+preserves the original local node and exchange identities. A source-side local region consumes Arrow
+batches directly; an actual Flink exchange still carries IPC frames decoded once at the receiving
+native edge. An attached local stage after a global window joins the same native tree.
 
 The retained legacy local handle still flushes per Arrow batch. Its reusable integer COUNT/SUM/AVG
 and append-only MIN/MAX computation uses DataFusion, with ordered Flink adapters for retractions
 and incompatible numeric semantics. It is not the buffered shared-runtime path.
+
+Generated SQL comparisons now run direct and attached HOP graphs with three input seeds on each
+backend and compare the complete collected changelog bytes against Flink. These use explicit test
+selection while asserting that ordinary admission remains gated. Topology checks verify stable
+original identities, original memory fractions including weighted source/sink boundaries, serialized
+factories, and direct Arrow input to source-side local regions. The shared single-input runtime also
+passes the pressure/control parity fixture; the existing aligned/unaligned channel and restore/rescale
+fixtures cover its common control path. These are prerequisites, not a full Q5 delivery or benchmark.
 
 ### Global HOP slicer
 
@@ -162,7 +172,7 @@ state writing/reading, routing, and the Arrow-to-RowData sink boundary use their
 These direct-region checks still leave production planner admission outstanding. Remaining
 Q5 requirements include:
 
-- Local-window fragment and resource binding, including the original local memory share.
+- Full-query integration of the verified local-window resource binding with reused outputs.
 - Ownership of the reused aggregate's two outputs, without duplicating computation or disabling
   Flink reuse.
 - Final physical-topology metric and checkpoint/replay contracts, including optional state/backend

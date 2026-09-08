@@ -106,8 +106,8 @@ public final class StreamFusionNativeRegionOperatorFactory extends AbstractStrea
         return result;
     }
 
-    // Every input is an IPC frame. Its envelope must remain native through the complete
-    // execution tree, including stateless UNION trees that were composed as protocol 2.
+    // Both direct Arrow inputs and exchange-edge IPC frames carry an owned envelope
+    // through the complete tree, including UNION trees composed as protocol 2.
     private static byte[] ownedEnvelopePlan(byte[] bytes) {
         try {
             var plan = tech.streamfusion.proto.plan.v1.NativePlan.parseFrom(bytes);

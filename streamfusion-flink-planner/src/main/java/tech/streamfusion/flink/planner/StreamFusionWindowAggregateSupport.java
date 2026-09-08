@@ -244,6 +244,20 @@ final class StreamFusionWindowAggregateSupport {
                     ReadableConfig.class);
             RowType originalInput = (RowType) aggregate.inputEdge.getOutputType();
             int[] grouping = localWindowGrouping(aggregate.local);
+            var localConfig = org.apache.flink.configuration.Configuration.fromMap(
+                    context.getPlanner().getTableConfig().toMap());
+            localConfig.addAll(org.apache.flink.configuration.Configuration.fromMap(
+                    aggregate.local.getPersistedConfig().toMap()));
+            String localReason = tech.streamfusion.flink.planner.window.StreamFusionLocalWindowAggregateTranslator
+                    .unsupportedStageReason(
+                            originalInput,
+                            nativeWindowAccumulatorType(originalInput, grouping),
+                            grouping,
+                            localWindowAggregateCalls(aggregate.local),
+                            localWindowing(aggregate.local),
+                            localWindowNeedRetraction(aggregate.local),
+                            localConfig);
+            if (localReason != null) return "local window: " + localReason;
             var config = org.apache.flink.configuration.Configuration.fromMap(
                     context.getPlanner().getTableConfig().getConfiguration().toMap());
             config.addAll(org.apache.flink.configuration.Configuration.fromMap(

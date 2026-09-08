@@ -33,6 +33,20 @@ final class NativeKeyedRegionTranslation {
             byte[] plan,
             List<Long> stateIds,
             StreamExecutionEnvironment environment) {
+        return translate(inputs, inputTypes, outputType, plan, stateIds, environment, null);
+    }
+
+    static Transformation<RowData> translate(
+            List<Transformation<RowData>> inputs,
+            List<RowType> inputTypes,
+            RowType outputType,
+            byte[] plan,
+            List<Long> stateIds,
+            StreamExecutionEnvironment environment,
+            java.util.function.Function<
+                            List<Transformation<?>>,
+                            java.util.Map<Long, tech.streamfusion.flink.memory.FlinkOperatorMemoryShare>>
+                    resolver) {
         if (inputs.isEmpty() || inputs.size() != inputTypes.size() || stateIds.isEmpty()) {
             throw new IllegalArgumentException(
                     "A keyed native region requires matching inputs and state-node identities");
@@ -67,14 +81,19 @@ final class NativeKeyedRegionTranslation {
             }
         }
         StreamFusionStateBackendFactory.install(environment);
+        var factory = new StreamFusionNativeRegionOperatorFactory(
+                inputTypes,
+                outputType,
+                plan,
+                stateIds,
+                bindings.stream().map(binding -> binding.exchangePlan).collect(Collectors.toList()),
+                resolver == null
+                        ? tech.streamfusion.flink.window.NativeLocalWindowResources.NONE
+                        : tech.streamfusion.flink.window.NativeLocalWindowResources.pending(plan));
+        if (resolver != null) factory.withResourceResolver(resolver);
         var result = new KeyedMultipleInputTransformation<>(
                 "streamfusion-native-region[inputs=" + inputs.size() + ",state=" + stateIds.size() + "]",
-                new StreamFusionNativeRegionOperatorFactory(
-                        inputTypes,
-                        outputType,
-                        plan,
-                        stateIds,
-                        bindings.stream().map(binding -> binding.exchangePlan).collect(Collectors.toList())),
+                factory,
                 ArrowRowDataBatchTypeInfo.INSTANCE,
                 parallelism,
                 false,

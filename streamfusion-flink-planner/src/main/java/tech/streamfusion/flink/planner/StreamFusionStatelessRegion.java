@@ -48,8 +48,14 @@ final class StreamFusionStatelessRegion {
         result.add(node);
     }
 
-    @SuppressWarnings("unchecked")
     static Transformation<RowData> translate(ExecNode<?> root, PlannerBase planner) {
+        var result = translateInternal(root, planner);
+        ((StreamFusionNativePlanNode) root).nativeMetadata().recordOutput(result);
+        return result;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Transformation<RowData> translateInternal(ExecNode<?> root, PlannerBase planner) {
         List<ExecNode<?>> stages = stages(root);
         if (stages.isEmpty()) {
             throw new IllegalArgumentException("Native region root does not implement physical-plan lowering");
@@ -62,8 +68,17 @@ final class StreamFusionStatelessRegion {
             var identify = runtime.getMethod("identifyStage", byte[].class, int.class, String.class, String.class);
             List<byte[]> plans = new ArrayList<>();
             List<Long> stateIds = new ArrayList<>();
+            StreamFusionOriginalWindowResources resources = null;
             for (ExecNode<?> stage : stages) {
                 var nativeStage = (StreamFusionNativePlanNode) stage;
+                if (nativeStage.ownsLocalWindowBuffer()) {
+                    var owner = nativeStage.nativeMetadata().resources();
+                    if (owner == null)
+                        throw new IllegalStateException("Local-window stage has no original resource graph");
+                    if (resources != null && resources != owner)
+                        throw new IllegalStateException("A native region cannot mix original window resource graphs");
+                    resources = owner;
+                }
                 int identity = nativeStage.nativeMetadata().physicalNodeId(stage);
                 plans.add((byte[]) identify.invoke(
                         null,
@@ -75,9 +90,10 @@ final class StreamFusionStatelessRegion {
                     stateIds.add((1L << 32) | Integer.toUnsignedLong(identity));
                 }
             }
-            if (!stateIds.isEmpty()
+            if (resources != null
+                    || !stateIds.isEmpty()
                     || stages.stream().anyMatch(stage -> stage.getInputEdges().size() != 1)) {
-                return translateTree(root, planner, runtime, stages, plans, stateIds);
+                return translateTree(root, planner, runtime, stages, plans, stateIds, resources);
             }
             // Only the region's edge is translated. All internal stages are protobuf children.
             return (Transformation<RowData>) runtime.getMethod(
@@ -97,7 +113,8 @@ final class StreamFusionStatelessRegion {
             Class<?> runtime,
             List<ExecNode<?>> stages,
             List<byte[]> fragments,
-            List<Long> stateIds)
+            List<Long> stateIds,
+            StreamFusionOriginalWindowResources resources)
             throws ReflectiveOperationException {
         var inputPlan = runtime.getMethod("inputPlan", int.class);
         var compose = runtime.getMethod("composeWithInputs", byte[].class, List.class);
@@ -121,6 +138,36 @@ final class StreamFusionStatelessRegion {
         for (ExecEdge edge : boundaries) {
             inputs.add((Transformation<RowData>) edge.translateToPlan(planner));
             inputTypes.add((RowType) edge.getOutputType());
+        }
+        if (resources != null) {
+            if (!stateIds.isEmpty()) {
+                return (Transformation<RowData>) runtime.getMethod(
+                                "translateKeyedInputsWithResources",
+                                List.class,
+                                List.class,
+                                RowType.class,
+                                byte[].class,
+                                List.class,
+                                org.apache.flink.streaming.api.environment.StreamExecutionEnvironment.class,
+                                java.util.function.Function.class)
+                        .invoke(
+                                null,
+                                inputs,
+                                inputTypes,
+                                root.getOutputType(),
+                                trees.get(root),
+                                stateIds,
+                                planner.getExecEnv(),
+                                resources.resolver());
+            }
+            return (Transformation<RowData>) runtime.getMethod(
+                            "translateInputsWithResources",
+                            List.class,
+                            List.class,
+                            RowType.class,
+                            byte[].class,
+                            java.util.function.Function.class)
+                    .invoke(null, inputs, inputTypes, root.getOutputType(), trees.get(root), resources.resolver());
         }
         if (!stateIds.isEmpty()) {
             return (Transformation<RowData>) runtime.getMethod(

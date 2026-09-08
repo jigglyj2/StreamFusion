@@ -21,12 +21,18 @@ final class StreamFusionGraphRewrite {
     private final Map<ExecNode<?>, List<ExecEdge>> pending = new IdentityHashMap<>();
     private final Map<String, ExecNode<?>> explicitUids = new java.util.HashMap<>();
     private final ReadableConfig tableConfig;
+    private final StreamFusionOriginalWindowResources resources;
 
     StreamFusionGraphRewrite() {
         this(new Configuration());
     }
 
     StreamFusionGraphRewrite(ReadableConfig tableConfig) {
+        this(tableConfig, List.of());
+    }
+
+    StreamFusionGraphRewrite(ReadableConfig tableConfig, List<ExecNode<?>> roots) {
+        this.resources = StreamFusionOriginalWindowResources.capture(roots);
         this.tableConfig = tableConfig == null ? new Configuration() : tableConfig;
     }
 
@@ -37,6 +43,7 @@ final class StreamFusionGraphRewrite {
             if (replacement instanceof StreamFusionNativePlanNode && replacement != node) {
                 var metadata = ((StreamFusionNativePlanNode) replacement).nativeMetadata();
                 metadata.bindOriginal(node);
+                metadata.bindResources(resources);
                 String uid = metadata.metricUid(tableConfig);
                 if (uid != null) {
                     ExecNode<?> previous = explicitUids.putIfAbsent(uid, node);

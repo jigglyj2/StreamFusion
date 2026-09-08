@@ -27,7 +27,10 @@ import tech.streamfusion.flink.metrics.StreamFusionNativeMetricTree;
 
 /** One Flink lifecycle owner for a native tree; no per-operator or operator-pair execution driver. */
 public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamOperatorV2<ArrowRowDataBatch>
-        implements MultipleInputStreamOperator<ArrowRowDataBatch>, BoundedMultiInput {
+        implements MultipleInputStreamOperator<ArrowRowDataBatch>,
+                BoundedMultiInput,
+                org.apache.flink.streaming.api.operators.OneInputStreamOperator<Object, ArrowRowDataBatch>,
+                org.apache.flink.streaming.api.operators.BoundedOneInput {
     private final Environment environment;
     private final int subtaskIndex;
     private final List<RowType> inputTypes;
@@ -160,7 +163,7 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
                         if (stateLifecycle != null) stateLifecycle.watermark(nodeId, timestamp);
                         metricTree.watermark(nodeId, timestamp);
                         if (nodeId == controls.rootId()) {
-                            processWatermark(new Watermark(timestamp));
+                            StreamFusionArrowNativeRegionOperator.super.processWatermark(new Watermark(timestamp));
                         }
                     }
 
@@ -184,6 +187,57 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
     @Override
     public List<Input> getInputs() {
         return inputs;
+    }
+
+    // A one-port region can be chained after its source-edge adapter. Flink invokes the
+    // same port through OneInputStreamOperator there; a task head uses getInputs().
+    @SuppressWarnings("unchecked")
+    private Input<Object> singleInput() {
+        if (inputs.size() != 1)
+            throw new IllegalStateException("A multi-port native region cannot be a chained one-input operator");
+        return (Input<Object>) inputs.get(0);
+    }
+
+    @Override
+    public void processElement(StreamRecord<Object> record) throws Exception {
+        singleInput().processElement(record);
+    }
+
+    @Override
+    public void setKeyContextElement(StreamRecord<Object> record) throws Exception {
+        singleInput().setKeyContextElement(record);
+    }
+
+    @Override
+    public void processWatermark(Watermark watermark) throws Exception {
+        singleInput().processWatermark(watermark);
+    }
+
+    @Override
+    public void processWatermarkStatus(WatermarkStatus status) throws Exception {
+        singleInput().processWatermarkStatus(status);
+    }
+
+    @Override
+    public void processLatencyMarker(LatencyMarker marker) throws Exception {
+        singleInput().processLatencyMarker(marker);
+    }
+
+    @Override
+    public void processRecordAttributes(org.apache.flink.streaming.runtime.streamrecord.RecordAttributes attributes)
+            throws Exception {
+        singleInput().processRecordAttributes(attributes);
+    }
+
+    @Override
+    public void processWatermark(org.apache.flink.runtime.event.WatermarkEvent watermark) throws Exception {
+        singleInput().processWatermark(watermark);
+    }
+
+    @Override
+    public void endInput() throws Exception {
+        singleInput();
+        endInput(1);
     }
 
     @Override

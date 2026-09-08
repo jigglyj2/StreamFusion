@@ -118,6 +118,9 @@ Unresolved local resources cannot be serialized or opened in a task.
 
 This callback lives in the runtime-side planner factory so it does not require access to Flink's
 isolated planner classloader. The distribution runner patches `StreamGraphGenerator` in the Flink
-distribution JAR as well as the existing planner/API hooks. Ordinary local-window exec-node
-selection still needs to attach the original-resource calculator to this resolver before Q5 can
-be admitted.
+distribution JAR as well as the existing planner/API hooks. Selected local-window exec nodes now
+attach the original-resource calculator to this resolver. All selected regions from one SQL graph
+share its original resource snapshot and record their output aliases without translating original
+internal operators. Generated direct and attached HOP graphs verify the resulting byte capacities,
+including source and downstream weights, and execute against Flink on both state backends. Q5
+still requires reused-output ownership and full-query validation before ordinary admission.

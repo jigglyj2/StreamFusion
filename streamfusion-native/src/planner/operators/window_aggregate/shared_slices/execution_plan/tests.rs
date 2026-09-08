@@ -344,3 +344,73 @@ fn window_scalar_channel_carries_counter_rate_and_restored_timer_watermark() {
     drop(context);
     assert_eq!(broker.reserved(), 0);
 }
+
+#[test]
+fn planner_partial_field_names_remain_payload_through_the_native_tree() {
+    let broker = Arc::new(TestBroker::new(256 << 20));
+    let names = [
+        "key",
+        "__streamfusion_accumulator",
+        "__streamfusion_window_start",
+        "__streamfusion_slice_end",
+    ];
+    let mut plan = plan();
+    let Some(proto::operator::Operator::Calc(root)) = &mut plan.root.as_mut().unwrap().operator
+    else {
+        unreachable!()
+    };
+    let Some(proto::operator::Operator::WindowAggregate(window)) =
+        &mut root.input.as_mut().unwrap().operator
+    else {
+        unreachable!()
+    };
+    for (field, name) in window
+        .input_schema
+        .as_mut()
+        .unwrap()
+        .fields
+        .iter_mut()
+        .zip(names)
+    {
+        field.name = name.into();
+    }
+    let memory = HostMemoryReservation::new(broker.clone(), "planner partial fields");
+    let mut context =
+        NativeExecutionContext::new(&plan.encode_to_vec(), memory.datafusion_pool(256 << 20))
+            .unwrap();
+    context
+        .install_state(&resources(None, None).encode_to_vec(), memory)
+        .unwrap();
+    let context = Arc::new(context);
+    let original = input(&[(1, 2, 2000)], INSERT);
+    let mut fields = original.schema().fields().to_vec();
+    for (field, name) in fields.iter_mut().zip(names) {
+        *field = Arc::new(field.as_ref().clone().with_name(name));
+    }
+    let batch =
+        RecordBatch::try_new(Arc::new(Schema::new(fields)), original.columns().to_vec()).unwrap();
+    assert_eq!(rows(&run(&context, batch.clone(), None).unwrap()), 0);
+    let output = run(
+        &context,
+        batch.slice(0, 0),
+        Some(ControlEvent::Watermark(i64::MAX)),
+    )
+    .unwrap();
+    assert_eq!(rows(&output), 3);
+    let counts = output
+        .iter()
+        .flat_map(|batch| {
+            batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+                .to_vec()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(counts, [2, 2, 2]);
+    drop(output);
+    drop(context);
+    assert_eq!(broker.reserved(), 0);
+}

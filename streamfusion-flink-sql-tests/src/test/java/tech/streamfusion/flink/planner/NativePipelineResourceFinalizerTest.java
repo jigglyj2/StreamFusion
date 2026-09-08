@@ -20,7 +20,6 @@ import org.apache.flink.streaming.api.graph.StreamConfig;
 import org.apache.flink.streaming.api.graph.StreamGraph;
 import org.apache.flink.streaming.api.graph.StreamGraphGenerator;
 import org.apache.flink.streaming.api.operators.ChainingStrategy;
-import org.apache.flink.streaming.api.transformations.MultipleInputTransformation;
 import org.apache.flink.streaming.api.transformations.OneInputTransformation;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
@@ -162,7 +161,9 @@ class NativePipelineResourceFinalizerTest {
     }
 
     private static StreamFusionNativeRegionOperatorFactory factory(Transformation<?> value) {
-        return (StreamFusionNativeRegionOperatorFactory) ((MultipleInputTransformation<?>) value).getOperatorFactory();
+        return (StreamFusionNativeRegionOperatorFactory)
+                ((org.apache.flink.streaming.api.transformations.OneInputTransformation<?, ?>) value)
+                        .getOperatorFactory();
     }
 
     private static int externalWeights(List<Transformation<?>> roots, Set<Transformation<?>> external) {

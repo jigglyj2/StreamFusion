@@ -155,5 +155,9 @@ bounds, and effective state/metric configuration before producing the protobuf. 
 composition retains the original physical node's identity and discovers its keyed-state owner;
 no standalone global-window Java execution operator is created. Selected topology tests verify
 Calc → global window → Calc with one keyed Arrow runtime, and generated Flink parity/recovery
-fixtures use the same builder. Local-window resource binding and reused-output ownership still
-block ordinary whole-plan Q5 admission; see [Window aggregation](/StreamFusion/operators/window-aggregation/).
+fixtures use the same builder. Selected local-window nodes now join this contract and attach the
+original resource calculator to the complete-pipeline finalizer. Their derived local/exchange nodes
+retain original identity, and source-side local regions consume Arrow directly through the shared
+runtime's single input. Generated direct and attached HOP SQL tests verify this wiring on both
+backends. Reused-output ownership and full-query validation still block ordinary whole-plan Q5
+admission; see [Window aggregation](/StreamFusion/operators/window-aggregation/).

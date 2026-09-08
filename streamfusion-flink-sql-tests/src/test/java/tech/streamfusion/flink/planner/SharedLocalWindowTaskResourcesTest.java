@@ -111,7 +111,12 @@ class SharedLocalWindowTaskResourcesTest {
                                 local.processElement(new StreamRecord<>(value, 123));
                             }
                             try (var batch = ArrowRowDataBatch.transpose(rows, INPUT, allocator)) {
-                                target.processElement(0, new StreamRecord<>(batch));
+                                if (global) target.processElement(0, new StreamRecord<>(batch));
+                                else {
+                                    var record = new StreamRecord<Object>(batch);
+                                    target.region().setKeyContextElement(record);
+                                    target.region().processElement(record);
+                                }
                             }
                             drain(local.getOutput(), keyed, expected, partialSerializer);
                             compare(target, keyed, expected, outputType);
@@ -125,7 +130,8 @@ class SharedLocalWindowTaskResourcesTest {
                             long watermark = phase == 4 ? Long.MAX_VALUE : phase * 2000L - 1;
                             local.processWatermark(new Watermark(watermark));
                             drain(local.getOutput(), keyed, expected, partialSerializer);
-                            target.processWatermark(0, new Watermark(watermark));
+                            if (global) target.processWatermark(0, new Watermark(watermark));
+                            else target.region().processWatermark(new Watermark(watermark));
                         }
                         compare(target, keyed, expected, outputType);
                     }

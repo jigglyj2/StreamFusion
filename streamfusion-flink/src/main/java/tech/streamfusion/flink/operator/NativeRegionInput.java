@@ -25,6 +25,13 @@ final class NativeRegionInput {
         this.exchangePlan = exchangePlan;
     }
 
+    static boolean isExchange(Transformation<?> input) {
+        if (!(input instanceof OneInputTransformation)) return false;
+        var single = (OneInputTransformation<?, ?>) input;
+        return single.getOperatorFactory() instanceof org.apache.flink.streaming.api.operators.SimpleOperatorFactory
+                && single.getOperator() instanceof NativeExchangeReaderOperator;
+    }
+
     @SuppressWarnings("unchecked")
     static NativeRegionInput bind(Transformation<RowData> input, RowType type, boolean keyed) {
         if (input instanceof OneInputTransformation) {

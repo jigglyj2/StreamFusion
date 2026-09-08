@@ -4,9 +4,9 @@
 use super::*;
 use crate::planner::operators::envelope::{Envelope, INPUT_ROW, OWNED_TIMESTAMP_V1, ROW_KIND};
 use crate::planner::persistent::{
+    PersistentOperatorFactory,
     control::ControlEvent,
     unary::{InvocationState, UnaryBatchProcessor, UnaryExec},
-    PersistentOperatorFactory,
 };
 use arrow::array::Int32Array;
 use datafusion::physical_plan::ExecutionPlan;
@@ -190,7 +190,15 @@ impl UnaryBatchProcessor for SharedWindow {
                 .iter()
                 .zip(planned.fields())
                 .any(|(a, b)| {
-                    a.data_type() != b.data_type() || a.name().starts_with("__streamfusion_")
+                    a.data_type() != b.data_type()
+                        || (a.name().starts_with("__streamfusion_")
+                            && !(a.name() == b.name()
+                                && matches!(
+                                    a.name().as_str(),
+                                    "__streamfusion_accumulator"
+                                        | "__streamfusion_window_start"
+                                        | "__streamfusion_slice_end"
+                                )))
                 })
         {
             return Err(DataFusionError::Plan(

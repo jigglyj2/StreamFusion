@@ -98,6 +98,16 @@ class NativeRegionInputTest {
     }
 
     @Test
+    void aSingleArrowSourceRemainsDirectWithoutAnIpcWriter() {
+        var input = arrowSource();
+        var region = StreamFusionNativeRegionTranslator.translateInputs(
+                List.of(input), List.of(TYPE), TYPE, StreamFusionNativeRegionTranslator.inputPlan(0));
+        assertThat(region).isInstanceOf(org.apache.flink.streaming.api.transformations.OneInputTransformation.class);
+        assertThat(region.getInputs()).containsExactly(input);
+        assertThat(region.getOutputType()).isSameAs(ArrowRowDataBatchTypeInfo.INSTANCE);
+    }
+
+    @Test
     void statelessRegionAlsoDecodesAnExistingExchangeOnlyOnce() throws Exception {
         var input = exchange(16, 2);
         var region = (MultipleInputTransformation<?>) StreamFusionNativeRegionTranslator.translateInputs(
