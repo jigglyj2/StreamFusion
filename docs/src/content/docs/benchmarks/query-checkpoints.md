@@ -181,6 +181,28 @@ backends. Those separate wall-clock jobs check execution invariants; exact bytes
 with identical controlled clocks. Terminal watermarks and bounded finish do not emit an open
 processing-time window. No Q12 performance result is claimed from empty/partial max-speed output.
 
+## Q13 lookup baseline and current blocker
+
+The original upstream Q13 SQL plans and executes on Flink 2.3.0 using its legacy filesystem
+CSV lookup table. `NexmarkQ13PlanningIT` loads `/queries/q13.sql` directly from the upstream
+Nexmark JAR, substitutes only the temporary side-file path and blackhole sink name, and writes
+the same 10,000 integer/string pairs as upstream `SideInputGenerator`. Four cases cover both
+backends with StreamFusion disabled and enabled. At 10,000 source events, each execution emits
+exactly the bid count measured by Q0 through the unmodified blackhole sink.
+
+With StreamFusion enabled, EXPLAIN reports whole-plan fallback because
+`StreamExecLookupJoin: operator has no StreamFusion physical implementation`; native batch
+counters remain zero. Q13 is not yet accelerated and has no native throughput result.
+This is an implementation blocker, not an unsupported upstream streaming query. Replacing
+the legacy source with the modern scan-only filesystem connector would change the baseline.
+
+Flink's `CsvLookupFunction` loads every side-file split once at task open, retains duplicate
+matches in file arrival order, and reloads the file after recovery. A native implementation
+must preserve those semantics, configured CSV parsing, per-input changelog order, memory
+accounting and the fused Arrow path while delegating lookup computation to DataFusion.
+The current test establishes successful baseline execution and fallback, not enrichment
+byte parity or native recovery correctness.
+
 ## Q6 has no Flink streaming baseline
 
 The upstream Nexmark Q6 query computes a bounded ordered AVG after winning-bid rank selection.
