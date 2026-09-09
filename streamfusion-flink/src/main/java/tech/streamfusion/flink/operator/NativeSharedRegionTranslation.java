@@ -40,6 +40,20 @@ public final class NativeSharedRegionTranslation {
             List<Long> stateIds,
             StreamExecutionEnvironment environment,
             Function<List<Transformation<?>>, Map<Long, FlinkOperatorMemoryShare>> resolver) {
+        return translateWithLookupSources(
+                inputs, inputTypes, outputTypes, bytes, stateIds, environment, resolver, Map.of());
+    }
+
+    public static List<Transformation<RowData>> translateWithLookupSources(
+            List<Transformation<RowData>> inputs,
+            List<RowType> inputTypes,
+            List<RowType> outputTypes,
+            byte[] bytes,
+            List<Long> stateIds,
+            StreamExecutionEnvironment environment,
+            Function<List<Transformation<?>>, Map<Long, FlinkOperatorMemoryShare>> resolver,
+            Map<Long, tech.streamfusion.flink.arrow.CsvLookupSnapshotSource> sources) {
+        var lookupSources = new tech.streamfusion.flink.join.NativeLookupSources(sources);
         var plan = decode(bytes);
         NativeSharedRegionOutputs.validate(plan, outputTypes.size());
         if (inputs.size() != plan.getInputCount() || inputTypes.size() != inputs.size())
@@ -52,6 +66,7 @@ public final class NativeSharedRegionTranslation {
         Function<List<byte[]>, StreamFusionNativeRegionOperatorFactory> factoryBuilder = exchanges -> {
             var factory = StreamFusionNativeRegionOperatorFactory.shared(
                     inputTypes, outputTypes, bytes, stateIds, exchanges, resources);
+            factory.withLookupSources(lookupSources);
             return resolver == null ? factory : factory.withResourceResolver(resolver);
         };
         Transformation<RowData> owner;

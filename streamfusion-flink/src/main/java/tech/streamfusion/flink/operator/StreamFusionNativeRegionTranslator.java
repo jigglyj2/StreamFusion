@@ -51,6 +51,20 @@ public final class StreamFusionNativeRegionTranslator {
                             List<Transformation<?>>,
                             java.util.Map<Long, tech.streamfusion.flink.memory.FlinkOperatorMemoryShare>>
                     resolver) {
+        return translateInputsWithLookupSources(inputs, inputTypes, outputType, plan, resolver, java.util.Map.of());
+    }
+
+    public static Transformation<RowData> translateInputsWithLookupSources(
+            List<Transformation<RowData>> inputs,
+            List<RowType> inputTypes,
+            RowType outputType,
+            byte[] plan,
+            java.util.function.Function<
+                            List<Transformation<?>>,
+                            java.util.Map<Long, tech.streamfusion.flink.memory.FlinkOperatorMemoryShare>>
+                    resolver,
+            java.util.Map<Long, tech.streamfusion.flink.arrow.CsvLookupSnapshotSource> sources) {
+        var lookupSources = new tech.streamfusion.flink.join.NativeLookupSources(sources);
         if (inputs.isEmpty() || inputs.size() != inputTypes.size()) {
             throw new IllegalArgumentException("Native region external inputs and types must have matching arity");
         }
@@ -67,6 +81,7 @@ public final class StreamFusionNativeRegionTranslator {
                     resolver == null
                             ? tech.streamfusion.flink.window.NativeLocalWindowResources.NONE
                             : tech.streamfusion.flink.window.NativeLocalWindowResources.pending(plan));
+            factory.withLookupSources(lookupSources);
             if (resolver != null) factory.withResourceResolver(resolver);
             var result = new OneInputTransformation<ArrowRowDataBatch, ArrowRowDataBatch>(
                     arrowInput,
@@ -94,6 +109,7 @@ public final class StreamFusionNativeRegionTranslator {
                 resolver == null
                         ? tech.streamfusion.flink.window.NativeLocalWindowResources.NONE
                         : tech.streamfusion.flink.window.NativeLocalWindowResources.pending(plan));
+        factory.withLookupSources(lookupSources);
         if (resolver != null) factory.withResourceResolver(resolver);
         var result = new org.apache.flink.streaming.api.transformations.MultipleInputTransformation<>(
                 "streamfusion-native-region[inputs=" + inputs.size() + "]",

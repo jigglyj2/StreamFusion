@@ -42,6 +42,18 @@ final class StreamFusionJoinConversions {
     private StreamFusionJoinConversions() {}
 
     static ExecNode<?> convert(ExecNode<?> node, StreamFusionExecGraphProcessor context) {
+        if (node instanceof org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecLookupJoin) {
+            var join = (org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecLookupJoin) node;
+            var replacement = new StreamFusionExecLookupJoin(
+                    join.getPersistedConfig(),
+                    join.getInputProperties().get(0),
+                    (RowType) join.getOutputType(),
+                    StreamFusionLookupJoinSupport.describe(join));
+            replacement.setInputEdges(join.getInputEdges().stream()
+                    .map(edge -> copyEdge(edge, context.convert(edge.getSource()), replacement))
+                    .collect(Collectors.toList()));
+            return replacement;
+        }
         if (node instanceof BatchExecHashJoin) {
             BatchExecHashJoin join = (BatchExecHashJoin) node;
             StreamFusionBatchExecHashJoin replacement = new StreamFusionBatchExecHashJoin(

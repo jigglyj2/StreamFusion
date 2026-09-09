@@ -586,6 +586,10 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             if (reason != null) {
                 rejections.add(nodePath + "\n" + reason);
             }
+        } else if (node instanceof org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecLookupJoin) {
+            String reason = StreamFusionLookupJoinSupport.unsupportedReason(
+                    (org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecLookupJoin) node);
+            if (reason != null) rejections.add(nodePath + "\n" + reason);
         } else if (node instanceof StreamExecTemporalJoin) {
             String reason = unsupportedReason((StreamExecTemporalJoin) node, context);
             if (reason != null) {

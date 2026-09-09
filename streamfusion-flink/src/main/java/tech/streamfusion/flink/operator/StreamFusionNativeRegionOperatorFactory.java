@@ -18,6 +18,8 @@ public final class StreamFusionNativeRegionOperatorFactory extends AbstractStrea
     private final boolean sharedRegion;
     private final byte[] plan;
     private final List<Long> stateIds;
+    private tech.streamfusion.flink.join.NativeLookupSources lookupSources =
+            tech.streamfusion.flink.join.NativeLookupSources.NONE;
     private final List<byte[]> exchangePlans;
     private final tech.streamfusion.flink.window.NativeLocalWindowResources localWindowResources;
     private transient java.util.function.Function<
@@ -116,6 +118,17 @@ public final class StreamFusionNativeRegionOperatorFactory extends AbstractStrea
         this.exchangePlans = exchangePlans.stream().map(byte[]::clone).collect(java.util.stream.Collectors.toList());
     }
 
+    public StreamFusionNativeRegionOperatorFactory withLookupSources(
+            tech.streamfusion.flink.join.NativeLookupSources sources) {
+        if (!lookupSources.isEmpty()) throw new IllegalStateException("Lookup sources are already bound");
+        if (!sources.isEmpty() && !stateIds.isEmpty())
+            throw new IllegalArgumentException(
+                    "Lookup task-open sources cannot yet share a region with keyed state initialization");
+        sources.validate(plan, sharedRegion);
+        lookupSources = sources;
+        return this;
+    }
+
     /** Planner-only metadata; resolved copies, never this closure, are shipped to tasks. */
     public StreamFusionNativeRegionOperatorFactory withResourceResolver(
             java.util.function.Function<
@@ -147,6 +160,7 @@ public final class StreamFusionNativeRegionOperatorFactory extends AbstractStrea
                 exchangePlans,
                 localWindowResources.resolvedFrom(shares),
                 sharedRegion);
+        result.withLookupSources(lookupSources);
         result.setChainingStrategy(getChainingStrategy());
         return result;
     }
@@ -169,8 +183,17 @@ public final class StreamFusionNativeRegionOperatorFactory extends AbstractStrea
     @SuppressWarnings("unchecked")
     public <T extends StreamOperator<ArrowRowDataBatch>> T createStreamOperator(
             StreamOperatorParameters<ArrowRowDataBatch> parameters) {
+        lookupSources.validate(plan, sharedRegion);
         return (T) new StreamFusionArrowNativeRegionOperator(
-                parameters, inputTypes, outputTypes, plan, stateIds, exchangePlans, localWindowResources, sharedRegion);
+                parameters,
+                inputTypes,
+                outputTypes,
+                plan,
+                stateIds,
+                exchangePlans,
+                localWindowResources,
+                sharedRegion,
+                lookupSources);
     }
 
     @Override

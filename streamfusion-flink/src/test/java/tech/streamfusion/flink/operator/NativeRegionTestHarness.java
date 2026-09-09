@@ -24,6 +24,7 @@ final class NativeRegionTestHarness extends MultiInputStreamOperatorTestHarness<
     final List<List<Long>> outputTimes = new ArrayList<>();
     final List<StreamElement> controls = new ArrayList<>();
     RuntimeException sinkFailure;
+    boolean cancelOnClose;
 
     NativeRegionTestHarness(byte[] plan, List<RowType> inputTypes, RowType outputType) throws Exception {
         this(new StreamFusionNativeRegionOperatorFactory(inputTypes, outputType, plan), List.of(outputType));
@@ -101,5 +102,27 @@ final class NativeRegionTestHarness extends MultiInputStreamOperatorTestHarness<
 
     void end(int input) throws Exception {
         ((StreamFusionArrowNativeRegionOperator) getCastedOperator()).endInput(input + 1);
+    }
+
+    @Override
+    public void close() throws Exception {
+        if (!cancelOnClose) {
+            super.close();
+            return;
+        }
+        // Flink skips finish on task cancellation. The upstream harness unconditionally
+        // calls finish before close, which would issue new controls to a failed invocation.
+        processingTimeService.shutdownService();
+        try {
+            getCastedOperator().close();
+        } finally {
+            try {
+                getEnvironment().close();
+            } finally {
+                var cleanup = org.apache.flink.streaming.util.MockStreamTask.class.getDeclaredMethod("cleanUpInternal");
+                cleanup.setAccessible(true);
+                cleanup.invoke(mockTask);
+            }
+        }
     }
 }

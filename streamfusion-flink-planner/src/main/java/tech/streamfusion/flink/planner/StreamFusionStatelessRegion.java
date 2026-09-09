@@ -69,6 +69,8 @@ final class StreamFusionStatelessRegion {
             var identify = runtime.getMethod("identifyStage", byte[].class, int.class, String.class, String.class);
             List<byte[]> plans = new ArrayList<>();
             List<Long> stateIds = new ArrayList<>();
+            var lookupSources =
+                    new java.util.LinkedHashMap<Long, tech.streamfusion.flink.arrow.CsvLookupSnapshotSource>();
             StreamFusionOriginalWindowResources resources = null;
             for (ExecNode<?> stage : stages) {
                 var nativeStage = (StreamFusionNativePlanNode) stage;
@@ -81,6 +83,8 @@ final class StreamFusionStatelessRegion {
                     resources = owner;
                 }
                 int identity = nativeStage.nativeMetadata().physicalNodeId(stage);
+                if (nativeStage.lookupSource() != null)
+                    lookupSources.put((1L << 32) | Integer.toUnsignedLong(identity), nativeStage.lookupSource());
                 plans.add((byte[]) identify.invoke(
                         null,
                         nativeStage.nativePlanFragment(planner),
@@ -92,9 +96,10 @@ final class StreamFusionStatelessRegion {
                 }
             }
             if (resources != null
+                    || !lookupSources.isEmpty()
                     || !stateIds.isEmpty()
                     || stages.stream().anyMatch(stage -> stage.getInputEdges().size() != 1)) {
-                return translateTree(root, planner, runtime, stages, plans, stateIds, resources);
+                return translateTree(root, planner, runtime, stages, plans, stateIds, resources, lookupSources);
             }
             // Only the region's edge is translated. All internal stages are protobuf children.
             return (Transformation<RowData>) runtime.getMethod(
@@ -115,7 +120,8 @@ final class StreamFusionStatelessRegion {
             List<ExecNode<?>> stages,
             List<byte[]> fragments,
             List<Long> stateIds,
-            StreamFusionOriginalWindowResources resources)
+            StreamFusionOriginalWindowResources resources,
+            java.util.Map<Long, tech.streamfusion.flink.arrow.CsvLookupSnapshotSource> lookupSources)
             throws ReflectiveOperationException {
         var inputPlan = runtime.getMethod("inputPlan", int.class);
         var compose = runtime.getMethod("composeWithInputs", byte[].class, List.class);
@@ -139,6 +145,27 @@ final class StreamFusionStatelessRegion {
         for (ExecEdge edge : boundaries) {
             inputs.add((Transformation<RowData>) edge.translateToPlan(planner));
             inputTypes.add((RowType) edge.getOutputType());
+        }
+        if (!lookupSources.isEmpty()) {
+            if (!stateIds.isEmpty())
+                throw new IllegalArgumentException(
+                        "Lookup task-open sources cannot yet share a region with keyed state initialization");
+            return (Transformation<RowData>) runtime.getMethod(
+                            "translateInputsWithLookupSources",
+                            List.class,
+                            List.class,
+                            RowType.class,
+                            byte[].class,
+                            java.util.function.Function.class,
+                            java.util.Map.class)
+                    .invoke(
+                            null,
+                            inputs,
+                            inputTypes,
+                            root.getOutputType(),
+                            trees.get(root),
+                            resources == null ? null : resources.resolver(),
+                            lookupSources);
         }
         if (resources != null) {
             if (!stateIds.isEmpty()) {

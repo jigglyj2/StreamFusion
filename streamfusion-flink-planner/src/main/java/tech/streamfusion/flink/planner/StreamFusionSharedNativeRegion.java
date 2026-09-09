@@ -20,6 +20,8 @@ final class StreamFusionSharedNativeRegion {
     private final byte[] plan;
     private final java.lang.reflect.Method translation;
     private final List<Long> stateIds;
+    private final java.util.Map<Long, tech.streamfusion.flink.arrow.CsvLookupSnapshotSource> lookupSources =
+            new java.util.LinkedHashMap<>();
     private final StreamFusionOriginalWindowResources resources;
     private List<Transformation<RowData>> outputs;
     private boolean translating;
@@ -27,6 +29,20 @@ final class StreamFusionSharedNativeRegion {
     static void install(ExecNodeGraph graph, PlannerBase planner) {
         var layout = StreamFusionNativeRegionLayout.discover(graph, node -> node instanceof StreamFusionNativePlanNode);
         layout.validateBoundaryGraph();
+        // Validate every connected region, including a single-exit tree, while GraphRewrite
+        // can still roll back retained Flink boundary edges. Keyed contexts initialize before
+        // open; the CSV lookup snapshot must observe the source at Flink's task-open boundary.
+        for (var region : layout.regions) {
+            boolean keyed =
+                    region.stages.stream().anyMatch(node -> ((StreamFusionNativePlanNode) node).ownsNativeKeyedState());
+            if (keyed)
+                for (var node : region.stages) {
+                    if (((StreamFusionNativePlanNode) node).lookupSource() != null)
+                        throw new IllegalArgumentException(
+                                node.getDescription()
+                                        + ": lookup task-open sources cannot yet share a region with keyed state initialization");
+                }
+        }
         var owners = new ArrayList<StreamFusionSharedNativeRegion>();
         for (var region : layout.regions)
             if (region.outputs.size() > 1) owners.add(new StreamFusionSharedNativeRegion(region, planner));
@@ -58,6 +74,11 @@ final class StreamFusionSharedNativeRegion {
             if (latency > 0)
                 throw new IllegalArgumentException(
                         "Shared native regions do not yet support Flink sampled latency routing");
+            if (stage.lookupSource() != null)
+                lookupSources.put(
+                        (1L << 32)
+                                | Integer.toUnsignedLong(stage.nativeMetadata().physicalNodeId(node)),
+                        stage.lookupSource());
             if (stage.ownsNativeKeyedState())
                 ids.add((1L << 32)
                         | Integer.toUnsignedLong(stage.nativeMetadata().physicalNodeId(node)));
@@ -70,6 +91,9 @@ final class StreamFusionSharedNativeRegion {
             }
         }
         stateIds = List.copyOf(ids);
+        if (!stateIds.isEmpty() && !lookupSources.isEmpty())
+            throw new IllegalArgumentException(
+                    "Lookup task-open sources cannot yet share a region with keyed state initialization");
         resources = resourceOwner;
         try {
             var runtime = Class.forName(
@@ -78,14 +102,15 @@ final class StreamFusionSharedNativeRegion {
                     planner.getFlinkContext().getClassLoader());
             runtime.getMethod("validate", byte[].class, int.class).invoke(null, plan, layout.outputs.size());
             translation = runtime.getMethod(
-                    "translate",
+                    "translateWithLookupSources",
                     List.class,
                     List.class,
                     List.class,
                     byte[].class,
                     List.class,
                     org.apache.flink.streaming.api.environment.StreamExecutionEnvironment.class,
-                    java.util.function.Function.class);
+                    java.util.function.Function.class,
+                    java.util.Map.class);
         } catch (InvocationTargetException failure) {
             throw new IllegalArgumentException(
                     "Unsupported shared native region: " + failure.getCause().getMessage(), failure.getCause());
@@ -120,7 +145,8 @@ final class StreamFusionSharedNativeRegion {
                     plan,
                     stateIds,
                     planner.getExecEnv(),
-                    resources == null ? null : resources.resolver());
+                    resources == null ? null : resources.resolver(),
+                    lookupSources);
             if (result.size() != layout.outputs.size())
                 throw new IllegalStateException("Native region runtime returned an incorrect output arity");
             for (int index = 0; index < result.size(); index++)

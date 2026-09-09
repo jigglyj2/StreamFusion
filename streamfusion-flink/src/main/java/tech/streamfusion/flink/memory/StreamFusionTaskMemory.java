@@ -72,6 +72,38 @@ public final class StreamFusionTaskMemory implements AutoCloseable {
                 environment, operatorConfig, metricGroup, name, serializedPlan, bindings, taskBindings, true);
     }
 
+    /** Immutable lookup readers open with the original Flink task, after state initialization. */
+    public static StreamFusionTaskMemory createWithLookupSources(
+            Environment environment,
+            StreamConfig operatorConfig,
+            OperatorMetricGroup metricGroup,
+            String name,
+            byte[] plan,
+            byte[] taskBindings,
+            boolean sharedRegion,
+            tech.streamfusion.flink.join.NativeLookupSources sources)
+            throws Exception {
+        FlinkManagedMemory memory = FlinkManagedMemory.create(environment, operatorConfig, metricGroup, name);
+        try {
+            return new StreamFusionTaskMemory(
+                    memory,
+                    sources.open(
+                            plan,
+                            memory,
+                            taskBindings,
+                            sharedRegion,
+                            memory.allocator(),
+                            environment.getUserCodeClassLoader().asClassLoader()));
+        } catch (Exception | Error failure) {
+            try {
+                memory.close();
+            } catch (RuntimeException | Error cleanup) {
+                failure.addSuppressed(cleanup);
+            }
+            throw failure;
+        }
+    }
+
     private static StreamFusionTaskMemory createWithState(
             Environment environment,
             StreamConfig operatorConfig,

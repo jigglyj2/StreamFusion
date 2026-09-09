@@ -27,7 +27,7 @@ bundle and receive the completed native plan. This boundary also applies to the 
 representation used by Q3–Q5; loading its translator from the runtime classloader would cause
 whole-plan fallback in the packaged distribution even when flat-classpath SQL tests pass.
 
-All other join paths described below are retained for development and direct parity tests under
+The cached CSV lookup subset below is also admitted. Other join paths are retained for development and direct parity tests under
 [architecture admission](/StreamFusion/development/architecture-admission/).
 
 **Retained implementation scope:** Partial implementation for bounded hash/adaptive/sort-merge/nested-loop joins and for
@@ -76,14 +76,27 @@ memory reservation callbacks. A native regression test reproduced 4,119 budget c
 and parity evidence. The [Q4 release comparison](/StreamFusion/benchmarks/q4-rowdata/)
 reports matched measurements and separate profiles on both backends.
 
-## Cached lookup prerequisites
+## Cached CSV lookup joins
 
-SQL lookup joins, including Nexmark Q13, still retain whole-plan fallback. A source-boundary
-prerequisite now extracts Flink's configured legacy `CsvTableSource` reader through its public
+Synchronous inner equality lookups over Flink's legacy `CsvTableSource`, including Nexmark Q13,
+are admitted through ordinary planner selection. The native lookup composes with adjacent Calc
+stages in one Arrow/DataFusion tree, including a shared lookup with multiple native consumers.
+The source description is serialized separately from the protobuf plan and opened only at task
+open. No RowData-shaped intermediate operator or additional per-probe JNI crossing is introduced.
+
+Equality keys must be matching boolean, signed integer, VARCHAR or VARBINARY fields; composite
+keys are supported. Other sources, asynchronous lookup, retries, outer joins, constant keys,
+custom shuffle, upsert materialization, embedded side projections/filters, and pre/residual join
+filters retain precise whole-plan fallback. Ordinary Calc stages before or after the lookup remain
+composable. A lookup cannot yet share a native region with keyed state: Flink initializes that
+state before opening the snapshot. This restriction is checked before committing the selected
+graph, including single-output trees, and does not affect Q13's Calc/lookup region.
+
+The source boundary extracts Flink's configured legacy `CsvTableSource` reader through its public
 `getDataStream` / `createInput` APIs. An isolated environment captures the reader description;
 it executes no job and reads no file during planning or serialization. Task open creates a fresh
-reader and lists all splits with the same argument as Flink's `CsvLookupFunction`. The eventual
-lookup binding must drain this finite source before accepting probe records and reload it when
+reader and lists all splits with the same argument as Flink's `CsvLookupFunction`. The
+lookup binding drains this finite source before accepting probe records and reloads it when
 the task recovers. It does not create Flink's additional Java hash-map cache.
 
 The adapter writes source rows directly into independently owned Arrow batches under a
@@ -96,8 +109,7 @@ reader's `java.sql` objects while preserving declared logical types and decimal 
 Six focused Java tests compare generated lookup values, order and binary-row bytes against the
 actual Flink CSV lookup function, and cover serialization before the file exists, multiple files,
 nullable/duplicate keys, varied batch sizes, temporal/decimal payloads, reopen, early close and
-allocation/parse failure. These are source-adapter checks; full planner, metric and
-checkpoint/channel integration remain required before production lookup acceleration.
+allocation/parse failure. These source-adapter checks supplement the runtime parity tests below.
 
 The test-only DataFusion 55 lookup investigation verifies an inner `HashJoinExec` with a
 single-consumption Arrow build stream and repeated probe invocations. Generated cases cover
@@ -170,9 +182,21 @@ They also check logical native-stage counters and record timestamps. A shared Fl
 fixture verifies that increasing retained Java payload grows the total charge only once, that
 parse/budget failures return all credit, and that output remains valid after the cache closes.
 Changing the file affects the next task open; an existing task retains its original snapshot.
-These are source/native-edge parity checks, not complete SQL planner, Flink metric-surface or
-checkpoint/recovery evidence. Java planner selection, full operator parity and recovery/channel
-validation remain pending. Q13 remains on whole-plan fallback and has no native benchmark result.
+Generated runtime tests additionally invoke Flink's unchanged lookup code generator,
+`CsvLookupFunction` and `ProcessOperator`. They compare the complete serialized changelog,
+duplicate order, SQL-null probes, record timestamps, watermark/idle controls, logical-record
+counters, and complete registered operator metric names/types and deterministic values. Rate
+meters retain Flink's implementation and logical counters rather than matching wall-clock rates.
+Calc/lookup/Calc and shared-output tests verify independent stage counts and Flink's Calc timestamp
+clearing. Factory serialization succeeds before the source exists; cancellation returns cache
+credit. Aligned and unaligned operator snapshots contain no lookup state, matching Flink, and
+restore reopens the original source. Channel state and redistribution remain Flink-owned; the
+lookup has no keyed state to migrate or rescale. These stateless tests are not RocksDB state
+performance evidence.
+
+The original Q13 SQL passes ordinary EXPLAIN admission and blackhole execution with both HashMap
+and RocksDB configured, with positive native batch counters and exactly the expected bid count.
+Q13 release measurements and mixed JVM/native profiles are still pending; no speedup is claimed.
 
 ## SQL example
 
@@ -363,7 +387,8 @@ planner-provided unique/upsert key. Interval joins additionally fall back for a 
 condition, non-constant bounds, semi/anti join modes, mini-batching, asynchronous state, or
 changelog-state wrapping. Temporal joins fall back for right/full/semi/anti modes, asynchronous
 state, or changelog-state wrapping; Flink itself rejects processing-time temporal table joins, and
-only its temporal table-function form is accepted there. Lookup joins remain Flink-owned. A
+only its temporal table-function form is accepted there. Lookup joins outside the cached CSV
+subset above remain Flink-owned. A
 bounded nested-loop scalar-subquery join also remains on Flink because its single-row cardinality
 failure contract is not yet native. These are explicit unimplemented shapes, not approximations.
 Multi-way joins additionally fall back for residual predicates outside the attribute map,

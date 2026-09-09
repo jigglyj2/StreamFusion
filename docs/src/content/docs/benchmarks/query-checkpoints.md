@@ -181,27 +181,29 @@ backends. Those separate wall-clock jobs check execution invariants; exact bytes
 with identical controlled clocks. Terminal watermarks and bounded finish do not emit an open
 processing-time window. No Q12 performance result is claimed from empty/partial max-speed output.
 
-## Q13 lookup baseline and current blocker
+## Q13 lookup admission; performance pending
 
-The original upstream Q13 SQL plans and executes on Flink 2.3.0 using its legacy filesystem
-CSV lookup table. `NexmarkQ13PlanningIT` loads `/queries/q13.sql` directly from the upstream
-Nexmark JAR, substitutes only the temporary side-file path and blackhole sink name, and writes
-the same 10,000 integer/string pairs as upstream `SideInputGenerator`. Four cases cover both
-backends with StreamFusion disabled and enabled. At 10,000 source events, each execution emits
-exactly the bid count measured by Q0 through the unmodified blackhole sink.
+The original upstream Q13 SQL now plans and executes with native lookup acceleration.
+`NexmarkQ13PlanningIT` loads `/queries/q13.sql` directly from the upstream Nexmark JAR,
+substitutes only the temporary side-file path and blackhole sink name, and writes the same
+10,000 integer/string pairs as upstream `SideInputGenerator`. Four cases cover HashMap and
+RocksDB with StreamFusion disabled and enabled. At 10,000 source events, each execution emits
+exactly the bid count measured by Q0 through the unmodified blackhole sink. StreamFusion reports
+`Accelerated: yes` and positive native plan batch counters; Flink reports no native activity.
 
-With StreamFusion enabled, EXPLAIN reports whole-plan fallback because
-`StreamExecLookupJoin: operator has no StreamFusion physical implementation`; native batch
-counters remain zero. Q13 is not yet accelerated and has no native throughput result.
-This is an implementation blocker, not an unsupported upstream streaming query. Replacing
-the legacy source with the modern scan-only filesystem connector would change the baseline.
+The lookup uses DataFusion hash/probe/equality computation and Arrow gathers in the same native
+tree as adjacent Calcs. The original configured CSV reader loads all splits at task open;
+duplicates retain file order and recovery reloads the file. Generated tests against Flink's
+actual lookup code generator compare full changelog bytes, timestamps, metric surfaces, control
+events, and Calc composition. Aligned/unaligned operator snapshots contain no cache state, as in
+Flink. Native memory tests cover shared-buffer accounting, bounded probe/output work, and full
+credit return on close or failure. See [joins](/StreamFusion/operators/joins/) for the admitted
+subset and precise fallback conditions, including regions mixing lookup and keyed state.
 
-Flink's `CsvLookupFunction` loads every side-file split once at task open, retains duplicate
-matches in file arrival order, and reloads the file after recovery. A native implementation
-must preserve those semantics, configured CSV parsing, per-input changelog order, memory
-accounting and the fused Arrow path while delegating lookup computation to DataFusion.
-The current test establishes successful baseline execution and fallback, not enrichment
-byte parity or native recovery correctness.
+This is an admission checkpoint, not a completed performance comparison. Q13 still needs its
+release/native-CPU measured forks and separate mixed profiles. Configuring RocksDB for this
+stateless query does not establish RocksDB state-performance behavior. The original legacy source
+remains the baseline; replacing it with the modern scan-only filesystem connector would change it.
 
 ## Q6 has no Flink streaming baseline
 

@@ -38,6 +38,7 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
     private final NativeSharedRegionOutputs sharedOutputs;
     private final byte[] plan;
     private final List<Long> stateIds;
+    private final tech.streamfusion.flink.join.NativeLookupSources lookupSources;
     private tech.streamfusion.flink.state.NativeRegionStateLifecycle stateLifecycle;
     private final List<Input> inputs;
     private final boolean[] ended;
@@ -57,7 +58,8 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
             List<Long> stateIds,
             List<byte[]> exchangePlans,
             tech.streamfusion.flink.window.NativeLocalWindowResources localWindowResources,
-            boolean sharedRegion) {
+            boolean sharedRegion,
+            tech.streamfusion.flink.join.NativeLookupSources lookupSources) {
         super(parameters, inputTypes.size());
         environment = parameters.getContainingTask().getEnvironment();
         subtaskIndex = parameters.getContainingTask().getIndexInSubtaskGroup();
@@ -87,6 +89,7 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
         this.plan = plan.clone();
         this.localWindowResources = localWindowResources;
         this.stateIds = List.copyOf(stateIds);
+        this.lookupSources = lookupSources;
         ended = new boolean[inputTypes.size()];
         List<Input> ports = new ArrayList<>();
         this.exchangePlans = exchangePlans.stream().map(byte[]::clone).collect(java.util.stream.Collectors.toList());
@@ -164,23 +167,33 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
         }
         if (memory == null) {
             byte[] resources = localWindowResources.resolve(environment, config);
-            memory = sharedPlan == null
-                    ? StreamFusionTaskMemory.createWithState(
+            memory = !lookupSources.isEmpty()
+                    ? StreamFusionTaskMemory.createWithLookupSources(
                             environment,
                             config,
                             getMetricGroup(),
                             "streamfusion-native-region",
                             plan,
-                            ignored -> null,
-                            resources)
-                    : StreamFusionTaskMemory.createRegionWithState(
-                            environment,
-                            config,
-                            getMetricGroup(),
-                            "streamfusion-native-region",
-                            plan,
-                            ignored -> null,
-                            resources);
+                            resources,
+                            sharedPlan != null,
+                            lookupSources)
+                    : sharedPlan == null
+                            ? StreamFusionTaskMemory.createWithState(
+                                    environment,
+                                    config,
+                                    getMetricGroup(),
+                                    "streamfusion-native-region",
+                                    plan,
+                                    ignored -> null,
+                                    resources)
+                            : StreamFusionTaskMemory.createRegionWithState(
+                                    environment,
+                                    config,
+                                    getMetricGroup(),
+                                    "streamfusion-native-region",
+                                    plan,
+                                    ignored -> null,
+                                    resources);
         }
         metricTree = sharedPlan == null
                 ? StreamFusionNativeMetricTree.forRegion(

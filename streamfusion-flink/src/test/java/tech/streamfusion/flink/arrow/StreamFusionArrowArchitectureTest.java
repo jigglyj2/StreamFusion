@@ -16,6 +16,25 @@ import org.junit.jupiter.api.Test;
 /** Prevents a StreamFusion internal operator from silently becoming row-shaped again. */
 class StreamFusionArrowArchitectureTest {
     @Test
+    void lookupResourcesBindAtTheSharedTaskEdgeWithoutAnInternalRowOperator() throws IOException {
+        var runtime = Files.readString(
+                Path.of("src/main/java/tech/streamfusion/flink/operator/StreamFusionArrowNativeRegionOperator.java"));
+        assertThat(runtime)
+                .contains("createWithLookupSources(", "MultipleInputStreamOperator<ArrowRowDataBatch>")
+                .doesNotContain(".transpose(", "rowView(", "CsvLookupFunction");
+        var sources = Files.readString(Path.of("src/main/java/tech/streamfusion/flink/join/NativeLookupSources.java"));
+        assertThat(sources)
+                .contains("ArrowLookupSnapshotBindings.create(", "implements Serializable")
+                .doesNotContain(".transpose(", "rowView(", "org.apache.flink.table.planner.");
+        var node = Files.readString(
+                Path.of(
+                        "../streamfusion-flink-planner/src/main/java/tech/streamfusion/flink/planner/StreamFusionExecLookupJoin.java"));
+        assertThat(node)
+                .contains("StreamFusionNativePlanNode", "StreamFusionStatelessRegion.translate(")
+                .doesNotContain("new ProcessOperator", "OneInputTransformation", "ArrowNativePlanBridge");
+    }
+
+    @Test
     void nativePlanRuntimeFamiliesDoNotLinkIsolatedPlannerClasses() throws IOException {
         for (String family : List.of("aggregate", "window", "over", "join")) {
             try (var sources = Files.walk(Path.of("src/main/java/tech/streamfusion/flink", family))) {

@@ -20,7 +20,7 @@ import org.junit.jupiter.params.provider.CsvSource;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
 import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 
-/** Verifies the official legacy CSV lookup baseline and the current whole-plan fallback. */
+/** Verifies ordinary admission and execution of the official legacy CSV lookup query. */
 @ResourceLock("streamfusion-planner-property")
 class NexmarkQ13PlanningIT {
     @TempDir
@@ -34,8 +34,7 @@ class NexmarkQ13PlanningIT {
 
     @ParameterizedTest
     @CsvSource({"false,hashmap", "true,hashmap", "false,rocksdb", "true,rocksdb"})
-    void legacyFilesystemLookupRunsOnFlinkAndKeepsPreciseWholePlanFallback(boolean selected, String backend)
-            throws Exception {
+    void legacyFilesystemLookupRunsOnFlinkAndInTheNativeRegion(boolean selected, String backend) throws Exception {
         long bids = NexmarkRowDataJob.runBlackhole(10_000, "q0", false, backend, 1, false);
         assertThat(bids).isPositive();
         clearPlanner();
@@ -65,18 +64,16 @@ class NexmarkQ13PlanningIT {
         tables.executeSql(statements[0]);
         tables.executeSql(statements[1]);
         String plan = tables.explainSql(statements[2]);
-        assertThat(plan).contains("LookupJoin(", "side_input", "lookup=[key=");
-        if (selected)
-            assertThat(StreamFusionPlanningDiagnostics.explain())
-                    .contains(
-                            "Accelerated: no",
-                            "StreamExecLookupJoin: operator has no StreamFusion physical implementation");
+        assertThat(plan).contains("LookupJoin", "side_input");
+        if (selected) assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
         try (var metrics = NexmarkBlackholeMetrics.begin()) {
             NexmarkBlackholeMetrics.configure(tables.getConfig().getConfiguration(), metrics.id);
             tables.executeSql(statements[2]).await();
             // The original side input covers every modulo key with exactly one match.
             assertThat(metrics.outputRows()).isEqualTo(bids);
         }
-        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isZero();
+        if (selected)
+            assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isPositive();
+        else assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isZero();
     }
 }
