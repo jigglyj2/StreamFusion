@@ -6,6 +6,7 @@ use crate::memory_pool::tests_support::TestBroker;
 use prost::Message;
 
 mod io;
+mod workspace;
 
 pub(in crate::planner::operators::window_aggregate) fn plan() -> Vec<u8> {
     let bytes = super::super::tests::plan(proto::WindowKind::Session, 10_000, 0, false);
@@ -19,7 +20,10 @@ pub(in crate::planner::operators::window_aggregate) fn plan() -> Vec<u8> {
     native.encode_to_vec()
 }
 
-fn processor(broker: Arc<TestBroker>, rocks: Option<&std::path::Path>) -> SharedSessions {
+fn processor(
+    broker: Arc<dyn crate::memory_pool::MemoryReservationBroker>,
+    rocks: Option<&std::path::Path>,
+) -> SharedSessions {
     let memory = HostMemoryReservation::new(broker, "session state");
     let timer = memory.sibling("session timers");
     let scratch = memory.sibling("session workspace");

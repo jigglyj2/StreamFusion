@@ -62,10 +62,7 @@ impl SharedSessions {
         Ok(())
     }
     fn admit(&mut self, bytes: usize) -> Result<()> {
-        if bytes > self.kernel.scratch_reservation.size() {
-            self.kernel.scratch_reservation.resize(bytes)?;
-        }
-        Ok(())
+        admit_workspace(&mut self.kernel.scratch_reservation, bytes)
     }
     fn process(&mut self, batch: &RecordBatch) -> Result<()> {
         self.require_healthy()?;
@@ -91,6 +88,21 @@ impl SharedSessions {
     }
     fn next_timer(&self) -> Option<i64> {
         self.kernel.next_event_timer()
+    }
+}
+
+/// State-range pages may contain only one small interval. Amortize their cumulative workspace
+/// admission while retaining an exact-size attempt when optional headroom does not fit Flink.
+fn admit_workspace(reservation: &mut HostMemoryReservation, bytes: usize) -> Result<()> {
+    if bytes <= reservation.size() {
+        return Ok(());
+    }
+    let rounded = bytes.checked_next_multiple_of(64 * 1024).unwrap_or(bytes);
+    match reservation.resize(rounded) {
+        Err(DataFusionError::ResourcesExhausted(_)) if rounded != bytes => {
+            reservation.resize(bytes)
+        }
+        result => result,
     }
 }
 

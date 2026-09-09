@@ -172,7 +172,7 @@ impl SharedSessions {
                     retained = retained
                         .saturating_add(bytes.saturating_mul(8))
                         .saturating_add(entries.len() * (512 + calls.len() * 512));
-                    scratch.resize(retained.saturating_add(sortable_state::PAGE_BYTES))?;
+                    admit_workspace(scratch, retained.saturating_add(sortable_state::PAGE_BYTES))?;
                     for &(key, value) in entries {
                         let (start, end) = codec::bounds(value)?;
                         if start > partition.maximum_end {

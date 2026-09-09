@@ -67,6 +67,11 @@ and one write batch containing under 256 key/value bytes. This is state-access e
 throughput benchmark. Timer state is serialized at checkpoint boundaries.
 
 Coarse batch, decoded-state, retained-state and output reservations use Flink's existing allowance.
+Decoded interval workspace grows in 64 KiB chunks, avoiding a host budget call for every small
+partition page. If that optional headroom is denied, admission retries the exact required size;
+it does not reject a workload merely because the next chunk does not fit. The workspace is released
+at the batch boundary. A regression loads 1,024 distinct existing partitions on each backend with
+fewer than 64 host growth calls across workspace, state and timers, and verifies exact-fit admission.
 Admission failure poisons the invocation so it must recover through a fresh context; no partial
 session computation can be resumed. Boundary tests retain output credit after context close and
 verify early denial before state access. Canonical native tests switch backends while restoring
