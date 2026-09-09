@@ -48,6 +48,7 @@ use crate::planner::region::{PhysicalRegion, RegionPlan};
 use definition::Definition;
 mod invocation;
 mod lifecycle;
+pub(crate) mod lookup_resources;
 pub(crate) mod operator_spec;
 #[cfg(test)]
 mod partition_tests;
@@ -533,6 +534,7 @@ pub(crate) fn register_with_resources(
         memory_manager,
         memory_limit,
         false,
+        &[],
     )
 }
 
@@ -552,6 +554,30 @@ pub(crate) fn register_region_with_resources(
         memory_manager,
         memory_limit,
         true,
+        &[],
+    )
+}
+
+/// Safety: snapshot structs are valid for the call and their producer owns task-budgeted buffers.
+pub(crate) unsafe fn register_with_lookup_sources(
+    bytes: &[u8],
+    bindings: Option<&[u8]>,
+    task_bindings: Option<&[u8]>,
+    java_vm: JavaVM,
+    memory_manager: Global<JObject<'static>>,
+    memory_limit: usize,
+    region: bool,
+    sources: &[lookup_resources::LookupSource],
+) -> Result<i64> {
+    register_context(
+        bytes,
+        bindings,
+        task_bindings,
+        java_vm,
+        memory_manager,
+        memory_limit,
+        region,
+        sources,
     )
 }
 
@@ -563,6 +589,7 @@ fn register_context(
     memory_manager: Global<JObject<'static>>,
     memory_limit: usize,
     region: bool,
+    sources: &[lookup_resources::LookupSource],
 ) -> Result<i64> {
     let broker = Arc::new(JvmMemoryReservationBroker::new(java_vm, memory_manager));
     let memory_pool: Arc<dyn MemoryPool> =
@@ -584,6 +611,12 @@ fn register_context(
             bindings,
             crate::memory_pool::HostMemoryReservation::new(broker, "native region state bindings"),
         )?;
+    }
+    if !sources.is_empty() {
+        // register_with_lookup_sources is the only caller providing nonempty addresses.
+        unsafe {
+            context.install_lookup_sources(sources)?;
+        }
     }
     let context = Arc::new(context);
     let handle = NEXT_CONTEXT_HANDLE.fetch_add(1, Ordering::Relaxed);

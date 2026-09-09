@@ -39,11 +39,27 @@ public final class NativeExecutionContext implements AutoCloseable {
     /** Binds keyed state and non-keyed Flink execution resources before capability negotiation. */
     public NativeExecutionContext(
             byte[] serializedPlan, NativeMemoryManager memoryManager, byte[] stateBindings, byte[] taskBindings) {
-        this(serializedPlan, memoryManager, stateBindings, taskBindings, false);
+        this(serializedPlan, memoryManager, stateBindings, taskBindings, false, null, null);
     }
 
     public static NativeExecutionContext region(byte[] plan, NativeMemoryManager memory, byte[] state, byte[] task) {
-        return new NativeExecutionContext(plan, memory, state, task, true);
+        return new NativeExecutionContext(plan, memory, state, task, true, null, null);
+    }
+
+    /** Consumes task-open lookup C Streams before returning; the caller owns the C structs. */
+    public static NativeExecutionContext withLookupSources(
+            byte[] plan,
+            NativeMemoryManager memory,
+            byte[] state,
+            byte[] task,
+            boolean region,
+            long[] nodeIds,
+            long[] streams) {
+        Objects.requireNonNull(nodeIds, "nodeIds");
+        Objects.requireNonNull(streams, "streams");
+        if (nodeIds.length == 0 || nodeIds.length != streams.length)
+            throw new IllegalArgumentException("Lookup source identities and streams must have equal nonzero arity");
+        return new NativeExecutionContext(plan, memory, state, task, region, nodeIds, streams);
     }
 
     private NativeExecutionContext(
@@ -51,7 +67,9 @@ public final class NativeExecutionContext implements AutoCloseable {
             NativeMemoryManager memoryManager,
             byte[] stateBindings,
             byte[] taskBindings,
-            boolean region) {
+            boolean region,
+            long[] lookupIds,
+            long[] lookupStreams) {
         this.region = region;
         stateful = stateBindings != null;
         Objects.requireNonNull(serializedPlan, "serializedPlan");
@@ -64,14 +82,27 @@ public final class NativeExecutionContext implements AutoCloseable {
         long controlBytes = Math.addExact(
                 Math.addExact((long) identifiedPlan.length, stateBindings == null ? 0 : stateBindings.length),
                 taskBindings == null ? 0 : taskBindings.length);
+        if (lookupIds != null) controlBytes = Math.addExact(controlBytes, Math.multiplyExact(32L, lookupIds.length));
         if (!memoryManager.tryReserve(controlBytes)) {
             throw new IllegalStateException(
                     "Flink denied " + controlBytes + " bytes for native plan/state-binding JNI copies");
         }
         try {
-            if (region) {
-                if (NativeRegionStream.edgeVersion() != 2)
-                    throw new IllegalStateException("Unsupported native region C Data edge version");
+            if (region && NativeRegionStream.edgeVersion() != 2)
+                throw new IllegalStateException("Unsupported native region C Data edge version");
+            if (lookupIds != null) {
+                if (NativeLookupResources.edgeVersion() != 1)
+                    throw new IllegalStateException("Unsupported native lookup C Stream edge version");
+                handle = NativeLookupResources.create(
+                        identifiedPlan,
+                        stateBindings,
+                        taskBindings,
+                        lookupIds,
+                        lookupStreams,
+                        memoryManager,
+                        memoryManager.limit(),
+                        region);
+            } else if (region) {
                 handle = NativeRegionStream.createContext(
                         identifiedPlan, stateBindings, taskBindings, memoryManager, memoryManager.limit());
             } else if (taskBindings != null) {

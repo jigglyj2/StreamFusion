@@ -10,6 +10,7 @@ mod exec;
 mod factory;
 pub(crate) use factory::LookupJoinFactory;
 mod probe;
+mod source;
 mod table;
 pub(crate) use exec::LookupJoinExec;
 pub(crate) use table::LookupTable;
@@ -25,3 +26,6 @@ mod test_support;
 
 #[cfg(test)]
 mod binding_tests;
+
+#[cfg(test)]
+mod source_tests;

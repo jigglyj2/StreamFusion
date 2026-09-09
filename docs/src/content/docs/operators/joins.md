@@ -96,9 +96,8 @@ reader's `java.sql` objects while preserving declared logical types and decimal 
 Six focused Java tests compare generated lookup values, order and binary-row bytes against the
 actual Flink CSV lookup function, and cover serialization before the file exists, multiple files,
 nullable/duplicate keys, varied batch sizes, temporal/decimal payloads, reopen, early close and
-allocation/parse failure. These are source-adapter checks. Planner selection, task-open
-C Stream ownership and memory transfer, native metrics and checkpoint/channel integration remain
-required before this source can unlock production lookup acceleration.
+allocation/parse failure. These are source-adapter checks; full planner, metric and
+checkpoint/channel integration remain required before production lookup acceleration.
 
 The test-only DataFusion 55 lookup investigation verifies an inner `HashJoinExec` with a
 single-consumption Arrow build stream and repeated probe invocations. Generated cases cover
@@ -153,9 +152,27 @@ position, type and nullability so a preceding DataFusion projection's internal n
 composition. The immutable cache has no timers or separately checkpointed keyed state. These tests
 verify native control traversal, not Flink checkpoint/restore or end-to-end metric parity.
 
-Task-open C Stream source binding, Java planner selection, complete Flink metric/changelog parity,
-and recovery/channel validation remain pending. Q13 remains on whole-plan fallback and has no
-native benchmark result.
+A versioned task-open C Stream edge now connects this source to native lookup resources before
+capability negotiation. Source descriptions stay in Java, and the original plan-node ID identifies
+each finite stream. Native setup validates all identities before consuming any stream, drains the
+snapshots before returning, and installs the cache bindings transactionally. Every consumed stream
+is released once, including reader errors; Java closes unconsumed streams after setup failure.
+
+The existing Arrow buffer registry retains producer release callbacks without charging Java-owned
+payloads again. A single source batch stays zero-copy. Multiple chunks are consolidated once under
+an admitted construction allowance for DataFusion's flat build-row addressing, matching its hash
+join build model; this is task-open cache construction, not an intermediate batch handoff. Coarse
+reservations also cover the retained chunk descriptors, hash table and physical configuration.
+
+Generated Java boundary tests compare serialized changelogs with Flink's actual CSV lookup
+function across source chunk sizes, duplicate/null keys, Unicode values and all four RowKinds.
+They also check logical native-stage counters and record timestamps. A shared Flink managed-memory
+fixture verifies that increasing retained Java payload grows the total charge only once, that
+parse/budget failures return all credit, and that output remains valid after the cache closes.
+Changing the file affects the next task open; an existing task retains its original snapshot.
+These are source/native-edge parity checks, not complete SQL planner, Flink metric-surface or
+checkpoint/recovery evidence. Java planner selection, full operator parity and recovery/channel
+validation remain pending. Q13 remains on whole-plan fallback and has no native benchmark result.
 
 ## SQL example
 

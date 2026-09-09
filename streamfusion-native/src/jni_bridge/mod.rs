@@ -18,6 +18,7 @@ mod group_aggregate;
 mod interval_join;
 mod local_group_aggregate;
 mod local_window_aggregate;
+mod lookup_resources;
 mod match_recognize;
 mod multi_join;
 mod over_aggregate;

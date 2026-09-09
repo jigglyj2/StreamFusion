@@ -34,7 +34,7 @@ fn payload_schema(schema: SchemaRef) -> proto::Schema {
     }
 }
 
-fn lookup(composite: bool) -> proto::Operator {
+pub(super) fn lookup(composite: bool) -> proto::Operator {
     let payload = payload_schema(schema(false));
     let output = proto::Schema {
         fields: payload
@@ -76,7 +76,7 @@ fn probe_calc() -> proto::Operator {
     spec.projections.truncate(3);
     node
 }
-fn serialized(root: proto::Operator, version: u32) -> Vec<u8> {
+pub(super) fn serialized(root: proto::Operator, version: u32) -> Vec<u8> {
     proto::NativePlan {
         protocol_version: version,
         root: Some(root),
