@@ -244,6 +244,68 @@ fn accumulator_credit_scales_by_distinct_groups_and_rejects_overflow() {
 }
 
 #[test]
+fn counted_growth_uses_nullable_filter_bitmaps_and_non_null_arguments() {
+    for rows in [0, 1, 37, 4096] {
+        for nullable in [false, true] {
+            let values: ArrayRef = Arc::new(Int64Array::from_iter(
+                (0..rows + 5).map(|row| (!nullable || row % 3 != 0).then_some(row as i64)),
+            ));
+            let filter: ArrayRef = Arc::new(BooleanArray::from_iter((0..rows + 5).map(|row| {
+                if row % 7 == 0 {
+                    None
+                } else {
+                    Some(row % 2 == 0)
+                }
+            })));
+            let absent: ArrayRef = Arc::new(BooleanArray::from(vec![Some(false); rows + 5]));
+            let batch = RecordBatch::try_from_iter(vec![
+                ("value", values),
+                ("filter", filter),
+                ("absent", absent),
+            ])
+            .unwrap()
+            .slice(3, rows);
+            let mut processor = processor(Arc::new(TestBroker::new(16 << 20)));
+            processor.calls = [None, Some(1), Some(2)]
+                .map(|filter_index| Call {
+                    function: proto::AggregateFunction::Count,
+                    distinct: true,
+                    filter_index,
+                    ..counted_call()
+                })
+                .to_vec();
+            processor.calls.push(Call {
+                filter_index: Some(1),
+                ..counted_call()
+            });
+            let old_bound = processor.accumulator_admission(1, rows).unwrap();
+            let eligible = processor
+                .calls
+                .iter()
+                .map(|call| {
+                    (0..rows)
+                        .filter(|&row| {
+                            aggregate_filter(call, &batch, row).unwrap()
+                                && !batch.column(0).is_null(row)
+                        })
+                        .count()
+                })
+                .sum::<usize>();
+            let bound = processor.accumulator_input_admission(1, &batch).unwrap();
+            assert_eq!(
+                bound,
+                processor.accumulator_admission(1, 0).unwrap()
+                    + eligible * accumulator::counted_map_entry_bytes()
+            );
+            assert!(bound <= old_bound);
+            if rows > 1 {
+                assert!(bound < old_bound);
+            }
+        }
+    }
+}
+
+#[test]
 fn gather_capacity_covers_sliced_nullable_nested_decimal_and_dictionary_keys() {
     let wide = "é".repeat(8192);
     let strings: ArrayRef = Arc::new(StringArray::from(vec![

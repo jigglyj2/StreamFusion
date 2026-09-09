@@ -15,6 +15,8 @@ use super::{
 mod tests;
 mod decoded_memory;
 pub(super) use decoded_memory::reserve_decoded_values;
+mod counted_values;
+use counted_values::decode_counted_values;
 
 pub(in crate::planner::operators) fn encode_state(state: &AccumulatorState) -> Vec<u8> {
     // Keep sparse neutral states compact and avoid geometric growth copies while large
@@ -230,19 +232,7 @@ pub(in crate::planner::operators) fn decode_state(
                 },
                 count: cursor.read_i64()?,
             },
-            3 => {
-                let entries = cursor.read_u32()? as usize;
-                let mut values = BTreeMap::new();
-                for _ in 0..entries {
-                    let value = if version == 1 {
-                        AggregateValue::Int(cursor.read_i128()?)
-                    } else {
-                        decode_value(&mut cursor)?
-                    };
-                    values.insert(value, cursor.read_i64()?);
-                }
-                Accumulator::Extremum(values)
-            }
+            3 => Accumulator::Extremum(decode_counted_values(&mut cursor, version == 1)?),
             4 => {
                 let value = match cursor.read_u8()? {
                     0 => None,
@@ -261,7 +251,7 @@ pub(in crate::planner::operators) fn decode_state(
             }
             5 if version >= 4 => Accumulator::DistinctCount {
                 count: cursor.read_i64()?,
-                values: decode_counted_values(&mut cursor)?,
+                values: decode_counted_values(&mut cursor, false)?,
             },
             6 if version >= 4 => {
                 let value = match cursor.read_u8()? {
@@ -276,7 +266,7 @@ pub(in crate::planner::operators) fn decode_state(
                 Accumulator::DistinctSum {
                     value,
                     count: cursor.read_i64()?,
-                    values: decode_counted_values(&mut cursor)?,
+                    values: decode_counted_values(&mut cursor, false)?,
                 }
             }
             7 if version >= 5 => Accumulator::Average {
@@ -286,7 +276,7 @@ pub(in crate::planner::operators) fn decode_state(
             8 if version >= 5 => Accumulator::DistinctAverage {
                 value: decode_optional_value(&mut cursor, "distinct average")?,
                 count: cursor.read_i64()?,
-                values: decode_counted_values(&mut cursor)?,
+                values: decode_counted_values(&mut cursor, false)?,
             },
             other => {
                 return Err(DataFusionError::Execution(format!(
@@ -355,16 +345,6 @@ fn decode_optional_value(
             "group aggregate {description} presence {other} is invalid"
         ))),
     }
-}
-
-fn decode_counted_values(cursor: &mut Cursor<'_>) -> Result<BTreeMap<AggregateValue, i64>> {
-    let entries = cursor.read_u32()? as usize;
-    let mut values = BTreeMap::new();
-    for _ in 0..entries {
-        let value = decode_value(cursor)?;
-        values.insert(value, cursor.read_i64()?);
-    }
-    Ok(values)
 }
 
 fn validate_accumulator_values(accumulator: &Accumulator, call: &Call) -> Result<()> {

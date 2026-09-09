@@ -58,18 +58,49 @@ impl GroupAggregateProcessor {
     /// or inserting. Only distinct keys need initial-node credit; each row can add at most one
     /// counted value per call. Variable payloads are covered by input/historical allowances.
     pub(super) fn accumulator_admission(&self, keys: usize, rows: usize) -> Result<usize> {
-        let maps = self
-            .calls
-            .iter()
-            .filter(|call| {
-                call.distinct
-                    || (call.retractable
-                        && matches!(
-                            call.function,
-                            proto::AggregateFunction::Min | proto::AggregateFunction::Max
-                        ))
-            })
-            .count();
+        let entries = rows
+            .checked_mul(self.calls.iter().filter(|call| counted(call)).count())
+            .ok_or_else(accumulator_overflow)?;
+        self.accumulator_capacity(keys, entries)
+    }
+
+    /// NULL arguments and rows rejected by SQL FILTER cannot grow counted membership.
+    /// Count eligible rows with Arrow bitmaps before loading state; do not inspect membership
+    /// or make backend/JNI calls per row. Existing batch scratch covers the temporary bitmaps.
+    pub(super) fn accumulator_input_admission(
+        &self,
+        keys: usize,
+        input: &RecordBatch,
+    ) -> Result<usize> {
+        let mut entries = 0usize;
+        for call in self.calls.iter().filter(|call| counted(call)) {
+            let values = input.column(call.input_index.expect("counted value has an argument"));
+            let eligible = if let Some(index) = call.filter_index {
+                let filter = input
+                    .column(index)
+                    .as_any()
+                    .downcast_ref::<BooleanArray>()
+                    .ok_or_else(|| {
+                        DataFusionError::Execution("aggregate FILTER is not boolean".into())
+                    })?;
+                if values.null_count() == 0 {
+                    filter.true_count()
+                } else {
+                    arrow::compute::and(filter, &arrow::compute::is_not_null(values.as_ref())?)?
+                        .true_count()
+                }
+            } else {
+                values.len() - values.null_count()
+            };
+            entries = entries
+                .checked_add(eligible)
+                .ok_or_else(accumulator_overflow)?;
+        }
+        self.accumulator_capacity(keys, entries)
+    }
+
+    fn accumulator_capacity(&self, keys: usize, entries: usize) -> Result<usize> {
+        let maps = self.calls.iter().filter(|call| counted(call)).count();
         let overflow = || {
             DataFusionError::ResourcesExhausted(
                 "group aggregate accumulator admission overflow".into(),
@@ -81,11 +112,12 @@ impl GroupAggregateProcessor {
             .ok_or_else(overflow)?;
         let trees = keys
             .checked_mul(accumulator::COUNTED_MAP_BASE_BYTES)
+            .and_then(|n| n.checked_mul(maps))
             .and_then(|n| {
-                rows.checked_mul(accumulator::counted_map_entry_bytes())?
+                entries
+                    .checked_mul(accumulator::counted_map_entry_bytes())?
                     .checked_add(n)
             })
-            .and_then(|n| n.checked_mul(maps))
             .ok_or_else(overflow)?;
         vectors.checked_add(trees).ok_or_else(overflow)
     }
@@ -167,6 +199,19 @@ impl GroupAggregateProcessor {
         }
         Ok(bytes)
     }
+}
+
+fn counted(call: &Call) -> bool {
+    call.distinct
+        || (call.retractable
+            && matches!(
+                call.function,
+                proto::AggregateFunction::Min | proto::AggregateFunction::Max
+            ))
+}
+
+fn accumulator_overflow() -> DataFusionError {
+    DataFusionError::ResourcesExhausted("group aggregate accumulator admission overflow".into())
 }
 
 impl GroupAggregateProcessor {

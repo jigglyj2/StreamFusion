@@ -138,6 +138,20 @@ mutations, cover every accumulator wire variant and neutral vectors, and check m
 frames and budget denial before decoding. This is coarse state/batch accounting, with no per-row
 allocator or JNI budget calls.
 
+Canonical counted-value maps are decoded through the standard library's bulk map construction
+when their entries are strictly ordered. This avoids a root-to-leaf insertion for every historical
+value on every batch. Unordered legacy entries and comparator-equal duplicates retain the previous
+insertion behavior, including the first key's NaN payload and the last signed count. Tests cover
+these cases, version-one integer entries, truncated lengths and staging-vector memory within the
+batch allowance. DataFusion still computes aggregate results; this optimization concerns the
+Flink-compatible membership state adapter.
+
+Synchronous membership-growth admission counts non-null arguments accepted by each call's FILTER
+using Arrow bitmaps. Rejected or null arguments cannot insert counted state and no longer reserve
+space for a prospective entry. Initial map nodes, historical state, variable payloads and output
+retain their separate allowances. This is performed once per batch before state loading and keeps
+nullable FILTER behavior and sliced-array offsets; no per-row state or budget calls are introduced.
+
 Generated Calc/Aggregate/Calc tests compare `COUNT(*)`, `SUM`, `MIN`, `MAX`, and `AVG` against an
 operator produced by Flink's SQL planner, including its generated handler. They cover null and
 Unicode keys, null values, all four input RowKinds, empty batches, timestamp presence/values,

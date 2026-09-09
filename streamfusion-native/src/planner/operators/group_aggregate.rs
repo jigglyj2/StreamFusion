@@ -537,7 +537,7 @@ impl GroupAggregateProcessor {
                 (unique_keys, row_key_indices)
             };
         let base_reservation = base_reservation
-            .checked_add(self.accumulator_admission(unique_keys.len(), batch.num_rows())?)
+            .checked_add(self.accumulator_input_admission(unique_keys.len(), &batch)?)
             .ok_or_else(|| {
                 DataFusionError::ResourcesExhausted(
                     "group aggregate accumulator admission overflow".into(),
