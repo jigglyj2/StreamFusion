@@ -69,6 +69,19 @@ final class KeyedNativeMetricHarness extends KeyedMultiInputStreamOperatorTestHa
             int parallelism,
             int subtask)
             throws Exception {
+        this(rocks, factory, inputCount, types, restore, parallelism, subtask, true);
+    }
+
+    KeyedNativeMetricHarness(
+            boolean rocks,
+            StreamFusionNativeRegionOperatorFactory factory,
+            int inputCount,
+            List<RowType> types,
+            org.apache.flink.runtime.checkpoint.OperatorSubtaskState restore,
+            int parallelism,
+            int subtask,
+            boolean incremental)
+            throws Exception {
         super(factory, 16, parallelism, subtask);
         outputTypes = List.copyOf(types);
         for (var ignored : outputTypes) outputs.add(new DataOutputSerializer(128));
@@ -93,7 +106,7 @@ final class KeyedNativeMetricHarness extends KeyedMultiInputStreamOperatorTestHa
                             ? frameKeys.getKey((tech.streamfusion.flink.exchange.NativeExchangeFrame) value)
                             : 0);
         setStateBackend(new StreamFusionStateBackend(
-                rocks ? new EmbeddedRocksDBStateBackend(true) : new HashMapStateBackend()));
+                rocks ? new EmbeddedRocksDBStateBackend(incremental) : new HashMapStateBackend()));
         setOutputCreator(ignored -> new CollectorOutput<ArrowRowDataBatch>(controls) {
             @Override
             public void collect(StreamRecord<ArrowRowDataBatch> record) {

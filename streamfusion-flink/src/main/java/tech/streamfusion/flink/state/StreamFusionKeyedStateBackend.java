@@ -61,7 +61,7 @@ public final class StreamFusionKeyedStateBackend<K>
     private volatile Map<String, SharedFile> completedSharedFiles = Map.of();
     private volatile long completedCheckpointId = -1;
     private volatile NativeIncrementalStateParticipant participant;
-    private volatile boolean incrementalSnapshotsEnabled;
+    private volatile boolean nativeFileSnapshotsEnabled;
     private final boolean configuredIncrementalCheckpoints;
     private final org.apache.flink.core.fs.CloseableRegistry uploads = new org.apache.flink.core.fs.CloseableRegistry();
 
@@ -82,12 +82,12 @@ public final class StreamFusionKeyedStateBackend<K>
     }
 
     public void registerNativeStateParticipant(
-            NativeIncrementalStateParticipant participant, boolean incrementalSnapshotsEnabled) throws Exception {
+            NativeIncrementalStateParticipant participant, boolean nativeFileSnapshotsEnabled) throws Exception {
         if (this.participant != null) {
             throw new IllegalStateException("A native state participant is already registered");
         }
         this.participant = participant;
-        this.incrementalSnapshotsEnabled = incrementalSnapshotsEnabled && configuredIncrementalCheckpoints;
+        this.nativeFileSnapshotsEnabled = nativeFileSnapshotsEnabled;
         for (IncrementalRemoteKeyedStateHandle handle : restoredNativeHandles) {
             Path directory = materialize(handle);
             try {
@@ -102,8 +102,13 @@ public final class StreamFusionKeyedStateBackend<K>
         restoredNativeHandles.clear();
     }
 
+    /** Both full and incremental RocksDB checkpoints use native files, as in Flink. */
+    public boolean usesNativeFileCheckpoints() {
+        return participant != null && nativeFileSnapshotsEnabled;
+    }
+
     public boolean usesNativeIncrementalCheckpoints() {
-        return participant != null && incrementalSnapshotsEnabled;
+        return usesNativeFileCheckpoints() && configuredIncrementalCheckpoints;
     }
 
     java.util.UUID nativeRocksDbMemoryScope() {
@@ -141,7 +146,7 @@ public final class StreamFusionKeyedStateBackend<K>
             throws Exception {
         NativeIncrementalStateParticipant current = participant;
         if (current == null
-                || !incrementalSnapshotsEnabled
+                || !nativeFileSnapshotsEnabled
                 || checkpointOptions.getCheckpointType().isSavepoint()) {
             return delegate.snapshot(checkpointId, timestamp, streamFactory, checkpointOptions);
         }
@@ -196,7 +201,9 @@ public final class StreamFusionKeyedStateBackend<K>
                 emptyFiles.add(relativePath);
                 continue;
             }
-            if (relativePath.endsWith(".sst")) {
+            // Flink's RocksNativeFullSnapshotStrategy uploads every file privately. Only
+            // incremental checkpoints may share immutable SSTs across completed snapshots.
+            if (configuredIncrementalCheckpoints && relativePath.endsWith(".sst")) {
                 SharedFile previous = completedSharedFiles.get(relativePath);
                 StreamStateHandle handle;
                 if (previous != null && previous.size == size && resources.canReuse(previous.handle)) {

@@ -150,15 +150,16 @@ class NativeRegionCheckpointTest {
         }
     }
 
-    @Test
-    void flinkIncrementalHandlesKeepNamespacesReuseSstsAndRestoreForBothAlignmentModes(@TempDir Path directory)
-            throws Exception {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void flinkFileHandlesKeepNamespacesHonorReuseAndRestoreForBothAlignmentModes(
+            boolean incremental, @TempDir Path directory) throws Exception {
         for (boolean unaligned : List.of(false, true)) {
             Path run = Files.createDirectory(directory.resolve("unaligned-" + unaligned));
             try (var oracle = flink();
                     var source = new Region(true, ALL, run.resolve("source"))) {
                 compare(source, oracle, rows(1));
-                var backend = backend(ALL, List.of());
+                var backend = backend(ALL, List.of(), incremental);
                 backend.registerNativeStateParticipant(source.participant, true);
                 var location = CheckpointStorageLocationReference.getDefault();
                 var options = unaligned
@@ -167,22 +168,44 @@ class NativeRegionCheckpointTest {
                 var first = checkpoint(backend, 1, options);
                 backend.notifyCheckpointComplete(1);
                 var second = checkpoint(backend, 2, options);
-                assertThat(first.getSharedState()).isNotEmpty();
-                assertThat(second.getSharedState()).hasSameSizeAs(first.getSharedState());
-                assertThat(second.getCheckpointedSize()).isLessThan(first.getCheckpointedSize());
+                assertThat(backend.usesNativeFileCheckpoints()).isTrue();
+                assertThat(backend.usesNativeIncrementalCheckpoints()).isEqualTo(incremental);
+                var files = incremental ? first.getSharedState() : first.getPrivateState();
+                assertThat(files).isNotEmpty();
                 for (long id : IDS)
-                    assertThat(first.getSharedState())
-                            .anyMatch(file -> file.getLocalPath().startsWith("node-" + id + "/"));
-                for (int index = 0; index < first.getSharedState().size(); index++)
-                    assertThat(second.getSharedState().get(index).getHandle())
-                            .isSameAs(first.getSharedState().get(index).getHandle());
+                    assertThat(files).anyMatch(file -> file.getLocalPath().startsWith("node-" + id + "/"));
+                if (incremental) {
+                    assertThat(second.getSharedState()).hasSameSizeAs(first.getSharedState());
+                    assertThat(second.getCheckpointedSize()).isLessThan(first.getCheckpointedSize());
+                    for (int index = 0; index < first.getSharedState().size(); index++)
+                        assertThat(second.getSharedState().get(index).getHandle())
+                                .isSameAs(first.getSharedState().get(index).getHandle());
+                } else {
+                    assertThat(first.getSharedState()).isEmpty();
+                    assertThat(second.getSharedState()).isEmpty();
+                    assertThat(second.getPrivateState()).hasSameSizeAs(first.getPrivateState());
+                    assertThat(second.getCheckpointedSize()).isEqualTo(first.getCheckpointedSize());
+                    for (int index = 0; index < first.getPrivateState().size(); index++)
+                        assertThat(second.getPrivateState().get(index).getHandle())
+                                .isNotSameAs(first.getPrivateState().get(index).getHandle());
+                }
+                var durable = metadataRoundTrip(second);
+                assertThat(durable.getStateHandleId()).isEqualTo(second.getStateHandleId());
+                assertThat(durable.getBackendIdentifier()).isEqualTo(second.getBackendIdentifier());
+                assertThat(durable.getCheckpointedSize()).isEqualTo(second.getCheckpointedSize());
+                assertThat(durable.getSharedState()).hasSameSizeAs(second.getSharedState());
+                assertThat(durable.getPrivateState()).hasSameSizeAs(second.getPrivateState());
                 try (var target = new Region(true, ALL, run.resolve("target"))) {
-                    backend(ALL, List.of(second)).registerNativeStateParticipant(target.participant, true);
+                    backend(ALL, List.of(durable), !incremental)
+                            .registerNativeStateParticipant(target.participant, true);
                     compare(target, oracle, rows(11));
                 }
                 for (var range : List.of(new KeyGroupRange(0, 7), new KeyGroupRange(8, 15))) {
                     try (var target = new Region(true, range, run.resolve("split-" + range.getStartKeyGroup()))) {
-                        backend(range, List.of((IncrementalRemoteKeyedStateHandle) second.getIntersection(range)))
+                        backend(
+                                        range,
+                                        List.of((IncrementalRemoteKeyedStateHandle) durable.getIntersection(range)),
+                                        !incremental)
                                 .registerNativeStateParticipant(target.participant, true);
                         for (long id : IDS)
                             for (int group : range)
@@ -197,6 +220,20 @@ class NativeRegionCheckpointTest {
         }
     }
 
+    private static IncrementalRemoteKeyedStateHandle metadataRoundTrip(IncrementalRemoteKeyedStateHandle handle)
+            throws Exception {
+        var bytes = new java.io.ByteArrayOutputStream();
+        try (var output = new java.io.DataOutputStream(bytes)) {
+            org.apache.flink.runtime.checkpoint.metadata.MetadataV3Serializer.INSTANCE.serializeKeyedStateHandleUtil(
+                    handle, output);
+        }
+        try (var input = new java.io.DataInputStream(new java.io.ByteArrayInputStream(bytes.toByteArray()))) {
+            return (IncrementalRemoteKeyedStateHandle)
+                    org.apache.flink.runtime.checkpoint.metadata.MetadataV3Serializer.INSTANCE
+                            .deserializeKeyedStateHandleUtil(input);
+        }
+    }
+
     private static IncrementalRemoteKeyedStateHandle checkpoint(
             StreamFusionKeyedStateBackend<?> backend, long id, CheckpointOptions options) throws Exception {
         var future = backend.snapshot(id, id, new MemCheckpointStreamFactory(64 << 20), options);
@@ -205,11 +242,11 @@ class NativeRegionCheckpointTest {
     }
 
     private static StreamFusionKeyedStateBackend<?> backend(
-            KeyGroupRange range, List<IncrementalRemoteKeyedStateHandle> restored) {
+            KeyGroupRange range, List<IncrementalRemoteKeyedStateHandle> restored, boolean incremental) {
         // Only Flink's assigned range is stubbed. Native checkpoint upload, materialization,
         // shared-state reuse and key-group restoration use the real backend adapter below.
         var delegate = supplied(CheckpointableKeyedStateBackend.class, "getKeyGroupRange", range);
-        return new StreamFusionKeyedStateBackend<>(delegate, restored, "rocksdb", null, true);
+        return new StreamFusionKeyedStateBackend<>(delegate, restored, "rocksdb", null, incremental);
     }
 
     private static void restoreRaw(Region region, KeyGroupsStateHandle handle) throws Exception {

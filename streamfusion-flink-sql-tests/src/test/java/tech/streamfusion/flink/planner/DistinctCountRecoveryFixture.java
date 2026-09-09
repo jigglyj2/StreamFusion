@@ -34,6 +34,12 @@ final class DistinctCountRecoveryFixture {
 
     static KeyedNativeMetricHarness region(boolean rocks, OperatorSubtaskState state, int parallelism, int subtask)
             throws Exception {
+        return region(rocks, state, parallelism, subtask, true);
+    }
+
+    static KeyedNativeMetricHarness region(
+            boolean rocks, OperatorSubtaskState state, int parallelism, int subtask, boolean incremental)
+            throws Exception {
         var factory = new StreamFusionNativeRegionOperatorFactory(
                 List.of(DistinctCountFlinkOracle.INPUT),
                 DistinctCountFlinkOracle.OUTPUT,
@@ -41,7 +47,7 @@ final class DistinctCountRecoveryFixture {
                 List.of(3L),
                 List.of(exchange(parallelism)));
         return new KeyedNativeMetricHarness(
-                rocks, factory, 1, DistinctCountFlinkOracle.OUTPUT, state, parallelism, subtask);
+                rocks, factory, 1, List.of(DistinctCountFlinkOracle.OUTPUT), state, parallelism, subtask, incremental);
     }
 
     private static byte[] exchange(int parallelism) {

@@ -534,8 +534,11 @@ and version 3 introduced typed boolean,
 floating-point, string, temporal, and nullable decimal-overflow state.
 Canonical savepoints are tested across all four source/target
 backend pairs and redistribute key groups during both 1-to-N and N-to-1 rescaling. Regular RocksDB
-checkpoints use incremental Flink keyed-state handles, reuse completed immutable SST files, survive
-Flink checkpoint-metadata serialization, and restore into native RocksDB.
+checkpoints use native file snapshots and Flink keyed-state handles. Incremental checkpoints reuse
+completed immutable SST files; full checkpoints upload every file privately, following Flink's
+existing incremental-checkpoint setting. Both restore into native RocksDB. Generated DISTINCT tests
+cover full aligned/unaligned restore and rescaling; canonical savepoints remain backend-neutral.
+See [native state](/StreamFusion/development/native-state/) for the remaining canonical-buffer limit.
 
 Global aggregate recovery is independently tested for all four memory/RocksDB source-to-target
 backend pairs with canonical savepoints and with both aligned and unaligned checkpoints. Global

@@ -180,16 +180,17 @@ stream. Changed node identities, duplicate key-group input, and incompatible hea
 the Flink initialization must fail and discard the region on any restore error.
 
 Physical RocksDB checkpoints put each owner's files in a `node-<id>` directory. The existing Flink
-incremental adapter uploads those directories in one handle and retains each namespace in its SST
-reuse keys. Shared-context checkpoint import uses the canonical key-group contract for the assigned
+file-checkpoint adapter uploads those directories in one handle and retains each namespace in
+its SST reuse keys when incremental checkpoints are enabled. Shared-context checkpoint import uses the canonical key-group contract for the assigned
 range and charges its temporary RocksDB reader and snapshot buffers to the task's memory budget.
 There is no operator-specific checkpoint-import JNI bridge on this path.
 Missing RocksDB `CURRENT` files are rejected rather than opening a new empty database during restore.
 
 Generated two-owner deduplication tests compare post-restore changelogs with Flink, verify both
 cross-backend canonical directions and split key-group assignments, and pass physical checkpoints
-through the real incremental adapter with aligned and unaligned checkpoint options. Unchanged
-checkpoints must reuse the same SST handles for both node namespaces. These tests cover checkpoint
+through the real file-checkpoint adapter with aligned and unaligned checkpoint options. Incremental
+checkpoints reuse the same unchanged SST handles for both namespaces; full checkpoints upload
+fresh private files. Restore also works after changing the incremental-checkpoint setting. These tests cover checkpoint
 transport, not in-flight channel replay, timer recovery, or a planner-selected stateful topology.
 
 The common multiple-input Flink runtime now accepts state-node identities from its factory and
@@ -319,6 +320,29 @@ block cache and one cache-charged write-buffer manager. The corresponding Flink 
 resource is reserved once and reference-counted across operators, rather than multiplying the
 state-backend fraction for every native database.
 
+Both full and incremental regular RocksDB checkpoints use native checkpoint files. The existing
+Flink `execution.checkpointing.incremental` setting controls reuse: when enabled, completed immutable
+SST handles can be shared; when disabled, every file is uploaded in `EXCLUSIVE` scope and the
+handle has no shared files. This follows Flink 2.3's `RocksNativeFullSnapshotStrategy`, which also
+uses an `IncrementalRemoteKeyedStateHandle` to carry full private-file snapshots. The handle's
+class name does not imply incremental reuse. No new configuration or upstream patch is required.
+
+Previously, disabling incremental checkpoints routed native RocksDB state through a whole-key-group
+canonical buffer. Large Q15 state exposed that mismatch with Flink. Regular checkpoints now avoid
+that buffer while retaining Flink's synchronous consistency boundary, asynchronous upload,
+cancellation and key-group restore lifecycle. Canonical savepoints still use the portable raw-keyed
+format, and memory checkpoints retain their canonical path. Whole-group canonical savepoint
+buffering remains a capacity limitation; this change does not solve it or retained HashMap growth.
+Legacy operator checkpoint diagnostics count full uploads in checkpoint bytes but do not label
+them as incremental checkpoints or increment SST-reuse counters.
+
+Generated DISTINCT tests cover full RocksDB aligned/unaligned checkpoint restore and 1-to-2-to-1
+rescaling, comparing every per-key changelog and record timestamp with the original Flink SQL
+handler, including filtered counts and signed duplicate membership. Common two-owner tests verify
+private-file handles and namespace restore. Full-file cancellation is exercised before execution,
+during blocked upload and during stream finalization, with staging/handle cleanup and exactly-once
+failure reporting. Existing incremental and canonical recovery tests remain in the focused suite.
+
 The RocksDB checkpoint API itself establishes the synchronous immutable-SST boundary for
 WAL-disabled writes. StreamFusion does not issue a redundant explicit flush before that call. The
 component test checkpoints writes that have not otherwise been flushed, opens the checkpoint as a
@@ -366,9 +390,9 @@ same completed state boundary as an aligned checkpoint.
 
 ## Reference gut-check
 
-Flink's RocksDB incremental snapshot strategy is the lifecycle model: create a consistent native
+Flink's RocksDB full and incremental snapshot strategies are the lifecycle model: create a consistent native
 checkpoint synchronously at the barrier, upload it asynchronously, reuse confirmed SST handles by
-filename, upload mutable metadata privately, register shared handles with the checkpoint
+filename only when incremental checkpointing is enabled, upload mutable metadata privately, register shared handles with the checkpoint
 coordinator, and only advance the reusable base after checkpoint completion. StreamFusion follows
 that lifecycle while retaining its backend-neutral SFS1 savepoint format.
 

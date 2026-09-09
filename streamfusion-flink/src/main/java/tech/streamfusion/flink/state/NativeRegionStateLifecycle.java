@@ -197,7 +197,7 @@ public final class NativeRegionStateLifecycle implements AutoCloseable {
 
     public void beginSnapshot(CheckpointOptions options) {
         rawSnapshot = backend == null
-                || !backend.usesNativeIncrementalCheckpoints()
+                || !backend.usesNativeFileCheckpoints()
                 || options.getCheckpointType().isSavepoint();
     }
 

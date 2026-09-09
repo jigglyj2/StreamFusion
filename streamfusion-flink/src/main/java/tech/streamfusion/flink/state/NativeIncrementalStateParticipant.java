@@ -7,15 +7,18 @@ package tech.streamfusion.flink.state;
 import java.nio.file.Path;
 import org.apache.flink.runtime.state.KeyGroupRange;
 
-/** Native RocksDB state owned by a StreamFusion operator and checkpointed by Flink. */
+/**
+ * Native RocksDB files owned by a StreamFusion operator and checkpointed by Flink.
+ * Full checkpoints use the same file/handle lifecycle with private files and zero SST reuse.
+ */
 public interface NativeIncrementalStateParticipant {
     /** Creates a stable local RocksDB checkpoint before asynchronous upload starts. */
     Path prepareIncrementalCheckpoint(long checkpointId) throws Exception;
 
-    /** Records exact upload and shared-state reuse after Flink materializes an incremental handle. */
+    /** Records exact upload and shared-state reuse after Flink materializes its file handle. */
     default void completeIncrementalCheckpoint(long checkpointId, long uploadedBytes, long reusedBytes) {}
 
-    /** Records an incremental checkpoint failure. */
+    /** Records a native file checkpoint failure. */
     default void failIncrementalCheckpoint(long checkpointId) {}
 
     /** Imports one restored RocksDB checkpoint, restricted to the assigned key-group range. */

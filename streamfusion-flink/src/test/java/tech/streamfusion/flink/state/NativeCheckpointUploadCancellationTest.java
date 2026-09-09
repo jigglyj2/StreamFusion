@@ -29,12 +29,14 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 class NativeCheckpointUploadCancellationTest {
-    @Test
-    void cancellationDuringStreamFinalizationDiscardsTheLateHandle(@TempDir Path directory) throws Exception {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void cancellationDuringStreamFinalizationDiscardsTheLateHandle(boolean incremental, @TempDir Path directory)
+            throws Exception {
         var owner = new Participant(directory);
         var factory = new Factory();
         factory.blockFinalizationAt = 1;
-        try (var backend = backend(owner)) {
+        try (var backend = backend(owner, incremental)) {
             var future = backend.snapshot(1, 1, factory, CheckpointOptions.forCheckpointWithDefaultLocation());
             Thread worker = new Thread(future, "native-checkpoint-finalization-test");
             worker.start();
@@ -110,13 +112,14 @@ class NativeCheckpointUploadCancellationTest {
         }
     }
 
-    @Test
-    void cancellationBeforeExecutionCleansStagingAndReportsFailureExactlyOnce(@TempDir Path directory)
-            throws Exception {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void cancellationBeforeExecutionCleansStagingAndReportsFailureExactlyOnce(
+            boolean incremental, @TempDir Path directory) throws Exception {
         for (boolean interrupt : List.of(false, true)) {
             var owner = new Participant(directory);
             var factory = new Factory();
-            try (var backend = backend(owner)) {
+            try (var backend = backend(owner, incremental)) {
                 var future = backend.snapshot(1, 1, factory, CheckpointOptions.forCheckpointWithDefaultLocation());
                 assertThat(Files.exists(owner.staging)).isTrue();
                 assertThat(future.cancel(interrupt)).isTrue();
@@ -130,13 +133,15 @@ class NativeCheckpointUploadCancellationTest {
         }
     }
 
-    @Test
-    void cancellationClosesBlockedIoAndDiscardsPreviouslyUploadedNewHandles(@TempDir Path directory) throws Exception {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void cancellationClosesBlockedIoAndDiscardsPreviouslyUploadedNewHandles(
+            boolean incremental, @TempDir Path directory) throws Exception {
         for (boolean interrupt : List.of(false, true)) {
             var owner = new Participant(directory);
             var factory = new Factory();
             factory.blockAt = 2;
-            try (var backend = backend(owner)) {
+            try (var backend = backend(owner, incremental)) {
                 var future = backend.snapshot(2, 2, factory, CheckpointOptions.forCheckpointWithDefaultLocation());
                 Thread worker = new Thread(future, "native-checkpoint-cancellation-test");
                 worker.start();
@@ -210,6 +215,10 @@ class NativeCheckpointUploadCancellationTest {
     }
 
     private static StreamFusionKeyedStateBackend<?> backend(Participant owner) throws Exception {
+        return backend(owner, true);
+    }
+
+    private static StreamFusionKeyedStateBackend<?> backend(Participant owner, boolean incremental) throws Exception {
         var delegate = (CheckpointableKeyedStateBackend<?>) Proxy.newProxyInstance(
                 NativeCheckpointUploadCancellationTest.class.getClassLoader(),
                 new Class<?>[] {CheckpointableKeyedStateBackend.class},
@@ -218,7 +227,7 @@ class NativeCheckpointUploadCancellationTest {
                     if (method.getName().equals("close") || method.getName().equals("dispose")) return null;
                     throw new UnsupportedOperationException(method.toString());
                 });
-        var result = new StreamFusionKeyedStateBackend<>(delegate, List.of(), "rocksdb", null, true);
+        var result = new StreamFusionKeyedStateBackend<>(delegate, List.of(), "rocksdb", null, incremental);
         result.registerNativeStateParticipant(owner, true);
         return result;
     }

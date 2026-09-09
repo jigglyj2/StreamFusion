@@ -14,15 +14,25 @@ import org.junit.jupiter.params.provider.CsvSource;
 /** Restore both the original Flink DISTINCT handler and the common native runtime. */
 class DistinctCountCheckpointTest {
     @ParameterizedTest
-    @CsvSource({"false,0", "true,0", "false,1", "true,1", "false,2", "true,2"})
-    void signedMembershipAndFilteredCountsSurviveCanonicalAndCheckpointRestore(boolean rocks, int mode)
-            throws Exception {
+    @CsvSource({
+        "false,0,true",
+        "true,0,true",
+        "false,1,true",
+        "true,1,true",
+        "false,2,true",
+        "true,2,true",
+        "true,0,false",
+        "true,1,false",
+        "true,2,false"
+    })
+    void signedMembershipAndFilteredCountsSurviveCanonicalAndCheckpointRestore(
+            boolean rocks, int mode, boolean incremental) throws Exception {
         var live = new ArrayList<GenericRowData>();
         OperatorSubtaskState reference;
         OperatorSubtaskState state;
         try (var allocator = new RootAllocator(64L << 20)) {
-            try (var oracle = DistinctCountFlinkOracle.create(rocks);
-                    var source = DistinctCountRecoveryFixture.region(rocks, null, 1, 0)) {
+            try (var oracle = DistinctCountFlinkOracle.create(rocks, null, incremental);
+                    var source = DistinctCountRecoveryFixture.region(rocks, null, 1, 0, incremental)) {
                 DistinctCountRecoveryFixture.input(
                         List.of(source), oracle, allocator, DistinctCountRecoveryFixture.changes(live, 0), 0);
                 oracle.prepareSnapshotPreBarrier(1);
@@ -31,8 +41,9 @@ class DistinctCountCheckpointTest {
                 if (mode == 0 || !rocks) assertThat(state.getRawKeyedState()).isNotEmpty();
                 else assertThat(state.getManagedKeyedState()).isNotEmpty();
             }
-            try (var oracle = DistinctCountFlinkOracle.create(rocks, reference);
-                    var target = DistinctCountRecoveryFixture.region(mode == 0 ? !rocks : rocks, state, 1, 0)) {
+            try (var oracle = DistinctCountFlinkOracle.create(rocks, reference, incremental);
+                    var target =
+                            DistinctCountRecoveryFixture.region(mode == 0 ? !rocks : rocks, state, 1, 0, incremental)) {
                 DistinctCountRecoveryFixture.input(
                         List.of(target), oracle, allocator, DistinctCountRecoveryFixture.changes(live, 1), 1);
                 DistinctCountRecoveryFixture.input(

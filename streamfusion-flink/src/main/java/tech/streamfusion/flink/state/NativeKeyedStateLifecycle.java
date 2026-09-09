@@ -47,7 +47,7 @@ final class NativeKeyedStateLifecycle implements Serializable {
     private transient boolean writeRawKeyedSnapshot = true;
     private transient long rawSnapshotBytes;
     private transient StreamFusionStatefulOperatorMetrics statefulMetrics;
-    private transient Map<Long, CheckpointObservation> incrementalCheckpoints;
+    private transient Map<Long, CheckpointObservation> fileCheckpoints;
 
     NativeKeyedStateLifecycle(byte[] serializedPlan, String stateName, NativeKeyedStateBridge bridge) {
         this.serializedPlan = serializedPlan.clone();
@@ -127,7 +127,7 @@ final class NativeKeyedStateLifecycle implements Serializable {
         }
         statefulMetrics = new StreamFusionStatefulOperatorMetrics(metricGroup, useRocksDb);
         metricGroup.addGroup("StreamFusion").gauge("rocksDbSharedManagedMemoryReserved", () -> rocksDbManagedMemory);
-        incrementalCheckpoints = new ConcurrentHashMap<>();
+        fileCheckpoints = new ConcurrentHashMap<>();
         if (keyedStateBackend instanceof StreamFusionKeyedStateBackend) {
             ((StreamFusionKeyedStateBackend<?>) keyedStateBackend)
                     .registerNativeStateParticipant(participant, useRocksDb);
@@ -183,14 +183,19 @@ final class NativeKeyedStateLifecycle implements Serializable {
     }
 
     long beginSnapshot(long checkpointId, CheckpointOptions options, KeyedStateBackend<?> keyedStateBackend) {
-        boolean incremental = keyedStateBackend instanceof StreamFusionKeyedStateBackend
-                && ((StreamFusionKeyedStateBackend<?>) keyedStateBackend).usesNativeIncrementalCheckpoints()
+        boolean nativeFiles = keyedStateBackend instanceof StreamFusionKeyedStateBackend
+                && ((StreamFusionKeyedStateBackend<?>) keyedStateBackend).usesNativeFileCheckpoints()
                 && !options.getCheckpointType().isSavepoint();
-        writeRawKeyedSnapshot = !incremental;
+        writeRawKeyedSnapshot = !nativeFiles;
         rawSnapshotBytes = 0;
         long startedNanos = System.nanoTime();
-        if (incremental) {
-            incrementalCheckpoints.put(checkpointId, new CheckpointObservation(options, startedNanos));
+        if (nativeFiles) {
+            fileCheckpoints.put(
+                    checkpointId,
+                    new CheckpointObservation(
+                            options,
+                            startedNanos,
+                            ((StreamFusionKeyedStateBackend<?>) keyedStateBackend).usesNativeIncrementalCheckpoints()));
         }
         return startedNanos;
     }
@@ -202,7 +207,7 @@ final class NativeKeyedStateLifecycle implements Serializable {
     }
 
     void snapshotFailed(long checkpointId) {
-        incrementalCheckpoints.remove(checkpointId);
+        fileCheckpoints.remove(checkpointId);
         statefulMetrics.checkpointFailed();
     }
 
@@ -227,7 +232,7 @@ final class NativeKeyedStateLifecycle implements Serializable {
 
     Path prepareIncrementalCheckpoint(long checkpointId) {
         if (rocksDbDirectory == null) {
-            throw new IllegalStateException("Only native RocksDB state supports incremental checkpoints");
+            throw new IllegalStateException("Only native RocksDB state supports native file checkpoints");
         }
         Path checkpointDirectory = rocksDbDirectory.resolveSibling(
                 "streamfusion-rocks-checkpoint-" + checkpointId + "-" + java.util.UUID.randomUUID());
@@ -236,19 +241,19 @@ final class NativeKeyedStateLifecycle implements Serializable {
     }
 
     void completeIncrementalCheckpoint(long checkpointId, long uploadedBytes, long reusedBytes) {
-        CheckpointObservation observation = incrementalCheckpoints.remove(checkpointId);
+        CheckpointObservation observation = fileCheckpoints.remove(checkpointId);
         if (observation != null) {
             statefulMetrics.checkpointCompleted(
                     observation.options,
                     uploadedBytes + reusedBytes,
-                    uploadedBytes,
-                    reusedBytes,
+                    observation.incremental ? uploadedBytes : -1,
+                    observation.incremental ? reusedBytes : 0,
                     System.nanoTime() - observation.startedNanos);
         }
     }
 
     void failIncrementalCheckpoint(long checkpointId) {
-        if (incrementalCheckpoints.remove(checkpointId) != null) {
+        if (fileCheckpoints.remove(checkpointId) != null) {
             statefulMetrics.checkpointFailed();
         }
     }
@@ -352,7 +357,10 @@ final class NativeKeyedStateLifecycle implements Serializable {
         private final CheckpointOptions options;
         private final long startedNanos;
 
-        private CheckpointObservation(CheckpointOptions options, long startedNanos) {
+        private final boolean incremental;
+
+        private CheckpointObservation(CheckpointOptions options, long startedNanos, boolean incremental) {
+            this.incremental = incremental;
             this.options = options;
             this.startedNanos = startedNanos;
         }
