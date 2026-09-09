@@ -69,8 +69,9 @@ This catalog is not production admission. Q3's binary inner equi-join path is ad
 state; other stateful families and RocksDB retain their gates. The query checkpoint page records
 current selection separately from implementation.
 q13, q15, q16, and q17 still require an
-unsupported join shape or surrounding operator. q10
-uses unsupported `DATE_FORMAT`; q14 uses a Java UDF, mixed decimal
+unsupported join shape or surrounding operator. Q10's SELECT path is now catalogued with
+numeric `DATE_FORMAT`; its blackhole comparison does not exercise filesystem partition commits
+or rolling policies. See the query checkpoint page for its delivery status. q14 uses a Java UDF, mixed decimal
 arithmetic beyond the q1 conversion shape, and timestamp calendar extraction; q21 uses Java-regex
 semantics. Q12's processing-time SQL is catalogued, but a max-speed bounded source completes before
 its first ten-second timer and therefore produces an empty result; it is not counted as result or

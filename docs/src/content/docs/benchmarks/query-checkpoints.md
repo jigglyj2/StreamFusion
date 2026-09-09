@@ -107,9 +107,13 @@ limits. Q10 is next.
 Q10's next prerequisite is numeric `DATE_FORMAT` over timezone-free `TIMESTAMP(3)`. Its literal
 pattern subset lowers to DataFusion kernels with full-range calendar-cycle/year-of-era adaptation
 and one coarse memory owner. Unsupported pattern/type/context variants keep precise fallback.
-Generated changelog, memory and native boundary tests cover the scalar contract. Q10's blackhole
-SELECT workload and release measurements are not yet delivered; filesystem sink partition-commit
-and rolling-policy behavior are outside that benchmark's evidence.
+Generated ordered changelog, memory and native boundary tests cover the scalar contract. Q10's
+RowData catalog now uses the unchanged SELECT body from the official filesystem query, including
+both partition-label columns. Its opt-in integration test compares complete collected results at
+10,000 events, parallelism one/four, on both backend configurations with positive native plan/Calc
+activity. This workload is stateless; choosing RocksDB is not state-performance evidence. Release
+measurement and profiling remain pending. Filesystem sink partition-commit and rolling-policy
+behavior are outside the blackhole benchmark's evidence.
 
 ## Q6 has no Flink streaming baseline
 

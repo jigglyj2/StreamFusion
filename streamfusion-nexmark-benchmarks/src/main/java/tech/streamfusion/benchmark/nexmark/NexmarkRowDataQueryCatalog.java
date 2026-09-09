@@ -64,6 +64,7 @@ final class NexmarkRowDataQueryCatalog {
                         + "`dateTime` TIMESTAMP(3), expires TIMESTAMP(3), seller BIGINT, category BIGINT, "
                         + "auction_extra STRING, auction BIGINT, bidder BIGINT, price BIGINT, "
                         + "bid_dateTime TIMESTAMP(3), bid_extra STRING, PRIMARY KEY (id) NOT ENFORCED");
+        schemas.put("q10", BID_COLUMNS + ", dt STRING, hm STRING");
         schemas.put("q11", SESSION_COLUMNS);
         schemas.put("q12", SESSION_COLUMNS);
         schemas.put("q18", FULL_BID_COLUMNS);
