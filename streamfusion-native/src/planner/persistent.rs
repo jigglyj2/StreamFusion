@@ -41,6 +41,12 @@ pub(crate) trait PersistentOperatorFactory: Send + Sync {
         false
     }
 
+    /// Local child slot requiring per-record clock samples at the receiving Flink edge.
+    /// Binding rejects intervening native stages rather than moving a clock read across compute.
+    fn processing_time_input(&self) -> Option<usize> {
+        None
+    }
+
     /// Earliest retained processing-time deadline, read only while the plan edge is idle.
     /// Flink owns scheduling and invokes ProcessingTime; native state only owns the timer keys.
     fn next_processing_time_timer(&self) -> Result<Option<i64>> {

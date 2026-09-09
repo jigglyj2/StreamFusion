@@ -135,11 +135,20 @@ final class NativeRegionControlScheduler {
         });
         try {
             var decoded = NativeControlCapabilities.parseFrom(encodedCapabilities);
-            if (decoded.getProtocolVersion() != 1 && decoded.getProtocolVersion() != 2)
+            if (decoded.getProtocolVersion() < 1 || decoded.getProtocolVersion() > 3)
                 throw new IllegalArgumentException("Unsupported native control capability version");
+            var clockPorts = new java.util.HashSet<Integer>();
             for (var stage : decoded.getStagesList()) {
                 if (decoded.getProtocolVersion() == 1 && stage.getProcessingTime())
                     throw new IllegalArgumentException("Processing-time capabilities require protocol 2");
+                if (stage.hasProcessingTimeInputPort()
+                        && (decoded.getProtocolVersion() != 3
+                                || !stage.getProcessingTime()
+                                || stage.getProcessingTimeInputPort() < 0
+                                || stage.getProcessingTimeInputPort() >= inputCount
+                                || !clockPorts.add(stage.getProcessingTimeInputPort())))
+                    throw new IllegalArgumentException(
+                            "Clock inputs require protocol 3 and distinct bound input ports");
                 long id = stage.getPlanNodeId();
                 if (id <= 0 || !tree.contains(id) || capabilities.putIfAbsent(id, stage) != null) {
                     throw new IllegalArgumentException("Native control capabilities require unique bound stage IDs");
@@ -156,6 +165,14 @@ final class NativeRegionControlScheduler {
 
     long rootId() {
         return tree.rootId();
+    }
+
+    List<Integer> processingTimeInputPorts() {
+        return capabilities.values().stream()
+                .filter(NativeStageControlCapability::hasProcessingTimeInputPort)
+                .map(NativeStageControlCapability::getProcessingTimeInputPort)
+                .sorted()
+                .collect(java.util.stream.Collectors.toUnmodifiableList());
     }
 
     List<Long> processingTimeStages() {

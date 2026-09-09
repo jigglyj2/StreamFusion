@@ -24,15 +24,25 @@ public final class ArrowNativeRegionDispatcher implements AutoCloseable {
 
     public ArrowNativeRegionDispatcher(
             NativeExecutionContext context, List<RowType> inputs, List<RowType> outputs, BufferAllocator allocator) {
+        this(context, inputs, outputs, allocator, List.of(), null);
+    }
+
+    public ArrowNativeRegionDispatcher(
+            NativeExecutionContext context,
+            List<RowType> inputs,
+            List<RowType> outputs,
+            BufferAllocator allocator,
+            List<Integer> clockPorts,
+            java.util.function.LongSupplier clock) {
         inputTypes = List.copyOf(inputs);
         if (inputs.isEmpty()) throw new IllegalArgumentException("Native region requires external inputs");
         if (!context.hasRegionOutputs()) {
             if (outputs.size() != 1) throw new IllegalArgumentException("Native tree requires one output");
-            tree = new ArrowNativePlanDispatcher(context, inputs, outputs.get(0), allocator);
+            tree = new ArrowNativePlanDispatcher(context, inputs, outputs.get(0), allocator, clockPorts, clock);
             shared = null;
         } else {
             tree = null;
-            shared = new ArrowNativeRegionBridge(context, outputs, allocator);
+            shared = new ArrowNativeRegionBridge(context, outputs, allocator, clockPorts, clock);
             try {
                 for (var type : inputTypes) emptyInputs.add(ArrowRowDataBatch.empty(type, allocator));
                 this.inputs.addAll(emptyInputs);

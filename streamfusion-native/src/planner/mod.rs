@@ -147,7 +147,19 @@ fn create_operator(
                 operator.plan_node_id
             )));
         }
-        return identify_stage(operator, factory.build(operator, children)?, resources);
+        let plan = factory.build(operator, children)?;
+        if plan
+            .schema()
+            .fields()
+            .iter()
+            .any(|field| field.name().starts_with("__streamfusion_processing_time_"))
+        {
+            return Err(DataFusionError::Plan(format!(
+                "native clock consumer {} must consume clock metadata before output",
+                operator.plan_node_id
+            )));
+        }
+        return identify_stage(operator, plan, resources);
     }
     let plan = match operator.operator.as_ref() {
         Some(proto::operator::Operator::Input(input)) => {

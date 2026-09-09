@@ -210,10 +210,22 @@ pub(super) unsafe fn import_inputs(
             "native C Data input arity mismatch".into(),
         ));
     }
-    let mut batches = Vec::with_capacity(arrays.len());
-    let mut reservations = Vec::with_capacity(arrays.len() + 1);
+    let clocks = context.clock_input_bindings();
+    let count = arrays.len().checked_sub(clocks.len()).ok_or_else(|| {
+        DataFusionError::Execution("missing native clock input descriptors".into())
+    })?;
+    if clocks.iter().any(|&(_, port)| port >= count)
+        || arrays[count..].iter().any(|&address| address == 0)
+        || schemas[count..].iter().any(|&address| address == 0)
+    {
+        return Err(DataFusionError::Execution(
+            "native clock inputs require explicit C Data descriptors".into(),
+        ));
+    }
+    let mut batches = Vec::with_capacity(count);
+    let mut reservations = Vec::with_capacity(count + 1);
     let mut row_offset = 0usize;
-    for index in 0..arrays.len() {
+    for index in 0..count {
         if arrays[index] == 0 {
             if schemas[index] != 0 {
                 return Err(DataFusionError::Execution(
@@ -250,6 +262,27 @@ pub(super) unsafe fn import_inputs(
         }
         batches[index] = batch;
     }
+    for (slot, &(_, port)) in clocks.iter().enumerate() {
+        let clock = unsafe {
+            super::common::import_record_batch(
+                arrays[count + slot] as *mut FFI_ArrowArray,
+                schemas[count + slot] as *mut FFI_ArrowSchema,
+            )
+        }?;
+        let clock = crate::memory_pool::arrow_lease::borrowed_batch(
+            clock,
+            crate::memory_pool::buffer_registry(context.task_context().memory_pool()),
+        )?;
+        // An IPC port was replaced above by its one native decode before attaching clocks.
+        // Clone only RecordBatch/array descriptors; producer buffers remain shared.
+        batches[port] = crate::planner::operators::envelope::processing_time::attach(
+            batches[port].clone(),
+            clock,
+        )?;
+    }
     reservations.push(controls);
     Ok((batches, reservations))
 }
+
+#[cfg(test)]
+mod clock_tests;

@@ -255,14 +255,28 @@ snapshot only after restore or a fully drained invocation; stages without proces
 make no deadline JNI calls. Cancellation invalidates stale callbacks, timer/output failures require
 recovery, and finish cancels outstanding callbacks without firing open windows. Native state owns
 absolute timer keys; Flink owns the clock, mailbox callback, and scheduling. Descriptor reads do not
-add per-allocation memory reservations. No production factory exposes this capability yet. Per-record
-clock transport and native processing-time window computation remain pending, so Q12 is still gated.
-The clock-input primitive captures one signed epoch-millisecond reading per record in a non-null
-Arrow Int64 vector (`__streamfusion_processing_time_v1`), allocated through the supplied edge
-allocator before sampling. It preserves clock rollback and uses producer-owned C Data release
-callbacks. The exchange frame can read its row count from the Arrow IPC header without copying
-or decoding payload buffers. These primitives have ownership, allocation-denial, malformed-header,
-and native-frame round-trip tests; they are not yet connected to production execution or admission.
+add per-allocation memory reservations.
+
+Capability protocol 3 additionally binds each clock-consuming stage to a distinct external input
+port. Native binding validates that the owner directly consumes that edge: clock sampling cannot
+move across an intervening native operator. Both tree and shared-region drivers attach one extra
+C Data descriptor pair per negotiated clock port to the existing invocation. Logical input schemas
+and schema caching stay separate; empty/control inputs have zero-length clock vectors and do not
+read the clock. An IPC frame supplies its logical row count through header-only inspection, and
+Rust attaches clock metadata after its single payload decode. No payload is reconstructed in Java.
+
+The clock vector uses non-null Arrow Int64 epoch milliseconds (`__streamfusion_processing_time_v1`),
+allocated through the Flink-backed edge allocator before sampling one clock value per record.
+Clock rollback is preserved. Buffers use the producer's C Data release callbacks and remain under
+their original accounting. Rust validates port, shape, length, and nullability before invocation,
+and requires the bound consumer to remove clock metadata before output. The new metadata does
+not become a SQL column or a downstream clock. Old capability versions cannot advertise clock
+ports; existing event-time operators keep their previous descriptor count and capability version.
+
+Tests cover native tree/region consumption, IPC input replacement, signed clock values, shared
+buffer identity, producer/import failure cleanup, malformed descriptors, and rejected clock
+placement. No production window factory enables this capability yet. Q12 remains gated until its
+native processing-time window kernel and complete Flink parity/recovery contracts are implemented.
 
 Shared regions can bind the existing Flink memory/state lifecycle directly. The same backend
 leases and checkpoint participants serve tree and shared definitions; they do not create another

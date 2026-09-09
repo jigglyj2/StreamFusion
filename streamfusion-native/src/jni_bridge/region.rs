@@ -64,7 +64,8 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeRegionStream_op
         let count = input_arrays.len(env)?;
         let expected = context
             .region_input_count()
-            .map_err(|error| throw(env, error))?;
+            .map_err(|error| throw(env, error))?
+            + context.clock_input_bindings().len();
         if count != expected || count != input_schemas.len(env)? {
             return Err(throw(env, "native region input arity mismatch"));
         }

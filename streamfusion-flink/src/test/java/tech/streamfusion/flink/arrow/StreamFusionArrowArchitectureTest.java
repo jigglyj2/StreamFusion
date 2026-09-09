@@ -45,6 +45,7 @@ class StreamFusionArrowArchitectureTest {
                         "NativeRegionProcessingTimeScheduler",
                         "controls, getProcessingTimeService(), memory.executionContext()::processingTimeDeadlines",
                         "processingTimers.close()",
+                        "controls.processingTimeInputPorts()",
                         "memory.executionContext().controlCapabilities()",
                         "metricTree.bindGauges(",
                         "memory.executionContext().gaugeSchema()",
@@ -122,6 +123,14 @@ class StreamFusionArrowArchitectureTest {
         assertThat(capture)
                 .contains("BigIntVector", "VectorSchemaRoot", "clock.getAsLong()", "vector.allocateNew(rows)")
                 .doesNotContain("RowData", "rowView(", "System.currentTimeMillis", "nativebridge", ".transpose(");
+        String edge = Files.readString(Path.of("src/main/java/tech/streamfusion/flink/arrow/NativePlanInputs.java"));
+        assertThat(edge)
+                .contains("NativeProcessingTimeInput.capture(", "Data.exportVectorSchemaRoot(")
+                .doesNotContain("rowView(", ".transpose(", "System.currentTimeMillis", "executeArrow");
+        String importer = Files.readString(Path.of("../streamfusion-native/src/jni_bridge/plan_stream.rs"));
+        assertThat(importer)
+                .contains("clock_input_bindings()", "processing_time::attach(")
+                .doesNotContain("concat_batches", "transpose", "clock_gettime", "SystemTime::now");
         String header =
                 Files.readString(Path.of("src/main/java/tech/streamfusion/flink/exchange/NativeExchangeRowCount.java"));
         assertThat(header)

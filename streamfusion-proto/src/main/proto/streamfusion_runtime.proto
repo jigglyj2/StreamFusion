@@ -91,8 +91,11 @@ message NativeStageControlCapability {
   bool watermark = 2;
   bool before_checkpoint = 3;
   bool end_input = 4;
-  // Capability protocol 2 only. Version 1 readers must never silently ignore this requirement.
+  // Capability protocol 2 or later. Version 1 readers must never silently ignore this requirement.
   bool processing_time = 5;
+  // Capability protocol 3: external Arrow input whose per-record clock vector this stage consumes.
+  // The owner must directly consume this edge; this is separate from the SQL PROCTIME placeholder.
+  optional uint32 processing_time_input_port = 6;
 }
 
 message NativeRocksDbState {

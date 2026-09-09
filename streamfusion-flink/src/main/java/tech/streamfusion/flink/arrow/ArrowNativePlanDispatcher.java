@@ -30,11 +30,21 @@ public final class ArrowNativePlanDispatcher implements AutoCloseable {
 
     public ArrowNativePlanDispatcher(
             NativeExecutionContext context, List<RowType> inputTypes, RowType outputType, BufferAllocator allocator) {
+        this(context, inputTypes, outputType, allocator, List.of(), null);
+    }
+
+    ArrowNativePlanDispatcher(
+            NativeExecutionContext context,
+            List<RowType> inputTypes,
+            RowType outputType,
+            BufferAllocator allocator,
+            List<Integer> clockPorts,
+            java.util.function.LongSupplier clock) {
         this.inputTypes = List.copyOf(inputTypes);
         if (inputTypes.isEmpty()) {
             throw new IllegalArgumentException("An arrival-driven native region needs at least one input");
         }
-        bridge = new ArrowNativePlanBridge(context, outputType, allocator);
+        bridge = new ArrowNativePlanBridge(context, outputType, allocator, clockPorts, clock);
         try {
             for (RowType type : this.inputTypes) {
                 emptyInputs.add(ArrowRowDataBatch.empty(type, allocator));

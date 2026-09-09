@@ -39,7 +39,7 @@ impl PhysicalRegion {
             return Err(invalid("external input count changed after planning"));
         }
         for input in &external {
-            owned_envelope(input)?;
+            owned_envelope(input, true)?;
         }
         // A bounded broadcast must not feed two inputs that one downstream operator may
         // drain sequentially. Admit divergent exits now; reconvergence requires a proven
@@ -85,7 +85,7 @@ impl PhysicalRegion {
                 })
                 .collect::<Vec<_>>();
             let physical = create_operator(stage.operator.as_ref().unwrap(), &inputs, &resources)?;
-            owned_envelope(&physical)?;
+            owned_envelope(&physical, false)?;
             sharing.push(
                 (plan.consumers[index] > 1)
                     .then(|| SharedStage::new(physical.clone(), plan.consumers[index])),
@@ -139,11 +139,11 @@ fn reader(
         .as_ref()
         .map_or_else(|| stages[index].clone(), |shared| shared.reader(slot))
 }
-fn owned_envelope(plan: &Arc<dyn ExecutionPlan>) -> Result<()> {
+fn owned_envelope(plan: &Arc<dyn ExecutionPlan>, input: bool) -> Result<()> {
     let schema = plan.schema();
     let envelope = envelope::Envelope::from_schema(&schema)?;
-    if schema.fields().len() != envelope.payload_width + 3
-        || schema.field(envelope.payload_width).name() != envelope::OWNED_TIMESTAMP_V1
+    if envelope::owned_timestamp_index(&schema)?.is_none()
+        || (!input && schema.fields().len() != envelope.payload_width + 3)
     {
         return Err(invalid(
             "every region edge requires the owned Arrow envelope",

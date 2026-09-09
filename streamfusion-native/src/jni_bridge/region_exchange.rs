@@ -25,7 +25,8 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeRegionStream_op
 ) -> jlongArray {
     env.with_env(|env| -> jni::errors::Result<_> {
         let context = crate::execution_context::get(handle).map_err(|e| throw(env, e))?;
-        let expected = context.region_input_count().map_err(|e| throw(env, e))?;
+        let expected = context.region_input_count().map_err(|e| throw(env, e))?
+            + context.clock_input_bindings().len();
         if arrays.len(env)? != expected || schemas.len(env)? != expected {
             return Err(throw(env, "native region input arity mismatch"));
         }

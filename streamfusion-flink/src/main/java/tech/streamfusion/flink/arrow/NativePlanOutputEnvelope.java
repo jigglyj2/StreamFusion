@@ -26,7 +26,9 @@ final class NativePlanOutputEnvelope {
 
     /** Reserve actual envelope/routing fields, not SQL payloads such as opaque accumulators. */
     static boolean isReservedInputField(String name) {
-        return name.startsWith("__streamfusion_owned_timestamp_") || INPUT_METADATA_FIELDS.contains(name);
+        return name.startsWith("__streamfusion_owned_timestamp_")
+                || name.startsWith("__streamfusion_processing_time_")
+                || INPUT_METADATA_FIELDS.contains(name);
     }
 
     private NativePlanOutputEnvelope() {}

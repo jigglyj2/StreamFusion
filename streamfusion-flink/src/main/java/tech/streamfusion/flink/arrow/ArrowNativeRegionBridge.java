@@ -14,11 +14,21 @@ public final class ArrowNativeRegionBridge {
     private final NativeExecutionContext context;
     private final List<RowType> outputTypes;
     private final BufferAllocator allocator;
-    private final NativePlanInputs inputEdge = new NativePlanInputs(true);
+    private final NativePlanInputs inputEdge;
     private final Schema[] outputSchemas;
 
     public ArrowNativeRegionBridge(
             NativeExecutionContext context, List<RowType> outputTypes, BufferAllocator allocator) {
+        this(context, outputTypes, allocator, List.of(), null);
+    }
+
+    ArrowNativeRegionBridge(
+            NativeExecutionContext context,
+            List<RowType> outputTypes,
+            BufferAllocator allocator,
+            List<Integer> clockPorts,
+            java.util.function.LongSupplier clock) {
+        inputEdge = new NativePlanInputs(true, clockPorts, clock);
         if (!context.hasRegionOutputs() || !context.requiresInputEnvelope())
             throw new IllegalArgumentException("Native region edge requires an owned-envelope region context");
         if (outputTypes.isEmpty()) throw new IllegalArgumentException("Native region requires output ports");
@@ -52,8 +62,9 @@ public final class ArrowNativeRegionBridge {
         Objects.requireNonNull(inputRows, "inputRows");
         return execute(
                 emptyInputs,
-                (arrays, schemas) ->
-                        frame.executeNativeRegion(context, port, exchangePlan, arrays, schemas, inputRows));
+                (arrays, schemas) -> frame.executeNativeRegion(context, port, exchangePlan, arrays, schemas, inputRows),
+                port,
+                inputEdge.samplesClock(port) ? frame.logicalRowCount() : 0);
     }
 
     private ArrowNativeRegionOutput execute(List<ArrowRowDataBatch> inputs, byte[] controls) {
@@ -66,7 +77,12 @@ public final class ArrowNativeRegionBridge {
     }
 
     private ArrowNativeRegionOutput execute(List<ArrowRowDataBatch> inputs, Invocation invocation) {
-        try (var prepared = inputEdge.prepare(inputs)) {
+        return execute(inputs, invocation, -1, 0);
+    }
+
+    private ArrowNativeRegionOutput execute(
+            List<ArrowRowDataBatch> inputs, Invocation invocation, int decodedPort, int decodedRows) {
+        try (var prepared = inputEdge.prepare(inputs, decodedPort, decodedRows)) {
             var stream = invocation.open(prepared.arrayAddresses, prepared.schemaAddresses);
             try {
                 var output = new ArrowNativeRegionOutput(stream, outputTypes, allocator, outputSchemas);

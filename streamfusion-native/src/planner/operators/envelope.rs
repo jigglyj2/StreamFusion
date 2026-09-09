@@ -15,6 +15,7 @@ pub(crate) const ROW_KIND: &str = "__streamfusion_row_kind";
 /// then RowKind and ordinal. Owned outputs use ordinal -1 and never refer to an arrival.
 pub(crate) const OWNED_TIMESTAMP_V1: &str = "__streamfusion_owned_timestamp_v1";
 
+pub(crate) mod processing_time;
 mod selection;
 pub(crate) use selection::{
     owned_timestamp_index, select_output, selected_output_fields, validate_owned_input,
@@ -139,7 +140,28 @@ impl Envelope {
                 "owned native timestamp v1 must be Int64".into(),
             ));
         }
-        let width = 1 + usize::from(has_kind) + usize::from(owned);
+        let clock =
+            owned && ordinal > 2 && schema.field(ordinal - 3).name() == processing_time::FIELD;
+        if schema
+            .fields()
+            .iter()
+            .filter(|field| field.name().starts_with("__streamfusion_processing_time_"))
+            .count()
+            != usize::from(clock)
+        {
+            return Err(DataFusionError::Plan(
+                "unsupported or misplaced processing-time input version".into(),
+            ));
+        }
+        if clock
+            && (schema.field(ordinal - 3).data_type() != &DataType::Int64
+                || schema.field(ordinal - 3).is_nullable())
+        {
+            return Err(DataFusionError::Plan(
+                "processing-time input v1 must be non-null Int64".into(),
+            ));
+        }
+        let width = 1 + usize::from(has_kind) + usize::from(owned) + usize::from(clock);
         Ok(Self {
             payload_width: schema.fields().len() - width,
             width,

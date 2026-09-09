@@ -182,8 +182,6 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
                             ignored -> null,
                             resources);
         }
-        dispatcher =
-                new ArrowNativeRegionDispatcher(memory.executionContext(), inputTypes, outputTypes, memory.allocator());
         metricTree = sharedPlan == null
                 ? StreamFusionNativeMetricTree.forRegion(
                         memory.executionContext().identifiedPlan(),
@@ -245,6 +243,13 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
                         restored,
                         this::dispatchControl,
                         listener);
+        dispatcher = new ArrowNativeRegionDispatcher(
+                memory.executionContext(),
+                inputTypes,
+                outputTypes,
+                memory.allocator(),
+                controls.processingTimeInputPorts(),
+                getProcessingTimeService()::getCurrentProcessingTime);
         processingTimers = new NativeRegionProcessingTimeScheduler(
                 controls, getProcessingTimeService(), memory.executionContext()::processingTimeDeadlines);
         processingTimers.refresh();

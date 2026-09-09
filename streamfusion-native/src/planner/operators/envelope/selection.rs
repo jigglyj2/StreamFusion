@@ -16,8 +16,8 @@ pub(crate) fn owned_timestamp_index(schema: &Schema) -> Result<Option<usize>> {
     {
         return Ok(None);
     }
-    let envelope = Envelope::from_schema(schema)?;
-    Ok(Some(envelope.payload_width))
+    Envelope::from_schema(schema)?;
+    Ok(Some(schema.fields().len() - 3))
 }
 
 /// Validate before state mutation, not only when an output happens to be selected.

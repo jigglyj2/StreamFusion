@@ -50,6 +50,11 @@ impl NativeExecutionContext {
                     before_checkpoint: factory.supports_control(ControlEvent::BeforeCheckpoint(0)),
                     end_input: factory.supports_control(ControlEvent::EndInput),
                     processing_time: factory.supports_control(ControlEvent::ProcessingTime(0)),
+                    processing_time_input_port: self
+                        .clock_inputs
+                        .iter()
+                        .find(|(owner, _)| owner == id)
+                        .map(|(_, port)| *port as u32),
                 };
                 (stage.watermark
                     || stage.before_checkpoint
@@ -58,7 +63,9 @@ impl NativeExecutionContext {
                     .then_some(stage)
             })
             .collect::<Vec<_>>();
-        let protocol_version = if stages.iter().any(|stage| stage.processing_time) {
+        let protocol_version = if !self.clock_inputs.is_empty() {
+            3
+        } else if stages.iter().any(|stage| stage.processing_time) {
             2
         } else {
             1

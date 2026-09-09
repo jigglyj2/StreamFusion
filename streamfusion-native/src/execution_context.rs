@@ -74,6 +74,7 @@ pub(crate) struct NativeExecutionContext {
     input_schemas: Mutex<Vec<SchemaRef>>,
     schema_reservation: Mutex<MemoryReservation>,
     persistent: Vec<PersistentBinding>,
+    clock_inputs: Vec<(u64, usize)>,
     state_resources: Option<state::StateResources>,
     task_resources_installed: bool,
     invocation: AtomicU8,
@@ -160,6 +161,7 @@ impl NativeExecutionContext {
                 .build()
                 .map_err(|error| DataFusionError::External(Box::new(error)))?,
         );
+        let clock_inputs = processing_time::resolve_inputs(&plan, persistent.iter())?;
         Ok(Self {
             plan,
             runtime,
@@ -171,6 +173,7 @@ impl NativeExecutionContext {
             input_schemas: Mutex::new(Vec::new()),
             schema_reservation: Mutex::new(schema_reservation),
             persistent,
+            clock_inputs,
             state_resources: None,
             task_resources_installed: false,
             invocation: AtomicU8::new(0),
@@ -210,7 +213,12 @@ impl NativeExecutionContext {
                 ));
             }
         }
+        let clock_inputs = processing_time::resolve_inputs(
+            &self.plan,
+            self.persistent.iter().chain(bindings.iter()),
+        )?;
         self.persistent.extend(bindings);
+        self.clock_inputs = clock_inputs;
         Ok(())
     }
 
@@ -383,6 +391,7 @@ impl NativeExecutionContext {
     // Caller must hold the invocation claim before touching reusable input slots. DataFusion
     // may open children lazily during stream polling, so slots live until invocation teardown.
     fn prepare_execution(&self, batches: Vec<arrow::array::RecordBatch>) -> Result<PreparedPlan> {
+        self.validate_clock_inputs(&batches)?;
         let mut cached = self.physical_plan.lock().map_err(|_| {
             DataFusionError::Internal("native physical-plan cache lock poisoned".to_string())
         })?;

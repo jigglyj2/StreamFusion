@@ -35,15 +35,26 @@ public final class ArrowNativePlanBridge {
         return executeStream(
                 emptyInputs,
                 null,
-                (arrays, schemas, output) -> inputRows.accept(
-                        frame.executeNativePlan(context, port, exchangePlan, arrays, schemas, output)));
+                (arrays, schemas, output) ->
+                        inputRows.accept(frame.executeNativePlan(context, port, exchangePlan, arrays, schemas, output)),
+                port,
+                inputEdge.samplesClock(port) ? frame.logicalRowCount() : 0);
     }
 
     public ArrowNativePlanBridge(NativeExecutionContext context, RowType outputType, BufferAllocator allocator) {
+        this(context, outputType, allocator, List.of(), null);
+    }
+
+    ArrowNativePlanBridge(
+            NativeExecutionContext context,
+            RowType outputType,
+            BufferAllocator allocator,
+            List<Integer> clockPorts,
+            java.util.function.LongSupplier clock) {
         this.context = context;
         this.outputType = outputType;
         this.allocator = allocator;
-        inputEdge = new NativePlanInputs(context.requiresInputEnvelope());
+        inputEdge = new NativePlanInputs(context.requiresInputEnvelope(), clockPorts, clock);
     }
 
     public ArrowCDataBridge.NativeOutputStream executeStream(List<ArrowRowDataBatch> inputs) {
@@ -64,7 +75,16 @@ public final class ArrowNativePlanBridge {
 
     private ArrowCDataBridge.NativeOutputStream executeStream(
             List<ArrowRowDataBatch> inputs, byte[] controls, ExchangeInvocation exchange) {
-        try (var prepared = inputEdge.prepare(inputs)) {
+        return executeStream(inputs, controls, exchange, -1, 0);
+    }
+
+    private ArrowCDataBridge.NativeOutputStream executeStream(
+            List<ArrowRowDataBatch> inputs,
+            byte[] controls,
+            ExchangeInvocation exchange,
+            int decodedPort,
+            int decodedRows) {
+        try (var prepared = inputEdge.prepare(inputs, decodedPort, decodedRows)) {
             ArrowArrayStream stream = ArrowArrayStream.allocateNew(allocator);
             try {
                 if (exchange != null)

@@ -157,11 +157,14 @@ before mutation and keep protocol-one capabilities. The shared region edge now r
 negotiated native deadline with Flink's processing-time service, including overdue restored timers,
 and cancels callbacks on finish/close without firing open windows. Focused lifecycle tests cover stale
 callbacks, tied owners, signed timestamp boundaries, invalid descriptors, and failed timer drains.
-Clock capture now has a tested Arrow Int64 primitive and header-only IPC row-count reader. Tests
-verify one reading per record, rollback/boundaries, zero-copy C Data ownership, allocation denial,
-and agreement with native decoding for nested/nullable frames. These primitives are not yet wired
-to the execution edge. No production factory enables the timer capability; clock transport and the
-native processing-time window kernel remain pending. This is still a prerequisite, not Q12 admission.
+Capability protocol 3 now connects clock ports to the shared tree/region execution edge. It exports
+one Arrow Int64 clock vector per negotiated input through the existing C Data call, uses header-only
+row-count inspection for IPC, and attaches metadata after native payload decoding. Tests cover
+per-record values, rollback/boundaries, direct/decoded input ownership, invalid bindings and
+schema/length failures. Clock owners must directly consume an external edge and remove clock
+metadata before output. No production window factory enables the capability yet; the native
+processing-time window kernel and full parity/recovery proof remain pending. This is still a
+prerequisite, not Q12 admission.
 No Q12 performance result is claimed from empty/partial max-speed bounded output.
 
 ## Q6 has no Flink streaming baseline

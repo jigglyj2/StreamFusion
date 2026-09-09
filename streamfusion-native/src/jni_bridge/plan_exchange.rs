@@ -88,7 +88,7 @@ pub(super) fn prepare_exchange<'a>(
     let count = input_arrays.len(env)?;
     let source_len = payload.len(env)?;
     if port < 0
-        || port as usize >= count
+        || port as usize >= count.saturating_sub(context.clock_input_bindings().len())
         || count != input_schemas.len(env)?
         || offset < 0
         || length < 0
