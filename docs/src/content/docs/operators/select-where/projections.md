@@ -14,6 +14,11 @@ Array output credit follows Arrow buffer ownership through slices and downstream
 results retain their original scalar semantics inside the expression tree. At projection roots,
 scalar broadcasting now reserves capacity before DataFusion materializes the array; existing array
 results pass through unchanged and cached literals are borrowed without a per-batch payload clone.
+Fixed-width casts whose Arrow source and target types are identical forward their input/child
+buffer ownership without a second workspace reservation. The same applies to an all-true
+selection; partial selections still reserve DataFusion's gather/scatter workspace. Native tests
+verify sliced values, shared buffers, retained computed-child credit, and rejection before an
+oversized masked gather. Workspace denial diagnostics identify the failing physical expression.
 Primitive scalar broadcasts reserve from Arrow's physical value width and validity, with coarse
 builder overlap and batch headroom. Rust's scalar enum is not charged once per output row.
 A 16,384-row regression verifies nullable and non-null BIGINT, timestamp, floating-point and Boolean

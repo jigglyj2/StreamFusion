@@ -133,13 +133,30 @@ fn generated_numeric_kernels_keep_bytes_and_admit_heap_before_execution() {
                 let expected = raw.evaluate(&input);
                 let (actual, observed) = measure(|| admitted.data.evaluate(&input));
                 let result = same_result(expected, actual);
-                assert!(
-                    result.as_ref().map_or(0, |array| {
-                        crate::memory_pool::buffer_size::arrays_bytes(std::slice::from_ref(array))
+                if raw
+                    .downcast_ref::<CastExpr>()
+                    .is_some_and(|cast| cast.cast_type() == input.column(0).data_type())
+                {
+                    // Identity casts borrow the caller's input credit. Prove buffer sharing
+                    // instead of requiring a second reservation for the same allocation.
+                    let result = result.as_ref().unwrap().to_data();
+                    let source = input.column(0).to_data();
+                    assert_eq!(result.buffers().len(), source.buffers().len());
+                    for (result, source) in result.buffers().iter().zip(source.buffers()) {
+                        assert_eq!(result.as_ptr(), source.as_ptr());
+                    }
+                    assert_eq!(broker.inner.reserved(), 0);
+                } else {
+                    assert!(
+                        result.as_ref().map_or(0, |array| {
+                            crate::memory_pool::buffer_size::arrays_bytes(std::slice::from_ref(
+                                array,
+                            ))
                             .unwrap()
-                    }) <= broker.inner.reserved(),
-                    "{raw} {kind} {observed:?}"
-                );
+                        }) <= broker.inner.reserved(),
+                        "{raw} {kind} {observed:?}"
+                    );
+                }
                 assert!(
                     observed.peak <= broker.peak.load(Ordering::Relaxed),
                     "{raw} {kind} {observed:?}"

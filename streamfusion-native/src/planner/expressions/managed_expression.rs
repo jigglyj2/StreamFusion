@@ -21,6 +21,8 @@ use std::sync::Arc;
 
 #[cfg(test)]
 mod decimal_tests;
+#[cfg(test)]
+mod forward_tests;
 mod materialize;
 pub(crate) use materialize::evaluate as evaluate_projection;
 mod policy;
@@ -59,11 +61,18 @@ impl AdmittedExpression {
     fn reserve(&self, batch: &RecordBatch, selection: bool) -> Result<MemoryReservation> {
         let memory =
             MemoryConsumer::new("native physical expression workspace").register(&self.pool);
-        memory.try_grow(
-            self.policy
-                .unwrap_or(policy::Policy::Forward)
-                .workspace(batch, selection)?,
-        )?;
+        memory
+            .try_grow(
+                self.policy
+                    .unwrap_or(policy::Policy::Forward)
+                    .workspace(batch, selection)?,
+            )
+            .map_err(|error| match error {
+                DataFusionError::ResourcesExhausted(reason) => DataFusionError::ResourcesExhausted(
+                    format!("{reason}; expression: {}", self.inner),
+                ),
+                error => error,
+            })?;
         Ok(memory)
     }
 
@@ -105,6 +114,11 @@ impl PhysicalExpr for AdmittedExpression {
         if self.policy.is_none() {
             return evaluate_projection(&self.inner, batch, &self.pool);
         }
+        if self.policy == Some(policy::Policy::Forward) {
+            // Same-type fixed-width casts share their child's buffers. The input/child
+            // owner already carries their credit; reserving a gather here counts them again.
+            return self.inner.evaluate(batch);
+        }
         let memory = self.reserve(batch, false)?;
         let result = self.inner.evaluate(batch)?;
         self.retain(result, memory)
@@ -119,6 +133,10 @@ impl PhysicalExpr for AdmittedExpression {
         let partial = selection.len() != batch.num_rows()
             || selection.null_count() != 0
             || selection.has_false();
+        if !partial && self.policy == Some(policy::Policy::Forward) {
+            // CastExpr uses DF's default selection path, which forwards an all-true mask.
+            return self.inner.evaluate_selection(batch, selection);
+        }
         let memory = self.reserve(batch, partial)?;
         // A scalar boolean can forward this mask, including a tiny slice of a
         // larger bitmap. Its backing capacity is not bounded by the batch's rows.
