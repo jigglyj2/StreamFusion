@@ -4,11 +4,19 @@
 
 We are creating a Flink accelerator on top of Apache DataFusion. This means we'll use DataFusion to accelerate operators where possible, otherwise we'll create our own based on Arroyo and RisingWave code. The rust layer is just responsible for execution, the existing Flink code is responsible for snapshotting, checkpointing, distribution, recovery, and planning. If you need to reference external code, check if it is in ~/data, and if not, clone it there.
 
-Do not fork or carry private modifications to upstream open-source dependencies. The sole
-exception is the minimal Flink monkey patch needed to install/select StreamFusion's planner,
-including the class loading required for that installation. This exception does not permit
-patching Flink's runtime, operators, memory assignment, checkpoints, sources, sinks, or benchmark
-generators. Keep adaptations in StreamFusion using upstream extension points; if that cannot
+Do not fork or carry private modifications to upstream open-source dependencies except for
+these two narrowly scoped Flink hooks:
+
+1. The minimal monkey patch needed to install/select StreamFusion's planner, including the
+   class loading required for that installation.
+2. A callback after complete `StreamGraphGenerator` graph construction and before JobGraph
+   serialization, solely to finalize native operators' original Flink managed-memory shares.
+   Keep the resource calculation and factory binding in StreamFusion. Preserve Flink's original
+   allocation semantics, including operators added after SQL translation; add no per-record work.
+
+These exceptions do not permit other runtime patches or changes to Flink's operator algorithms,
+memory-allocation rules, checkpoints, sources, sinks, or benchmark generators.
+Keep adaptations in StreamFusion using upstream extension points; if that cannot
 preserve the required semantics, retain precise whole-plan fallback or pursue an upstream change.
 Reference checkouts and StreamFusion-owned adaptations of upstream code are allowed, subject to
 their licenses; they must not become a requirement for a privately modified dependency build.

@@ -124,10 +124,9 @@ job-graph cases cover reuse, weighted sources, unions across distinct slot group
 weights added after SQL translation, and legacy/Sink V2 boundaries. These comparisons verify
 Flink's final managed-memory fractions and resolved byte capacities.
 
-The current pipeline-generator patch is outside the permitted planner-installation exception in
-the upstream-dependency policy. It remains an implementation limitation to remove; the memory
-semantics below must be retained through supported extension points or the affected plans must
-fall back.
+The upstream-dependency policy explicitly permits the pipeline-generator callback solely to
+finalize original Flink managed-memory shares after complete graph construction. Resource
+calculation and factory binding remain in StreamFusion; Flink's allocation rules are preserved.
 
 The patched Flink pipeline generator invokes a runtime-side finalizer after the complete
 pipeline is available and before JobGraph serialization. Native local-window factories can carry

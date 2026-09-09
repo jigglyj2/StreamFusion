@@ -9,11 +9,11 @@ parallelism, and state backend configuration as the collecting RowData harness. 
 uses ordinary whole-plan admission and its Arrow source and sink boundary adapters.
 
 The current benchmark phase uses only this RowData/blackhole path and separate collecting-sink
-validation; Kafka execution is deferred. The upstream-dependency policy permits only the minimal
-Flink planner-installation patch. The existing build also carries a `StreamGraphGenerator`
-resource-finalization patch, which violates that restriction and must be removed. Recorded results
-remain historical measurements of their stated builds; buffered-window coverage must be revalidated
-without that runtime patch before it can satisfy the new policy.
+validation; Kafka execution is deferred. The upstream-dependency policy permits the minimal
+Flink planner-installation patch and the `StreamGraphGenerator` callback that finalizes original
+Flink managed-memory shares after complete graph construction. Resource calculation remains in
+StreamFusion, and the callback adds no per-record work or changes to Flink's allocation rules.
+Recorded results remain measurements of their stated builds.
 
 The blackhole consumes rows without serializing, hashing, retaining, or materializing them.
 Its normal Flink changelog negotiation excludes UPDATE_BEFORE. Both engines use that contract;
