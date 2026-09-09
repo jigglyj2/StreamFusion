@@ -266,8 +266,34 @@ a StreamFusion timing: aggregate scratch/output requested 15,017,456 bytes with 
 available. That failed attempt is retained under the benchmark's `target/measurements/q15/`
 directory and is not a throughput result. Investigation found duplicate decoded-state allowances
 and decode headroom retained after the decoded maps were freed. Synchronous aggregation now
-keeps one historical-state allowance and releases unused decode credit before building output;
-the release comparison must be rerun on that change.
+keeps one historical-state allowance and releases unused decode credit before building output.
+
+On clean release commit `19beb78f5ffda3e0940bc66e010768f84fb657af`, three alternating fresh-JVM
+pairs at one million events completed on HashMap. Flink's median was **5.469674 s**
+[5.285552, 5.577082], MAD 0.107408 s; StreamFusion's was **7.601704 s**
+[7.540897, 7.955219], MAD 0.060807 s. The throughput ratio is **0.719533×**, so this is a
+regression against Flink, not a performance win. Every engine fork emitted 920,000 blackhole
+records; each selected fork reported acceleration, 200 native plan batches and 136 Calc batches.
+No measured forks were discarded.
+
+Timing is end-to-end, including SQL/EXPLAIN, native initialization, cluster startup, execution
+and cleanup, but excluding JVM launch, argument parsing and builds. Both engines used parallelism
+four, mini-batching disabled, one-second exactly-once checkpoints, UTC, 1 GiB heap, 2 GiB direct
+memory, and four active JVM processors. The machine was the WSL2 Intel Core i7-12650H host with
+16 logical CPUs and Java 24.0.2. Native artifacts used release optimization, native CPU features,
+frame pointers and profiling symbols. The core artifact SHA-256 was
+`a6d8d8ac6d25b69d0513f2841b0e530f8451ab4a59c080d328c999804c376a8d`; the RocksDB artifact was
+`118e0d6c10fb0ed24ef99d44e0bc8eaf7d3f81402554bf5b9848ba806cf2e85a`.
+
+The RocksDB StreamFusion fork still failed at one million events: historical-state decoding
+requested 56,542,920 bytes with 55,699,897 available. There is no RocksDB median or speedup.
+Separate 500,000-event diagnostic profiles completed for both engines/backends, retaining JFR,
+CPU/allocation collapsed stacks, flame graphs and differential graphs. They are smaller than the
+measured workload and dominated by JVM compilation (46.4–48.2% of process CPU samples); they do
+not satisfy the final longer-workload profiling checkpoint or establish an optimization ceiling.
+The next work is historical-state capacity and then representative profiling. Artifacts, flags,
+upstream revisions/patches and raw runs remain under
+`streamfusion-nexmark-benchmarks/target/measurements/q15/19beb78f/`.
 
 ## Q6 has no Flink streaming baseline
 
