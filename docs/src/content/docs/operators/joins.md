@@ -76,6 +76,30 @@ memory reservation callbacks. A native regression test reproduced 4,119 budget c
 and parity evidence. The [Q4 release comparison](/StreamFusion/benchmarks/q4-rowdata/)
 reports matched measurements and separate profiles on both backends.
 
+## Cached lookup prerequisites
+
+SQL lookup joins, including Nexmark Q13, still retain whole-plan fallback. A source-boundary
+prerequisite now extracts Flink's configured legacy `CsvTableSource` reader through its public
+`getDataStream` / `createInput` APIs. An isolated environment captures the reader description;
+it executes no job and reads no file during planning or serialization. Task open creates a fresh
+reader and lists all splits with the same argument as Flink's `CsvLookupFunction`. The eventual
+lookup binding must drain this finite source before accepting probe records and reload it when
+the task recovers. It does not create Flink's additional Java hash-map cache.
+
+The adapter writes source rows directly into independently owned Arrow batches under a
+caller-supplied allocator. Returned batches remain valid after later reads and reader closure;
+allocation/parse failures close the active file and release the current batch. Flink retains all
+configured CSV parsing, including projected columns, comments, quoting, delimiters, headers,
+lenient parsing and empty-column nulls. Its standard temporal conversion adapts the legacy
+reader's `java.sql` objects while preserving declared logical types and decimal precision.
+
+Six focused Java tests compare generated lookup values, order and binary-row bytes against the
+actual Flink CSV lookup function, and cover serialization before the file exists, multiple files,
+nullable/duplicate keys, varied batch sizes, temporal/decimal payloads, reopen, early close and
+allocation/parse failure. These are source-adapter checks. Planner/protobuf selection, task-open
+C Stream ownership and memory transfer, native metrics and checkpoint/channel integration remain
+required before this source can unlock production lookup acceleration.
+
 ## SQL example
 
 ```sql
