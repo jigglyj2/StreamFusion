@@ -77,9 +77,10 @@ final class StreamFusionPersistentAdmission {
             return "aggregate persistent admission: SELECT DISTINCT retains its separate production gate";
         for (var call : calls) {
             if (!INTEGER_AGGREGATES.contains(call.getAggregation().getKind())
-                    || call.isDistinct()
+                    || (call.isDistinct() && call.getAggregation().getKind() != SqlKind.COUNT)
                     || call.getType().getSqlTypeName() != org.apache.calcite.sql.type.SqlTypeName.BIGINT)
-                return "aggregate persistent admission: verified calls are non-DISTINCT BIGINT COUNT/SUM/SUM0/MIN/MAX/AVG";
+                return "aggregate persistent admission: verified calls are BIGINT COUNT (including DISTINCT) "
+                        + "and non-DISTINCT BIGINT SUM/SUM0/MIN/MAX/AVG";
             for (int index : call.getArgList())
                 if (input.getTypeAt(index).getTypeRoot() != LogicalTypeRoot.BIGINT)
                     return "aggregate persistent admission: aggregate argument type " + input.getTypeAt(index)

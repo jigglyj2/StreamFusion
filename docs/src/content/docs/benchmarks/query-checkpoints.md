@@ -229,29 +229,37 @@ Java UDF execution remains unsupported;
 the [Arrow-batch callback proposal](/StreamFusion/development/jvm-udf-boundary/) awaits an explicit
 architecture exception. No Q14 acceleration or performance result is claimed.
 
-## Q15 initial admission
+## Q15 admission and correctness
 
-While Q14's JVM UDF architecture decision is pending, the next query's original SQL has been
-checked without changing its filtered DISTINCT aggregates. `NexmarkQ15PlanningIT` runs 50,000
-RowData source events into the unmodified blackhole sink with both backends and StreamFusion
-disabled/enabled. All four cases finish with non-empty output and zero native plan batches.
-The selected plan reports the `StreamExecGroupAggregate` persistent-admission restriction to
-non-DISTINCT BIGINT calls. The retained DISTINCT implementation is not yet production-admitted;
-its state, DataFusion computation, memory, metric and recovery contracts must be verified before
-opening that gate. This establishes fallback and execution, not accelerated parity or performance.
+While Q14's JVM UDF architecture decision is pending, original Q15 now passes ordinary
+whole-plan selection with its filtered DISTINCT aggregates unchanged. The benchmark catalog
+uses the exact upstream SELECT and its thirteen output columns, without adding a primary key.
+The native plan composes DataFusion-based Calc and keyed aggregation through Arrow batches.
+Pure nested-field projections keep unrelated source payloads out of conditional gathers.
 
-The first compute prerequisite moves retained `COUNT(DISTINCT)` row/run counting to DataFusion,
-keeping signed duplicate membership as a Flink state adapter. Common-runtime generated tests
-compare filtered and unfiltered counts, complete changelog envelopes, watermarks and registered
-metrics against the actual Flink aggregate handler on both backends. Native tests cover signed
-membership, state bytes and selected batch runs. See [group aggregation](/StreamFusion/operators/group-aggregation/)
-for scope and remaining contracts; Q15 still has no accelerated benchmark result.
+BIGINT COUNT(DISTINCT) delegates counting to DataFusion while retaining Flink's signed membership
+state. Generated tests compare the original Flink aggregate handler's per-key changelog bytes,
+record envelopes and registered metrics on both backends. Recovery coverage includes canonical
+backend switches, aligned/unaligned restore, 1→2→1 repartitioning across all 16 test key groups,
+and captured Arrow channel replay. Tests preserve duplicate counts and unmatched retractions
+through restore and then delete the final members. Ordinary SQL admission tests additionally
+compare complete serialized changelog multisets for nullable arguments and independent FILTERs.
+See [group aggregation](/StreamFusion/operators/group-aggregation/) for the admitted subset.
 
-BIGINT DISTINCT membership now also has checkpoint and rescaling evidence: canonical backend
-switches, aligned/unaligned restore, 1→2→1 repartitioning across all 16 test key groups, and captured
-Arrow channel replay. The tests preserve duplicate counts and unmatched retractions across restore,
-then compare all per-key changelog bytes through the last deletion. This remains a prerequisite;
-ordinary Q15 admission has not changed at this checkpoint.
+The opt-in Q15 integration tests use 50,000 RowData source events with both backends and
+parallelism one and four. Collecting-sink validation compares final materialized bytes and
+logical changelog counts on each configuration, plus the complete changelog multiset at
+parallelism one. Independently scheduled parallel channels can produce different transient
+counts; the controlled runtime/recovery tests establish exact transitions for identical input
+order. Blackhole output counts are compared separately between engines because that sink does
+not request UPDATE_BEFORE records. Selected runs require positive native plan batch counters.
+
+These tests use the campaign's existing 1 GiB Flink managed-memory setting and 90:10 operator/state
+consumer weights on both engines. The smaller embedded defaults are not a supported capacity
+claim: the RocksDB case exhausted aggregate batch scratch/output credit after conditional input
+pruning, requesting 7,718,512 bytes with 7,498,960 available. State storage and output remain
+subject to Flink's assigned allowance. Release throughput measurements and mixed JVM/native
+profiles are still pending; this checkpoint does not claim a performance win or a state-size limit.
 
 ## Q6 has no Flink streaming baseline
 

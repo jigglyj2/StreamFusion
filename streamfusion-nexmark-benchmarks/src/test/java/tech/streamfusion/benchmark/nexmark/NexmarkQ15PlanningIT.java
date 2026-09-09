@@ -15,7 +15,7 @@ import org.junit.jupiter.params.provider.CsvSource;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
 import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 
-/** Keep the original filtered DISTINCT SQL while establishing the next production blockers. */
+/** Original filtered DISTINCT SQL through ordinary planner admission and the blackhole sink. */
 @ResourceLock("streamfusion-planner-property")
 class NexmarkQ15PlanningIT {
     @AfterEach
@@ -31,6 +31,7 @@ class NexmarkQ15PlanningIT {
             System.setProperty(
                     StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY, StreamFusionPlannerFactory.class.getName());
         var tables = TableEnvironment.create(EnvironmentSettings.inStreamingMode());
+        NexmarkRowDataJob.configureMemory(tables.getConfig().getConfiguration());
         tables.getConfig().set(StateBackendOptions.STATE_BACKEND, backend);
         tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ENABLED, false);
         tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
@@ -47,16 +48,15 @@ class NexmarkQ15PlanningIT {
         var plan = tables.explainSql(statements[1]);
         assertThat(plan).contains("GroupAggregate", "Calc");
         if (selected) {
-            assertThat(StreamFusionPlanningDiagnostics.explain())
-                    .contains("Accelerated: no")
-                    .contains("StreamExecGroupAggregate")
-                    .contains("aggregate persistent admission: verified calls are non-DISTINCT BIGINT");
+            assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
         }
         try (var metrics = NexmarkBlackholeMetrics.begin()) {
             NexmarkBlackholeMetrics.configure(tables.getConfig().getConfiguration(), metrics.id);
             tables.executeSql(statements[1]).await();
             assertThat(metrics.outputRows()).isPositive();
         }
-        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isZero();
+        if (selected)
+            assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isPositive();
+        else assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isZero();
     }
 }

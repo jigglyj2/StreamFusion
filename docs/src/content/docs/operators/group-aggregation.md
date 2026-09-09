@@ -6,7 +6,7 @@ sidebar:
 ---
 
 **Current status:** Partial. Ordinary planning admits synchronous keyed `StreamExecGroupAggregate`
-with non-DISTINCT BIGINT `COUNT`, `SUM`, `SUM0`, `MIN`, `MAX`, and `AVG`; aggregate arguments must
+with BIGINT `COUNT` (including DISTINCT), and non-DISTINCT `SUM`, `SUM0`, `MIN`, `MAX`, and `AVG`; aggregate arguments must
 be BIGINT, and grouping keys must be BIGINT, INTEGER, or VARCHAR. Both in-memory and supported
 default RocksDB state use the common native execution tree. Existing semantic checks still
 reject unsupported TTL, async state, metrics, and backend configurations.
@@ -59,8 +59,13 @@ changelog byte while canceling unmatched retractions and deleting the final memb
 rescaling matrix routes actual Arrow exchange frames through all 16 test key groups and Flink's
 state repartitioning. A two-channel mailbox test captures an in-flight duplicate with a different
 filter result and replays it through Flink's channel-state reader exactly once. Managed memory
-returns to zero after each native harness closes. These proofs cover BIGINT DISTINCT counts;
-DISTINCT production admission and end-to-end performance remain outstanding. No speedup is claimed.
+returns to zero after each native harness closes. These proofs cover BIGINT DISTINCT counts.
+Ordinary SQL planning now admits that subset, including nullable FILTER predicates and multiple
+distinct calls alongside ordinary BIGINT aggregates. Generated SQL tests compare the complete
+Flink-serialized changelog multiset for three seeds on each backend, with all four RowKinds,
+duplicate values, nulls and independent filters. DISTINCT SUM/AVG, non-BIGINT arguments,
+global aggregation and mini-batching retain precise whole-plan fallback. Q15 release performance
+measurement remains outstanding; no DISTINCT speedup is claimed.
 
 Custom arithmetic remains for floating sums/averages (vectorized reassociation changes bits),
 decimal arithmetic (Flink overflow can poison the accumulator), DISTINCT sums/averages, and

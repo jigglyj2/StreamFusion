@@ -23,6 +23,7 @@ class NexmarkRowDataQueryCatalogTest {
                         "q11",
                         "q12",
                         "q13",
+                        "q15",
                         "q18",
                         "q19",
                         "q20",

@@ -27,6 +27,25 @@ public final class NexmarkRowDataJob {
     public static final long CHECKPOINT_INTERVAL_MILLIS = 1_000;
     public static final long MANAGED_MEMORY_MEBIBYTES = 1024;
 
+    static void configureMemory(org.apache.flink.configuration.Configuration configuration) {
+        // Keep the local comparison out of Flink's tiny embedded-cluster defaults. Both
+        // engines receive the same realistic state/Arrow allowance, including RocksDB cache
+        // memory.
+        configuration.set(
+                TaskManagerOptions.MANAGED_MEMORY_SIZE,
+                MemorySize.ofMebiBytes(
+                        Long.getLong("streamfusion.nexmark.managed-memory-mb", MANAGED_MEMORY_MEBIBYTES)));
+        // These Arrow-heavy jobs need more scratch/output memory than Flink's default 50/50
+        // split, while their one-million-event RocksDB working set needs far less than half a
+        // GiB of cache. This is Flink's standard consumer-weight setting and is identical for
+        // both engines.
+        configuration.setString(
+                TaskManagerOptions.MANAGED_MEMORY_CONSUMER_WEIGHTS.key(),
+                System.getProperty(
+                        TaskManagerOptions.MANAGED_MEMORY_CONSUMER_WEIGHTS.key(),
+                        "OPERATOR:90,STATE_BACKEND:10,PYTHON:30"));
+    }
+
     private NexmarkRowDataJob() {}
 
     public static BenchmarkResultStore.Result run(long eventCount, String query, boolean streamFusion)
@@ -92,26 +111,7 @@ public final class NexmarkRowDataJob {
             TableEnvironment tables = TableEnvironment.create(
                     batchMode ? EnvironmentSettings.inBatchMode() : EnvironmentSettings.inStreamingMode());
             if (blackhole) NexmarkBlackholeMetrics.configure(tables.getConfig().getConfiguration(), metricRunId);
-            // Keep the local comparison out of Flink's tiny embedded-cluster defaults. Both
-            // engines receive the same realistic state/Arrow allowance, including RocksDB cache
-            // memory.
-            tables.getConfig()
-                    .getConfiguration()
-                    .set(
-                            TaskManagerOptions.MANAGED_MEMORY_SIZE,
-                            MemorySize.ofMebiBytes(
-                                    Long.getLong("streamfusion.nexmark.managed-memory-mb", MANAGED_MEMORY_MEBIBYTES)));
-            // These Arrow-heavy jobs need more scratch/output memory than Flink's default 50/50
-            // split, while their one-million-event RocksDB working set needs far less than half a
-            // GiB of cache. This is Flink's standard consumer-weight setting and is identical for
-            // both engines.
-            tables.getConfig()
-                    .getConfiguration()
-                    .setString(
-                            TaskManagerOptions.MANAGED_MEMORY_CONSUMER_WEIGHTS.key(),
-                            System.getProperty(
-                                    TaskManagerOptions.MANAGED_MEMORY_CONSUMER_WEIGHTS.key(),
-                                    "OPERATOR:90,STATE_BACKEND:10,PYTHON:30"));
+            configureMemory(tables.getConfig().getConfiguration());
             tables.getConfig().getConfiguration().set(StateBackendOptions.STATE_BACKEND, stateBackend);
             tables.getConfig().getConfiguration().set(CheckpointingOptions.CHECKPOINT_STORAGE, "filesystem");
             tables.getConfig()
