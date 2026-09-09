@@ -53,6 +53,16 @@ final class DistinctCountFlinkOracle {
     static KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> create(
             boolean rocks, org.apache.flink.runtime.checkpoint.OperatorSubtaskState restore, boolean incremental)
             throws Exception {
+        return create(rocks, restore, incremental, false);
+    }
+
+    @SuppressWarnings("unchecked")
+    static KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> create(
+            boolean rocks,
+            org.apache.flink.runtime.checkpoint.OperatorSubtaskState restore,
+            boolean incremental,
+            boolean appendOnly)
+            throws Exception {
         String factory = System.getProperty(StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY);
         String processor = System.getProperty(StreamFusionPlannerFactory.EXEC_GRAPH_PROCESSOR_PROPERTY);
         System.clearProperty(StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY);
@@ -69,7 +79,10 @@ final class DistinctCountFlinkOracle {
                     Types.ROW_NAMED(new String[] {"k", "v", "selected"}, Types.STRING, Types.LONG, Types.BOOLEAN));
             tables.createTemporaryView(
                     "aggregate_input",
-                    tables.fromChangelogStream(source, Schema.newBuilder().build(), ChangelogMode.all()));
+                    tables.fromChangelogStream(
+                            source,
+                            Schema.newBuilder().build(),
+                            appendOnly ? ChangelogMode.insertOnly() : ChangelogMode.all()));
             var output = tables.toChangelogStream(
                     tables.sqlQuery(
                             "SELECT k, COUNT(DISTINCT v) AS n, COUNT(DISTINCT v) FILTER (WHERE selected) AS filtered, COUNT(*) AS all_rows FROM aggregate_input GROUP BY k"));

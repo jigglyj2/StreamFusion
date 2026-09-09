@@ -13,6 +13,7 @@ pub(crate) fn import_key_group(
     source: &RocksPluginKeyedState,
     group: u32,
     owner: &HostMemoryReservation,
+    validate: &mut dyn FnMut(&[u8], &[u8]) -> Result<()>,
 ) -> Result<()> {
     {
         let mut probe = owner.sibling("checkpoint destination validation");
@@ -24,6 +25,9 @@ pub(crate) fn import_key_group(
         })?;
     }
     source.visit_key_group_admitted(group, 1024, 256 << 10, owner, &mut |page| {
+        for (key, value) in page {
+            validate(key, value)?;
+        }
         let mut workspace = owner.sibling("checkpoint state write page");
         let bytes = page.iter().try_fold(4096usize, |total, (key, value)| {
             key.len()

@@ -66,6 +66,7 @@ fn historical_counts_for_inactive_filters_fit_the_batch_membership_allowance() {
                 &accumulates,
                 &mut staged,
                 &[true],
+                &[Mode::Counted],
                 &owner,
             )
             .unwrap();

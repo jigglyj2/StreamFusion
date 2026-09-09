@@ -6,6 +6,8 @@ use std::fmt::{Display, Formatter};
 
 use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 
+mod snapshot_entries;
+pub use snapshot_entries::key_group_snapshot_entries;
 mod snapshot_writer;
 pub use snapshot_writer::SnapshotWriter;
 

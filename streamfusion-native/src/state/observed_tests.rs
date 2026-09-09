@@ -110,6 +110,10 @@ impl KeyedState for Observed {
                 f(page)
             })
     }
+    fn checkpoint(&self, directory: &std::path::Path) -> Result<()> {
+        self.inner.checkpoint(directory)
+    }
+
     fn snapshot_key_group(
         &self,
         group: u32,

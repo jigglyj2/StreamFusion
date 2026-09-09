@@ -16,6 +16,10 @@ final class DistinctCountFixture {
     private DistinctCountFixture() {}
 
     static byte[] plan() {
+        return plan(false);
+    }
+
+    static byte[] plan(boolean appendOnly) {
         var bigint = LogicalType.newBuilder()
                 .setBigint(EmptyType.getDefaultInstance())
                 .setNullable(true)
@@ -24,7 +28,7 @@ final class DistinctCountFixture {
                 .setInput(Operator.newBuilder().setPlanNodeId(1).setInput(Input.newBuilder()))
                 .addGroupingIndices(0)
                 .setGenerateUpdateBefore(true)
-                .setInputChangelog(true);
+                .setInputChangelog(!appendOnly);
         for (boolean filtered : List.of(false, true)) {
             var call = AggregateCall.newBuilder()
                     .setFunction(AggregateFunction.AGGREGATE_FUNCTION_COUNT)
@@ -32,14 +36,14 @@ final class DistinctCountFixture {
                     .setInputType(bigint)
                     .setOutputType(bigint.toBuilder().setNullable(false))
                     .setDistinct(true)
-                    .setRetractable(true);
+                    .setRetractable(!appendOnly);
             if (filtered) call.setFilterIndex(2);
             group.addAggregateCalls(call);
         }
         group.addAggregateCalls(AggregateCall.newBuilder()
                 .setFunction(AggregateFunction.AGGREGATE_FUNCTION_COUNT_STAR)
                 .setOutputType(bigint.toBuilder().setNullable(false))
-                .setRetractable(true));
+                .setRetractable(!appendOnly));
         return NativePlan.newBuilder()
                 .setProtocolVersion(2)
                 .setRoot(Operator.newBuilder().setPlanNodeId(3).setGroupAggregate(group))

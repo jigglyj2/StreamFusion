@@ -47,8 +47,9 @@ Compact grouped vectors cannot consume these kernels directly because they lack 
 map. DISTINCT SUM/AVG and canonical partial merging retain their existing semantic adapters.
 
 Synchronous COUNT(DISTINCT) now stores memberships separately from the small group accumulator
-header. Calls on the same input argument share one member entry containing independent signed
-counts for their FILTERs, following Flink's DISTINCT data-view grouping. Each incoming batch
+header. Calls on the same input argument share one member entry containing independent
+membership for their FILTERs, following Flink's DISTINCT data-view grouping. Retractable groups
+store signed counts; new append-only groups store presence bits. Each incoming batch
 loads its group headers and then all required member keys in a batched lookup. The existing
 DataFusion accumulators compute each observable transition from those loaded counts. One atomic
 backend batch writes changed member entries and group headers after computation; there are no
@@ -64,12 +65,33 @@ VARCHAR, decimal, date, time and timestamp. Production admission remains the BIG
 described above. Floating-point DISTINCT, DISTINCT SUM/AVG, mini-batches, partial merging and
 bounded final aggregation retain their existing inline state paths and admission conditions.
 
-The persisted group header is `SFGD` version 1 wrapping a version-6 accumulator record with
-external membership maps omitted. Member count vectors use `SFDV` version 1. Existing inline
+The persisted group header is `SFGD` version 1 for counted membership or version 2 for
+append-only presence, wrapping a version-6 accumulator record with external membership maps
+omitted. Member vectors use matching `SFDV` versions: version 1 stores signed 64-bit counts,
+while version 2 stores one bit per shared FILTER after the call-count prefix. Unused bitmap
+bits must be zero. Existing inline
 DISTINCT versions 4, 5 and 6 migrate on the next update to each group, in the same atomic write
 as that update. Migration preserves signed counts and nullable FILTER behavior. Unknown versions
 and malformed count vectors are rejected. Canonical key-group snapshots include both headers and
 members, so Flink continues to own checkpoints, recovery, channel replay and rescaling.
+
+Append-only selection comes from the planner's input-changelog contract, not SQL text or a
+benchmark setting. Existing inline and version-1 groups retain counted membership after an
+upgrade, including every signed multiplicity; only newly created append-only groups use
+presence. No historical scan or eager conversion is required. Presence state cannot restore
+into a retractable plan: canonical and physical-file restore reject that mismatch before the
+operator can process input. This format compatibility does not promise arbitrary SQL plan
+changes across a savepoint.
+
+Within a batch, the existing DataFusion COUNT kernels still compute every required changelog
+transition. Temporary membership counts are normalized to presence before dirty-state comparison.
+A duplicate-only batch therefore updates its group header without rewriting unchanged member
+entries. The compact format changes retained state and write volume, not Arrow handoff,
+metric definitions, memory budgets or production admission. With two shared FILTERs, a native
+test verifies 15 fewer persisted bytes per member on both backends and no member writes for a
+128-row duplicate batch. Generated tests use Flink's actual insert-only DISTINCT handler to
+compare full changelog bytes, envelopes and metrics, plus canonical/backend-switch restore,
+full/incremental aligned/unaligned checkpoints, channel replay and 1-to-2-to-1 rescaling.
 
 Group deletion clears every persisted member, including unmatched negative counts, before a
 recreated group becomes visible. Row-count transitions identify such deletions at the start of

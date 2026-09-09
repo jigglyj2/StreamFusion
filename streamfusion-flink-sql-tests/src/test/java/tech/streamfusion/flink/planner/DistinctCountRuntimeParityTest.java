@@ -14,18 +14,19 @@ import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.StringData;
 import org.apache.flink.types.RowKind;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.CsvSource;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 
-/** Direct common-runtime prerequisite; production DISTINCT admission deliberately stays closed. */
+/** Exact common-runtime parity for append-only and retractable DISTINCT data views. */
 class DistinctCountRuntimeParityTest {
     @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void generatedFilteredDistinctCountsMatchFlinkChangelogControlsAndMetrics(boolean rocks) throws Exception {
-        try (var oracle = DistinctCountFlinkOracle.create(rocks);
+    @CsvSource({"false,false", "true,false", "false,true", "true,true"})
+    void generatedFilteredDistinctCountsMatchFlinkChangelogControlsAndMetrics(boolean rocks, boolean appendOnly)
+            throws Exception {
+        try (var oracle = DistinctCountFlinkOracle.create(rocks, null, true, appendOnly);
                 var nativePlan = new KeyedNativeMetricHarness(
                         rocks,
-                        DistinctCountFixture.plan(),
+                        DistinctCountFixture.plan(appendOnly),
                         List.of(DistinctCountFlinkOracle.INPUT),
                         DistinctCountFlinkOracle.OUTPUT,
                         List.of(3L));
@@ -51,8 +52,9 @@ class DistinctCountRuntimeParityTest {
                 for (int pass = 0; pass < 6; pass++) {
                     // The null-key group exists. Retract a value it has never seen, then cancel
                     // that negative multiplicity before retracting its ordinary records.
-                    var inputs =
-                            pass == 2 || pass == 3 ? List.of(GenericRowData.of(null, Long.MIN_VALUE, true)) : values;
+                    var inputs = !appendOnly && (pass == 2 || pass == 3)
+                            ? List.of(GenericRowData.of(null, Long.MIN_VALUE, true))
+                            : values;
                     for (int start = 0; start < inputs.size(); start += 31) {
                         var rows = new ArrayList<GenericRowData>();
                         int count = Math.min(31, inputs.size() - start);
@@ -61,10 +63,13 @@ class DistinctCountRuntimeParityTest {
                         var times = new long[count];
                         for (int index = 0; index < count; index++) {
                             var value = inputs.get(start + index);
+                            if (appendOnly && pass >= 3) value.setField(2, true);
                             value.setRowKind(
-                                    pass < 2 || pass == 3
-                                            ? index % 2 == 0 ? RowKind.INSERT : RowKind.UPDATE_AFTER
-                                            : index % 2 == 0 ? RowKind.DELETE : RowKind.UPDATE_BEFORE);
+                                    appendOnly
+                                            ? RowKind.INSERT
+                                            : pass < 2 || pass == 3
+                                                    ? index % 2 == 0 ? RowKind.INSERT : RowKind.UPDATE_AFTER
+                                                    : index % 2 == 0 ? RowKind.DELETE : RowKind.UPDATE_BEFORE);
                             rows.add(value);
                             kinds[index] = value.getRowKind();
                             present[index] = index % 3 != 0;

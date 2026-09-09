@@ -40,10 +40,21 @@ final class DistinctCountRecoveryFixture {
     static KeyedNativeMetricHarness region(
             boolean rocks, OperatorSubtaskState state, int parallelism, int subtask, boolean incremental)
             throws Exception {
+        return region(rocks, state, parallelism, subtask, incremental, false);
+    }
+
+    static KeyedNativeMetricHarness region(
+            boolean rocks,
+            OperatorSubtaskState state,
+            int parallelism,
+            int subtask,
+            boolean incremental,
+            boolean appendOnly)
+            throws Exception {
         var factory = new StreamFusionNativeRegionOperatorFactory(
                 List.of(DistinctCountFlinkOracle.INPUT),
                 DistinctCountFlinkOracle.OUTPUT,
-                DistinctCountFixture.plan(),
+                DistinctCountFixture.plan(appendOnly),
                 List.of(3L),
                 List.of(exchange(parallelism)));
         return new KeyedNativeMetricHarness(
@@ -52,6 +63,18 @@ final class DistinctCountRecoveryFixture {
 
     private static byte[] exchange(int parallelism) {
         return NativeExchangePlanSerializer.hash(DistinctCountFlinkOracle.INPUT, new int[] {0}, 16, parallelism, true);
+    }
+
+    static List<RowData> appendRows(int seed, boolean selected) {
+        var rows = new ArrayList<RowData>();
+        var random = new Random(seed);
+        for (int index = 0; index < 2048; index++) {
+            rows.add(GenericRowData.of(
+                    index % 7 == 0 ? null : StringData.fromString("é\u0000-" + random.nextInt(96)),
+                    index % 11 == 0 ? null : (long) random.nextInt(257),
+                    index % 13 == 0 ? null : selected && index % 3 != 0));
+        }
+        return rows;
     }
 
     static List<RowData> changes(List<GenericRowData> live, int phase) {

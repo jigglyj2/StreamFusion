@@ -55,7 +55,7 @@ fn arrow_member_keys_preserve_scalar_comparison_and_frame_partition_identity() {
             retractable: true,
         };
         assert!(MembershipLayout::eligible(std::slice::from_ref(&call)));
-        let layout = MembershipLayout::new(&[call]).unwrap();
+        let layout = MembershipLayout::new(&[call], false).unwrap();
         let input = aggregate_array(
             &values.iter().cloned().map(Some).collect::<Vec<_>>(),
             &data_type,

@@ -50,8 +50,8 @@ fn checkpoint_import_reads_a_group_larger_than_the_transfer_budget_in_bounded_pa
         .unwrap_err()
         .to_string()
         .contains("Flink denied"));
-    import_key_group(&mut destination, &reader, 2, &owner).unwrap();
-    import_key_group(&mut destination, &reader, 3, &owner).unwrap();
+    import_key_group(&mut destination, &reader, 2, &owner, &mut |_, _| Ok(())).unwrap();
+    import_key_group(&mut destination, &reader, 3, &owner, &mut |_, _| Ok(())).unwrap();
     assert_eq!(
         broker.reserved(),
         2 << 20,
@@ -73,10 +73,12 @@ fn checkpoint_import_reads_a_group_larger_than_the_transfer_budget_in_bounded_pa
             );
         }
     }
-    assert!(import_key_group(&mut destination, &reader, 2, &owner)
-        .unwrap_err()
-        .to_string()
-        .contains("restored more than once"));
+    assert!(
+        import_key_group(&mut destination, &reader, 2, &owner, &mut |_, _| Ok(()))
+            .unwrap_err()
+            .to_string()
+            .contains("restored more than once")
+    );
     drop(destination);
     drop(reader);
     drop(caches);
@@ -126,17 +128,19 @@ fn paged_import_preserves_large_legacy_values_on_both_destinations_and_releases_
         ),
     ];
     for target in &mut targets {
-        import_key_group(target.as_mut(), &source, 2, &owner).unwrap();
+        import_key_group(target.as_mut(), &source, 2, &owner, &mut |_, _| Ok(())).unwrap();
         assert_eq!(&*target.snapshot_key_group(2, &owner).unwrap(), &*expected);
     }
     let small = Arc::new(TestBroker::new(64 << 10));
     let budget = HostMemoryReservation::new(small.clone(), "denied scan");
     let mut destination = MemoryKeyedState::new(2, 3, budget.sibling("memory")).unwrap();
     let baseline = small.reserved();
-    assert!(import_key_group(&mut destination, &source, 2, &budget)
-        .unwrap_err()
-        .to_string()
-        .contains("Flink denied"));
+    assert!(
+        import_key_group(&mut destination, &source, 2, &budget, &mut |_, _| Ok(()))
+            .unwrap_err()
+            .to_string()
+            .contains("Flink denied")
+    );
     assert_eq!(small.reserved(), baseline);
     let empty = destination.snapshot_key_group(2, &budget).unwrap();
     assert_eq!(decode_key_group_snapshot(2, &empty).unwrap().len(), 0);

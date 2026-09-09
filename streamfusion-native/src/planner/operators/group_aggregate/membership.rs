@@ -23,7 +23,14 @@ struct Member {
     original: Vec<i64>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Mode {
+    Counted,
+    Presence,
+}
+
 pub(super) struct MembershipLayout {
+    append_only: bool,
     columns: Vec<MemberColumn>,
 }
 
@@ -65,7 +72,7 @@ impl MembershipLayout {
             })
     }
 
-    pub(super) fn new(calls: &[Call]) -> Result<Self> {
+    pub(super) fn new(calls: &[Call], append_only: bool) -> Result<Self> {
         let mut columns: Vec<MemberColumn> = Vec::new();
         for (index, call) in calls.iter().enumerate().filter(|(_, call)| call.distinct) {
             let input = call.input_index.expect("distinct argument");
@@ -87,10 +94,37 @@ impl MembershipLayout {
                 });
             }
         }
-        Ok(Self { columns })
+        Ok(Self {
+            columns,
+            append_only,
+        })
+    }
+
+    pub(super) fn mode(&self, bytes: Option<&[u8]>) -> Result<Mode> {
+        match bytes {
+            None => Ok(if self.append_only {
+                Mode::Presence
+            } else {
+                Mode::Counted
+            }),
+            Some(bytes) => {
+                header_bytes(bytes)?;
+                if is_header(bytes) && bytes[4] == 2 {
+                    if !self.append_only {
+                        return Err(DataFusionError::Execution("append-only DISTINCT presence state cannot restore to a retractable plan".into()));
+                    }
+                    Ok(Mode::Presence)
+                } else {
+                    // Existing inline/version-1 groups keep every signed multiplicity. New
+                    // append-only groups can use presence without an eager history migration.
+                    Ok(Mode::Counted)
+                }
+            }
+        }
     }
 
     pub(super) fn decode(&self, bytes: &[u8], calls: &[Call]) -> Result<AccumulatorState> {
+        self.mode(Some(bytes))?;
         let state = decode_state(header_bytes(bytes)?, calls)?;
         if is_header(bytes) && state.accumulators.iter().any(|accumulator| {
             matches!(accumulator, Accumulator::DistinctCount { values, .. } if !values.is_empty())
@@ -100,13 +134,13 @@ impl MembershipLayout {
         Ok(state)
     }
 
-    pub(super) fn encode(&self, mut state: AccumulatorState) -> Vec<u8> {
+    pub(super) fn encode(&self, mut state: AccumulatorState, mode: Mode) -> Vec<u8> {
         for accumulator in &mut state.accumulators {
             if let Accumulator::DistinctCount { values, .. } = accumulator {
                 values.clear();
             }
         }
-        codec::encode_header(&state)
+        codec::encode_header(&state, mode)
     }
 }
 
@@ -142,4 +176,19 @@ fn counts(
             },
         )
         .collect()
+}
+
+pub(super) fn validate_restored_header(
+    layout: Option<&MembershipLayout>,
+    value: &[u8],
+) -> Result<()> {
+    if is_header(value) {
+        let layout = layout.ok_or_else(|| {
+            DataFusionError::Execution(
+                "external DISTINCT state requires a compatible COUNT DISTINCT plan".into(),
+            )
+        })?;
+        layout.mode(Some(value))?;
+    }
+    Ok(())
 }

@@ -22,6 +22,7 @@ impl MembershipLayout {
         accumulates: &[bool],
         staged: &mut [Option<AccumulatorState>],
         external: &[bool],
+        modes: &[Mode],
         owner: &HostMemoryReservation,
     ) -> Result<MembershipBatch> {
         let mut workspace = owner.sibling("DISTINCT batch membership keys, counts and mutations");
@@ -47,7 +48,11 @@ impl MembershipLayout {
             {
                 let column = &self.columns[member.column];
                 if let Some(stored) = stored {
-                    let counts = codec::decode_counts(stored.as_ref(), column.calls.len())?;
+                    let counts = codec::decode_members(
+                        stored.as_ref(),
+                        column.calls.len(),
+                        modes[member.group],
+                    )?;
                     for (&call, count) in column.calls.iter().zip(counts) {
                         let Accumulator::DistinctCount { values, .. } =
                             &mut staged[member.group].as_mut().unwrap().accumulators[call]
@@ -129,27 +134,38 @@ impl MembershipBatch {
         layout: &MembershipLayout,
         staged: &[Option<AccumulatorState>],
         touched: &[bool],
+        modes: &[Mode],
     ) -> Vec<StateMutation> {
         let mut mutations = Vec::with_capacity(self.members.len() + self.cleanup.len());
         for (key, member) in self.members.drain() {
             if !touched[member.group] {
                 continue;
             }
-            let current = counts(
+            let mut current = counts(
                 staged[member.group].as_ref(),
                 &layout.columns[member.column],
                 &member.value,
             );
+            if modes[member.group] == Mode::Presence {
+                // Only INSERTs reach this mode. Within-batch duplicate counts are temporary;
+                // the persisted fact is presence, exactly as in Flink's append-only data view.
+                for count in &mut current {
+                    *count = i64::from(*count != 0);
+                }
+            }
             // Coalesce cleanup and later reinsertion into one mutation per key. Never discard
             // a negative count merely because DataFusion's visible distinct count is zero.
             let removed = self.cleanup.remove(&key).is_some();
             if removed || self.reset[member.group] || current != member.original {
                 mutations.push(StateMutation {
                     key,
-                    value: current
-                        .iter()
-                        .any(|&count| count != 0)
-                        .then(|| codec::encode_counts(&current)),
+                    value: current.iter().any(|&count| count != 0).then(|| {
+                        if modes[member.group] == Mode::Presence {
+                            codec::encode_presence(&current)
+                        } else {
+                            codec::encode_counts(&current)
+                        }
+                    }),
                 });
             }
         }

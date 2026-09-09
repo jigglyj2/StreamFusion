@@ -358,7 +358,17 @@ Successful pages populate the assigned backend directly without assembling or de
 canonical snapshot. A failed initialization may have installed earlier pages; the execution context
 is poisoned and Flink must discard it. It cannot resume processing partially restored state.
 Canonical savepoint formats, stored aggregate/member encodings and the checkpoint file format do
-not change. No intermediate Java batches or per-record JNI callbacks are introduced.
+not change as a consequence of paging. No intermediate Java batches or per-record JNI callbacks
+are introduced.
+
+Aggregate restore also checks external DISTINCT headers against the target plan's changelog
+contract. New append-only groups use version-2 presence headers/member bitmaps; legacy groups
+retain version-1 signed counts. A retractable plan rejects presence-only state. Canonical restore
+validates borrowed entries before backend mutation; physical restore validates each admitted
+page before writing it. A later-page rejection follows the same poisoned-initialization contract
+above. The borrowed canonical iterator does not copy a second whole snapshot or change the
+state C ABI. See [group aggregation](/StreamFusion/operators/group-aggregation/) for the persisted
+formats, legacy behavior and exact Flink parity coverage.
 
 A native capacity test imports an 8 MiB key group with a 4 MiB budget, including 2 MiB reserved
 for source/destination caches, while the old whole-group snapshot is denied under that budget.

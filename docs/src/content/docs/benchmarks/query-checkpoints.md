@@ -231,6 +231,13 @@ architecture exception. No Q14 acceleration or performance result is claimed.
 
 ## Q15 admission and correctness
 
+The latest aggregate prerequisite stores presence bits for newly created append-only COUNT
+DISTINCT groups, following Flink's append-only data-view behavior. It retains DataFusion COUNT
+computation and batched state I/O, skips writes for unchanged membership, and preserves legacy
+counted groups during restore. Generated insert-only Flink parity covers metrics, checkpoints,
+channel replay and rescaling. This change has not yet been included in the release measurements
+below; the earlier HashMap capacity failure remains unresolved evidence pending a new campaign.
+
 While Q14's JVM UDF architecture decision is pending, original Q15 now passes ordinary
 whole-plan selection with its filtered DISTINCT aggregates unchanged. The benchmark catalog
 uses the exact upstream SELECT and its thirteen output columns, without adding a primary key.

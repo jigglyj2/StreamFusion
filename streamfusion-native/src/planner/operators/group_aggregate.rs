@@ -428,7 +428,7 @@ impl GroupAggregateProcessor {
             && membership::MembershipLayout::eligible(&calls)
         {
             control_reservation.try_grow(calls.len().saturating_mul(4096))?;
-            Some(membership::MembershipLayout::new(&calls)?)
+            Some(membership::MembershipLayout::new(&calls, !plan.input_changelog)?)
         } else {
             None
         };
@@ -578,6 +578,13 @@ impl GroupAggregateProcessor {
             .iter()
             .map(|value| value.as_ref().is_some_and(|bytes| membership::is_header(bytes.as_ref())))
             .collect::<Vec<_>>();
+        let membership_modes = match &self.membership_layout {
+            Some(layout) => existing
+                .iter()
+                .map(|value| layout.mode(value.as_deref()))
+                .collect::<Result<Vec<_>>>()?,
+            None => Vec::new(),
+        };
         let mut staged_values = existing
             .iter()
             .map(|value| {
@@ -605,6 +612,7 @@ impl GroupAggregateProcessor {
                     &accumulates,
                     &mut staged_values,
                     &external,
+                    &membership_modes,
                     &self.scratch_reservation,
                 )?;
                 self.state_read_batches = self.state_read_batches.saturating_add(members.read_batches);
@@ -717,20 +725,22 @@ impl GroupAggregateProcessor {
                     self.membership_layout.as_ref().unwrap(),
                     &staged_values,
                     &touched,
+                    &membership_modes,
                 )
             })
             .unwrap_or_default();
         let mut mutations: Vec<StateMutation> = unique_keys
             .into_iter()
             .zip(staged_values.into_iter().zip(touched))
-            .filter_map(|(key, (state, touched))| {
+            .enumerate()
+            .filter_map(|(group, (key, (state, touched)))| {
                 touched.then(|| {
                     StateMutation {
                         key,
                         value: state
                             .filter(|state| state.row_count != 0)
                             .map(|state| match &self.membership_layout {
-                                Some(layout) => layout.encode(state),
+                                Some(layout) => layout.encode(state, membership_modes[group]),
                                 None => encode_state(&state),
                             }),
                     }
@@ -1547,6 +1557,11 @@ impl GroupAggregateProcessor {
 
     pub(crate) fn restore_key_group(&mut self, key_group: u32, bytes: &[u8]) -> Result<()> {
         self.invocation.require_idle("group aggregate")?;
+        for (_, value) in streamfusion_state_abi::key_group_snapshot_entries(key_group, bytes)
+            .map_err(|error| DataFusionError::Execution(error.to_string()))?
+        {
+            membership::validate_restored_header(self.membership_layout.as_ref(), value)?;
+        }
         self.state
             .restore_key_group(key_group, bytes, &self.scratch_reservation)
     }

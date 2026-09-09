@@ -7,6 +7,7 @@ use crate::state::observed_tests::{Io, Observed};
 use prost::Message;
 use std::sync::atomic::Ordering;
 
+mod append;
 mod keys;
 mod memory;
 mod recovery;
@@ -123,6 +124,14 @@ fn processor(
     strings: bool,
     owner: &HostMemoryReservation,
 ) -> (GroupAggregateProcessor, tempfile::TempDir, Arc<Io>) {
+    processor_with_plan(rocks, owner, &plan(strings))
+}
+
+fn processor_with_plan(
+    rocks: bool,
+    owner: &HostMemoryReservation,
+    plan_bytes: &[u8],
+) -> (GroupAggregateProcessor, tempfile::TempDir, Arc<Io>) {
     let dir = tempfile::tempdir().unwrap();
     let state: Box<dyn KeyedState> = if rocks {
         Box::new(
@@ -141,7 +150,7 @@ fn processor(
     };
     let io = Arc::new(Io::default());
     let processor = GroupAggregateProcessor::with_state(
-        &plan(strings),
+        plan_bytes,
         16,
         0,
         15,
@@ -266,7 +275,7 @@ fn partial_membership_matches_inline_compute_for_filters_signed_counts_and_group
 #[test]
 fn invalid_external_versions_and_count_vectors_are_rejected() {
     assert!(header_bytes(b"SFGD").is_err());
-    assert!(header_bytes(b"SFGD\x02").is_err());
+    assert!(header_bytes(b"SFGD\x03").is_err());
     for counts in [vec![], vec![0], vec![1, -1, i64::MAX, i64::MIN]] {
         let encoded = codec::encode_counts(&counts);
         assert_eq!(
