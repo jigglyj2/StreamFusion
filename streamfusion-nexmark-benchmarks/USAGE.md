@@ -49,7 +49,7 @@ by default and a benchmark result sink serializes and hashes both the complete s
 changelog and its final materialized table. Primary-key sinks use ordered upsert materialization;
 keyless sinks retain multiset semantics. Checkpointing uses exactly-once mode and task restart is disabled so resource failures
 surface instead of contaminating a timing with retries. It currently runs the fully accelerable q0,
-q1, q2, q4, q5, q7, q8, q9, q11, q12, q22, q23, group-aggregate,
+q1, q2, q4, q5, q7, q8, q9, q10, q11, q12, q13, q22, q23, group-aggregate,
 legacy-window-aggregate, select-distinct, top-n, limit, bounded-sort,
 bounded-sort-merge-join, over-aggregate,
 over-aggregate-event-time, over-aggregate-processing-time, temporal-join, match-recognize,

@@ -174,6 +174,9 @@ public final class NexmarkRowDataJob {
 
             tables.executeSql(sourceDdl(eventCount));
             NexmarkSqlJob.createViews(tables);
+            if (query.equals("q13")) {
+                tables.executeSql(NexmarkQ13SideInput.prepare(checkpointDirectory));
+            }
             if (query.equals("temporal-join")) {
                 tables.executeSql(versionedAuctionViewDdl());
             }

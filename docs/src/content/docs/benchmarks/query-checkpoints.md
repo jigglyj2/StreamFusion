@@ -200,6 +200,12 @@ Flink. Native memory tests cover shared-buffer accounting, bounded probe/output 
 credit return on close or failure. See [joins](/StreamFusion/operators/joins/) for the admitted
 subset and precise fallback conditions, including regions mixing lookup and keyed state.
 
+Q13 is also available in the collecting and blackhole benchmark catalog. Both engines create
+the same temporary 10,000-row CSV fixture within end-to-end setup and remove it during cleanup.
+A separate integration check verifies that the catalog SELECT is unchanged from upstream and
+compares complete enrichment changelog hashes and blackhole counts at 50,000 source events,
+parallelism 1 and 4, and both configured backends.
+
 This is an admission checkpoint, not a completed performance comparison. Q13 still needs its
 release/native-CPU measured forks and separate mixed profiles. Configuring RocksDB for this
 stateless query does not establish RocksDB state-performance behavior. The original legacy source
