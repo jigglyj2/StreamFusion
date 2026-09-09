@@ -86,6 +86,12 @@ public abstract class MapWriter<T> extends ArrowFieldWriter<T> {
     }
 
     @Override
+    protected void onVectorReallocated() {
+        keyWriter.parentReallocated();
+        valueWriter.parentReallocated();
+    }
+
+    @Override
     public void finish() {
         super.finish();
         keyWriter.finish();

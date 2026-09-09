@@ -150,6 +150,14 @@ normalization layer. Tests cover non-zero-offset fixed-width, UTF-8/binary, list
 struct, nullable, temporal, and decimal arrays. The end-to-end C Data test also proves
 that imported buffers are released by closing the resulting RowData batch view.
 
+Source-edge writers refresh cached child buffer views whenever Arrow grows a struct,
+list, or map. Container reallocation can replace descendant buffers without invoking
+the descendant writer directly; the refresh propagates recursively and preserves
+existing validity bits. This happens on capacity growth, without adding buffer lookups
+to each row write. Generated tests compare Flink-serialized bytes for 5,001 nullable
+nested rows, lists, maps, and Unicode strings across growth and writer reuse, and check
+that closing the batch releases the allocator's buffers.
+
 ABI-level tests must cover version negotiation, schema compatibility, end-of-stream,
 errors, cancellation, and exactly-once release of streams and arrays. Integration tests
 must also prove that separately packaged components can be loaded together and exchange

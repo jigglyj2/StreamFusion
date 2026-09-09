@@ -71,6 +71,11 @@ public abstract class ArrayWriter<T> extends ArrowFieldWriter<T> {
     }
 
     @Override
+    protected void onVectorReallocated() {
+        elementWriter.parentReallocated();
+    }
+
+    @Override
     public void finish() {
         super.finish();
         elementWriter.finish();

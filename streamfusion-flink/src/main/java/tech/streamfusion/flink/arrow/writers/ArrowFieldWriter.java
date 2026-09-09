@@ -140,6 +140,15 @@ public abstract class ArrowFieldWriter<IN> {
     /** Refreshes writer-specific cached buffer views after Arrow grows a vector. */
     protected void onVectorReallocated() {}
 
+    /** Container reallocation also replaces descendant buffers without calling their writers. */
+    final void parentReallocated() {
+        int previousCapacity = valueCapacity;
+        valueCapacity = valueVector.getValueCapacity();
+        refreshBuffers();
+        initializeValidity(previousCapacity, valueCapacity);
+        onVectorReallocated();
+    }
+
     private void resetOffsets() {
         if (valueVector instanceof BaseVariableWidthVector) {
             BaseVariableWidthVector variableWidthVector = (BaseVariableWidthVector) valueVector;

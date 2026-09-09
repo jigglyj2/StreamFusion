@@ -77,6 +77,11 @@ public abstract class RowWriter<T> extends ArrowFieldWriter<T> {
     }
 
     @Override
+    protected void onVectorReallocated() {
+        for (ArrowFieldWriter<?> field : fieldsWriters) field.parentReallocated();
+    }
+
+    @Override
     public void finish() {
         super.finish();
         for (ArrowFieldWriter<?> fieldsWriter : fieldsWriters) {
