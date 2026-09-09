@@ -138,9 +138,11 @@ Q12 is the active checkpoint. Its processing-time TUMBLE COUNT operator now supp
 whole-plan selection with UTC, one nullable or non-null BIGINT key, unfiltered COUNT(*), start/end
 properties, synchronous state and disabled mini-batching. The original `PROCTIME()` Calc and
 exchange remain in the selected graph. Other time zones, window kinds, aggregate/key shapes and
-clock-sensitive placements retain precise whole-plan fallback. The official Nexmark RowData run,
-release performance comparison and mixed profiles are still pending; this is not a completed Q12
-performance checkpoint.
+clock-sensitive placements retain precise whole-plan fallback. Official Nexmark RowData collecting
+checks pass at 50 million events, parallelism four, on both engines and state backends. They require
+non-empty INSERT output, positive counts, unique bidder/window pairs, ten-second UTC alignment and
+positive native plan/Calc activity for StreamFusion. The release performance comparison and mixed
+profiles are still pending; this is not a completed Q12 performance checkpoint.
 
 The logical PROCTIME attribute lowers to DataFusion's typed null. Arrow/protobuf schemas allow
 that physical null even when Flink's logical attribute is NOT NULL; ordinary timestamp constraints

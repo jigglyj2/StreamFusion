@@ -77,8 +77,10 @@ semantics. Q12's processing-time SQL is catalogued, but its windows align to the
 A bounded max-speed run may finish before a timer fires, and finishing input does not emit the final
 open window. Empty or partial results do not establish parity or acceleration. Its UTC TUMBLE COUNT operator now has ordinary
 selection, controlled-clock changelog/metric parity, both-backend recovery and live SQL execution
-coverage. The official Q12 RowData run and release comparison remain pending. See the query
-checkpoint page for evidence and remaining work.
+coverage. Official Q12 collecting checks pass at 50 million events, parallelism four, on both
+engines/backends, with non-empty output and valid window/count invariants. Separate live-clock jobs
+do not establish exact changelog parity. Release measurements and profiles remain pending; see the
+query checkpoint page for evidence and remaining work.
 
 Build the local Nexmark connector against this project's Flink version:
 
