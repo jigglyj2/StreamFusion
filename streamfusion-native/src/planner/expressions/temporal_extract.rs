@@ -24,6 +24,9 @@ pub(crate) fn create(
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let operand_type = operand.data_type(schema)?;
     let is_time_field = matches!(field, "hour" | "minute" | "second" | "flink_millisecond");
+    if is_time_field && operand_type == DataType::Timestamp(TimeUnit::Millisecond, None) {
+        return timestamp_clock_field(operand, field, result_is_bigint);
+    }
     let valid_type = if is_time_field {
         matches!(
             operand_type,
@@ -73,3 +76,40 @@ pub(crate) fn create(
         Ok(extracted)
     }
 }
+
+// Flink ExtractCallGen uses getMillisecond() with Java's signed remainder and
+// truncating division. Calendar date_part would change pre-epoch results and
+// impose chrono's narrower timestamp range. Keep computation in DataFusion.
+fn timestamp_clock_field(
+    operand: Arc<dyn PhysicalExpr>,
+    field: &str,
+    result_is_bigint: bool,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let (modulus, divisor) = match field {
+        "hour" => (86_400_000, 3_600_000),
+        "minute" => (3_600_000, 60_000),
+        "second" => (60_000, 1_000),
+        "flink_millisecond" => (1_000, 1),
+        _ => unreachable!("validated timestamp clock field"),
+    };
+    let mut extracted: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+        Arc::new(CastExpr::new(operand, DataType::Int64, None)),
+        Operator::Modulo,
+        Arc::new(Literal::new(ScalarValue::Int64(Some(modulus)))),
+    ));
+    if divisor != 1 {
+        extracted = Arc::new(BinaryExpr::new(
+            extracted,
+            Operator::Divide,
+            Arc::new(Literal::new(ScalarValue::Int64(Some(divisor)))),
+        ));
+    }
+    Ok(if result_is_bigint {
+        extracted
+    } else {
+        Arc::new(CastExpr::new(extracted, DataType::Int32, None))
+    })
+}
+
+#[cfg(test)]
+mod tests;

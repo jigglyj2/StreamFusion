@@ -13,6 +13,7 @@ import java.util.List;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
+import org.apache.flink.table.types.logical.TimestampType;
 import tech.streamfusion.proto.plan.v1.Expression;
 import tech.streamfusion.proto.plan.v1.TemporalExtract;
 import tech.streamfusion.proto.plan.v1.TemporalExtractField;
@@ -35,7 +36,7 @@ final class StreamFusionTemporalFunctionTranslator extends StreamFusionComplexTy
         LogicalType operandType = logicalType(operands.get(1), inputType);
         if (field == TemporalExtractField.TEMPORAL_EXTRACT_FIELD_UNSPECIFIED
                 || operandType == null
-                || !supports(field, operandType.getTypeRoot())) {
+                || !supports(field, operandType)) {
             return null;
         }
         Expression operand =
@@ -60,12 +61,25 @@ final class StreamFusionTemporalFunctionTranslator extends StreamFusionComplexTy
         }
         LogicalType operandType = logicalType(operands.get(1), inputType);
         if (operandType == null) {
+            Object operand = operands.get(1);
+            if (hasNoArgMethod(operand, "getType")
+                    && "TIMESTAMP_WITH_LOCAL_TIME_ZONE"
+                            .equals(invoke(invoke(operand, "getType"), "getSqlTypeName")
+                                    .toString())) {
+                return "timestamp EXTRACT field " + fieldName(operands.get(0))
+                        + " on " + invoke(operand, "getType")
+                        + " stays on Flink; only timezone-free TIMESTAMP(3) hour/minute/second/millisecond fields are parity-proven";
+            }
             return "EXTRACT operand type could not be resolved safely";
         }
         LogicalTypeRoot root = operandType.getTypeRoot();
         if (root == LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE
                 || root == LogicalTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE) {
-            return "timestamp EXTRACT stays on Flink until session-zone and subsecond precision semantics are parity-proven";
+            return "timestamp EXTRACT field "
+                    + fieldName(operands.get(0))
+                    + " on "
+                    + operandType.asSummaryString()
+                    + " stays on Flink; only timezone-free TIMESTAMP(3) hour/minute/second/millisecond fields are parity-proven";
         }
         if (root == LogicalTypeRoot.INTERVAL_DAY_TIME || root == LogicalTypeRoot.INTERVAL_YEAR_MONTH) {
             return "interval EXTRACT stays on Flink until signed interval field decomposition is parity-proven";
@@ -131,15 +145,16 @@ final class StreamFusionTemporalFunctionTranslator extends StreamFusionComplexTy
         }
     }
 
-    private static boolean supports(TemporalExtractField field, LogicalTypeRoot operandType) {
+    private static boolean supports(TemporalExtractField field, LogicalType operandType) {
         switch (field) {
             case TEMPORAL_EXTRACT_FIELD_HOUR:
             case TEMPORAL_EXTRACT_FIELD_MINUTE:
             case TEMPORAL_EXTRACT_FIELD_SECOND:
             case TEMPORAL_EXTRACT_FIELD_MILLISECOND:
-                return operandType == LogicalTypeRoot.TIME_WITHOUT_TIME_ZONE;
+                return operandType.getTypeRoot() == LogicalTypeRoot.TIME_WITHOUT_TIME_ZONE
+                        || (operandType instanceof TimestampType && ((TimestampType) operandType).getPrecision() == 3);
             default:
-                return operandType == LogicalTypeRoot.DATE;
+                return operandType.getTypeRoot() == LogicalTypeRoot.DATE;
         }
     }
 }

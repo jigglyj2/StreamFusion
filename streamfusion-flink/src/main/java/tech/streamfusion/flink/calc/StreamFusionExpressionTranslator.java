@@ -522,6 +522,9 @@ abstract class StreamFusionExpressionTranslator extends StreamFusionProjectionTr
             Object leftExpression, Object rightExpression, ComparisonOperator operator, RowType inputType) {
         org.apache.flink.table.types.logical.LogicalType leftType = expressionLogicalType(leftExpression);
         org.apache.flink.table.types.logical.LogicalType rightType = expressionLogicalType(rightExpression);
+        Expression mixedInteger = StreamFusionIntegerComparisonTranslator.translate(
+                leftExpression, rightExpression, leftType, rightType, operator, inputType);
+        if (mixedInteger != null) return mixedInteger;
         org.apache.flink.table.types.logical.LogicalType comparisonType = comparisonType(leftType, rightType);
         if (comparisonType == null
                 || (!supportsRecursiveComparison(comparisonType.getTypeRoot(), operator)

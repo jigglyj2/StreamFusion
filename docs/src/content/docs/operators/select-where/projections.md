@@ -135,6 +135,11 @@ Null-safe `IS TRUE`, `IS FALSE`, `IS NOT TRUE`, and `IS NOT FALSE` expressions a
 accelerated and always produce a non-null boolean result.
 Null-safe `IS DISTINCT FROM` and `IS NOT DISTINCT FROM` comparison results are also
 accelerated for the types supported by filters.
+Comparisons between different signed integer widths evaluate each operand in its original
+Flink type, then widen the completed values losslessly to `BIGINT` for DataFusion comparison.
+This includes nested comparisons such as `HOUR(timestamp) >= 8` and preserves integer overflow
+inside an operand before widening. Flink-generated changelog and metric tests cover all signed
+widths against `BIGINT`, both operand orders, null-safe comparisons and overflow boundaries.
 Signed-integer division is accelerated for literal and dynamic expression divisors. Arrow's
 checked division has Flink's truncate-toward-zero result, divide-by-zero failure, and overflow
 boundary. `FLOAT` and `DOUBLE` division preserve IEEE-754 zero, infinity, NaN, and signed-zero
@@ -457,8 +462,8 @@ before the Unix epoch, leap days, nulls, and the supported Flink date range have
 `EXTRACT(EPOCH FROM date)` is also accelerated and returns Flink's signed whole-second offset from
 the Unix epoch. Pre-epoch dates, the epoch boundary, nulls, projections, and filters have parity
 coverage.
-Timestamp, local-time-zone, and additional calendar fields remain on Flink
-until their session-zone and precision contracts are separately proven.
+Timestamp calendar fields, local-time-zone extraction, and additional calendar fields remain
+on Flink until their calendar, session-zone and precision contracts are separately proven.
 `CURRENT_DATE`, `CURRENT_TIME`, `LOCALTIME`, `CURRENT_TIMESTAMP`, `NOW`,
 `CURRENT_ROW_TIMESTAMP`, and `LOCALTIMESTAMP` stay on Flink because their values are bound to
 Flink's job, per-row, and configured session-clock lifecycle. StreamFusion does not independently
@@ -495,8 +500,25 @@ are proven. EXPLAIN distinguishes these runtime-context restrictions from an unk
 `EXTRACT` forms are accelerated for timezone-free `TIME`. The same protobuf expression lowers to
 Arrow's temporal kernel over the corresponding Time32 vector. Midnight, end-of-day and fractional
 values, Flink's supported precisions 0/3, nulls, projections, and filters have parity coverage.
-Microsecond/nanosecond fields, timestamp, and local-time-zone extraction remain on Flink.
-Their EXPLAIN fallback identifies the unresolved session-zone and subsecond precision contract.
+The same four clock fields are accelerated for timezone-free `TIMESTAMP(3)`, including
+`HOUR`, `MINUTE` and `SECOND` convenience functions, projections, filters and nested conditions.
+Flink's `ExtractCallGen` computes signed integer remainder and truncating division over epoch
+milliseconds. StreamFusion lowers that arithmetic to DataFusion casts, remainder and division;
+using ordinary calendar extraction would change pre-epoch results. For example, extracting
+milliseconds from `1969-12-31 23:59:59.999` returns `-1`, as Flink does. The expressions preserve
+nulls and the complete signed 64-bit millisecond range independently of the session timezone.
+They execute inside the existing fused Calc plan and use its managed fixed-width expression
+buffer allowances and stage metrics, without additional Java callbacks or retained keyed state.
+Generated SQL changelogs cover all four RowKinds, full-range endpoints, randomized timestamps,
+and a non-UTC session. Flink-generated Calc harness comparisons additionally exercise empty and
+multi-batch inputs, record timestamps, watermarks and registered stage metrics with either
+configured state backend. Native tests cover slices, scalar inputs, budget denial and reservation
+retention until the final output slice is released. Upstream `TimeFunctionsITCase` clock input
+cases are also exercised through the SQL parity harness at the admitted millisecond precision.
+
+Microsecond/nanosecond fields, timestamp calendar fields, other timestamp precisions and
+local-time-zone extraction remain on Flink. EXPLAIN identifies the field and input type outside
+the admitted timezone-free `TIMESTAMP(3)` clock contract.
 Interval extraction likewise remains on Flink pending signed-field decomposition parity, while
 `MILLENNIUM`, `CENTURY`, and `DECADE` date extraction remains there pending BCE and year-zero
 calendar parity. StreamFusion reports those reasons rather than a generic unsupported expression.

@@ -315,3 +315,10 @@ enabling StreamFusion and explicit opt-in for non-identical operators. Separate 
 tuning parameters, memory budgets and admission bypasses are not permitted. Benchmark-only
 measurement controls do not become deployment settings. Unsupported Flink settings require
 an explicit fallback rather than silent substitution with native defaults.
+
+Q14 is in progress and retains whole-plan fallback. Its timezone-free `TIMESTAMP(3)` clock
+extraction and mixed-width integer comparisons now have DataFusion execution, generated Flink
+changelog/metric parity, full signed-millisecond coverage and managed-buffer checks. Rechecking
+the original Q14 SQL with its original Java UDF on both backends reaches the next blocker:
+widening the nested CASE result from `VARCHAR(9)` to the sink's `VARCHAR(2147483647)`.
+Java UDF execution also remains unsupported. No Q14 acceleration or performance result is claimed.
