@@ -126,6 +126,18 @@ not state encoding, backend access, DataFusion computation or changelog semantic
 tests exercise a 500 KiB historical DISTINCT count/sum value under a 5 MiB allowance, and measure
 decoded numeric/string counted maps with concurrent serialized mutations against the shared credit.
 
+For current version-6 synchronous state, an allocation-free scan sizes historical map entries and
+owned variable-length payloads instead of applying the generic eight-times-serialized-size bound.
+One batch reservation covers those entries and the serialized mutation; accumulator headers and
+sparse initial map nodes remain covered by the existing per-key batch allowance. The canonical
+writer now allocates exactly the encoded size, avoiding geometric buffer growth while decoded maps
+are live and keeping neutral states compact. The encoding and value-validation rules are unchanged.
+Older state versions retain the conservative decode allowance and normal migration behavior.
+Tests measure decoded Boolean, integer, floating and Unicode membership maps plus concurrent
+mutations, cover every accumulator wire variant and neutral vectors, and check malformed/truncated
+frames and budget denial before decoding. This is coarse state/batch accounting, with no per-row
+allocator or JNI budget calls.
+
 Generated Calc/Aggregate/Calc tests compare `COUNT(*)`, `SUM`, `MIN`, `MAX`, and `AVG` against an
 operator produced by Flink's SQL planner, including its generated handler. They cover null and
 Unicode keys, null values, all four input RowKinds, empty batches, timestamp presence/values,

@@ -13,12 +13,13 @@ use super::{
 
 #[cfg(test)]
 mod tests;
+mod decoded_memory;
+pub(super) use decoded_memory::reserve_decoded_values;
 
 pub(in crate::planner::operators) fn encode_state(state: &AccumulatorState) -> Vec<u8> {
-    // Split-DISTINCT incremental state commonly has only one active accumulator family for a
-    // grouping key. Start with the exact sparse header instead of retaining worst-case capacity
-    // in every long-lived in-memory value; populated accumulators grow geometrically as needed.
-    let mut bytes = Vec::with_capacity(4 + 1 + 8 + 4 + state.accumulators.len());
+    // Keep sparse neutral states compact and avoid geometric growth copies while large
+    // decoded membership maps are still live. Sizing uses the same canonical writer.
+    let mut bytes = Vec::with_capacity(encoded_state_size(state));
     encode_state_into(state, &mut bytes);
     bytes
 }

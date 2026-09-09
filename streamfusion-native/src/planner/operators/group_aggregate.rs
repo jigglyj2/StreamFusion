@@ -555,7 +555,7 @@ impl GroupAggregateProcessor {
             .state
             .get_batch(&unique_key_refs, &self.scratch_reservation)?;
         let mut loaded_state_workspace =
-            crate::state::reserve_decoded_values(&existing, &self.scratch_reservation)?;
+            state_codec::reserve_decoded_values(&existing, &self.calls, &self.scratch_reservation)?;
         self.state_read_batches = self.state_read_batches.saturating_add(1);
         drop(unique_key_refs);
         // The independent loaded-state reservation already covers historical B-tree decoding

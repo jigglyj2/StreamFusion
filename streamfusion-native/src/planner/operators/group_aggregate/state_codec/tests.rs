@@ -55,9 +55,9 @@ fn sizing_is_allocation_free_and_matches_every_accumulator_wire_variant() {
             assert_eq!(observed.peak, 0);
             let (bytes, observed) = measure(|| encode_state(&state));
             assert_eq!(bytes.len(), size);
-            assert!(bytes.capacity() <= size * 2);
+            assert_eq!(bytes.capacity(), size);
             assert_eq!(observed.live as usize, bytes.capacity());
-            assert!(observed.peak <= size * 3);
+            assert_eq!(observed.peak, size);
             assert_eq!(&bytes[..4], STATE_MAGIC);
             assert_eq!(bytes[4], STATE_VERSION);
         }
