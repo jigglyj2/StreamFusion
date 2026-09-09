@@ -25,6 +25,8 @@ use crate::memory_pool::HostMemoryReservation;
 
 use super::{KeyedState, StateKeyRef, StateMutation};
 
+mod scan;
+
 /// Dynamically loaded RocksDB component accessed exclusively through the versioned C/Arrow ABI.
 pub(crate) struct RocksPluginKeyedState {
     // Kept alive until after `handle` is closed and every API pointer is dead.
@@ -171,7 +173,9 @@ impl RocksPluginKeyedState {
         };
         check(self.api, status)?;
         let data = unsafe { from_ffi(output_array, &output_schema) }?;
-        Ok(RecordBatch::from(StructArray::from(data)))
+        let mut batch = RecordBatch::from(StructArray::from(data));
+        *batch.schema_metadata_mut() = output_schema.metadata()?;
+        Ok(batch)
     }
 
     fn invoke_admitted(
@@ -208,7 +212,9 @@ impl RocksPluginKeyedState {
         }
         check(self.api, status)?;
         let data = unsafe { from_ffi(output_array, &output_schema) }?;
-        Ok(RecordBatch::from(StructArray::from(data)))
+        let mut batch = RecordBatch::from(StructArray::from(data));
+        *batch.schema_metadata_mut() = output_schema.metadata()?;
+        Ok(batch)
     }
 }
 
@@ -294,44 +300,7 @@ impl KeyedState for RocksPluginKeyedState {
         max_bytes: usize,
         visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<bool>,
     ) -> Result<()> {
-        let rows = u32::try_from(max_rows).map_err(|_| {
-            DataFusionError::Execution("state scan row limit exceeds UInt32".to_string())
-        })?;
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("key_group", DataType::UInt32, false),
-            Field::new("after", DataType::Binary, true),
-            Field::new("max_rows", DataType::UInt32, false),
-            Field::new("max_bytes", DataType::UInt64, false),
-            Field::new("start", DataType::Binary, false),
-            Field::new("end", DataType::Binary, true),
-        ]));
-        let mut after: Option<Vec<u8>> = None;
-        loop {
-            let input = RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![
-                    Arc::new(UInt32Array::from(vec![key_group])),
-                    Arc::new(BinaryArray::from(vec![after.as_deref()])),
-                    Arc::new(UInt32Array::from(vec![rows])),
-                    Arc::new(UInt64Array::from(vec![max_bytes as u64])),
-                    Arc::new(BinaryArray::from(vec![start])),
-                    Arc::new(BinaryArray::from(vec![end])),
-                ],
-            )?;
-            let output = self.invoke(self.api.scan_key_group, input)?;
-            if output.num_rows() == 0 {
-                return Ok(());
-            }
-            let keys = column::<BinaryViewArray>(&output, 0, "key")?;
-            let values = column::<BinaryViewArray>(&output, 1, "value")?;
-            let entries = (0..output.num_rows())
-                .map(|row| (keys.value(row), values.value(row)))
-                .collect::<Vec<_>>();
-            if !visitor(&entries)? {
-                return Ok(());
-            }
-            after = Some(keys.value(keys.len() - 1).to_vec());
-        }
+        self.scan_range(key_group, start, end, max_rows, max_bytes, visitor)
     }
 
     fn snapshot_key_group(

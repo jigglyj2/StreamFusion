@@ -127,8 +127,8 @@ unsafe extern "C" fn scan_key_group(
         if groups.is_null(0) || rows.is_null(0) || bytes.is_null(0) || start.is_null(0) {
             return Err("state scan bounds must be non-null".to_string());
         }
-        let entries = backend(handle)?
-            .scan_range(
+        let page = backend(handle)?
+            .scan_range_page(
                 groups.value(0),
                 start.value(0),
                 (!end.is_null(0)).then(|| end.value(0)),
@@ -137,15 +137,22 @@ unsafe extern "C" fn scan_key_group(
                 usize::try_from(bytes.value(0)).map_err(|error| error.to_string())?,
             )
             .map_err(|error| error.to_string())?;
-        let (keys, values): (Vec<_>, Vec<_>) = entries
+        let (keys, values): (Vec<_>, Vec<_>) = page
+            .entries
             .into_iter()
             .map(|(key, value)| (Some(key), Some(value)))
             .unzip();
         let output = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![
-                Field::new("key", DataType::BinaryView, false),
-                Field::new("value", DataType::BinaryView, false),
-            ])),
+            Arc::new(
+                Schema::new(vec![
+                    Field::new("key", DataType::BinaryView, false),
+                    Field::new("value", DataType::BinaryView, false),
+                ])
+                .with_metadata(std::collections::HashMap::from([(
+                    streamfusion_state_abi::STATE_SCAN_COMPLETE_METADATA.to_string(),
+                    page.complete.to_string(),
+                )])),
+            ),
             vec![
                 Arc::new(streamfusion_state_abi::owned_binary_views(keys)?),
                 Arc::new(streamfusion_state_abi::owned_binary_views(values)?),
@@ -370,13 +377,12 @@ unsafe fn export_batch(
     if array.is_null() || schema.is_null() {
         return Err("RocksDB state Arrow output is null".to_string());
     }
+    let exported_schema =
+        FFI_ArrowSchema::try_from(batch.schema().as_ref()).map_err(|error| error.to_string())?;
     let data = StructArray::from(batch).to_data();
     unsafe {
         ptr::write(array, FFI_ArrowArray::new(&data));
-        ptr::write(
-            schema,
-            FFI_ArrowSchema::try_from(data.data_type()).map_err(|error| error.to_string())?,
-        );
+        ptr::write(schema, exported_schema);
     }
     Ok(())
 }

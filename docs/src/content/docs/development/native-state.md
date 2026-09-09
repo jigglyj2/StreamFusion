@@ -259,6 +259,14 @@ bytewise comparator and stops at the upper bound. Callers may stop after any pag
 than the admitted page budget produces a recoverable resource error rather than exceeding the
 budget. Scanning holds the backend stable until the operation completes.
 
+A scan reply may carry optional Arrow schema metadata `streamfusion.state.scan.complete.v1`.
+`true` says the requested range is exhausted, including when the final page reaches the row limit;
+`false` says pagination must continue. This avoids another component call and RocksDB iterator
+just to discover an empty final page. Absence retains legacy pagination until an empty result, so
+ABI-8 components without the extension remain compatible. The function table, BinaryView column
+schema and checkpoint encodings are unchanged. The C Data bridge preserves this schema metadata;
+invalid completion values fail explicitly. Distinct partition ranges still have separate scans.
+
 Range-oriented operators use a separately budgeted B-tree in-memory backend. Point-only operators
 retain the existing hash-table backend. Both ordered backends read and write the same canonical
 SFS1 snapshots, so key-group redistribution and backend changes preserve keys byte-for-byte.

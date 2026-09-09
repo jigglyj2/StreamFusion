@@ -12,6 +12,11 @@ pub use snapshot_writer::SnapshotWriter;
 pub const STATE_BACKEND_ABI_VERSION: u32 = 8;
 pub const STATE_BACKEND_OK: i32 = 0;
 
+/// Optional ABI-8 Arrow schema metadata on scan replies. "true" declares the requested range
+/// exhausted, including after a full page; "false" declares a continuation. Absence preserves
+/// legacy behavior: request another page until empty. Older consumers may ignore this extension.
+pub const STATE_SCAN_COMPLETE_METADATA: &str = "streamfusion.state.scan.complete.v1";
+
 /// Transfers owned values into Arrow BinaryView buffers without concatenating payloads.
 /// Short values are stored inline in the view; longer values retain their Vec allocation.
 pub fn owned_binary_views(
@@ -99,7 +104,9 @@ pub struct StateBackendApiV1 {
     /// Bounded key-group scan. Input: group UInt32, exclusive after-key Binary (nullable),
     /// maximum rows UInt32, maximum payload bytes UInt64, inclusive start Binary,
     /// exclusive end Binary (nullable). Output: key/value BinaryView.
-    /// An empty output ends the scan. The caller holds the backend stable until completion.
+    /// An empty output or STATE_SCAN_COMPLETE_METADATA="true" ends the scan. The optional
+    /// metadata extension preserves the existing function table and key/value column schema.
+    /// The caller holds the backend stable until completion.
     pub scan_key_group: ArrowOperation,
     pub last_error: LastError,
 }

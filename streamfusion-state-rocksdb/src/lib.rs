@@ -7,5 +7,5 @@ mod log_directory;
 mod rocks_state;
 
 pub use rocks_state::{
-    CheckpointFile, RocksCheckpoint, RocksStateBackend, StateKey, StateMutation,
+    CheckpointFile, RocksCheckpoint, RocksStateBackend, ScanPage, StateKey, StateMutation,
 };
