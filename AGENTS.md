@@ -5,7 +5,7 @@
 We are creating a Flink accelerator on top of Apache DataFusion. This means we'll use DataFusion to accelerate operators where possible, otherwise we'll create our own based on Arroyo and RisingWave code. The rust layer is just responsible for execution, the existing Flink code is responsible for snapshotting, checkpointing, distribution, recovery, and planning. If you need to reference external code, check if it is in ~/data, and if not, clone it there.
 
 Do not fork or carry private modifications to upstream open-source dependencies except for
-these two narrowly scoped Flink hooks:
+these three narrowly scoped exceptions:
 
 1. The minimal monkey patch needed to install/select StreamFusion's planner, including the
    class loading required for that installation.
@@ -13,13 +13,20 @@ these two narrowly scoped Flink hooks:
    serialization, solely to finalize native operators' original Flink managed-memory shares.
    Keep the resource calculation and factory binding in StreamFusion. Preserve Flink's original
    allocation semantics, including operators added after SQL translation; add no per-record work.
+3. The RocksDB C/Rust binding extension exposing `LRUCacheOptions.high_pri_pool_ratio`, solely
+   to match Flink's cache-priority setting. The exception includes the minimal binding/build
+   plumbing recorded in `streamfusion-state-rocksdb/vendor/rocksdb/cache-priority.patch`.
+   Keep RocksDB and Snappy sources unmodified, preserve upstream cache/write-buffer-manager
+   ownership, and remove the extension once upstream bindings expose an equivalent setter.
 
 These exceptions do not permit other runtime patches or changes to Flink's operator algorithms,
-memory-allocation rules, checkpoints, sources, sinks, or benchmark generators.
+memory-allocation rules, checkpoints, sources, sinks, or benchmark generators. The RocksDB
+exception permits no storage-algorithm changes or unrelated binding extensions.
 Keep adaptations in StreamFusion using upstream extension points; if that cannot
 preserve the required semantics, retain precise whole-plan fallback or pursue an upstream change.
 Reference checkouts and StreamFusion-owned adaptations of upstream code are allowed, subject to
-their licenses; they must not become a requirement for a privately modified dependency build.
+their licenses; outside these exceptions, they must not become a requirement for a privately
+modified dependency build.
 
 Native operators must delegate computation to DataFusion physical operators, aggregate
 accumulators, window evaluators, expressions, and kernels wherever they preserve Flink

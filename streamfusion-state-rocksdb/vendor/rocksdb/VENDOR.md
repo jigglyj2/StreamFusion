@@ -21,6 +21,11 @@ standalone workspace declaration. No upstream execution algorithms are changed.
 
 ## Local extension
 
+The repository's `AGENTS.md` explicitly permits this setter and its minimal binding/build
+plumbing as a narrow exception to the no-private-upstream-modifications rule. It does not
+permit storage-algorithm changes or unrelated binding extensions. RocksDB and Snappy
+sources remain unmodified, and upstream cache/write-buffer-manager ownership is preserved.
+
 `cache-priority.patch` records the functional changes against the pinned upstream revision.
 Apply this zero-context patch with `git apply --unidiff-zero` only to the pinned revision.
 The optional `cache-priority` feature adds a validated Rust setter and a C API setter for

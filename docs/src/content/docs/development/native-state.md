@@ -56,6 +56,10 @@ and Snappy sources pinned as Git submodules. Initialize them with
 validated setter and preserves upstream shared cache/WBM ownership. It does not change
 RocksDB's execution algorithms. The retained patch and source provenance are in
 `streamfusion-state-rocksdb/vendor/rocksdb/VENDOR.md`.
+This setter and its minimal binding/build plumbing are an explicit exception to the
+repository's no-private-upstream-modifications rule. The exception preserves upstream
+cache/write-buffer-manager ownership and does not permit storage-algorithm changes or
+unrelated binding extensions. Remove it once upstream bindings provide the equivalent setter.
 
 Default log relocation is now resolved in the TaskManager JVM using Flink's `log.file`
 property, readable-file checks and database-path length limit. Tests compare this resolution
