@@ -26,6 +26,9 @@ mod forward_tests;
 mod materialize;
 pub(crate) use materialize::evaluate as evaluate_projection;
 mod policy;
+mod scoped_input;
+#[cfg(test)]
+mod scoped_input_tests;
 #[cfg(test)]
 mod tests;
 mod validity;
@@ -36,6 +39,7 @@ struct AdmittedExpression {
     pool: Arc<dyn MemoryPool>,
     // None denotes the projection-only scalar-to-array boundary, not a kernel policy.
     policy: Option<policy::Policy>,
+    scope: Option<scoped_input::ScopedInput>,
 }
 impl PartialEq for AdmittedExpression {
     fn eq(&self, other: &Self) -> bool {
@@ -76,6 +80,28 @@ impl AdmittedExpression {
         Ok(memory)
     }
 
+    fn evaluate_scoped(
+        &self,
+        scope: &scoped_input::ScopedInput,
+        batch: &RecordBatch,
+        selection: Option<&BooleanArray>,
+    ) -> Result<ColumnarValue> {
+        let memory =
+            MemoryConsumer::new("native conditional expression workspace").register(&self.pool);
+        memory.try_grow(scope.workspace(batch.num_rows())?)?;
+        let projected = scope.project(batch)?;
+        memory
+            .try_grow(policy::Policy::ShortCircuit.workspace(&projected, selection.is_some())?)?;
+        let result = match selection {
+            Some(selection) => {
+                memory.try_grow(selection.get_array_memory_size())?;
+                scope.expression.evaluate_selection(&projected, selection)?
+            }
+            None => scope.expression.evaluate(&projected)?,
+        };
+        self.retain(result, memory)
+    }
+
     fn retain(&self, result: ColumnarValue, memory: MemoryReservation) -> Result<ColumnarValue> {
         match result {
             // Preserve scalar-vs-array semantics. Projection's later scalar broadcast is
@@ -111,6 +137,9 @@ impl PhysicalExpr for AdmittedExpression {
         self.inner.return_field(schema)
     }
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+        if let Some(scope) = &self.scope {
+            return self.evaluate_scoped(scope, batch, None);
+        }
         if self.policy.is_none() {
             return evaluate_projection(&self.inner, batch, &self.pool);
         }
@@ -128,6 +157,9 @@ impl PhysicalExpr for AdmittedExpression {
         batch: &RecordBatch,
         selection: &BooleanArray,
     ) -> Result<ColumnarValue> {
+        if let Some(scope) = &self.scope {
+            return self.evaluate_scoped(scope, batch, Some(selection));
+        }
         // DataFusion's default implementation may gather the whole input and scatter
         // the result. Cover that workspace before delegating, without another gather.
         let partial = selection.len() != batch.num_rows()
@@ -167,10 +199,17 @@ impl PhysicalExpr for AdmittedExpression {
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
+        let inner = self.inner.clone().with_new_children(children)?;
+        let scope = self
+            .scope
+            .as_ref()
+            .map(|_| scoped_input::ScopedInput::new(inner.clone()))
+            .transpose()?;
         Ok(Arc::new(Self {
-            inner: self.inner.clone().with_new_children(children)?,
+            inner,
             pool: self.pool.clone(),
             policy: self.policy,
+            scope,
         }))
     }
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
@@ -202,13 +241,22 @@ impl PhysicalExpr for AdmittedExpression {
         self.inner.snapshot_generation()
     }
     fn snapshot(&self) -> Result<Option<Arc<dyn PhysicalExpr>>> {
-        Ok(self.inner.snapshot()?.map(|inner| {
-            Arc::new(Self {
-                inner,
-                pool: self.pool.clone(),
-                policy: self.policy,
-            }) as Arc<dyn PhysicalExpr>
-        }))
+        self.inner
+            .snapshot()?
+            .map(|inner| {
+                let scope = self
+                    .scope
+                    .as_ref()
+                    .map(|_| scoped_input::ScopedInput::new(inner.clone()))
+                    .transpose()?;
+                Ok(Arc::new(Self {
+                    inner,
+                    pool: self.pool.clone(),
+                    policy: self.policy,
+                    scope,
+                }) as Arc<dyn PhysicalExpr>)
+            })
+            .transpose()
     }
     #[allow(deprecated)]
     fn evaluate_statistics(&self, children: &[&Distribution]) -> Result<Distribution> {
@@ -236,6 +284,7 @@ pub(super) fn install(
         inner: expression,
         pool: pool.clone(),
         policy: Some(policy),
+        scope: None,
     })))
 }
 
@@ -258,5 +307,31 @@ pub(crate) fn projection(
         inner: expression,
         pool: pool.clone(),
         policy: None,
+        scope: None,
     })
+}
+
+/// Scope only outermost conditional kernels, avoiding a second cached subtree at every nested
+/// AND/OR. Child adapters keep their normal workspace and ownership rules on the narrow batch.
+pub(super) fn scope_conditionals(
+    expression: Arc<dyn PhysicalExpr>,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    use datafusion::common::tree_node::{TransformedResult, TreeNode, TreeNodeRecursion};
+    expression
+        .transform_down(|expression| {
+            let Some(admitted) = expression.downcast_ref::<AdmittedExpression>() else {
+                return Ok(Transformed::no(expression));
+            };
+            if admitted.policy != Some(policy::Policy::ShortCircuit) {
+                return Ok(Transformed::no(expression));
+            }
+            let scoped = Arc::new(AdmittedExpression {
+                inner: admitted.inner.clone(),
+                pool: admitted.pool.clone(),
+                policy: admitted.policy,
+                scope: Some(scoped_input::ScopedInput::new(admitted.inner.clone())?),
+            }) as Arc<dyn PhysicalExpr>;
+            Ok(Transformed::new(scoped, true, TreeNodeRecursion::Jump))
+        })
+        .data()
 }

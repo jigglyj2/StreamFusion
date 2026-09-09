@@ -146,7 +146,7 @@ pub(crate) fn install(
     let Some(pool) = pool else {
         return Ok(expression);
     };
-    expression
+    let expression = expression
         .transform_up(|expression| {
             let Some(function) = expression.downcast_ref::<ScalarFunctionExpr>() else {
                 return super::managed_expression::install(expression, pool, schema);
@@ -178,5 +178,6 @@ pub(crate) fn install(
             );
             Ok(Transformed::yes(Arc::new(result) as Arc<dyn PhysicalExpr>))
         })
-        .data()
+        .data()?;
+    super::managed_expression::scope_conditionals(expression)
 }

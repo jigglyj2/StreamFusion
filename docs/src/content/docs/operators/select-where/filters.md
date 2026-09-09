@@ -26,6 +26,17 @@ workspace while retaining its conditional error behavior; no additional batch co
 Other predicate families still need their own verified allocation policies. This does not change
 SQL coverage or lift the stateful production-admission gate.
 
+For fixed-width `AND`/`OR`, StreamFusion gives DataFusion a cached projection of only
+the referenced input columns or nested `ROW` fields. Value buffers remain shared;
+nullable ancestors may require combining validity bitmaps under a coarse batch
+reservation. DataFusion's conditional gather therefore excludes unused sibling
+payloads. Only pure input access moves ahead of evaluation: arithmetic, casts, and
+other functions retain DataFusion's conditional evaluation and error behavior. The
+original expression tree remains visible to optimizers, and column remapping rebuilds
+the cached projection. Tests cover sliced nullable nested inputs with large unused
+strings, selection masks, guarded division, buffer ownership and budget denial, plus
+Flink-generated Calc changelog and metric parity on both state backends.
+
 Planner-generated nonempty `SEARCH` range predicates now preserve Calcite's `TRUE`, `FALSE`, or
 `UNKNOWN` policy for null inputs. This includes rewrites such as `x IS NULL OR x <> 0`, null-aware
 `IN`/`BETWEEN`, and their projected boolean results. Native lowering applies `IS NOT FALSE` or

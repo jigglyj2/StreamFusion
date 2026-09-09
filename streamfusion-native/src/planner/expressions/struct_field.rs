@@ -52,6 +52,28 @@ struct FlinkStructField {
     signature: Signature,
 }
 
+/// Column/ROW-field access is total for a validated schema and can be projected before a
+/// conditional kernel. Computed operands, casts and other UDFs must keep their evaluation order.
+pub(super) fn is_input_access(expression: &Arc<dyn PhysicalExpr>) -> bool {
+    if expression
+        .downcast_ref::<datafusion::physical_expr::expressions::Column>()
+        .is_some()
+    {
+        return true;
+    }
+    expression
+        .downcast_ref::<ScalarFunctionExpr>()
+        .is_some_and(|function| {
+            function
+                .fun()
+                .inner()
+                .downcast_ref::<FlinkStructField>()
+                .is_some()
+                && function.args().len() == 1
+                && is_input_access(&function.args()[0])
+        })
+}
+
 impl ScalarUDFImpl for FlinkStructField {
     fn name(&self) -> &str {
         "streamfusion_struct_field"
