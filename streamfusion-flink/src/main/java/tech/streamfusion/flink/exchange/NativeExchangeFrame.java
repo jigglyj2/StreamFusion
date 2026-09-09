@@ -72,6 +72,11 @@ public final class NativeExchangeFrame {
         return Arrays.copyOfRange(payload, bodyOffset, bodyOffset + bodyLength);
     }
 
+    /** Reads only the Arrow IPC header, for control vectors sampled at the receiving edge. */
+    public int logicalRowCount() {
+        return NativeExchangeRowCount.read(payload, metadataOffset, metadataLength, bodyLength);
+    }
+
     public int metadataLength() {
         return metadataLength;
     }

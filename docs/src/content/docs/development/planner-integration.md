@@ -256,7 +256,13 @@ make no deadline JNI calls. Cancellation invalidates stale callbacks, timer/outp
 recovery, and finish cancels outstanding callbacks without firing open windows. Native state owns
 absolute timer keys; Flink owns the clock, mailbox callback, and scheduling. Descriptor reads do not
 add per-allocation memory reservations. No production factory exposes this capability yet. Per-record
-clock capture and native processing-time window computation remain pending, so Q12 is still gated.
+clock transport and native processing-time window computation remain pending, so Q12 is still gated.
+The clock-input primitive captures one signed epoch-millisecond reading per record in a non-null
+Arrow Int64 vector (`__streamfusion_processing_time_v1`), allocated through the supplied edge
+allocator before sampling. It preserves clock rollback and uses producer-owned C Data release
+callbacks. The exchange frame can read its row count from the Arrow IPC header without copying
+or decoding payload buffers. These primitives have ownership, allocation-denial, malformed-header,
+and native-frame round-trip tests; they are not yet connected to production execution or admission.
 
 Shared regions can bind the existing Flink memory/state lifecycle directly. The same backend
 leases and checkpoint participants serve tree and shared definitions; they do not create another

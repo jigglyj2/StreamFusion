@@ -116,6 +116,20 @@ class StreamFusionArrowArchitectureTest {
     }
 
     @Test
+    void processingTimeCaptureIsAnArrowControlVectorAndIpcInspectionIsHeaderOnly() throws IOException {
+        String capture =
+                Files.readString(Path.of("src/main/java/tech/streamfusion/flink/arrow/NativeProcessingTimeInput.java"));
+        assertThat(capture)
+                .contains("BigIntVector", "VectorSchemaRoot", "clock.getAsLong()", "vector.allocateNew(rows)")
+                .doesNotContain("RowData", "rowView(", "System.currentTimeMillis", "nativebridge", ".transpose(");
+        String header =
+                Files.readString(Path.of("src/main/java/tech/streamfusion/flink/exchange/NativeExchangeRowCount.java"));
+        assertThat(header)
+                .contains("Message.getRootAsMessage", "MessageHeader.RecordBatch", "ByteBuffer.wrap")
+                .doesNotContain("copyOf", "System.arraycopy", "ArrowStreamReader", "decodeNative", "getVector(");
+    }
+
+    @Test
     void runtimeArrivalsUseOneArityIndependentDispatcherAndNeverTransposeOrBufferRows() throws Exception {
         String dispatcher =
                 Files.readString(Path.of("src/main/java/tech/streamfusion/flink/arrow/ArrowNativePlanDispatcher.java"));

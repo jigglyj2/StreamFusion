@@ -157,8 +157,11 @@ before mutation and keep protocol-one capabilities. The shared region edge now r
 negotiated native deadline with Flink's processing-time service, including overdue restored timers,
 and cancels callbacks on finish/close without firing open windows. Focused lifecycle tests cover stale
 callbacks, tied owners, signed timestamp boundaries, invalid descriptors, and failed timer drains.
-No production factory enables the timer capability yet; per-record clock capture and the native
-processing-time window kernel remain pending. This is still a prerequisite, not Q12 admission.
+Clock capture now has a tested Arrow Int64 primitive and header-only IPC row-count reader. Tests
+verify one reading per record, rollback/boundaries, zero-copy C Data ownership, allocation denial,
+and agreement with native decoding for nested/nullable frames. These primitives are not yet wired
+to the execution edge. No production factory enables the timer capability; clock transport and the
+native processing-time window kernel remain pending. This is still a prerequisite, not Q12 admission.
 No Q12 performance result is claimed from empty/partial max-speed bounded output.
 
 ## Q6 has no Flink streaming baseline
