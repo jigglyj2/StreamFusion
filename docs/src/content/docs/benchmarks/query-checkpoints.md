@@ -136,9 +136,13 @@ Q11's supported SESSION COUNT path is delivered within these limits.
 
 Q12 is the active checkpoint. Its ordinary plan contains a `PROCTIME()` Calc, exchange and
 single-stage processing-time TUMBLE COUNT. Both backends currently retain whole-plan fallback:
-logical time-attribute handling and Flink-owned per-record clock/timer delivery are not implemented
-in the shared native tree. EXPLAIN names both blockers, including when the old shape recognizer
-could have folded the Calc away. It does not mislabel Q12 as an unsupported SESSION window.
+Flink-owned per-record clock/timer delivery is not implemented in the shared native tree.
+The logical `PROCTIME()` Calc attribute now lowers to DataFusion's typed null expression, matching
+Flink's code generator without reading or storing a clock value. Generated physical-Calc tests
+compare complete ordered changelog bytes and record timestamps for every RowKind, nullable keys,
+empty inputs and different batch sizes. Actual `PROCTIME_MATERIALIZE` clock reads remain gated.
+EXPLAIN inspects the original nodes instead of hiding rejected inputs through legacy shape folding;
+it does not mislabel Q12 as an unsupported SESSION window.
 
 A SQL-generated Flink clock oracle now checks nullable keys, generated counts, one-/ten-/37-second
 UTC windows, live clock transitions, terminal watermarks, bounded finish and restoration of pending

@@ -50,6 +50,10 @@ class TemporalContextFallbackTest extends SqlParityTestSupport {
     private static Stream<Arguments> queries() {
         return Stream.of(
                 Arguments.of(
+                        "processing clock materialization",
+                        "SELECT event_timestamp, PROCTIME() FROM temporal_input",
+                        "PROCTIME_MATERIALIZE stays on Flink"),
+                Arguments.of(
                         "clock lifecycle",
                         "SELECT event_timestamp, CURRENT_ROW_TIMESTAMP() FROM temporal_input",
                         "job, row, and session clock lifecycle"),

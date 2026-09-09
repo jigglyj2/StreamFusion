@@ -16,7 +16,10 @@ final class StreamFusionTemporalContextFunctionTranslator extends StreamFusionRe
     static String failureReason(Object expression) {
         String function = functionName(expression);
         if ("PROCTIME".equals(function)) {
-            return "PROCTIME stays on Flink as a logical time attribute until consuming native operators preserve Flink's processing clock; a batch timestamp is not equivalent";
+            return "PROCTIME requires an unmaterialized TIMESTAMP_LTZ(3) processing-time attribute";
+        }
+        if ("PROCTIME_MATERIALIZE".equals(function)) {
+            return "PROCTIME_MATERIALIZE stays on Flink until native operators preserve Flink's per-record processing clock; a batch timestamp is not equivalent";
         }
         if (isClockFunction(function)) {
             return function

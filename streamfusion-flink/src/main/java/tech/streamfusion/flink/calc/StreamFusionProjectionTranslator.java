@@ -55,6 +55,9 @@ import tech.streamfusion.proto.plan.v1.WhenThen;
 abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
     protected static Expression projectionExpression(
             Object expression, RowType inputType, org.apache.flink.table.types.logical.LogicalType expectedType) {
+        Expression processingTimeAttribute =
+                StreamFusionProcessingTimeAttributeTranslator.translate(expression, expectedType);
+        if (processingTimeAttribute != null) return processingTimeAttribute;
         Expression typeOf = StreamFusionTypeOfTranslator.translate(expression, inputType, expectedType);
         if (typeOf != null) {
             return typeOf;

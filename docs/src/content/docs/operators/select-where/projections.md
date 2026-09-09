@@ -737,3 +737,17 @@ See the [Flink SELECT-clause documentation](https://nightlies.apache.org/flink/f
 
 The [Q10 SELECT release comparison](/StreamFusion/benchmarks/q10-rowdata/) documents numeric
 `DATE_FORMAT` parity, managed-memory behavior, full-range adaptation and measured performance.
+
+
+### Logical processing-time attributes
+
+A zero-argument `PROCTIME()` that Flink types as a TIMESTAMP_LTZ(3) processing-time indicator
+lowers to a DataFusion typed-null literal. Flink's own `ExprCodeGenerator` emits this null physical
+slot and materializes time only when a consumer requires it. Native execution does not sample a
+clock or replace the attribute with a batch timestamp. Generated physical-Calc parity tests compare
+complete ordered RowData changelogs for all four RowKinds, nullable keys, empty inputs and different
+batch sizes, including Flink's cleared record timestamps and released native memory ownership.
+
+Actual `PROCTIME_MATERIALIZE` calls retain whole-plan fallback with a per-record Flink clock reason.
+Processing-time window consumers also remain gated until their Flink-owned clock, timer, metric
+and recovery contract is implemented. Supporting the placeholder alone does not accelerate Q12.

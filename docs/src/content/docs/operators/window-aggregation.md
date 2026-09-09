@@ -92,9 +92,11 @@ complete SESSION conformance evidence established for COUNT and remain gated.
 ## Processing-time window contract
 
 Processing-time TVF aggregation remains whole-plan Flink fallback. EXPLAIN reports the missing
-shared per-record clock and processing-time timer delivery contract and separately explains the
-logical `PROCTIME()` attribute in its Calc. Legacy processing-time shape folding does not hide
-that Calc's rejection. A logical time attribute must not be replaced with a batch timestamp.
+shared per-record clock and processing-time timer delivery contract. The logical `PROCTIME()`
+Calc slot lowers to DataFusion's typed null, matching Flink's generated placeholder; this does
+not read a clock or admit the window. `PROCTIME_MATERIALIZE` still reports a clock-lifecycle fallback.
+Legacy processing-time shape folding does not hide rejected inputs. A logical time attribute
+must not be replaced with a batch timestamp.
 
 The SQL-generated Flink reference tests use explicit UTC clocks, nullable keys, generated counts
 and one-/ten-/37-second windows. They verify that the window samples its own clock even when the
