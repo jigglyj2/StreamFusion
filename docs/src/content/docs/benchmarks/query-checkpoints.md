@@ -258,8 +258,8 @@ These tests use the campaign's existing 1 GiB Flink managed-memory setting and 9
 consumer weights on both engines. The smaller embedded defaults are not a supported capacity
 claim: the RocksDB case exhausted aggregate batch scratch/output credit after conditional input
 pruning, requesting 7,718,512 bytes with 7,498,960 available. State storage and output remain
-subject to Flink's assigned allowance. Release throughput measurements and mixed JVM/native
-profiles are still pending; this checkpoint does not claim a performance win or a state-size limit.
+subject to Flink's assigned allowance. The initial admission tests establish correctness; the
+release measurements below track performance and the remaining state-capacity limitation.
 
 The first one-million-event release attempt at `8679f83b` also exhausted memory before returning
 a StreamFusion timing: aggregate scratch/output requested 15,017,456 bytes with 12,339,736
@@ -294,6 +294,79 @@ not satisfy the final longer-workload profiling checkpoint or establish an optim
 The next work is historical-state capacity and then representative profiling. Artifacts, flags,
 upstream revisions/patches and raw runs remain under
 `streamfusion-nexmark-benchmarks/target/measurements/q15/19beb78f/`.
+
+### Q15 measured state-decoding improvements
+
+Clean release commit `32bc32d9e0aaf9bcf24025033b4cd6f0ac48814d` completed three alternating
+fresh-JVM pairs on **both backends at one million events**, using the same end-to-end method,
+machine and Flink settings above. No measured forks were discarded. The implementation sizes
+historical-state workspace from its serialized entries, builds canonical sorted membership maps
+in bulk using the Rust standard library, and bounds new map growth by non-null arguments that
+pass each aggregate's FILTER. It retains DataFusion COUNT and all per-record changelog transitions.
+
+| Backend | Flink median seconds [min, max]; MAD | StreamFusion median seconds [min, max]; MAD | Throughput ratio SF/Flink |
+| --- | --- | --- | --- |
+| HashMap | 5.667826 [5.577019, 6.637873]; 0.090807 | 8.183829 [7.149841, 8.285988]; 0.102159 | **0.692564×** |
+| RocksDB | 8.244501 [8.204193, 8.435007]; 0.040308 | 7.532215 [7.291340, 7.987163]; 0.240875 | **1.094565×** |
+
+The ranges are disjoint: StreamFusion is slower on HashMap and about 9.5% faster on RocksDB
+in these forks. Every engine emitted 920,000 records into the original blackhole sink. Every
+StreamFusion EXPLAIN selected the complete native plan. In measured order, native plan/Calc
+batch counts were **200/136, 224/152, 212/144** on HashMap and **208/140, 232/156, 223/150**
+on RocksDB; Flink counters were zero. Batch counts can vary with runtime flushing even for
+identical source events. Core artifact SHA-256:
+`1e84248ef4aaf9a3f796b5dfee68f913b255bef93fa3ae89e1ac112cb0119d77`;
+the RocksDB artifact hash is unchanged from above. Both used release/native-CPU optimization,
+frame pointers and profiling symbols. The recorded Flink revision is
+`c0f8d1a1e09f209885a88f9c19ceb9d9e9870283`, with only the approved planner/class-loading and
+managed-share callback patches; the original Flink engine path and operator algorithms remain
+the baseline. Upstream Nexmark is the clean revision
+`6b3646c3baec701f1fa74baf938d235f742e5d3c`. No Kafka services or connectors were exercised.
+
+Separate two-million-event HashMap profiles completed for both engines, each emitting 1,840,000
+blackhole records. StreamFusion reported 395 native plan batches and 266 Calc batches. The larger
+RocksDB profiles did **not** complete: StreamFusion requested 59,281,427 bytes of decoded-state
+and mutation workspace with 58,702,103 available at two million events, and 59,099,765 with
+58,735,253 available at 1.5 million. These are failures in those profiled forks, not measured
+throughput or a universal event-count limit. Flink completed both sizes. A separate one-million-
+event RocksDB diagnostic profile pair completed with 920,000 output records and 229/154 native
+plan/Calc batches. That diagnostic pair is the same size as the measured workload and **does
+not satisfy the required longer-workload profiling checkpoint**.
+
+The completed async-profiler runs use 10 ms CPU sampling, Java non-safepoint sampling, native
+DWARF unwinding and JFR output. They retain CPU/allocation collapsed stacks, per-engine flame
+graphs and differential graphs. The table gives inclusive percentages of all process CPU samples; categories
+overlap. In particular, JNI includes downstream native work, and DataFusion includes state work
+below its execution-plan frames rather than only numerical kernels. A zero sampled share does
+not establish absence of work. Profiled elapsed times are excluded from the benchmark results.
+
+| CPU category | HashMap 2M Flink / SF | RocksDB 1M diagnostic Flink / SF |
+| --- | --- | --- |
+| Samples | 2,267 / 2,553 | 2,075 / 1,988 |
+| Row copying | 15.704% / 7.207% | 8.337% / 4.427% |
+| RowData-to-Arrow writing | 0% / 1.802% | 0% / 1.559% |
+| Arrow C Data / JNI, inclusive | 0% / 19.585% | 0% / 11.368% |
+| Native plan lowering | 0% / 0% | 0% / 0.050% |
+| DataFusion execution, inclusive | 0% / 18.371% | 0% / 9.809% |
+| Native aggregate state codec | 0% / 7.756% | 0% / 2.817% |
+| Arrow-backed output access | 0% / 2.977% | 0% / 1.358% |
+| Source polling, inclusive | 31.363% / 21.661% | 15.566% / 15.946% |
+| RocksDB, inclusive | 0% / 0% | 11.952% / 3.169% |
+| Budget callbacks | 0% / 0.157% | 0% / 0% |
+| JVM compilation | 35.862% / 32.432% | 39.663% / 39.537% |
+
+The previous `d809379f` two-million-event HashMap profile spent 19.840% in the aggregate state
+codec, including repeated B-tree insertion; that share fell to 7.756% after bulk decoding.
+This is profile evidence for the implementation change, not an isolated throughput attribution.
+Q15's performance checkpoint remains incomplete: loading and rewriting each group's whole
+membership history still creates workspace proportional to historical cardinality. The next
+structural work is batched access to individual membership entries, with Flink's group cleanup,
+signed counts and recovery semantics preserved. Larger RocksDB capacity and profiles must then
+be revalidated; these results do not establish a reasonable optimization ceiling.
+
+All raw runs, profiles, metadata, build flags and upstream patch hashes are retained under
+`streamfusion-nexmark-benchmarks/target/measurements/q15/32bc32d9/`, including the failed larger
+RocksDB attempts. The earlier `d809379f` measurements and profiles remain in their own directory.
 
 ## Q6 has no Flink streaming baseline
 
