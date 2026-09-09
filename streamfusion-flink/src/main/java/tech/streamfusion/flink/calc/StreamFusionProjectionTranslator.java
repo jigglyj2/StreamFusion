@@ -74,7 +74,7 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
         if (scalarExtremum != null) {
             return scalarExtremum;
         }
-        Expression identityCast = identityCastExpression(expression, inputType, expectedType);
+        Expression identityCast = StreamFusionIdentityCastTranslator.translate(expression, inputType, expectedType);
         if (identityCast != null) {
             return identityCast;
         }
@@ -415,32 +415,6 @@ abstract class StreamFusionProjectionTranslator extends StreamFusionRexSupport {
             return Expression.newBuilder().setSubstring(substring).build();
         }
         return projectionExpression(expression, inputType, expectedType.getTypeRoot());
-    }
-
-    private static Expression identityCastExpression(
-            Object expression, RowType inputType, org.apache.flink.table.types.logical.LogicalType expectedType) {
-        if (!expression.getClass().getSimpleName().equals("RexCall") || !isCastKind(expression)) {
-            return null;
-        }
-        List<?> operands = (List<?>) invoke(expression, "getOperands");
-        if (operands.size() != 1) {
-            return null;
-        }
-        org.apache.flink.table.types.logical.LogicalType sourceType =
-                StreamFusionExpressionTranslator.expressionLogicalType(operands.get(0));
-        org.apache.flink.table.types.logical.LogicalType targetType =
-                StreamFusionExpressionTranslator.expressionLogicalType(expression);
-        if (!sameTypeIgnoringNullability(sourceType, targetType)
-                || !sameTypeIgnoringNullability(targetType, expectedType)) {
-            return null;
-        }
-        return projectionExpression(operands.get(0), inputType, expectedType);
-    }
-
-    private static boolean sameTypeIgnoringNullability(
-            org.apache.flink.table.types.logical.LogicalType left,
-            org.apache.flink.table.types.logical.LogicalType right) {
-        return left != null && right != null && left.copy(true).equals(right.copy(true));
     }
 
     protected static boolean supportsLocaleIndependentCaseMapping() {

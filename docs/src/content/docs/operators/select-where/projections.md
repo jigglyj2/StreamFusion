@@ -173,11 +173,20 @@ the same family without changing stored values. This does not enable interval ca
 timestamp/decimal precision checks. Generated SQL checks cover interval and multiset payloads,
 null predicates, and all changelog kinds alongside the other supported types.
 Direct constant character literals are encoded as UTF-8 and accelerated. Character
-expressions that require a converting planner-inserted cast still fall back with the whole Calc.
+expressions that require an unsupported converting planner-inserted cast still fall back with the whole Calc.
 Planner-inserted casts that leave the complete logical type unchanged, including width,
 precision, and scale, are removed on the Java side and the enclosed expression is serialized
 normally. This covers the redundant typed-literal casts Flink introduces around some `VALUES`
 branches without delegating any conversion semantics to DataFusion.
+Widening `VARCHAR(n)` to `VARCHAR(m)` with `m >= n`, including `STRING`, likewise forwards the
+enclosed expression without copying Arrow buffers. Flink's `CharVarCharTrimPadCastRule` trusts
+the declared input width and performs no trimming or padding for this case; StreamFusion preserves
+that behavior even for oversized source values. This covers planner casts around computed
+expressions such as CASE, and both CAST and TRY_CAST. Generated changelog and Flink Calc harness
+checks cover nulls, empty/Unicode/oversized strings, nested CASE, all RowKinds, record timestamps,
+watermarks and registered metrics with both configured backends. No additional state, workspace
+reservation or JVM callback is introduced; existing Arrow buffer ownership and stage metrics apply.
+Narrowing VARCHAR casts and CHAR conversions that require trimming or padding remain on Flink.
 Direct hexadecimal binary literals are accelerated with their exact byte sequence and
 fixed width. Cast-derived and computed binary expressions remain on Flink.
 Typed `NULL` literals are accelerated for the supported scalar projection types, including
@@ -205,8 +214,8 @@ Unary `+` is accelerated for every otherwise supported numeric expression by eli
 identity node on the Java planner side. The operand remains an independently encoded native
 expression, so this does not introduce a redundant DataFusion kernel or batch copy.
 `TRY_CAST` is accelerated when it preserves the complete type or performs a lossless widening from
-`TINYINT` through `BIGINT`. These conversions cannot take the failure branch, so they reuse the
-parity-approved native cast expressions. Parsing, narrowing, floating, temporal, and nested
+`TINYINT` through `BIGINT`, or widens VARCHAR as described above. These conversions cannot take
+the failure branch, so they reuse the parity-approved native expressions. Parsing, narrowing, floating, temporal, and nested
 conversions stay on Flink because their exact null-on-failure boundary is not yet proven; the
 restriction appears in `EXPLAIN`.
 

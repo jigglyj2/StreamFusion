@@ -319,6 +319,10 @@ an explicit fallback rather than silent substitution with native defaults.
 Q14 is in progress and retains whole-plan fallback. Its timezone-free `TIMESTAMP(3)` clock
 extraction and mixed-width integer comparisons now have DataFusion execution, generated Flink
 changelog/metric parity, full signed-millisecond coverage and managed-buffer checks. Rechecking
-the original Q14 SQL with its original Java UDF on both backends reaches the next blocker:
-widening the nested CASE result from `VARCHAR(9)` to the sink's `VARCHAR(2147483647)`.
-Java UDF execution also remains unsupported. No Q14 acceleration or performance result is claimed.
+the original Q14 SQL on both backends now reaches its original `count_char` Java UDF as the
+reported blocker. Widening the nested CASE result from `VARCHAR(9)` to the sink's
+`VARCHAR(2147483647)` is supported through value forwarding, with separate generated changelog
+and metric parity. Independent checks of the decimal range expressions also demonstrate a
+remaining mixed DECIMAL/integer comparison restriction. Java UDF execution remains unsupported;
+the [Arrow-batch callback proposal](/StreamFusion/development/jvm-udf-boundary/) awaits an explicit
+architecture exception. No Q14 acceleration or performance result is claimed.

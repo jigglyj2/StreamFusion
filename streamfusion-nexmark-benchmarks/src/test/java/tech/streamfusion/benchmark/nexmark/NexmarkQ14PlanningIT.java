@@ -51,8 +51,8 @@ class NexmarkQ14PlanningIT {
         if (selected) {
             assertThat(StreamFusionPlanningDiagnostics.explain())
                     .contains("Accelerated: no")
-                    .contains("projection[3]/CAST")
-                    .contains("VARCHAR(2147483647)");
+                    .contains("projection[6]")
+                    .contains("count_char");
         }
         try (var metrics = NexmarkBlackholeMetrics.begin()) {
             NexmarkBlackholeMetrics.configure(tables.getConfig().getConfiguration(), metrics.id);
