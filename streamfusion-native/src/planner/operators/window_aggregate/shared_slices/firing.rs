@@ -5,23 +5,24 @@ use super::*;
 
 impl SharedSlices {
     pub(super) fn advance_inner(&mut self, watermark: i64) -> Result<RecordBatch> {
-        if watermark < self.kernel.current_event_time {
+        let processing_time = self.kernel.plan.processing_time;
+        if !processing_time && watermark < self.kernel.current_event_time {
             return self.empty_owned();
         }
-        self.kernel.current_event_time = watermark;
+        let domain = if processing_time {
+            TimerDomain::ProcessingTime
+        } else {
+            self.kernel.current_event_time = watermark;
+            TimerDomain::EventTime
+        };
         // A callback can create an earlier timer than another already-queued window.
         // Drain one timestamp frontier at a time so newly registered windows fire before
         // later windows expire the slice state they still need.
-        let frontier = self
+        let frontier = self.next_timer().unwrap_or(i64::MAX).min(watermark);
+        let fired = self
             .kernel
-            .next_event_timer()
-            .unwrap_or(i64::MAX)
-            .min(watermark);
-        let fired = self.kernel.timers.advance_owned_limited(
-            TimerDomain::EventTime,
-            frontier,
-            OUTPUT_ROWS,
-        )?;
+            .timers
+            .advance_owned_limited(domain, frontier, OUTPUT_ROWS)?;
         if fired.is_empty() {
             return self.empty_owned();
         }
@@ -177,7 +178,9 @@ impl SharedSlices {
             .collect::<Vec<_>>();
         for (index, timer) in fired.iter().enumerate() {
             let state = merged.state(&self.kernel.calls, index)?;
-            if state.row_count != 0 {
+            // Insert-only Flink TUMBLE has no COUNT(*) emptiness guard. A repeated
+            // processing-time deadline may fire before its raw buffer is published.
+            if processing_time || state.row_count != 0 {
                 output_keys.push(codec::grouping_row(&timer.timer.key)?.to_vec());
                 output_starts.push(ends[index].wrapping_sub(self.kernel.plan.size_millis));
                 output_ends.push(ends[index]);

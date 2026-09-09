@@ -8,9 +8,11 @@ const MARKER_KEY: &[u8] = b"\0streamfusion-shared-slices";
 impl SharedSlices {
     fn marker(&self) -> Vec<u8> {
         let mut marker = STATE_MAGIC.to_vec();
-        use prost::Message;
-        use sha2::{Digest, Sha256};
-        marker.extend_from_slice(&Sha256::digest(self.kernel.plan.encode_to_vec()));
+        marker.extend_from_slice(
+            &self
+                .original_plan_fingerprint
+                .unwrap_or_else(|| Self::fingerprint(&self.kernel.plan)),
+        );
         marker
     }
 

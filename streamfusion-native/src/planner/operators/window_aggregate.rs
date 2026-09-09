@@ -10,6 +10,7 @@ mod session_batch;
 mod session_changes;
 pub(crate) mod shared_execution;
 mod shared_kernel;
+mod shared_processing;
 mod shared_sessions;
 pub(crate) mod shared_slices;
 mod state_codec;

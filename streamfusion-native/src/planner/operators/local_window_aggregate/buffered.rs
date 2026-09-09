@@ -265,6 +265,10 @@ impl BufferedWindow {
         self.cursor.is_some() || self.flushing.is_some()
     }
 
+    pub(crate) fn has_buffered_updates(&self) -> bool {
+        !self.order.is_empty() || self.has_pending()
+    }
+
     pub(crate) fn poll_pending(&mut self) -> Result<Option<RecordBatch>> {
         loop {
             if self.flushing.is_some() {

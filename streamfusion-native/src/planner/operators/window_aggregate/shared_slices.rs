@@ -14,6 +14,7 @@ mod checkpoint;
 mod codec;
 mod firing;
 mod input;
+mod processing_time;
 #[cfg(test)]
 pub(super) mod tests;
 
@@ -30,16 +31,22 @@ pub(super) struct SharedSlices {
     started: bool,
     restored_watermark: Option<i64>,
     kernel: WindowAggregateProcessor,
+    original_plan_fingerprint: Option<[u8; 32]>,
 }
 
 impl SharedSlices {
     pub(super) fn new(kernel: WindowAggregateProcessor) -> Result<Self> {
+        Self::new_inner(kernel, None)
+    }
+
+    fn new_inner(kernel: WindowAggregateProcessor, original: Option<[u8; 32]>) -> Result<Self> {
         let plan = &kernel.plan;
         if (plan.kind != proto::WindowKind::Hop as i32
             && plan.kind != proto::WindowKind::Tumble as i32)
             || plan.partial_accumulator_index.is_none()
             || plan.input_changelog
-            || plan.processing_time
+            || (plan.processing_time
+                && (original.is_none() || plan.kind != proto::WindowKind::Tumble as i32))
             || kernel.shift_time_zone != chrono_tz::UTC
         {
             return Err(DataFusionError::Plan(
@@ -60,6 +67,7 @@ impl SharedSlices {
             started: false,
             restored_watermark: None,
             kernel,
+            original_plan_fingerprint: original,
         })
     }
 
@@ -130,7 +138,17 @@ impl SharedSlices {
     }
 
     fn next_timer(&self) -> Option<i64> {
-        self.kernel.next_event_timer()
+        if self.kernel.plan.processing_time {
+            self.kernel.next_processing_timer()
+        } else {
+            self.kernel.next_event_timer()
+        }
+    }
+
+    fn fingerprint(plan: &proto::WindowAggregate) -> [u8; 32] {
+        use prost::Message;
+        use sha2::{Digest, Sha256};
+        Sha256::digest(plan.encode_to_vec()).into()
     }
 }
 

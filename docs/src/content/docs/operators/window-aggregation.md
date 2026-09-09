@@ -92,7 +92,7 @@ complete SESSION conformance evidence established for COUNT and remain gated.
 ## Processing-time window contract
 
 Processing-time TVF aggregation remains whole-plan Flink fallback. EXPLAIN reports the missing
-shared buffered window state, timer firing and recovery contract. The logical `PROCTIME()`
+shared processing-time resource binding, lifecycle and recovery parity contract. The logical `PROCTIME()`
 Calc slot lowers to DataFusion's typed null, matching Flink's generated placeholder; this does
 not read a clock or admit the window. `PROCTIME_MATERIALIZE` still reports a clock-lifecycle fallback.
 Legacy processing-time shape folding does not hide rejected inputs. A logical time attribute
@@ -103,8 +103,21 @@ prerequisites. The reusable DataFusion grouped buffer now also supports clock-dr
 assignment and Flink's processing-time flush progression. It leaves new records buffered at
 repeated/older timer timestamps and flushes them before checkpointing. SQL-generated Flink
 oracles on both backends show that a timer with no published state can emit COUNT zero in this
-case; eager state accumulation or suppressing that output would change the changelog. The native
-stateful consumer and full recovery/parity proof remain pending, so none of this admits Q12 yet.
+case; eager state accumulation or suppressing that output would change the changelog.
+
+A reusable native TUMBLE COUNT(*) component now combines this buffer with the existing ordered
+slice store and DataFusion partial merger. Raw Arrow arrivals register absolute processing-time
+timers before publishing accumulators; a later buffer flush cannot recreate an already-fired
+timer. State reads/writes are batched for each bounded partial flush and timer frontier on both
+backends. Output is bounded to 1,024 timers per batch, and retained state/buffers and growing
+workspaces use Flink reservations. The persisted marker identifies the original raw-input plan,
+including columns omitted from the partial layout. Snapshots reject unflushed updates.
+
+Native component tests cover the Flink-oracle clock cases, watermark/EOF behavior, memory denial,
+nullable/global keys, both backends and cross-backend timer restore while rescaling one owner to two.
+This is prerequisite coverage: the shared factory's Flink buffer-resource binding, complete
+clock/metric lifecycle, aligned/unaligned recovery and generated end-to-end parity remain pending.
+Processing-time windows are still rejected during ordinary planning; Q12 is not admitted.
 
 The SQL-generated Flink reference tests use explicit UTC clocks, nullable keys, generated counts
 and one-/ten-/37-second windows. They verify that the window samples its own clock even when the

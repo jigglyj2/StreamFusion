@@ -30,7 +30,7 @@ class ProcessingTimeWindowAdmissionTest extends SqlParityTestSupport {
                     + "GROUP BY k, window_start, window_end";
             assertThat(tables.explainSql(sql))
                     .contains("Accelerated: no", "the entire plan will use Flink", "StreamExecWindowAggregate")
-                    .contains("shared buffered window state, timer firing and recovery parity")
+                    .contains("shared processing-time window resource binding, lifecycle and recovery parity")
                     .doesNotContain("projection[1]/PROCTIME:");
         }
     }

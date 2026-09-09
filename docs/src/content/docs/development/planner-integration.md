@@ -276,7 +276,7 @@ ports; existing event-time operators keep their previous descriptor count and ca
 Tests cover native tree/region consumption, IPC input replacement, signed clock values, shared
 buffer identity, producer/import failure cleanup, malformed descriptors, and rejected clock
 placement. No production window factory enables this capability yet. Q12 remains gated until its
-native processing-time window kernel and complete Flink parity/recovery contracts are implemented.
+processing-time factory/resource binding and complete Flink parity/recovery contracts are implemented.
 
 The DataFusion grouped window buffer is shared as an internal computation component, with a
 processing-time mode for direct UTC TUMBLE input. It preserves the null logical PROCTIME slot,
@@ -284,8 +284,17 @@ uses the separate clock vector for assignment, retains Flink's paged buffer capa
 starts processing progress at MIN independently of restored event-time watermarks. Timer progress
 must strictly advance to flush; repeated/older timers leave updates pending, while a pre-checkpoint
 control flushes them. This distinction is externally observable in Flink's zero-count timer output
-and must be retained by the pending stateful window implementation. No extra physical operator
+and is retained by the stateful processing-time component. No extra physical operator
 or JVM/native handoff is introduced by reusing this component.
+
+The processing-time TUMBLE component reuses the local DataFusion buffer and the ordered global
+slice merger inside one operator. Only raw arrivals register processing-time timers; buffer
+partials update state without registering timers again. A callback first applies Flink's buffer
+progression, then drains bounded processing-time timer frontiers. Repeated/older callbacks may
+emit COUNT zero, while watermarks only update the operator's event-time metric. Keyed snapshots
+require a pre-checkpoint buffer flush and identify the original raw plan rather than its internal
+partial layout. Component tests include backend-switch timer restore and rescaling; production
+factory/resource binding and the complete Flink lifecycle proof are still pending.
 
 Shared regions can bind the existing Flink memory/state lifecycle directly. The same backend
 leases and checkpoint participants serve tree and shared definitions; they do not create another

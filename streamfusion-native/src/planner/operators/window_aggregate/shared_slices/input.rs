@@ -115,7 +115,9 @@ impl SharedSlices {
                         .into(),
                 ));
             }
-            if self.last_window_end(end).wrapping_sub(1) <= self.kernel.current_event_time {
+            if !plan.processing_time
+                && self.last_window_end(end).wrapping_sub(1) <= self.kernel.current_event_time
+            {
                 self.kernel.late_records_dropped = self.kernel.late_records_dropped.wrapping_add(1);
                 continue;
             }
@@ -131,16 +133,20 @@ impl SharedSlices {
                     let next = keys.len();
                     keys.push(key);
                     unique.insert_unique(hash, next, |&index| hasher.hash_one(&keys[index]));
-                    let first = self.first_unfired(end);
-                    timers.push((
-                        key_group,
-                        TimerDomain::EventTime,
-                        TimerKey {
-                            timestamp: first.wrapping_sub(1),
-                            key: prefix,
-                            namespace: first.to_le_bytes().to_vec(),
-                        },
-                    ));
+                    // Processing-time timers belong to raw arrival, even when no partial
+                    // has been published yet. Flushing a buffer must not recreate a fired timer.
+                    if !plan.processing_time {
+                        let first = self.first_unfired(end);
+                        timers.push((
+                            key_group,
+                            TimerDomain::EventTime,
+                            TimerKey {
+                                timestamp: first.wrapping_sub(1),
+                                key: prefix,
+                                namespace: first.to_le_bytes().to_vec(),
+                            },
+                        ));
+                    }
                     next
                 }
             };
