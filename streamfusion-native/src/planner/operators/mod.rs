@@ -30,6 +30,8 @@ pub(crate) mod interval_join;
 pub(crate) mod local_group_aggregate;
 pub(super) mod local_partitions;
 pub(crate) mod local_window_aggregate;
+#[cfg(test)]
+mod lookup_join;
 mod managed_filter;
 pub(crate) mod match_recognize;
 pub(crate) mod multi_join;

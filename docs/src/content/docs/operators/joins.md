@@ -100,6 +100,21 @@ allocation/parse failure. These are source-adapter checks. Planner/protobuf sele
 C Stream ownership and memory transfer, native metrics and checkpoint/channel integration remain
 required before this source can unlock production lookup acceleration.
 
+The test-only DataFusion 55 lookup investigation verifies an inner `HashJoinExec` with a
+single-consumption Arrow build stream and repeated probe invocations. Generated cases cover
+nullable BIGINT/composite UTF-8 keys, dense and sparse keys, duplicate file order, all four
+RowKinds, record timestamps and ordinals, empty input/cache, and projection composition. A
+40,003-match key exercises bounded output batches. Build reservations reach the Flink memory
+broker, remain stable across probes and release after success or memory denial.
+
+This candidate is deliberately excluded from production builds. DataFusion registers fresh
+metric descriptors on every `execute` call; a 32-invocation regression verifies linear retained
+descriptor growth despite stable build-buffer reservations. Also, an unordered outer-join probe
+can emit unmatched rows after matched rows, violating Flink's arrival order. Production integration
+must resolve task-lifetime execution without retaining per-invocation metrics, and retain fallback
+for unverified outer semantics. These checks are native algorithm/lifecycle evidence against an
+independent row oracle, not complete Flink/native changelog, metric or recovery parity.
+
 ## SQL example
 
 ```sql
