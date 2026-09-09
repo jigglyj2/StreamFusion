@@ -47,6 +47,7 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
     private ArrowNativeRegionDispatcher dispatcher;
     private StreamFusionNativeMetricTree metricTree;
     private NativeRegionControlScheduler controls;
+    private NativeRegionProcessingTimeScheduler processingTimers;
 
     StreamFusionArrowNativeRegionOperator(
             StreamOperatorParameters<ArrowRowDataBatch> parameters,
@@ -244,6 +245,9 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
                         restored,
                         this::dispatchControl,
                         listener);
+        processingTimers = new NativeRegionProcessingTimeScheduler(
+                controls, getProcessingTimeService(), memory.executionContext()::processingTimeDeadlines);
+        processingTimers.refresh();
     }
 
     @Override
@@ -299,11 +303,13 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
     @Override
     protected void reportWatermark(Watermark watermark, int inputId) throws Exception {
         controls.watermark(inputId - 1, watermark.getTimestamp());
+        processingTimers.refresh();
     }
 
     @Override
     public void processWatermarkStatus(WatermarkStatus status, int inputId) throws Exception {
         controls.status(inputId - 1, status);
+        processingTimers.refresh();
     }
 
     // Flink's StreamOperatorWrapper gives BoundedOneInput precedence over BoundedMultiInput.
@@ -313,6 +319,7 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
         int port = java.util.Objects.checkIndex(inputId - 1, ended.length);
         if (!ended[port]) {
             controls.endInput(port);
+            processingTimers.refresh();
             ended[port] = true;
         }
     }
@@ -320,6 +327,7 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
     @Override
     public void finish() throws Exception {
         controls.finish();
+        processingTimers.close();
         java.util.Arrays.fill(ended, true);
         super.finish();
     }
@@ -327,6 +335,7 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
     @Override
     public void prepareSnapshotPreBarrier(long checkpointId) throws Exception {
         controls.beforeCheckpoint(checkpointId);
+        processingTimers.refresh();
         super.prepareSnapshotPreBarrier(checkpointId);
     }
 
@@ -358,14 +367,16 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
             throw failure;
         }
         metricTree.update(memory.executionContext());
+        processingTimers.refresh();
     }
 
     @Override
     public void close() throws Exception {
         try {
             org.apache.flink.util.IOUtils.closeAll(
-                    dispatcher, metricTree, stateLifecycle == null ? memory : stateLifecycle);
+                    processingTimers, dispatcher, metricTree, stateLifecycle == null ? memory : stateLifecycle);
         } finally {
+            processingTimers = null;
             dispatcher = null;
             metricTree = null;
             memory = null;
@@ -403,6 +414,7 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
                     throw failure;
                 }
                 metricTree.update(memory.executionContext());
+                processingTimers.refresh();
             } else {
                 throw new IllegalArgumentException("Native region input must be Arrow or an exchange-edge IPC frame");
             }

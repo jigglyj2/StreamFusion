@@ -41,6 +41,12 @@ pub(crate) trait PersistentOperatorFactory: Send + Sync {
         false
     }
 
+    /// Earliest retained processing-time deadline, read only while the plan edge is idle.
+    /// Flink owns scheduling and invokes ProcessingTime; native state only owns the timer keys.
+    fn next_processing_time_timer(&self) -> Result<Option<i64>> {
+        Ok(None)
+    }
+
     fn build(
         &self,
         node: &proto::Operator,

@@ -153,9 +153,13 @@ not native parity or admission evidence. The next implementation must preserve t
 the shared Arrow tree; substituting one timestamp per batch or a private native clock is not proven
 equivalent. Shared control protocol 2 now carries a separate, capability-negotiated processing-time
 timer event through the normal native Arrow tree. Existing event-time operators reject that event
-before mutation and keep protocol-one capabilities. Flink timer registration and per-record clock
-capture are still pending, so this is a protocol prerequisite rather than Q12 admission. No Q12
-performance result is claimed from empty/partial max-speed bounded output.
+before mutation and keep protocol-one capabilities. The shared region edge now registers the earliest
+negotiated native deadline with Flink's processing-time service, including overdue restored timers,
+and cancels callbacks on finish/close without firing open windows. Focused lifecycle tests cover stale
+callbacks, tied owners, signed timestamp boundaries, invalid descriptors, and failed timer drains.
+No production factory enables the timer capability yet; per-record clock capture and the native
+processing-time window kernel remain pending. This is still a prerequisite, not Q12 admission.
+No Q12 performance result is claimed from empty/partial max-speed bounded output.
 
 ## Q6 has no Flink streaming baseline
 

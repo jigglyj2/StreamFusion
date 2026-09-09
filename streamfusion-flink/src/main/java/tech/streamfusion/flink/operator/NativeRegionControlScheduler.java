@@ -158,6 +158,18 @@ final class NativeRegionControlScheduler {
         return tree.rootId();
     }
 
+    List<Long> processingTimeStages() {
+        return capabilities.values().stream()
+                .filter(NativeStageControlCapability::getProcessingTime)
+                .map(NativeStageControlCapability::getPlanNodeId)
+                .collect(java.util.stream.Collectors.toUnmodifiableList());
+    }
+
+    /** Timer scheduling failures share the same terminal control lifecycle as failed native output. */
+    void invalidate() {
+        failed = true;
+    }
+
     void requireHealthy() {
         if (failed) throw new IllegalStateException("Native control scheduling failed; requires recovery");
     }

@@ -145,6 +145,11 @@ public final class NativeExecutionContext implements AutoCloseable {
         return readControlCapabilities(handle());
     }
 
+    /** Packed (stage ID, earliest deadline) pairs; called only for negotiated processing-time owners. */
+    public long[] processingTimeDeadlines() {
+        return readProcessingTimeDeadlines(handle());
+    }
+
     /** Gauge names/types/scopes in snapshot order; discover once after state binding. */
     public byte[] gaugeSchema() {
         return readGaugeSchema(handle());
@@ -241,6 +246,8 @@ public final class NativeExecutionContext implements AutoCloseable {
     private static native long[] readMetricSnapshot(long handle);
 
     private static native byte[] readControlCapabilities(long handle);
+
+    private static native long[] readProcessingTimeDeadlines(long handle);
 
     private static native boolean readInputEnvelopeRequirement(long handle);
 

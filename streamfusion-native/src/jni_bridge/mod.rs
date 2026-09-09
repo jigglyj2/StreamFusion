@@ -23,6 +23,7 @@ mod multi_join;
 mod over_aggregate;
 mod plan_exchange;
 mod plan_gauges;
+mod plan_processing_time;
 mod plan_state;
 mod plan_stream;
 mod region;

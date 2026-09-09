@@ -249,8 +249,14 @@ when a bound native factory accepts that event; existing event-time operators co
 protocol 1 and reject processing-time input before state or metric mutation. A version-one message
 cannot carry the new event/capability. Java negotiates the capability before dispatch and retains
 its fail-closed output-drain lifecycle. The event uses the ordinary native Arrow execution tree,
-not an operator-specific JNI path. This protocol prerequisite does not yet register Flink timers,
-capture per-record clocks, or admit processing-time windows; Q12 remains gated for those contracts.
+not an operator-specific JNI path. The region edge now schedules the earliest deadline reported by
+negotiated native owners with Flink's processing-time service. It refreshes this bounded descriptor
+snapshot only after restore or a fully drained invocation; stages without processing-time capability
+make no deadline JNI calls. Cancellation invalidates stale callbacks, timer/output failures require
+recovery, and finish cancels outstanding callbacks without firing open windows. Native state owns
+absolute timer keys; Flink owns the clock, mailbox callback, and scheduling. Descriptor reads do not
+add per-allocation memory reservations. No production factory exposes this capability yet. Per-record
+clock capture and native processing-time window computation remain pending, so Q12 is still gated.
 
 Shared regions can bind the existing Flink memory/state lifecycle directly. The same backend
 leases and checkpoint participants serve tree and shared definitions; they do not create another

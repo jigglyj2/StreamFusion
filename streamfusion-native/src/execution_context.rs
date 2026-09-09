@@ -53,6 +53,7 @@ pub(crate) mod operator_spec;
 mod partition_tests;
 #[cfg(test)]
 mod persistent_tests;
+mod processing_time;
 mod state;
 #[cfg(test)]
 mod state_conformance_tests;

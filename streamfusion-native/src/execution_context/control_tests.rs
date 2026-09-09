@@ -17,6 +17,7 @@ struct Buffered {
     controls: usize,
     fail: bool,
     panic: bool,
+    deadline: Option<i64>,
 }
 impl UnaryBatchProcessor for Buffered {
     const NAME: &'static str = "TestControlKernel";
@@ -49,6 +50,9 @@ struct Factory(Arc<Mutex<Buffered>>, bool);
 impl PersistentOperatorFactory for Factory {
     fn supports_control(&self, _: ControlEvent) -> bool {
         self.1
+    }
+    fn next_processing_time_timer(&self) -> Result<Option<i64>> {
+        Ok(self.0.lock().unwrap().deadline)
     }
     fn build(
         &self,
@@ -127,6 +131,7 @@ impl Fixture {
                 controls: 0,
                 fail: false,
                 panic: false,
+                deadline: None,
             }));
             bindings.push((id, Arc::new(Factory(kernel.clone(), supported))));
             kernels.push(kernel);
@@ -422,5 +427,47 @@ fn processing_time_capabilities_require_version_two_only_when_a_binding_accepts_
             .iter()
             .all(|stage| stage.processing_time));
         drop(memory);
+    }
+}
+
+#[test]
+fn processing_time_deadlines_are_idle_capability_filtered_and_preserve_signed_timestamps() {
+    for supported in [false, true] {
+        let fixture = Fixture::new(supported);
+        let before = fixture.broker.reserved();
+        assert!(fixture
+            .context
+            .processing_time_deadlines()
+            .unwrap()
+            .is_empty());
+        for deadline in [i64::MIN, -1, 0, 9999, i64::MAX] {
+            fixture.kernels[0].lock().unwrap().deadline = Some(deadline);
+            assert_eq!(
+                fixture.context.processing_time_deadlines().unwrap(),
+                if supported { vec![2, deadline] } else { vec![] }
+            );
+        }
+        fixture.kernels[1].lock().unwrap().deadline = Some(-99);
+        let mut pairs: Vec<_> = fixture
+            .context
+            .processing_time_deadlines()
+            .unwrap()
+            .chunks_exact(2)
+            .map(|pair| (pair[0], pair[1]))
+            .collect();
+        pairs.sort();
+        assert_eq!(
+            pairs,
+            if supported {
+                vec![(2, i64::MAX), (4, -99)]
+            } else {
+                vec![]
+            }
+        );
+        assert_eq!(fixture.broker.reserved(), before);
+        let stream = fixture.context.start(fixture.inputs()).unwrap();
+        assert!(fixture.context.processing_time_deadlines().is_err());
+        drop(stream);
+        assert!(fixture.context.processing_time_deadlines().is_err());
     }
 }

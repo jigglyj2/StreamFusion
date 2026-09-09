@@ -42,6 +42,9 @@ class StreamFusionArrowArchitectureTest {
                         "ArrowNativeRegionDispatcher",
                         "NativeRegionControlTree",
                         "NativeRegionControlScheduler",
+                        "NativeRegionProcessingTimeScheduler",
+                        "controls, getProcessingTimeService(), memory.executionContext()::processingTimeDeadlines",
+                        "processingTimers.close()",
                         "memory.executionContext().controlCapabilities()",
                         "metricTree.bindGauges(",
                         "memory.executionContext().gaugeSchema()",
@@ -89,6 +92,19 @@ class StreamFusionArrowArchitectureTest {
         assertThat(scheduling)
                 .contains("NativeControlCapabilities.parseFrom", "tree.endInput(", "pending.values()")
                 .doesNotContain("OperatorCase", "getGroupAggregate", "getDeduplicate", "rowView(", ".transpose(");
+        String timers = Files.readString(
+                Path.of("src/main/java/tech/streamfusion/flink/operator/NativeRegionProcessingTimeScheduler.java"));
+        assertThat(timers)
+                .contains("service.registerTimer(", "controls.processingTime(", "scheduled.cancel(false)")
+                .doesNotContain(
+                        "System.currentTimeMillis",
+                        "Thread(",
+                        "newScheduledThreadPool",
+                        "rowView(",
+                        ".transpose(",
+                        "OperatorCase",
+                        "RecordBatch",
+                        "ArrowRowDataBatch");
         String gauges =
                 Files.readString(Path.of("src/main/java/tech/streamfusion/flink/metrics/NativeStageGauges.java"));
         assertThat(gauges)
