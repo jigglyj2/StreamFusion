@@ -120,7 +120,8 @@ The retained SESSION kernel now checks lateness after merging, with controlled-a
 comparisons; this is a correctness prerequisite, not an admission or performance result. Its shared
 COUNT kernel now uses DataFusion grouped computation and ordered per-session state, with generated
 Flink metric/changelog comparison and native cross-backend/legacy-state restore checks. SESSION
-managed-checkpoint/rescaling/channel-replay coverage and ordinary admission remain pending.
+managed-checkpoint, backend-switch, rescaling and real-barrier channel-replay tests now pass;
+ordinary planner binding and end-to-end query validation remain pending.
 
 ## Q6 has no Flink streaming baseline
 

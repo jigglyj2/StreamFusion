@@ -60,16 +60,8 @@ class SharedWindowChannelRecoveryTest {
                 TaskStateSnapshot checkpoint;
                 outputBarriers = 0;
                 try (var task = create(attached, rocks, unaligned, null)) {
-                    input(
-                            attached,
-                            oracle,
-                            task,
-                            allocator,
-                            memory,
-                            0,
-                            List.of(partial(2, 2000), partial(5, 4000)),
-                            false);
-                    watermark(attached, oracle, task, 1999);
+                    input(attached, oracle, task, allocator, memory, 0, initialRows(), false);
+                    watermark(attached, oracle, task, initialWatermark());
                     var location = CheckpointStorageLocationReference.getDefault();
                     var options = unaligned
                             ? CheckpointOptions.unaligned(CheckpointType.CHECKPOINT, location)
@@ -79,12 +71,7 @@ class SharedWindowChannelRecoveryTest {
                     task.processEvent(barrier, 0, 0);
                     // The second channel has not delivered its barrier. An unaligned snapshot
                     // contains these IPC frames in channel state, before their keyed mutations.
-                    var inflight = new ArrayList<RowData>();
-                    inflight.add(partial(99, -2000)); // fully late even for shared HOP
-                    inflight.add(partial(7, 2000)); // late only for the attached window
-                    var random = new Random(seed);
-                    for (int row = 0; row < 31; row++)
-                        inflight.add(partial(random.nextInt(99) + 1, (random.nextInt(7) - 1) * 2000L));
+                    var inflight = inflightRows(seed);
                     input(attached, oracle, task, allocator, memory, 1, inflight, unaligned);
                     if (!unaligned) beforeCheckpoint(1);
                     task.processEvent(barrier, 0, 1);
@@ -109,9 +96,8 @@ class SharedWindowChannelRecoveryTest {
                     restored.processAll();
                     compare(attached, oracle, restored);
                     watermark(attached, oracle, restored, 999);
-                    input(attached, oracle, restored, allocator, memory, 0, List.of(partial(13, 4000)), false);
-                    for (long mark : new long[] {3999, 5999, 7999, Long.MAX_VALUE})
-                        watermark(attached, oracle, restored, mark);
+                    input(attached, oracle, restored, allocator, memory, 0, restoredRows(), false);
+                    for (long mark : finalWatermarks()) watermark(attached, oracle, restored, mark);
                     restored.endInput();
                     restored.waitForTaskCompletion();
                 } finally {
@@ -119,6 +105,31 @@ class SharedWindowChannelRecoveryTest {
                 }
                 assertThat(memory.available()).isEqualTo(memory.limit());
             }
+    }
+
+    protected List<RowData> initialRows() {
+        return List.of(partial(2, 2000), partial(5, 4000));
+    }
+
+    protected long initialWatermark() {
+        return 1999;
+    }
+
+    protected List<RowData> inflightRows(int seed) {
+        var rows = new ArrayList<RowData>();
+        rows.add(partial(99, -2000)); // fully late even for shared HOP
+        rows.add(partial(7, 2000)); // late only for the attached window
+        var random = new Random(seed);
+        for (int row = 0; row < 31; row++) rows.add(partial(random.nextInt(99) + 1, (random.nextInt(7) - 1) * 2000L));
+        return rows;
+    }
+
+    protected List<RowData> restoredRows() {
+        return List.of(partial(13, 4000));
+    }
+
+    protected long[] finalWatermarks() {
+        return new long[] {3999, 5999, 7999, Long.MAX_VALUE};
     }
 
     private static RowData partial(long value, long end) {

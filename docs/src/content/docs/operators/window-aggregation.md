@@ -38,7 +38,7 @@ Ordinary SESSION selection remains gated. The shared native window runtime now a
 append-only UTC event-time session kernel; Q11's COUNT contract has controlled Flink-generated
 changelog and complete registered metric-surface coverage on both backends. Adjacent Calc stages
 share the native execution tree, Arrow buffers and common control/ownership lifecycle. These
-fragment checks do not establish ordinary SQL admission, distributed recovery or benchmark results.
+checks do not establish ordinary SQL admission or benchmark results.
 
 The kernel processes arrivals in input order to assign Flink merging namespaces, then uses
 DataFusion grouped aggregate update/merge kernels over Arrow slices. It does not sort arrivals
@@ -61,9 +61,14 @@ session computation can be resumed. Boundary tests retain output credit after co
 verify early denial before state access. Canonical native tests switch backends while restoring
 Flink's operator watermark. Legacy `SFWS`/`SFWI` append-only snapshots migrate to ordered entries
 only after their indexes, accumulators and timers agree; retained retraction-event state is rejected.
-The common managed-checkpoint, rescaling and channel-replay matrices still need SESSION-specific
-coverage before production admission can be enabled. Other native aggregate-call variants do not
-yet carry the complete SESSION conformance evidence established for COUNT.
+Generated SESSION recovery tests now compare exact changelog bytes with a SQL-generated Flink
+operator across canonical backend switches, aligned and unaligned checkpoints, and key-group
+rescaling from one to two subtasks and back. Nullable keys route through Arrow IPC; live sessions
+accept older bridging events after restore. RocksDB checkpoints also verify incremental SST reuse.
+A separate real-barrier test captures and replays Arrow IPC channel state once, comparing data and
+watermark bytes on both backends. Ordinary planner binding and end-to-end query validation remain
+pending. Other native aggregate-call variants do not yet carry the complete SESSION conformance
+evidence established for COUNT.
 
 ## Q5 checkpoint
 
