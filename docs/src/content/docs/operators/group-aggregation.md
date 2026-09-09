@@ -52,8 +52,15 @@ duplicate and last-value transitions, null/Unicode keys, null arguments/filters,
 watermarks, and registered metrics. Native tests additionally compare serialized state after
 every transition, checkpoint round trips, sliced/noncontiguous inputs, and mixed append/retract
 runs for BIGINT and VARCHAR arguments. The existing state encoding and reservations are unchanged.
-This is a compute prerequisite: DISTINCT production admission, full recovery/rescaling evidence,
-and end-to-end performance remain outstanding. No speedup is claimed.
+Recovery tests additionally snapshot the original Flink handler and native region, restore
+canonical state across both backends, and restore aligned/unaligned checkpoints on each backend.
+They retain duplicate and negative memberships across the checkpoint, then compare every per-key
+changelog byte while canceling unmatched retractions and deleting the final members. A 1→2→1
+rescaling matrix routes actual Arrow exchange frames through all 16 test key groups and Flink's
+state repartitioning. A two-channel mailbox test captures an in-flight duplicate with a different
+filter result and replays it through Flink's channel-state reader exactly once. Managed memory
+returns to zero after each native harness closes. These proofs cover BIGINT DISTINCT counts;
+DISTINCT production admission and end-to-end performance remain outstanding. No speedup is claimed.
 
 Custom arithmetic remains for floating sums/averages (vectorized reassociation changes bits),
 decimal arithmetic (Flink overflow can poison the accumulator), DISTINCT sums/averages, and

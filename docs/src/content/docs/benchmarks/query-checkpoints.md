@@ -247,6 +247,12 @@ metrics against the actual Flink aggregate handler on both backends. Native test
 membership, state bytes and selected batch runs. See [group aggregation](/StreamFusion/operators/group-aggregation/)
 for scope and remaining contracts; Q15 still has no accelerated benchmark result.
 
+BIGINT DISTINCT membership now also has checkpoint and rescaling evidence: canonical backend
+switches, aligned/unaligned restore, 1→2→1 repartitioning across all 16 test key groups, and captured
+Arrow channel replay. The tests preserve duplicate counts and unmatched retractions across restore,
+then compare all per-key changelog bytes through the last deletion. This remains a prerequisite;
+ordinary Q15 admission has not changed at this checkpoint.
+
 ## Q6 has no Flink streaming baseline
 
 The upstream Nexmark Q6 query computes a bounded ordered AVG after winning-bid rank selection.

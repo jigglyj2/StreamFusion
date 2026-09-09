@@ -40,6 +40,12 @@ final class DistinctCountFlinkOracle {
 
     @SuppressWarnings("unchecked")
     static KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> create(boolean rocks) throws Exception {
+        return create(rocks, null);
+    }
+
+    @SuppressWarnings("unchecked")
+    static KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> create(
+            boolean rocks, org.apache.flink.runtime.checkpoint.OperatorSubtaskState restore) throws Exception {
         String factory = System.getProperty(StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY);
         String processor = System.getProperty(StreamFusionPlannerFactory.EXEC_GRAPH_PROCESSOR_PROPERTY);
         System.clearProperty(StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY);
@@ -79,6 +85,7 @@ final class DistinctCountFlinkOracle {
                             ? new org.apache.flink.state.rocksdb.EmbeddedRocksDBStateBackend(true)
                             : new org.apache.flink.runtime.state.hashmap.HashMapStateBackend());
             harness.setup(new org.apache.flink.table.runtime.typeutils.RowDataSerializer(OUTPUT));
+            if (restore != null) harness.initializeState(restore);
             harness.open();
             return harness;
         } finally {

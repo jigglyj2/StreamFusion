@@ -16,14 +16,6 @@ import org.apache.flink.types.RowKind;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
-import tech.streamfusion.proto.plan.v1.AggregateCall;
-import tech.streamfusion.proto.plan.v1.AggregateFunction;
-import tech.streamfusion.proto.plan.v1.EmptyType;
-import tech.streamfusion.proto.plan.v1.GroupAggregate;
-import tech.streamfusion.proto.plan.v1.Input;
-import tech.streamfusion.proto.plan.v1.LogicalType;
-import tech.streamfusion.proto.plan.v1.NativePlan;
-import tech.streamfusion.proto.plan.v1.Operator;
 
 /** Direct common-runtime prerequisite; production DISTINCT admission deliberately stays closed. */
 class DistinctCountRuntimeParityTest {
@@ -33,7 +25,7 @@ class DistinctCountRuntimeParityTest {
         try (var oracle = DistinctCountFlinkOracle.create(rocks);
                 var nativePlan = new KeyedNativeMetricHarness(
                         rocks,
-                        plan(),
+                        DistinctCountFixture.plan(),
                         List.of(DistinctCountFlinkOracle.INPUT),
                         DistinctCountFlinkOracle.OUTPUT,
                         List.of(3L));
@@ -124,37 +116,5 @@ class DistinctCountRuntimeParityTest {
             }
             assertThat(allocator.getAllocatedMemory()).isZero();
         }
-    }
-
-    private static byte[] plan() {
-        var bigint = LogicalType.newBuilder()
-                .setBigint(EmptyType.getDefaultInstance())
-                .setNullable(true)
-                .build();
-        var group = GroupAggregate.newBuilder()
-                .setInput(Operator.newBuilder().setPlanNodeId(1).setInput(Input.newBuilder()))
-                .addGroupingIndices(0)
-                .setGenerateUpdateBefore(true)
-                .setInputChangelog(true);
-        for (boolean filtered : List.of(false, true)) {
-            var call = AggregateCall.newBuilder()
-                    .setFunction(AggregateFunction.AGGREGATE_FUNCTION_COUNT)
-                    .setInputIndex(1)
-                    .setInputType(bigint)
-                    .setOutputType(bigint.toBuilder().setNullable(false))
-                    .setDistinct(true)
-                    .setRetractable(true);
-            if (filtered) call.setFilterIndex(2);
-            group.addAggregateCalls(call);
-        }
-        group.addAggregateCalls(AggregateCall.newBuilder()
-                .setFunction(AggregateFunction.AGGREGATE_FUNCTION_COUNT_STAR)
-                .setOutputType(bigint.toBuilder().setNullable(false))
-                .setRetractable(true));
-        return NativePlan.newBuilder()
-                .setProtocolVersion(2)
-                .setRoot(Operator.newBuilder().setPlanNodeId(3).setGroupAggregate(group))
-                .build()
-                .toByteArray();
     }
 }

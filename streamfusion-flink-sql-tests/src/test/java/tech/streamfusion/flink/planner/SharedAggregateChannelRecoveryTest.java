@@ -2,8 +2,6 @@
 package tech.streamfusion.flink.planner;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static tech.streamfusion.flink.planner.SharedAggregateFlinkOracle.INPUT;
-import static tech.streamfusion.flink.planner.SharedAggregateFlinkOracle.OUTPUT;
 
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -32,7 +30,7 @@ class SharedAggregateChannelRecoveryTest {
     @ParameterizedTest
     @CsvSource({"false,false", "false,true", "true,false", "true,true"})
     void restoredAggregateReplaysCapturedArrowChangelogExactlyOnce(boolean rocks, boolean unaligned) throws Exception {
-        try (var oracle = SharedAggregateFlinkOracle.create(rocks);
+        try (var oracle = oracle(rocks);
                 var allocator = new RootAllocator(64L << 20)) {
             var memory = new SharedChannelStateIO.RoutingMemory();
             var expected = new DataOutputSerializer(128);
@@ -89,24 +87,41 @@ class SharedAggregateChannelRecoveryTest {
         }
     }
 
-    private static GenericRowData row(long value, RowKind kind) {
+    protected org.apache.flink.table.types.logical.RowType inputType() {
+        return SharedAggregateFlinkOracle.INPUT;
+    }
+
+    protected org.apache.flink.table.types.logical.RowType outputType() {
+        return SharedAggregateFlinkOracle.OUTPUT;
+    }
+
+    protected byte[] plan() {
+        return SharedAggregateRegionParityTest.plan();
+    }
+
+    protected org.apache.flink.streaming.util.KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> oracle(
+            boolean rocks) throws Exception {
+        return SharedAggregateFlinkOracle.create(rocks);
+    }
+
+    protected GenericRowData row(long value, RowKind kind) {
         var row = GenericRowData.of(StringData.fromString("é-group"), value);
         row.setRowKind(kind);
         return row;
     }
 
-    private static byte[] exchange() {
-        return NativeExchangePlanSerializer.hash(INPUT, new int[] {0}, 1, 1, true);
+    private byte[] exchange() {
+        return NativeExchangePlanSerializer.hash(inputType(), new int[] {0}, 1, 1, true);
     }
 
-    private static StreamTaskMailboxTestHarness<RowData> create(
-            boolean rocks, boolean unaligned, TaskStateSnapshot state) throws Exception {
+    private StreamTaskMailboxTestHarness<RowData> create(boolean rocks, boolean unaligned, TaskStateSnapshot state)
+            throws Exception {
         var factory = new StreamFusionNativeRegionOperatorFactory(
-                List.of(INPUT), OUTPUT, SharedAggregateRegionParityTest.plan(), List.of(3L), List.of(exchange()));
-        return SharedKeyedChannelHarness.create(factory, OUTPUT, new int[] {2}, rocks, unaligned, state);
+                List.of(inputType()), outputType(), plan(), List.of(3L), List.of(exchange()));
+        return SharedKeyedChannelHarness.create(factory, outputType(), new int[] {2}, rocks, unaligned, state);
     }
 
-    private static void send(
+    private void send(
             StreamTaskMailboxTestHarness<RowData> task,
             RootAllocator allocator,
             SharedChannelStateIO.RoutingMemory memory,
@@ -114,9 +129,9 @@ class SharedAggregateChannelRecoveryTest {
             GenericRowData row,
             boolean capture)
             throws Exception {
-        try (var batch = ArrowRowDataBatch.transpose(List.of(row), INPUT, allocator)
+        try (var batch = ArrowRowDataBatch.transpose(List.of(row), inputType(), allocator)
                         .withRowKinds(new RowKind[] {row.getRowKind()});
-                var envelope = ArrowExchangeBatch.withEnvelope(batch, INPUT, null)) {
+                var envelope = ArrowExchangeBatch.withEnvelope(batch, inputType(), null)) {
             for (var frame : ArrowExchangeCDataBridge.route(exchange(), envelope.batch(), allocator, memory)) {
                 if (capture) SharedChannelStateIO.capture(task, 0, channel, frame);
                 task.processElement(new StreamRecord<>(frame), 0, channel);
@@ -124,16 +139,16 @@ class SharedAggregateChannelRecoveryTest {
         }
     }
 
-    private static void drain(java.util.Queue<Object> events, DataOutputSerializer bytes) throws Exception {
+    private void drain(java.util.Queue<Object> events, DataOutputSerializer bytes) throws Exception {
         for (var event : events)
-            if (event instanceof StreamRecord) StageEventBytes.encode(OUTPUT, (StreamRecord<?>) event, bytes);
+            if (event instanceof StreamRecord) StageEventBytes.encode(outputType(), (StreamRecord<?>) event, bytes);
         events.clear();
     }
 
-    private static byte[] bytes(StreamTaskMailboxTestHarness<RowData> task) throws Exception {
+    private byte[] bytes(StreamTaskMailboxTestHarness<RowData> task) throws Exception {
         var bytes = new DataOutputSerializer(128);
         for (var event : task.getOutput())
-            if (event instanceof StreamRecord) StageEventBytes.encode(OUTPUT, (StreamRecord<?>) event, bytes);
+            if (event instanceof StreamRecord) StageEventBytes.encode(outputType(), (StreamRecord<?>) event, bytes);
         return bytes.getCopyOfBuffer();
     }
 }
