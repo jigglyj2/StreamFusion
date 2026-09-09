@@ -143,8 +143,11 @@ impl PersistentOperatorFactory for WindowFactory {
     fn supports_owned_envelope(&self) -> bool {
         true
     }
-    fn supports_control(&self, _: ControlEvent) -> bool {
-        true
+    fn supports_control(&self, event: ControlEvent) -> bool {
+        matches!(
+            event,
+            ControlEvent::Watermark(_) | ControlEvent::BeforeCheckpoint(_) | ControlEvent::EndInput
+        )
     }
     fn build(
         &self,
@@ -261,6 +264,9 @@ impl UnaryBatchProcessor for SharedWindow {
     }
     fn poll_control(&mut self, event: ControlEvent) -> Result<Option<RecordBatch>> {
         match event {
+            ControlEvent::ProcessingTime(_) => Err(DataFusionError::Plan(
+                "event-time window cannot consume a processing-time timer".into(),
+            )),
             ControlEvent::Watermark(watermark) => loop {
                 let output = self.window.advance(watermark)?;
                 if output.num_rows() != 0 {

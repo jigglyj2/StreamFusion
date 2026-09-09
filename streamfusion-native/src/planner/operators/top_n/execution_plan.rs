@@ -53,8 +53,11 @@ impl PersistentOperatorFactory for TopOneFactory {
     fn supports_owned_envelope(&self) -> bool {
         true
     }
-    fn supports_control(&self, _event: ControlEvent) -> bool {
-        true
+    fn supports_control(&self, event: ControlEvent) -> bool {
+        matches!(
+            event,
+            ControlEvent::Watermark(_) | ControlEvent::BeforeCheckpoint(_) | ControlEvent::EndInput
+        )
     }
     fn gauge_definitions(&self) -> Result<&'static [GaugeDefinition]> {
         const METRICS: &[GaugeDefinition] = &[

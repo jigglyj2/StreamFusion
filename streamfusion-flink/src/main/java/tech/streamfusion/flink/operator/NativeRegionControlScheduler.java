@@ -135,9 +135,11 @@ final class NativeRegionControlScheduler {
         });
         try {
             var decoded = NativeControlCapabilities.parseFrom(encodedCapabilities);
-            if (decoded.getProtocolVersion() != 1)
+            if (decoded.getProtocolVersion() != 1 && decoded.getProtocolVersion() != 2)
                 throw new IllegalArgumentException("Unsupported native control capability version");
             for (var stage : decoded.getStagesList()) {
+                if (decoded.getProtocolVersion() == 1 && stage.getProcessingTime())
+                    throw new IllegalArgumentException("Processing-time capabilities require protocol 2");
                 long id = stage.getPlanNodeId();
                 if (id <= 0 || !tree.contains(id) || capabilities.putIfAbsent(id, stage) != null) {
                     throw new IllegalArgumentException("Native control capabilities require unique bound stage IDs");
@@ -162,6 +164,21 @@ final class NativeRegionControlScheduler {
 
     void watermark(int input, long timestamp) throws Exception {
         dispatch(() -> tree.watermark(input, timestamp));
+    }
+
+    /** A Flink timer callback targets its owning native stage; it never advances watermarks. */
+    void processingTime(long id, long timestamp) throws Exception {
+        dispatch(() -> {
+            var capability = capabilities.get(id);
+            if (capability == null || !capability.getProcessingTime())
+                throw new IllegalArgumentException("Native stage has no processing-time timer capability: " + id);
+            pending.put(
+                    id,
+                    NativeStageControl.newBuilder()
+                            .setPlanNodeId(id)
+                            .setProcessingTimeMillis(timestamp)
+                            .build());
+        });
     }
 
     void status(int input, WatermarkStatus status) throws Exception {
@@ -218,7 +235,8 @@ final class NativeRegionControlScheduler {
     private void flush() throws Exception {
         if (!pending.isEmpty())
             invocation.run(NativeControlInvocation.newBuilder()
-                    .setProtocolVersion(1)
+                    .setProtocolVersion(
+                            pending.values().stream().anyMatch(NativeStageControl::hasProcessingTimeMillis) ? 2 : 1)
                     .addAllStages(pending.values())
                     .build()
                     .toByteArray());

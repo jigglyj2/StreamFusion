@@ -49,13 +49,23 @@ impl NativeExecutionContext {
                     watermark: factory.supports_control(ControlEvent::Watermark(0)),
                     before_checkpoint: factory.supports_control(ControlEvent::BeforeCheckpoint(0)),
                     end_input: factory.supports_control(ControlEvent::EndInput),
+                    processing_time: factory.supports_control(ControlEvent::ProcessingTime(0)),
                 };
-                (stage.watermark || stage.before_checkpoint || stage.end_input).then_some(stage)
+                (stage.watermark
+                    || stage.before_checkpoint
+                    || stage.end_input
+                    || stage.processing_time)
+                    .then_some(stage)
             })
-            .collect();
+            .collect::<Vec<_>>();
+        let protocol_version = if stages.iter().any(|stage| stage.processing_time) {
+            2
+        } else {
+            1
+        };
         Ok((
             crate::proto::NativeControlCapabilities {
-                protocol_version: 1,
+                protocol_version,
                 stages,
             }
             .encode_to_vec(),

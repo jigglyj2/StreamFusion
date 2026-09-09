@@ -13,6 +13,7 @@ use std::sync::Mutex;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ControlEvent {
     Watermark(i64),
+    ProcessingTime(i64),
     BeforeCheckpoint(u64),
     EndInput,
 }
@@ -34,7 +35,7 @@ impl ControlEvents {
         let request = crate::proto::NativeControlInvocation::decode(bytes).map_err(|error| {
             DataFusionError::Plan(format!("invalid native control protobuf: {error}"))
         })?;
-        if request.protocol_version != 1 {
+        if !matches!(request.protocol_version, 1 | 2) {
             return Err(DataFusionError::Plan(format!(
                 "unsupported native control version {}",
                 request.protocol_version
@@ -48,6 +49,14 @@ impl ControlEvents {
                     Some(Event::WatermarkMillis(value)) => ControlEvent::Watermark(value),
                     Some(Event::BeforeCheckpoint(value)) => ControlEvent::BeforeCheckpoint(value),
                     Some(Event::EndInput(_)) => ControlEvent::EndInput,
+                    Some(Event::ProcessingTimeMillis(value)) if request.protocol_version == 2 => {
+                        ControlEvent::ProcessingTime(value)
+                    }
+                    Some(Event::ProcessingTimeMillis(_)) => {
+                        return Err(DataFusionError::Plan(
+                            "processing-time control requires protocol 2".into(),
+                        ));
+                    }
                     None => {
                         return Err(DataFusionError::Plan(
                             "missing or unknown native control event".into(),
@@ -112,3 +121,6 @@ impl ControlEvents {
 fn poisoned() -> DataFusionError {
     DataFusionError::Execution("native control invocation lock poisoned".into())
 }
+
+#[cfg(test)]
+mod tests;

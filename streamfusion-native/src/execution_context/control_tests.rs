@@ -169,6 +169,7 @@ impl Fixture {
 fn explicit_controls_drain_through_calc_and_state_stages_with_shared_arrow_and_metrics() {
     for event in [
         ControlEvent::Watermark(99),
+        ControlEvent::ProcessingTime(9999),
         ControlEvent::BeforeCheckpoint(7),
         ControlEvent::EndInput,
     ] {
@@ -242,6 +243,7 @@ fn targeting_rejects_unknown_duplicate_unmigrated_and_data_bearing_controls_with
             .is_err());
         if !supported {
             assert!(f.drain(&[(2, ControlEvent::EndInput)]).is_err());
+            assert!(f.drain(&[(2, ControlEvent::ProcessingTime(9999))]).is_err());
         }
         assert!(f
             .kernels
@@ -406,3 +408,19 @@ fn persistent_stages_reject_owned_envelopes_without_an_explicit_capability() {
 }
 
 mod fanout;
+
+#[test]
+fn processing_time_capabilities_require_version_two_only_when_a_binding_accepts_them() {
+    for supported in [false, true] {
+        let fixture = Fixture::new(supported);
+        let (bytes, memory) = fixture.context.control_capabilities().unwrap();
+        let capabilities = proto::NativeControlCapabilities::decode(bytes.as_slice()).unwrap();
+        assert_eq!(capabilities.protocol_version, if supported { 2 } else { 1 });
+        assert_eq!(capabilities.stages.len(), if supported { 2 } else { 0 });
+        assert!(capabilities
+            .stages
+            .iter()
+            .all(|stage| stage.processing_time));
+        drop(memory);
+    }
+}

@@ -7,6 +7,7 @@ use crate::memory_pool::tests_support::TestBroker;
 use futures::StreamExt;
 use prost::Message;
 
+mod processing_time;
 mod region;
 mod sessions;
 

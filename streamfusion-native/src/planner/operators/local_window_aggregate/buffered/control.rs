@@ -13,6 +13,11 @@ impl BufferedWindow {
             ));
         }
         let flush = match event {
+            ControlEvent::ProcessingTime(_) => {
+                return Err(DataFusionError::Plan(
+                    "event-time local window cannot consume a processing-time timer".into(),
+                ))
+            }
             ControlEvent::BeforeCheckpoint(_) => true,
             // Flink's LocalSlicingWindowAggOperator is not BoundedOneInput. A terminal
             // MAX watermark performs the normal event-time flush; EOF alone does not.

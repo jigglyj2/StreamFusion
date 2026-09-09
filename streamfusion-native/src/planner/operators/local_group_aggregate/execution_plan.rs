@@ -77,8 +77,11 @@ impl PersistentOperatorFactory for LocalGroupAggregateFactory {
     fn supports_owned_envelope(&self) -> bool {
         true
     }
-    fn supports_control(&self, _: ControlEvent) -> bool {
-        true
+    fn supports_control(&self, event: ControlEvent) -> bool {
+        matches!(
+            event,
+            ControlEvent::Watermark(_) | ControlEvent::BeforeCheckpoint(_) | ControlEvent::EndInput
+        )
     }
     fn build(
         &self,

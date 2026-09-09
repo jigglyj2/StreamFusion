@@ -58,8 +58,11 @@ impl PersistentOperatorFactory for GroupAggregateFactory {
     fn supports_owned_envelope(&self) -> bool {
         true
     }
-    fn supports_control(&self, _event: ControlEvent) -> bool {
-        self.0.lock().is_ok_and(|processor| {
+    fn supports_control(&self, event: ControlEvent) -> bool {
+        matches!(
+            event,
+            ControlEvent::Watermark(_) | ControlEvent::BeforeCheckpoint(_) | ControlEvent::EndInput
+        ) && self.0.lock().is_ok_and(|processor| {
             processor.plan.mini_batch_size > 0 && !processor.plan.bounded_final_output
         })
     }

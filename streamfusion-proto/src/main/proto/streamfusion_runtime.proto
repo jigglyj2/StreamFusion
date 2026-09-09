@@ -73,6 +73,8 @@ message NativeStageControl {
     int64 watermark_millis = 2;
     uint64 before_checkpoint = 3;
     NativeControlEndInput end_input = 4;
+    // Control protocol 2: a Flink-owned processing-time timer firing, independent of watermarks.
+    int64 processing_time_millis = 5;
   }
 }
 
@@ -89,6 +91,8 @@ message NativeStageControlCapability {
   bool watermark = 2;
   bool before_checkpoint = 3;
   bool end_input = 4;
+  // Capability protocol 2 only. Version 1 readers must never silently ignore this requirement.
+  bool processing_time = 5;
 }
 
 message NativeRocksDbState {

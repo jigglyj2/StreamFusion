@@ -243,6 +243,15 @@ Flink latency tracking rather than broadcasting those markers. Restored
 window-clock clamping reaches every downstream exit. Nested UNION control graphs are rejected
 until their physical channels are flattened with Flink's wiring semantics.
 
+Control invocation protocol 2 adds a distinct processing-time timer event. It addresses only the
+owning stage and does not advance or forward a watermark. Capability protocol 2 is emitted only
+when a bound native factory accepts that event; existing event-time operators continue to expose
+protocol 1 and reject processing-time input before state or metric mutation. A version-one message
+cannot carry the new event/capability. Java negotiates the capability before dispatch and retains
+its fail-closed output-drain lifecycle. The event uses the ordinary native Arrow execution tree,
+not an operator-specific JNI path. This protocol prerequisite does not yet register Flink timers,
+capture per-record clocks, or admit processing-time windows; Q12 remains gated for those contracts.
+
 Shared regions can bind the existing Flink memory/state lifecycle directly. The same backend
 leases and checkpoint participants serve tree and shared definitions; they do not create another
 budget or state owner. Window union clocks are initialized once per physical definition, retain
