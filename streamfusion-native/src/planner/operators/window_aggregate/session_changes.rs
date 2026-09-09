@@ -9,7 +9,9 @@ pub(in crate::planner::operators) fn apply_session_changes(
     gap: i64,
     calls: &[Call],
     retain_events: bool,
-) -> Result<()> {
+    mut is_late: impl FnMut(i64) -> Result<bool>,
+) -> Result<u64> {
+    let mut dropped = 0;
     for (accumulate, event) in changes {
         if accumulate {
             let mut start = event.timestamp;
@@ -26,6 +28,13 @@ pub(in crate::planner::operators) fn apply_session_changes(
                 start = start.min(merged.start);
                 end = end.max(merged.end);
                 merged_sessions.push(merged);
+            }
+            // Flink MergingWindowProcessFunction tests the merged namespace, not the
+            // incoming event's original window. An older event can extend a live session.
+            if is_late(end)? {
+                debug_assert!(merged_sessions.is_empty());
+                dropped += 1;
+                continue;
             }
             let mut accumulator = AccumulatorState::new(calls);
             let mut events = if retain_events {
@@ -59,6 +68,21 @@ pub(in crate::planner::operators) fn apply_session_changes(
                 events,
             });
         } else {
+            // Retractions retain the matching session namespace. Only an unmatched,
+            // expired event can be dropped before its contribution lookup.
+            let end = sessions
+                .iter()
+                .filter(|session| {
+                    session.start <= event.timestamp.saturating_add(gap)
+                        && session.end >= event.timestamp
+                })
+                .map(|session| session.end)
+                .max()
+                .unwrap_or_else(|| event.timestamp.saturating_add(gap));
+            if is_late(end)? {
+                dropped += 1;
+                continue;
+            }
             let Some((session_index, event_index)) =
                 sessions
                     .iter()
@@ -88,5 +112,50 @@ pub(in crate::planner::operators) fn apply_session_changes(
             }
         }
     }
-    Ok(())
+    Ok(dropped)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn late_input_merges_before_expiration_check_without_reordering_arrivals() {
+        let calls = vec![Call {
+            function: proto::AggregateFunction::CountStar,
+            input_index: None,
+            input_type: None,
+            output_type: DataType::Int64,
+            retractable: false,
+            filter_index: None,
+            distinct: false,
+        }];
+        let event = |timestamp| {
+            (
+                true,
+                SessionEvent {
+                    timestamp,
+                    values: vec![None],
+                },
+            )
+        };
+        for (timestamps, expected_count, expected_dropped) in
+            [(vec![0, 10_000, 0], 2, 1), (vec![10_000, 0, 0], 3, 0)]
+        {
+            let mut sessions = Vec::new();
+            let dropped = apply_session_changes(
+                &mut sessions,
+                timestamps.into_iter().map(event).collect(),
+                10_000,
+                &calls,
+                false,
+                |end| Ok(end - 1 <= 15_000),
+            )
+            .unwrap();
+            assert_eq!(dropped, expected_dropped);
+            assert_eq!(sessions.len(), 1);
+            assert_eq!((sessions[0].start, sessions[0].end), (0, 20_000));
+            assert_eq!(sessions[0].accumulator.row_count, expected_count);
+        }
+    }
 }

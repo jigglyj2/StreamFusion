@@ -305,7 +305,13 @@ selects retractable accumulators.
 Window start, end, row-time, and processing-time properties are supported. Null event timestamps,
 late rows, watermark cleanup, timer ordering, offsets, negative epochs, `TIMESTAMP_LTZ`, configured
 local time zones, and daylight-saving gaps/overlaps follow Flink. Session windows perform
-transitive merging and keep Flink's merged namespace when a bridging row retracts.
+transitive merging and keep Flink's merged namespace when a bridging row retracts. Lateness is checked
+against the merged session end: an older event whose own window has expired is accepted when it
+joins a live session, including inclusive boundary contact. Arrival order is preserved within each
+Arrow batch, so a later event cannot retroactively rescue an earlier dropped event. Generated
+comparisons against Flink's SQL-created session operator cover these cases and the late-record
+counter on both backends. This retained-kernel correction does not enable SESSION admission;
+shared execution, ordered state, memory and full metric/recovery conformance remain prerequisites.
 
 Legacy early/late firing, distinct/approximate or user-defined aggregate calls, async state,
 changelog-state wrapping, and unsupported surrounding physical nodes produce an explicit

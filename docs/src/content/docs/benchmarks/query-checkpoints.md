@@ -115,7 +115,9 @@ one and ten million events, plus separate two-/twenty-million-event mixed profil
 throughput ratios are 0.994× Flink in memory and 0.979× with RocksDB configured, with overlapping
 ranges; million-event results remain slower. This stateless workload does not establish RocksDB
 state performance or filesystem sink partition-commit/rolling behavior. Q11's session-window
-plan is the next checkpoint.
+plan is the next checkpoint. Its initial ordinary EXPLAIN falls back at `StreamExecWindowAggregate`.
+The retained SESSION kernel now checks lateness after merging, with controlled-arrival Flink
+comparisons; this is a correctness prerequisite, not an admission or performance result.
 
 ## Q6 has no Flink streaming baseline
 
