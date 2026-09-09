@@ -5,6 +5,8 @@ mod memory;
 #[cfg(test)]
 pub(crate) mod observed_tests;
 mod ordered_memory;
+#[cfg(test)]
+mod prefix_tests;
 pub(crate) use ordered_memory::OrderedMemoryKeyedState;
 mod read_batch;
 mod read_keys;
@@ -72,6 +74,29 @@ pub(crate) trait KeyedState: Send {
         max_bytes: usize,
         visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<()>,
     ) -> Result<()>;
+
+    /// Visits matching entries in bounded pages, without requiring an ordering-capable
+    /// in-memory backend. External ordered stores should seek directly to the prefix.
+    fn visit_prefix(
+        &self,
+        key_group: u32,
+        prefix: &[u8],
+        max_rows: usize,
+        max_bytes: usize,
+        visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<()>,
+    ) -> Result<()> {
+        self.visit_key_group(key_group, max_rows, max_bytes, &mut |page| {
+            let selected = page
+                .iter()
+                .copied()
+                .filter(|(key, _)| key.starts_with(prefix))
+                .collect::<Vec<_>>();
+            if !selected.is_empty() {
+                visitor(&selected)?;
+            }
+            Ok(())
+        })
+    }
 
     /// Visits [start, end) in bytewise key order. Pages are bounded by both limits;
     /// returning false stops without visiting another page. The caller reserves the page

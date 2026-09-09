@@ -66,6 +66,28 @@ impl KeyedState for Observed {
     ) -> Result<()> {
         self.inner.visit_key_group(group, rows, bytes, f)
     }
+    fn visit_prefix(
+        &self,
+        group: u32,
+        prefix: &[u8],
+        rows: usize,
+        bytes: usize,
+        f: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<()>,
+    ) -> Result<()> {
+        self.io.range_reads.fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .visit_prefix(group, prefix, rows, bytes, &mut |page| {
+                self.io
+                    .scanned_rows
+                    .fetch_add(page.len(), Ordering::Relaxed);
+                self.io.read_bytes.fetch_add(
+                    page.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>(),
+                    Ordering::Relaxed,
+                );
+                f(page)
+            })
+    }
+
     fn visit_range(
         &self,
         group: u32,

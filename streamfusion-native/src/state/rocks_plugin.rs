@@ -291,6 +291,36 @@ impl KeyedState for RocksPluginKeyedState {
         })
     }
 
+    fn visit_prefix(
+        &self,
+        key_group: u32,
+        prefix: &[u8],
+        max_rows: usize,
+        max_bytes: usize,
+        visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<()>,
+    ) -> Result<()> {
+        let mut end = prefix.to_vec();
+        let end = match end.iter().rposition(|&byte| byte != u8::MAX) {
+            Some(index) => {
+                end.truncate(index + 1);
+                end[index] += 1;
+                Some(end)
+            }
+            None => None,
+        };
+        self.visit_range(
+            key_group,
+            prefix,
+            end.as_deref(),
+            max_rows,
+            max_bytes,
+            &mut |page| {
+                visitor(page)?;
+                Ok(true)
+            },
+        )
+    }
+
     fn visit_range(
         &self,
         key_group: u32,
