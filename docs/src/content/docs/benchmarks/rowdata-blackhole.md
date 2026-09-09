@@ -78,6 +78,11 @@ The [Q8 release comparison](/StreamFusion/benchmarks/q8-rowdata/) covers DISTINC
 window-bound join, with one-/ten-million-event measurements and separate longer profiles on both
 backends. It reports the in-memory regression alongside the larger RocksDB median improvement.
 
+The [Q12 release comparison](/StreamFusion/benchmarks/q12-rowdata/) covers processing-time TUMBLE
+COUNT with 50-million-event measurements and separate 100-million-event profiles. It records every
+fork's output count, the varying RocksDB timings and the distinction between live-clock execution
+invariants and exact controlled-clock parity.
+
 ## Q3 in-memory measurements, September 7, 2026
 
 These historical tables predate the diagnostic-counter timing correction. The counter reset

@@ -134,15 +134,23 @@ General improvements amortize decoded-state budget calls and eliminate empty ter
 scan probes while retaining ABI-8 compatibility. All twenty-million-event profiles complete.
 Q11's supported SESSION COUNT path is delivered within these limits.
 
-Q12 is the active checkpoint. Its processing-time TUMBLE COUNT operator now supports ordinary
+Q12's supported processing-time TUMBLE COUNT path is delivered. Its operator supports ordinary
 whole-plan selection with UTC, one nullable or non-null BIGINT key, unfiltered COUNT(*), start/end
 properties, synchronous state and disabled mini-batching. The original `PROCTIME()` Calc and
 exchange remain in the selected graph. Other time zones, window kinds, aggregate/key shapes and
 clock-sensitive placements retain precise whole-plan fallback. Official Nexmark RowData collecting
 checks pass at 50 million events, parallelism four, on both engines and state backends. They require
 non-empty INSERT output, positive counts, unique bidder/window pairs, ten-second UTC alignment and
-positive native plan/Calc activity for StreamFusion. The release performance comparison and mixed
-profiles are still pending; this is not a completed Q12 performance checkpoint.
+positive native plan/Calc activity for StreamFusion. The
+[Q12 release comparison](/StreamFusion/benchmarks/q12-rowdata/) records three alternating pairs at
+50 million events and separate 100-million-event mixed profiles on both backends. Median throughput
+ratios are 1.303× Flink in memory and 1.720× on RocksDB, with disjoint ranges. The third RocksDB pair
+is nearly tied, so its median advantage is not a stable general speedup. Every fork emits windows;
+independent processing clocks still produce different window labels and output counts.
+Borrowed Arrow keys eliminate repeated timer registration within each raw batch while preserving
+all DataFusion counts, absolute timers and Flink's original buffer allowance. Registration's CPU
+share falls from 8.94% / 8.11% to 2.08% / 1.92% in memory / RocksDB; cross-run shares do not isolate
+a throughput gain. All 100-million-event profiles finish without capacity failure. Q13 is next.
 
 The logical PROCTIME attribute lowers to DataFusion's typed null. Arrow/protobuf schemas allow
 that physical null even when Flink's logical attribute is NOT NULL; ordinary timestamp constraints

@@ -79,8 +79,10 @@ open window. Empty or partial results do not establish parity or acceleration. I
 selection, controlled-clock changelog/metric parity, both-backend recovery and live SQL execution
 coverage. Official Q12 collecting checks pass at 50 million events, parallelism four, on both
 engines/backends, with non-empty output and valid window/count invariants. Separate live-clock jobs
-do not establish exact changelog parity. Release measurements and profiles remain pending; see the
-query checkpoint page for evidence and remaining work.
+do not establish exact changelog parity. The [Q12 release comparison](/StreamFusion/benchmarks/q12-rowdata/)
+records 50-million-event measurements and separate 100-million-event profiles, with median throughput
+ratios of 1.303× Flink in memory and 1.720× on RocksDB. The third RocksDB pair is nearly tied; the
+report retains every fork, output counts and dispersion. See the query checkpoint page for scope.
 
 Build the local Nexmark connector against this project's Flink version:
 
