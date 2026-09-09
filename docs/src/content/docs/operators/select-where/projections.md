@@ -140,6 +140,12 @@ Flink type, then widen the completed values losslessly to `BIGINT` for DataFusio
 This includes nested comparisons such as `HOUR(timestamp) >= 8` and preserves integer overflow
 inside an operand before widening. Flink-generated changelog and metric tests cover all signed
 widths against `BIGINT`, both operand orders, null-safe comparisons and overflow boundaries.
+DECIMAL comparisons likewise preserve each operand's own precision and scale, then use DataFusion
+lossless common-type coercion, casts and comparison. Different decimal scales and signed-integer
+operands are supported, including cases requiring Decimal256 internally; explicit casts inside
+an operand still execute first. See [decimal filter semantics](../filters/) for precision,
+managed-buffer, metric and generated parity coverage. The same contract applies to projected
+boolean results and nested CASE conditions.
 Signed-integer division is accelerated for literal and dynamic expression divisors. Arrow's
 checked division has Flink's truncate-toward-zero result, divide-by-zero failure, and overflow
 boundary. `FLOAT` and `DOUBLE` division preserve IEEE-754 zero, infinity, NaN, and signed-zero

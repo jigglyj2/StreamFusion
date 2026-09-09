@@ -63,8 +63,8 @@ shape also cause the whole Calc to fall back.
 
 The same six predicates support direct, exactly matching column pairs for `TINYINT`,
 `SMALLINT`, `INTEGER`, `BIGINT`, `VARCHAR`, `BINARY`, `VARBINARY`, `DECIMAL`, `DATE`,
-`TIME`, and `TIMESTAMP WITHOUT TIME ZONE`. This includes exactly matching `CHAR` columns. Decimal precision
-and scale and temporal precision must match on both sides. Direct `BOOLEAN` pairs support
+`TIME`, and `TIMESTAMP WITHOUT TIME ZONE`. This includes exactly matching `CHAR` columns. Temporal precision must match on both sides. Decimal comparisons also support different
+precisions/scales and signed-integer operands as described below. Direct `BOOLEAN` pairs support
 `=` and `<>`. A null on either side produces SQL unknown. Floating-point, mismatched,
 and planner-cast column pairs currently
 fall back to Flink.
@@ -97,10 +97,29 @@ separately in the plan protobuf, then Rust constructs a matching Arrow timestamp
 at the declared precision. `TIMESTAMP_LTZ` remains on Flink pending separate timezone and
 daylight-saving parity coverage.
 
-Exact `DECIMAL` comparisons support Flink precision up to 38 with a same-scale literal.
-The plan carries the signed unscaled integer, precision, and scale; Rust validates these
-before constructing a DataFusion `Decimal128` scalar. Comparisons that require planner
-rescaling or exceed Flink's decimal range fall back rather than rounding.
+Exact `DECIMAL` comparisons support Flink precision up to 38 against another supported decimal
+or any signed integer width, including literals and computed operands. Each operand is evaluated
+at its own Flink precision and scale before comparison. The six ordered/equality predicates and
+null-safe distinctness predicates preserve both operand orders, null behavior and fractional values.
+The plan retains each operand's type; Rust uses DataFusion's comparison coercion and cast kernels
+to obtain a lossless common representation. It asks for Decimal256 coercion to avoid DataFusion's
+Decimal128 precision cap, then uses Decimal128 when the complete common precision fits 38 digits.
+Extreme scale differences can require all 76 Decimal256 digits. This follows Flink's exact
+`DecimalDataUtils.compare` contract without rounding an operand or converting it to floating point.
+Explicit casts within an operand still retain their Flink semantics before comparison.
+
+These comparisons remain scalar expressions in the fused DataFusion Calc/Filter plan. Their cast
+and comparison buffers use the existing managed fixed-width expression allowance; output slices
+retain their buffer credit, and insufficient allowance fails before allocating the large workspace.
+There is no additional JNI boundary, state, metric family or runtime option. Flink-generated Calc
+changelog/metric tests cover all signed integer widths, compact and noncompact decimals, both
+operand orders, null-safe comparisons, empty/multi-batch input and both configured backends.
+Generated SQL tests separately exercise Q14's decimal scaling and range predicates across signed
+integer extrema and non-empty filtered changelogs. Native checks include scalar/sliced input,
+76-digit coercion and managed-buffer release. The exact-number subset of Flink's
+`DecimalTypeTest.testComparison` also runs through the SQL harness with source fields, including
+BETWEEN and mixed precision/scale. Decimal/floating comparisons and unsupported operand expressions
+retain whole-plan fallback; this support does not change decimal arithmetic or casts.
 
 `IS NULL` and `IS NOT NULL` are supported over direct input columns of every scalar and
 complex type listed on the [projection coverage page](../projections/). For `ARRAY`, `MAP`,

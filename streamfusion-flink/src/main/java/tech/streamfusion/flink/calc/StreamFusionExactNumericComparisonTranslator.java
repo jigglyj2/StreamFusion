@@ -9,9 +9,9 @@ import tech.streamfusion.proto.plan.v1.Comparison;
 import tech.streamfusion.proto.plan.v1.ComparisonOperator;
 import tech.streamfusion.proto.plan.v1.Expression;
 
-/** Widen completed signed-integer operands without changing their internal arithmetic width. */
-final class StreamFusionIntegerComparisonTranslator {
-    private StreamFusionIntegerComparisonTranslator() {}
+/** Preserve operand arithmetic and decimal scales before native lossless comparison coercion. */
+final class StreamFusionExactNumericComparisonTranslator {
+    private StreamFusionExactNumericComparisonTranslator() {}
 
     static Expression translate(
             Object left,
@@ -20,13 +20,19 @@ final class StreamFusionIntegerComparisonTranslator {
             LogicalType rightType,
             ComparisonOperator operator,
             RowType inputType) {
-        if (leftType == null
-                || rightType == null
-                || leftType.getTypeRoot() == rightType.getTypeRoot()
-                || !signed(leftType.getTypeRoot())
-                || !signed(rightType.getTypeRoot())) return null;
-        Expression lhs = widen(left, leftType, inputType);
-        Expression rhs = widen(right, rightType, inputType);
+        if (leftType == null || rightType == null || !exact(leftType.getTypeRoot()) || !exact(rightType.getTypeRoot()))
+            return null;
+        boolean decimal =
+                leftType.getTypeRoot() == LogicalTypeRoot.DECIMAL || rightType.getTypeRoot() == LogicalTypeRoot.DECIMAL;
+        if (!decimal && leftType.getTypeRoot() == rightType.getTypeRoot()) return null;
+        // Decimal comparison must retain each operand's original scale. Rust uses
+        // DataFusion's lossless common type, including Decimal256 where necessary.
+        Expression lhs = decimal
+                ? StreamFusionProjectionTranslator.projectionExpression(left, inputType, leftType)
+                : widen(left, leftType, inputType);
+        Expression rhs = decimal
+                ? StreamFusionProjectionTranslator.projectionExpression(right, inputType, rightType)
+                : widen(right, rightType, inputType);
         if (lhs == null || rhs == null) return null;
         return Expression.newBuilder()
                 .setComparison(
@@ -45,10 +51,11 @@ final class StreamFusionIntegerComparisonTranslator {
                 .build();
     }
 
-    private static boolean signed(LogicalTypeRoot type) {
+    private static boolean exact(LogicalTypeRoot type) {
         return type == LogicalTypeRoot.TINYINT
                 || type == LogicalTypeRoot.SMALLINT
                 || type == LogicalTypeRoot.INTEGER
-                || type == LogicalTypeRoot.BIGINT;
+                || type == LogicalTypeRoot.BIGINT
+                || type == LogicalTypeRoot.DECIMAL;
     }
 }

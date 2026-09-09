@@ -18,6 +18,10 @@ use datafusion_functions::math::isnan;
 
 use crate::proto;
 
+mod exact_numeric;
+#[cfg(test)]
+mod tests;
+
 pub(crate) fn create(
     left: Arc<dyn PhysicalExpr>,
     right: Arc<dyn PhysicalExpr>,
@@ -39,6 +43,7 @@ pub(crate) fn create(
             ));
         }
     };
+    let (left, right) = exact_numeric::coerce(left, right, schema)?;
     let comparison: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
         Arc::clone(&left),
         datafusion_operator,
