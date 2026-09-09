@@ -332,7 +332,10 @@ canonical buffer. Large Q15 state exposed that mismatch with Flink. Regular chec
 that buffer while retaining Flink's synchronous consistency boundary, asynchronous upload,
 cancellation and key-group restore lifecycle. Canonical savepoints still use the portable raw-keyed
 format, and memory checkpoints retain their canonical path. Whole-group canonical savepoint
-buffering remains a capacity limitation; this change does not solve it or retained HashMap growth.
+buffering remains a capacity limitation. Physical file restore also currently imports each assigned
+key group through a canonical snapshot buffer; its peak memory can still grow with key-group size.
+A completed large checkpoint or benchmark does not establish restore capacity at that size.
+This change does not solve those restore/savepoint limits or retained HashMap growth.
 Legacy operator checkpoint diagnostics count full uploads in checkpoint bytes but do not label
 them as incremental checkpoints or increment SST-reuse counters.
 

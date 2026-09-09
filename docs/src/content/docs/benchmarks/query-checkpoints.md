@@ -452,6 +452,81 @@ Both retain frame pointers and profiling symbols without reducing optimization. 
 metadata, complete commands, upstream revisions and patch hashes, raw runs and failed-fork logs
 are retained under `streamfusion-nexmark-benchmarks/target/measurements/q15/9fc0c19c/`.
 
+### Q15 full RocksDB checkpoints follow Flink's file strategy
+
+Clean commit `54a5e5c00689d989fd6956d9ca0db57c01074e52` fixes the full-checkpoint mismatch:
+with Flink's default `execution.checkpointing.incremental=false`, StreamFusion now uploads native
+RocksDB checkpoint files privately instead of serializing each key group's whole state into a
+buffer. This matches Flink's `RocksNativeFullSnapshotStrategy`; incremental SST reuse remains
+controlled by the existing Flink setting. Canonical savepoints retain the portable raw-keyed format.
+The change passed 84 distinct focused unit/integration tests, including generated changelog,
+aligned/unaligned restore, rescaling, cancellation, durable checkpoint metadata, metric-surface
+checks and Q15 ordinary planner/production tests. No Rust compute or native artifact changed.
+
+Fresh RocksDB runs used three alternating fresh-JVM pairs per size, followed by separate 2M and
+20M mixed JVM/native profiles. The source, original blackhole sink, end-to-end timer, Flink memory
+shares, parallelism, one-second exactly-once checkpoints, JVM limits, native CPU build and host
+were identical to the preceding campaign. Every fork is retained; no Kafka was used.
+
+| Events | Flink median seconds [min, max]; MAD | StreamFusion median seconds [min, max]; MAD | Throughput ratio SF/Flink |
+| --- | --- | --- | --- |
+| 1M | 11.166225 [9.560942, 12.658226]; 1.492001 | 9.823816 [7.016843, 13.616004]; 2.806973 | **1.136648×** |
+| 10M | 39.129748 [38.615214, 39.683834]; 0.514534 | 23.869675 [23.556482, 27.642661]; 0.313193 | **1.639308×** |
+
+The 1M ranges overlap widely, so that median does not establish a consistent win. At 10M the
+ranges are disjoint and all three paired StreamFusion forks are faster. The before/after campaigns
+are separate measurements, not an isolated attribution of the entire timing difference to
+checkpointing. Both engines emitted 920,000 / 9,200,000 records at 1M / 10M. Every StreamFusion
+EXPLAIN selected the complete native plan. Measured native plan/Calc counts were **229/154,
+208/140, 232/156** at 1M and **1943/1298, 1921/1282, 1925/1286** at 10M; Flink counters were zero.
+
+The **20M profile now completes on both engines**, each emitting 18,400,000 records. StreamFusion
+reported **3809/2542** native plan/Calc batches. The separate 2M pair also completed with
+1,840,000 output records and **391/262** StreamFusion batches. These supply longer paired
+profiles for both measured sizes, resolving the prior checkpoint-buffer failure in the 20M run.
+They retain JFR, CPU/allocation collapsed stacks, per-engine flame graphs and differential graphs.
+Sampling is 10 ms CPU with Java non-safepoint sampling and native DWARF unwinding; profile elapsed
+times are excluded from the throughput table.
+
+Inclusive percentages below use all process CPU samples. Categories overlap: JNI includes native
+computation below it, and DataFusion includes state work below execution-plan frames. Zero sampled
+share does not prove absence of work.
+
+| CPU category | RocksDB 2M Flink / SF | RocksDB 20M Flink / SF |
+| --- | --- | --- |
+| Samples | 2,761 / 2,388 | 14,167 / 10,692 |
+| Row copying | 10.757% / 6.910% | 21.847% / 11.308% |
+| RowData-to-Arrow writing | 0% / 2.010% | 0% / 3.217% |
+| Arrow C Data / JNI, inclusive | 0% / 15.452% | 0% / 38.571% |
+| Native plan lowering | 0% / 0% | 0% / 0% |
+| DataFusion execution, inclusive | 0% / 14.196% | 0% / 27.815% |
+| DISTINCT membership state access | 0% / 2.554% | 0% / 4.115% |
+| Native aggregate state codec | 0% / 0.042% | 0% / 0.075% |
+| Arrow-backed output access | 0% / 2.303% | 0% / 4.433% |
+| Source polling, inclusive | 21.659% / 22.529% | 40.248% / 41.545% |
+| RocksDB, inclusive | 17.168% / 2.764% | 30.649% / 11.532% |
+| Budget callbacks | 0% / 0.042% | 0% / 0.112% |
+| JVM compilation | 32.090% / 35.092% | 7.376% / 10.615% |
+
+The larger profile makes the source and native aggregation more visible as JVM compilation's
+share falls. Source polling accounts for about 41.5% of StreamFusion process CPU; native group
+aggregation accounts for 24.3%, including 11.6% under its DISTINCT/row-kernel adapters. State codec
+work remains small. These observations do not establish a reasonable optimization ceiling.
+Flink's append-only DISTINCT code uses presence bits and avoids rewriting unchanged memberships;
+StreamFusion still keeps signed counts on that path. That is a general remaining state/write
+optimization, not a Q15-specific SQL rewrite.
+
+HashMap was not remeasured for this RocksDB checkpoint change; its prior 1M result and 10M
+retained-table growth failure remain the available evidence. Large canonical savepoints still
+require whole-key-group buffers. Physical file restore also currently imports each key group
+through a canonical buffer, so successful 20M processing/checkpointing is **not** proof of restore
+capacity at that size. The focused tests establish recovery semantics at their tested state sizes;
+these capacity limits remain open, as detailed in [native state](/StreamFusion/development/native-state/).
+
+Artifacts and complete machine/runtime/command metadata are under
+`streamfusion-nexmark-benchmarks/target/measurements/q15/54a5e5c0/`. The native artifact hashes,
+release/native-CPU flags and upstream Flink/Nexmark revisions are unchanged from `9fc0c19c` above.
+
 ## Q6 has no Flink streaming baseline
 
 The upstream Nexmark Q6 query computes a bounded ordered AVG after winning-bid rank selection.
