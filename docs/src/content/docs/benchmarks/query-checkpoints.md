@@ -104,20 +104,18 @@ in-memory run still fails during dirty join-state encoding: another 262,416 byte
 no million-event comparison or RocksDB result is claimed. Q9 is delivered within these explicit
 limits. Q10 is next.
 
-Q10's next prerequisite is numeric `DATE_FORMAT` over timezone-free `TIMESTAMP(3)`. Its literal
-pattern subset lowers to DataFusion kernels with full-range calendar-cycle/year-of-era adaptation
-and one coarse memory owner. Unsupported pattern/type/context variants keep precise fallback.
-Generated ordered changelog, memory and native boundary tests cover the scalar contract. Q10's
-RowData catalog now uses the unchanged SELECT body from the official filesystem query, including
-both partition-label columns. Its opt-in integration test compares complete collected results at
-10,000 events, parallelism one/four, on both backend configurations with positive native plan/Calc
-activity. This workload is stateless; choosing RocksDB is not state-performance evidence. Release
-measurement at `1227c358` gives million-event median throughput ratios of 0.850× Flink in memory
-and 0.875× with RocksDB configured. Separate two-million-event CPU profiles put native formatting
-at 3.6–4.2% of process samples. Numeric formatting now selects direct DataFusion `to_char` for AD
-years 1–9999, retaining full-range adaptation elsewhere; a fresh release comparison is pending.
-Filesystem sink partition-commit and rolling-policy behavior are outside the blackhole benchmark's
-evidence.
+Q10's SELECT path is delivered through ordinary whole-plan selection. Numeric `DATE_FORMAT`
+over timezone-free `TIMESTAMP(3)` uses DataFusion kernels with full-range calendar adaptation,
+a direct path for AD years 1–9999 and one coarse memory owner. Generated ordered changelog,
+managed-memory and boundary tests cover its contract; unsupported variants keep precise fallback.
+Official SELECT integration verifies complete collected results at 10,000 events, parallelism
+one/four, on both backend configurations with positive native plan/Calc activity. The
+[Q10 release comparison](/StreamFusion/benchmarks/q10-rowdata/) records three alternating pairs at
+one and ten million events, plus separate two-/twenty-million-event mixed profiles. Ten-million-event
+throughput ratios are 0.994× Flink in memory and 0.979× with RocksDB configured, with overlapping
+ranges; million-event results remain slower. This stateless workload does not establish RocksDB
+state performance or filesystem sink partition-commit/rolling behavior. Q11's session-window
+plan is the next checkpoint.
 
 ## Q6 has no Flink streaming baseline
 

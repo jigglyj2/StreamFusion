@@ -734,3 +734,6 @@ cast family therefore extends one compatibility matrix and its generated parity 
 while semantic exceptions remain isolated.
 
 See the [Flink SELECT-clause documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/select/#select-clause).
+
+The [Q10 SELECT release comparison](/StreamFusion/benchmarks/q10-rowdata/) documents numeric
+`DATE_FORMAT` parity, managed-memory behavior, full-range adaptation and measured performance.
