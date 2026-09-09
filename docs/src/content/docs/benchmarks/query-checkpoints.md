@@ -132,7 +132,22 @@ RocksDB, with disjoint ranges; Flink's RocksDB times vary from 17.9 to 42.9 seco
 a stable general speedup claim. Million-event memory remains slower and RocksDB ranges overlap.
 General improvements amortize decoded-state budget calls and eliminate empty terminal RocksDB
 scan probes while retaining ABI-8 compatibility. All twenty-million-event profiles complete.
-Q11's supported SESSION COUNT path is delivered within these limits. Q12 is the next checkpoint.
+Q11's supported SESSION COUNT path is delivered within these limits.
+
+Q12 is the active checkpoint. Its ordinary plan contains a `PROCTIME()` Calc, exchange and
+single-stage processing-time TUMBLE COUNT. Both backends currently retain whole-plan fallback:
+logical time-attribute handling and Flink-owned per-record clock/timer delivery are not implemented
+in the shared native tree. EXPLAIN names both blockers, including when the old shape recognizer
+could have folded the Calc away. It does not mislabel Q12 as an unsupported SESSION window.
+
+A SQL-generated Flink clock oracle now checks nullable keys, generated counts, one-/ten-/37-second
+UTC windows, live clock transitions, terminal watermarks, bounded finish and restoration of pending
+processing-time timers on both backends. The physical PROCTIME input slot is null; the consuming
+window reads Flink's clock. Only processing-time progress fires these windows. Terminal event time
+and finishing input do not close the final open window. These are prerequisite reference tests,
+not native parity or admission evidence. The next implementation must preserve this lifecycle in
+the shared Arrow tree; substituting one timestamp per batch or a private native clock is not proven
+equivalent. No Q12 performance result is claimed from empty/partial max-speed bounded output.
 
 ## Q6 has no Flink streaming baseline
 

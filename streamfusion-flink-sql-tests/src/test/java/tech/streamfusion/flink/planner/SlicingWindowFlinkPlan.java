@@ -46,6 +46,11 @@ final class SlicingWindowFlinkPlan {
     }
 
     static OneInputTransformation<?, ?> stage(String name, String sql, boolean stringKey) throws Exception {
+        return stage(name, sql, stringKey, null);
+    }
+
+    static OneInputTransformation<?, ?> stage(String name, String sql, boolean stringKey, java.time.ZoneId zone)
+            throws Exception {
         String factory = System.getProperty(StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY);
         String processor = System.getProperty(StreamFusionPlannerFactory.EXEC_GRAPH_PROCESSOR_PROPERTY);
         System.clearProperty(StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY);
@@ -54,6 +59,7 @@ final class SlicingWindowFlinkPlan {
             var env = StreamExecutionEnvironment.getExecutionEnvironment();
             env.setParallelism(1);
             var tables = StreamTableEnvironment.create(env);
+            if (zone != null) tables.getConfig().setLocalTimeZone(zone);
             tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_ASYNC_STATE_ENABLED, false);
             tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ENABLED, false);
             tables.getConfig()

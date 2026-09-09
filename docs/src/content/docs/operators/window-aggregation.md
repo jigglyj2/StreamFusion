@@ -89,6 +89,22 @@ A separate real-barrier test captures and replays Arrow IPC channel state once, 
 watermark bytes on both backends. Other native aggregate-call variants do not yet carry the
 complete SESSION conformance evidence established for COUNT and remain gated.
 
+## Processing-time window contract
+
+Processing-time TVF aggregation remains whole-plan Flink fallback. EXPLAIN reports the missing
+shared per-record clock and processing-time timer delivery contract and separately explains the
+logical `PROCTIME()` attribute in its Calc. Legacy processing-time shape folding does not hide
+that Calc's rejection. A logical time attribute must not be replaced with a batch timestamp.
+
+The SQL-generated Flink reference tests use explicit UTC clocks, nullable keys, generated counts
+and one-/ten-/37-second windows. They verify that the window samples its own clock even when the
+physical PROCTIME slot is null, only processing-time timers emit results, and pending timers survive
+both-backend checkpoint restore. A terminal watermark and bounded finish leave an open processing-time
+window un-emitted. These tests define the native prerequisite; they do not admit the retained native
+kernel or establish native clock/metric/recovery parity. Non-UTC clock/zone behavior needs its own
+proof. Q12's bounded blackhole output can therefore be empty or incomplete depending on wall-clock
+alignment and cannot by itself establish result parity or acceleration.
+
 ## Q5 checkpoint
 
 Q5's local/global HOP COUNT, attached MAX/COUNT and binary join now use ordinary planner

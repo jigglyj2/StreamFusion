@@ -560,16 +560,11 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             rejections.add(
                     nodePath + "\nlocal window aggregate: native acceleration requires its paired global aggregate");
         } else if (node instanceof StreamExecWindowAggregate) {
-            ProcessingTimeWindowAggregate folded = processingTimeWindowAggregate((StreamExecWindowAggregate) node);
-            String reason = folded == null
-                    ? unsupportedReason((StreamExecWindowAggregate) node, context)
-                    : unsupportedReason(folded, context);
+            // Only the verified shared SESSION path is admitted here. Inspect every original
+            // input as well: legacy PROCTIME folding must not hide a rejected Calc clock contract.
+            String reason = unsupportedReason((StreamExecWindowAggregate) node, context);
             if (reason != null) {
                 rejections.add(nodePath + "\n" + reason);
-            }
-            if (folded != null) {
-                collectRejections(folded.inputEdge.getSource(), context, nodePath + "/native-input", rejections);
-                return;
             }
         } else if (node instanceof StreamExecWindowDeduplicate) {
             String reason = unsupportedReason((StreamExecWindowDeduplicate) node, context);

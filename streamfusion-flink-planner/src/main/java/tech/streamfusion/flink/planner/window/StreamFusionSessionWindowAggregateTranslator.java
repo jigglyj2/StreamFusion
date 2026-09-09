@@ -67,6 +67,8 @@ public final class StreamFusionSessionWindowAggregateTranslator {
             NamedWindowProperty[] properties,
             boolean retractable,
             ReadableConfig config) {
+        if (strategy.isProctime())
+            return "window processing time: shared native execution has no Flink-owned per-record clock and processing-time timer delivery contract";
         if (!(strategy instanceof TimeAttributeWindowingStrategy)
                 || !(strategy.getWindow() instanceof SessionWindowSpec))
             return "session persistent admission: shared single-stage windows require direct SESSION event time";

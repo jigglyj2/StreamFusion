@@ -73,9 +73,11 @@ unsupported join shape or surrounding operator. Q10's SELECT path is now catalog
 numeric `DATE_FORMAT`; its blackhole comparison does not exercise filesystem partition commits
 or rolling policies. See the query checkpoint page for its delivery status. q14 uses a Java UDF, mixed decimal
 arithmetic beyond the q1 conversion shape, and timestamp calendar extraction; q21 uses Java-regex
-semantics. Q12's processing-time SQL is catalogued, but a max-speed bounded source completes before
-its first ten-second timer and therefore produces an empty result; it is not counted as result or
-acceleration evidence. Those queries remain whole-plan Flink fallback.
+semantics. Q12's processing-time SQL is catalogued, but its windows align to the live Flink clock.
+A bounded max-speed run may finish before a timer fires, and finishing input does not emit the final
+open window. Empty or partial results do not establish parity or acceleration. Q12 remains whole-plan
+Flink fallback pending its per-record clock and processing-time timer contract. See the query
+checkpoint page for controlled-clock evidence and remaining work.
 
 Build the local Nexmark connector against this project's Flink version:
 
