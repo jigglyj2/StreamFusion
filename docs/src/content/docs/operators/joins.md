@@ -96,7 +96,7 @@ reader's `java.sql` objects while preserving declared logical types and decimal 
 Six focused Java tests compare generated lookup values, order and binary-row bytes against the
 actual Flink CSV lookup function, and cover serialization before the file exists, multiple files,
 nullable/duplicate keys, varied batch sizes, temporal/decimal payloads, reopen, early close and
-allocation/parse failure. These are source-adapter checks. Planner/protobuf selection, task-open
+allocation/parse failure. These are source-adapter checks. Planner selection, task-open
 C Stream ownership and memory transfer, native metrics and checkpoint/channel integration remain
 required before this source can unlock production lookup acceleration.
 
@@ -136,9 +136,26 @@ do not fit; an unrepresentable minimum batch fails recoverably. Shared snapshot 
 their existing Arrow leases, and output leases survive downstream projection and task-plan closure.
 Native tests cover every admitted key type, generated ordered changelogs and metadata, 2,000
 invocations with constant cache credit, a separate heap-growth observation, live-stream delivery,
-wide duplicate fan-out, cancellation, allocation denial and retry. Planner/protobuf and task-open
-source binding, complete Flink metric/changelog parity, and recovery/channel validation are still
-pending. Q13 remains on whole-plan fallback and has no native benchmark result.
+wide duplicate fan-out, cancellation, allocation denial and retry.
+
+The version-3 physical-plan protocol now describes a unary `LookupJoin` with explicit probe,
+snapshot and output schemas, equality-key positions and an inner-join mode. Its task resource is
+bound by the original physical node identity; source configuration, process addresses and snapshot
+payloads are excluded from the portable plan. Native construction rejects older protocols, missing
+snapshot bindings, unsupported modes, wrong key types and mismatched schemas. Configuration and
+schema retention use the same Flink memory pool as the cache and probe buffers.
+
+Shared-context tests execute `Calc -> LookupJoin -> Calc` as one native tree across repeated
+batches and watermark, checkpoint-preparation and end-input controls. They compare complete Arrow
+payloads and record metadata against an independent arrival oracle, check each stage's logical I/O
+counts, and verify stable cache credit and full release on closure. Probe columns are matched by
+position, type and nullability so a preceding DataFusion projection's internal names do not prevent
+composition. The immutable cache has no timers or separately checkpointed keyed state. These tests
+verify native control traversal, not Flink checkpoint/restore or end-to-end metric parity.
+
+Task-open C Stream source binding, Java planner selection, complete Flink metric/changelog parity,
+and recovery/channel validation remain pending. Q13 remains on whole-plan fallback and has no
+native benchmark result.
 
 ## SQL example
 

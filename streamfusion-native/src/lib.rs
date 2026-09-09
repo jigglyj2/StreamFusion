@@ -96,6 +96,14 @@ fn assign_plan_node_ids(
 
     use proto::operator::Operator::*;
     match operator.operator.as_mut() {
+        Some(LookupJoin(node)) => {
+            if protocol_version < RECORD_POLICY_PLAN_PROTOCOL_VERSION {
+                return Err(DataFusionError::Plan(
+                    "lookup snapshot requires plan protocol version 3".into(),
+                ));
+            }
+            assign_child(&mut node.input, next_id, assigned, protocol_version)
+        }
         Some(RegularJoin(node)) => {
             assign_child(&mut node.left_input, next_id, assigned, protocol_version)?;
             assign_child(&mut node.right_input, next_id, assigned, protocol_version)

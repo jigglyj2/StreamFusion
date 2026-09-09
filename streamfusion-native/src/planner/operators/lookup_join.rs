@@ -7,6 +7,8 @@
 //! Only that lifetime/stream adaptation is custom; matching and gathering remain vectorized.
 
 mod exec;
+mod factory;
+pub(crate) use factory::LookupJoinFactory;
 mod probe;
 mod table;
 pub(crate) use exec::LookupJoinExec;
@@ -20,3 +22,6 @@ mod kernel_tests;
 mod memory_tests;
 #[cfg(test)]
 mod test_support;
+
+#[cfg(test)]
+mod binding_tests;

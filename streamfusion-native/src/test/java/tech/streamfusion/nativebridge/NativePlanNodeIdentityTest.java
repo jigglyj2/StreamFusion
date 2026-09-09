@@ -15,11 +15,42 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import org.junit.jupiter.api.Test;
 import tech.streamfusion.proto.plan.v1.Calc;
 import tech.streamfusion.proto.plan.v1.Input;
+import tech.streamfusion.proto.plan.v1.LookupJoin;
+import tech.streamfusion.proto.plan.v1.LookupJoinKind;
 import tech.streamfusion.proto.plan.v1.NativePlan;
 import tech.streamfusion.proto.plan.v1.Operator;
 import tech.streamfusion.proto.plan.v1.Union;
 
 class NativePlanNodeIdentityTest {
+    @Test
+    void lookupSnapshotIdentityStaysStableWhileProbeChildrenAreAssigned() throws Exception {
+        NativePlan original = NativePlan.newBuilder()
+                .setProtocolVersion(3)
+                .setRoot(Operator.newBuilder()
+                        .setPlanNodeId(41)
+                        .setMetricName("LookupJoin[41]")
+                        .setLookupJoin(LookupJoin.newBuilder()
+                                .setKind(LookupJoinKind.LOOKUP_JOIN_KIND_INNER)
+                                .addProbeKeys(2)
+                                .addSideKeys(0)
+                                .setInput(Operator.newBuilder()
+                                        .setCalc(Calc.newBuilder()
+                                                .setPreserveInputEnvelope(true)
+                                                .setInput(
+                                                        Operator.newBuilder().setInput(Input.getDefaultInstance()))))))
+                .build();
+        NativePlan identified = NativePlan.parseFrom(NativePlanNodeIdentity.assign(original.toByteArray()));
+        assertThat(identified.getRoot().getPlanNodeId()).isEqualTo(41);
+        assertThat(identified.getRoot().getMetricName()).isEqualTo("LookupJoin[41]");
+        LookupJoin lookup = identified.getRoot().getLookupJoin();
+        assertThat(lookup.getKind()).isEqualTo(LookupJoinKind.LOOKUP_JOIN_KIND_INNER);
+        assertThat(lookup.getProbeKeysList()).containsExactly(2);
+        assertThat(lookup.getSideKeysList()).containsExactly(0);
+        assertThat(lookup.getInput().getPlanNodeId()).isEqualTo(1);
+        assertThat(lookup.getInput().getCalc().getInput().getPlanNodeId()).isEqualTo(2);
+        assertThat(NativePlanNodeIdentity.assign(identified.toByteArray())).containsExactly(identified.toByteArray());
+    }
+
     @Test
     void reservesDescendantIdsBeforeAssigningMissingParentIds() throws Exception {
         NativePlan original = NativePlan.newBuilder()

@@ -94,6 +94,7 @@ pub(crate) fn children(node: &proto::Operator) -> Result<Vec<&proto::Operator>> 
                 .collect()
         }
         Some(Calc(node)) => node.input.as_deref(),
+        Some(LookupJoin(node)) => node.input.as_deref(),
         Some(Expand(node)) => node.input.as_deref(),
         Some(ArrayUnnest(node)) => node.input.as_deref(),
         Some(ReplicateRows(node)) => node.input.as_deref(),

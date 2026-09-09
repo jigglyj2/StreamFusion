@@ -261,6 +261,9 @@ fn create_operator(
         Some(proto::operator::Operator::WindowJoin(_)) => Err(DataFusionError::Plan(
             "WindowJoin requires a persistent stateful execution handle".to_string(),
         )),
+        Some(proto::operator::Operator::LookupJoin(_)) => Err(DataFusionError::Plan(
+            "LookupJoin requires a task-open Arrow snapshot binding".into(),
+        )),
         Some(proto::operator::Operator::RegularJoin(_)) => Err(DataFusionError::Plan(
             "RegularJoin requires a persistent stateful execution handle".into(),
         )),

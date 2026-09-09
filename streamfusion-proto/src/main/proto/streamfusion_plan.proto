@@ -112,7 +112,28 @@ message Operator {
     ReplicateRows replicate_rows = 27;
     BoundedRank bounded_rank = 28;
     LocalWindowAggregate local_window_aggregate = 29;
+    LookupJoin lookup_join = 30;
   }
+}
+
+// Protocol 3: task-open immutable lookup snapshot, supplied separately through Arrow C Stream.
+// The snapshot is associated with this Operator's stable plan_node_id; no process address,
+// source configuration or data payload belongs in the portable physical plan. Output is probe
+// payload followed by snapshot payload, with the probe's owned record envelope preserved.
+// Only synchronous inner equality lookup is currently implemented. Other modes must fall back.
+message LookupJoin {
+  Operator input = 1;
+  Schema input_schema = 2;
+  Schema side_schema = 3;
+  Schema output_schema = 4;
+  repeated uint32 probe_keys = 5;
+  repeated uint32 side_keys = 6;
+  LookupJoinKind kind = 7;
+}
+
+enum LookupJoinKind {
+  LOOKUP_JOIN_KIND_UNSPECIFIED = 0;
+  LOOKUP_JOIN_KIND_INNER = 1;
 }
 
 // RANK over an already sorted bounded input. The processor retains only the previous physical
