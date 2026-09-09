@@ -1,6 +1,8 @@
 // Copyright 2026 StreamFusion Authors
 // Licensed under the Apache License, Version 2.0
 
+mod checkpoint_import;
+pub(crate) use checkpoint_import::import_key_group;
 mod memory;
 #[cfg(test)]
 pub(crate) mod observed_tests;

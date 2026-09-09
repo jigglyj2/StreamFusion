@@ -538,7 +538,11 @@ checkpoints use native file snapshots and Flink keyed-state handles. Incremental
 completed immutable SST files; full checkpoints upload every file privately, following Flink's
 existing incremental-checkpoint setting. Both restore into native RocksDB. Generated DISTINCT tests
 cover full aligned/unaligned restore and rescaling; canonical savepoints remain backend-neutral.
-See [native state](/StreamFusion/development/native-state/) for the remaining canonical-buffer limit.
+Shared group aggregation imports physical files as admitted Arrow key/value pages and batched
+state writes, preserving large individual legacy values when the host budget permits them.
+Generated parity tests also cover full/incremental restore of an 8,192-member hot group followed by
+complete retraction and recreation. Canonical savepoints still require whole-key-group buffers;
+see [native state](/StreamFusion/development/native-state/) for the limits and ABI-9 upgrade requirement.
 
 Global aggregate recovery is independently tested for all four memory/RocksDB source-to-target
 backend pairs with canonical savepoints and with both aligned and unaligned checkpoints. Global

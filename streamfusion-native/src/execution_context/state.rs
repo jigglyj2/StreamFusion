@@ -247,7 +247,7 @@ impl NativeExecutionContext {
         last: u32,
         reader_limit: usize,
     ) -> Result<()> {
-        use crate::state::{KeyedState, RocksPluginKeyedState};
+        use crate::state::RocksPluginKeyedState;
         let resources = self
             .state_resources
             .as_ref()
@@ -301,8 +301,7 @@ impl NativeExecutionContext {
             };
             let source = RocksPluginKeyedState::open_configured(&reader, first, last, None)?;
             for group in first..=last {
-                let bytes = source.snapshot_key_group(group, &memory)?;
-                owner.restore(group, &bytes)?;
+                owner.restore_from_checkpoint(group, &source, &memory)?;
             }
             Ok(())
         })

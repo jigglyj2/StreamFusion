@@ -64,8 +64,8 @@ unrelated binding extensions. Remove it once upstream bindings provide the equiv
 Default log relocation is now resolved in the TaskManager JVM using Flink's `log.file`
 property, readable-file checks and database-path length limit. Tests compare this resolution
 with Flink's actual `RocksDBResourceContainer`. The resolved path crosses state-binding protocol
-2 and state-component ABI 8; legacy bindings without relocation still use protocol 1. Both
-libraries must implement ABI 8. Closing a database removes only its current and rotated log
+2; legacy bindings without relocation still use protocol 1. The current state-component ABI is 9,
+and both native libraries must implement it. Closing a database removes only its current and rotated log
 files after RocksDB closes its logger. Unlike Flink's broad prefix cleanup, neighboring database
 names are preserved; this narrows cleanup ownership without changing execution or checkpoint
 semantics. Cross-backend lifecycle tests exercise relocated logs and exact state restoration.
@@ -182,7 +182,9 @@ the Flink initialization must fail and discard the region on any restore error.
 Physical RocksDB checkpoints put each owner's files in a `node-<id>` directory. The existing Flink
 file-checkpoint adapter uploads those directories in one handle and retains each namespace in
 its SST reuse keys when incremental checkpoints are enabled. Shared-context checkpoint import uses the canonical key-group contract for the assigned
-range and charges its temporary RocksDB reader and snapshot buffers to the task's memory budget.
+range and charges its temporary RocksDB reader and transfer buffers to the task's memory budget.
+Shared group aggregation imports bounded entry pages; other factories retain their canonical
+snapshot adapter until their semantic restore hooks support a paged import.
 There is no operator-specific checkpoint-import JNI bridge on this path.
 Missing RocksDB `CURRENT` files are rejected rather than opening a new empty database during restore.
 
@@ -268,8 +270,10 @@ A scan reply may carry optional Arrow schema metadata `streamfusion.state.scan.c
 `true` says the requested range is exhausted, including when the final page reaches the row limit;
 `false` says pagination must continue. This avoids another component call and RocksDB iterator
 just to discover an empty final page. Absence retains legacy pagination until an empty result, so
-ABI-8 components without the extension remain compatible. The function table, BinaryView column
-schema and checkpoint encodings are unchanged. The C Data bridge preserves this schema metadata;
+this metadata extension was compatible with earlier ABI-8 components without changing their
+function table. ABI 9 adds a separate admitted scan operation and requires matching core/component
+libraries; it rejects ABI-8 components at initialization. BinaryView column schemas and persisted
+checkpoint encodings remain unchanged. The C Data bridge preserves this schema metadata;
 invalid completion values fail explicitly. Distinct partition ranges still have separate scans.
 
 Range-oriented operators use a separately budgeted B-tree in-memory backend. Point-only operators
@@ -332,12 +336,38 @@ canonical buffer. Large Q15 state exposed that mismatch with Flink. Regular chec
 that buffer while retaining Flink's synchronous consistency boundary, asynchronous upload,
 cancellation and key-group restore lifecycle. Canonical savepoints still use the portable raw-keyed
 format, and memory checkpoints retain their canonical path. Whole-group canonical savepoint
-buffering remains a capacity limitation. Physical file restore also currently imports each assigned
-key group through a canonical snapshot buffer; its peak memory can still grow with key-group size.
-A completed large checkpoint or benchmark does not establish restore capacity at that size.
-This change does not solve those restore/savepoint limits or retained HashMap growth.
+buffering remains a capacity limitation. Factories other than shared group aggregation still import physical files through whole-key-group
+canonical buffers. Shared group aggregation now uses the paged import described below. A completed
+large checkpoint or benchmark does not by itself establish restore capacity at that size.
+Canonical savepoint buffering and retained HashMap growth remain separate limits.
 Legacy operator checkpoint diagnostics count full uploads in checkpoint bytes but do not label
 them as incremental checkpoints or increment SST-reuse counters.
+
+Shared group aggregation now imports physical RocksDB checkpoints through ABI-9 admitted scans.
+Each call selects at most 1,024 entries with a 256 KiB page target, admits payload and conversion
+workspace once, and transfers key/value Arrow BinaryViews directly between the native components.
+A single larger legacy key or value may occupy a page by itself after the host admits it. The
+page target is an internal implementation constant, not a deployment option or a new state-format
+limit. Source pages stay charged while the destination's batched write executes; cursor memory
+and copied write buffers have separate bounded reservations. The ordinary strict range-scan API
+retains its existing hard byte limit.
+
+Flink still materializes file handles, supplies key-group assignments and coordinates recovery.
+The aggregate factory validates its idle state boundary and the destination group must be empty.
+Successful pages populate the assigned backend directly without assembling or decoding a whole
+canonical snapshot. A failed initialization may have installed earlier pages; the execution context
+is poisoned and Flink must discard it. It cannot resume processing partially restored state.
+Canonical savepoint formats, stored aggregate/member encodings and the checkpoint file format do
+not change. No intermediate Java batches or per-record JNI callbacks are introduced.
+
+A native capacity test imports an 8 MiB key group with a 4 MiB budget, including 2 MiB reserved
+for source/destination caches, while the old whole-group snapshot is denied under that budget.
+Additional tests preserve individual 400 KB values and 300 KB keys, restore into memory and
+RocksDB, reject duplicate imports, verify reservation release on denial and poison a context when
+a later group fails after an earlier group was installed. Generated Flink DISTINCT parity tests
+restore an 8,192-member hot group across multiple pages using full/incremental and aligned/unaligned
+checkpoints, then retract every member and recreate the group. This is bounded-workspace and
+recovery evidence at those tested sizes, not a measured 20M Nexmark restore or a throughput result.
 
 Generated DISTINCT tests cover full RocksDB aligned/unaligned checkpoint restore and 1-to-2-to-1
 rescaling, comparing every per-key changelog and record timestamp with the original Flink SQL

@@ -9,6 +9,7 @@ use crate::memory_pool::{tests_support::TestBroker, HostMemoryReservation};
 
 const LIMIT: usize = 32 << 20;
 
+mod checkpoint_import;
 mod lifecycle;
 mod log_configuration;
 

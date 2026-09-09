@@ -21,6 +21,8 @@ use crate::RocksStateBackend;
 
 #[cfg(test)]
 mod open_tests;
+mod scan;
+use scan::{scan_key_group, scan_key_group_admitted};
 
 thread_local! {
     static LAST_ERROR: RefCell<CString> = RefCell::new(CString::new("no RocksDB state error").unwrap());
@@ -37,6 +39,7 @@ static API: StateBackendApiV1 = StateBackendApiV1 {
     checkpoint,
     scan_key_group,
     last_error,
+    scan_key_group_admitted,
 };
 
 #[unsafe(no_mangle)]
@@ -104,63 +107,6 @@ unsafe extern "C" fn close(handle: *mut c_void) {
     if !handle.is_null() {
         unsafe { drop(Box::from_raw(handle.cast::<RocksStateBackend>())) };
     }
-}
-
-unsafe extern "C" fn scan_key_group(
-    handle: *mut c_void,
-    input_array: *mut FFI_ArrowArray,
-    input_schema: *mut FFI_ArrowSchema,
-    output_array: *mut FFI_ArrowArray,
-    output_schema: *mut FFI_ArrowSchema,
-) -> i32 {
-    operation(|| {
-        let input = unsafe { import_batch(input_array, input_schema) }?;
-        if input.num_rows() != 1 {
-            return Err("state scan requires one request".to_string());
-        }
-        let groups = column::<UInt32Array>(&input, 0, "key_group")?;
-        let after = column::<BinaryArray>(&input, 1, "after")?;
-        let rows = column::<UInt32Array>(&input, 2, "max_rows")?;
-        let bytes = column::<UInt64Array>(&input, 3, "max_bytes")?;
-        let start = column::<BinaryArray>(&input, 4, "start")?;
-        let end = column::<BinaryArray>(&input, 5, "end")?;
-        if groups.is_null(0) || rows.is_null(0) || bytes.is_null(0) || start.is_null(0) {
-            return Err("state scan bounds must be non-null".to_string());
-        }
-        let page = backend(handle)?
-            .scan_range_page(
-                groups.value(0),
-                start.value(0),
-                (!end.is_null(0)).then(|| end.value(0)),
-                (!after.is_null(0)).then(|| after.value(0)),
-                rows.value(0) as usize,
-                usize::try_from(bytes.value(0)).map_err(|error| error.to_string())?,
-            )
-            .map_err(|error| error.to_string())?;
-        let (keys, values): (Vec<_>, Vec<_>) = page
-            .entries
-            .into_iter()
-            .map(|(key, value)| (Some(key), Some(value)))
-            .unzip();
-        let output = RecordBatch::try_new(
-            Arc::new(
-                Schema::new(vec![
-                    Field::new("key", DataType::BinaryView, false),
-                    Field::new("value", DataType::BinaryView, false),
-                ])
-                .with_metadata(std::collections::HashMap::from([(
-                    streamfusion_state_abi::STATE_SCAN_COMPLETE_METADATA.to_string(),
-                    page.complete.to_string(),
-                )])),
-            ),
-            vec![
-                Arc::new(streamfusion_state_abi::owned_binary_views(keys)?),
-                Arc::new(streamfusion_state_abi::owned_binary_views(values)?),
-            ],
-        )
-        .map_err(|error| error.to_string())?;
-        unsafe { export_batch(output, output_array, output_schema) }
-    })
 }
 
 unsafe extern "C" fn get_batch(

@@ -523,6 +523,15 @@ through a canonical buffer, so successful 20M processing/checkpointing is **not*
 capacity at that size. The focused tests establish recovery semantics at their tested state sizes;
 these capacity limits remain open, as detailed in [native state](/StreamFusion/development/native-state/).
 
+Subsequent shared group-aggregate recovery work replaces whole-group physical-file imports with
+admitted Arrow key/value pages. An 8 MiB group now restores within a 4 MiB test budget including
+2 MiB of cache leases, while the old whole-group snapshot is denied. Generated parity tests cover
+an 8,192-member hot group, full/incremental files and aligned/unaligned restore followed by complete
+retraction. This is restore correctness/capacity evidence, not a new throughput measurement or a
+20M Nexmark restore result. Canonical savepoints and retained HashMap growth remain open limits;
+other operator factories retain their existing canonical import adapters. Both native libraries
+must now implement state-component ABI 9; see [native state](/StreamFusion/development/native-state/).
+
 Artifacts and complete machine/runtime/command metadata are under
 `streamfusion-nexmark-benchmarks/target/measurements/q15/54a5e5c0/`. The native artifact hashes,
 release/native-CPU flags and upstream Flink/Nexmark revisions are unchanged from `9fc0c19c` above.

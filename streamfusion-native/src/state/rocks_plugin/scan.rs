@@ -16,26 +16,17 @@ impl RocksPluginKeyedState {
         let rows = u32::try_from(max_rows).map_err(|_| {
             DataFusionError::Execution("state scan row limit exceeds UInt32".to_string())
         })?;
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("key_group", DataType::UInt32, false),
-            Field::new("after", DataType::Binary, true),
-            Field::new("max_rows", DataType::UInt32, false),
-            Field::new("max_bytes", DataType::UInt64, false),
-            Field::new("start", DataType::Binary, false),
-            Field::new("end", DataType::Binary, true),
-        ]));
+        let schema = scan_schema();
         let mut after: Option<Vec<u8>> = None;
         loop {
-            let input = RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![
-                    Arc::new(UInt32Array::from(vec![key_group])),
-                    Arc::new(BinaryArray::from(vec![after.as_deref()])),
-                    Arc::new(UInt32Array::from(vec![rows])),
-                    Arc::new(UInt64Array::from(vec![max_bytes as u64])),
-                    Arc::new(BinaryArray::from(vec![start])),
-                    Arc::new(BinaryArray::from(vec![end])),
-                ],
+            let input = scan_input(
+                &schema,
+                key_group,
+                after.as_deref(),
+                rows,
+                max_bytes,
+                start,
+                end,
             )?;
             let output = self.invoke(self.api.scan_key_group, input)?;
             let complete = scan_complete(&output)?;
@@ -72,3 +63,38 @@ fn scan_complete(batch: &RecordBatch) -> Result<bool> {
 
 #[cfg(test)]
 mod tests;
+
+fn scan_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("key_group", DataType::UInt32, false),
+        Field::new("after", DataType::Binary, true),
+        Field::new("max_rows", DataType::UInt32, false),
+        Field::new("max_bytes", DataType::UInt64, false),
+        Field::new("start", DataType::Binary, false),
+        Field::new("end", DataType::Binary, true),
+    ]))
+}
+
+fn scan_input(
+    schema: &Arc<Schema>,
+    group: u32,
+    after: Option<&[u8]>,
+    rows: u32,
+    bytes: usize,
+    start: &[u8],
+    end: Option<&[u8]>,
+) -> Result<RecordBatch> {
+    Ok(RecordBatch::try_new(
+        Arc::clone(schema),
+        vec![
+            Arc::new(UInt32Array::from(vec![group])),
+            Arc::new(BinaryArray::from(vec![after])),
+            Arc::new(UInt32Array::from(vec![rows])),
+            Arc::new(UInt64Array::from(vec![bytes as u64])),
+            Arc::new(BinaryArray::from(vec![start])),
+            Arc::new(BinaryArray::from(vec![end])),
+        ],
+    )?)
+}
+
+mod admitted;

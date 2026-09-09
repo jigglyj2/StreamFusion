@@ -9,7 +9,7 @@ use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 mod snapshot_writer;
 pub use snapshot_writer::SnapshotWriter;
 
-pub const STATE_BACKEND_ABI_VERSION: u32 = 8;
+pub const STATE_BACKEND_ABI_VERSION: u32 = 9;
 pub const STATE_BACKEND_OK: i32 = 0;
 
 /// Optional ABI-8 Arrow schema metadata on scan replies. "true" declares the requested range
@@ -109,6 +109,11 @@ pub struct StateBackendApiV1 {
     /// The caller holds the backend stable until completion.
     pub scan_key_group: ArrowOperation,
     pub last_error: LastError,
+    /// ABI 9: same request/response columns as scan_key_group, with host admission before
+    /// allocating page payloads. max_bytes is a page target: one larger entry may be returned
+    /// alone after admission succeeds. This preserves large legacy values during paged restore.
+    /// The caller retains the resulting reservation until the output Arrow buffers are released.
+    pub scan_key_group_admitted: AdmittedArrowOperation,
 }
 
 pub type InitializeStateBackend =

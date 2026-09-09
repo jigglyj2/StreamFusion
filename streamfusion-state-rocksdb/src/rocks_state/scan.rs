@@ -3,6 +3,10 @@
 
 use super::*;
 
+mod admitted;
+#[cfg(test)]
+mod admitted_tests;
+
 /// A bounded ordered range page, including whether the iterator reached the requested boundary.
 #[derive(Debug)]
 pub struct ScanPage {

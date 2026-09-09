@@ -8,12 +8,12 @@ fn rejects_old_abi_and_invalid_open_configuration_without_returning_a_handle() {
     unsafe {
         let mut api = ptr::null();
         assert_ne!(
-            streamfusion_state_backend_init(7, &mut api),
+            streamfusion_state_backend_init(STATE_BACKEND_ABI_VERSION - 1, &mut api),
             STATE_BACKEND_OK
         );
         assert!(api.is_null());
         assert_eq!(
-            streamfusion_state_backend_init(8, &mut api),
+            streamfusion_state_backend_init(STATE_BACKEND_ABI_VERSION, &mut api),
             STATE_BACKEND_OK
         );
         let mut handle = ptr::null_mut();
