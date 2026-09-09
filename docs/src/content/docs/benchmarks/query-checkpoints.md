@@ -363,12 +363,94 @@ membership history still creates workspace proportional to historical cardinalit
 structural work was batched access to individual membership entries. That path is now implemented
 for synchronous COUNT(DISTINCT), including shared filtered counts, Arrow keys, group cleanup and
 old-state migration; see [group aggregation](/StreamFusion/operators/group-aggregation/).
-Its fresh release comparison and larger RocksDB profiles remain pending. The table above measures
-the earlier whole-map implementation and does not establish a reasonable optimization ceiling.
+The table above measures the earlier whole-map implementation. The next section measures the
+per-member implementation; neither establishes a reasonable optimization ceiling.
 
 All raw runs, profiles, metadata, build flags and upstream patch hashes are retained under
 `streamfusion-nexmark-benchmarks/target/measurements/q15/32bc32d9/`, including the failed larger
 RocksDB attempts. The earlier `d809379f` measurements and profiles remain in their own directory.
+
+### Q15 per-member state results and checkpoint capacity
+
+Clean release commit `9fc0c19c9fab5fc1fc5ccfe454a97e69c94a4e6a` replaces whole-map DISTINCT
+history with Arrow-encoded membership keys, one batched read of incoming members and one atomic
+write of changed members and group headers. Shared filtered counts and signed retract counts
+remain exact; DataFusion still computes the aggregates. Legacy inline snapshots migrate when
+next touched. Generated changelog, metrics, restore and rescaling tests passed on both backends.
+The production admission subset remains synchronous BIGINT COUNT(DISTINCT).
+
+Three alternating fresh-JVM pairs used original Q15, RowData input and the original blackhole
+sink, with the same end-to-end timer, host, JVM limits, parallelism and checkpoint settings above.
+Both engines used 1 GiB Flink managed memory and consumer weights
+`OPERATOR:90,STATE_BACKEND:10,PYTHON:30`. No measured forks were discarded and no Kafka was used.
+
+| Backend / events | Flink median seconds [min, max]; MAD | StreamFusion median seconds [min, max]; MAD | Throughput ratio SF/Flink |
+| --- | --- | --- | --- |
+| HashMap / 1M | 8.214385 [6.265439, 8.409952]; 0.195567 | 11.255587 [8.676581, 13.898180]; 2.579006 | **0.729805×** |
+| RocksDB / 1M | 8.191732 [8.102087, 8.355158]; 0.089645 | 7.026451 [6.994387, 7.026959]; 0.000508 | **1.165842×** |
+| RocksDB / 10M | 40.186194 [38.639833, 57.047206]; 1.546361 | 31.910713 [30.185959, 38.937901]; 1.724754 | **1.259332×** |
+
+HashMap remains slower, with substantial variation in its StreamFusion forks. RocksDB is about
+16.6% faster at 1M with disjoint ranges. Its 10M ranges overlap slightly and the median speedup
+is not a uniform per-fork improvement. All successful engines emitted 920,000 / 9,200,000
+blackhole records at 1M / 10M. Every successful StreamFusion EXPLAIN selected the whole native
+plan. Measured native plan/Calc batch counts were **203/138, 200/136, 200/136** for HashMap 1M;
+**220/148, 208/140, 226/152** for RocksDB 1M; and **1899/1268, 1904/1272, 1876/1252** for
+RocksDB 10M. Flink native counters were zero.
+
+Separate 2M profiles completed for both engines on both backends, each emitting 1,840,000
+records. StreamFusion reported 404/272 native plan/Calc batches on HashMap and 388/260 on
+RocksDB. They retain JFR, CPU/allocation collapsed stacks, per-engine flame graphs and
+differential graphs, using 10 ms CPU sampling, Java non-safepoint sampling and native DWARF
+unwinding. These satisfy the longer-workload profile requirement for the **1M** comparison.
+Profiled elapsed times are excluded from the benchmark table. Inclusive CPU shares below use
+all process samples; categories overlap, JNI includes downstream native work and DataFusion
+includes state work beneath execution-plan frames. Zero samples do not establish absence.
+
+| CPU category | HashMap 2M Flink / SF | RocksDB 2M Flink / SF |
+| --- | --- | --- |
+| Samples | 2,224 / 2,352 | 2,737 / 2,495 |
+| Row copying | 14.029% / 7.015% | 10.011% / 6.172% |
+| RowData-to-Arrow writing | 0% / 1.573% | 0% / 1.884% |
+| Arrow C Data / JNI, inclusive | 0% / 13.946% | 0% / 14.228% |
+| Native plan lowering | 0% / 0% | 0% / 0% |
+| DataFusion execution, inclusive | 0% / 12.585% | 0% / 11.503% |
+| DISTINCT membership state access | 0% / 1.658% | 0% / 2.084% |
+| Native aggregate state codec | 0% / 0.043% | 0% / 0.040% |
+| Arrow-backed output access | 0% / 2.253% | 0% / 2.405% |
+| Source polling, inclusive | 31.520% / 22.364% | 21.008% / 21.723% |
+| RocksDB, inclusive | 0% / 0% | 17.647% / 3.367% |
+| Budget callbacks | 0% / 0.043% | 0% / 0.240% |
+| JVM compilation | 35.432% / 35.799% | 32.042% / 35.271% |
+
+The HashMap aggregate-codec share fell from 7.756% in the previous 2M profile to 0.043%.
+This supports the removal of repeated whole-map serialization, rather than isolating its
+throughput contribution. Source work and JVM compilation remain substantial.
+
+Two larger attempts exposed remaining capacity limits:
+
+- **HashMap 10M failed** in its first StreamFusion fork when retained state-table growth
+  requested 34,770,984 bytes with 61,712,205 already reserved and 7,967,496 available. There
+  is no HashMap 10M median or speedup; the failure was retained-state growth, rather than
+  decoding the aggregate's whole membership history.
+- **RocksDB 20M profiling failed** at checkpoint 24 while requesting 106,147,343 bytes for a
+  canonical RocksDB snapshot, with 4,096 already reserved and 96,079,934 available. Flink
+  completed with 18,400,000 output records. The StreamFusion fork did not complete, so the
+  **10M timing comparison still lacks a successful longer paired profile**. Whole-key-group
+  canonical checkpoint buffering is a demonstrated remaining limit.
+
+These are the observed failures under the recorded managed-memory shares, not universal
+maximum event counts. Q15 is production-admitted but its scalability/performance work remains
+open. Retained-state growth and checkpoint buffering need improvement; a larger memory budget,
+disabled checkpoints or smaller replacement forks would not resolve those implementation limits.
+
+Core release/native-CPU artifact SHA-256:
+`5e5b54cf842bb95f0dd53d1803efea905fb4a24b49fbb91bc19f903c9a28d62f`.
+The RocksDB artifact remains
+`118e0d6c10fb0ed24ef99d44e0bc8eaf7d3f81402554bf5b9848ba806cf2e85a`.
+Both retain frame pointers and profiling symbols without reducing optimization. Machine/runtime
+metadata, complete commands, upstream revisions and patch hashes, raw runs and failed-fork logs
+are retained under `streamfusion-nexmark-benchmarks/target/measurements/q15/9fc0c19c/`.
 
 ## Q6 has no Flink streaming baseline
 
