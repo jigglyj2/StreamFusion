@@ -117,6 +117,15 @@ estimate retains base credit for empty maps too. Low-budget tests verify rejecti
 reads/writes and release of batch reservations. This is allocation
 regression evidence, not an end-to-end JVM/native allocation profile or a measured throughput gain.
 
+Synchronous aggregation uses one shared allowance for decoded historical state and its serialized
+mutations. It no longer adds a second decode allowance to batch scratch for the same historical
+bytes. Once the decoded maps have been consumed into mutations, it releases unused decode
+headroom before allocating Arrow output, retaining credit for the serialized buffers. Incoming
+state growth and output retain their separate batch allowances. This changes accounting lifetime,
+not state encoding, backend access, DataFusion computation or changelog semantics. Regression
+tests exercise a 500 KiB historical DISTINCT count/sum value under a 5 MiB allowance, and measure
+decoded numeric/string counted maps with concurrent serialized mutations against the shared credit.
+
 Generated Calc/Aggregate/Calc tests compare `COUNT(*)`, `SUM`, `MIN`, `MAX`, and `AVG` against an
 operator produced by Flink's SQL planner, including its generated handler. They cover null and
 Unicode keys, null values, all four input RowKinds, empty batches, timestamp presence/values,

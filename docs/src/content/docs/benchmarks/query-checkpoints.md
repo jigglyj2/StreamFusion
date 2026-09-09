@@ -261,6 +261,14 @@ pruning, requesting 7,718,512 bytes with 7,498,960 available. State storage and 
 subject to Flink's assigned allowance. Release throughput measurements and mixed JVM/native
 profiles are still pending; this checkpoint does not claim a performance win or a state-size limit.
 
+The first one-million-event release attempt at `8679f83b` also exhausted memory before returning
+a StreamFusion timing: aggregate scratch/output requested 15,017,456 bytes with 12,339,736
+available. That failed attempt is retained under the benchmark's `target/measurements/q15/`
+directory and is not a throughput result. Investigation found duplicate decoded-state allowances
+and decode headroom retained after the decoded maps were freed. Synchronous aggregation now
+keeps one historical-state allowance and releases unused decode credit before building output;
+the release comparison must be rerun on that change.
+
 ## Q6 has no Flink streaming baseline
 
 The upstream Nexmark Q6 query computes a bounded ordered AVG after winning-bid rank selection.

@@ -554,17 +554,13 @@ impl GroupAggregateProcessor {
         let existing = self
             .state
             .get_batch(&unique_key_refs, &self.scratch_reservation)?;
-        let _loaded_state_workspace =
+        let mut loaded_state_workspace =
             crate::state::reserve_decoded_values(&existing, &self.scratch_reservation)?;
         self.state_read_batches = self.state_read_batches.saturating_add(1);
         drop(unique_key_refs);
-        let serialized_state_bytes = existing.iter().fold(0usize, |bytes, value| {
-            bytes.saturating_add(value.as_deref().map_or(0, <[u8]>::len))
-        });
-        // Decoding retractable MIN/MAX expands packed pairs into BTree nodes. Four times the
-        // canonical bytes is a conservative admission bound for that transient representation.
-        self.scratch_reservation
-            .resize(base_reservation.saturating_add(serialized_state_bytes.saturating_mul(4)))?;
+        // The independent loaded-state reservation already covers historical B-tree decoding
+        // and serialized mutations. Batch scratch covers new entries and output; adding another
+        // multiple of the historical bytes here charges the same decoded state twice.
         let mut staged_values = existing
             .iter()
             .map(|value| {
@@ -668,7 +664,7 @@ impl GroupAggregateProcessor {
             touched[key_index] = true;
         }
 
-        let mutations = unique_keys
+        let mutations: Vec<StateMutation> = unique_keys
             .into_iter()
             .zip(staged_values.into_iter().zip(touched))
             .filter_map(|(key, (state, touched))| {
@@ -681,6 +677,13 @@ impl GroupAggregateProcessor {
                 })
             })
             .collect();
+        // Consuming staged_values above drops all decoded maps. Only encoded mutations
+        // remain; retire their unused decode headroom before allocating Arrow output.
+        // New-state growth is independently covered by the incoming batch allowance.
+        let mutation_bytes = mutations.iter().fold(0usize, |bytes, mutation| {
+            bytes.saturating_add(mutation.value.as_ref().map_or(0, Vec::capacity))
+        });
+        loaded_state_workspace.resize(loaded_state_workspace.size().min(mutation_bytes))?;
         // Admit gather/builder buffers while historical values and dirty mutations are still
         // alive. Checking the finished batch would allocate before asking Flink for memory.
         let output_allowance = self.output_admission(&batch, &events)?;
