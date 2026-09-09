@@ -129,7 +129,7 @@ final class StreamFusionWindowAggregateSupport {
     }
 
     static String unsupportedReason(StreamExecWindowAggregate aggregate, ProcessorContext context) {
-        return StreamFusionSessionWindowAdmission.unsupportedReason(
+        return StreamFusionSingleStageWindowAdmission.unsupportedReason(
                 aggregate, context == null ? null : context.getPlanner().getTableConfig());
     }
 
@@ -163,38 +163,6 @@ final class StreamFusionWindowAggregateSupport {
             throw new IllegalStateException("Could not inspect legacy group-window support", e);
         } catch (InvocationTargetException e) {
             throw new IllegalStateException("Legacy group-window support inspection failed", e.getCause());
-        }
-    }
-
-    static String unsupportedReason(ProcessingTimeWindowAggregate aggregate, ProcessorContext context) {
-        try {
-            Class<?> translator = Class.forName(
-                    WINDOW_AGGREGATE_TRANSLATOR_CLASS, true, StreamFusionRuntimeClasses.class.getClassLoader());
-            Method method = translator.getMethod(
-                    "unsupportedReason",
-                    RowType.class,
-                    RowType.class,
-                    int[].class,
-                    org.apache.calcite.rel.core.AggregateCall[].class,
-                    WindowingStrategy.class,
-                    NamedWindowProperty[].class,
-                    boolean.class,
-                    ReadableConfig.class);
-            return (String) method.invoke(
-                    null,
-                    (RowType) aggregate.inputEdge.getOutputType(),
-                    (RowType) aggregate.node.getOutputType(),
-                    aggregate.grouping,
-                    aggregate.aggregateCalls,
-                    aggregate.windowing,
-                    windowProperties(aggregate.node),
-                    windowNeedRetraction(aggregate.node),
-                    aggregate.node.getPersistedConfig());
-        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
-            throw new IllegalStateException("Could not inspect folded processing-time WindowAggregate support", e);
-        } catch (InvocationTargetException e) {
-            throw new IllegalStateException(
-                    "Folded processing-time WindowAggregate support inspection failed", e.getCause());
         }
     }
 

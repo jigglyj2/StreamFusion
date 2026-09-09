@@ -72,7 +72,7 @@ final class StreamFusionStatelessRegion {
             StreamFusionOriginalWindowResources resources = null;
             for (ExecNode<?> stage : stages) {
                 var nativeStage = (StreamFusionNativePlanNode) stage;
-                if (nativeStage.ownsLocalWindowBuffer()) {
+                if (nativeStage.ownsWindowBuffer()) {
                     var owner = nativeStage.nativeMetadata().resources();
                     if (owner == null)
                         throw new IllegalStateException("Local-window stage has no original resource graph");

@@ -242,7 +242,7 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                             boolean.class,
                             org.apache.flink.configuration.ReadableConfig.class);
             Class.forName(
-                            "tech.streamfusion.flink.planner.window.StreamFusionSessionWindowAggregateTranslator",
+                            "tech.streamfusion.flink.planner.window.StreamFusionSingleStageWindowAggregateTranslator",
                             true,
                             StreamFusionRuntimeClasses.class.getClassLoader())
                     .getMethod(
@@ -560,8 +560,8 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
             rejections.add(
                     nodePath + "\nlocal window aggregate: native acceleration requires its paired global aggregate");
         } else if (node instanceof StreamExecWindowAggregate) {
-            // Only the verified shared SESSION path is admitted here. Inspect every original
-            // input as well: legacy PROCTIME folding must not hide a rejected Calc clock contract.
+            // Admit the verified single-stage family and inspect every original input.
+            // Clock attributes and their exchange edge remain part of the selected graph.
             String reason = unsupportedReason((StreamExecWindowAggregate) node, context);
             if (reason != null) {
                 rejections.add(nodePath + "\n" + reason);

@@ -15,7 +15,6 @@ import static tech.streamfusion.flink.planner.StreamFusionExecGraphProcessor.cop
 import static tech.streamfusion.flink.planner.StreamFusionGroupAggregateSupport.*;
 import static tech.streamfusion.flink.planner.StreamFusionJoinSupport.*;
 import static tech.streamfusion.flink.planner.StreamFusionOverSupport.*;
-import static tech.streamfusion.flink.planner.StreamFusionProcessingTimeShapes.*;
 import static tech.streamfusion.flink.planner.StreamFusionRankShapes.*;
 import static tech.streamfusion.flink.planner.StreamFusionRankSupport.*;
 import static tech.streamfusion.flink.planner.StreamFusionRuntimeClasses.*;
@@ -130,22 +129,6 @@ final class StreamFusionWindowAggregateConversions {
         }
         if (node instanceof StreamExecWindowAggregate) {
             StreamExecWindowAggregate aggregate = (StreamExecWindowAggregate) node;
-            ProcessingTimeWindowAggregate folded = processingTimeWindowAggregate(aggregate);
-            if (folded != null) {
-                StreamFusionExecWindowAggregate replacement = new StreamFusionExecWindowAggregate(
-                        aggregate.getPersistedConfig(),
-                        folded.grouping,
-                        folded.aggregateCalls,
-                        folded.windowing,
-                        windowProperties(aggregate),
-                        windowNeedRetraction(aggregate),
-                        folded.inputProperty,
-                        (RowType) aggregate.getOutputType(),
-                        "StreamFusionWindowAggregate");
-                replacement.setInputEdges(List.of(
-                        copyEdge(folded.inputEdge, context.convert(folded.inputEdge.getSource()), replacement)));
-                return replacement;
-            }
             StreamFusionExecWindowAggregate replacement = new StreamFusionExecWindowAggregate(
                     aggregate.getPersistedConfig(),
                     windowGrouping(aggregate),

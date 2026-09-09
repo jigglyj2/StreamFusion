@@ -21,8 +21,8 @@ interface StreamFusionNativePlanNode extends ExecNode<RowData> {
         return false;
     }
 
-    /** Local buffers need the original Flink capacity in addition to the runtime allocation budget. */
-    default boolean ownsLocalWindowBuffer() {
+    /** Window buffers need the original Flink capacity in addition to the runtime allocation budget. */
+    default boolean ownsWindowBuffer() {
         return false;
     }
 

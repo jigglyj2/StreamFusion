@@ -25,7 +25,7 @@ public final class StreamFusionExecWindowAggregate extends ExecNodeBase<RowData>
         implements StreamExecNode<RowData>, StreamFusionNativePlanNode {
     private final StreamFusionNativeNodeMetadata nativeMetadata = new StreamFusionNativeNodeMetadata();
     private static final String TRANSLATOR_CLASS =
-            "tech.streamfusion.flink.planner.window.StreamFusionSessionWindowAggregateTranslator";
+            "tech.streamfusion.flink.planner.window.StreamFusionSingleStageWindowAggregateTranslator";
 
     private final int[] grouping;
     private final AggregateCall[] aggregateCalls;
@@ -65,6 +65,11 @@ public final class StreamFusionExecWindowAggregate extends ExecNodeBase<RowData>
     @Override
     public boolean ownsNativeKeyedState() {
         return true;
+    }
+
+    @Override
+    public boolean ownsWindowBuffer() {
+        return windowing.isProctime();
     }
 
     @Override

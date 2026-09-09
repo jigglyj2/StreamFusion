@@ -25,7 +25,10 @@ public final class FlinkLogicalTypeProto {
 
     public static LogicalType serialize(org.apache.flink.table.types.logical.LogicalType flinkType) {
         flinkType = physicalType(flinkType);
-        LogicalType.Builder type = LogicalType.newBuilder().setNullable(flinkType.isNullable());
+        // Flink's unmaterialized processing-time attribute is a physical null placeholder,
+        // even when the logical planner type is NOT NULL. The consuming operator owns the clock.
+        LogicalType.Builder type = LogicalType.newBuilder()
+                .setNullable(flinkType.isNullable() || LogicalTypeChecks.isProctimeAttribute(flinkType));
         LogicalTypeRoot root = flinkType.getTypeRoot();
         switch (root) {
             case TINYINT:

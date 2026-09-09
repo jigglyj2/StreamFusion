@@ -24,8 +24,6 @@ import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.rex.RexShuttle;
 import org.apache.calcite.rex.RexWindowBound;
 import org.apache.calcite.rex.RexWindowBounds;
-import org.apache.flink.table.planner.plan.logical.TimeAttributeWindowingStrategy;
-import org.apache.flink.table.planner.plan.logical.WindowingStrategy;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecEdge;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNode;
 import org.apache.flink.table.planner.plan.nodes.exec.batch.BatchExecExchange;
@@ -38,7 +36,6 @@ import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecCalc;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecDeduplicate;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecExchange;
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecOverAggregate;
-import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWindowAggregate;
 import org.apache.flink.table.types.logical.RowType;
 
 /** StreamFusion ProcessingTimeShapes for native physical planning. */
@@ -268,95 +265,9 @@ final class StreamFusionProcessingTimeShapes {
         return observedRemovedField[0] ? null : new RemappedExpressions(remappedProjection, remappedCondition);
     }
 
-    static ProcessingTimeWindowAggregate processingTimeWindowAggregate(StreamExecWindowAggregate node) {
-        WindowingStrategy originalWindowing = windowing(node);
-        if (!(originalWindowing instanceof TimeAttributeWindowingStrategy) || !originalWindowing.isProctime()) {
-            return null;
-        }
-        ExecEdge aggregateInput = node.getInputEdges().get(0);
-        if (!(aggregateInput.getSource() instanceof StreamExecExchange)) {
-            return null;
-        }
-        StreamExecExchange exchange = (StreamExecExchange) aggregateInput.getSource();
-        ExecEdge exchangeInput = exchange.getInputEdges().get(0);
-        if (!(exchangeInput.getSource() instanceof StreamExecCalc)) {
-            return null;
-        }
-        StreamExecCalc calc = (StreamExecCalc) exchangeInput.getSource();
-        if (condition(calc) != null) {
-            return null;
-        }
-        List<RexNode> projects = projection(calc);
-        int timeIndex = ((TimeAttributeWindowingStrategy) originalWindowing).getTimeAttributeIndex();
-        if (timeIndex < 0 || timeIndex >= projects.size() || !isProctimeCall(projects.get(timeIndex))) {
-            return null;
-        }
-        int[] sourceIndex = new int[projects.size()];
-        java.util.Arrays.fill(sourceIndex, -1);
-        for (int index = 0; index < projects.size(); index++) {
-            RexNode project = projects.get(index);
-            if (index == timeIndex) {
-                continue;
-            }
-            if (!(project instanceof RexInputRef)) {
-                return null;
-            }
-            sourceIndex[index] = ((RexInputRef) project).getIndex();
-        }
-        int[] remappedGrouping = windowGrouping(node);
-        for (int index = 0; index < remappedGrouping.length; index++) {
-            int projected = remappedGrouping[index];
-            if (projected < 0 || projected >= sourceIndex.length || sourceIndex[projected] < 0) {
-                return null;
-            }
-            remappedGrouping[index] = sourceIndex[projected];
-        }
-        org.apache.calcite.rel.core.AggregateCall[] calls = windowAggregateCalls(node);
-        for (int index = 0; index < calls.length; index++) {
-            List<Integer> remappedArguments =
-                    new ArrayList<>(calls[index].getArgList().size());
-            for (int projected : calls[index].getArgList()) {
-                if (projected < 0 || projected >= sourceIndex.length || sourceIndex[projected] < 0) {
-                    return null;
-                }
-                remappedArguments.add(sourceIndex[projected]);
-            }
-            calls[index] = calls[index].withArgList(remappedArguments);
-        }
-        TimeAttributeWindowingStrategy remappedWindowing = new TimeAttributeWindowingStrategy(
-                originalWindowing.getWindow(), originalWindowing.getTimeAttributeType(), 0);
-        ExecEdge calcInput = calc.getInputEdges().get(0);
-        return new ProcessingTimeWindowAggregate(
-                node, calcInput, calc.getInputProperties().get(0), remappedGrouping, calls, remappedWindowing);
-    }
-
     static boolean isProctimeCall(RexNode expression) {
         return expression instanceof RexCall
                 && ((RexCall) expression).getOperator().getName().equalsIgnoreCase("PROCTIME");
-    }
-
-    static final class ProcessingTimeWindowAggregate {
-        final StreamExecWindowAggregate node;
-        final ExecEdge inputEdge;
-        final org.apache.flink.table.planner.plan.nodes.exec.InputProperty inputProperty;
-        final int[] grouping;
-        final org.apache.calcite.rel.core.AggregateCall[] aggregateCalls;
-        final TimeAttributeWindowingStrategy windowing;
-
-        ProcessingTimeWindowAggregate(
-                StreamExecWindowAggregate node,
-                ExecEdge inputEdge,
-                org.apache.flink.table.planner.plan.nodes.exec.InputProperty inputProperty,
-                int[] grouping,
-                org.apache.calcite.rel.core.AggregateCall[] aggregateCalls,
-                TimeAttributeWindowingStrategy windowing) {
-            this.node = node;
-            this.inputEdge = inputEdge;
-            this.inputProperty = inputProperty;
-            this.grouping = grouping;
-            this.aggregateCalls = aggregateCalls;
-            this.windowing = windowing;
-        }
     }
 
     static final class RemappedExpressions {

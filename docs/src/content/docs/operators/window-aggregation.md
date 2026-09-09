@@ -11,6 +11,7 @@ and arguments, BIGINT/INTEGER grouping keys (or no keys), synchronous state and 
 DISTINCT-only TUMBLE also accepts nullable BIGINT/INTEGER/VARCHAR grouping keys, including
 composite keys, under the same execution settings. Single-stage SESSION supports unfiltered COUNT(*)
 with one nullable or non-null BIGINT partition key and TIMESTAMP(3) event time, on both backends.
+Single-stage processing-time TUMBLE supports the UTC COUNT(*) subset described below.
 Other window families retain whole-plan fallback under the
 [architecture admission requirements](/StreamFusion/development/architecture-admission/).
 Both in-memory and supported default RocksDB state use the common native runtime.
@@ -91,12 +92,17 @@ complete SESSION conformance evidence established for COUNT and remain gated.
 
 ## Processing-time window contract
 
-Processing-time TVF aggregation remains whole-plan Flink fallback. EXPLAIN reports the missing
-shared processing-time planner resource binding and production parity contract. The logical `PROCTIME()`
-Calc slot lowers to DataFusion's typed null, matching Flink's generated placeholder; this does
-not read a clock or admit the window. `PROCTIME_MATERIALIZE` still reports a clock-lifecycle fallback.
-Legacy processing-time shape folding does not hide rejected inputs. A logical time attribute
-must not be replaced with a batch timestamp.
+Ordinary whole-plan selection admits direct processing-time TUMBLE with UTC local time zone,
+one nullable or non-null BIGINT key, unfiltered COUNT(*), start/end properties, synchronous state
+and disabled mini-batching. The window must directly consume an exchange edge. Other grouping
+shapes, aggregates, window kinds, time zones, retractions and unsupported backend/metric settings
+fall back with an explicit reason; computation between the exchange and clock-owning window
+also remains gated. Flink's existing `table.local-time-zone` setting selects the time zone.
+
+The logical `PROCTIME()` Calc slot lowers to DataFusion's typed null. Its physical Arrow and
+protobuf fields are nullable even when the logical attribute is NOT NULL; ordinary timestamp
+constraints are unchanged. `PROCTIME_MATERIALIZE` remains gated. The original Calc and exchange
+are retained during replacement; the legacy rewrite that removed them has been deleted.
 
 Per-record clock transport and Flink-owned timer scheduling are implemented as shared-plan
 prerequisites. The reusable DataFusion grouped buffer now also supports clock-driven TUMBLE
@@ -124,7 +130,8 @@ A shared-region test verifies that two exits share the same result buffers and o
 The original-resource pass now captures single-stage processing-time buffer owners and carries
 their stable identities into protocol 2. Tests compare their capacity/page bytes with generated
 Flink job graphs on both backends, including weighted boundaries and distinct slot-sharing groups.
-These resource tests do not yet establish ordinary selected-plan admission.
+Ordinarily selected, serialized factories also retain that resource identity and execute against
+the controlled Flink clock oracle.
 
 Generated Java tests run the SQL-created Flink operator and actual shared native factory through
 identical clocks with nullable keys, varying batch sizes and one-/ten-/37-second windows. They
@@ -137,16 +144,16 @@ rescaling, canonical backend switches, aligned/unaligned keyed snapshots and inc
 SST reuse. Real task/network tests capture and replay Arrow IPC after both barrier modes: records
 replayed in a later processing-time window use the restored task clock, while checkpointed records
 keep their absolute timers. Complete changelog bytes match Flink, ignoring only its unspecified
-order among independent keys at the same timer deadline. Ordinary planner resource binding and
-production parity remain pending; Q12 is not admitted.
+order among independent keys at the same timer deadline. Live SQL tests additionally produce
+non-empty windows through the real Arrow exchange on both backends. The official Nexmark Q12
+RowData run and release comparison remain pending.
 
 The SQL-generated Flink reference tests use explicit UTC clocks, nullable keys, generated counts
 and one-/ten-/37-second windows. They verify that the window samples its own clock even when the
 physical PROCTIME slot is null, only processing-time timers emit results, and pending timers survive
 both-backend checkpoint restore. A terminal watermark and bounded finish leave an open processing-time
 window un-emitted. These reference tests define the controlled-clock contract used by the native parity fixtures;
-they do not establish ordinary planner admission. Non-UTC clock/zone behavior needs its own
-proof. Q12's bounded blackhole output can therefore be empty or incomplete depending on wall-clock
+Non-UTC clock/zone behavior needs its own proof. Q12's bounded blackhole output can therefore be empty or incomplete depending on wall-clock
 alignment and cannot by itself establish result parity or acceleration.
 
 ## Q5 checkpoint

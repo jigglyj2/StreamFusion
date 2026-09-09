@@ -159,7 +159,9 @@ public final class ArrowUtils {
     private static Field toArrowField(String fieldName, LogicalType logicalType) {
         LogicalType physicalType = physicalType(logicalType);
         FieldType fieldType = new FieldType(
-                logicalType.isNullable(), physicalType.accept(LogicalTypeToArrowTypeConverter.INSTANCE), null);
+                logicalType.isNullable() || LogicalTypeChecks.isProctimeAttribute(physicalType),
+                physicalType.accept(LogicalTypeToArrowTypeConverter.INSTANCE),
+                null);
         List<Field> children = null;
         if (physicalType instanceof ArrayType) {
             children = Collections.singletonList(toArrowField("element", ((ArrayType) physicalType).getElementType()));

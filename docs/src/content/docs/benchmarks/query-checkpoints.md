@@ -134,66 +134,42 @@ General improvements amortize decoded-state budget calls and eliminate empty ter
 scan probes while retaining ABI-8 compatibility. All twenty-million-event profiles complete.
 Q11's supported SESSION COUNT path is delivered within these limits.
 
-Q12 is the active checkpoint. Its ordinary plan contains a `PROCTIME()` Calc, exchange and
-single-stage processing-time TUMBLE COUNT. Both backends currently retain whole-plan fallback:
-shared processing-time planner resource binding and production parity still need verification.
-The logical `PROCTIME()` Calc attribute now lowers to DataFusion's typed null expression, matching
-Flink's code generator without reading or storing a clock value. Generated physical-Calc tests
-compare complete ordered changelog bytes and record timestamps for every RowKind, nullable keys,
-empty inputs and different batch sizes. Actual `PROCTIME_MATERIALIZE` clock reads remain gated.
-EXPLAIN inspects the original nodes instead of hiding rejected inputs through legacy shape folding;
-it does not mislabel Q12 as an unsupported SESSION window.
+Q12 is the active checkpoint. Its processing-time TUMBLE COUNT operator now supports ordinary
+whole-plan selection with UTC, one nullable or non-null BIGINT key, unfiltered COUNT(*), start/end
+properties, synchronous state and disabled mini-batching. The original `PROCTIME()` Calc and
+exchange remain in the selected graph. Other time zones, window kinds, aggregate/key shapes and
+clock-sensitive placements retain precise whole-plan fallback. The official Nexmark RowData run,
+release performance comparison and mixed profiles are still pending; this is not a completed Q12
+performance checkpoint.
 
-A SQL-generated Flink clock oracle now checks nullable keys, generated counts, one-/ten-/37-second
-UTC windows, live clock transitions, terminal watermarks, bounded finish and restoration of pending
-processing-time timers on both backends. The physical PROCTIME input slot is null; the consuming
-window reads Flink's clock. Only processing-time progress fires these windows. Terminal event time
-and finishing input do not close the final open window. These are prerequisite reference tests,
-not native parity or admission evidence. The next implementation must preserve this lifecycle in
-the shared Arrow tree; substituting one timestamp per batch or a private native clock is not proven
-equivalent. Shared control protocol 2 now carries a separate, capability-negotiated processing-time
-timer event through the normal native Arrow tree. Existing event-time operators reject that event
-before mutation and keep protocol-one capabilities. The shared region edge now registers the earliest
-negotiated native deadline with Flink's processing-time service, including overdue restored timers,
-and cancels callbacks on finish/close without firing open windows. Focused lifecycle tests cover stale
-callbacks, tied owners, signed timestamp boundaries, invalid descriptors, and failed timer drains.
-Capability protocol 3 now connects clock ports to the shared tree/region execution edge. It exports
-one Arrow Int64 clock vector per negotiated input through the existing C Data call, uses header-only
-row-count inspection for IPC, and attaches metadata after native payload decoding. Tests cover
-per-record values, rollback/boundaries, direct/decoded input ownership, invalid bindings and
-schema/length failures. Clock owners must directly consume an external edge and remove clock
-metadata before output. The shared window factory now enables this capability for explicit verified
-TUMBLE COUNT(*) bindings; ordinary admission still requires complete planner resource binding and
-production parity. This is a prerequisite, not Q12 admission.
-The existing DataFusion grouped window buffer now has a processing-time mode. It assigns each
-row from its supplied clock while retaining Flink's buffer capacity and flush boundaries; watermarks
-and EOF do not flush it. Flink reference tests on both backends establish an observable edge case:
-a repeated or rollback timer can emit COUNT zero while new records remain buffered. A checkpoint
-publishes those records, so the next repeated timer sees that count. Native buffer tests preserve
-these pending/published boundaries, including negative clocks and null PROCTIME placeholders.
-The native buffer/state component now reuses ordered Arrow-keyed slice storage and DataFusion
-partial merging for direct UTC TUMBLE COUNT(*). Timers register at raw arrival and fire in bounded
-frontiers even when no accumulator was published; flushing state does not recreate fired timers.
-Component tests match the established Flink clock cases and verify cross-backend absolute timer
-restore with one-to-two rescaling, bounded state I/O, input-plan fingerprinting and memory denial.
-Task-resource protocol 2 now binds the original Flink buffer capacity before keyed factory creation.
-Generated Java tests compare complete changelog/control bytes and registered metrics against the
-SQL-created Flink operator using both direct C Data and IPC input. Clock rollback/repetition,
-terminal controls and pending-timer checkpoint restore pass on both backends. Native tests cover
-transactional resource failures, cross-backend factory restore and shared-buffer multi-output
-regions. Capacity-pressure tests now match Flink's published counts for 300,000 records at two
-Arrow batch sizes, including the remaining count after a checkpoint and repeated timer. Generated
-recovery tests cover one-to-two-to-one rescaling, canonical backend switches, aligned/unaligned
-keyed checkpoints and reused RocksDB SSTs. Actual Flink task/channel tests restore Arrow IPC after
-aligned and unaligned barriers on both backends. Replayed records sample the receiving task's clock
-in the next window; saved records retain their original absolute timer. Complete changelog bytes
-match the SQL-generated Flink reference, canonicalizing only independent keys tied at one deadline.
-The original-resource pass now captures single-stage processing-time buffers. Their resolved
-physical identities, capacity and page size match Flink job graphs on both backends, including
-weighted boundaries and different slot-sharing groups. Selected-plan resource finalization and
-the production Q12 checkpoint remain pending.
+The logical PROCTIME attribute lowers to DataFusion's typed null. Arrow/protobuf schemas allow
+that physical null even when Flink's logical attribute is NOT NULL; ordinary timestamp constraints
+are unchanged. Actual `PROCTIME_MATERIALIZE` clock reads remain gated. The receiving window reads
+one Flink clock value per record at its external Arrow edge, through the existing C Data call or
+after a single IPC decode. Flink owns mailbox scheduling and checkpoint coordination; native state
+stores absolute timers. A private native clock or one timestamp per batch is not substituted.
 
-No Q12 performance result is claimed from empty/partial max-speed bounded output.
+The reusable DataFusion buffer preserves Flink's original paged capacity, pressure/checkpoint
+flushes and strictly advancing timer progression. Repeated or rollback timers can emit COUNT zero
+while new records remain buffered. Only raw arrivals register timers; publishing partials cannot
+recreate fired timers. Ordered Arrow-keyed slice state and DataFusion merging batch backend access
+and emit bounded timer frontiers. Large buffers, retained state and growing workspaces remain
+under Flink's managed-memory reservations.
+
+Generated controlled-clock tests compare complete changelog/control bytes and registered metrics
+on both backends, including nullable keys, varying batches, one-/ten-/37-second windows, rollback,
+terminal controls and checkpoint restore. Pressure tests cover 300,000 records at two batch sizes.
+Recovery covers one-to-two-to-one rescaling, canonical backend switches, incremental RocksDB SST
+reuse and actual aligned/unaligned IPC replay into a later processing-time window. Only Flink's
+unspecified order among independent keys tied at one timer deadline is canonicalized.
+
+Ordinarily selected factories retain the original physical identity, Arrow input/output and
+complete-pipeline resource binding through serialization, and match the Flink clock oracle.
+Original capacity/page bytes also match Flink job graphs with weighted boundaries and distinct
+slot-sharing groups. Live SQL tests produce non-empty windows through the actual exchange on both
+backends. Those separate wall-clock jobs check execution invariants; exact bytes are established
+with identical controlled clocks. Terminal watermarks and bounded finish do not emit an open
+processing-time window. No Q12 performance result is claimed from empty/partial max-speed output.
 
 ## Q6 has no Flink streaming baseline
 

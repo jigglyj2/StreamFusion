@@ -21,6 +21,11 @@ class ProcessingWindowArchitectureTest {
         assertThat(Files.readString(root.resolve("shared_processing/execution.rs")))
                 .contains("impl SharedWindowKernel", "clock.clone()", "batch.columns().to_vec()")
                 .doesNotContain("JNIEnv", "new_current_thread", "SystemTime");
+        assertThat(
+                        Files.readString(
+                                Path.of(
+                                        "../streamfusion-flink-planner/src/main/java/tech/streamfusion/flink/planner/StreamFusionWindowAggregateConversions.java")))
+                .doesNotContain("processingTimeWindowAggregate(", "folded.inputEdge", "folded.windowing");
         assertThat(Files.readString(
                         Path.of("src/main/java/tech/streamfusion/flink/window/NativeLocalWindowResources.java")))
                 .contains("getProcessingTime()", "memoryBytes(environment, runtime)")

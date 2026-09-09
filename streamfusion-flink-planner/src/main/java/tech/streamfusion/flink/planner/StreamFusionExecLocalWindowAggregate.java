@@ -55,7 +55,7 @@ public final class StreamFusionExecLocalWindowAggregate extends ExecNodeBase<Row
     }
 
     @Override
-    public boolean ownsLocalWindowBuffer() {
+    public boolean ownsWindowBuffer() {
         return true;
     }
 

@@ -75,9 +75,10 @@ or rolling policies. See the query checkpoint page for its delivery status. q14 
 arithmetic beyond the q1 conversion shape, and timestamp calendar extraction; q21 uses Java-regex
 semantics. Q12's processing-time SQL is catalogued, but its windows align to the live Flink clock.
 A bounded max-speed run may finish before a timer fires, and finishing input does not emit the final
-open window. Empty or partial results do not establish parity or acceleration. Q12 remains whole-plan
-Flink fallback pending its per-record clock and processing-time timer contract. See the query
-checkpoint page for controlled-clock evidence and remaining work.
+open window. Empty or partial results do not establish parity or acceleration. Its UTC TUMBLE COUNT operator now has ordinary
+selection, controlled-clock changelog/metric parity, both-backend recovery and live SQL execution
+coverage. The official Q12 RowData run and release comparison remain pending. See the query
+checkpoint page for evidence and remaining work.
 
 Build the local Nexmark connector against this project's Flink version:
 

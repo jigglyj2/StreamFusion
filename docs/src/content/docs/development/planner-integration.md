@@ -276,7 +276,11 @@ ports; existing event-time operators keep their previous descriptor count and ca
 Tests cover native tree/region consumption, IPC input replacement, signed clock values, shared
 buffer identity, producer/import failure cleanup, malformed descriptors, and rejected clock
 placement. The shared window factory now consumes this capability for explicit direct UTC TUMBLE
-COUNT(*) bindings. Q12 remains gated until ordinary planner resource binding and production parity are verified.
+COUNT(*) bindings and ordinary single-stage selection. The planner requires a direct exchange
+input and preserves the original PROCTIME Calc, exchange and window identities. The obsolete
+processing-time shape rewrite has been removed. Physical Arrow/protobuf PROCTIME fields allow
+the null placeholder even for logical NOT NULL attributes; ordinary timestamp constraints remain
+unchanged. Other time zones, window kinds and unverified semantic subsets retain fallback.
 
 The DataFusion grouped window buffer is shared as an internal computation component, with a
 processing-time mode for direct UTC TUMBLE input. It preserves the null logical PROCTIME slot,
@@ -302,7 +306,8 @@ aligned/unaligned snapshots with incremental RocksDB SST reuse. Actual Flink cha
 uses the restored receiving task's clock for replayed IPC and retains saved absolute timer keys;
 both backends and both barrier modes match the SQL-generated reference changelog. The task harness
 replaces only the clock before operator initialization, retaining Flink's mailbox dispatch and
-system timer service. Ordinary planner resource binding and production parity remain pending.
+system timer service. Ordinarily selected factories also match the controlled Flink clock oracle,
+and live SQL execution produces non-empty windows through the real exchange on both backends.
 
 Task-resource protocol 2 extends the existing local-buffer descriptor to processing-time windows.
 Original Flink memory shares and page sizes bind before keyed factories are constructed. No new
@@ -314,8 +319,9 @@ windows. It preserves their original physical node identity and Flink OPERATOR/S
 use cases when resolving complete-pipeline shares. Generated job-graph comparisons cover both
 backends, weighted sources, unioned slot-sharing groups and a weighted sink added after SQL
 translation. The resolved protocol-2 capacity/page bytes match Flink; changing a replacement
-operator's memory weight cannot change this buffer geometry. End-to-end selected-plan binding
-and production admission remain separate checks.
+operator's memory weight cannot change this buffer geometry. Selected-plan tests verify original
+identities and complete-pipeline resources through factory serialization and native execution.
+The official Nexmark Q12 run and release performance checkpoint remain pending.
 
 Shared regions can bind the existing Flink memory/state lifecycle directly. The same backend
 leases and checkpoint participants serve tree and shared definitions; they do not create another

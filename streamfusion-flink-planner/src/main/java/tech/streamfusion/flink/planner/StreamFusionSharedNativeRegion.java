@@ -61,7 +61,7 @@ final class StreamFusionSharedNativeRegion {
             if (stage.ownsNativeKeyedState())
                 ids.add((1L << 32)
                         | Integer.toUnsignedLong(stage.nativeMetadata().physicalNodeId(node)));
-            if (stage.ownsLocalWindowBuffer()) {
+            if (stage.ownsWindowBuffer()) {
                 var original = stage.nativeMetadata().resources();
                 if (original == null || (resourceOwner != null && resourceOwner != original))
                     throw new IllegalStateException(
