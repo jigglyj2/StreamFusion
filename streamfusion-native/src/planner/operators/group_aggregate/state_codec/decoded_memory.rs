@@ -29,6 +29,7 @@ fn add(left: usize, right: usize) -> Result<usize> {
 }
 
 fn workspace(bytes: &[u8], calls: &[Call]) -> Result<usize> {
+    let bytes = super::super::membership::header_bytes(bytes)?;
     let mut cursor = Cursor::new(bytes);
     if cursor.read_exact(4)? != STATE_MAGIC {
         return Err(DataFusionError::Execution(

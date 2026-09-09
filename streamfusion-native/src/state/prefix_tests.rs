@@ -82,5 +82,24 @@ fn prefix_pages_cover_empty_binary_and_unbounded_suffixes_on_every_backend() {
                     .collect::<Vec<_>>()
             );
         }
+        // A large inline value from another logical group must not consume this prefix's
+        // page budget. This matters while old and migrated DISTINCT groups coexist.
+        state
+            .write_batch(vec![StateMutation {
+                key: StateKey {
+                    key_group: 3,
+                    key: vec![42],
+                },
+                value: Some(vec![0; 4096]),
+            }])
+            .unwrap();
+        let mut selected = 0;
+        state
+            .visit_prefix(3, &[255], 2, 256, &mut |page| {
+                selected += page.len();
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(selected, 3);
     }
 }

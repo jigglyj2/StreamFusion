@@ -360,9 +360,11 @@ codec, including repeated B-tree insertion; that share fell to 7.756% after bulk
 This is profile evidence for the implementation change, not an isolated throughput attribution.
 Q15's performance checkpoint remains incomplete: loading and rewriting each group's whole
 membership history still creates workspace proportional to historical cardinality. The next
-structural work is batched access to individual membership entries, with Flink's group cleanup,
-signed counts and recovery semantics preserved. Larger RocksDB capacity and profiles must then
-be revalidated; these results do not establish a reasonable optimization ceiling.
+structural work was batched access to individual membership entries. That path is now implemented
+for synchronous COUNT(DISTINCT), including shared filtered counts, Arrow keys, group cleanup and
+old-state migration; see [group aggregation](/StreamFusion/operators/group-aggregation/).
+Its fresh release comparison and larger RocksDB profiles remain pending. The table above measures
+the earlier whole-map implementation and does not establish a reasonable optimization ceiling.
 
 All raw runs, profiles, metadata, build flags and upstream patch hashes are retained under
 `streamfusion-nexmark-benchmarks/target/measurements/q15/32bc32d9/`, including the failed larger

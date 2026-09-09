@@ -44,6 +44,7 @@ pub(crate) mod execution_plan;
 pub(super) mod flink_udaf;
 pub(super) mod grouped_compute;
 mod mini_batch;
+mod membership;
 mod output_admission;
 mod partial_batch;
 mod planning;
@@ -74,6 +75,7 @@ const BOUNDED_OUTPUT_MAX_ROWS: usize = 16_384;
 pub(crate) struct GroupAggregateProcessor {
     plan: proto::GroupAggregate,
     calls: Vec<Call>,
+    membership_layout: Option<membership::MembershipLayout>,
     max_parallelism: u32,
     last_key_group: u32,
     state: Box<dyn KeyedState>,
@@ -420,9 +422,20 @@ impl GroupAggregateProcessor {
             ));
         }
         planned_schema_reservation.resize(retained_schema_bytes)?;
+        let membership_layout = if !partial_input
+            && !plan.bounded_final_output
+            && plan.mini_batch_size == 0
+            && membership::MembershipLayout::eligible(&calls)
+        {
+            control_reservation.try_grow(calls.len().saturating_mul(4096))?;
+            Some(membership::MembershipLayout::new(&calls)?)
+        } else {
+            None
+        };
         Ok(Self {
             plan,
             calls,
+            membership_layout,
             max_parallelism,
             last_key_group,
             state,
@@ -561,16 +574,44 @@ impl GroupAggregateProcessor {
         // The independent loaded-state reservation already covers historical B-tree decoding
         // and serialized mutations. Batch scratch covers new entries and output; adding another
         // multiple of the historical bytes here charges the same decoded state twice.
+        let external = existing
+            .iter()
+            .map(|value| value.as_ref().is_some_and(|bytes| membership::is_header(bytes.as_ref())))
+            .collect::<Vec<_>>();
         let mut staged_values = existing
             .iter()
             .map(|value| {
                 value
                     .as_deref()
-                    .map(|bytes| decode_state(bytes, &self.calls))
+                    .map(|bytes| match &self.membership_layout {
+                        Some(layout) => layout.decode(bytes, &self.calls),
+                        None => decode_state(bytes, &self.calls),
+                    })
                     .transpose()
             })
             .collect::<Result<Vec<_>>>()?;
         drop(existing);
+        let mut membership_batch = match &self.membership_layout {
+            Some(layout) => {
+                let accumulates = (0..batch.num_rows())
+                    .map(|row| self.accumulates(&batch, row))
+                    .collect::<Result<Vec<_>>>()?;
+                let members = layout.load(
+                    &self.calls,
+                    self.state.as_ref(),
+                    &batch,
+                    &unique_keys,
+                    &row_key_indices,
+                    &accumulates,
+                    &mut staged_values,
+                    &external,
+                    &self.scratch_reservation,
+                )?;
+                self.state_read_batches = self.state_read_batches.saturating_add(members.read_batches);
+                Some(members)
+            }
+            None => None,
+        };
         let mut touched = vec![false; unique_keys.len()];
         let mut events = OutputEvents::with_capacity(batch.num_rows() * 2, self.calls.len());
         let mut event_memory = self
@@ -669,7 +710,17 @@ impl GroupAggregateProcessor {
             touched[key_index] = true;
         }
 
-        let mutations: Vec<StateMutation> = unique_keys
+        let member_mutations = membership_batch
+            .as_mut()
+            .map(|members| {
+                members.mutations(
+                    self.membership_layout.as_ref().unwrap(),
+                    &staged_values,
+                    &touched,
+                )
+            })
+            .unwrap_or_default();
+        let mut mutations: Vec<StateMutation> = unique_keys
             .into_iter()
             .zip(staged_values.into_iter().zip(touched))
             .filter_map(|(key, (state, touched))| {
@@ -678,11 +729,15 @@ impl GroupAggregateProcessor {
                         key,
                         value: state
                             .filter(|state| state.row_count != 0)
-                            .map(|state| encode_state(&state)),
+                            .map(|state| match &self.membership_layout {
+                                Some(layout) => layout.encode(state),
+                                None => encode_state(&state),
+                            }),
                     }
                 })
             })
             .collect();
+        mutations.extend(member_mutations);
         // Consuming staged_values above drops all decoded maps. Only encoded mutations
         // remain; retire their unused decode headroom before allocating Arrow output.
         // New-state growth is independently covered by the incoming batch allowance.

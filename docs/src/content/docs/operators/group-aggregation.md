@@ -46,6 +46,48 @@ workspace allowance. This adds no per-row backend access, JNI crossing, or input
 Compact grouped vectors cannot consume these kernels directly because they lack the membership
 map. DISTINCT SUM/AVG and canonical partial merging retain their existing semantic adapters.
 
+Synchronous COUNT(DISTINCT) now stores memberships separately from the small group accumulator
+header. Calls on the same input argument share one member entry containing independent signed
+counts for their FILTERs, following Flink's DISTINCT data-view grouping. Each incoming batch
+loads its group headers and then all required member keys in a batched lookup. The existing
+DataFusion accumulators compute each observable transition from those loaded counts. One atomic
+backend batch writes changed member entries and group headers after computation; there are no
+per-row backend calls or extra JVM/native crossings. Repeated membership values outside the
+incoming batch are neither decoded nor rewritten.
+
+Member keys use Arrow row encoding behind a versioned, length-framed partition prefix and
+argument identity anchored to its first aggregate call, so physical input-column reordering
+does not change membership identity. Their key group remains the hash of the original Flink BinaryRow, independent
+of Arrow ordering bytes. This layout applies to synchronous raw-input plans whose DISTINCT
+calls are all COUNT over supported non-floating scalar arguments: Boolean, signed integers,
+VARCHAR, decimal, date, time and timestamp. Production admission remains the BIGINT subset
+described above. Floating-point DISTINCT, DISTINCT SUM/AVG, mini-batches, partial merging and
+bounded final aggregation retain their existing inline state paths and admission conditions.
+
+The persisted group header is `SFGD` version 1 wrapping a version-6 accumulator record with
+external membership maps omitted. Member count vectors use `SFDV` version 1. Existing inline
+DISTINCT versions 4, 5 and 6 migrate on the next update to each group, in the same atomic write
+as that update. Migration preserves signed counts and nullable FILTER behavior. Unknown versions
+and malformed count vectors are rejected. Canonical key-group snapshots include both headers and
+members, so Flink continues to own checkpoints, recovery, channel replay and rescaling.
+
+Group deletion clears every persisted member, including unmatched negative counts, before a
+recreated group becomes visible. Row-count transitions identify such deletions at the start of
+the batch, when cleanup keys are loaded in bounded pages. RocksDB seeks to the group's prefix;
+the HashMap backend scans its key directory and pages only matching entries. Unrelated inline
+values do not consume that prefix's page allowance. Cleanup keys and one-time migration
+workspace remain subject to Flink's allowance and may still exhaust it for a sufficiently large
+deletion or old inline value. Ordinary updates reserve input-sized membership workspace rather
+than the entire historical set. Retained backend entries, Arrow key buffers and dirty mutations
+remain charged through the existing managed-memory model, with no new runtime settings.
+
+Native tests build 10,000 members and verify that a one-row update reads and writes fewer than
+256 state bytes with two batched reads, one write and no scan. They cover denied admission with
+unchanged snapshots, shared filters, signed counts, deletion/recreation, Arrow key order and
+framing, and migration plus restore across both backends. A controlled heap test also checks the
+loaded maps when fifteen shared filters reject the batch but retain historical counts. These checks establish
+bounded normal access; release throughput and larger-state capacity require separate measurement.
+
 Generated common-runtime tests compare filtered and unfiltered BIGINT DISTINCT counts with
 Flink's actual SQL-generated aggregate handler on both state backends, including all RowKinds,
 duplicate and last-value transitions, null/Unicode keys, null arguments/filters, record envelopes,

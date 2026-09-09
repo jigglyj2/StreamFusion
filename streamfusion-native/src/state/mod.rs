@@ -49,6 +49,13 @@ pub(crate) struct StateMutation {
     pub(crate) value: Option<Vec<u8>>,
 }
 
+fn prefix_end(prefix: &[u8]) -> Option<Vec<u8>> {
+    let index = prefix.iter().rposition(|&byte| byte != u8::MAX)?;
+    let mut end = prefix[..=index].to_vec();
+    end[index] += 1;
+    Some(end)
+}
+
 /// Backend-neutral byte state used by native keyed operators.
 ///
 /// Runtime keys and values are opaque to Java. Key-group snapshots deliberately use the same

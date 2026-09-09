@@ -146,6 +146,21 @@ impl KeyedState for OrderedMemoryKeyedState {
         })
     }
 
+    fn visit_prefix(
+        &self,
+        group: u32,
+        prefix: &[u8],
+        rows: usize,
+        bytes: usize,
+        visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<()>,
+    ) -> Result<()> {
+        let end = super::prefix_end(prefix);
+        self.visit_range(group, prefix, end.as_deref(), rows, bytes, &mut |page| {
+            visitor(page)?;
+            Ok(true)
+        })
+    }
+
     fn visit_range(
         &self,
         group: u32,

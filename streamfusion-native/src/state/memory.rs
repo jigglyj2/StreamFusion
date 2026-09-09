@@ -215,6 +215,17 @@ impl KeyedState for MemoryKeyedState {
         max_bytes: usize,
         visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<()>,
     ) -> Result<()> {
+        self.visit_prefix(key_group, &[], max_rows, max_bytes, visitor)
+    }
+
+    fn visit_prefix(
+        &self,
+        key_group: u32,
+        prefix: &[u8],
+        max_rows: usize,
+        max_bytes: usize,
+        visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<()>,
+    ) -> Result<()> {
         if max_rows == 0 || max_bytes == 0 {
             return Err(DataFusionError::Execution(
                 "state scan bounds must be positive".to_string(),
@@ -223,6 +234,9 @@ impl KeyedState for MemoryKeyedState {
         let mut page = Vec::with_capacity(max_rows.min(max_bytes / 96));
         let mut bytes = 0usize;
         for (key, value) in self.group(key_group)? {
+            if !key.starts_with(prefix) {
+                continue;
+            }
             let size = key.len().saturating_add(value.len()).saturating_add(96);
             if size > max_bytes {
                 return Err(DataFusionError::ResourcesExhausted(
