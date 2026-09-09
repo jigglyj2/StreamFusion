@@ -50,6 +50,10 @@ Generated ordinary SQL tests also cover nullable keys, negative timestamps, shuf
 different gaps and window rowtime output. Official Q11 also matches the complete Flink result
 changelog for 10,000 generated events at parallelism one/four on both backends, through ordinary
 selection with positive native plan/Calc activity. These tests are not performance measurements.
+The separate [Q11 release report](/StreamFusion/benchmarks/q11-rowdata/) compares one- and
+ten-million-event workloads and longer mixed profiles on both backends. Ten-million-event median
+throughput ratios are 1.181× Flink in memory and 2.001× on RocksDB, with substantial Flink RocksDB
+dispersion; the report retains all forks and the earlier optimization baselines.
 
 The kernel processes arrivals in input order to assign Flink merging namespaces, then uses
 DataFusion grouped aggregate update/merge kernels over Arrow slices. It does not sort arrivals

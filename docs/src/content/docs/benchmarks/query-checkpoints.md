@@ -124,7 +124,15 @@ managed-checkpoint, backend-switch, rescaling and real-barrier channel-replay te
 ordinary selection now binds the verified single-key BIGINT SESSION COUNT subset to the shared
 native region. Generated SQL and Arrow topology checks cover that binding. Official Q11 results
 match Flink byte-for-byte for 10,000 generated events at parallelism one/four on both backends,
-with ordinary acceleration and positive native plan/Calc activity. Its release comparison is pending.
+with ordinary acceleration and positive native plan/Calc activity. The
+[Q11 release comparison](/StreamFusion/benchmarks/q11-rowdata/) records three alternating pairs
+at one and ten million events, plus separate two-/twenty-million-event mixed profiles on both
+backends. At ten million the median throughput ratios are 1.181× Flink in memory and 2.001× on
+RocksDB, with disjoint ranges; Flink's RocksDB times vary from 17.9 to 42.9 seconds, so this is not
+a stable general speedup claim. Million-event memory remains slower and RocksDB ranges overlap.
+General improvements amortize decoded-state budget calls and eliminate empty terminal RocksDB
+scan probes while retaining ABI-8 compatibility. All twenty-million-event profiles complete.
+Q11's supported SESSION COUNT path is delivered within these limits. Q12 is the next checkpoint.
 
 ## Q6 has no Flink streaming baseline
 
