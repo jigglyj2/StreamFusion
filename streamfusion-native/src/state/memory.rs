@@ -7,7 +7,6 @@ use std::mem::size_of;
 use ahash::RandomState;
 use datafusion::error::{DataFusionError, Result};
 use hashbrown::hash_map::Entry;
-use hashbrown::HashMap;
 
 use crate::memory_pool::HostMemoryReservation;
 
@@ -15,7 +14,8 @@ use super::{snapshot, KeyedState, StateKeyRef, StateMutation};
 
 // Stored keys/values are immutable; keep capacity words out of every hash-table bucket.
 type StateBytes = Box<[u8]>;
-type KeyGroupMap = HashMap<StateBytes, StateBytes, RandomState>;
+mod table;
+use table::KeyGroupMap;
 
 /// In-memory state is independently owned by key group, making raw snapshots directly
 /// redistributable when Flink changes parallelism.
@@ -40,7 +40,7 @@ impl MemoryKeyedState {
         let count = usize::try_from(last_key_group - first_key_group + 1).unwrap();
         reservation.resize(count.saturating_mul(size_of::<KeyGroupMap>()))?;
         let groups = (0..count)
-            .map(|_| HashMap::with_hasher(RandomState::new()))
+            .map(|_| KeyGroupMap::with_hasher(RandomState::new()))
             .collect();
         Ok(Self {
             first_key_group,
@@ -137,40 +137,53 @@ impl KeyedState for MemoryKeyedState {
                         .contains_key(mutation.key.key.as_slice())
             })
             .count();
-        workspace.try_grow(additions_bound.min(self.groups.len()).saturating_mul(512))?;
-        let mut additions = std::collections::BTreeMap::<u32, usize>::new();
+        workspace.try_grow(
+            additions_bound
+                .min(self.groups.len().saturating_mul(table::SHARDS))
+                .saturating_mul(512),
+        )?;
+        let mut additions = std::collections::BTreeMap::<(u32, usize), usize>::new();
         for mutation in &mutations {
             if mutation.value.is_some()
                 && !self
                     .group(mutation.key.key_group)?
                     .contains_key(mutation.key.key.as_slice())
             {
-                *additions.entry(mutation.key.key_group).or_default() += 1;
+                let shard = self
+                    .group(mutation.key.key_group)?
+                    .shard_index(&mutation.key.key);
+                *additions
+                    .entry((mutation.key.key_group, shard))
+                    .or_default() += 1;
             }
         }
-        let table_growth_bound =
-            additions
-                .iter()
-                .try_fold(0usize, |total, (&key_group, &count)| {
-                    let group = self.group(key_group)?;
-                    let required = group.len().saturating_add(count);
-                    Ok::<_, DataFusionError>(if required > group.capacity() {
-                        total.saturating_add(table_size_for_entries(required))
-                    } else {
-                        total
-                    })
-                })?;
+        let mut table_growth_bound = 0usize;
+        let mut previous_group = None;
+        let mut overlap = 0usize;
+        for (&(key_group, shard), &count) in &additions {
+            let group = self.group(key_group)?;
+            if previous_group != Some(key_group) {
+                table_growth_bound = table_growth_bound.saturating_add(group.directory_growth());
+                previous_group = Some(key_group);
+            }
+            let (retained_growth, old_table) = group.growth_for_shard(shard, count);
+            table_growth_bound = table_growth_bound.saturating_add(retained_growth);
+            overlap = overlap.max(old_table);
+        }
         self.reservation.resize(
             current
                 .saturating_add(grows)
-                .saturating_add(table_growth_bound),
+                .saturating_add(table_growth_bound)
+                .saturating_add(overlap),
         )?;
+        // Tables grow sequentially: charge final table growth plus the largest old table
+        // that can coexist with its replacement, rather than every replacement at once.
         // Reserve once per growing table instead of repeatedly reallocating while
         // applying a large batch. A failed allocation leaves logical state untouched.
-        for (key_group, count) in additions {
-            if let Err(error) = self.group_mut(key_group)?.try_reserve(count) {
+        for ((key_group, shard), count) in additions {
+            if let Err(error) = self.group_mut(key_group)?.reserve_shard(shard, count) {
                 self.reservation.resize(self.estimated_heap_size())?;
-                return Err(DataFusionError::ResourcesExhausted(error.to_string()));
+                return Err(error);
             }
         }
         for mutation in mutations {
@@ -233,7 +246,7 @@ impl KeyedState for MemoryKeyedState {
         }
         let mut page = Vec::with_capacity(max_rows.min(max_bytes / 96));
         let mut bytes = 0usize;
-        for (key, value) in self.group(key_group)? {
+        for (key, value) in self.group(key_group)?.iter() {
             if !key.starts_with(prefix) {
                 continue;
             }
@@ -312,7 +325,8 @@ impl KeyedState for MemoryKeyedState {
         self.reservation.resize(
             current
                 .saturating_add(bytes.len().saturating_mul(3))
-                .saturating_add(count.saturating_mul(192)),
+                .saturating_add(count.saturating_mul(192))
+                .saturating_add(self.group(key_group)?.directory_growth()),
         )?;
         let entries = match snapshot::decode(key_group, bytes) {
             Ok(entries) => entries,
@@ -337,7 +351,7 @@ impl KeyedState for MemoryKeyedState {
             entries
                 .into_iter()
                 .map(|(key, value)| (key.into_boxed_slice(), value.into_boxed_slice())),
-        );
+        )?;
         self.reservation.resize(self.estimated_heap_size())?;
         Ok(())
     }
@@ -358,6 +372,8 @@ fn table_heap_size(capacity: usize) -> usize {
 
 #[cfg(test)]
 mod allocation_tests;
+#[cfg(test)]
+mod sharded_growth;
 
 fn table_size_for_entries(entries: usize) -> usize {
     if entries <= 3 {

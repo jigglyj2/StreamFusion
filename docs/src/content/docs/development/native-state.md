@@ -3,10 +3,11 @@ title: Native keyed state
 description: Backend contract, checkpoint formats, and implementation references for native operators.
 ---
 
-The binary inner equi `StreamExecMultiJoin` path is admitted with in-memory and default RocksDB state under
-[architecture admission](/StreamFusion/development/architecture-admission/). Other persistent
-families retain whole-plan Flink fallback. The implementation details
-below distinguish this verified path from retained code and its target memory contract.
+Native keyed state backs admitted stateful subsets, including synchronous binary equi-joins and
+supported grouped aggregation, on in-memory and default RocksDB backends. Admission remains
+specific to each operator's semantics; see [architecture admission](/StreamFusion/development/architecture-admission/)
+and the individual operator pages. The shared storage mechanisms below do not themselves admit
+an unsupported operator or remove its whole-plan fallback.
 
 Native keyed-region preflight now rejects non-default Flink RocksDB options that the component
 does not propagate, including custom option factories, local directories, memory ratios,
@@ -282,6 +283,28 @@ SFS1 snapshots, so key-group redistribution and backend changes preserve keys by
 Ordered entries include the existing Flink key-group identity, a length-framed operator partition
 prefix, encoded ordering columns, and a deterministic sequence/row identity. Partition hashing is
 unchanged. Payloads and small partition metadata are separate state entries.
+
+The point-state memory backend now divides each populated Flink key group's hash directory
+into 64 independently growing tables. This is an internal allocation granularity: Flink still
+owns the original key groups and their assignment, and stored keys/values and canonical snapshots
+remain byte-compatible. The table directory is allocated on the first insertion; its routing hash
+is private to that backend instance and does not replace Flink's partition hash or Arrow sort keys.
+
+Each incoming write batch admits payload growth, directory storage, final table growth and the
+largest old/new table overlap before changing logical values. Table reservations execute
+sequentially, releasing each replaced allocation before growing the next table. The bound also
+covers hashbrown's larger replacements after tombstone deletions. A denied batch leaves existing
+updates, deletions and insertions unapplied together. Retained backing tables remain charged after
+their entries are removed. Admission still uses the existing Flink allowance with coarse batch
+reservations, rather than per-entry memory callbacks.
+
+A native capacity test stores and verifies all 240,000 entries in one hot key group with a
+20 MiB budget; the former single-table replacement would exceed that budget. Mixed-mutation
+denial, immutable-buffer ownership, tombstone retention and canonical restore tests cover the
+storage contract. This demonstrates a smaller growth peak at that tested size, not unbounded
+state capacity or a completed large Nexmark checkpoint. Canonical snapshot buffering and retained
+payloads can still exhaust the allowance. The [Q15 release report](/StreamFusion/benchmarks/q15-rowdata/)
+predates this directory change; new release measurements are required to establish its effect.
 
 The ordered operator format identifies StreamFusion encoding version 1 and Arrow row encoding
 major version 59. Runtime and plugin ABI versions must match. Unknown operator encoding versions

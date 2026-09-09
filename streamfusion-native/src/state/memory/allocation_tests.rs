@@ -15,7 +15,7 @@ fn tombstone_removals_keep_the_entire_backing_table_admitted() {
         HostMemoryReservation::new(broker.clone(), "tombstone state"),
     )
     .unwrap();
-    *state.group_mut(0).unwrap() = HashMap::with_hasher(RandomState::with_seeds(1, 2, 3, 4));
+    *state.group_mut(0).unwrap() = KeyGroupMap::with_hasher(RandomState::with_seeds(1, 2, 3, 4));
     let baseline = broker.reserved();
     state
         .write_batch(
@@ -78,11 +78,13 @@ fn immutable_state_entries_fit_a_bounded_hash_table_share_and_restore_identical_
     }
     drop(pressure);
     let snapshot = state.snapshot_key_group(0, &owner).unwrap();
-    let original_size = state.estimated_heap_size();
+    let original_entries = state.entry_bytes;
     drop(state);
     let mut restored = MemoryKeyedState::new(0, 0, owner.sibling("restored")).unwrap();
     restored.restore_key_group(0, &snapshot, &owner).unwrap();
-    assert_eq!(restored.estimated_heap_size(), original_size);
+    assert_eq!(restored.entry_bytes, original_entries);
+    // Fresh routing seeds can change individual table capacities; payload bytes stay exact.
+    assert!(restored.estimated_heap_size() <= 10 << 20);
     assert_eq!(restored.snapshot_key_group(0, &owner).unwrap(), snapshot);
     let decoded = snapshot::decode(0, &snapshot).unwrap();
     assert_eq!(decoded.len(), 100_000);
