@@ -309,6 +309,13 @@ Original Flink memory shares and page sizes bind before keyed factories are cons
 budget, JNI entry point or intermediate operator is introduced. Protocol 1 remains valid for local
 windows and rejects processing-time ownership. Resource/state installation validates missing,
 duplicate and mismatched owners before execution; checkpointing rejects unflushed window updates.
+The original-resource pass now recognizes single-stage processing-time buffers as well as local
+windows. It preserves their original physical node identity and Flink OPERATOR/STATE_BACKEND
+use cases when resolving complete-pipeline shares. Generated job-graph comparisons cover both
+backends, weighted sources, unioned slot-sharing groups and a weighted sink added after SQL
+translation. The resolved protocol-2 capacity/page bytes match Flink; changing a replacement
+operator's memory weight cannot change this buffer geometry. End-to-end selected-plan binding
+and production admission remain separate checks.
 
 Shared regions can bind the existing Flink memory/state lifecycle directly. The same backend
 leases and checkpoint participants serve tree and shared definitions; they do not create another

@@ -168,7 +168,7 @@ public class OriginalMemoryPlanTest {
                         }
                         assertThatThrownBy(() -> resourcePlan.resolve(
                                         OriginalMemoryPlanTest::cached, List.of(source.getTransformation()), Map.of()))
-                                .hasMessageContaining("missing an original local-window output");
+                                .hasMessageContaining("missing an original window-buffer output");
                         var expanding = output.sinkTo(new ExpandingSink());
                         assertThatThrownBy(() -> resourcePlan.resolve(
                                         OriginalMemoryPlanTest::cached,
@@ -209,7 +209,7 @@ public class OriginalMemoryPlanTest {
         }
     }
 
-    private static Transformation<?> cached(ExecNode<?> node) {
+    static Transformation<?> cached(ExecNode<?> node) {
         try {
             var field = ExecNodeBase.class.getDeclaredField("transformation");
             field.setAccessible(true);
@@ -219,7 +219,7 @@ public class OriginalMemoryPlanTest {
         }
     }
 
-    private static List<ExecNode<?>> allNodes(ExecNodeGraph graph) {
+    static List<ExecNode<?>> allNodes(ExecNodeGraph graph) {
         var nodes = new IdentityHashMap<ExecNode<?>, Boolean>();
         var pending = new ArrayList<>(graph.getRootNodes());
         while (!pending.isEmpty()) {
@@ -230,7 +230,7 @@ public class OriginalMemoryPlanTest {
         return List.copyOf(nodes.keySet());
     }
 
-    private static void restore(String key, String value) {
+    static void restore(String key, String value) {
         if (value == null) System.clearProperty(key);
         else System.setProperty(key, value);
     }

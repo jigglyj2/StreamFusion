@@ -46,16 +46,25 @@ final class StreamFusionOriginalMemoryPlan {
         for (var root : pipelineRoots) sum(resolver.transformation(root, stops), groups, visited);
         var result = new HashMap<Long, Share>();
         entries.forEach((original, entry) -> {
-            if (entry.kind != Kind.LOCAL_WINDOW) return;
+            if (!requiresOriginalBuffer(original)) return;
             var node = resolver.node(original);
             if (!visited.contains(node))
-                throw new IllegalArgumentException("Complete pipeline is missing an original local-window output");
+                throw new IllegalArgumentException("Complete pipeline is missing an original window-buffer output");
             var group = groups.get(node.group);
             long id = (1L << 32) | Integer.toUnsignedLong(original.getId());
             if (result.put(id, new Share(node.weight, group.weight, Set.copyOf(group.useCases))) != null)
-                throw new IllegalArgumentException("Original local-window physical identities must be unique");
+                throw new IllegalArgumentException("Original window-buffer physical identities must be unique");
         });
         return Map.copyOf(result);
+    }
+
+    static boolean requiresOriginalBuffer(ExecNode<?> node) {
+        if (node instanceof org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecLocalWindowAggregate)
+            return true;
+        return node instanceof org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWindowAggregate
+                && FlinkExecNodeAccess.windowing(
+                                (org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWindowAggregate) node)
+                        .isProctime();
     }
 
     private void capture(ExecNode<?> node, Set<ExecNode<?>> visiting) {

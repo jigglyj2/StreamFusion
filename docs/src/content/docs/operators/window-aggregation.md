@@ -121,6 +121,10 @@ construction. Missing capacity or a legacy processing-time resource version fail
 before opening the backend. The factory consumes its negotiated per-record Arrow clock, exposes
 absolute deadlines to the existing Flink scheduler, and removes clock metadata before Arrow output.
 A shared-region test verifies that two exits share the same result buffers and one timer owner.
+The original-resource pass now captures single-stage processing-time buffer owners and carries
+their stable identities into protocol 2. Tests compare their capacity/page bytes with generated
+Flink job graphs on both backends, including weighted boundaries and distinct slot-sharing groups.
+These resource tests do not yet establish ordinary selected-plan admission.
 
 Generated Java tests run the SQL-created Flink operator and actual shared native factory through
 identical clocks with nullable keys, varying batch sizes and one-/ten-/37-second windows. They

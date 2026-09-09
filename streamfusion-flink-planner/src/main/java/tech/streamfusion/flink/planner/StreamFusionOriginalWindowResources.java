@@ -13,7 +13,6 @@ import org.apache.flink.streaming.api.graph.StreamGraphGenerator;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNode;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeBase;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecNodeGraph;
-import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecLocalWindowAggregate;
 import tech.streamfusion.flink.memory.FlinkOperatorMemoryShare;
 
 /** Client-only original resource ownership, shared by every selected region from one SQL graph. */
@@ -27,7 +26,7 @@ final class StreamFusionOriginalWindowResources {
             StreamGraphGenerator.class.getDeclaredMethod("applyExternalPipelineProcessor", StreamGraph.class);
         } catch (NoSuchMethodException failure) {
             throw new IllegalArgumentException(
-                    "Local windows require the complete-pipeline Flink resource hook", failure);
+                    "Buffered windows require the complete-pipeline Flink resource hook", failure);
         }
         original = new StreamFusionOriginalMemoryPlan(new ExecNodeGraph(roots));
     }
@@ -38,7 +37,8 @@ final class StreamFusionOriginalWindowResources {
         while (!pending.isEmpty()) {
             var node = pending.remove(pending.size() - 1);
             if (!seen.add(node)) continue;
-            if (node instanceof StreamExecLocalWindowAggregate) return new StreamFusionOriginalWindowResources(roots);
+            if (StreamFusionOriginalMemoryPlan.requiresOriginalBuffer(node))
+                return new StreamFusionOriginalWindowResources(roots);
             for (var edge : node.getInputEdges()) pending.add(edge.getSource());
         }
         return null;

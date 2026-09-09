@@ -188,7 +188,10 @@ keyed checkpoints and reused RocksDB SSTs. Actual Flink task/channel tests resto
 aligned and unaligned barriers on both backends. Replayed records sample the receiving task's clock
 in the next window; saved records retain their original absolute timer. Complete changelog bytes
 match the SQL-generated Flink reference, canonicalizing only independent keys tied at one deadline.
-Ordinary planner resource identity/budget binding and the production Q12 checkpoint remain pending.
+The original-resource pass now captures single-stage processing-time buffers. Their resolved
+physical identities, capacity and page size match Flink job graphs on both backends, including
+weighted boundaries and different slot-sharing groups. Selected-plan resource finalization and
+the production Q12 checkpoint remain pending.
 
 No Q12 performance result is claimed from empty/partial max-speed bounded output.
 
