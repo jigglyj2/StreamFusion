@@ -23,7 +23,8 @@ class NexmarkBlackholeBenchmarkTest {
         for (String[] args : new String[][] {
             {"100", "q0", "both", "hashmap"},
             {"100", "q0", "flink", "both"},
-            {"100", "q0", "flink", "hashmap", "4", "unknown"}
+            {"100", "q0", "flink", "hashmap", "4", "unknown"},
+            {"1", "q0", "flink", "hashmap", "4"}
         }) assertThatThrownBy(() -> NexmarkBlackholeBenchmark.main(args)).isInstanceOf(IllegalArgumentException.class);
     }
 }

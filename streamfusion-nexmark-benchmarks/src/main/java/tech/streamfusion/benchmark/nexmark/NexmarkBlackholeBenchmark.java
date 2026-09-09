@@ -29,7 +29,7 @@ public final class NexmarkBlackholeBenchmark {
         boolean nativeEngine = engines.get(0);
         long started = System.nanoTime();
         NativeExecutionDiagnostics.reset();
-        NexmarkRowDataJob.runBlackhole(
+        long outputRows = NexmarkRowDataJob.runBlackhole(
                 events, query, nativeEngine, backends.get(0), parallelism, mode.equals("explain"));
         double elapsed = (System.nanoTime() - started) / 1_000_000_000.0;
         if (mode.equals("explain")) return;
@@ -40,7 +40,7 @@ public final class NexmarkBlackholeBenchmark {
         System.out.printf(
                 Locale.ROOT,
                 "NEXMARK_BLACKHOLE query=%s engine=%s state_backend=%s parallelism=%d runtime_mode=%s mini_batch=%s "
-                        + "timing=end_to_end input_events=%d elapsed_seconds=%.6f input_events_per_second=%.2f "
+                        + "timing=end_to_end input_events=%d output_records=%d elapsed_seconds=%.6f input_events_per_second=%.2f "
                         + "accelerated=%s native_plan_batches=%d native_calc_batches=%d%n",
                 query,
                 args[2],
@@ -49,6 +49,7 @@ public final class NexmarkBlackholeBenchmark {
                 Boolean.getBoolean("streamfusion.nexmark.batch-mode") ? "batch" : "streaming",
                 Boolean.getBoolean("streamfusion.nexmark.mini-batch"),
                 events,
+                outputRows,
                 elapsed,
                 events / elapsed,
                 nativeEngine,

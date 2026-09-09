@@ -28,6 +28,8 @@ java --add-opens=java.base/java.nio=ALL-UNNAMED -cp "$BENCHMARK_CLASSPATH" \
 The arguments are event count, query, engine (`flink` or `streamfusion`), backend (`hashmap` or
 `rocksdb`), optional parallelism (default four), and optional mode (`run` or `explain`). The
 `explain` mode prints the ordinary physical plan and admission reasons without starting the job.
+The event count must be at least the source parallelism: upstream Nexmark interprets a zero-sized
+split as unbounded, so the harness rejects that combination before starting either engine.
 A StreamFusion measurement fails when preflight reports fallback or execution records no native
 plan batches. It never labels a fallback timing as accelerated performance.
 
@@ -37,7 +39,19 @@ Diagnostic counter reads/resets are Java-only and do not load StreamFusion into 
 baseline. JVM process launch and argument parsing are outside the reported timer; the runner
 retains separate whole-process wall times. Input-event throughput divides the configured source
 event count by that time; it is neither output-row throughput nor a steady-state measurement.
-It also reports runtime mode, mini-batching, backend, parallelism, and native invocation counts.
+It also reports runtime mode, mini-batching, backend, parallelism, native invocation counts and
+`output_records`. The latter sums the unmodified Flink blackhole writer's `numRecordsIn` counters
+across sink subtasks after completion. A benchmark-only metric reporter retains those counters
+through deregistration; it adds no data-plane operator, row callback, serialization or hashing.
+Missing counters fail the measurement instead of being reported as zero. An observed zero count
+is valid evidence of no emitted rows. Opt-in integration tests compare this count to the collecting
+sink for both engines/backends, including empty output and parallel sink subtasks.
+
+For processing-time queries such as Q12, record the time zone and output count of every fork.
+Use runs long enough to emit closed windows, and reject empty-output forks as performance evidence
+for window emission. Separate jobs read separate wall clocks, so their window labels and emitted
+counts can differ; bounded finish does not emit the final open window. Exact processing-time
+changelog parity comes from controlled-clock tests, not matching independent wall-clock runs.
 
 Use identical JVM and Flink settings, at least three unprofiled forks per engine, and alternating
 engine order. Record the commit and machine/runtime configuration and report median plus

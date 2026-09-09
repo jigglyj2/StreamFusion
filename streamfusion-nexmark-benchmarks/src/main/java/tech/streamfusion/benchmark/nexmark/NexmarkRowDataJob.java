@@ -42,10 +42,10 @@ public final class NexmarkRowDataJob {
     static BenchmarkResultStore.Result run(
             long eventCount, String query, boolean streamFusion, String stateBackend, int parallelism)
             throws Exception {
-        return execute(eventCount, query, streamFusion, stateBackend, parallelism, false, false);
+        return execute(eventCount, query, streamFusion, stateBackend, parallelism, false, false, null);
     }
 
-    static void runBlackhole(
+    static long runBlackhole(
             long eventCount,
             String query,
             boolean streamFusion,
@@ -53,7 +53,10 @@ public final class NexmarkRowDataJob {
             int parallelism,
             boolean explainOnly)
             throws Exception {
-        execute(eventCount, query, streamFusion, stateBackend, parallelism, true, explainOnly);
+        try (var metrics = NexmarkBlackholeMetrics.begin()) {
+            execute(eventCount, query, streamFusion, stateBackend, parallelism, true, explainOnly, metrics.id);
+            return explainOnly ? -1 : metrics.outputRows();
+        }
     }
 
     private static BenchmarkResultStore.Result execute(
@@ -63,13 +66,18 @@ public final class NexmarkRowDataJob {
             String stateBackend,
             int parallelism,
             boolean blackhole,
-            boolean explainOnly)
+            boolean explainOnly,
+            String metricRunId)
             throws Exception {
         if (eventCount <= 0) {
             throw new IllegalArgumentException("eventCount must be positive");
         }
         if (parallelism <= 0) {
             throw new IllegalArgumentException("parallelism must be positive");
+        }
+        if (eventCount < parallelism) {
+            throw new IllegalArgumentException(
+                    "eventCount must be at least parallelism: Nexmark treats zero-sized splits as unbounded");
         }
         if (!stateBackend.equals("hashmap") && !stateBackend.equals("rocksdb")) {
             throw new IllegalArgumentException("stateBackend must be hashmap or rocksdb: " + stateBackend);
@@ -83,6 +91,7 @@ public final class NexmarkRowDataJob {
             boolean batchMode = Boolean.getBoolean("streamfusion.nexmark.batch-mode");
             TableEnvironment tables = TableEnvironment.create(
                     batchMode ? EnvironmentSettings.inBatchMode() : EnvironmentSettings.inStreamingMode());
+            if (blackhole) NexmarkBlackholeMetrics.configure(tables.getConfig().getConfiguration(), metricRunId);
             // Keep the local comparison out of Flink's tiny embedded-cluster defaults. Both
             // engines receive the same realistic state/Arrow allowance, including RocksDB cache
             // memory.
