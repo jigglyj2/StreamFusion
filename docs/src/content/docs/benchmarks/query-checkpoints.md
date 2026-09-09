@@ -235,8 +235,11 @@ The latest aggregate prerequisite stores presence bits for newly created append-
 DISTINCT groups, following Flink's append-only data-view behavior. It retains DataFusion COUNT
 computation and batched state I/O, skips writes for unchanged membership, and preserves legacy
 counted groups during restore. Generated insert-only Flink parity covers metrics, checkpoints,
-channel replay and rescaling. This change has not yet been included in the release measurements
-below; the earlier HashMap capacity failure remains unresolved evidence pending a new campaign.
+channel replay and rescaling. The [presence-state release comparison](/StreamFusion/benchmarks/q15-rowdata/)
+records 1.192× RocksDB and 0.729× in-memory median throughput at one million events, and 1.552×
+RocksDB throughput at ten million. Separate longer profiles cover both backends. The ten-million
+event in-memory attempt still fails at table growth despite lower retained-state size; no large
+in-memory result or incremental throughput gain over the preceding StreamFusion build is claimed.
 
 While Q14's JVM UDF architecture decision is pending, original Q15 now passes ordinary
 whole-plan selection with its filtered DISTINCT aggregates unchanged. The benchmark catalog
