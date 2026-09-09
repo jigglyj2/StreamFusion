@@ -92,7 +92,7 @@ complete SESSION conformance evidence established for COUNT and remain gated.
 ## Processing-time window contract
 
 Processing-time TVF aggregation remains whole-plan Flink fallback. EXPLAIN reports the missing
-shared processing-time resource binding, lifecycle and recovery parity contract. The logical `PROCTIME()`
+shared processing-time capacity, rescaling and channel recovery parity contract. The logical `PROCTIME()`
 Calc slot lowers to DataFusion's typed null, matching Flink's generated placeholder; this does
 not read a clock or admit the window. `PROCTIME_MATERIALIZE` still reports a clock-lifecycle fallback.
 Legacy processing-time shape folding does not hide rejected inputs. A logical time attribute
@@ -115,16 +115,27 @@ including columns omitted from the partial layout. Snapshots reject unflushed up
 
 Native component tests cover the Flink-oracle clock cases, watermark/EOF behavior, memory denial,
 nullable/global keys, both backends and cross-backend timer restore while rescaling one owner to two.
-This is prerequisite coverage: the shared factory's Flink buffer-resource binding, complete
-clock/metric lifecycle, aligned/unaligned recovery and generated end-to-end parity remain pending.
-Processing-time windows are still rejected during ordinary planning; Q12 is not admitted.
+The shared factory now binds this component in the native tree and shared-region execution paths.
+Task-resource protocol 2 supplies the original Flink buffer share and page size before keyed state
+construction. Missing capacity or a legacy processing-time resource version fails transactionally
+before opening the backend. The factory consumes its negotiated per-record Arrow clock, exposes
+absolute deadlines to the existing Flink scheduler, and removes clock metadata before Arrow output.
+A shared-region test verifies that two exits share the same result buffers and one timer owner.
+
+Generated Java tests run the SQL-created Flink operator and actual shared native factory through
+identical clocks with nullable keys, varying batch sizes and one-/ten-/37-second windows. They
+compare complete changelog/control bytes and the entire registered metric surface, including
+logical-record counters, meters and watermark latency. Direct C Data and Arrow IPC input, backward
+and repeated timers, terminal watermark/finish, and pending-timer checkpoint restore pass on both
+backends. Capacity-pressure parity and the full rescaling/aligned/unaligned channel-recovery matrix
+remain pending. Ordinary planning still rejects processing-time windows; Q12 is not admitted.
 
 The SQL-generated Flink reference tests use explicit UTC clocks, nullable keys, generated counts
 and one-/ten-/37-second windows. They verify that the window samples its own clock even when the
 physical PROCTIME slot is null, only processing-time timers emit results, and pending timers survive
 both-backend checkpoint restore. A terminal watermark and bounded finish leave an open processing-time
-window un-emitted. These tests define the native prerequisite; they do not admit the retained native
-kernel or establish native clock/metric/recovery parity. Non-UTC clock/zone behavior needs its own
+window un-emitted. These reference tests define the controlled-clock contract used by the native parity fixtures;
+they do not establish ordinary planner admission or the complete recovery matrix. Non-UTC clock/zone behavior needs its own
 proof. Q12's bounded blackhole output can therefore be empty or incomplete depending on wall-clock
 alignment and cannot by itself establish result parity or acceleration.
 
@@ -160,7 +171,7 @@ in first-appearance order, including future slices when a trigger flushes the bu
 timestamp-less INSERT partials, limited to 2,048 rows per pull. Invocation EOF and end-input alone
 do not flush; a terminal watermark uses the normal event-time path.
 
-`NativeTaskBindings` v1 binds each local stage to the original Flink operator's resolved memory
+`NativeTaskBindings` v1/v2 binds each local stage to the original Flink operator's resolved memory
 share and page size before lowering. A capacity model matches Flink's `WindowBytesMultiMap`
 geometry without constructing RowData. This bookkeeping preserves observable pressure-flush
 boundaries; actual native buffers and retained state use coarse Flink memory reservations.

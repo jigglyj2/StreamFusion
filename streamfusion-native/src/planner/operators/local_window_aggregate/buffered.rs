@@ -67,6 +67,10 @@ impl BorrowedSliceKey<'_> {
 }
 
 impl BufferedWindow {
+    pub(crate) fn validate_capacity(capacity: usize, page: usize) -> Result<()> {
+        BufferLayout::new(capacity, page).map(|_| ())
+    }
+
     pub(super) fn new(
         kernel: LocalWindowAggregateProcessor,
         flink_memory_bytes: usize,

@@ -11,7 +11,8 @@ use crate::planner::operators::local_window_aggregate::{
 };
 use crate::planner::persistent::control::ControlEvent;
 
-mod planning;
+mod execution;
+pub(super) mod planning;
 #[cfg(test)]
 mod tests;
 

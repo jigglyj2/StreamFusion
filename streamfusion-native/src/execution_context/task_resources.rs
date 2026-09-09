@@ -7,8 +7,21 @@ use crate::planner::operators::local_window_aggregate::buffered::execution_plan:
 use prost::Message;
 use std::collections::HashSet;
 
+#[derive(Clone, Copy)]
+pub(crate) struct WindowBuffer {
+    pub(crate) capacity: usize,
+    pub(crate) page: usize,
+}
+
+fn requires_buffer(node: &proto::Operator) -> bool {
+    matches!(
+        &node.operator,
+        Some(proto::operator::Operator::LocalWindowAggregate(_))
+    ) || matches!(&node.operator, Some(proto::operator::Operator::WindowAggregate(plan)) if plan.processing_time)
+}
+
 impl NativeExecutionContext {
-    /// Bind non-keyed resources once, transactionally, before lowering or invocation. The
+    /// Bind buffer resources once, transactionally, before their keyed owner or lowering. The
     /// wire contains resolved Flink capacities, not SQL plan fragments or native budgets.
     pub(crate) fn install_task_resources(
         &mut self,
@@ -36,7 +49,7 @@ impl NativeExecutionContext {
         )?;
         let options = proto::NativeTaskBindings::decode(bytes)
             .map_err(|error| invalid(format!("invalid native task resource protobuf: {error}")))?;
-        if options.protocol_version != 1
+        if !matches!(options.protocol_version, 1 | 2)
             || options.bindings.is_empty()
             || self.protocol_version() < crate::ENVELOPE_PLAN_PROTOCOL_VERSION
         {
@@ -46,6 +59,7 @@ impl NativeExecutionContext {
         }
         let mut ids = HashSet::new();
         let mut bindings: Vec<PersistentBinding> = Vec::new();
+        let mut processing_buffers = Vec::new();
         for binding in &options.bindings {
             let id = binding.plan_node_id;
             if id == 0
@@ -71,23 +85,39 @@ impl NativeExecutionContext {
             }
             let capacity = usize::try_from(buffer.flink_buffer_memory_bytes)
                 .map_err(|_| invalid("Flink window buffer capacity exceeds native usize"))?;
-            bindings.push((
-                id,
-                Arc::new(LocalWindowFactory::new(
-                    node,
-                    memory.sibling("local window shared state"),
-                    capacity,
-                    buffer.flink_page_bytes as usize,
-                )?),
-            ));
+            if matches!(&node.operator, Some(proto::operator::Operator::WindowAggregate(plan)) if plan.processing_time)
+            {
+                if options.protocol_version < 2 {
+                    return Err(invalid(
+                        "processing-time buffer resources require protocol 2",
+                    ));
+                }
+                crate::planner::operators::window_aggregate::shared_execution::validate_node(
+                    node, 1,
+                )?;
+                crate::planner::operators::local_window_aggregate::buffered::BufferedWindow::validate_capacity(capacity, buffer.flink_page_bytes as usize)?;
+                processing_buffers.push((
+                    id,
+                    WindowBuffer {
+                        capacity,
+                        page: buffer.flink_page_bytes as usize,
+                    },
+                ));
+            } else {
+                bindings.push((
+                    id,
+                    Arc::new(LocalWindowFactory::new(
+                        node,
+                        memory.sibling("local window shared state"),
+                        capacity,
+                        buffer.flink_page_bytes as usize,
+                    )?),
+                ));
+            }
         }
         // A local window must never silently run without its original Flink capacity.
         fn required(node: &proto::Operator, ids: &HashSet<u64>) -> Result<()> {
-            if matches!(
-                node.operator,
-                Some(proto::operator::Operator::LocalWindowAggregate(_))
-            ) && !ids.contains(&node.plan_node_id)
-            {
+            if requires_buffer(node) && !ids.contains(&node.plan_node_id) {
                 return Err(invalid("native task resources omit a local window stage"));
             }
             for child in crate::planner::persistent::children(node)? {
@@ -99,6 +129,7 @@ impl NativeExecutionContext {
             required(root, &ids)?;
         }
         self.bind_persistent(bindings)?;
+        self.processing_window_buffers = processing_buffers;
         self.task_resources_installed = true;
         Ok(())
     }

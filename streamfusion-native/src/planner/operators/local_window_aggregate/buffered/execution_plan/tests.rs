@@ -304,7 +304,7 @@ fn resource_binding_rejects_invalid_requests_transactionally() {
         let baseline = broker.reserved();
         let mut invalid = resources(3);
         match case {
-            0 => invalid.protocol_version = 2,
+            0 => invalid.protocol_version = 3,
             1 => invalid.bindings[0].plan_node_id = 0,
             2 => invalid.bindings[0].plan_node_id = 2,
             3 => invalid.bindings[0].plan_node_id = 99,

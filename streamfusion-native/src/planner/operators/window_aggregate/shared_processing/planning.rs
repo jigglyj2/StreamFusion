@@ -2,7 +2,9 @@
 // Licensed under the Apache License, Version 2.0.
 use super::*;
 
-pub(super) fn validate(plan: &proto::WindowAggregate) -> Result<()> {
+pub(in crate::planner::operators::window_aggregate) fn validate(
+    plan: &proto::WindowAggregate,
+) -> Result<()> {
     if !plan.processing_time
         || plan.kind != proto::WindowKind::Tumble as i32
         || plan.size_millis <= 0

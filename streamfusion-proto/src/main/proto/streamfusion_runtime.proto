@@ -107,7 +107,8 @@ message NativeRocksDbState {
   optional string log_directory = 4;
 }
 
-// Non-keyed task-lifetime execution resources resolved by Flink before native lowering.
+// Task-lifetime buffer resources resolved by Flink before keyed factories or native lowering.
+// Protocol 1 binds local-window buffers; protocol 2 also binds processing-time window buffers.
 message NativeTaskBindings {
   uint32 protocol_version = 1;
   repeated NativeTaskBinding bindings = 2;

@@ -3,9 +3,11 @@
 
 use super::super::group_aggregate::grouped_compute::GroupedMerge;
 use super::shared_kernel::SharedWindowKernel;
+use super::shared_processing::SharedProcessingWindows;
 use super::shared_sessions::SharedSessions;
 use super::shared_slices::SharedSlices;
 use super::*;
+use crate::execution_context::task_resources::WindowBuffer;
 use crate::planner::operators::envelope::{Envelope, INPUT_ROW, OWNED_TIMESTAMP_V1, ROW_KIND};
 use crate::planner::persistent::{
     control::ControlEvent,
@@ -16,7 +18,10 @@ use arrow::array::Int32Array;
 use datafusion::physical_plan::ExecutionPlan;
 use std::sync::Mutex;
 
-pub(crate) struct WindowFactory(Arc<Mutex<SharedWindow>>);
+pub(crate) struct WindowFactory {
+    owner: Arc<Mutex<SharedWindow>>,
+    processing_time: bool,
+}
 struct SharedWindow {
     window: Box<dyn SharedWindowKernel>,
     invocation: InvocationState,
@@ -33,6 +38,9 @@ pub(crate) fn validate_node(node: &proto::Operator, max_parallelism: u32) -> Res
         ));
     };
     validate_plan(plan, max_parallelism)?;
+    if plan.processing_time {
+        return super::shared_processing::planning::validate(plan);
+    }
     if plan.kind == proto::WindowKind::Session as i32 {
         return super::shared_sessions::validate(plan);
     }
@@ -66,6 +74,7 @@ impl WindowFactory {
         binding: &proto::NativeStateBinding,
         state: Box<dyn KeyedState>,
         scratch: HostMemoryReservation,
+        buffer: Option<WindowBuffer>,
     ) -> Result<Self> {
         validate_node(node, binding.max_parallelism)?;
         let mut configuration = scratch.sibling("shared window plan, codecs and controls");
@@ -82,28 +91,42 @@ impl WindowFactory {
             timer_memory,
             scratch,
         )?;
-        let mut window: Box<dyn SharedWindowKernel> =
-            if kernel.plan.kind == proto::WindowKind::Session as i32 {
-                Box::new(SharedSessions::new(kernel)?)
-            } else {
-                Box::new(SharedSlices::new(kernel)?)
-            };
+        let processing_time = kernel.plan.processing_time;
+        let mut window: Box<dyn SharedWindowKernel> = if processing_time {
+            let buffer = buffer.ok_or_else(|| {
+                DataFusionError::Plan(
+                    "processing-time window requires its original Flink buffer resource".into(),
+                )
+            })?;
+            Box::new(SharedProcessingWindows::new(
+                kernel,
+                buffer.capacity,
+                buffer.page,
+            )?)
+        } else if kernel.plan.kind == proto::WindowKind::Session as i32 {
+            Box::new(SharedSessions::new(kernel)?)
+        } else {
+            Box::new(SharedSlices::new(kernel)?)
+        };
         if let Some(watermark) = binding.restored_watermark {
             // A restored operator can have an empty keyed state range. Its Flink clock still
             // applies before the first input, even when there are no key-group payloads to import.
             window.set_restored_watermark(watermark);
         }
-        Ok(Self(Arc::new(Mutex::new(SharedWindow {
-            window,
-            invocation: InvocationState::Idle,
-            restored_watermark: binding.restored_watermark,
-            output_schema: None,
-            metadata_schema: Arc::new(Schema::new(vec![
-                Field::new(OWNED_TIMESTAMP_V1, DataType::Int64, true),
-                Field::new(INPUT_ROW, DataType::Int32, false),
-            ])),
-            _configuration: configuration,
-        }))))
+        Ok(Self {
+            processing_time,
+            owner: Arc::new(Mutex::new(SharedWindow {
+                window,
+                invocation: InvocationState::Idle,
+                restored_watermark: binding.restored_watermark,
+                output_schema: None,
+                metadata_schema: Arc::new(Schema::new(vec![
+                    Field::new(OWNED_TIMESTAMP_V1, DataType::Int64, true),
+                    Field::new(INPUT_ROW, DataType::Int32, false),
+                ])),
+                _configuration: configuration,
+            })),
+        })
     }
 }
 impl PersistentOperatorFactory for WindowFactory {
@@ -134,7 +157,7 @@ impl PersistentOperatorFactory for WindowFactory {
                 "invalid shared window metric snapshot shape".into(),
             ));
         };
-        let owner = self.0.lock().map_err(|_| poisoned())?;
+        let owner = self.owner.lock().map_err(|_| poisoned())?;
         *late = owner.window.kernel().late_records_dropped as i64;
         *watermark = owner.window.kernel().current_event_time;
         Ok(())
@@ -144,10 +167,25 @@ impl PersistentOperatorFactory for WindowFactory {
         true
     }
     fn supports_control(&self, event: ControlEvent) -> bool {
-        matches!(
-            event,
-            ControlEvent::Watermark(_) | ControlEvent::BeforeCheckpoint(_) | ControlEvent::EndInput
-        )
+        (self.processing_time && matches!(event, ControlEvent::ProcessingTime(_)))
+            || matches!(
+                event,
+                ControlEvent::Watermark(_)
+                    | ControlEvent::BeforeCheckpoint(_)
+                    | ControlEvent::EndInput
+            )
+    }
+    fn processing_time_input(&self) -> Option<usize> {
+        self.processing_time.then_some(0)
+    }
+    fn next_processing_time_timer(&self) -> Result<Option<i64>> {
+        if !self.processing_time {
+            return Ok(None);
+        }
+        let owner = self.owner.lock().map_err(|_| poisoned())?;
+        owner.invocation.require_idle(SharedWindow::NAME)?;
+        owner.window.require_healthy()?;
+        Ok(owner.window.next_timer())
     }
     fn build(
         &self,
@@ -161,7 +199,7 @@ impl PersistentOperatorFactory for WindowFactory {
         }
         validate_node(
             node,
-            self.0
+            self.owner
                 .lock()
                 .map_err(|_| poisoned())?
                 .window
@@ -169,23 +207,23 @@ impl PersistentOperatorFactory for WindowFactory {
                 .max_parallelism,
         )?;
         Ok(Arc::new(
-            UnaryExec::new(self.0.clone(), children.remove(0))?.with_node_id(node.plan_node_id),
+            UnaryExec::new(self.owner.clone(), children.remove(0))?.with_node_id(node.plan_node_id),
         ))
     }
     fn snapshot(&self, group: u32) -> Result<crate::state::SnapshotBytes> {
-        let mut owner = self.0.lock().map_err(|_| poisoned())?;
+        let mut owner = self.owner.lock().map_err(|_| poisoned())?;
         owner.invocation.require_idle(SharedWindow::NAME)?;
         owner.window.snapshot(group)
     }
     fn restore(&self, group: u32, bytes: &[u8]) -> Result<()> {
-        let mut owner = self.0.lock().map_err(|_| poisoned())?;
+        let mut owner = self.owner.lock().map_err(|_| poisoned())?;
         owner.invocation.require_idle(SharedWindow::NAME)?;
         let watermark = owner.restored_watermark.ok_or_else(|| DataFusionError::Plan(
             "shared window restore requires Flink's union-operator watermark in state-binding protocol 3".into()))?;
         owner.window.restore(group, bytes, watermark)
     }
     fn checkpoint(&self, directory: &std::path::Path) -> Result<()> {
-        let mut owner = self.0.lock().map_err(|_| poisoned())?;
+        let mut owner = self.owner.lock().map_err(|_| poisoned())?;
         owner.invocation.require_idle(SharedWindow::NAME)?;
         owner.window.checkpoint(directory)
     }
@@ -197,8 +235,7 @@ impl UnaryBatchProcessor for SharedWindow {
     }
     fn prepare_output_schema(&mut self, input: SchemaRef) -> Result<SchemaRef> {
         let envelope = Envelope::from_schema(&input)?;
-        let planned =
-            crate::planner::arrow_schema(self.window.kernel().plan.input_schema.as_ref().unwrap())?;
+        let planned = self.window.input_schema()?;
         if envelope.payload_width != planned.fields().len()
             || input.fields()[..envelope.payload_width]
                 .iter()
@@ -259,30 +296,15 @@ impl UnaryBatchProcessor for SharedWindow {
             }
         }
         let payload = input.project(&(0..envelope.payload_width).collect::<Vec<_>>())?;
-        self.window.process(&payload)?;
+        let clock = crate::planner::operators::envelope::processing_time::column(&input)?;
+        self.window.process_with_clock(&payload, clock)?;
         Ok(RecordBatch::new_empty(self.output_schema.clone().unwrap()))
     }
     fn poll_control(&mut self, event: ControlEvent) -> Result<Option<RecordBatch>> {
-        match event {
-            ControlEvent::ProcessingTime(_) => Err(DataFusionError::Plan(
-                "event-time window cannot consume a processing-time timer".into(),
-            )),
-            ControlEvent::Watermark(watermark) => loop {
-                let output = self.window.advance(watermark)?;
-                if output.num_rows() != 0 {
-                    return self.envelope(output).map(Some);
-                }
-                if self.window.next_timer().is_none_or(|next| next > watermark) {
-                    return Ok(None);
-                }
-            },
-            // Input batches have already flushed slice state. Flink owns timer serialization
-            // at snapshot/checkpoint callbacks. EOF/endInput alone must not fire windows.
-            ControlEvent::BeforeCheckpoint(_) | ControlEvent::EndInput => {
-                self.window.require_healthy()?;
-                Ok(None)
-            }
-        }
+        self.window
+            .poll_control(event)?
+            .map(|output| self.envelope(output))
+            .transpose()
     }
 }
 impl SharedWindow {

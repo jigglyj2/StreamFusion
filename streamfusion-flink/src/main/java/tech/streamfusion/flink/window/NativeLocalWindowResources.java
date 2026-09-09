@@ -15,7 +15,7 @@ import tech.streamfusion.proto.plan.v1.NativeTaskBinding;
 import tech.streamfusion.proto.plan.v1.NativeTaskBindings;
 import tech.streamfusion.proto.plan.v1.Operator;
 
-/** Resolves every local-window capacity from original Flink resource metadata at task initialization. */
+/** Resolves local and processing-time window buffers from original Flink memory shares. */
 public final class NativeLocalWindowResources implements Serializable {
     private static final long serialVersionUID = 1L;
     public static final NativeLocalWindowResources NONE = new NativeLocalWindowResources(Map.of());
@@ -101,7 +101,7 @@ public final class NativeLocalWindowResources implements Serializable {
     public byte[] resolve(Environment environment, StreamConfig runtime) {
         if (isPending()) throw new IllegalStateException("Local-window shares require complete-pipeline finalization");
         if (shares.isEmpty()) return null;
-        var result = NativeTaskBindings.newBuilder().setProtocolVersion(1);
+        var result = NativeTaskBindings.newBuilder().setProtocolVersion(2);
         shares.entrySet().stream().sorted(Map.Entry.comparingByKey()).forEach(entry -> {
             long bytes = entry.getValue().memoryBytes(environment, runtime);
             if (bytes <= 0) throw new IllegalStateException("Flink assigned no original local-window buffer memory");
@@ -115,7 +115,9 @@ public final class NativeLocalWindowResources implements Serializable {
     }
 
     private static void collect(Operator node, Set<Long> locals) {
-        if (node.hasLocalWindowAggregate() && (node.getPlanNodeId() <= 0 || !locals.add(node.getPlanNodeId())))
+        boolean buffered = node.hasLocalWindowAggregate()
+                || (node.hasWindowAggregate() && node.getWindowAggregate().getProcessingTime());
+        if (buffered && (node.getPlanNodeId() <= 0 || !locals.add(node.getPlanNodeId())))
             throw new IllegalArgumentException("Local-window resource owners must have unique positive identities");
         for (var child : NativePhysicalPlan.children(node)) collect(child, locals);
     }

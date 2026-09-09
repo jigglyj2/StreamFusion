@@ -134,6 +134,14 @@ impl NativeExecutionContext {
             }
             if window {
                 shared_window::validate_node(node, binding.max_parallelism)?;
+                if matches!(&node.operator, Some(proto::operator::Operator::WindowAggregate(plan)) if plan.processing_time)
+                    && !self
+                        .processing_window_buffers
+                        .iter()
+                        .any(|(id, _)| *id == binding.plan_node_id)
+                {
+                    return Err(invalid("processing-time state requires its original Flink buffer resource before binding"));
+                }
             }
             match binding.backend.as_ref() {
                 Some(proto::native_state_binding::Backend::Memory(_)) => {}
@@ -179,7 +187,12 @@ impl NativeExecutionContext {
             .encode_to_vec();
             let state_memory =
                 memory.sibling(format!("native state node {}", binding.plan_node_id));
-            let factory = create(node, &bare, binding, state_memory)?;
+            let buffer = self
+                .processing_window_buffers
+                .iter()
+                .find(|(id, _)| *id == binding.plan_node_id)
+                .map(|(_, buffer)| *buffer);
+            let factory = create(node, &bare, binding, state_memory, buffer)?;
             bindings.push((binding.plan_node_id, factory));
         }
         self.bind_persistent(bindings)?;
@@ -303,6 +316,7 @@ fn create(
     bytes: &[u8],
     binding: &proto::NativeStateBinding,
     memory: HostMemoryReservation,
+    buffer: Option<super::task_resources::WindowBuffer>,
 ) -> Result<Arc<dyn PersistentOperatorFactory>> {
     use crate::state::{KeyedState, MemoryKeyedState, RocksPluginKeyedState};
     let max = binding.max_parallelism;
@@ -332,7 +346,7 @@ fn create(
     };
     match &node.operator {
         Some(proto::operator::Operator::WindowAggregate(_)) => Ok(Arc::new(WindowFactory::new(
-            node, bytes, binding, state, scratch,
+            node, bytes, binding, state, scratch, buffer,
         )?)),
         Some(
             proto::operator::Operator::GroupAggregate(_)

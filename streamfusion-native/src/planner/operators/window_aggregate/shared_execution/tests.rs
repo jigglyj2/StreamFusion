@@ -8,6 +8,7 @@ use futures::StreamExt;
 use prost::Message;
 
 mod processing_time;
+mod processing_window;
 mod region;
 mod sessions;
 

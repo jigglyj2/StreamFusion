@@ -68,7 +68,7 @@ public final class StreamFusionSessionWindowAggregateTranslator {
             boolean retractable,
             ReadableConfig config) {
         if (strategy.isProctime())
-            return "window processing time: shared processing-time window resource binding, lifecycle and recovery parity are not yet implemented";
+            return "window processing time: shared processing-time window capacity, rescaling and channel recovery parity are not yet verified";
         if (!(strategy instanceof TimeAttributeWindowingStrategy)
                 || !(strategy.getWindow() instanceof SessionWindowSpec))
             return "session persistent admission: shared single-stage windows require direct SESSION event time";

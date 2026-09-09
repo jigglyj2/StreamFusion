@@ -275,8 +275,8 @@ ports; existing event-time operators keep their previous descriptor count and ca
 
 Tests cover native tree/region consumption, IPC input replacement, signed clock values, shared
 buffer identity, producer/import failure cleanup, malformed descriptors, and rejected clock
-placement. No production window factory enables this capability yet. Q12 remains gated until its
-processing-time factory/resource binding and complete Flink parity/recovery contracts are implemented.
+placement. The shared window factory now consumes this capability for explicit direct UTC TUMBLE
+COUNT(*) bindings. Q12 remains gated until capacity, rescaling and channel-recovery parity are verified.
 
 The DataFusion grouped window buffer is shared as an internal computation component, with a
 processing-time mode for direct UTC TUMBLE input. It preserves the null logical PROCTIME slot,
@@ -293,8 +293,16 @@ partials update state without registering timers again. A callback first applies
 progression, then drains bounded processing-time timer frontiers. Repeated/older callbacks may
 emit COUNT zero, while watermarks only update the operator's event-time metric. Keyed snapshots
 require a pre-checkpoint buffer flush and identify the original raw plan rather than its internal
-partial layout. Component tests include backend-switch timer restore and rescaling; production
-factory/resource binding and the complete Flink lifecycle proof are still pending.
+partial layout. Component tests include backend-switch timer restore and rescaling. The shared
+factory binds the same component in trees and shared regions; generated Java tests cover complete
+registered metrics and changelog/control parity through direct C Data and IPC on both backends.
+The complete capacity-pressure and recovery matrix remains pending.
+
+Task-resource protocol 2 extends the existing local-buffer descriptor to processing-time windows.
+Original Flink memory shares and page sizes bind before keyed factories are constructed. No new
+budget, JNI entry point or intermediate operator is introduced. Protocol 1 remains valid for local
+windows and rejects processing-time ownership. Resource/state installation validates missing,
+duplicate and mismatched owners before execution; checkpointing rejects unflushed window updates.
 
 Shared regions can bind the existing Flink memory/state lifecycle directly. The same backend
 leases and checkpoint participants serve tree and shared definitions; they do not create another

@@ -43,13 +43,13 @@ fn region_plan() -> proto::NativeRegionPlan {
         output_stage_ids: vec![3, 4],
     }
 }
-fn slot() -> proto::Operator {
+pub(super) fn slot() -> proto::Operator {
     proto::Operator {
         operator: Some(proto::operator::Operator::Input(proto::Input::default())),
         ..Default::default()
     }
 }
-fn reference(id: u64) -> proto::NativeRegionInputReference {
+pub(super) fn reference(id: u64) -> proto::NativeRegionInputReference {
     proto::NativeRegionInputReference {
         source: Some(proto::native_region_input_reference::Source::StageId(id)),
     }
@@ -70,7 +70,7 @@ fn region_context(
         .unwrap();
     Arc::new(context)
 }
-fn run_region(
+pub(super) fn run_region(
     context: &Arc<NativeExecutionContext>,
     input: RecordBatch,
     event: Option<ControlEvent>,

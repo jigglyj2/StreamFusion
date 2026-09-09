@@ -60,7 +60,7 @@ mod state_conformance_tests;
 pub(crate) mod stream;
 #[cfg(test)]
 mod stream_tests;
-mod task_resources;
+pub(crate) mod task_resources;
 
 pub(crate) struct NativeExecutionContext {
     plan: Definition,
@@ -77,6 +77,7 @@ pub(crate) struct NativeExecutionContext {
     clock_inputs: Vec<(u64, usize)>,
     state_resources: Option<state::StateResources>,
     task_resources_installed: bool,
+    processing_window_buffers: Vec<(u64, task_resources::WindowBuffer)>,
     invocation: AtomicU8,
     controls: Arc<crate::planner::persistent::control::ControlEvents>,
     _control_reservation: MemoryReservation,
@@ -176,6 +177,7 @@ impl NativeExecutionContext {
             clock_inputs,
             state_resources: None,
             task_resources_installed: false,
+            processing_window_buffers: Vec::new(),
             invocation: AtomicU8::new(0),
             controls,
             _control_reservation: control_reservation,
@@ -570,19 +572,17 @@ fn register_context(
     } else {
         NativeExecutionContext::new(bytes, memory_pool)?
     };
-    if let Some(bindings) = bindings {
-        context.install_state(
-            bindings,
-            crate::memory_pool::HostMemoryReservation::new(
-                broker.clone(),
-                "native region state bindings",
-            ),
-        )?;
-    }
+    // Buffer capacities are prerequisites for keyed processing-time factory construction.
     if let Some(bindings) = task_bindings {
         context.install_task_resources(
             bindings,
-            crate::memory_pool::HostMemoryReservation::new(broker, "native task bindings"),
+            crate::memory_pool::HostMemoryReservation::new(broker.clone(), "native task bindings"),
+        )?;
+    }
+    if let Some(bindings) = bindings {
+        context.install_state(
+            bindings,
+            crate::memory_pool::HostMemoryReservation::new(broker, "native region state bindings"),
         )?;
     }
     let context = Arc::new(context);

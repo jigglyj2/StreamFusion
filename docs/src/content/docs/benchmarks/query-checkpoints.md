@@ -136,7 +136,7 @@ Q11's supported SESSION COUNT path is delivered within these limits.
 
 Q12 is the active checkpoint. Its ordinary plan contains a `PROCTIME()` Calc, exchange and
 single-stage processing-time TUMBLE COUNT. Both backends currently retain whole-plan fallback:
-the shared processing-time resource binding, lifecycle and recovery parity contract is incomplete.
+the shared processing-time capacity, rescaling and channel recovery parity contract is incomplete.
 The logical `PROCTIME()` Calc attribute now lowers to DataFusion's typed null expression, matching
 Flink's code generator without reading or storing a clock value. Generated physical-Calc tests
 compare complete ordered changelog bytes and record timestamps for every RowKind, nullable keys,
@@ -162,9 +162,9 @@ one Arrow Int64 clock vector per negotiated input through the existing C Data ca
 row-count inspection for IPC, and attaches metadata after native payload decoding. Tests cover
 per-record values, rollback/boundaries, direct/decoded input ownership, invalid bindings and
 schema/length failures. Clock owners must directly consume an external edge and remove clock
-metadata before output. No production window factory enables the capability yet; the native
-processing-time factory/resource binding and full parity/recovery proof remain pending. This is still a
-prerequisite, not Q12 admission.
+metadata before output. The shared window factory now enables this capability for explicit verified
+TUMBLE COUNT(*) bindings; ordinary admission still requires the remaining capacity and recovery
+proof. This is a prerequisite, not Q12 admission.
 The existing DataFusion grouped window buffer now has a processing-time mode. It assigns each
 row from its supplied clock while retaining Flink's buffer capacity and flush boundaries; watermarks
 and EOF do not flush it. Flink reference tests on both backends establish an observable edge case:
@@ -176,7 +176,13 @@ partial merging for direct UTC TUMBLE COUNT(*). Timers register at raw arrival a
 frontiers even when no accumulator was published; flushing state does not recreate fired timers.
 Component tests match the established Flink clock cases and verify cross-backend absolute timer
 restore with one-to-two rescaling, bounded state I/O, input-plan fingerprinting and memory denial.
-Factory resource binding and full Flink lifecycle/recovery parity remain required before admission.
+Task-resource protocol 2 now binds the original Flink buffer capacity before keyed factory creation.
+Generated Java tests compare complete changelog/control bytes and registered metrics against the
+SQL-created Flink operator using both direct C Data and IPC input. Clock rollback/repetition,
+terminal controls and pending-timer checkpoint restore pass on both backends. Native tests cover
+transactional resource failures, cross-backend factory restore and shared-buffer multi-output
+regions. The full capacity-pressure, rescaling and aligned/unaligned channel-recovery proofs are
+still required before ordinary admission.
 
 No Q12 performance result is claimed from empty/partial max-speed bounded output.
 
