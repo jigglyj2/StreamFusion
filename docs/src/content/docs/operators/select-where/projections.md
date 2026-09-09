@@ -469,8 +469,11 @@ doubled apostrophes). The empty pattern is supported. Flink's Java planner encod
 pattern in protobuf; Rust lowers its numeric formatting to DataFusion arithmetic, comparisons,
 `date_part`, `to_char`, padding and concatenation kernels. A 400-year Gregorian cycle rebase
 preserves month/day/time fields across the complete signed-millisecond range, with explicit
-Java year-of-era and expanded-year sign handling. This avoids Arrow/chrono range truncation
-without a handwritten per-row calendar or formatting algorithm. Timestamp values are independent
+Java year-of-era and expanded-year sign handling. For AD years 1–9999, where Java and Arrow
+numeric year formatting agree, DataFusion selects a direct `to_char` path. Other rows retain the
+calendar-cycle adaptation, including within mixed batches. This avoids unnecessary numeric/string
+work for ordinary dates and avoids Arrow/chrono range truncation without a handwritten per-row
+calendar or formatting algorithm. Timestamp values are independent
 of the session zone. Null timestamps remain null, including for empty or literal-only patterns.
 
 The format operation uses one coarse DataFusion memory reservation for its numeric workspace,

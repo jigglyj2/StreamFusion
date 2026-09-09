@@ -40,10 +40,17 @@ class DateFormatGeneratedParityTest extends SqlParityTestSupport {
             0,
             1,
             -12219292800000L,
-            951782400123L
+            951782400123L,
+            -62_135_596_800_001L,
+            -62_135_596_800_000L,
+            253_402_300_799_999L
         };
         for (int i = 0; i < 257; i++) {
-            long millis = i < edges.length ? edges[i] : random.nextLong();
+            long millis = i < edges.length
+                    ? edges[i]
+                    : i % 2 == 0
+                            ? random.nextLong()
+                            : Math.floorMod(random.nextLong(), 315_537_897_600_000L) - 62_135_596_800_000L;
             LocalDateTime timestamp =
                     i % 17 == 16 ? null : LocalDateTime.ofInstant(Instant.ofEpochMilli(millis), ZoneOffset.UTC);
             for (RowKind kind : RowKind.values()) rows.add(Row.ofKind(kind, (long) i, timestamp));

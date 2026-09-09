@@ -23,6 +23,9 @@ fn full_signed_millisecond_range_matches_java_year_of_era_and_sign_rules() {
             Some(i64::MAX),
             Some(-1),
             Some(0),
+            Some(-62_135_596_800_001),
+            Some(-62_135_596_800_000),
+            Some(253_402_300_799_999),
         ]))],
     )
     .unwrap();
@@ -48,7 +51,10 @@ fn full_signed_millisecond_range_matches_java_year_of_era_and_sign_rules() {
             Some("+10000-01-01 00:00:00.000"),
             Some("+292278994-08-17 07:12:55.807"),
             Some("1969-12-31 23:59:59.999"),
-            Some("1970-01-01 00:00:00.000")
+            Some("1970-01-01 00:00:00.000"),
+            Some("0001-12-31 23:59:59.999"),
+            Some("0001-01-01 00:00:00.000"),
+            Some("9999-12-31 23:59:59.999")
         ]
     );
 }

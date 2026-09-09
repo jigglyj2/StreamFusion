@@ -112,8 +112,12 @@ RowData catalog now uses the unchanged SELECT body from the official filesystem 
 both partition-label columns. Its opt-in integration test compares complete collected results at
 10,000 events, parallelism one/four, on both backend configurations with positive native plan/Calc
 activity. This workload is stateless; choosing RocksDB is not state-performance evidence. Release
-measurement and profiling remain pending. Filesystem sink partition-commit and rolling-policy
-behavior are outside the blackhole benchmark's evidence.
+measurement at `1227c358` gives million-event median throughput ratios of 0.850× Flink in memory
+and 0.875× with RocksDB configured. Separate two-million-event CPU profiles put native formatting
+at 3.6–4.2% of process samples. Numeric formatting now selects direct DataFusion `to_char` for AD
+years 1–9999, retaining full-range adaptation elsewhere; a fresh release comparison is pending.
+Filesystem sink partition-commit and rolling-policy behavior are outside the blackhole benchmark's
+evidence.
 
 ## Q6 has no Flink streaming baseline
 

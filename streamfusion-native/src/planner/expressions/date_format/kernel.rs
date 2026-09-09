@@ -50,6 +50,13 @@ pub(super) fn create(value: Expr, pattern: &str, schema: &Schema) -> Result<Expr
         ));
     }
     let parts = pattern::parse(pattern)?;
+    let direct_pattern = parts
+        .iter()
+        .map(|part| match part {
+            pattern::Part::YearOfEra => "%Y",
+            pattern::Part::Format(format) => format.as_str(),
+        })
+        .collect::<String>();
     let millis = cast(value.clone(), DataType::Int64);
     let remainder = binary(millis.clone(), Operator::Modulo, number(CYCLE_MILLIS));
     let negative = cast(
@@ -57,7 +64,7 @@ pub(super) fn create(value: Expr, pattern: &str, schema: &Schema) -> Result<Expr
         DataType::Int64,
     );
     let cycles = binary(
-        binary(millis, Operator::Divide, number(CYCLE_MILLIS)),
+        binary(millis.clone(), Operator::Divide, number(CYCLE_MILLIS)),
         Operator::Minus,
         negative,
     );
@@ -134,6 +141,20 @@ pub(super) fn create(value: Expr, pattern: &str, schema: &Schema) -> Result<Expr
     } else {
         call(datafusion_functions::string::concat(), arguments, schema)?
     };
+    // Java yyyy and chrono %Y agree for AD years 1..9999. Let DataFusion evaluate one
+    // formatter directly there; preserve the full-range adaptation for the remaining rows.
+    // CASE selects Arrow subsets, so neither path evaluates unsupported calendar values.
+    let ordinary = binary(
+        binary(millis.clone(), Operator::GtEq, number(-62_135_596_800_000)),
+        Operator::And,
+        binary(millis, Operator::Lt, number(253_402_300_800_000)),
+    );
+    let direct = call(
+        datafusion_functions::datetime::to_char(),
+        vec![value.clone(), text(&direct_pattern)],
+        schema,
+    )?;
+    let result = choose(ordinary, direct, result)?;
     choose(
         Arc::new(IsNullExpr::new(value)),
         Arc::new(Literal::new(ScalarValue::Utf8(None))),
