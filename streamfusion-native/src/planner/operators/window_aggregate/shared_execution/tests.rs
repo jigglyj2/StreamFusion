@@ -8,6 +8,7 @@ use futures::StreamExt;
 use prost::Message;
 
 mod region;
+mod sessions;
 
 fn calc(id: u64, input: proto::Operator, width: u32) -> proto::Operator {
     proto::Operator {
@@ -31,7 +32,8 @@ fn calc(id: u64, input: proto::Operator, width: u32) -> proto::Operator {
     }
 }
 fn plan() -> proto::NativePlan {
-    let mut plan = proto::NativePlan::decode(super::super::tests::plan().as_slice()).unwrap();
+    let mut plan =
+        proto::NativePlan::decode(super::super::shared_slices::tests::plan().as_slice()).unwrap();
     let mut window = plan.root.take().unwrap();
     window.plan_node_id = 3;
     let Some(proto::operator::Operator::WindowAggregate(aggregate)) = &mut window.operator else {
@@ -92,7 +94,7 @@ fn context(
     Arc::new(context)
 }
 fn input(rows: &[(i64, i64, i64)], kind: i8) -> RecordBatch {
-    let payload = super::super::tests::batch(rows);
+    let payload = super::super::shared_slices::tests::batch(rows);
     let mut columns = payload.columns().to_vec();
     columns.extend([
         Arc::new(Int64Array::from(vec![Some(123); rows.len()])) as ArrayRef,
@@ -293,13 +295,16 @@ fn cancelling_a_window_control_stream_requires_recovery_and_preserves_output_own
             break batch;
         }
     };
-    assert_eq!(held.num_rows(), OUTPUT_ROWS);
+    assert_eq!(held.num_rows(), super::super::shared_slices::OUTPUT_ROWS);
     drop(stream);
     assert!(context.snapshot_state(3, 0).is_err());
     assert!(context.start(vec![batch.slice(0, 0)]).is_err());
     drop(context);
     assert!(broker.reserved() > 0);
-    assert_eq!(held.column(4).null_count(), OUTPUT_ROWS);
+    assert_eq!(
+        held.column(4).null_count(),
+        super::super::shared_slices::OUTPUT_ROWS
+    );
     drop(held);
     assert_eq!(broker.reserved(), 0);
 }

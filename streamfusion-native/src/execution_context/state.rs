@@ -14,9 +14,7 @@ use crate::planner::operators::{
         execution_plan::{self as top_one, TopOneFactory},
         TopNProcessor,
     },
-    window_aggregate::shared_slices::execution_plan::{
-        self as slicing_window, SlicingWindowFactory,
-    },
+    window_aggregate::shared_execution::{self as shared_window, WindowFactory},
 };
 use crate::planner::persistent::{PersistentBinding, PersistentOperatorFactory};
 use crate::{proto, state::SnapshotBytes};
@@ -135,7 +133,7 @@ impl NativeExecutionContext {
                 ));
             }
             if window {
-                slicing_window::validate_node(node, binding.max_parallelism)?;
+                shared_window::validate_node(node, binding.max_parallelism)?;
             }
             match binding.backend.as_ref() {
                 Some(proto::native_state_binding::Backend::Memory(_)) => {}
@@ -333,9 +331,9 @@ fn create(
         None => return Err(invalid("unsupported native state binding")),
     };
     match &node.operator {
-        Some(proto::operator::Operator::WindowAggregate(_)) => Ok(Arc::new(
-            SlicingWindowFactory::new(node, bytes, binding, state, scratch)?,
-        )),
+        Some(proto::operator::Operator::WindowAggregate(_)) => Ok(Arc::new(WindowFactory::new(
+            node, bytes, binding, state, scratch,
+        )?)),
         Some(
             proto::operator::Operator::GroupAggregate(_)
             | proto::operator::Operator::GlobalGroupAggregate(_),

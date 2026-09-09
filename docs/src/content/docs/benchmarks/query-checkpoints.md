@@ -117,7 +117,10 @@ ranges; million-event results remain slower. This stateless workload does not es
 state performance or filesystem sink partition-commit/rolling behavior. Q11's session-window
 plan is the next checkpoint. Its initial ordinary EXPLAIN falls back at `StreamExecWindowAggregate`.
 The retained SESSION kernel now checks lateness after merging, with controlled-arrival Flink
-comparisons; this is a correctness prerequisite, not an admission or performance result.
+comparisons; this is a correctness prerequisite, not an admission or performance result. Its shared
+COUNT kernel now uses DataFusion grouped computation and ordered per-session state, with generated
+Flink metric/changelog comparison and native cross-backend/legacy-state restore checks. SESSION
+managed-checkpoint/rescaling/channel-replay coverage and ordinary admission remain pending.
 
 ## Q6 has no Flink streaming baseline
 

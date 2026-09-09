@@ -12,18 +12,17 @@ use crate::planner::operators::sortable_state;
 
 mod checkpoint;
 mod codec;
-pub(crate) mod execution_plan;
 mod firing;
 mod input;
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
 
 const STATE_NAMESPACE: u8 = 0x53;
 const STATE_MAGIC: &[u8; 5] = b"SFSL\x01";
 const READ_ROWS: usize = 4096;
-const OUTPUT_ROWS: usize = 1024;
+pub(super) const OUTPUT_ROWS: usize = 1024;
 
-struct SharedSlices {
+pub(super) struct SharedSlices {
     // Drop compute/codec owners before the kernel's workspace reservation.
     compute: GroupedMerge,
     end_codec: RowConverter,
@@ -34,7 +33,7 @@ struct SharedSlices {
 }
 
 impl SharedSlices {
-    fn new(kernel: WindowAggregateProcessor) -> Result<Self> {
+    pub(super) fn new(kernel: WindowAggregateProcessor) -> Result<Self> {
         let plan = &kernel.plan;
         if (plan.kind != proto::WindowKind::Hop as i32
             && plan.kind != proto::WindowKind::Tumble as i32)
@@ -132,5 +131,36 @@ impl SharedSlices {
 
     fn next_timer(&self) -> Option<i64> {
         self.kernel.next_event_timer()
+    }
+}
+
+impl super::shared_kernel::SharedWindowKernel for SharedSlices {
+    fn kernel(&self) -> &WindowAggregateProcessor {
+        &self.kernel
+    }
+    fn set_restored_watermark(&mut self, watermark: i64) {
+        self.kernel.current_event_time = watermark;
+        self.restored_watermark = Some(watermark);
+    }
+    fn require_healthy(&self) -> Result<()> {
+        SharedSlices::require_healthy(self)
+    }
+    fn process(&mut self, batch: &RecordBatch) -> Result<()> {
+        SharedSlices::process(self, batch)
+    }
+    fn advance(&mut self, watermark: i64) -> Result<RecordBatch> {
+        SharedSlices::advance(self, watermark)
+    }
+    fn next_timer(&self) -> Option<i64> {
+        SharedSlices::next_timer(self)
+    }
+    fn snapshot(&mut self, group: u32) -> Result<crate::state::SnapshotBytes> {
+        SharedSlices::snapshot(self, group)
+    }
+    fn restore(&mut self, group: u32, bytes: &[u8], watermark: i64) -> Result<()> {
+        SharedSlices::restore(self, group, bytes, watermark)
+    }
+    fn checkpoint(&mut self, directory: &std::path::Path) -> Result<()> {
+        SharedSlices::checkpoint(self, directory)
     }
 }

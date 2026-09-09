@@ -6,7 +6,7 @@ use crate::memory_pool::tests_support::TestBroker;
 use crate::planner::operators::group_aggregate::Accumulator;
 use prost::Message;
 
-pub(super) fn plan() -> Vec<u8> {
+pub(in crate::planner::operators::window_aggregate) fn plan() -> Vec<u8> {
     use super::super::tests::{field, logical_bigint, plan};
     let mut native =
         proto::NativePlan::decode(plan(proto::WindowKind::Hop, 6000, 2000, false).as_slice())
@@ -80,7 +80,9 @@ fn processor_with_plan(
     .unwrap()
 }
 
-pub(super) fn batch(rows: &[(i64, i64, i64)]) -> RecordBatch {
+pub(in crate::planner::operators::window_aggregate) fn batch(
+    rows: &[(i64, i64, i64)],
+) -> RecordBatch {
     let encoded = rows
         .iter()
         .map(|&(_, count, _)| {
@@ -172,9 +174,9 @@ fn backends() -> Vec<bool> {
 
 mod attached;
 mod checkpoint;
+mod distinct;
 mod generated;
 mod tumble;
-mod distinct;
 
 #[test]
 fn borrowed_partial_slices_do_not_reserve_the_parent_arrow_buffers_again() {

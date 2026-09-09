@@ -32,6 +32,39 @@ FROM TABLE(HOP(TABLE bid, DESCRIPTOR(dateTime), INTERVAL '2' SECOND, INTERVAL '1
 GROUP BY window_start, window_end, bidder;
 ```
 
+## SESSION execution prerequisite
+
+Ordinary SESSION selection remains gated. The shared native window runtime now also binds an
+append-only UTC event-time session kernel; Q11's COUNT contract has controlled Flink-generated
+changelog and complete registered metric-surface coverage on both backends. Adjacent Calc stages
+share the native execution tree, Arrow buffers and common control/ownership lifecycle. These
+fragment checks do not establish ordinary SQL admission, distributed recovery or benchmark results.
+
+The kernel processes arrivals in input order to assign Flink merging namespaces, then uses
+DataFusion grouped aggregate update/merge kernels over Arrow slices. It does not sort arrivals
+before the lateness decision or apply COUNT updates in a handwritten row loop. Namespace lookups
+use an ordered interval map; merging retains contribution ordinals for vectorized computation.
+Null rowtime and overflowing session endpoints fail before state access.
+
+Persisted entries use a length-framed partition prefix and Arrow 59 encoded session end. Flink's
+BinaryRow identity still determines the key group. Each interval has its own `SFSN` version-one
+accumulator value; input events and whole partition lists are not retained. A batch reads relevant
+ordered ranges for distinct touched keys before computation and writes only changed intervals in
+one atomic batch. Both memory and RocksDB support the same index. A native regression updates one
+session among 10,000 disjoint sessions with 64 events: one range read, at most one 256-entry page,
+and one write batch containing under 256 key/value bytes. This is state-access evidence, not a
+throughput benchmark. Timer state is serialized at checkpoint boundaries.
+
+Coarse batch, decoded-state, retained-state and output reservations use Flink's existing allowance.
+Admission failure poisons the invocation so it must recover through a fresh context; no partial
+session computation can be resumed. Boundary tests retain output credit after context close and
+verify early denial before state access. Canonical native tests switch backends while restoring
+Flink's operator watermark. Legacy `SFWS`/`SFWI` append-only snapshots migrate to ordered entries
+only after their indexes, accumulators and timers agree; retained retraction-event state is rejected.
+The common managed-checkpoint, rescaling and channel-replay matrices still need SESSION-specific
+coverage before production admission can be enabled. Other native aggregate-call variants do not
+yet carry the complete SESSION conformance evidence established for COUNT.
+
 ## Q5 checkpoint
 
 Q5's local/global HOP COUNT, attached MAX/COUNT and binary join now use ordinary planner
