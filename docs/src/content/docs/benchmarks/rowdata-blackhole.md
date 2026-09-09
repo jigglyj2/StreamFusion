@@ -157,3 +157,9 @@ flame graphs, differential flame graphs and the category-matching script remain 
 `streamfusion-nexmark-benchmarks/target/measurements/q3-memory/`. Subdirectories are
 `one-million`, `profiles`, `projected-one-million`, `projected-ten-million`, and
 `projected-profiles`; generated artifacts are intentionally not checked into Git.
+
+The [Q13 lookup comparison](/StreamFusion/benchmarks/q13-rowdata/) uses the original legacy CSV
+side input and unchanged enrichment SELECT. Three alternating fresh-JVM pairs show slower
+one-million-event runs but ten-million-event median throughput of 1.113× Flink with HashMap
+and 1.149× with RocksDB configured, with disjoint ranges. Separate mixed profiles put native
+lookup at about 3% of process CPU. The immutable lookup cache is not RocksDB keyed state.

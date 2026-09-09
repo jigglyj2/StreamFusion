@@ -150,7 +150,7 @@ independent processing clocks still produce different window labels and output c
 Borrowed Arrow keys eliminate repeated timer registration within each raw batch while preserving
 all DataFusion counts, absolute timers and Flink's original buffer allowance. Registration's CPU
 share falls from 8.94% / 8.11% to 2.08% / 1.92% in memory / RocksDB; cross-run shares do not isolate
-a throughput gain. All 100-million-event profiles finish without capacity failure. Q13 is next.
+a throughput gain. All 100-million-event profiles finish without capacity failure. Q13 is documented below.
 
 The logical PROCTIME attribute lowers to DataFusion's typed null. Arrow/protobuf schemas allow
 that physical null even when Flink's logical attribute is NOT NULL; ordinary timestamp constraints
@@ -181,7 +181,7 @@ backends. Those separate wall-clock jobs check execution invariants; exact bytes
 with identical controlled clocks. Terminal watermarks and bounded finish do not emit an open
 processing-time window. No Q12 performance result is claimed from empty/partial max-speed output.
 
-## Q13 lookup admission; performance pending
+## Q13 lookup delivery
 
 The original upstream Q13 SQL now plans and executes with native lookup acceleration.
 `NexmarkQ13PlanningIT` loads `/queries/q13.sql` directly from the upstream Nexmark JAR,
@@ -206,9 +206,11 @@ A separate integration check verifies that the catalog SELECT is unchanged from 
 compares complete enrichment changelog hashes and blackhole counts at 50,000 source events,
 parallelism 1 and 4, and both configured backends.
 
-This is an admission checkpoint, not a completed performance comparison. Q13 still needs its
-release/native-CPU measured forks and separate mixed profiles. Configuring RocksDB for this
-stateless query does not establish RocksDB state-performance behavior. The original legacy source
+The [Q13 release comparison](/StreamFusion/benchmarks/q13-rowdata/) records three alternating
+fresh-JVM pairs at one and ten million events and separate mixed profiles at two and twenty
+million. At ten million, median throughput is 1.113× Flink with HashMap and 1.149× with RocksDB
+configured, with disjoint timing ranges. One-million-event runs remain slower. Configuring RocksDB
+for this stateless query does not establish RocksDB state-performance behavior. The original legacy source
 remains the baseline; replacing it with the modern scan-only filesystem connector would change it.
 
 ## Q6 has no Flink streaming baseline

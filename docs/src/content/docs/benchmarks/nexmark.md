@@ -68,8 +68,9 @@ Flink's constant-bound event-time interval physical operator.
 This catalog is not production admission. Q3's binary inner equi-join path is admitted with in-memory
 state; other stateful families and RocksDB retain their gates. The query checkpoint page records
 current selection separately from implementation.
-Q13 is catalogued with its original legacy CSV side input and passes ordinary lookup admission;
-its release comparison remains pending. q15, q16, and q17 still require an
+Q13 is catalogued with its original legacy CSV side input and passes ordinary lookup admission.
+Its [release comparison](/StreamFusion/benchmarks/q13-rowdata/) reports slower one-million-event
+runs and faster ten-million-event medians with both backend configurations. q15, q16, and q17 still require an
 unsupported join shape or surrounding operator. Q10's SELECT path is now catalogued with
 numeric `DATE_FORMAT`; its blackhole comparison does not exercise filesystem partition commits
 or rolling policies. See the query checkpoint page for its delivery status. q14 uses a Java UDF, mixed decimal

@@ -196,7 +196,11 @@ performance evidence.
 
 The original Q13 SQL passes ordinary EXPLAIN admission and blackhole execution with both HashMap
 and RocksDB configured, with positive native batch counters and exactly the expected bid count.
-Q13 release measurements and mixed JVM/native profiles are still pending; no speedup is claimed.
+The [Q13 release comparison](/StreamFusion/benchmarks/q13-rowdata/) includes matched measurements
+and mixed JVM/native profiles. At ten million events, median throughput is 1.113× Flink with
+HashMap and 1.149× with RocksDB configured; one-million-event runs remain slower. Lookup itself
+is about 3% of process CPU in the longer profiles, with larger costs in the shared source and
+RowData/Arrow boundaries. These results do not establish a performance ceiling.
 
 ## SQL example
 
