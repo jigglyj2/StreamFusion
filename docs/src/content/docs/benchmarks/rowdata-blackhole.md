@@ -8,6 +8,13 @@ unmodified SQL `blackhole` connector. It uses the same query SQL, schemas, check
 parallelism, and state backend configuration as the collecting RowData harness. StreamFusion
 uses ordinary whole-plan admission and its Arrow source and sink boundary adapters.
 
+The current benchmark phase uses only this RowData/blackhole path and separate collecting-sink
+validation; Kafka execution is deferred. The upstream-dependency policy permits only the minimal
+Flink planner-installation patch. The existing build also carries a `StreamGraphGenerator`
+resource-finalization patch, which violates that restriction and must be removed. Recorded results
+remain historical measurements of their stated builds; buffered-window coverage must be revalidated
+without that runtime patch before it can satisfy the new policy.
+
 The blackhole consumes rows without serializing, hashing, retaining, or materializing them.
 Its normal Flink changelog negotiation excludes UPDATE_BEFORE. Both engines use that contract;
 complete changelog validation belongs in the separate collecting-sink and controlled parity tests.

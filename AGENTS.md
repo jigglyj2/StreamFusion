@@ -4,6 +4,15 @@
 
 We are creating a Flink accelerator on top of Apache DataFusion. This means we'll use DataFusion to accelerate operators where possible, otherwise we'll create our own based on Arroyo and RisingWave code. The rust layer is just responsible for execution, the existing Flink code is responsible for snapshotting, checkpointing, distribution, recovery, and planning. If you need to reference external code, check if it is in ~/data, and if not, clone it there.
 
+Do not fork or carry private modifications to upstream open-source dependencies. The sole
+exception is the minimal Flink monkey patch needed to install/select StreamFusion's planner,
+including the class loading required for that installation. This exception does not permit
+patching Flink's runtime, operators, memory assignment, checkpoints, sources, sinks, or benchmark
+generators. Keep adaptations in StreamFusion using upstream extension points; if that cannot
+preserve the required semantics, retain precise whole-plan fallback or pursue an upstream change.
+Reference checkouts and StreamFusion-owned adaptations of upstream code are allowed, subject to
+their licenses; they must not become a requirement for a privately modified dependency build.
+
 Native operators must delegate computation to DataFusion physical operators, aggregate
 accumulators, window evaluators, expressions, and kernels wherever they preserve Flink
 semantics. Implementing DataFusion's `ExecutionPlan` interface around a handwritten
@@ -261,6 +270,10 @@ The Kafka-in/Kafka-out, exactly-once Nexmark comparison against unmodified Flink
 our north-star benchmark. Optimize its four state-backend/mini-batch cases while
 keeping the code simple and avoiding substantial divergence from Flink's result
 parity and architecture.
+
+Current benchmark work is limited to the Nexmark RowData source into the unmodified Flink
+blackhole sink, with separate collecting-sink validation. Do not start Kafka, interact with
+Kafka services, or run Kafka connector benchmarks until the user explicitly requests that phase.
 
 Benchmark-driven optimizations must preserve the intended StreamFusion architecture;
 never trade away the production design merely to improve a benchmark result. Before

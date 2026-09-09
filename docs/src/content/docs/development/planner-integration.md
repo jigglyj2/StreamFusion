@@ -111,7 +111,13 @@ input RowKinds. They compare each physical stage's logical I/O counts and requir
 to its initial allowance at close. This is not complete large-owner lifetime or metric-surface coverage.
 
 
-StreamFusion uses a small Flink patch for planner-factory selection, exec-graph replacement, and
+The upstream-dependency policy permits only the minimal Flink planner-installation patch and
+its required class loading. The existing runtime finalization patch described below is outside
+that exception and must be replaced with StreamFusion-owned integration through upstream extension
+points, or the affected semantic paths must fall back. Its current tests do not establish compliance
+with this restriction.
+
+The existing implementation uses a Flink patch for planner-factory selection, exec-graph replacement, and
 complete-pipeline resource finalization. The pipeline callback runs after `StreamGraphGenerator`
 has seen the complete pipeline, before JobGraph serialization. This additional Flink boundary is
 needed because operators added after SQL translation can change the original local-window memory
