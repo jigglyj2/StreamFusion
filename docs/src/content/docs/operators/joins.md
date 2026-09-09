@@ -110,10 +110,35 @@ broker, remain stable across probes and release after success or memory denial.
 This candidate is deliberately excluded from production builds. DataFusion registers fresh
 metric descriptors on every `execute` call; a 32-invocation regression verifies linear retained
 descriptor growth despite stable build-buffer reservations. Also, an unordered outer-join probe
-can emit unmatched rows after matched rows, violating Flink's arrival order. Production integration
-must resolve task-lifetime execution without retaining per-invocation metrics, and retain fallback
-for unverified outer semantics. These checks are native algorithm/lifecycle evidence against an
-independent row oracle, not complete Flink/native changelog, metric or recovery parity.
+can emit unmatched rows after matched rows, violating Flink's arrival order. These checks are native
+algorithm/lifecycle evidence against an independent row oracle, not complete Flink/native changelog,
+metric or recovery parity.
+
+A retained native inner-lookup stage now uses DataFusion's unchanged `JoinHashMapU32`,
+`update_hash`, bounded candidate probing and physical equality expressions, followed by Arrow
+gather kernels. It builds the immutable hash table once, preserves duplicate file order, and
+emits each batch's matches before requesting another input. Equality checks remove hash collisions
+with SQL null semantics; supported key types are boolean, signed integers, UTF-8 and binary,
+including composite keys. Stable physical-stage counters count logical probe and output records.
+The probe streams do not construct DataFusion plans or retain new metric objects per invocation.
+
+This is a documented Flink-lifetime deviation from Comet's use of `HashJoinExec`: repeated
+execution grows retained metrics in DataFusion 55, while keeping that operator's stream alive
+coalesces small results across Flink control boundaries. StreamFusion manages immutable cache
+lifetime, bounded probe cursors and Arrow ownership; DataFusion still performs hashing, candidate
+enumeration and equality computation. It does not copy or privately modify DataFusion's algorithms.
+The hash-table API is public but intended mainly for DataFusion's internal use, so dependency
+upgrades must rerun the lookup regressions.
+
+Coarse reservations cover hash state, probe hashes, candidate indices, comparison work and output.
+An output pull examines at most 1,024 candidates and reduces that limit when wide selected values
+do not fit; an unrepresentable minimum batch fails recoverably. Shared snapshot buffers retain
+their existing Arrow leases, and output leases survive downstream projection and task-plan closure.
+Native tests cover every admitted key type, generated ordered changelogs and metadata, 2,000
+invocations with constant cache credit, a separate heap-growth observation, live-stream delivery,
+wide duplicate fan-out, cancellation, allocation denial and retry. Planner/protobuf and task-open
+source binding, complete Flink metric/changelog parity, and recovery/channel validation are still
+pending. Q13 remains on whole-plan fallback and has no native benchmark result.
 
 ## SQL example
 
