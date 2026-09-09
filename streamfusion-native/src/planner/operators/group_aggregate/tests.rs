@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 mod mini_batch;
 mod decoded_admission;
+mod group_lifecycle;
 mod schema_allocation;
 
 fn logical_bigint(nullable: bool) -> proto::LogicalType {

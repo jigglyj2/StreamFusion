@@ -652,6 +652,11 @@ impl GroupAggregateProcessor {
                 if !first_row {
                     events.push(input_row, DELETE, previous_values);
                 }
+                // Flink clears both accumulator state and its data views when the group
+                // disappears. A later row in this same Arrow batch must create fresh
+                // accumulators, including DataFusion kernels and signed DISTINCT membership.
+                staged_values[key_index] = None;
+                row_kernels[key_index] = None;
             } else if first_row {
                 events.push(input_row, INSERT, current_values);
             } else if previous_values != current_values {
@@ -669,10 +674,11 @@ impl GroupAggregateProcessor {
             .zip(staged_values.into_iter().zip(touched))
             .filter_map(|(key, (state, touched))| {
                 touched.then(|| {
-                    let state = state.expect("a touched group aggregate state exists");
                     StateMutation {
                         key,
-                        value: (state.row_count != 0).then(|| encode_state(&state)),
+                        value: state
+                            .filter(|state| state.row_count != 0)
+                            .map(|state| encode_state(&state)),
                     }
                 })
             })

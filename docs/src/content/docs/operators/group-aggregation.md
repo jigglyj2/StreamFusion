@@ -52,6 +52,13 @@ duplicate and last-value transitions, null/Unicode keys, null arguments/filters,
 watermarks, and registered metrics. Native tests additionally compare serialized state after
 every transition, checkpoint round trips, sliced/noncontiguous inputs, and mixed append/retract
 runs for BIGINT and VARCHAR arguments. The existing state encoding and reservations are unchanged.
+Synchronous group deletion clears the staged accumulator, signed membership maps and cached
+DataFusion kernels immediately when the input row count reaches zero. A later insertion in the
+same Arrow batch starts a fresh group, and orphan retractions remain ignored. Generated tests
+compare Flink's complete changelog, record envelopes and metric surface across batch sizes
+1, 3, 7 and 64 on both backends, including a deletion that leaves unmatched membership counts.
+Native tests also verify that batching does not change the resulting canonical checkpoint bytes.
+Backend reads and writes still occur at batch boundaries; this cleanup adds no per-row state I/O.
 Recovery tests additionally snapshot the original Flink handler and native region, restore
 canonical state across both backends, and restore aligned/unaligned checkpoints on each backend.
 They retain duplicate and negative memberships across the checkpoint, then compare every per-key
