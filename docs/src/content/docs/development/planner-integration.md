@@ -276,7 +276,7 @@ ports; existing event-time operators keep their previous descriptor count and ca
 Tests cover native tree/region consumption, IPC input replacement, signed clock values, shared
 buffer identity, producer/import failure cleanup, malformed descriptors, and rejected clock
 placement. The shared window factory now consumes this capability for explicit direct UTC TUMBLE
-COUNT(*) bindings. Q12 remains gated until capacity, rescaling and channel-recovery parity are verified.
+COUNT(*) bindings. Q12 remains gated until ordinary planner resource binding and production parity are verified.
 
 The DataFusion grouped window buffer is shared as an internal computation component, with a
 processing-time mode for direct UTC TUMBLE input. It preserves the null logical PROCTIME slot,
@@ -296,7 +296,13 @@ require a pre-checkpoint buffer flush and identify the original raw plan rather 
 partial layout. Component tests include backend-switch timer restore and rescaling. The shared
 factory binds the same component in trees and shared regions; generated Java tests cover complete
 registered metrics and changelog/control parity through direct C Data and IPC on both backends.
-The complete capacity-pressure and recovery matrix remains pending.
+Capacity-pressure parity now covers two Arrow batch sizes and checkpoint/repeated-timer visibility.
+Generated keyed recovery covers one-to-two-to-one rescaling, canonical backend switches and
+aligned/unaligned snapshots with incremental RocksDB SST reuse. Actual Flink channel-state replay
+uses the restored receiving task's clock for replayed IPC and retains saved absolute timer keys;
+both backends and both barrier modes match the SQL-generated reference changelog. The task harness
+replaces only the clock before operator initialization, retaining Flink's mailbox dispatch and
+system timer service. Ordinary planner resource binding and production parity remain pending.
 
 Task-resource protocol 2 extends the existing local-buffer descriptor to processing-time windows.
 Original Flink memory shares and page sizes bind before keyed factories are constructed. No new

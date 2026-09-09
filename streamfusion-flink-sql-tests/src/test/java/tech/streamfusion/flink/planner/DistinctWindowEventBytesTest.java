@@ -30,7 +30,8 @@ class DistinctWindowEventBytesTest {
         var row = GenericRowData.of(1L, TimestampData.fromEpochMillis(0), TimestampData.fromEpochMillis(2000));
         row.setRowKind(RowKind.DELETE);
         StageEventBytes.row(fixture.output, row, false, 0, bytes);
-        assertThatThrownBy(() -> DistinctWindowEventBytes.canonical(fixture, bytes.getCopyOfBuffer()))
+        assertThatThrownBy(() ->
+                        WindowTimerEventBytes.canonical(fixture.output, fixture.keys + 1, bytes.getCopyOfBuffer()))
                 .isInstanceOf(AssertionError.class);
     }
 
@@ -51,6 +52,6 @@ class DistinctWindowEventBytesTest {
                         bytes);
             }
         }
-        return DistinctWindowEventBytes.canonical(fixture, bytes.getCopyOfBuffer());
+        return WindowTimerEventBytes.canonical(fixture.output, fixture.keys + 1, bytes.getCopyOfBuffer());
     }
 }

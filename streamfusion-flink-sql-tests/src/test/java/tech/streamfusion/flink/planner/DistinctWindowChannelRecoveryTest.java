@@ -73,7 +73,7 @@ class DistinctWindowChannelRecoveryTest extends SharedWindowChannelRecoveryTest 
             if (event instanceof StreamRecord<?> || event instanceof Watermark)
                 StageEventBytes.encode(type, (StreamElement) event, actual);
         queue.clear();
-        assertThat(DistinctWindowEventBytes.canonical(fixture, actual.getCopyOfBuffer()))
-                .containsExactly(DistinctWindowEventBytes.canonical(fixture, expected));
+        assertThat(WindowTimerEventBytes.canonical(fixture.output, fixture.keys + 1, actual.getCopyOfBuffer()))
+                .containsExactly(WindowTimerEventBytes.canonical(fixture.output, fixture.keys + 1, expected));
     }
 }

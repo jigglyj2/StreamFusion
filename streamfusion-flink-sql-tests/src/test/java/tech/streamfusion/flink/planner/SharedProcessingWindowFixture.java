@@ -53,15 +53,21 @@ final class SharedProcessingWindowFixture {
     }
 
     static StreamFusionNativeRegionOperatorFactory factory(int gap) {
+        return factory(gap, NativeExchangePlanSerializer.singleton(INPUT), 1, 1);
+    }
+
+    static StreamFusionNativeRegionOperatorFactory factory(int gap, byte[] exchange, int weight, int totalWeight) {
         return new StreamFusionNativeRegionOperatorFactory(
                 List.of(INPUT),
                 OUTPUT,
                 plan(gap),
                 List.of(3L),
-                List.of(NativeExchangePlanSerializer.singleton(INPUT)),
+                List.of(exchange),
                 new NativeLocalWindowResources(Map.of(
                         3L,
                         new FlinkOperatorMemoryShare(
-                                1, 1, Set.of(ManagedMemoryUseCase.OPERATOR, ManagedMemoryUseCase.STATE_BACKEND)))));
+                                weight,
+                                totalWeight,
+                                Set.of(ManagedMemoryUseCase.OPERATOR, ManagedMemoryUseCase.STATE_BACKEND)))));
     }
 }

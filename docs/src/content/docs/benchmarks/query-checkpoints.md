@@ -136,7 +136,7 @@ Q11's supported SESSION COUNT path is delivered within these limits.
 
 Q12 is the active checkpoint. Its ordinary plan contains a `PROCTIME()` Calc, exchange and
 single-stage processing-time TUMBLE COUNT. Both backends currently retain whole-plan fallback:
-the shared processing-time capacity, rescaling and channel recovery parity contract is incomplete.
+shared processing-time planner resource binding and production parity still need verification.
 The logical `PROCTIME()` Calc attribute now lowers to DataFusion's typed null expression, matching
 Flink's code generator without reading or storing a clock value. Generated physical-Calc tests
 compare complete ordered changelog bytes and record timestamps for every RowKind, nullable keys,
@@ -163,8 +163,8 @@ row-count inspection for IPC, and attaches metadata after native payload decodin
 per-record values, rollback/boundaries, direct/decoded input ownership, invalid bindings and
 schema/length failures. Clock owners must directly consume an external edge and remove clock
 metadata before output. The shared window factory now enables this capability for explicit verified
-TUMBLE COUNT(*) bindings; ordinary admission still requires the remaining capacity and recovery
-proof. This is a prerequisite, not Q12 admission.
+TUMBLE COUNT(*) bindings; ordinary admission still requires complete planner resource binding and
+production parity. This is a prerequisite, not Q12 admission.
 The existing DataFusion grouped window buffer now has a processing-time mode. It assigns each
 row from its supplied clock while retaining Flink's buffer capacity and flush boundaries; watermarks
 and EOF do not flush it. Flink reference tests on both backends establish an observable edge case:
@@ -181,8 +181,14 @@ Generated Java tests compare complete changelog/control bytes and registered met
 SQL-created Flink operator using both direct C Data and IPC input. Clock rollback/repetition,
 terminal controls and pending-timer checkpoint restore pass on both backends. Native tests cover
 transactional resource failures, cross-backend factory restore and shared-buffer multi-output
-regions. The full capacity-pressure, rescaling and aligned/unaligned channel-recovery proofs are
-still required before ordinary admission.
+regions. Capacity-pressure tests now match Flink's published counts for 300,000 records at two
+Arrow batch sizes, including the remaining count after a checkpoint and repeated timer. Generated
+recovery tests cover one-to-two-to-one rescaling, canonical backend switches, aligned/unaligned
+keyed checkpoints and reused RocksDB SSTs. Actual Flink task/channel tests restore Arrow IPC after
+aligned and unaligned barriers on both backends. Replayed records sample the receiving task's clock
+in the next window; saved records retain their original absolute timer. Complete changelog bytes
+match the SQL-generated Flink reference, canonicalizing only independent keys tied at one deadline.
+Ordinary planner resource identity/budget binding and the production Q12 checkpoint remain pending.
 
 No Q12 performance result is claimed from empty/partial max-speed bounded output.
 

@@ -10,23 +10,24 @@ import org.apache.flink.table.runtime.typeutils.RowDataSerializer;
 import org.apache.flink.types.RowKind;
 
 /** Flink TimerHeapInternalTimer compares timestamps only; equal-time keys have no defined order. */
-final class DistinctWindowEventBytes {
-    private DistinctWindowEventBytes() {}
+final class WindowTimerEventBytes {
+    private WindowTimerEventBytes() {}
 
-    static byte[] canonical(DistinctWindowFixture fixture, byte[] bytes) throws Exception {
+    static byte[] canonical(org.apache.flink.table.types.logical.RowType type, int endIndex, byte[] bytes)
+            throws Exception {
         var input = new DataInputDeserializer(bytes);
         var output = new DataOutputSerializer(Math.max(1, bytes.length));
         var rows = new ArrayList<byte[]>();
-        var serializer = new RowDataSerializer(fixture.output);
+        var serializer = new RowDataSerializer(type);
         Long frontier = null;
         while (input.available() > 0) {
             int start = input.getPosition();
             int kind = input.readUnsignedByte();
             if (kind == 0) {
                 var row = serializer.deserialize(input);
-                if (row.getRowKind() != RowKind.INSERT) throw new AssertionError("DISTINCT window must emit INSERT");
+                if (row.getRowKind() != RowKind.INSERT) throw new AssertionError("append-only window must emit INSERT");
                 if (input.readBoolean()) input.readLong();
-                long end = row.getTimestamp(fixture.keys + 1, 3).getMillisecond();
+                long end = row.getTimestamp(endIndex, 3).getMillisecond();
                 if (frontier != null && frontier != end) flush(rows, output);
                 frontier = end;
                 rows.add(Arrays.copyOfRange(bytes, start, input.getPosition()));

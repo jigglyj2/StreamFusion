@@ -36,6 +36,16 @@ final class GlobalWindowFlinkOracle {
             boolean rocks,
             OperatorSubtaskState restored)
             throws Exception {
+        return create(stage, rocks, restored, 1.0);
+    }
+
+    @SuppressWarnings("unchecked")
+    static KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> create(
+            org.apache.flink.streaming.api.transformations.OneInputTransformation<?, ?> stage,
+            boolean rocks,
+            OperatorSubtaskState restored,
+            double operatorFraction)
+            throws Exception {
         var operator = (OneInputStreamOperator<RowData, RowData>) stage.getOperator();
         if (!(operator instanceof WindowAggOperator<?, ?>))
             throw new AssertionError("Expected Flink WindowAggOperator");
@@ -62,7 +72,8 @@ final class GlobalWindowFlinkOracle {
                     rocks
                             ? new org.apache.flink.state.rocksdb.EmbeddedRocksDBStateBackend(true)
                             : new org.apache.flink.runtime.state.hashmap.HashMapStateBackend());
-            harness.getStreamConfig().setManagedMemoryFractionOperatorOfUseCase(ManagedMemoryUseCase.OPERATOR, 1.0);
+            harness.getStreamConfig()
+                    .setManagedMemoryFractionOperatorOfUseCase(ManagedMemoryUseCase.OPERATOR, operatorFraction);
             harness.getStreamConfig()
                     .setManagedMemoryFractionOperatorOfUseCase(ManagedMemoryUseCase.STATE_BACKEND, 1.0);
             harness.setup(new RowDataSerializer(outputType));

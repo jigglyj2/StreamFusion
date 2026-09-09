@@ -20,8 +20,10 @@ import org.apache.flink.streaming.api.operators.StreamOperator;
 import org.apache.flink.streaming.runtime.io.recovery.RecordFilterContext;
 import org.apache.flink.streaming.runtime.tasks.MultipleInputStreamTask;
 import org.apache.flink.streaming.runtime.tasks.StreamMockEnvironment;
+import org.apache.flink.streaming.runtime.tasks.StreamTask;
 import org.apache.flink.streaming.runtime.tasks.StreamTaskMailboxTestHarness;
 import org.apache.flink.streaming.runtime.tasks.StreamTaskMailboxTestHarnessBuilder;
+import org.apache.flink.streaming.runtime.tasks.TimerService;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
 import org.apache.flink.table.runtime.typeutils.RowDataSerializer;
@@ -64,6 +66,32 @@ final class SharedKeyedChannelHarness extends StreamTaskMailboxTestHarnessBuilde
             TaskStateSnapshot restore,
             java.util.Queue<Object> sideOutput,
             org.apache.flink.table.types.logical.RowType sideOutputType)
+            throws Exception {
+        return create(factory, output, channels, rocks, unaligned, restore, sideOutput, sideOutputType, null);
+    }
+
+    static StreamTaskMailboxTestHarness<RowData> create(
+            StreamFusionNativeRegionOperatorFactory factory,
+            org.apache.flink.table.types.logical.RowType output,
+            int[] channels,
+            boolean rocks,
+            boolean unaligned,
+            TaskStateSnapshot restore,
+            TimerService clock)
+            throws Exception {
+        return create(factory, output, channels, rocks, unaligned, restore, null, output, clock);
+    }
+
+    private static StreamTaskMailboxTestHarness<RowData> create(
+            StreamFusionNativeRegionOperatorFactory factory,
+            org.apache.flink.table.types.logical.RowType output,
+            int[] channels,
+            boolean rocks,
+            boolean unaligned,
+            TaskStateSnapshot restore,
+            java.util.Queue<Object> sideOutput,
+            org.apache.flink.table.types.logical.RowType sideOutputType,
+            TimerService clock)
             throws Exception {
         var builder = new SharedKeyedChannelHarness(output);
         for (int count : channels)
@@ -123,6 +151,15 @@ final class SharedKeyedChannelHarness extends StreamTaskMailboxTestHarnessBuilde
             harnessField.set(harness, manager);
         }
         try {
+            if (clock != null) {
+                // MultipleInputStreamTask exposes no timer-service constructor. Replace the
+                // task clock before operators initialize or recovered channel data is replayed.
+                // The system timer service and mailbox callback dispatch remain Flink's.
+                var field = StreamTask.class.getDeclaredField("timerService");
+                field.setAccessible(true);
+                ((TimerService) field.get(harness.getStreamTask())).shutdownService();
+                field.set(harness.getStreamTask(), clock);
+            }
             harness.getStreamTask().restore();
             // StreamMockEnvironment otherwise drops asynchronous channel-reader failures.
             if (restore != null) readFinished.get(15, TimeUnit.SECONDS);

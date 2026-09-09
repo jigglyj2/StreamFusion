@@ -114,8 +114,9 @@ class DistinctWindowRecoveryTest {
         for (var event : flink.getOutput()) StageEventBytes.encode(fixture.output, (StreamElement) event, expected);
         flink.getOutput().clear();
         target.drainControls();
-        assertThat(DistinctWindowEventBytes.canonical(fixture, target.output.getCopyOfBuffer()))
-                .containsExactly(DistinctWindowEventBytes.canonical(fixture, expected.getCopyOfBuffer()));
+        assertThat(WindowTimerEventBytes.canonical(fixture.output, fixture.keys + 1, target.output.getCopyOfBuffer()))
+                .containsExactly(
+                        WindowTimerEventBytes.canonical(fixture.output, fixture.keys + 1, expected.getCopyOfBuffer()));
         target.output.clear();
         var reference = RegisteredMetricSurface.metrics(flink.getOperator().getMetricGroup());
         var actual = RegisteredMetricSurface.metrics(target.stage(3));

@@ -92,7 +92,7 @@ complete SESSION conformance evidence established for COUNT and remain gated.
 ## Processing-time window contract
 
 Processing-time TVF aggregation remains whole-plan Flink fallback. EXPLAIN reports the missing
-shared processing-time capacity, rescaling and channel recovery parity contract. The logical `PROCTIME()`
+shared processing-time planner resource binding and production parity contract. The logical `PROCTIME()`
 Calc slot lowers to DataFusion's typed null, matching Flink's generated placeholder; this does
 not read a clock or admit the window. `PROCTIME_MATERIALIZE` still reports a clock-lifecycle fallback.
 Legacy processing-time shape folding does not hide rejected inputs. A logical time attribute
@@ -127,15 +127,21 @@ identical clocks with nullable keys, varying batch sizes and one-/ten-/37-second
 compare complete changelog/control bytes and the entire registered metric surface, including
 logical-record counters, meters and watermark latency. Direct C Data and Arrow IPC input, backward
 and repeated timers, terminal watermark/finish, and pending-timer checkpoint restore pass on both
-backends. Capacity-pressure parity and the full rescaling/aligned/unaligned channel-recovery matrix
-remain pending. Ordinary planning still rejects processing-time windows; Q12 is not admitted.
+backends. Capacity-pressure tests match Flink's published/remaining counts over 300,000 records
+at two Arrow batch sizes using the original buffer share. Generated tests also cover one-to-two-to-one
+rescaling, canonical backend switches, aligned/unaligned keyed snapshots and incremental RocksDB
+SST reuse. Real task/network tests capture and replay Arrow IPC after both barrier modes: records
+replayed in a later processing-time window use the restored task clock, while checkpointed records
+keep their absolute timers. Complete changelog bytes match Flink, ignoring only its unspecified
+order among independent keys at the same timer deadline. Ordinary planner resource binding and
+production parity remain pending; Q12 is not admitted.
 
 The SQL-generated Flink reference tests use explicit UTC clocks, nullable keys, generated counts
 and one-/ten-/37-second windows. They verify that the window samples its own clock even when the
 physical PROCTIME slot is null, only processing-time timers emit results, and pending timers survive
 both-backend checkpoint restore. A terminal watermark and bounded finish leave an open processing-time
 window un-emitted. These reference tests define the controlled-clock contract used by the native parity fixtures;
-they do not establish ordinary planner admission or the complete recovery matrix. Non-UTC clock/zone behavior needs its own
+they do not establish ordinary planner admission. Non-UTC clock/zone behavior needs its own
 proof. Q12's bounded blackhole output can therefore be empty or incomplete depending on wall-clock
 alignment and cannot by itself establish result parity or acceleration.
 

@@ -84,6 +84,11 @@ class ProcessingTimeWindowClockTest {
 
     static KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> oracle(
             boolean rocks, int gap, OperatorSubtaskState restored) throws Exception {
+        return oracle(rocks, gap, restored, 1.0);
+    }
+
+    static KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> oracle(
+            boolean rocks, int gap, OperatorSubtaskState restored, double operatorFraction) throws Exception {
         String sql = "WITH B AS (SELECT k, PROCTIME() AS pt FROM local_window_input) "
                 + "SELECT k, COUNT(*) AS n, window_start, window_end FROM TABLE("
                 + "TUMBLE(TABLE B, DESCRIPTOR(pt), INTERVAL '" + gap / 1000 + "' SECOND)) "
@@ -91,7 +96,8 @@ class ProcessingTimeWindowClockTest {
         return GlobalWindowFlinkOracle.create(
                 SlicingWindowFlinkPlan.stage("WindowAggregate", sql, false, java.time.ZoneId.of("UTC")),
                 rocks,
-                restored);
+                restored,
+                operatorFraction);
     }
 
     static void input(KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> flink, Long key, int count)
