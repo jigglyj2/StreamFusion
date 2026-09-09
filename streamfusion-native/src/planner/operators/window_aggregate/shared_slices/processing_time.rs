@@ -84,20 +84,30 @@ impl SharedSlices {
             .collect::<Result<Vec<_>>>()?;
         let mut partition = Vec::new();
         let mut registrations = Vec::with_capacity(batch.num_rows());
+        // Timer registration is idempotent within an input batch. Borrow the already encoded
+        // Arrow key before constructing owned timer keys, hashing Flink partitions, or probing
+        // the retained timer tree. All raw rows still reach the DataFusion buffer below this
+        // registration stage. The batch workspace reservation covers this temporary index.
+        let mut seen =
+            hashbrown::HashSet::with_capacity_and_hasher(batch.num_rows(), RandomState::new());
         for row in 0..batch.num_rows() {
-            // Match the slice store's empty global-group identity as well as keyed input.
-            if !key_fields.is_empty() {
-                encode_binary_row_into(batch, row, &key_fields, &mut partition)?;
-            }
-            let group = assign_key_group(&partition, self.kernel.max_parallelism);
             let grouping = rows.as_ref().map(|rows| rows.row(row));
-            let key = codec::prefix(grouping.as_ref().map_or(&[], |row| row.as_ref()))?;
+            let grouping = grouping.as_ref().map_or(&[][..], |row| row.data());
             let end = crate::planner::operators::window_table_function::window_start(
                 clocks.value(row),
                 self.kernel.plan.offset_millis,
                 self.kernel.plan.size_millis,
             )
             .wrapping_add(self.kernel.plan.size_millis);
+            if !seen.insert((grouping, end)) {
+                continue;
+            }
+            // Match the slice store's empty global-group identity as well as keyed input.
+            if !key_fields.is_empty() {
+                encode_binary_row_into(batch, row, &key_fields, &mut partition)?;
+            }
+            let group = assign_key_group(&partition, self.kernel.max_parallelism);
+            let key = codec::prefix(grouping)?;
             registrations.push((
                 group,
                 TimerDomain::ProcessingTime,

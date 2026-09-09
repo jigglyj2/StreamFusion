@@ -119,6 +119,11 @@ backends. Output is bounded to 1,024 timers per batch, and retained state/buffer
 workspaces use Flink reservations. The persisted marker identifies the original raw-input plan,
 including columns omitted from the partial layout. Snapshots reject unflushed updates.
 
+Within each raw batch, timer registration deduplicates borrowed Arrow grouping keys and absolute
+window ends before constructing owned timer keys or probing the retained timer index. Every record
+still reaches DataFusion COUNT. The temporary index shares the existing batch reservation and is
+discarded after registration, so a later arrival can register a previously fired window again.
+
 Native component tests cover the Flink-oracle clock cases, watermark/EOF behavior, memory denial,
 nullable/global keys, both backends and cross-backend timer restore while rescaling one owner to two.
 The shared factory now binds this component in the native tree and shared-region execution paths.

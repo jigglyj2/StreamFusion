@@ -390,3 +390,65 @@ fn global_group_uses_the_same_partition_identity_for_arrival_timers_and_publishe
         assert_eq!(broker.reserved(), 0);
     }
 }
+
+#[test]
+fn repeated_batch_keys_keep_all_counts_and_can_register_again_after_firing() {
+    for rocks in backends() {
+        for (seed, batch_size) in [(7u64, 17), (31, 1024), (97, 4096)] {
+            let directory = tempfile::tempdir().unwrap();
+            let broker = Arc::new(TestBroker::new(64 << 20));
+            let mut window = window(
+                &plan(1000),
+                broker.clone(),
+                rocks.then_some(directory.path()),
+                0,
+                127,
+            );
+            let mut random = seed;
+            let mut registered = 0;
+            // Reuse the same absolute window labels after firing: the deduplication index
+            // must not outlive its batch or prevent a new timer after a clock rollback.
+            for checkpoint in 1..=2 {
+                let mut expected = std::collections::BTreeMap::new();
+                let mut keys = Vec::new();
+                let mut clocks = Vec::new();
+                for row in 0..8192 {
+                    random = random.wrapping_mul(6364136223846793005).wrapping_add(1);
+                    let value = ((random >> 32) % 34) as i64;
+                    let key = (value != 33).then_some(value - 16);
+                    let clock = [0, 999, 1000, 1999, 2000, 2999][(random as usize >> 16) % 6];
+                    *expected
+                        .entry((key, clock / 1000 * 1000 + 1000))
+                        .or_insert(0) += 1;
+                    keys.push(key);
+                    clocks.push(clock);
+                    if keys.len() == batch_size || row == 8191 {
+                        push(
+                            &mut window,
+                            std::mem::take(&mut keys),
+                            std::mem::take(&mut clocks),
+                        );
+                    }
+                }
+                registered += expected.len() as u64;
+                assert_eq!(window.slices.kernel().timer_registrations, registered);
+                window
+                    .control(ControlEvent::BeforeCheckpoint(checkpoint))
+                    .unwrap();
+                let mut actual = fire(&mut window, 2999);
+                actual.sort();
+                let mut expected = expected
+                    .into_iter()
+                    .map(|((key, end), count)| (key, count, end - 1000, end))
+                    .collect::<Vec<_>>();
+                expected.sort();
+                assert_eq!(actual, expected);
+                assert_eq!(actual.iter().map(|row| row.1).sum::<i64>(), 8192);
+                assert_eq!(window.slices.kernel().timers_fired, registered);
+                assert_eq!(window.next_timer(), None);
+            }
+            drop(window);
+            assert_eq!(broker.reserved(), 0);
+        }
+    }
+}
