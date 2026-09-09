@@ -17,6 +17,9 @@ impl RowInputs {
             columns: calls
                 .iter()
                 .map(|call| {
+                    if datafusion_distinct_count::supports(call) {
+                        return Ok(Some((Arc::new(Int8Array::from(vec![1])) as ArrayRef, None)));
+                    }
                     if !datafusion_compute::reusable(call) {
                         return Ok(None);
                     }
@@ -66,7 +69,7 @@ impl RowKernels {
                 };
                 let mut native = expr.create_accumulator()?;
                 let (value, data_type) = match state {
-                    Accumulator::Count(count) => {
+                    Accumulator::Count(count) | Accumulator::DistinctCount { count, .. } => {
                         (Some(AggregateValue::Int(*count as i128)), DataType::Int64)
                     }
                     Accumulator::Sum { value, .. } | Accumulator::Average { value, .. } => {
@@ -111,6 +114,20 @@ impl RowKernels {
                 continue;
             };
             if !aggregate_filter(call, batch, row)? {
+                continue;
+            }
+            if let Accumulator::DistinctCount { count, values } = &mut state.accumulators[index] {
+                if datafusion_distinct_count::membership_change(
+                    values, call, batch, row, accumulate,
+                )? {
+                    let marker = &inputs.columns[index].as_ref().expect("distinct marker").0;
+                    if accumulate {
+                        native.update_batch(std::slice::from_ref(marker))?;
+                    } else {
+                        native.retract_batch(std::slice::from_ref(marker))?;
+                    }
+                    *count = datafusion_distinct_count::evaluate(native.as_mut())?;
+                }
                 continue;
             }
             let (input, negative) = inputs.columns[index]

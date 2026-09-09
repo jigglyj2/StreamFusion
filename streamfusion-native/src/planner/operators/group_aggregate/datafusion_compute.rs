@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0
 
 //! DataFusion computes Arrow aggregate batches; Flink's canonical state remains the checkpoint
-//! contract. Floating-point arithmetic, decimal overflow and retractable DISTINCT/extrema retain
+//! contract. Floating-point arithmetic, decimal overflow and DISTINCT sums/retractable extrema retain
 //! the ordered Flink transitions: reassociating those operations can change observable results.
 
 use super::*;
@@ -51,7 +51,7 @@ impl Kernels {
             calls
                 .iter()
                 .map(|call| {
-                    if !reusable(call) {
+                    if !reusable(call) && !datafusion_distinct_count::supports(call) {
                         return Ok(None);
                     }
                     let udf = match call.function {
@@ -62,7 +62,9 @@ impl Kernels {
                         proto::AggregateFunction::Max => max_udaf(),
                         _ => sum_udaf(),
                     };
-                    let data_type = if matches!(
+                    let data_type = if datafusion_distinct_count::supports(call) {
+                        DataType::Int8
+                    } else if matches!(
                         call.function,
                         proto::AggregateFunction::Sum
                             | proto::AggregateFunction::Sum0
@@ -107,6 +109,18 @@ impl AccumulatorState {
                 .collect::<Result<Vec<_>>>()?,
         );
         for (index, call) in calls.iter().enumerate() {
+            if datafusion_distinct_count::supports(call) {
+                datafusion_distinct_count::apply_append_batch(
+                    &mut self.accumulators[index],
+                    call,
+                    kernels.0[index]
+                        .as_ref()
+                        .expect("distinct count was prepared"),
+                    batch,
+                    rows,
+                )?;
+                continue;
+            }
             if !reusable(call) {
                 let mut state = Self {
                     row_count: self.row_count,

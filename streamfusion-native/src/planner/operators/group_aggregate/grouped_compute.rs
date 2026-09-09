@@ -26,6 +26,11 @@ pub(in crate::planner::operators) struct GroupedOutput {
 
 impl GroupedCompute {
     pub(in crate::planner::operators) fn new(calls: &[Call]) -> Result<Option<Self>> {
+        // COUNT DISTINCT kernels consume membership-change markers, not raw group inputs.
+        // Compact group vectors have no Flink signed membership map to produce those markers.
+        if calls.iter().any(|call| call.distinct) {
+            return Ok(None);
+        }
         let kernels = Kernels::new(calls)?;
         if kernels.0.iter().any(|kernel| {
             kernel

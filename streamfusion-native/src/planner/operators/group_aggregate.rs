@@ -36,6 +36,9 @@ mod control;
 pub(super) mod datafusion_compute;
 #[cfg(test)]
 mod datafusion_compute_tests;
+mod datafusion_distinct_count;
+#[cfg(test)]
+mod datafusion_distinct_count_tests;
 pub(super) mod datafusion_rows;
 pub(crate) mod execution_plan;
 pub(super) mod flink_udaf;

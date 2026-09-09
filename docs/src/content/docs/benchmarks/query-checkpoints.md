@@ -240,6 +240,13 @@ non-DISTINCT BIGINT calls. The retained DISTINCT implementation is not yet produ
 its state, DataFusion computation, memory, metric and recovery contracts must be verified before
 opening that gate. This establishes fallback and execution, not accelerated parity or performance.
 
+The first compute prerequisite moves retained `COUNT(DISTINCT)` row/run counting to DataFusion,
+keeping signed duplicate membership as a Flink state adapter. Common-runtime generated tests
+compare filtered and unfiltered counts, complete changelog envelopes, watermarks and registered
+metrics against the actual Flink aggregate handler on both backends. Native tests cover signed
+membership, state bytes and selected batch runs. See [group aggregation](/StreamFusion/operators/group-aggregation/)
+for scope and remaining contracts; Q15 still has no accelerated benchmark result.
+
 ## Q6 has no Flink streaming baseline
 
 The upstream Nexmark Q6 query computes a bounded ordered AVG after winning-bid rank selection.

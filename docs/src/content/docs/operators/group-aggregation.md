@@ -36,10 +36,30 @@ integer SUM/SUM0, integer AVG's sum component, and append-only MIN/MAX over non-
 Flink-specific adapters retain integer result widths, AVG division, null/SUM0 behavior,
 canonical state encoding, key ownership, bundle boundaries, and logical-record metrics.
 
+The retained `COUNT(DISTINCT argument)` row and append-run paths also use DataFusion COUNT.
+Flink's signed membership map produces a marker only for a first accumulation or last retraction;
+DataFusion updates or retracts the count from those markers. Nullable filters and arguments still
+follow Flink, including an unmatched retraction and its later cancellation. Streaming execution
+prepares one constant Arrow marker per call and retains the count accumulator per loaded group
+for the incoming batch. Append runs build one nullable marker vector under the existing batch
+workspace allowance. This adds no per-row backend access, JNI crossing, or input-payload gather.
+Compact grouped vectors cannot consume these kernels directly because they lack the membership
+map. DISTINCT SUM/AVG and canonical partial merging retain their existing semantic adapters.
+
+Generated common-runtime tests compare filtered and unfiltered BIGINT DISTINCT counts with
+Flink's actual SQL-generated aggregate handler on both state backends, including all RowKinds,
+duplicate and last-value transitions, null/Unicode keys, null arguments/filters, record envelopes,
+watermarks, and registered metrics. Native tests additionally compare serialized state after
+every transition, checkpoint round trips, sliced/noncontiguous inputs, and mixed append/retract
+runs for BIGINT and VARCHAR arguments. The existing state encoding and reservations are unchanged.
+This is a compute prerequisite: DISTINCT production admission, full recovery/rescaling evidence,
+and end-to-end performance remain outstanding. No speedup is claimed.
+
 Custom arithmetic remains for floating sums/averages (vectorized reassociation changes bits),
-decimal arithmetic (Flink overflow can poison the accumulator), DISTINCT multiplicities, and
+decimal arithmetic (Flink overflow can poison the accumulator), DISTINCT sums/averages, and
 arbitrarily retractable extrema. DataFusion's distinct sets and ordered sliding extrema do not
-represent the same signed/retractable state. Mixed-changelog bundles use the same DataFusion accumulators while retaining their
+represent the same signed/retractable state; DISTINCT membership remains a Flink-specific state adapter.
+Mixed-changelog bundles use the same DataFusion accumulators while retaining their
 ordered state updates and resetting the temporary cache at each Flink bundle boundary. These are specific semantic exceptions; wrapping custom computation in
 an `ExecutionPlan` is not itself DataFusion compute reuse. Generated direct-native tests compare
 bounded results to unmodified Flink SQL on both state backends, and the existing generated
