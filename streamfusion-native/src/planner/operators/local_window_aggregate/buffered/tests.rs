@@ -10,7 +10,7 @@ fn buffer() -> BufferedWindow {
         crate::memory_pool::tests_support::TestBroker::new(256 << 20),
     ))
 }
-fn buffer_with_broker(
+pub(super) fn buffer_with_broker(
     broker: Arc<dyn crate::memory_pool::MemoryReservationBroker>,
 ) -> BufferedWindow {
     let source = super::super::tests::processor(false);
@@ -73,7 +73,10 @@ fn partials(batch: RecordBatch) -> Vec<(i64, i64, i64)> {
         })
         .collect()
 }
-fn drain(buffer: &mut BufferedWindow, first: Option<RecordBatch>) -> Vec<(i64, i64, i64)> {
+pub(super) fn drain(
+    buffer: &mut BufferedWindow,
+    first: Option<RecordBatch>,
+) -> Vec<(i64, i64, i64)> {
     let mut result = first.map(partials).unwrap_or_default();
     while let Some(batch) = buffer.poll_pending().unwrap() {
         result.extend(partials(batch));

@@ -14,7 +14,7 @@ import tech.streamfusion.flink.StreamFusionPlannerFactory;
 class ProcessingTimeWindowAdmissionTest extends SqlParityTestSupport {
     @ParameterizedTest
     @ValueSource(strings = {"hashmap", "rocksdb"})
-    void namesTheWindowClockContractWithoutMistakingTheLogicalAttributeForAClockRead(String backend) {
+    void namesTheRemainingWindowStateContractWithoutMistakingTheLogicalAttributeForAClockRead(String backend) {
         System.setProperty(
                 StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY, StreamFusionPlannerFactory.class.getName());
         var tables = StreamTableEnvironment.create(StreamExecutionEnvironment.getExecutionEnvironment());
@@ -30,7 +30,7 @@ class ProcessingTimeWindowAdmissionTest extends SqlParityTestSupport {
                     + "GROUP BY k, window_start, window_end";
             assertThat(tables.explainSql(sql))
                     .contains("Accelerated: no", "the entire plan will use Flink", "StreamExecWindowAggregate")
-                    .contains("per-record clock and processing-time timer delivery")
+                    .contains("shared buffered window state, timer firing and recovery parity")
                     .doesNotContain("projection[1]/PROCTIME:");
         }
     }

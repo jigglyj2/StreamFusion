@@ -278,6 +278,15 @@ buffer identity, producer/import failure cleanup, malformed descriptors, and rej
 placement. No production window factory enables this capability yet. Q12 remains gated until its
 native processing-time window kernel and complete Flink parity/recovery contracts are implemented.
 
+The DataFusion grouped window buffer is shared as an internal computation component, with a
+processing-time mode for direct UTC TUMBLE input. It preserves the null logical PROCTIME slot,
+uses the separate clock vector for assignment, retains Flink's paged buffer capacity model, and
+starts processing progress at MIN independently of restored event-time watermarks. Timer progress
+must strictly advance to flush; repeated/older timers leave updates pending, while a pre-checkpoint
+control flushes them. This distinction is externally observable in Flink's zero-count timer output
+and must be retained by the pending stateful window implementation. No extra physical operator
+or JVM/native handoff is introduced by reusing this component.
+
 Shared regions can bind the existing Flink memory/state lifecycle directly. The same backend
 leases and checkpoint participants serve tree and shared definitions; they do not create another
 budget or state owner. Window union clocks are initialized once per physical definition, retain

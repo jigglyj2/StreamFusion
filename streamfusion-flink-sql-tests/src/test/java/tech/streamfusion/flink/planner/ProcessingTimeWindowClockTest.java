@@ -82,7 +82,7 @@ class ProcessingTimeWindowClockTest {
         }
     }
 
-    private static KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> oracle(
+    static KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> oracle(
             boolean rocks, int gap, OperatorSubtaskState restored) throws Exception {
         String sql = "WITH B AS (SELECT k, PROCTIME() AS pt FROM local_window_input) "
                 + "SELECT k, COUNT(*) AS n, window_start, window_end FROM TABLE("
@@ -94,20 +94,18 @@ class ProcessingTimeWindowClockTest {
                 restored);
     }
 
-    private static void input(
-            KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> flink, Long key, int count)
+    static void input(KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> flink, Long key, int count)
             throws Exception {
         var serializer = new RowDataSerializer(INPUT);
         for (int i = 0; i < count; i++)
             flink.processElement(new StreamRecord<>(serializer.toBinaryRow(GenericRowData.of(key, null)), 123));
     }
 
-    private static RowData result(Long key, long count, long start, long end) {
+    static RowData result(Long key, long count, long start, long end) {
         return GenericRowData.of(key, count, TimestampData.fromEpochMillis(start), TimestampData.fromEpochMillis(end));
     }
 
-    private static void assertRows(
-            KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> flink, RowData... expected)
+    static void assertRows(KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> flink, RowData... expected)
             throws Exception {
         var serializer = new RowDataSerializer(OUTPUT);
         var actualBytes = new DataOutputSerializer(128);

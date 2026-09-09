@@ -12,6 +12,8 @@ use crate::planner::operators::group_aggregate::grouped_compute::GroupedOutput;
 mod control;
 pub(crate) mod execution_plan;
 #[cfg(test)]
+mod processing_time_tests;
+#[cfg(test)]
 mod string_tests;
 #[cfg(test)]
 mod tests;
@@ -19,7 +21,7 @@ mod tests;
 const OUTPUT_ROWS: usize = 2048;
 const COMPUTE_ROWS: usize = 2048;
 
-pub(super) struct BufferedWindow {
+pub(crate) struct BufferedWindow {
     kernel: LocalWindowAggregateProcessor,
     groups: hashbrown::HashTable<usize>,
     hasher: RandomState,
@@ -31,13 +33,15 @@ pub(super) struct BufferedWindow {
     key_layout: RowLayout,
     input_layout: RowLayout,
     min_slice_end: i64,
-    current_watermark: i64,
-    next_trigger_watermark: i64,
+    current_progress: i64,
+    processing_time: bool,
+    next_trigger_progress: i64,
     // Owners precede their credits so cancellation/drop never returns live buffers' budget.
     retained: HostMemoryReservation,
 }
 struct InputCursor {
     batch: RecordBatch,
+    clock: Option<Int64Array>,
     keys: Option<arrow::row::Rows>,
     offset: usize,
 }
@@ -67,6 +71,15 @@ impl BufferedWindow {
         kernel: LocalWindowAggregateProcessor,
         flink_memory_bytes: usize,
         page_bytes: usize,
+    ) -> Result<Self> {
+        Self::new_inner(kernel, flink_memory_bytes, page_bytes, false)
+    }
+
+    fn new_inner(
+        kernel: LocalWindowAggregateProcessor,
+        flink_memory_bytes: usize,
+        page_bytes: usize,
+        processing_time: bool,
     ) -> Result<Self> {
         if kernel.plan.input_changelog || kernel.grouped_compute.is_none() {
             return Err(DataFusionError::Plan(
@@ -147,14 +160,63 @@ impl BufferedWindow {
             key_layout,
             input_layout,
             min_slice_end: i64::MAX,
-            current_watermark: 0,
-            next_trigger_watermark: 0,
+            current_progress: 0,
+            processing_time,
+            next_trigger_progress: 0,
             retained,
         })
     }
 
+    /// The single-stage processing-time window uses Flink's same RecordsWindowBuffer geometry,
+    /// but reads explicit per-record clocks and flushes on processing-time progress only.
+    pub(crate) fn new_processing_time(
+        kernel: LocalWindowAggregateProcessor,
+        flink_memory_bytes: usize,
+        page_bytes: usize,
+    ) -> Result<Self> {
+        if kernel.plan.kind != proto::WindowKind::Tumble as i32
+            || kernel.plan.attached_window_start_index.is_some()
+            || kernel.plan.attached_window_end_index.is_some()
+        {
+            return Err(DataFusionError::Plan(
+                "processing-time buffer requires a direct TUMBLE window".into(),
+            ));
+        }
+        let mut buffer = Self::new_inner(kernel, flink_memory_bytes, page_bytes, true)?;
+        // WindowAggProcessorBase starts at MIN; its processing clock is not restored from watermarks.
+        buffer.current_progress = i64::MIN;
+        buffer.next_trigger_progress = i64::MIN;
+        Ok(buffer)
+    }
+
+    pub(crate) fn push_processing_time(
+        &mut self,
+        batch: RecordBatch,
+        clock: Int64Array,
+    ) -> Result<Option<RecordBatch>> {
+        if !self.processing_time || clock.len() != batch.num_rows() || clock.null_count() != 0 {
+            return Err(DataFusionError::Plan(
+                "processing-time buffer requires one non-null clock per input row".into(),
+            ));
+        }
+        self.push_inner(batch, Some(clock))
+    }
+
     /// The input must be drained before another batch or control event can be accepted.
     pub(super) fn push(&mut self, batch: RecordBatch) -> Result<Option<RecordBatch>> {
+        if self.processing_time {
+            return Err(DataFusionError::Plan(
+                "processing-time buffer requires explicit Flink clock input".into(),
+            ));
+        }
+        self.push_inner(batch, None)
+    }
+
+    fn push_inner(
+        &mut self,
+        batch: RecordBatch,
+        clock: Option<Int64Array>,
+    ) -> Result<Option<RecordBatch>> {
         if self.has_pending() {
             return Err(DataFusionError::Execution(
                 "local window input cursor is still active".into(),
@@ -163,7 +225,8 @@ impl BufferedWindow {
         self.kernel.validate_batch(&batch)?;
         // Flink accepts a nullable schema but fails a record with a null rowtime.
         // Validate the Arrow bitmap once before any retained grouped state changes.
-        if self.kernel.plan.attached_window_end_index.is_none()
+        if !self.processing_time
+            && self.kernel.plan.attached_window_end_index.is_none()
             && batch
                 .column(self.kernel.plan.time_attribute_index as usize)
                 .null_count()
@@ -191,17 +254,18 @@ impl BufferedWindow {
         };
         self.cursor = Some(InputCursor {
             batch,
+            clock,
             keys,
             offset: 0,
         });
         self.poll_pending()
     }
 
-    pub(super) fn has_pending(&self) -> bool {
+    pub(crate) fn has_pending(&self) -> bool {
         self.cursor.is_some() || self.flushing.is_some()
     }
 
-    pub(super) fn poll_pending(&mut self) -> Result<Option<RecordBatch>> {
+    pub(crate) fn poll_pending(&mut self) -> Result<Option<RecordBatch>> {
         loop {
             if self.flushing.is_some() {
                 return self.emit_chunk().map(Some);
@@ -235,8 +299,18 @@ impl BufferedWindow {
         let mut pressure = false;
         while cursor.offset < end {
             let row = cursor.offset;
-            let Some((window_start, slice_end)) = self.kernel.slice_bounds(&cursor.batch, row)?
-            else {
+            let bounds = match &cursor.clock {
+                Some(clock) => {
+                    let start = window_start(
+                        clock.value(row),
+                        self.kernel.plan.offset_millis,
+                        self.kernel.plan.size_millis,
+                    );
+                    Some((start, start.wrapping_add(self.kernel.plan.size_millis)))
+                }
+                None => self.kernel.slice_bounds(&cursor.batch, row)?,
+            };
+            let Some((window_start, slice_end)) = bounds else {
                 return Err(DataFusionError::Execution(
                     "buffered local window requires non-null event-time/window bounds".into(),
                 ));

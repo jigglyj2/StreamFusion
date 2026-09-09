@@ -92,11 +92,19 @@ complete SESSION conformance evidence established for COUNT and remain gated.
 ## Processing-time window contract
 
 Processing-time TVF aggregation remains whole-plan Flink fallback. EXPLAIN reports the missing
-shared per-record clock and processing-time timer delivery contract. The logical `PROCTIME()`
+shared buffered window state, timer firing and recovery contract. The logical `PROCTIME()`
 Calc slot lowers to DataFusion's typed null, matching Flink's generated placeholder; this does
 not read a clock or admit the window. `PROCTIME_MATERIALIZE` still reports a clock-lifecycle fallback.
 Legacy processing-time shape folding does not hide rejected inputs. A logical time attribute
 must not be replaced with a batch timestamp.
+
+Per-record clock transport and Flink-owned timer scheduling are implemented as shared-plan
+prerequisites. The reusable DataFusion grouped buffer now also supports clock-driven TUMBLE
+assignment and Flink's processing-time flush progression. It leaves new records buffered at
+repeated/older timer timestamps and flushes them before checkpointing. SQL-generated Flink
+oracles on both backends show that a timer with no published state can emit COUNT zero in this
+case; eager state accumulation or suppressing that output would change the changelog. The native
+stateful consumer and full recovery/parity proof remain pending, so none of this admits Q12 yet.
 
 The SQL-generated Flink reference tests use explicit UTC clocks, nullable keys, generated counts
 and one-/ten-/37-second windows. They verify that the window samples its own clock even when the

@@ -136,7 +136,7 @@ Q11's supported SESSION COUNT path is delivered within these limits.
 
 Q12 is the active checkpoint. Its ordinary plan contains a `PROCTIME()` Calc, exchange and
 single-stage processing-time TUMBLE COUNT. Both backends currently retain whole-plan fallback:
-Flink-owned per-record clock/timer delivery is not implemented in the shared native tree.
+the shared buffered window state, timer firing and recovery contract is not implemented.
 The logical `PROCTIME()` Calc attribute now lowers to DataFusion's typed null expression, matching
 Flink's code generator without reading or storing a clock value. Generated physical-Calc tests
 compare complete ordered changelog bytes and record timestamps for every RowKind, nullable keys,
@@ -165,6 +165,13 @@ schema/length failures. Clock owners must directly consume an external edge and 
 metadata before output. No production window factory enables the capability yet; the native
 processing-time window kernel and full parity/recovery proof remain pending. This is still a
 prerequisite, not Q12 admission.
+The existing DataFusion grouped window buffer now has a processing-time mode. It assigns each
+row from its supplied clock while retaining Flink's buffer capacity and flush boundaries; watermarks
+and EOF do not flush it. Flink reference tests on both backends establish an observable edge case:
+a repeated or rollback timer can emit COUNT zero while new records remain buffered. A checkpoint
+publishes those records, so the next repeated timer sees that count. Native buffer tests preserve
+these pending/published boundaries, including negative clocks and null PROCTIME placeholders.
+The stateful window consumer must still implement the corresponding timer output and recovery.
 No Q12 performance result is claimed from empty/partial max-speed bounded output.
 
 ## Q6 has no Flink streaming baseline

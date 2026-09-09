@@ -29,7 +29,7 @@ impl LocalWindowAggregateProcessor {
         Self::from_plan(plan, reservation, plan_reservation)
     }
 
-    pub(super) fn from_plan(
+    pub(crate) fn from_plan(
         plan: proto::LocalWindowAggregate,
         reservation: HostMemoryReservation,
         plan_reservation: HostMemoryReservation,
