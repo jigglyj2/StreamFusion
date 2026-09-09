@@ -43,6 +43,10 @@ final class StreamFusionPersistentAdmission {
                             instanceof
                             org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecGlobalWindowAggregate)
                 return StreamFusionWindowPersistentAdmission.unsupportedReason(node, activeConfig);
+            if (node instanceof org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWindowAggregate)
+                return StreamFusionSessionWindowAdmission.unsupportedReason(
+                        (org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWindowAggregate) node,
+                        activeConfig);
             if (node instanceof StreamExecGroupAggregate)
                 return aggregateReason((StreamExecGroupAggregate) node, activeConfig);
         } catch (RuntimeException failure) {

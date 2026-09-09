@@ -79,7 +79,8 @@ final class StreamFusionArchitectureSupport {
             "StreamExecLocalGroupAggregate",
             "StreamExecGlobalGroupAggregate",
             "StreamExecLocalWindowAggregate",
-            "StreamExecGlobalWindowAggregate");
+            "StreamExecGlobalWindowAggregate",
+            "StreamExecWindowAggregate");
 
     static void collect(ExecNodeGraph graph, List<String> rejections) {
         collect(graph, rejections, null);

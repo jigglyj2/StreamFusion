@@ -37,6 +37,11 @@ Mini-batch, singleton/global and other aggregate subsets retain explicit product
 Two-phase UTC event-time TUMBLE/HOP windows also compose through this runtime: append-only BIGINT
 COUNT/MIN/MAX with BIGINT arguments and BIGINT/INTEGER keys (or no keys), synchronous state,
 and mini-batch disabled. Semantic lowering rejects other time, accumulator and buffer layouts.
+Single-stage SESSION COUNT(*) also composes with adjacent Calcs, using DataFusion grouped
+compute and ordered per-session state on both backends. Its verified subset uses one BIGINT
+partition key, TIMESTAMP(3) event time, synchronous state and disabled mini-batching. Other
+session calls, key shapes, retractions and time semantics remain gated; see
+[Window aggregation](/StreamFusion/operators/window-aggregation/) for the recovery and metric coverage.
 Append-only partitioned ROW_NUMBER range [1,1] also composes through this runtime, using
 DataFusion sort/cumulative MIN and batched point state. Its verified key/payload types, disabled
 TTL/mini-batch/async settings and default cache configuration are listed on the [Top-N page](/StreamFusion/operators/top-n/).

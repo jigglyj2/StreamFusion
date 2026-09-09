@@ -9,7 +9,9 @@ sidebar:
 append-only UTC event-time TUMBLE/HOP windows use DataFusion grouped COUNT/MIN/MAX with BIGINT results
 and arguments, BIGINT/INTEGER grouping keys (or no keys), synchronous state and mini-batch disabled.
 DISTINCT-only TUMBLE also accepts nullable BIGINT/INTEGER/VARCHAR grouping keys, including
-composite keys, under the same execution settings. Other window families retain whole-plan fallback under the
+composite keys, under the same execution settings. Single-stage SESSION supports unfiltered COUNT(*)
+with one nullable or non-null BIGINT partition key and TIMESTAMP(3) event time, on both backends.
+Other window families retain whole-plan fallback under the
 [architecture admission requirements](/StreamFusion/development/architecture-admission/).
 Both in-memory and supported default RocksDB state use the common native runtime.
 
@@ -32,13 +34,22 @@ FROM TABLE(HOP(TABLE bid, DESCRIPTOR(dateTime), INTERVAL '2' SECOND, INTERVAL '1
 GROUP BY window_start, window_end, bidder;
 ```
 
-## SESSION execution prerequisite
+## SESSION COUNT execution
 
-Ordinary SESSION selection remains gated. The shared native window runtime now also binds an
-append-only UTC event-time session kernel; Q11's COUNT contract has controlled Flink-generated
-changelog and complete registered metric-surface coverage on both backends. Adjacent Calc stages
-share the native execution tree, Arrow buffers and common control/ownership lifecycle. These
-checks do not establish ordinary SQL admission or benchmark results.
+Ordinary whole-plan selection admits append-only SESSION with one BIGINT partition key,
+unfiltered COUNT(*), positive fixed gaps, and TIMESTAMP(3) event time without time zone. Keys may
+be null. Supported properties are window start, end and rowtime. Synchronous state and disabled
+mini-batching are required; other grouping shapes, aggregate calls, filtered counts, retractions,
+TIMESTAMP_LTZ, processing time and unsupported state/metric configurations fall back with a reason.
+No SQL query name or particular gap value is special-cased.
+
+The shared native window runtime uses the same Arrow tree and control/ownership lifecycle as
+adjacent Calc stages, preserving each original Flink physical metric identity. Controlled
+Flink-generated changelog and complete registered metric-surface tests run on both backends.
+Generated ordinary SQL tests also cover nullable keys, negative timestamps, shuffled arrivals,
+different gaps and window rowtime output. Official Q11 also matches the complete Flink result
+changelog for 10,000 generated events at parallelism one/four on both backends, through ordinary
+selection with positive native plan/Calc activity. These tests are not performance measurements.
 
 The kernel processes arrivals in input order to assign Flink merging namespaces, then uses
 DataFusion grouped aggregate update/merge kernels over Arrow slices. It does not sort arrivals
@@ -66,9 +77,8 @@ operator across canonical backend switches, aligned and unaligned checkpoints, a
 rescaling from one to two subtasks and back. Nullable keys route through Arrow IPC; live sessions
 accept older bridging events after restore. RocksDB checkpoints also verify incremental SST reuse.
 A separate real-barrier test captures and replays Arrow IPC channel state once, comparing data and
-watermark bytes on both backends. Ordinary planner binding and end-to-end query validation remain
-pending. Other native aggregate-call variants do not yet carry the complete SESSION conformance
-evidence established for COUNT.
+watermark bytes on both backends. Other native aggregate-call variants do not yet carry the
+complete SESSION conformance evidence established for COUNT and remain gated.
 
 ## Q5 checkpoint
 
@@ -348,8 +358,8 @@ against the merged session end: an older event whose own window has expired is a
 joins a live session, including inclusive boundary contact. Arrival order is preserved within each
 Arrow batch, so a later event cannot retroactively rescue an earlier dropped event. Generated
 comparisons against Flink's SQL-created session operator cover these cases and the late-record
-counter on both backends. This retained-kernel correction does not enable SESSION admission;
-shared execution, ordered state, memory and full metric/recovery conformance remain prerequisites.
+counter on both backends. This retained implementation is broader than production admission;
+only the shared SESSION COUNT subset described above is selected.
 
 Legacy early/late firing, distinct/approximate or user-defined aggregate calls, async state,
 changelog-state wrapping, and unsupported surrounding physical nodes produce an explicit

@@ -129,35 +129,8 @@ final class StreamFusionWindowAggregateSupport {
     }
 
     static String unsupportedReason(StreamExecWindowAggregate aggregate, ProcessorContext context) {
-        ExecEdge input = aggregate.getInputEdges().get(0);
-        try {
-            Class<?> translator = Class.forName(
-                    WINDOW_AGGREGATE_TRANSLATOR_CLASS, true, StreamFusionRuntimeClasses.class.getClassLoader());
-            Method method = translator.getMethod(
-                    "unsupportedReason",
-                    RowType.class,
-                    RowType.class,
-                    int[].class,
-                    org.apache.calcite.rel.core.AggregateCall[].class,
-                    WindowingStrategy.class,
-                    NamedWindowProperty[].class,
-                    boolean.class,
-                    ReadableConfig.class);
-            return (String) method.invoke(
-                    null,
-                    (RowType) input.getOutputType(),
-                    (RowType) aggregate.getOutputType(),
-                    windowGrouping(aggregate),
-                    windowAggregateCalls(aggregate),
-                    windowing(aggregate),
-                    windowProperties(aggregate),
-                    windowNeedRetraction(aggregate),
-                    aggregate.getPersistedConfig());
-        } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
-            throw new IllegalStateException("Could not inspect StreamFusion WindowAggregate support", e);
-        } catch (InvocationTargetException e) {
-            throw new IllegalStateException("StreamFusion WindowAggregate support inspection failed", e.getCause());
-        }
+        return StreamFusionSessionWindowAdmission.unsupportedReason(
+                aggregate, context == null ? null : context.getPlanner().getTableConfig());
     }
 
     static String unsupportedReason(LegacyGroupWindowAggregate aggregate, ProcessorContext context) {

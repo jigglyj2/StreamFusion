@@ -76,6 +76,7 @@ final class StreamFusionOriginalMemoryPlan {
                 // ExecNodeUtil rounds the upstream 50/100-byte relative window weights to one MiB unit.
             case "StreamExecLocalWindowAggregate":
                 return Kind.LOCAL_WINDOW;
+            case "StreamExecWindowAggregate":
             case "StreamExecGlobalWindowAggregate":
                 return Kind.GLOBAL_WINDOW;
             case "StreamExecGroupAggregate":

@@ -19,8 +19,8 @@ import org.apache.flink.table.api.TableEnvironment;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
 import org.apache.flink.table.api.internal.TableEnvironmentImpl;
 import org.apache.flink.table.planner.delegation.PlannerBase;
+import org.apache.flink.table.planner.plan.logical.HoppingWindowSpec;
 import org.apache.flink.table.planner.plan.logical.TimeAttributeWindowingStrategy;
-import org.apache.flink.table.planner.plan.logical.TumblingWindowSpec;
 import org.apache.flink.table.planner.plan.logical.WindowAttachedWindowingStrategy;
 import org.apache.flink.table.planner.plan.logical.WindowingStrategy;
 import org.apache.flink.table.planner.plan.nodes.exec.ExecEdge;
@@ -171,7 +171,7 @@ class SharedGlobalWindowTopologyTest {
         assertThat(reason(
                         config,
                         new TimeAttributeWindowingStrategy(
-                                new TumblingWindowSpec(Duration.ofSeconds(6), null), ROWTIME, 1),
+                                new HoppingWindowSpec(Duration.ofSeconds(7), Duration.ofSeconds(2), null), ROWTIME, 1),
                         calls(),
                         SharedSlicingWindowFixture.INPUT,
                         false))
