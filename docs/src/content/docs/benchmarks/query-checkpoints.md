@@ -229,6 +229,17 @@ Java UDF execution remains unsupported;
 the [Arrow-batch callback proposal](/StreamFusion/development/jvm-udf-boundary/) awaits an explicit
 architecture exception. No Q14 acceleration or performance result is claimed.
 
+## Q15 initial admission
+
+While Q14's JVM UDF architecture decision is pending, the next query's original SQL has been
+checked without changing its filtered DISTINCT aggregates. `NexmarkQ15PlanningIT` runs 50,000
+RowData source events into the unmodified blackhole sink with both backends and StreamFusion
+disabled/enabled. All four cases finish with non-empty output and zero native plan batches.
+The selected plan reports the `StreamExecGroupAggregate` persistent-admission restriction to
+non-DISTINCT BIGINT calls. The retained DISTINCT implementation is not yet production-admitted;
+its state, DataFusion computation, memory, metric and recovery contracts must be verified before
+opening that gate. This establishes fallback and execution, not accelerated parity or performance.
+
 ## Q6 has no Flink streaming baseline
 
 The upstream Nexmark Q6 query computes a bounded ordered AVG after winning-bid rank selection.
