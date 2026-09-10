@@ -20,6 +20,35 @@ compiled JVM batch kernel and receives an Arrow result. Task-scoped instances an
 user classloader preserve UDF identity across callbacks. This is a scalar-expression callback,
 not an intermediate Spark row operator.
 
+### Dispatch and Arrow access in Comet
+
+The reference's
+[`JvmScalarUdfExpr`](https://github.com/apache/datafusion-comet/blob/4897161704b7b8b7dfa909f4bf897c6508b11117/native/spark-expr/src/jvm_udf/mod.rs)
+evaluates argument columns in DataFusion, exports them through Arrow C Data, and calls the
+static JVM bridge once per expression batch using a cached JNI method ID. Literal arguments
+remain length-one vectors; the callback receives the batch row count separately. The JVM
+exports its result vector back to Rust, where the Arrow owner retains the JVM release callback.
+
+[`CometBatchKernelCodegen`](https://github.com/apache/datafusion-comet/blob/4897161704b7b8b7dfa909f4bf897c6508b11117/spark/src/main/scala/org/apache/comet/codegen/CometBatchKernelCodegen.scala)
+generates a final kernel class with a loop over the batch. It binds concrete input-vector types
+before the loop. Its typed getters let the JIT devirtualize row-access calls and fold constant
+column ordinals. The generated kernel presents Spark's row-access interface over Arrow; it does
+not materialize an intermediate batch of Spark rows.
+[`CometBatchKernelCodegenInput`](https://github.com/apache/datafusion-comet/blob/4897161704b7b8b7dfa909f4bf897c6508b11117/spark/src/main/scala/org/apache/comet/codegen/CometBatchKernelCodegenInput.scala)
+uses cached buffer addresses for primitive reads and variable-width offsets/data. Its UTF-8
+getter creates a view over the data buffer, while its binary getter copies into a Java byte
+array. User-function argument conversions and output construction can still allocate. This
+reduces dispatch and transport overhead; it does not eliminate scalar UDF calls or guarantee
+zero-copy conversion to every user-declared Java type.
+
+StreamFusion should follow this structure using Flink-generated invocation and conversion code:
+resolve the callback once, cache the evaluator within the appropriate task/function lifecycle,
+bind Arrow access outside the row loop, and write directly to an Arrow result vector. Keep
+buffer addresses valid for the complete callback and refresh them for each imported batch;
+growing output vectors must not leave cached addresses pointing to released buffers. Validate
+scalar broadcasting, slices, nulls, exceptions and release ownership before admission. Profile
+the generated loop to verify dispatch reductions rather than assuming every call devirtualizes.
+
 The corresponding StreamFusion contract would be:
 
 - Represent a JVM UDF call as a DataFusion physical scalar expression inside the existing native
