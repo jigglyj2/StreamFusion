@@ -13,6 +13,7 @@ mod input_memory;
 mod output_pressure;
 mod planning_memory;
 mod region;
+mod region_input;
 mod streaming;
 mod timestamp_predicate;
 mod wide_predicate;

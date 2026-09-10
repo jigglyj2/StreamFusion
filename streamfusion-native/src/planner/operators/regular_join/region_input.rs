@@ -50,14 +50,6 @@ pub(super) fn normalize(
             "regular join RowKind metadata must be non-null Int8".into(),
         ));
     }
-    // Covers the key builder, one temporary BinaryRow, and Arrow metadata before allocation.
-    memory.resize(
-        batch
-            .get_array_memory_size()
-            .saturating_mul(4)
-            .saturating_add(batch.num_rows().saturating_mul(256))
-            .saturating_add(4096),
-    )?;
     let mut columns = batch.columns()[..visible].to_vec();
     columns.push(batch.column(kind).clone());
     let key: ArrayRef = if let Some(index) = metadata_index(&actual, "__streamfusion_key") {
@@ -87,7 +79,12 @@ pub(super) fn normalize(
                 ))
             })
             .collect::<Result<Vec<_>>>()?;
-        let mut builder = BinaryBuilder::new();
+        // Existing columns retain their producer's reservation. Only newly encoded keys
+        // need workspace here; flat key slices can share a much larger IPC allocation.
+        let key_columns = fields.iter().map(|(index, _)| *index).collect::<Vec<_>>();
+        let key_batch = batch.project(&key_columns)?;
+        memory.resize(input_memory::workspace(&key_batch, key_columns.len())?)?;
+        let mut builder = BinaryBuilder::with_capacity(batch.num_rows(), 0);
         for row in 0..batch.num_rows() {
             if fields.is_empty() {
                 builder.append_value([]);

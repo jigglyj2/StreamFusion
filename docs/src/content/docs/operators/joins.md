@@ -468,6 +468,13 @@ table is dropped before constructing staged state. A 16,384-row test with one, 5
 distinct keys fits input admission within 12 MiB and verifies allocation peaks and cancellation.
 The previous allowance requested over 17 MiB even for the single-key input.
 
+The fused join-region adapter forwards existing routing keys, RowKind metadata and visible
+Arrow columns without reserving their shared buffers again. If routing keys are missing,
+it reserves one coarse encoding workspace for the selected key columns, using logical spans
+for flat keys and the existing conservative estimate for nested keys. The reservation remains
+owned by the region invocation while the generated keys are consumed. Input validation and
+Flink's exact BinaryRow partition-key encoding are unchanged.
+
 Paged decoding admits payload bytes and coarse row-vector/Arc headroom once for the complete
 read batch, using the page headers. Original and updated state share payload Arcs, so wide rows
 are not charged as eight hypothetical decoded copies. Backend read buffers retain their own
