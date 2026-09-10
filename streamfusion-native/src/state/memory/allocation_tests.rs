@@ -98,7 +98,7 @@ fn immutable_state_entries_fit_a_bounded_hash_table_share_and_restore_identical_
 }
 
 #[test]
-fn stored_buffers_discard_spare_capacity_and_updates_keep_the_original_key() {
+fn packed_buffers_discard_spare_capacity_and_reuse_equal_length_updates() {
     let broker = Arc::new(TestBroker::new(1 << 20));
     let mut state = MemoryKeyedState::new(
         0,
@@ -107,12 +107,12 @@ fn stored_buffers_discard_spare_capacity_and_updates_keep_the_original_key() {
     )
     .unwrap();
     let key = 7u64.to_le_bytes();
-    for length in [32, 96, 0] {
+    for length in [32, 32, 96, 96, 0, 0] {
         let previous = state
             .group(0)
             .unwrap()
             .get_key_value(key.as_slice())
-            .map(|(key, _)| key.as_ptr());
+            .map(|(key, value)| (key.as_ptr(), value.len()));
         let mut oversized_key = Vec::with_capacity(1024);
         oversized_key.extend_from_slice(&key);
         let mut value = Vec::with_capacity(4096);
@@ -127,7 +127,8 @@ fn stored_buffers_discard_spare_capacity_and_updates_keep_the_original_key() {
             }])
             .unwrap();
         assert_eq!(state.entry_bytes, key.len() + length);
-        if let Some(previous) = previous {
+        if let Some((previous, old_length)) = previous.filter(|(_, old)| *old == length) {
+            assert_eq!(old_length, length);
             assert_eq!(
                 state
                     .group(0)

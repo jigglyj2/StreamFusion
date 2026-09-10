@@ -6,14 +6,12 @@ use std::mem::size_of;
 
 use ahash::RandomState;
 use datafusion::error::{DataFusionError, Result};
-use hashbrown::hash_map::Entry;
 
 use crate::memory_pool::HostMemoryReservation;
 
 use super::{snapshot, KeyedState, StateKeyRef, StateMutation};
 
-// Stored keys/values are immutable; keep capacity words out of every hash-table bucket.
-type StateBytes = Box<[u8]>;
+mod entry;
 mod table;
 use table::KeyGroupMap;
 
@@ -106,12 +104,17 @@ impl KeyedState for MemoryKeyedState {
 
     fn write_batch(&mut self, mutations: Vec<StateMutation>) -> Result<()> {
         let current = self.estimated_heap_size();
+        let mut payload_overlap = 0usize;
         let grows = mutations.iter().try_fold(0usize, |growth, mutation| {
             let old = self
                 .group(mutation.key.key_group)?
                 .get(mutation.key.key.as_slice());
             Ok::<_, DataFusionError>(match (&mutation.value, old) {
                 (Some(value), Some(old)) => {
+                    if value.len() != old.len() {
+                        payload_overlap =
+                            payload_overlap.max(mutation.key.key.len().saturating_add(old.len()));
+                    }
                     growth.saturating_add(value.capacity().saturating_sub(old.len()))
                 }
                 (Some(value), None) => growth
@@ -174,10 +177,12 @@ impl KeyedState for MemoryKeyedState {
             current
                 .saturating_add(grows)
                 .saturating_add(table_growth_bound)
-                .saturating_add(overlap),
+                .saturating_add(overlap.max(payload_overlap)),
         )?;
         // Tables grow sequentially: charge final table growth plus the largest old table
         // that can coexist with its replacement, rather than every replacement at once.
+        // Variable-length value replacement likewise admits one old packed entry at a
+        // time; equal-length updates reuse the existing allocation.
         // Reserve once per growing table instead of repeatedly reallocating while
         // applying a large batch. A failed allocation leaves logical state untouched.
         for ((key_group, shard), count) in additions {
@@ -190,26 +195,8 @@ impl KeyedState for MemoryKeyedState {
             let (added, removed) = {
                 let group = self.group_mut(mutation.key.key_group)?;
                 match mutation.value {
-                    Some(value) => {
-                        let value = value.into_boxed_slice();
-                        match group.entry(mutation.key.key.into_boxed_slice()) {
-                            Entry::Occupied(mut entry) => {
-                                let old_length = entry.get().len();
-                                let new_length = value.len();
-                                entry.insert(value);
-                                (new_length, old_length)
-                            }
-                            Entry::Vacant(entry) => {
-                                let added = entry.key().len().saturating_add(value.len());
-                                entry.insert(value);
-                                (added, 0)
-                            }
-                        }
-                    }
-                    None => group
-                        .remove_entry(mutation.key.key.as_slice())
-                        .map(|(key, value)| (0, key.len().saturating_add(value.len())))
-                        .unwrap_or((0, 0)),
+                    Some(value) => group.insert(mutation.key.key, value),
+                    None => (0, group.remove_bytes(mutation.key.key.as_slice())),
                 }
             };
             self.entry_bytes = self
@@ -288,18 +275,15 @@ impl KeyedState for MemoryKeyedState {
         let mut reservation = owner.sibling("canonical snapshot bytes");
         reservation.resize(bytes)?;
         let mut sort_reservation = owner.sibling("canonical snapshot sorted references");
-        sort_reservation.resize(
-            group
-                .len()
-                .saturating_mul(size_of::<(&StateBytes, &StateBytes)>()),
-        )?;
-        let mut entries = group.iter().collect::<Vec<_>>();
-        entries.sort_unstable_by(|left, right| left.0.cmp(right.0));
+        sort_reservation.resize(group.len().saturating_mul(size_of::<&entry::PackedEntry>()))?;
+        let mut entries = Vec::with_capacity(group.len());
+        entries.extend(group.entries());
+        entries.sort_unstable_by(|left, right| left.key().cmp(right.key()));
         let mut writer = streamfusion_state_abi::SnapshotWriter::new(key_group, group.len(), bytes)
             .map_err(|error| DataFusionError::Execution(error.to_string()))?;
-        for (key, value) in entries {
+        for entry in entries {
             writer
-                .append(key, value)
+                .append(entry.key(), entry.value())
                 .map_err(|error| DataFusionError::Execution(error.to_string()))?;
         }
         let bytes = writer
@@ -347,11 +331,7 @@ impl KeyedState for MemoryKeyedState {
                 .map(|(key, value)| key.len().saturating_add(value.len()))
                 .sum::<usize>(),
         );
-        self.group_mut(key_group)?.extend(
-            entries
-                .into_iter()
-                .map(|(key, value)| (key.into_boxed_slice(), value.into_boxed_slice())),
-        )?;
+        self.group_mut(key_group)?.extend(entries.into_iter())?;
         self.reservation.resize(self.estimated_heap_size())?;
         Ok(())
     }
@@ -373,6 +353,8 @@ fn table_heap_size(capacity: usize) -> usize {
 #[cfg(test)]
 mod allocation_tests;
 #[cfg(test)]
+mod packed_tests;
+#[cfg(test)]
 mod sharded_growth;
 
 fn table_size_for_entries(entries: usize) -> usize {
@@ -393,7 +375,7 @@ fn table_size_for_entries(entries: usize) -> usize {
 }
 
 const fn bucket_bytes() -> usize {
-    size_of::<(StateBytes, StateBytes)>() + 1
+    size_of::<entry::PackedEntry>() + 1
 }
 
 #[cfg(test)]

@@ -11,8 +11,8 @@ fn hot_key_group_grows_past_the_single_table_peak_under_the_same_budget() {
     let limit = 20 << 20;
     // Actual hashbrown allocations for the former whole-group directory cross this budget
     // when growing from 229,376 usable slots. Payloads alone are not the limiting factor.
-    let old = hashbrown::HashMap::<StateBytes, StateBytes>::with_capacity(229_376);
-    let next = hashbrown::HashMap::<StateBytes, StateBytes>::with_capacity(240_000);
+    let old = hashbrown::HashMap::<Box<[u8]>, Box<[u8]>>::with_capacity(229_376);
+    let next = hashbrown::HashMap::<Box<[u8]>, Box<[u8]>>::with_capacity(240_000);
     assert!(old.allocation_size() + next.allocation_size() + 240_000 * 9 > limit);
     drop((old, next));
     let broker = Arc::new(TestBroker::new(limit));

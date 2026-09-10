@@ -290,8 +290,14 @@ owns the original key groups and their assignment, and stored keys/values and ca
 remain byte-compatible. The table directory is allocated on the first insertion; its routing hash
 is private to that backend instance and does not replace Flink's partition hash or Arrow sort keys.
 
+Each point-state entry packs its key and value into one exact-length buffer, with a private split
+that does not enter the snapshot protocol. This reduces per-bucket descriptors from 32 to 24 bytes
+on 64-bit hosts. Equal-length value updates reuse the buffer; variable-length replacements reserve
+the largest old/new payload overlap for the batch. Hashing, equality, prefix scans and snapshots
+continue to inspect the original key and value separately.
+
 Each incoming write batch admits payload growth, directory storage, final table growth and the
-largest old/new table overlap before changing logical values. Table reservations execute
+largest old/new table or payload overlap before changing logical values. Table reservations execute
 sequentially, releasing each replaced allocation before growing the next table. The bound also
 covers hashbrown's larger replacements after tombstone deletions. A denied batch leaves existing
 updates, deletions and insertions unapplied together. Retained backing tables remain charged after
@@ -301,11 +307,15 @@ reservations, rather than per-entry memory callbacks.
 A native capacity test stores and verifies all 240,000 entries in one hot key group with a
 20 MiB budget; the former single-table replacement would exceed that budget. Mixed-mutation
 denial, immutable-buffer ownership, tombstone retention and canonical restore tests cover the
-storage contract. This demonstrates a smaller growth peak at that tested size, not unbounded
+storage contract. The packed-entry capacity fixture additionally stores and verifies 120,000
+56-byte keys with ten-byte values under 15 MiB; the equivalent unpacked directory exceeds that
+share. Boundary and variable-length replacement tests check identical concatenated bytes with
+different key/value splits, prefix scans, canonical restore, and atomic memory denial.
+This demonstrates a smaller growth peak at that tested size, not unbounded
 state capacity or a completed large Nexmark checkpoint. Canonical snapshot buffering and retained
 payloads can still exhaust the allowance. The [Q15 release report](/StreamFusion/benchmarks/q15-rowdata/)
-now includes this directory change. The ten-million-event in-memory attempt passes the earlier
-large replacement boundary but still exhausts retained-state capacity; smaller allocation peaks
+includes the directory change; the packed-entry follow-up has not yet been measured there.
+The ten-million-event in-memory attempt passes the earlier large replacement boundary but still exhausts retained-state capacity; smaller allocation peaks
 alone do not establish sufficient capacity for that workload.
 
 The ordered operator format identifies StreamFusion encoding version 1 and Arrow row encoding

@@ -35,13 +35,17 @@ A 100,000-entry constrained-memory regression
 checks range values, sparse occupancy after deletion, observed retained allocations, and restore;
 the cross-backend fixtures continue to compare identical snapshot bytes.
 
-The hash-based in-memory backend also stores immutable key/value bytes in boxed slices.
-Removing vector capacity fields reduces each key/value bucket's descriptors from 48 to 32
-bytes on 64-bit hosts and releases unused payload capacity. Updates retain the original key.
-Reservations still cover the full allocated hash table, including empty buckets after deletion
-and replacement tables during growth. A 100,000-entry regression fits eight-byte keys and
-32-byte values within a 10 MiB state share, then verifies identical canonical snapshot bytes
-after restore. This changes neither the snapshot protocol nor Flink's managed-memory budget.
+The hash-based in-memory backend packs each key and value into one exact-length boxed buffer.
+A bucket holds that buffer and its key/value split, reducing descriptors from 32 to 24 bytes
+on 64-bit hosts. Hashing and equality inspect only the key. Equal-length value updates reuse
+the allocation; other updates replace the packed buffer. Batch admission covers the largest
+old/new payload overlap as well as the full allocated hash tables, including empty buckets
+after deletion and replacement tables during growth. Canonical snapshots sort references to
+packed entries and still emit the original separate key/value byte strings.
+A 100,000-entry regression fits eight-byte keys and 32-byte values within a 10 MiB state share, then verifies identical canonical snapshot bytes
+after restore. A separate 120,000-entry fixture with 56-byte keys and ten-byte values fits a
+15 MiB share that cannot hold the previous unpacked directory, then verifies every value through
+batched reads. This changes neither the snapshot protocol nor Flink's managed-memory budget.
 
 Filters evaluate their predicate once. All-pass output retains the input buffers; all-rejected
 input needs no gathered payload. Partial selections reserve gather space from the projected
