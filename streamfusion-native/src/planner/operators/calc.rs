@@ -726,6 +726,17 @@ pub(super) fn create_expression(
                 schema,
             )
         }
+        Some(proto::expression::Expression::RegexExtract(extract)) => {
+            let operand = extract
+                .operand
+                .as_ref()
+                .ok_or_else(|| DataFusionError::Plan("REGEXP_EXTRACT operand is empty".into()))?;
+            expressions::regexp_extract::create(
+                create_expression(operand, schema)?,
+                &extract.capture_pattern,
+                schema,
+            )
+        }
         Some(proto::expression::Expression::DateFormat(format)) => {
             let operand = format
                 .operand

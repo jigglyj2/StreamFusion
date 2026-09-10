@@ -669,11 +669,38 @@ parity dependency in `EXPLAIN` instead of substituting a similar native predicat
 DataFusion's similarly named Spark function performs literal delimiter matching; using it would
 produce different keys for valid Flink expressions. StreamFusion reports this distinction in
 `EXPLAIN` instead of approximating the result.
-`REGEXP`, `REGEXP_COUNT`, `REGEXP_EXTRACT`, `REGEXP_EXTRACT_ALL`, `REGEXP_INSTR`,
-`REGEXP_SUBSTR`, `REGEXP_REPLACE`, and the `SIMILAR TO` predicates remain on Flink. They use Java
-`Pattern` syntax, matching, capture, and replacement semantics, including constructs such as
-look-around and backreferences that Rust/DataFusion regex deliberately does not implement.
-`EXPLAIN` identifies the regex-engine dependency rather than accepting only an undocumented subset.
+`REGEXP_EXTRACT` is accelerated for `VARCHAR` input and a non-null literal pattern within the
+verified Java-compatible subset. Patterns may contain ASCII literals, ASCII character classes
+and ranges (including negation), alternation, `^`, capturing groups and greedy single-atom
+`?`, `*` and `+`. Input values may contain Unicode. The optional capture index must be an
+in-range literal `INTEGER`; omission selects group zero, the complete match. Patterns are
+limited to 256 characters and 32 levels of grouping. Dynamic patterns/indices, fixed-width
+`CHAR`, invalid indices, flags, escapes, dot, end anchors, repeated groups, set operations and
+other unverified syntax retain precise whole-plan fallback. In particular, repeated groups can
+retain earlier captures in Java, and end-anchor/line-terminator behavior differs between engines.
+
+The planner retains only the requested capture and converts other groups to noncapturing groups.
+This avoids Arrow's compaction of unmatched captures changing Java's group numbering. Rust
+validates the projected grammar and composes DataFusion `regexp_match` with `array_element`.
+No match or an absent capture yields null; a participating empty capture yields the empty string.
+Both matching and extraction use DataFusion kernels. Generated SQL parity covers every RowKind,
+Unicode, line terminators, null/empty values, alternative groups, group zero, nested extraction,
+filters and CASE. Flink-generated Calc harnesses compare the full ordered changelog, timestamps,
+registered metric surface, watermarks, latency and terminal paths across three fused native stages.
+Adapted upstream `RegexpFunctionsITCase` SQL cases also check values, nullable result types and
+the pinned Flink 2.3 behavior for invalid patterns: those expressions stay on Flink and return null.
+
+Extraction reserves one coarse batch allowance for regex workspace, growing Arrow list/string
+buffers, element gathering and scalar broadcasting. Eight MiB of fixed headroom covers the bounded
+pattern compilation and regex DFA caches; growing payloads are reserved separately. The reservation
+shrinks to the actual final output buffers and survives native consumers and slices until their
+last owner releases them. Memory denial is recoverable and occurs before the large buffers are
+allocated. There is no per-row JNI accounting or separate deployment setting.
+
+`REGEXP`, `REGEXP_COUNT`, `REGEXP_EXTRACT_ALL`, `REGEXP_INSTR`, `REGEXP_SUBSTR`, `REGEXP_REPLACE`,
+and the `SIMILAR TO` predicates remain on Flink. Their general Java `Pattern` syntax, matching,
+capture and replacement semantics include look-around and backreferences that Rust/DataFusion
+regex deliberately does not implement. `EXPLAIN` identifies that dependency.
 `REPEAT(value, count)` is accelerated for supported `VARCHAR` values and `INTEGER` counts,
 including computed counts. StreamFusion widens the count inside the native plan for DataFusion's
 vectorized kernel; zero and negative counts produce the empty string as in Flink, while null

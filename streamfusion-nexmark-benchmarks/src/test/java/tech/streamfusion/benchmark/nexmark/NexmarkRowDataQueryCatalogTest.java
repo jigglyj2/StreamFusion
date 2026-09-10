@@ -29,6 +29,7 @@ class NexmarkRowDataQueryCatalogTest {
                         "q18",
                         "q19",
                         "q20",
+                        "q21",
                         "q22",
                         "q23",
                         "aggregate-modifiers",

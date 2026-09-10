@@ -2,11 +2,11 @@
 package tech.streamfusion.flink.calc;
 
 /**
- * Planner-side syntax restriction and capture projection for a prospective DataFusion extraction.
+ * Planner-side syntax restriction and capture projection for DataFusion extraction.
  *
  * <p>Arrow regexp_match omits unmatched captures. Retaining exactly one capture avoids interpreting
- * that compacted list as Java's stable group numbering. This helper does not enable SQL admission;
- * the native kernel, memory contract and generated cross-engine parity must be verified first.
+ * that compacted list as Java's stable group numbering. The native decoder checks the projected
+ * grammar again before composing DataFusion matching and element extraction.
  */
 final class StreamFusionRegexCapturePattern {
     // Bound planner work and the prospective compiled expression independently of input size.

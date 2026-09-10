@@ -15,7 +15,7 @@ import org.junit.jupiter.params.provider.CsvSource;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
 import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 
-/** Preserve original SQL execution and its demonstrated blocker while extraction is implemented. */
+/** Original channel extraction SQL through ordinary admission on both backend configurations. */
 @ResourceLock("streamfusion-planner-property")
 class NexmarkQ21PlanningIT {
     @AfterEach
@@ -24,9 +24,21 @@ class NexmarkQ21PlanningIT {
         StreamFusionPlannerFactory.resetMetrics();
     }
 
+    @org.junit.jupiter.api.Test
+    void catalogPreservesOriginalSelectAndSinkSchema() throws Exception {
+        try (var input = getClass().getResourceAsStream("/queries/q21.sql")) {
+            assertThat(input).isNotNull();
+            var original = new String(input.readAllBytes(), StandardCharsets.UTF_8);
+            var select = original.substring(original.indexOf("SELECT", original.indexOf("INSERT INTO")));
+            assertThat(NexmarkRowDataQueryCatalog.load("q21").trim()).isEqualTo(select.trim());
+            assertThat(NexmarkRowDataQueryCatalog.sinkColumns("q21"))
+                    .isEqualTo("auction BIGINT, bidder BIGINT, price BIGINT, channel STRING, channel_id STRING");
+        }
+    }
+
     @ParameterizedTest
     @CsvSource({"false,hashmap", "true,hashmap", "false,rocksdb", "true,rocksdb"})
-    void originalQueryFallsBackPreciselyUntilRegexParityIsAdmitted(boolean selected, String backend) throws Exception {
+    void originalQueryUsesOrdinaryAcceleration(boolean selected, String backend) throws Exception {
         if (selected)
             System.setProperty(
                     StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY, StreamFusionPlannerFactory.class.getName());
@@ -47,14 +59,15 @@ class NexmarkQ21PlanningIT {
         tables.executeSql(statements[0]);
         tables.explainSql(statements[1]);
         if (selected) {
-            assertThat(StreamFusionPlanningDiagnostics.explain())
-                    .contains("Accelerated: no", "REGEXP_EXTRACT", "Java Pattern syntax");
+            assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
         }
         try (var metrics = NexmarkBlackholeMetrics.begin()) {
             NexmarkBlackholeMetrics.configure(tables.getConfig().getConfiguration(), metrics.id);
             tables.executeSql(statements[1]).await();
             assertThat(metrics.outputRows()).isPositive();
         }
-        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isZero();
+        if (selected)
+            assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isPositive();
+        else assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isZero();
     }
 }

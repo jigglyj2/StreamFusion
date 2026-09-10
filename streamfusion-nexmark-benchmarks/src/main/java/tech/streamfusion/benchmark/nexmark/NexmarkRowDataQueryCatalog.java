@@ -91,6 +91,7 @@ final class NexmarkRowDataQueryCatalog {
                         + "bid_dateTime TIMESTAMP(3), bid_extra STRING, itemName STRING, description STRING, "
                         + "initialBid BIGINT, reserve BIGINT, auction_dateTime TIMESTAMP(3), expires TIMESTAMP(3), "
                         + "seller BIGINT, category BIGINT, auction_extra STRING");
+        schemas.put("q21", "auction BIGINT, bidder BIGINT, price BIGINT, channel STRING, channel_id STRING");
         schemas.put(
                 "q22",
                 "auction BIGINT, bidder BIGINT, price BIGINT, channel STRING, dir1 STRING, dir2 STRING, dir3 STRING");

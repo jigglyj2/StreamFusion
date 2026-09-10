@@ -2419,6 +2419,7 @@ dependencies = [
  "prost",
  "prost-build",
  "protoc-bin-vendored",
+ "regex-syntax",
  "sha1",
  "sha2",
  "streamfusion-state-abi",

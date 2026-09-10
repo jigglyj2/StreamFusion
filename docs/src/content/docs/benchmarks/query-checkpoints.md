@@ -812,29 +812,22 @@ option or an acceleration bypass.
 
 ## Q21 channel identifier extraction
 
-Original Q21 remains on whole-plan Flink fallback for `REGEXP_EXTRACT`. Its original SELECT
-and blackhole schema now have a dedicated planning/execution guard on both backends, with
-StreamFusion selected and unselected. This establishes the next blocker; it is not an
-accelerated Q21 result or a performance comparison.
+Original Q21 now passes ordinary whole-plan admission with the restricted `REGEXP_EXTRACT`
+implementation described under [projections](/StreamFusion/operators/select-where/projections/).
+Its original CASE, LOWER, extraction predicate, SELECT and blackhole schema are preserved.
+No channel name, URL layout or query shape is recognized specially by the implementation.
 
-A planner-side capture-projection prerequisite retains only the requested capture, converting
-other groups to noncapturing groups (or wrapping the complete match for group zero). This is
-needed because Arrow's regex kernel omits unmatched captures from its result list; indexing
-that list by Java's original group number can select the wrong value. With one capture, an
-empty list can represent the absent group without shifting another group's position.
+The planner projects exactly one capture, avoiding Arrow's omission of unmatched groups shifting
+Java's capture indices. Rust validates the projected grammar and composes actual DataFusion
+regex matching and element extraction under one coarse memory reservation. Unsupported Java
+regex syntax retains precise whole-plan fallback. The initial differential probe's 46,440
+matching results are supplemented by permanent generated Flink/native SQL changelog tests,
+Flink-generated shared Calc metric/control harnesses and adapted upstream regex SQL cases.
+Native tests cover large-buffer refusal before computation, scalar broadcasts, conditional
+input selection, grammar validation and output accounting through the last slice release.
 
-The proposed grammar accepts short ASCII literal patterns, ASCII character classes/ranges,
-negated classes, alternation, start anchors, capturing groups and greedy single-atom `?`, `*`
-and `+`. Input strings may contain Unicode. It rejects dynamic patterns, flags, escapes,
-look-around, backreferences, end anchors, dot, set operations, repeated groups and other
-unverified syntax. Repeated groups need separate treatment because Java can retain a capture
-from an earlier iteration. Pattern length and nesting are bounded independently of input size.
-No specific channel name, URL layout or query shape is recognized by the helper.
-
-Generated Java tests verify capture projection across empty, Unicode, line-terminator,
-combining-character and alternative inputs. A local differential probe also covers nulls and compares 46,440 actual
-Flink `SqlFunctionUtils.regexpExtract` results with the projected Arrow regex kernel used by
-DataFusion; all match. This is semantic feasibility evidence, not completed native-expression
-admission. DataFusion expression/protobuf wiring, coarse workspace/output reservations,
-permanent generated Flink/native SQL parity and release performance checks remain required
-before enabling this subset. Other regex functions remain on Flink.
+The implementation checkpoint passes 13 native checks, 32 focused Java unit checks and nine
+original-query integration cases. Planning and collecting/blackhole validation exercise both backend configurations
+and parallelism 1/4 at 50,000 events. Q21 is stateless, so these are not RocksDB state-performance
+or recovery-capacity results. Release measurement, profiling and reasonable optimization on
+both backend configurations remain the next checkpoint; no Q21 performance result is claimed yet.

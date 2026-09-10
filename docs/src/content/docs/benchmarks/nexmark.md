@@ -94,7 +94,9 @@ Q10's SELECT path is now catalogued with
 numeric `DATE_FORMAT`; its blackhole comparison does not exercise filesystem partition commits
 or rolling policies. See the query checkpoint page for its delivery status. Q14's built-in expressions
 have parity coverage, but its original Java UDF still awaits the proposed architecture exception;
-q21 uses Java-regex semantics. Q12's processing-time SQL is catalogued, but its windows align to the live Flink clock.
+Q21 now uses the verified literal-regex subset through DataFusion and passes ordinary admission
+and collecting/blackhole parity on both backend configurations. Its release measurements remain
+pending. Q12's processing-time SQL is catalogued, but its windows align to the live Flink clock.
 A bounded max-speed run may finish before a timer fires, and finishing input does not emit the final
 open window. Empty or partial results do not establish parity or acceleration. Its UTC TUMBLE COUNT operator now has ordinary
 selection, controlled-clock changelog/metric parity, both-backend recovery and live SQL execution

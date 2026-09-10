@@ -810,7 +810,16 @@ message Expression {
     IntervalYearMonthLiteral interval_year_month_literal = 116;
     IntervalDayTimeLiteral interval_day_time_literal = 117;
     DateFormat date_format = 118;
+    RegexExtract regex_extract = 119;
   }
+}
+
+// Restricted Java-compatible extraction. The planner projects exactly one capture;
+// native code validates this grammar before invoking DataFusion's regexp_match.
+// An unmatched sole capture yields NULL; an empty participating capture yields "".
+message RegexExtract {
+  Expression operand = 1;
+  string capture_pattern = 2;
 }
 
 // Locale-independent Java numeric pattern subset over timezone-free millisecond timestamps.

@@ -25,7 +25,7 @@ class RegexFunctionFallbackTest {
             strings = {
                 "REGEXP(f0, 'a(?=b)')",
                 "REGEXP_COUNT(f0, 'a')",
-                "REGEXP_EXTRACT(f0, '(a)(b)', 1)",
+                "REGEXP_EXTRACT(f0, '(a)+', 1)",
                 "REGEXP_EXTRACT_ALL(f0, '(a)', 1)",
                 "REGEXP_INSTR(f0, 'b')",
                 "REGEXP_SUBSTR(f0, 'a.')",
