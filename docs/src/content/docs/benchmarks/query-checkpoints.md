@@ -668,5 +668,9 @@ checks pass with 50,000 events, parallelism one/four and both backends. They com
 collected changelog at parallelism one, materialized results at both parallelisms, and blackhole
 record counts negotiated independently of the collecting sink. All accelerated runs require
 positive native activity. Independent parallel jobs may interleave channels differently; controlled
-runtime tests remain the byte-parity evidence for identical input ordering. Release measurements
-and mixed JVM/native profiles remain outstanding; admission alone establishes no speedup.
+runtime tests remain the byte-parity evidence for identical input ordering. The
+[initial release comparison](/StreamFusion/benchmarks/q16-rowdata/) reports three alternating
+pairs at 1M on both backends and 10M on RocksDB, plus separate longer profiles. Ratios are
+0.709× in memory and 1.389× on RocksDB at 1M, and 0.912× on RocksDB at 10M, with dispersion
+and failed memory cases recorded. Q16's performance work remains active: the long profile
+identifies repeated RocksDB index-block reads/decompression as a leading cost.
