@@ -95,6 +95,7 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
 
     private transient ReadableConfig activeTableConfig;
     private transient StreamFusionGraphRewrite graphRewrite;
+    private transient StreamFusionRejectionTraversal rejectionTraversal;
 
     @Override
     public ExecNodeGraph process(ExecNodeGraph graph, ProcessorContext context) {
@@ -104,6 +105,8 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         activeTableConfig = context == null ? null : context.getPlanner().getTableConfig();
         try {
             List<String> rejections = new ArrayList<>();
+            rejectionTraversal = new StreamFusionRejectionTraversal(
+                    rejections, (node, path) -> inspectRejections(node, context, path, rejections));
             // Inspect the original complete graph, including nodes that semantic lowering folds
             // away. Architecture readiness must not be bypassed by a specialized conversion.
             StreamFusionArchitectureSupport.collect(graph, rejections, activeTableConfig);
@@ -112,10 +115,7 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                 rejections.add("runtime-preflight\n" + runtimeRejection);
             }
             for (int index = 0; index < graph.getRootNodes().size(); index++) {
-                if (runtimeRejection == null) {
-                    collectRejectionsSafely(
-                            graph.getRootNodes().get(index), context, "root[" + index + "]", rejections);
-                }
+                collectRejections(graph.getRootNodes().get(index), context, "root[" + index + "]", rejections);
             }
             if (!rejections.isEmpty()) {
                 rejections.forEach(rejection -> {
@@ -158,6 +158,7 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         } finally {
             activeTableConfig = null;
             graphRewrite = null;
+            rejectionTraversal = null;
         }
     }
 
@@ -270,17 +271,8 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         }
     }
 
-    private void collectRejectionsSafely(
-            ExecNode<?> node, ProcessorContext context, String path, List<String> rejections) {
-        try {
-            collectRejections(node, context, path, rejections);
-        } catch (LinkageError failure) {
-            rejections.add(path + "\nStreamFusion capability inspection could not load its runtime classes: "
-                    + failureDescription(failure));
-        } catch (RuntimeException failure) {
-            rejections.add(
-                    path + "\nStreamFusion capability inspection was inconclusive: " + failureDescription(failure));
-        }
+    private void collectRejections(ExecNode<?> node, ProcessorContext context, String path, List<String> rejections) {
+        rejectionTraversal.visit(node, path);
     }
 
     private static String failureDescription(Throwable failure) {
@@ -307,7 +299,7 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
         return boundary;
     }
 
-    private void collectRejections(ExecNode<?> node, ProcessorContext context, String path, List<String> rejections) {
+    private void inspectRejections(ExecNode<?> node, ProcessorContext context, String path, List<String> rejections) {
         String nodePath = path + "/" + node.getClass().getSimpleName();
         if (node instanceof StreamExecValues) {
             String reason = unsupportedReason((StreamExecValues) node, context);
