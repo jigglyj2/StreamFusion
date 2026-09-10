@@ -42,8 +42,9 @@ compute and ordered per-session state on both backends. Its verified subset uses
 partition key, TIMESTAMP(3) event time, synchronous state and disabled mini-batching. Other
 session calls, key shapes, retractions and time semantics remain gated; see
 [Window aggregation](/StreamFusion/operators/window-aggregation/) for the recovery and metric coverage.
-Append-only partitioned ROW_NUMBER range [1,1] also composes through this runtime, using
-DataFusion sort/cumulative MIN and batched point state. Its verified key/payload types, disabled
+Append-only partitioned ROW_NUMBER constant ranges also compose through this runtime, using
+DataFusion sort/cumulative MIN for Top-1 and bounded sort selection for larger ranges. State
+uses batched point values for Top-1 and an ordered candidate index with changed-entry writes for Top-N. Its verified key/payload types, disabled
 TTL/mini-batch/async settings and default cache configuration are listed on the [Top-N page](/StreamFusion/operators/top-n/).
 Synchronous row-time keep-first/keep-last deduplication uses DataFusion cumulative timestamp
 MIN/MAX windows with batched state and per-arrival changelogs. BIGINT, INTEGER, VARCHAR and

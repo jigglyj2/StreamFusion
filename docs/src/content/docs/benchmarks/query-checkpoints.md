@@ -749,12 +749,16 @@ The RowData catalog now preserves that SELECT exactly. The previous catalog adde
 bidder and string tie-breakers that changed which tied bids survive; those extra order keys
 have been removed. The original blackhole schema includes the rank number and has no primary key.
 
-Ordinary planner selection still falls back the complete plan: persistent rank admission is
-verified only for append-only `ROW_NUMBER` range `[1,1]`, whereas Q19 requires `[1,10]`.
-`NexmarkQ19PlanningIT` checks the unchanged SELECT and runs the original SQL/blackhole plan with
-StreamFusion selected and unselected on both backends, requiring the precise fallback reason
-and zero native activity. This is a fallback baseline, not accelerated Q19 coverage or a
-performance result.
+Ordinary planner selection now accelerates the verified append-only constant-range subset,
+including Q19's `[1,10]`, with the existing type/configuration restrictions. The five
+`NexmarkQ19PlanningIT` checks preserve the original SELECT/schema and run the original blackhole
+SQL with StreamFusion selected and unselected on both backends. Native activity is required only
+for accelerated execution. Four `NexmarkQ19ProductionIT` cases compare collecting and blackhole
+execution at 50,000 events on both backends and parallelism 1/4. Complete materialized result
+bytes match in all cases; parallelism one also matches every ordered changelog byte and blackhole
+record count. Parallel input channels can change intermediate rankings, so independent parallel
+jobs do not assert identical transient changelogs. Fixed-arrival operator tests compare the
+complete changelog and timestamp envelopes. Release measurements and profiling are pending.
 
 The retained append-only constant-range computation now uses DataFusion batch ordering and
 per-arrival bounded selection over fixed-width priorities. Twenty Rust checks and generated
@@ -768,5 +772,6 @@ Calc stages. Ordered state writes encode only new final candidates; losing-only 
 no writes. Native coverage includes migration, retained-history admission and cross-backend
 restore. Generated Java checks compare complete metrics/changelogs and exercise aligned/unaligned
 checkpoints, canonical backend switches, 1-to-2-to-1 rescaling, incremental SST reuse and actual
-channel replay with full Top-10 candidate sets. This completes the shared-runtime prerequisite;
-ordinary Q19 selection and original-query parity remain the next checkpoint before benchmarking.
+channel replay with full Top-10 candidate sets. The final shared prerequisite passed 27 native
+checks and 109 focused Java checks; ordinary admission adds one planner test and nine original-query
+integration cases. These establish correctness and admission, not a performance claim.

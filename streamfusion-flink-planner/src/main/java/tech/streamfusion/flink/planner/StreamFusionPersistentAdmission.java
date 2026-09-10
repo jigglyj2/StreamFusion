@@ -29,7 +29,7 @@ final class StreamFusionPersistentAdmission {
                         (org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecDeduplicate) node,
                         activeConfig);
             if (node instanceof org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecRank)
-                return StreamFusionTopOneAdmission.unsupportedReason(
+                return StreamFusionAppendTopNAdmission.unsupportedReason(
                         (org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecRank) node, activeConfig);
             if (node instanceof StreamExecMultiJoin) {
                 var join = FlinkExecNodeAccess.binaryMultiJoinSpec((StreamExecMultiJoin) node);

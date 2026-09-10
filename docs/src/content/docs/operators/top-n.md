@@ -5,7 +5,7 @@ sidebar:
   order: 14
 ---
 
-**Current status:** The verified append-only, partitioned `ROW_NUMBER` Top-1 subset accelerates
+**Current status:** The verified append-only, partitioned `ROW_NUMBER` constant-range Top-N subset accelerates
 through the shared native runtime on memory and default RocksDB state. Other Top-N/Rank subsets
 retain whole-plan fallback under the [architecture admission requirements](/StreamFusion/development/architecture-admission/).
 
@@ -33,20 +33,20 @@ WHERE rank_num <= 1;
 
 ## Acceleration and fallback
 
-Production selection requires Flink's append-fast strategy, constant range `[1,1]`, a nonempty
+Production selection requires Flink's append-fast strategy, a positive constant rank range (including offsets), a nonempty
 partition key and explicit ordering. Partition keys accept BIGINT/INTEGER; payload and order
 columns accept BIGINT, INTEGER, VARCHAR and TIMESTAMP(3) without processing-time attributes.
 Nullable keys, mixed order directions, optional rank output and optional UPDATE_BEFORE are
 verified. State TTL, asynchronous state and mini-batching must be disabled; a nondefault
 `table.exec.rank.topn-cache-size` retains fallback because its cache configuration is not
-represented by the native point-state implementation. Common backend and metric-option gates
+represented by the native state implementation. Common backend and metric-option gates
 still apply. EXPLAIN reports the reason for every unsupported node in the complete fallback plan.
 
-Global rank/LIMIT, larger/variable ranges, retract/update-fast strategies and other types remain
+Global rank/LIMIT, variable ranges, retract/update-fast strategies and other types remain
 gated. Flink 2.3 does not implement streaming `RANK` or `DENSE_RANK` in this physical operator;
 those shapes retain Flink's own planning error. The following broader implementations remain
 available for direct development/parity tests and are not production-admitted. Original Nexmark Q19
-requires range `[1,10]` and therefore falls back. Its RowData catalog preserves the original
+uses the admitted range `[1,10]`. Its RowData catalog preserves the original
 price-only ordering; additional tie-breakers are not part of that query. See
 [query checkpoints](/StreamFusion/benchmarks/query-checkpoints/#q19-original-auction-top-10).
 
@@ -94,9 +94,7 @@ sort over the retained candidate priorities, then the existing Flink adapter emi
 rank/changelog changes. Payloads and wide order keys stay outside those repeated sorts. A coarse
 reservation covers the batch priority tables and per-arrival sort workspace for their full lifetime.
 Legacy candidate order migration uses the same DataFusion ordering for this subset; persisted
-state encodings and ordered candidate entries are unchanged. This is a compute prerequisite:
-larger ranges still fall back in production pending ordinary SQL admission and original-query
-validation. The shared runtime contracts are verified separately below. Twenty focused Rust checks pass, including per-prefix order,
+state encodings and ordered candidate entries are unchanged. The shared runtime contracts are verified separately below. Twenty focused Rust compute checks pass, including per-prefix order,
 wide retained keys, memory refusal and old-state migration. Eight generated Java cases compare
 complete changelog bytes with Flink's `AppendOnlyTopNFunction` across four rank ranges, both
 backends and batch sizes 1/7/64, with nullable composite ordering, cutoff ties, offsets and
@@ -129,8 +127,8 @@ Generated Java conformance checks compare complete stage metric surfaces, determ
 latency semantics, ordered changelog and timestamp envelopes for four ranges and all output flags
 on both backends. Top-10 recovery checks use three seeds and full candidate sets across aligned/
 unaligned checkpoints, canonical backend switches, 1→2→1 rescaling, incremental SST reuse and
-actual two-channel Arrow IPC replay. Ordinary larger-range SQL admission remains gated at this
-prerequisite checkpoint; this is not yet accelerated Q19 coverage or a performance result.
+actual two-channel Arrow IPC replay. Ordinary SQL admission accepts these constant ranges;
+variable ranges and the other unsupported subsets retain precise whole-plan fallback.
 
 The shared append-only Top-1 binding now composes between native Calc stages. Java emits a
 protobuf fragment and binds its state to the common native runtime; intermediate Arrow output

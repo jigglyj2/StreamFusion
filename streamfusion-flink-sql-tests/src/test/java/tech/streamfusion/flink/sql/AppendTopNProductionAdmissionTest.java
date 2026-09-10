@@ -10,13 +10,18 @@ import org.apache.flink.table.api.config.ExecutionConfigOptions;
 import org.junit.jupiter.api.Test;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
 
-class TopOneProductionAdmissionTest extends SqlParityTestSupport {
+class AppendTopNProductionAdmissionTest extends SqlParityTestSupport {
     @Test
-    void admitsPartitionedTopOneAndExplainsEveryUnverifiedSubset() {
+    void admitsPartitionedConstantTopNAndExplainsEveryUnverifiedSubset() {
         var tables = tables();
         String sql = query("k", "score DESC NULLS LAST, ts ASC NULLS FIRST", 1);
         assertThat(tables.explainSql(sql)).contains("Accelerated: yes", "StreamFusionRank");
-        assertThat(tables.explainSql(query("k", "score DESC", 2))).contains("Accelerated: no", "range [1,1]");
+        for (int end : new int[] {2, 10, 64}) {
+            assertThat(tables.explainSql(query("k", "score DESC", end)))
+                    .contains("Accelerated: yes", "StreamFusionRank");
+        }
+        assertThat(tables.explainSql(query("k", "score DESC", 5) + " AND rn>=2"))
+                .contains("Accelerated: yes", "StreamFusionRank");
         assertThat(tables.explainSql(query("label", "score DESC", 1)))
                 .contains("Accelerated: no", "partition key type VARCHAR");
         assertThat(tables.explainSql(query("k", "floating DESC", 1))).contains("Accelerated: no", "input type DOUBLE");
@@ -39,7 +44,7 @@ class TopOneProductionAdmissionTest extends SqlParityTestSupport {
     private static String query(String partition, String order, int end) {
         return "SELECT k,score,ts,label FROM (SELECT k,score,ts,label,ROW_NUMBER() OVER ("
                 + (partition.isEmpty() ? "" : "PARTITION BY " + partition + " ")
-                + "ORDER BY " + order + ") rn FROM top_one_admission) WHERE rn<=" + end;
+                + "ORDER BY " + order + ") rn FROM append_top_n_admission) WHERE rn<=" + end;
     }
 
     private static StreamTableEnvironment tables() {
@@ -49,7 +54,7 @@ class TopOneProductionAdmissionTest extends SqlParityTestSupport {
         tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_ASYNC_STATE_ENABLED, false);
         tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ENABLED, false);
         tables.executeSql(
-                "CREATE TABLE top_one_admission (k BIGINT, score BIGINT, ts TIMESTAMP(3), label STRING, floating DOUBLE) "
+                "CREATE TABLE append_top_n_admission (k BIGINT, score BIGINT, ts TIMESTAMP(3), label STRING, floating DOUBLE) "
                         + "WITH ('connector'='datagen', 'number-of-rows'='1')");
         return tables;
     }

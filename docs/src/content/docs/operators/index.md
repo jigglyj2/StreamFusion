@@ -25,7 +25,7 @@ This matrix follows the query operations documented by Flink 2.3, including the 
 | [Table and collection expansion](table-expansion/) | **Partial** (standalone supported `UNNEST`; native combinations gated) | Yes | DataFusion `UnnestExec` with Flink-compatible correlate semantics |
 | [ORDER BY](order-by/) | **Temporarily gated** (whole-plan Flink fallback) | Yes | Native counted full sort, bounded heap, Top-N, or timer/state sort |
 | [LIMIT](limit/) | **Partial** (bounded Arrow-slice limits; streaming stateful paths gated) | Yes | Arrow slicing or native counter/Top-N state |
-| [Top-N](top-n/) | **Partial** (verified append-only partitioned ROW_NUMBER Top-1) | Yes | DataFusion sort/cumulative MIN and batched point state in one native region |
+| [Top-N](top-n/) | **Partial** (verified append-only partitioned ROW_NUMBER constant ranges) | Yes | DataFusion selection, batched point/ordered state in one native region |
 | [Window Top-N](window-top-n/) | **Temporarily gated** (whole-plan Flink fallback) | Yes | Native per-window state plus Flink's exact generated comparator |
 | [Deduplication](deduplication/) | **Temporarily gated** (whole-plan Flink fallback) | Yes | Native batched raw keyed state |
 | [Window deduplication](window-deduplication/) | **Temporarily gated** (whole-plan Flink fallback) | Yes | Native retractable per-window keyed state and timers |
