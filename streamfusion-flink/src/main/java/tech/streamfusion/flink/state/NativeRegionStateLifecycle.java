@@ -138,7 +138,8 @@ public final class NativeRegionStateLifecycle implements AutoCloseable {
                 }
                 long stateLease = backend == null ? 0 : backend.nativeRocksDbMemoryLimit();
                 if (rocks && stateLease == 0) {
-                    stateLease = assigned.limit() / 4;
+                    stateLease =
+                            ((tech.streamfusion.flink.memory.FlinkManagedMemory) assigned).assignedOperatorShare() / 4;
                     if (!assigned.tryReserve(stateLease)) {
                         throw new IllegalStateException("Flink denied the native region RocksDB lease");
                     }

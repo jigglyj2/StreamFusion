@@ -647,8 +647,10 @@ comparisons over those nested values inside a residual expression remain Flink-o
 rejects the complete plan with that precise reason rather than approximating nested comparison
 semantics in Rust.
 The regular and interval join transformations each request a stateful relative weight of eight
-from Flink's existing `OPERATOR` pool; this is a share of the configured task memory, not a separate
-StreamFusion memory setting.
+from Flink's existing `OPERATOR` pool. Native reservation admission now shares the slot's
+OPERATOR capacity across native owners instead of enforcing each weight as a private state
+ceiling. Original Flink semantic buffer geometry and separate RocksDB leases remain unchanged;
+see [memory sharing](/StreamFusion/development/memory-and-configuration/#flink-budgets-and-settings).
 
 Temporal joins use that same backend-neutral keyed-state and timer interface. Each incoming Arrow
 batch performs one distinct batched state read and one atomic batched write. Right-side event-time

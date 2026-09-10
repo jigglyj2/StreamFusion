@@ -205,6 +205,14 @@ memory that grows with input or state size. Flink's existing managed/off-heap me
 model governs these reservations. Count shared Arrow buffers once and retain their
 accounting for as long as the owning consumer retains them.
 
+Share native execution reservations across operators within the same Flink slot's OPERATOR
+use-case budget. Keep ownership and usage metrics per operator, but do not turn relative
+operator weights into private native-state ceilings that strand free capacity. Preserve
+Flink's separate STATE_BACKEND/PYTHON budgets and every actual MemoryManager reservation.
+Keep original per-operator memory geometry where it defines Flink semantics, such as local
+aggregate flush boundaries; that geometry is distinct from native allocation admission.
+Do not add an independent deployment budget or silently borrow from another use case.
+
 Small, bounded, short-lived allocations such as descriptors, temporary expression
 objects, and stream-control structures do not need individual reservations. Allow
 reasonable internal headroom for this overhead within Flink's existing allowance.

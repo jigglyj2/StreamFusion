@@ -87,7 +87,8 @@ final class NativeKeyedStateLifecycle implements Serializable {
                     ? ((StreamFusionKeyedStateBackend<?>) keyedStateBackend).nativeRocksDbMemoryLimit()
                     : 0;
             // Embedded runners may not provide the separately weighted STATE_BACKEND lease.
-            long rocksDbMemory = stateBackendMemory > 0 ? stateBackendMemory : managedMemory.limit() / 4;
+            long rocksDbMemory =
+                    stateBackendMemory > 0 ? stateBackendMemory : managedMemory.assignedOperatorShare() / 4;
             boolean operatorMemoryFallback = stateBackendMemory == 0;
             if (operatorMemoryFallback && !managedMemory.tryReserve(rocksDbMemory)) {
                 throw new IllegalStateException("Flink denied " + rocksDbMemory + " bytes for native RocksDB state");

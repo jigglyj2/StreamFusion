@@ -60,6 +60,38 @@ available budget. Native DataFusion and Arrow Java participate in that resource 
 `taskmanager.memory.task.off-heap.size` is not an additional untracked StreamFusion allowance.
 No separate StreamFusion memory budget or admission bypass is supported.
 
+Native operators in the same Flink slot and job share one OPERATOR reservation pool. Flink
+resolves its ceiling from the slot's managed-memory size, active use cases, state-backend flag
+and configured consumer weights. An individual native operator may use free capacity beyond
+its relative operator-weight share; admission checks the aggregate pool and Flink's actual
+remaining memory. This replaces the former private native-operator ceilings. It does not
+combine memory across slots or jobs, or borrow from the STATE_BACKEND/PYTHON portions.
+Existing Flink allocations remain charged in the underlying MemoryManager. The pool reserves
+actual growing buffers/state on demand, rather than preallocating the full allowance.
+
+Pool ownership uses Flink's shared-resource lifecycle. Closing an operator rejects new work
+but retains its pool lease while Arrow or native buffers still own reservations. The last
+release returns the credit; only the last lease destroys the empty pool. Native-to-Arrow
+ownership transfer retains the same credit. Concurrent owners cannot reserve the same free
+capacity twice. Pool acquisition works before other native operators initialize, including
+restore; capacity does not depend on summing registrations as operators open.
+
+The StreamFusion metric subgroup's `managedMemoryUsed` and `managedMemoryPeak` remain usage
+for the individual owner. `managedMemoryLimit` now reports the shared OPERATOR ceiling;
+`managedMemoryPoolUsed` reports aggregate native usage in that pool. Do not sum the repeated
+pool gauges across operators. These diagnostics do not change Flink's metric definitions.
+
+Original Flink operator shares still determine semantic buffer sizes, including local-window
+and local-group flush behavior. RocksDB retains its separately assigned STATE_BACKEND cache
+and write-buffer-manager lease. Legacy embedded runners without that lease retain their
+original operator-share-based fallback sizing; sharing execution capacity does not enlarge
+their caches. No Flink dependency patch or deployment option is added by this change.
+
+Sharing removes stranded private allowances; it does not guarantee unlimited in-memory state,
+automatic spill for every workspace, or equivalence to Flink's shared JVM heap. The full native
+pool can still reject a large buffer or retained-state growth. Benchmark capacity comparisons
+must report the heap, managed-memory configuration and actual allocation limits separately.
+
 Fused regions preserve the managed-memory weights of their state owners. A RocksDB cache and
 write-buffer manager are shared by the owners of the same Flink shared memory resource.
 Different resources with equal byte limits must remain independent. The reservation is released

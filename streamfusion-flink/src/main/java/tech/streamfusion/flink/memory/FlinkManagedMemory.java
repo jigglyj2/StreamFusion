@@ -15,20 +15,22 @@ import org.apache.arrow.memory.AllocationListener;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.OutOfMemoryException;
 import org.apache.arrow.memory.RootAllocator;
+import org.apache.flink.configuration.Configuration;
 import org.apache.flink.core.memory.ManagedMemoryUseCase;
 import org.apache.flink.metrics.MetricGroup;
 import org.apache.flink.metrics.groups.OperatorMetricGroup;
 import org.apache.flink.runtime.execution.Environment;
 import org.apache.flink.runtime.memory.MemoryManager;
-import org.apache.flink.runtime.memory.MemoryReservationException;
+import org.apache.flink.runtime.memory.OpaqueMemoryResource;
 import org.apache.flink.streaming.api.graph.StreamConfig;
 import tech.streamfusion.nativebridge.NativeMemoryManager;
 
-/** Shares one Flink operator managed-memory allowance between Arrow and native execution. */
+/** Tracks an operator's Arrow/native ownership within the slot's shared OPERATOR allowance. */
 public final class FlinkManagedMemory implements AllocationListener, NativeMemoryManager, AutoCloseable {
-    private final MemoryManager memoryManager;
-    private final Object reservationOwner = new Object();
+    private final OpaqueMemoryResource<NativeOperatorMemoryPool> poolLease;
+    private final NativeOperatorMemoryPool pool;
     private final long limit;
+    private final long assignedOperatorShare;
     private final RootAllocator rootAllocator;
     private final BufferAllocator allocator;
     private final ThreadLocal<Deque<AllocationCharge>> preAllocationCharges = ThreadLocal.withInitial(ArrayDeque::new);
@@ -54,6 +56,7 @@ public final class FlinkManagedMemory implements AllocationListener, NativeMemor
     private long peakReserved;
     private long pendingArrowTransfer;
     private boolean closed;
+    private boolean leaseClosed;
 
     public static FlinkManagedMemory create(
             Environment environment, StreamConfig operatorConfig, OperatorMetricGroup metricGroup, String name) {
@@ -63,27 +66,65 @@ public final class FlinkManagedMemory implements AllocationListener, NativeMemor
                 environment.getTaskManagerInfo().getConfiguration(),
                 environment.getUserCodeClassLoader().asClassLoader());
         MemoryManager memoryManager = environment.getMemoryManager();
-        long limit = memoryManager.computeMemorySize(fraction);
-        if (limit <= 0) {
+        long assignedShare = memoryManager.computeMemorySize(fraction);
+        if (assignedShare <= 0) {
             throw new IllegalStateException(
                     "Flink assigned no OPERATOR managed memory to StreamFusion; declare a positive managed-memory weight");
         }
-        FlinkManagedMemory managedMemory = new FlinkManagedMemory(memoryManager, limit, name);
+        // Use Flink's own use-case membership, backend flag, weights and rounding, but without
+        // subdividing OPERATOR into private native ceilings. Never mutate the task's config:
+        // original Flink buffer geometry continues to use its original operator share.
+        StreamConfig sharedConfig = new StreamConfig(new Configuration(operatorConfig.getConfiguration()));
+        sharedConfig.setManagedMemoryFractionOperatorOfUseCase(ManagedMemoryUseCase.OPERATOR, 1.0);
+        long limit = memoryManager.computeMemorySize(sharedConfig.getManagedMemoryFractionOperatorUseCaseOfSlot(
+                ManagedMemoryUseCase.OPERATOR,
+                environment.getJobConfiguration(),
+                environment.getTaskManagerInfo().getConfiguration(),
+                environment.getUserCodeClassLoader().asClassLoader()));
+        FlinkManagedMemory managedMemory =
+                new FlinkManagedMemory(memoryManager, limit, assignedShare, "job-" + environment.getJobID(), name);
         MetricGroup streamFusionMetrics = metricGroup.addGroup("StreamFusion");
         streamFusionMetrics.gauge("managedMemoryUsed", managedMemory::reserved);
         streamFusionMetrics.gauge("managedMemoryPeak", managedMemory::peakReserved);
         streamFusionMetrics.gauge("managedMemoryLimit", managedMemory::limit);
+        streamFusionMetrics.gauge("managedMemoryPoolUsed", managedMemory.pool::reserved);
         return managedMemory;
     }
 
     FlinkManagedMemory(MemoryManager memoryManager, long limit, String name) {
-        if (limit <= 0) {
-            throw new IllegalArgumentException("StreamFusion managed-memory limit must be positive");
-        }
-        this.memoryManager = memoryManager;
+        this(memoryManager, limit, limit, "test", name);
+    }
+
+    private FlinkManagedMemory(MemoryManager memoryManager, long limit, long assignedShare, String scope, String name) {
         this.limit = limit;
-        this.rootAllocator = new RootAllocator(this, limit);
-        this.allocator = rootAllocator.newChildAllocator(name, 0, limit);
+        this.assignedOperatorShare = assignedShare;
+        try {
+            poolLease = memoryManager.getExternalSharedMemoryResource(
+                    "streamfusion-native-operator-memory-v1/" + scope,
+                    ignored -> new NativeOperatorMemoryPool(memoryManager, limit),
+                    0);
+            pool = poolLease.getResourceHandle();
+            if (pool.limit() != limit) {
+                poolLease.close();
+                throw new IllegalStateException("Native operators disagree on Flink's slot OPERATOR allowance");
+            }
+        } catch (Exception failure) {
+            throw new IllegalStateException("Cannot acquire Flink's shared native OPERATOR pool", failure);
+        }
+        RootAllocator root = null;
+        try {
+            root = new RootAllocator(this, limit);
+            this.allocator = root.newChildAllocator(name, 0, limit);
+            this.rootAllocator = root;
+        } catch (RuntimeException | Error failure) {
+            try {
+                if (root != null) root.close();
+                poolLease.close();
+            } catch (Exception cleanup) {
+                failure.addSuppressed(cleanup);
+            }
+            throw failure;
+        }
     }
 
     public BufferAllocator allocator() {
@@ -99,12 +140,7 @@ public final class FlinkManagedMemory implements AllocationListener, NativeMemor
         if (bytes == 0) {
             return true;
         }
-        if (bytes > limit - reserved) {
-            return false;
-        }
-        try {
-            memoryManager.reserveMemory(reservationOwner, bytes);
-        } catch (MemoryReservationException unavailable) {
+        if (!pool.tryReserve(bytes)) {
             return false;
         }
         reserved += bytes;
@@ -122,8 +158,9 @@ public final class FlinkManagedMemory implements AllocationListener, NativeMemor
             throw new IllegalStateException(
                     "StreamFusion attempted to release " + bytes + " bytes with only " + reserved + " reserved");
         }
-        memoryManager.releaseMemory(reservationOwner, bytes);
+        pool.release(bytes);
         reserved -= bytes;
+        closeLeaseIfReleased();
     }
 
     @Override
@@ -155,6 +192,11 @@ public final class FlinkManagedMemory implements AllocationListener, NativeMemor
         return limit;
     }
 
+    /** Original private share, used only by legacy embedded RocksDB lease sizing, not admission. */
+    public long assignedOperatorShare() {
+        return assignedOperatorShare;
+    }
+
     public synchronized long reserved() {
         return reserved;
     }
@@ -165,7 +207,7 @@ public final class FlinkManagedMemory implements AllocationListener, NativeMemor
 
     @Override
     public synchronized long available() {
-        return closed ? 0 : Math.min(limit - reserved, memoryManager.availableMemory());
+        return closed ? 0 : pool.available();
     }
 
     @Override
@@ -244,8 +286,22 @@ public final class FlinkManagedMemory implements AllocationListener, NativeMemor
         }
         // Do not releaseAllMemory here: a retained foreign buffer may still own a native
         // reservation. A leaked owner must remain visible to Flink, not be reported as freed.
+        synchronized (this) {
+            closeLeaseIfReleased();
+        }
         if (allocatorFailure != null) {
             throw allocatorFailure;
+        }
+    }
+
+    private void closeLeaseIfReleased() {
+        if (closed && reserved == 0 && !leaseClosed) {
+            leaseClosed = true;
+            try {
+                poolLease.close();
+            } catch (Exception failure) {
+                throw new IllegalStateException("Cannot release shared native OPERATOR pool", failure);
+            }
         }
     }
 
