@@ -5,20 +5,21 @@ sidebar:
   order: 16
 ---
 
-**Current status:** Temporarily uses whole-plan Flink fallback under the
-[architecture admission requirements](/StreamFusion/development/architecture-admission/). The native paths
-described below are retained for development and direct parity tests; SQL planning does not select them.
+**Current status:** Accelerates synchronous row-time keep-first/keep-last updating plans with
+BIGINT, INTEGER, VARCHAR and TIMESTAMP(3) payload/key fields. State TTL, mini-batching, async
+state and timer-backed row-time insert-only output remain unsupported. Both in-memory and
+supported Flink-default RocksDB state are admitted. Nexmark Q18 uses row-time keep-last.
 
-**Retained implementation scope:** Implementation for all synchronous, timer-free Flink deduplication modes:
-row-time first/last updating plans, processing-time keep-first insert-only plans, and
-processing-time keep-last updating plans. Nexmark Q18 uses the row-time keep-last path.
+**Additional retained implementation scope:** Processing-time keep-first insert-only and
+keep-last updating paths remain available for direct development/parity tests, with precise
+whole-plan SQL fallback pending their own compute and shared recovery admission.
 
 The retained Arrow runtime now binds `DeduplicateExec` into the shared native execution context.
 Adjacent nodes use recursive physical-plan lowering and shared Arrow streams; deduplication has no
 operator-specific Calc fusion loop or intermediate JNI handoff. The legacy single-output C Data
 facade drains that shared tree and rejects multi-batch results, which require the general stream
 edge. Native metrics report stable node IDs and logical input/output counts. Its shared-region
-composition capability is now admitted, but the separate stateful memory gate still prevents SQL selection.
+composition and persistent-state capabilities are admitted for the row-time subset above.
 `DeduplicateExec` now uses the common synchronous unary physical adapter for polling,
 invocation exclusion, cancellation, and stream-control memory admission. Its state codec and
 checkpoint format are unchanged. A failed or abandoned invocation requires recovery; constructor
@@ -29,7 +30,7 @@ region collector. It can share one Flink keyed runtime with another native state
 create its own intermediate Java operator. Planned exchange frames and their decoding contracts
 are retained at the region edge. Missing or incompatible routing domains are rejected. Generated
 runtime checks consume hash frames and restore two deduplication owners across canonical memory/
-RocksDB savepoints; production selection remains gated as stated above.
+RocksDB savepoints; production selection observes the semantic and type restrictions above.
 
 Hidden envelope ordinals compose through preceding native stages, including stored-row
 `UPDATE_BEFORE` outputs. Schema/codec admission is transactional on validation failure. Native
@@ -44,7 +45,7 @@ Metadata selection and owned-ordinal validation use the common envelope helper; 
 aggregation use that same validator. Invalid owned ordinals are rejected before state mutation,
 even for an arrival that would otherwise lose the rowtime comparison. The legacy borrowed-envelope
 contract and canonical state bytes are unchanged. This is an execution-contract change, not a new
-fusion combination or removal of the production admission gate.
+fusion combination or expansion beyond the admitted semantic subset.
 
 Shared-stage conformance compares all synchronous modes and both backends against actual Flink
 deduplicate functions between generated Calc stages. Complete ordered changelogs, record timestamp
@@ -67,15 +68,15 @@ SELECT * FROM (
 
 StreamFusion accelerates Flink's recognized `ROW_NUMBER() = 1` deduplication node when it:
 
-- orders by its single Flink `ROWTIME` or `PROCTIME` attribute and keeps the first or last row;
+- orders by its single Flink `ROWTIME` attribute and keeps the first or last row;
 - has insert-only input and uses a synchronous state strategy;
 - uses the output changelog selected by Flink, including optional `UPDATE_BEFORE` rows;
 - has no state TTL;
 - is not Flink's timer-backed row-time keep-first insert-only optimization; and
 - has identical input and output row schemas.
 
-TTL, async state, mini-batching, Flink's timer-backed row-time keep-first insert-only operator, and
-general ranking expressions fall back with a specific EXPLAIN reason. Processing-time plans carry a
+Processing-time SQL, unsupported payload/key types, TTL, async state, mini-batching, Flink's
+timer-backed row-time keep-first insert-only operator, and general ranking expressions fall back with a specific EXPLAIN reason. Processing-time plans carry a
 synthetic `PROCTIME` field in Flink's physical graph. StreamFusion folds that field out before the
 native Calc/Exchange/Deduplicate tree only when neither the outer projection, predicate, nor key can
 observe it; an observable processing-time value remains on Flink.
@@ -107,8 +108,11 @@ This compute prerequisite passes 21 focused Rust checks and 136 Java checks: key
 backend parity, complete shared metrics, 1-to-2-to-1 rescaling with canonical backend switches,
 aligned/unaligned checkpoints, incremental SST reuse, actual two-channel Arrow IPC replay and
 one-runtime Arrow topology. These tests compare against uninterrupted Flink, including timestamp
-ties and out-of-order arrivals. Production SQL admission remains gated pending its separate audit
-and original-Q18 collecting validation.
+ties and out-of-order arrivals. Original Q18 is covered separately by ordinary SQL admission and collecting/blackhole validation.
+One-source ordered changelogs match byte-for-byte; parallel final rows are checked against the
+original readers' legal last winners because equal rowtimes make channel interleaving observable.
+See [query checkpoints](/StreamFusion/benchmarks/query-checkpoints/) for the exact validation scope.
+Its release performance checkpoint remains pending.
 
 The production paths remain Arrow-backed between source and sink boundaries. Rust gathers selected
 columns once and returns row-kind and input-ordinal envelope metadata with the batch. Row-time state

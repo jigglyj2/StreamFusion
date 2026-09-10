@@ -45,6 +45,10 @@ session calls, key shapes, retractions and time semantics remain gated; see
 Append-only partitioned ROW_NUMBER range [1,1] also composes through this runtime, using
 DataFusion sort/cumulative MIN and batched point state. Its verified key/payload types, disabled
 TTL/mini-batch/async settings and default cache configuration are listed on the [Top-N page](/StreamFusion/operators/top-n/).
+Synchronous row-time keep-first/keep-last deduplication uses DataFusion cumulative timestamp
+MIN/MAX windows with batched state and per-arrival changelogs. BIGINT, INTEGER, VARCHAR and
+TIMESTAMP(3) fields are admitted with disabled TTL/mini-batch/async state. Processing-time SQL
+and timer-backed insert-only row-time output remain gated; see [Deduplication](/StreamFusion/operators/deduplication/).
 Other persistent families remain on whole-plan fallback until their state/buffer admission,
 backend settings, checkpoint behavior, and complete Flink metric contracts are verified.
 

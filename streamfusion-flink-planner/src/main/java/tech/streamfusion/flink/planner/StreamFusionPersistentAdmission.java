@@ -24,6 +24,10 @@ final class StreamFusionPersistentAdmission {
 
     static String unsupportedReason(ExecNode<?> node, ReadableConfig activeConfig) {
         try {
+            if (node instanceof org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecDeduplicate)
+                return StreamFusionDeduplicateAdmission.unsupportedReason(
+                        (org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecDeduplicate) node,
+                        activeConfig);
             if (node instanceof org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecRank)
                 return StreamFusionTopOneAdmission.unsupportedReason(
                         (org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecRank) node, activeConfig);

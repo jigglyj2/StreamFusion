@@ -706,24 +706,31 @@ small native RocksDB costs. No query-specific algorithm or additional optimizati
 This is measured local evidence, not a performance ceiling. Q18 is the next query checkpoint.
 
 
-## Q18 original last bid: admission blocker
+## Q18 original last bid
 
-The original SQL selects the latest bid for each bidder/auction with row-time `ROW_NUMBER`
-and `rank_number <= 1`. Rechecking ordinary planning after Q17 confirms complete Flink fallback
-on both state backends. EXPLAIN identifies `StreamExecDeduplicate` and its unverified persistent
-execution contracts. The original source/blackhole job succeeds in either planner selection,
-with no native invocations; this is a fallback check, not an accelerated performance result.
+Original Q18 now passes ordinary whole-plan admission on both backends. Its unchanged SELECT
+uses row-time `ROW_NUMBER` with `rank_number <= 1`, grouping by bidder/auction. The retained
+handwritten timestamp-extremum calculation was replaced by DataFusion cumulative MIN/MAX
+windows; StreamFusion supplies the Flink-specific state and per-arrival changelog adaptation.
+Equal timestamps replace the winner in keep-last mode; keep-first requires strict improvement.
 
-The retained [deduplication implementation](/StreamFusion/operators/deduplication/) already
-has generated changelog/envelope and metric coverage plus direct state restore tests. Before
-production admission, audit its computation against DataFusion, verify coarse memory ownership
-for large incoming and historical rows, and exercise the shared production runtime's checkpoint,
-channel replay and rescaling paths. Keep the gate until those contracts are demonstrated;
-then validate original-query collecting parity and release performance on both backends.
+The compute prerequisite passes 21 Rust and 136 Java checks covering coarse workspace/history
+admission, key/envelope parity, shared metrics, Arrow topology, canonical cross-backend restore,
+aligned/unaligned checkpoints, 1-to-2-to-1 rescaling, incremental SST reuse and actual channel
+replay. Ordinary admission separately retains precise fallback for processing-time SQL,
+timer-backed insert-only row-time output, unsupported field types, TTL, async state and mini-batching.
+The supported flat field types are BIGINT, INTEGER, VARCHAR and TIMESTAMP(3).
 
-The retained row-time path now uses DataFusion cumulative MIN/MAX windows to select every
-per-arrival winner, including historical state. StreamFusion retains state and changelog ownership.
-Flink's asymmetric tie rule is explicit: keep-last replaces on equal timestamps, whereas keep-first
-requires a strictly earlier timestamp. A plain `ROW_NUMBER` evaluator over sorted input does not
-supply those intermediate updates. This is a compute prerequisite; production admission and
-release performance remain pending.
+Original-SQL planning/blackhole checks and collecting validation use 50,000 events on both
+backends, at parallelism one and four. One-source jobs compare the complete ordered changelog
+and final result digest exactly. Parallel jobs can choose different last payloads for equal
+timestamps from different readers: this source configuration has 167 such keys among 13,670
+final keys. The parallel validator replays the original seeded generators and normalization,
+retains each reader's final candidate, and checks every complete result payload against the
+legal per-reader winners at the greatest timestamp. It checks key coverage and one row per key.
+It does not discard arbitrary mismatches or claim byte-identical results across different
+input-channel interleavings. Controlled shared-runtime tests retain complete byte parity for
+identical arrival order. Independent original blackhole counts match at this validation size.
+
+Release/native-CPU measured forks and longer mixed profiles on both backends remain pending.
+This is the admission/correctness checkpoint, not a Q18 performance result or optimization ceiling.

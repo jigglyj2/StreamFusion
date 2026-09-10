@@ -15,7 +15,7 @@ import org.junit.jupiter.params.provider.CsvSource;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
 import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 
-/** Original last-bid SQL records the current whole-plan fallback on both backends. */
+/** Original last-bid SQL through ordinary whole-plan admission on both backends. */
 @ResourceLock("streamfusion-planner-property")
 class NexmarkQ18PlanningIT {
     @AfterEach
@@ -26,7 +26,7 @@ class NexmarkQ18PlanningIT {
 
     @ParameterizedTest
     @CsvSource({"false,hashmap", "true,hashmap", "false,rocksdb", "true,rocksdb"})
-    void originalQ18RetainsPreciseWholePlanFallbackOnBothBackends(boolean selected, String backend) throws Exception {
+    void originalQ18AcceleratesOnBothBackends(boolean selected, String backend) throws Exception {
         if (selected)
             System.setProperty(
                     StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY, StreamFusionPlannerFactory.class.getName());
@@ -48,17 +48,15 @@ class NexmarkQ18PlanningIT {
         var plan = tables.explainSql(statements[1]);
         assertThat(plan).contains("Deduplicate", "Calc");
         if (selected) {
-            assertThat(StreamFusionPlanningDiagnostics.explain())
-                    .contains(
-                            "Accelerated: no",
-                            "StreamExecDeduplicate",
-                            "native persistent state is temporarily disabled");
+            assertThat(StreamFusionPlanningDiagnostics.explain()).contains("Accelerated: yes");
         }
         try (var metrics = NexmarkBlackholeMetrics.begin()) {
             NexmarkBlackholeMetrics.configure(tables.getConfig().getConfiguration(), metrics.id);
             tables.executeSql(statements[1]).await();
             assertThat(metrics.outputRows()).isPositive();
         }
-        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isZero();
+        if (selected)
+            assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isPositive();
+        else assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isZero();
     }
 }
