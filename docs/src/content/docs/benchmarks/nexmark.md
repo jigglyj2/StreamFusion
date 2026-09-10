@@ -97,7 +97,16 @@ have parity coverage, but its original Java UDF still awaits the proposed archit
 Q21 now uses the verified literal-regex subset through DataFusion and passes ordinary admission
 and collecting/blackhole parity on both backend configurations. Its
 [release comparison](/StreamFusion/benchmarks/q21-rowdata/) reports 1.315× / 1.172× median throughput
-at 10M events (hashmap / RocksDB configured), with disjoint ranges; both 1M cases favor Flink. Q12's processing-time SQL is catalogued, but its windows align to the live Flink clock.
+at 10M events (hashmap / RocksDB configured), with disjoint ranges; both 1M cases favor Flink.
+
+Q22 now uses DataFusion splitting and extraction with Flink-compatible index/null behavior,
+verified memory ownership, generated changelog/metric parity and original-query execution on
+both backend configurations. Its [release comparison](/StreamFusion/benchmarks/q22-rowdata/)
+reports 1.018× / 1.027× median throughput at 10M events, with overlapping ranges and mixed pair
+outcomes: near parity rather than a robust speedup. Both 1M cases favor Flink. Q21 and Q22 are
+stateless; their backend configurations do not establish RocksDB state-performance evidence.
+
+Q12's processing-time SQL is catalogued, but its windows align to the live Flink clock.
 A bounded max-speed run may finish before a timer fires, and finishing input does not emit the final
 open window. Empty or partial results do not establish parity or acceleration. Its UTC TUMBLE COUNT operator now has ordinary
 selection, controlled-clock changelog/metric parity, both-backend recovery and live SQL execution
