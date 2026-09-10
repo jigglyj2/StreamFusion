@@ -19,6 +19,7 @@ mod registry;
 pub(crate) use registry::Registry;
 mod edge;
 pub(crate) use edge::edge_batch;
+pub(crate) use edge::host_edge_batch;
 
 /// One conservative batch allowance stays charged until its last retained buffer disappears.
 /// Original allocations remain owned by BufferOwner; wrapping copies only Arrow descriptors.

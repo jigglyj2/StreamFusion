@@ -85,16 +85,28 @@ time, non-inner joins, mismatched or unsupported equality keys, and invalid pred
 state-only protobufs remain readable and do not imply native compute support. This contract is
 a prerequisite; the retained Java candidate matcher has not yet been replaced by shared execution.
 
-A test-only DataFusion 55 investigation evaluates a closed insert-only inner window with
-`NestedLoopJoinExec` and the lowered protobuf predicate. A complete right-window Arrow input
-preserves Flink `WindowJoinHelper`'s left-row/right-row iteration order; the normal DataFusion
-memory source splits batches and can change that order. The existing native reusable Arrow input
-avoids this split without copying payloads or adding a Java boundary. Tests cover generated
-nulls/duplicates, empty windows, output batches bounded by 64/4,096 rows, the ordering
-counterexample and release of DataFusion build reservations after cancellation.
-This is compute/lifecycle evidence against an independent row oracle, not Flink SQL parity or
-production admission. Full output-buffer leases, bounded closed-window execution, timer/metric
-parity, shared-plan composition and Flink checkpoint/channel recovery remain implementation work.
+Native closed-window computation now uses DataFusion 55 `NestedLoopJoinExec` and the lowered
+protobuf predicate. Complete left/right Arrow inputs use the native reusable input node:
+DataFusion's normal memory source splits batches and can change Flink's left-row/right-row
+emission order. The single left batch retains its existing Flink buffer allowance; a private
+build-pool view lets DataFusion retain it without charging the same payload twice. That view
+rejects other consumers or storage beyond the admitted input.
+
+The stream admits coarse candidate/filter/coalescer workspace before execution, returns bounded
+output batches, and transfers already admitted allowance to their buffer owners. Shared slices
+reuse the same backing-allocation owner, including when the first exported slice has a non-zero
+offset. Retaining output batches consumes the same Flink allowance; insufficient budget fails
+before the next kernel poll. Cancellation releases compute workspace while retained outputs stay
+valid and accounted for. Current bounded computation supports scalar payloads and primitive
+DataFusion comparison, arithmetic, boolean, null-check and conditional predicates. Expanding or
+unsupported predicate kernels and collection payloads are rejected pending suitable admission.
+
+Tests run generated duplicate payloads through indexed state and DataFusion on memory and
+RocksDB, compare complete ordered outputs to an independent row oracle, and retain output after
+processor disposal. They also cover empty windows, predicate errors, cancellation, budget denial,
+and the input-splitting ordering counterexample. This is direct native compute/state/ownership
+evidence, not full Flink SQL or production admission. Shared-plan composition, per-stage metrics,
+Flink checkpoint/channel recovery and planner selection remain required before enabling Q5/Q8.
 
 The retained state handle now appends individual Arrow-encoded payload rows and updates a
 29-byte window index, instead of reloading and rewriting both sides of a growing window.

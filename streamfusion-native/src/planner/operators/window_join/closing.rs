@@ -17,6 +17,7 @@ pub(super) struct PendingWindow {
 pub(crate) struct ClosedWindow {
     /// SQL payloads in original per-side arrival order. Each batch owns its buffer allowance.
     pub(crate) inputs: [RecordBatch; 2],
+    pub(super) max_row_bytes: [usize; 2],
 }
 
 impl WindowJoinProcessor {
@@ -144,6 +145,10 @@ impl WindowJoinProcessor {
             let memory = workspace.split(batch_bytes(&batch)?, "closed window Arrow payload")?;
             batches.push(host_batch(batch, memory)?);
         }
+        let mut max_row_bytes = [0usize; 2];
+        for (_, side, row) in &rows {
+            max_row_bytes[*side as usize] = max_row_bytes[*side as usize].max(row.len());
+        }
         // Drop decode payloads before returning their workspace to Flink.
         drop(rows);
         let retained = deletes
@@ -171,6 +176,7 @@ impl WindowJoinProcessor {
         let left = batches.pop().expect("left window batch");
         Ok(Some(ClosedWindow {
             inputs: [left, right],
+            max_row_bytes,
         }))
     }
 

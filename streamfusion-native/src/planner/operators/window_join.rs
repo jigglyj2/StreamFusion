@@ -24,7 +24,9 @@ use crate::state::{
 };
 use crate::{decode_plan, proto};
 
+mod build_pool;
 mod closing;
+mod computation;
 mod indexed_state;
 mod legacy_state;
 pub(crate) mod planning;

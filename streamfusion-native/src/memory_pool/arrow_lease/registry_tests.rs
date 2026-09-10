@@ -226,3 +226,35 @@ fn registered_nested_dictionary_decimal_views_survive_c_data_and_cross_thread_re
     assert_eq!(broker.inner.reserved(), 0);
     assert_eq!(broker.registry.len(), 0);
 }
+
+#[test]
+fn separately_exported_raw_slices_move_one_prepaid_allocation_to_output_owners() {
+    let broker = Broker::new();
+    let source = RecordBatch::try_from_iter(vec![(
+        "id",
+        Arc::new(Int32Array::from_iter_values(0..4096)) as ArrayRef,
+    )])
+    .unwrap();
+    let bytes = crate::memory_pool::buffer_size::batch_bytes(&source).unwrap();
+    let mut workspace = HostMemoryReservation::new(broker.clone(), "prepaid kernel output");
+    workspace.resize(bytes).unwrap();
+    let first = host_edge_batch(source.slice(13, 128), &mut workspace, &broker.registry).unwrap();
+    assert_eq!(workspace.size(), 0);
+    let second = host_edge_batch(source.slice(256, 128), &mut workspace, &broker.registry).unwrap();
+    assert_eq!(broker.inner.reserved(), bytes);
+    drop(first);
+    drop(source);
+    assert_eq!(broker.inner.reserved(), bytes);
+    assert_eq!(
+        second
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap()
+            .value(0),
+        256
+    );
+    drop(second);
+    assert_eq!(broker.inner.reserved(), 0);
+    assert_eq!(broker.registry.len(), 0);
+}
