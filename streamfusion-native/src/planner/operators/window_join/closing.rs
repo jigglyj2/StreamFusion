@@ -16,7 +16,7 @@ pub(super) struct PendingWindow {
     right: pages::Decoded,
     left_cursor: u64,
     seen_bytes: u64,
-    in_flight_rows: Option<(u64, usize)>,
+    in_flight_rows: Option<(u64, pages::PayloadEntries)>,
     // The cursor is invocation-local. No checkpoint may observe a partly closed window.
     _memory: HostMemoryReservation,
 }
@@ -96,7 +96,7 @@ impl WindowJoinProcessor {
         if pending.seen_bytes > pending.header.bytes() {
             return Err(pages::invalid_index());
         }
-        pending.in_flight_rows = Some((left.batch.num_rows() as u64, left.max_row_bytes));
+        pending.in_flight_rows = Some((left.batch.num_rows() as u64, left.entries));
         let closed = ClosedWindow {
             inputs: [left.batch, pending.right.batch.clone()],
             max_row_bytes: [left.max_row_bytes, pending.right.max_row_bytes],
@@ -176,7 +176,7 @@ impl WindowJoinProcessor {
         let mut pending = self.pending_window.take().ok_or_else(|| {
             DataFusionError::Execution("window join has no pending closed window".into())
         })?;
-        let (rows, max_row_bytes) = pending.in_flight_rows.take().ok_or_else(|| {
+        let (rows, entries) = pending.in_flight_rows.take().ok_or_else(|| {
             DataFusionError::Execution("window join has no output page to acknowledge".into())
         })?;
         let next = pending
@@ -195,27 +195,13 @@ impl WindowJoinProcessor {
         // The page's DataFusion output reached EOF. Reclaim just these payloads now;
         // input/checkpoint/restore remain blocked throughout the watermark invocation.
         // Failure or cancellation can only recover the previous Flink checkpoint.
-        pages::delete_rows(
-            self,
-            &pending.keys,
-            0,
-            pending.left_cursor,
-            rows,
-            max_row_bytes,
-        )?;
+        pages::delete_rows(self, &pending.keys, 0, &entries)?;
         if !finished {
             pending.left_cursor = next;
             self.pending_window = Some(pending);
             return Ok(());
         }
-        pages::delete_rows(
-            self,
-            &pending.keys,
-            1,
-            0,
-            pending.header.counts()[1],
-            pending.right.max_row_bytes,
-        )?;
+        pages::delete_rows(self, &pending.keys, 1, &pending.right.entries)?;
         self.state.write_batch(vec![StateMutation {
             key: pending.keys.header,
             value: None,

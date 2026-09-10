@@ -123,6 +123,11 @@ function-registry cloning alone is not the leading finding. The first optimizati
 larger, simpler redundant state reads while retaining DataFusion computation. New post-change
 measurements are required before claiming any improvement over this baseline.
 
+The subsequent source change retains validated payload-entry ordinals and deletes them directly
+in bounded batches after DataFusion output drains. It preserves legacy state encodings, the
+final tail check, checkpoint boundaries and output ownership. The focused native fixtures verify
+that acknowledgement rereads no payload bytes; release remeasurement remains pending.
+
 ## Capacity and excluded profiling attempts
 
 A twenty-million-event in-memory Flink profile completes with 212,686 output records. StreamFusion

@@ -55,6 +55,9 @@ fn closes_one_window_at_a_time_and_keeps_timer_until_completion_on_both_backends
                 .ingest_arrow(0, batch(&[9], &[100], &[b"blocked"], &[INSERT]))
                 .is_err());
             p.finish_closed_window().unwrap();
+            // Only the required final tail check reads state during acknowledgement.
+            // Payload deletion must not rescan either already validated side.
+            assert_eq!(io.range_reads.load(Ordering::Relaxed), reads + 3);
             assert_eq!(p.timers.timer_count(TimerDomain::EventTime), remaining - 1);
             retained.extend(closed.inputs);
         }
@@ -171,5 +174,61 @@ fn completed_watermark_controls_lateness_and_repeated_progress_without_reopening
         assert_eq!(payloads(&closed.inputs[1]), vec![b"on time".to_vec()]);
         p.finish_closed_window().unwrap();
         assert!(p.next_closed_window().unwrap().is_none());
+    }
+}
+
+#[test]
+fn wide_multi_page_acknowledgements_delete_known_entries_without_payload_reads() {
+    for rocks in backends() {
+        let (mut p, broker, _dir) = processor(rocks, 0, 127);
+        let count = 2049;
+        let payloads = (0..count)
+            .map(|i| vec![(i % 251) as u8; 1000 + i % 9 * 500])
+            .collect::<Vec<_>>();
+        let values = payloads.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        for side in 0..2 {
+            p.ingest_arrow(
+                side,
+                batch(
+                    &vec![9; count],
+                    &vec![100; count],
+                    &values,
+                    &vec![INSERT; count],
+                ),
+            )
+            .unwrap();
+        }
+        let io = observe(&mut p);
+        let group = *p.dirty_timer_groups.first().unwrap();
+        p.begin_watermark(99).unwrap();
+        let mut consumed = 0;
+        let mut pages = 0;
+        while let Some(closed) = p.next_closed_window().unwrap() {
+            let rows = closed.inputs[0].num_rows();
+            assert!(rows > 0 && rows <= crate::planner::operators::sortable_state::PAGE_ROWS);
+            assert_eq!(closed.inputs[1].num_rows(), count);
+            consumed += rows;
+            pages += 1;
+            let reads = io.range_reads.load(Ordering::Relaxed);
+            let bytes = io.read_bytes.load(Ordering::Relaxed);
+            p.finish_closed_window().unwrap();
+            assert_eq!(
+                io.range_reads.load(Ordering::Relaxed),
+                reads + usize::from(consumed == count)
+            );
+            // The final tail check is empty too: no payload bytes may be reread to delete.
+            assert_eq!(io.read_bytes.load(Ordering::Relaxed), bytes);
+            assert_eq!(closed.inputs[0].column(2).len(), rows);
+        }
+        assert_eq!(consumed, count);
+        assert!(pages > 1);
+        let snapshot = p.snapshot_key_group(group).unwrap();
+        assert!(crate::state::decode_key_group_snapshot(group, &snapshot)
+            .unwrap()
+            .iter()
+            .all(|(key, _)| !matches!(key[0], 0x91 | 0x92)));
+        drop(snapshot);
+        drop(p);
+        assert_eq!(broker.reserved(), 0);
     }
 }

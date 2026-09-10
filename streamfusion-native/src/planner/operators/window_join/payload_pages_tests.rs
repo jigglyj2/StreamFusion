@@ -1,9 +1,10 @@
 // Copyright 2026 StreamFusion Authors
 // Licensed under the Apache License, Version 2.0.
 
-use super::indexed_tests::{backends, other_backend, processor};
+use super::indexed_tests::{backends, observe, other_backend, processor};
 use super::tests::batch;
 use super::*;
+use std::sync::atomic::Ordering;
 
 #[test]
 fn hot_window_stores_bounded_pages_with_less_than_one_mib_for_ten_thousand_rows() {
@@ -51,12 +52,14 @@ fn hot_window_stores_bounded_pages_with_less_than_one_mib_for_ten_thousand_rows(
 fn v3_row_entries_restore_append_and_retire_without_reinterpreting_payloads() {
     for rocks in backends() {
         let (mut source, _, _dir) = processor(false, 0, 127);
-        source
-            .ingest_arrow(
-                0,
-                batch(&[7; 3], &[100; 3], &[b"b", b"a", b"b"], &[INSERT; 3]),
-            )
-            .unwrap();
+        for side in 0..2 {
+            source
+                .ingest_arrow(
+                    side,
+                    batch(&[7; 3], &[100; 3], &[b"b", b"a", b"b"], &[INSERT; 3]),
+                )
+                .unwrap();
+        }
         let group = *source.dirty_timer_groups.first().unwrap();
         let snapshot = source.snapshot_key_group(group).unwrap();
         let mut old = Vec::new();
@@ -100,6 +103,7 @@ fn v3_row_entries_restore_append_and_retire_without_reinterpreting_payloads() {
         let mixed = target.snapshot_key_group(group).unwrap();
         let (mut restored, broker, _restore_dir) = processor(other_backend(rocks), 0, 127);
         restored.restore_key_group(group, &mixed).unwrap();
+        let io = observe(&mut restored);
         restored.begin_watermark(199).unwrap();
         let mut actual = Vec::new();
         while let Some(closed) = restored.next_closed_window().unwrap() {
@@ -110,7 +114,11 @@ fn v3_row_entries_restore_append_and_retire_without_reinterpreting_payloads() {
                 .unwrap();
             actual.extend(payload.iter().map(|v| v.unwrap().to_vec()));
             drop(closed);
+            let reads = io.range_reads.load(Ordering::Relaxed);
             restored.finish_closed_window().unwrap();
+            // Each of these small windows needs only the final tail validation. This
+            // also checks direct deletion of the nonempty legacy right-side entries.
+            assert_eq!(io.range_reads.load(Ordering::Relaxed), reads + 1);
         }
         assert_eq!(
             actual,
@@ -123,6 +131,12 @@ fn v3_row_entries_restore_append_and_retire_without_reinterpreting_payloads() {
             ]
         );
         assert_eq!(restored.timers.timer_count(TimerDomain::EventTime), 0);
+        let retired = restored.snapshot_key_group(group).unwrap();
+        assert!(crate::state::decode_key_group_snapshot(group, &retired)
+            .unwrap()
+            .iter()
+            .all(|(key, _)| !matches!(key[0], 0x91 | 0x92)));
+        drop(retired);
         drop(restored);
         assert_eq!(broker.reserved(), 0);
     }

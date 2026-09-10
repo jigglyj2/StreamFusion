@@ -7,10 +7,17 @@
 use super::*;
 use crate::planner::operators::sortable_state::{prefix_end, PAGE_BYTES, PAGE_ROWS};
 
+pub(super) struct PayloadEntries {
+    starts: Vec<u64>,
+    // Entry identities grow with decoded state and outlive the decoding workspace.
+    _memory: HostMemoryReservation,
+}
+
 pub(super) struct Decoded {
     pub batch: RecordBatch,
     pub bytes: u64,
     pub max_row_bytes: usize,
+    pub entries: PayloadEntries,
 }
 
 pub(super) fn decode(
@@ -48,6 +55,7 @@ pub(super) fn decode(
             ),
     )?;
     let mut rows = Vec::new();
+    let mut starts = Vec::new();
     let mut bytes = 0u64;
     let mut max_row_bytes = 0;
     processor.state.visit_range(
@@ -96,6 +104,9 @@ pub(super) fn decode(
                 {
                     return Err(invalid_index());
                 }
+                // Keep only the validated ordinal, not another copy of each state key.
+                // The per-row decode allowance also covers this vector's capacity.
+                starts.push(expected);
                 let payload = payload_pages::Rows::new(value, header.paged)?;
                 for row in payload.iter() {
                     max_row_bytes = max_row_bytes.max(row.len());
@@ -118,10 +129,18 @@ pub(super) fn decode(
     let memory = workspace.split(batch_bytes(&batch)?, "closed window Arrow payload")?;
     let batch = host_batch(batch, memory)?;
     drop(rows);
+    let entry_memory = workspace.split(
+        starts.capacity().saturating_mul(std::mem::size_of::<u64>()),
+        "closed window payload entry identities",
+    )?;
     Ok(Decoded {
         batch,
         bytes,
         max_row_bytes,
+        entries: PayloadEntries {
+            starts,
+            _memory: entry_memory,
+        },
     })
 }
 
@@ -133,56 +152,24 @@ pub(super) fn delete_rows(
     processor: &mut WindowJoinProcessor,
     keys: &WindowKeys,
     side: usize,
-    first: u64,
-    count: u64,
-    max_row_bytes: usize,
+    entries: &PayloadEntries,
 ) -> Result<()> {
     let mut workspace = processor
         .scratch_reservation
         .sibling("window join completed page deletes");
-    if count == 0 {
-        return Ok(());
-    }
-    let end = keys.payload_key(side, first.checked_add(count).ok_or_else(invalid_index)?);
-    let mut start = keys.payload_key(side, first).key;
-    let prefix_bytes = keys.side_prefix(side).len();
-    let page_bytes = max_row_bytes
-        .saturating_add(prefix_bytes)
-        .saturating_add(128)
-        .max(32 << 10);
-    workspace.resize(
-        page_bytes
-            .saturating_mul(2)
-            .saturating_add(PAGE_ROWS.saturating_mul(prefix_bytes.saturating_add(128))),
-    )?;
-    loop {
-        let mut deletes = Vec::new();
-        processor.state.visit_range(
-            keys.header.key_group,
-            &start,
-            Some(&end.key),
-            PAGE_ROWS,
-            page_bytes,
-            &mut |page| {
-                for &(key, _) in page {
-                    deletes.push(StateMutation {
-                        key: StateKey {
-                            key_group: keys.header.key_group,
-                            key: key.to_vec(),
-                        },
-                        value: None,
-                    });
-                }
-                Ok(false)
-            },
-        )?;
-        processor.state_read_batches = processor.state_read_batches.saturating_add(1);
-        let Some(last) = deletes.last() else {
-            break;
-        };
-        start = last.key.key.clone();
-        // The acknowledged prefix is immutable; an inclusive seek after deletion resumes
-        // at its successor without retaining a growing list of payload keys.
+    let key_bytes = keys.side_prefix(side).len().saturating_add(8);
+    // Decoding already validated the physical entry starts, including legacy unpaged rows.
+    // The acknowledged prefix is immutable until the watermark invocation completes. Derive
+    // bounded delete batches directly instead of reading the same payloads a second time.
+    for chunk in entries.starts.chunks(PAGE_ROWS) {
+        workspace.resize(chunk.len().saturating_mul(key_bytes.saturating_add(128)))?;
+        let deletes = chunk
+            .iter()
+            .map(|&first| StateMutation {
+                key: keys.payload_key(side, first),
+                value: None,
+            })
+            .collect();
         processor.state.write_batch(deletes)?;
         processor.state_write_batches = processor.state_write_batches.saturating_add(1);
     }

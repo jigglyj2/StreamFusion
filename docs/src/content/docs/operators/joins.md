@@ -79,9 +79,11 @@ semantic/configuration subsets below retain precise whole-plan fallback.
 Q5's original SQL is checked with ordinary selection, generated SQL parity, two-input Arrow
 exchange topology, original Flink managed-memory bindings, complete stage metrics, and checkpoint
 recovery. Separate collecting and unmodified-blackhole runs exercise both backends at parallelism
-one and four. Release measurement and profiling of this default WindowJoin path remain pending;
-earlier Q5/Q8 measurements enabled the multi-join optimizer and exercised a binary join instead.
-Q8's complete query checkpoint remains separate from this operator admission.
+one and four. The [Q5 default-path report](/StreamFusion/benchmarks/q5-default-rowdata/) and
+[Q8 default-path baseline](/StreamFusion/benchmarks/q8-default-rowdata/) now record release
+measurements, collecting parity and profiles on both backends. Earlier Q5/Q8 reports enabled
+the multi-join optimizer and exercised a binary join instead. Q8 optimization and post-change
+measurements remain open.
 
 The version-3 inner-window contract has explicit left/right native children, SQL schemas,
 equality keys, per-key null filters, and a serialized residual expression. Adjacent native
@@ -127,8 +129,14 @@ separate; keyless shared joins use Flink's eight-byte empty `BinaryRowData` key.
 A watermark closes one window at a time, decoding at most 256 left rows per page with a byte
 limit derived from the existing memory allowance. Encoded copies and deletion keys no longer
 grow with the complete left window. Right-side decode and candidate computation must still fit
-their reservations. A left page's payload entries are deleted in a batch only after its DataFusion
-output reaches EOF; the right state, header and timer remain until the final page completes.
+their reservations. Decoding retains each validated payload entry's first arrival ordinal under
+a coarse reservation. Once a left page's DataFusion output reaches EOF, those ordinals derive
+direct deletes in batches of at most 256 entries; acknowledgement does not rescan payloads to
+rediscover keys. The complete right side retains its entry ordinals until the final page completes,
+when its entries, header and timer are retired. Legacy row entries use the same validated-ordinal
+path. The final left-tail lookahead and total byte/count checks still reject extra or inconsistent
+payloads before final mutation. StreamFusion's state-read diagnostic counts actual read calls and
+therefore excludes the removed deletion scans; Flink's metric definitions are unchanged.
 The partial-close cursor is invocation-local, never persisted. Ordinary invocation EOF, end-input,
 and checkpoint preparation do not fire windows. Failed or cancelled invocations prevent
 checkpointing and reuse and recover the previous Flink checkpoint.
