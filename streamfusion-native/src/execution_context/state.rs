@@ -15,6 +15,7 @@ use crate::planner::operators::{
         TopNProcessor,
     },
     window_aggregate::shared_execution::{self as shared_window, WindowFactory},
+    window_join::shared_execution::{self as shared_window_join, WindowJoinFactory},
 };
 use crate::planner::persistent::{PersistentBinding, PersistentOperatorFactory};
 use crate::{proto, state::SnapshotBytes};
@@ -102,6 +103,7 @@ impl NativeExecutionContext {
                         | proto::operator::Operator::GroupAggregate(_)
                         | proto::operator::Operator::GlobalGroupAggregate(_)
                         | proto::operator::Operator::RegularJoin(_)
+                        | proto::operator::Operator::WindowJoin(_)
                         | proto::operator::Operator::WindowAggregate(_)
                         | proto::operator::Operator::TopN(_)
                 )
@@ -127,7 +129,16 @@ impl NativeExecutionContext {
                 node.operator,
                 Some(proto::operator::Operator::WindowAggregate(_))
             );
-            if binding.restored_watermark.is_some() && (options.protocol_version < 3 || !window) {
+            let window_join = matches!(
+                node.operator,
+                Some(proto::operator::Operator::WindowJoin(_))
+            );
+            if window_join {
+                shared_window_join::validate_node(node, binding.max_parallelism)?;
+            }
+            if binding.restored_watermark.is_some()
+                && (options.protocol_version < 3 || !(window || window_join))
+            {
                 return Err(invalid(
                     "restored operator watermarks require a window binding and protocol 3",
                 ));
@@ -328,6 +339,7 @@ fn create(
                 node.operator,
                 Some(
                     proto::operator::Operator::WindowAggregate(_)
+                        | proto::operator::Operator::WindowJoin(_)
                         | proto::operator::Operator::TopN(_)
                 )
             ) {
@@ -344,6 +356,9 @@ fn create(
         None => return Err(invalid("unsupported native state binding")),
     };
     match &node.operator {
+        Some(proto::operator::Operator::WindowJoin(_)) => Ok(Arc::new(WindowJoinFactory::new(
+            node, bytes, binding, state, scratch,
+        )?)),
         Some(proto::operator::Operator::WindowAggregate(_)) => Ok(Arc::new(WindowFactory::new(
             node, bytes, binding, state, scratch, buffer,
         )?)),
@@ -384,6 +399,7 @@ fn require_bindings(node: &proto::Operator, ids: &HashSet<u64>) -> Result<()> {
                 | proto::operator::Operator::RegularJoin(_)
                 | proto::operator::Operator::GroupAggregate(_)
                 | proto::operator::Operator::GlobalGroupAggregate(_)
+                | proto::operator::Operator::WindowJoin(_)
                 | proto::operator::Operator::WindowAggregate(_)
                 | proto::operator::Operator::TopN(_)
         )

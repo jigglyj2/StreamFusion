@@ -72,8 +72,9 @@ The cached CSV lookup subset below is also admitted. Other join paths are retain
 With Flink's default disabled multi-join optimizer, Nexmark Q5 and Q8 select
 `StreamExecWindowJoin`, which still retains whole-plan fallback. Earlier measurements of
 those queries enabled the multi-join optimizer and exercised a supported binary join instead.
-The retained window-join handle is not integrated into the common native execution-plan,
-state, control and per-stage metric lifecycle and must not be admitted on those results.
+The Java planner still selects the retained candidate-matching handle. A Rust shared-runtime
+binding is now implemented, but Java integration and full Flink conformance remain required;
+these development results do not admit the default plans.
 
 The planner now has a version-3 inner-window contract with explicit left/right native children,
 SQL schemas, equality keys, per-key null filters, and a serialized residual expression. It
@@ -83,7 +84,7 @@ batch. A DataFusion `CASE` skips residual evaluation for filtered null keys, pre
 null-key wrapper even when the residual could throw. Current contract validation rejects non-UTC
 time, non-inner joins, mismatched or unsupported equality keys, and invalid predicates. Legacy
 state-only protobufs remain readable and do not imply native compute support. This contract is
-a prerequisite; the retained Java candidate matcher has not yet been replaced by shared execution.
+a prerequisite; the retained Java translator has not yet been switched to shared execution.
 
 Native closed-window computation now uses DataFusion 55 `NestedLoopJoinExec` and the lowered
 protobuf predicate. Complete left/right Arrow inputs use the native reusable input node:
@@ -105,8 +106,8 @@ Tests run generated duplicate payloads through indexed state and DataFusion on m
 RocksDB, compare complete ordered outputs to an independent row oracle, and retain output after
 processor disposal. They also cover empty windows, predicate errors, cancellation, budget denial,
 and the input-splitting ordering counterexample. This is direct native compute/state/ownership
-evidence, not full Flink SQL or production admission. Shared-plan composition, per-stage metrics,
-Flink checkpoint/channel recovery and planner selection remain required before enabling Q5/Q8.
+evidence, not full Flink SQL or production admission. Java planner integration and generated
+Flink metric, changelog, checkpoint and channel parity remain required before enabling Q5/Q8.
 
 The retained state handle now appends individual Arrow-encoded payload rows and updates a
 29-byte window index, instead of reloading and rewriting both sides of a growing window.
@@ -134,8 +135,23 @@ acknowledges that the window's output has drained. Input, snapshots, checkpoints
 are rejected during a drain; a failed close requires recovery from the previous Flink checkpoint.
 Direct tests on both backends cover one-window range reads, empty sides, duplicate arrival order,
 retained buffer ownership, cancellation, cross-backend recovery, and denial before payload reads.
-This API is not yet connected to the common DataFusion execution stream, and does not change
-production admission or the retained Java handle's watermark output path.
+The shared Rust binding now connects this API to the common DataFusion execution stream. It
+accepts two Arrow children, drains them before addressed controls, and composes with downstream
+native operators directly. Output carries INSERT, an absent record timestamp, and detached row
+ordinals. Keyless joins use Flink's eight-byte empty `BinaryRowData` header for partition hashing;
+the retained legacy handle keeps its previous stored identity. Ordinary invocation EOF, end-input
+and checkpoint-preparation events do not fire windows;
+watermarks do. A cancelled or failed invocation prevents checkpointing and reuse.
+
+The binding exposes Flink's `leftNumLateRecordsDropped`/`leftLateRecordsDroppedRate`,
+`rightNumLateRecordsDropped`/`rightLateRecordsDroppedRate`, and `watermarkLatency`, alongside
+logical-record stage counters from the shared metric tree. Shared checkpoints carry an `SFWF/1`
+operator-contract fingerprint in each key group and require Flink's restored union-operator
+watermark, including for empty groups. Unmarked legacy-handle snapshots and different contracts
+are rejected by the shared binding. Direct shared-runtime tests cover cross-backend canonical
+restore, 1→2 rescaling, RocksDB checkpoint import into memory, cancellation and the metric protocol.
+These checks do not replace generated Flink harness parity. The retained Java translator and
+its legacy watermark-output path remain unchanged, and production admission remains gated.
 
 **Retained implementation scope:** Partial implementation for bounded hash/adaptive/sort-merge/nested-loop joins and for
 synchronous regular, multi-way, time-bounded, and temporal streaming joins.

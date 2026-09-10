@@ -19,6 +19,29 @@ use std::task::{Context, Poll};
 
 mod admission;
 
+/// Shared resource installation calls this before opening state, so unsupported kernels
+/// are not first discovered after a window has accumulated input.
+pub(super) fn validate(plan: &proto::WindowJoin) -> Result<Option<JoinFilter>> {
+    let filter = super::planning::filter(plan)?;
+    for schema in [plan.left_schema.as_ref(), plan.right_schema.as_ref()] {
+        let schema = arrow_schema(
+            schema.ok_or_else(|| DataFusionError::Plan("window join schema missing".into()))?,
+        )?;
+        if schema
+            .fields()
+            .iter()
+            .any(|field| !admission::scalar_payload(field.data_type()))
+        {
+            return Err(DataFusionError::Plan(
+                "native window join bounded output currently requires scalar payload columns"
+                    .into(),
+            ));
+        }
+    }
+    admission::predicate_row_bytes(filter.as_ref(), 0)?;
+    Ok(filter)
+}
+
 pub(super) struct ClosedWindowStream {
     // Free DataFusion's raw buffers before returning their workspace, including on cancellation.
     stream: Option<SendableRecordBatchStream>,

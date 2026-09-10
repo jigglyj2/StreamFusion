@@ -30,6 +30,7 @@ mod computation;
 mod indexed_state;
 mod legacy_state;
 pub(crate) mod planning;
+pub(crate) mod shared_execution;
 use indexed_state::{Header, WindowKeys};
 use legacy_state::decode_state;
 #[cfg(test)]
@@ -43,6 +44,7 @@ const UPDATE_BEFORE: i8 = 1;
 const UPDATE_AFTER: i8 = 2;
 const DELETE: i8 = 3;
 const WINDOW_KEY_PREFIX: u8 = 1;
+const SHARED_STATE_KEY: &[u8] = b"\0streamfusion-window-join-shared-contract";
 const TIMER_STATE_KEY: &[u8] = b"\0streamfusion-window-join-timers";
 
 /// Two-input Window Join storage with Arrow-row state and Arrow condition-input output.
@@ -59,6 +61,9 @@ pub(crate) struct WindowJoinProcessor {
     row_converters: [RowConverter; 2],
     schemas: [Option<SchemaRef>; 2],
     key_fields: [Vec<(usize, KeyField)>; 2],
+    // The retained legacy handle used an empty byte vector. Shared execution installs
+    // Flink's zero-field BinaryRowData header; its checkpoint contract is separate.
+    empty_partition_key: Vec<u8>,
     preencoded_key_indices: [Option<usize>; 2],
     input_kind_indices: [Option<usize>; 2],
     current_event_time: i64,
@@ -211,6 +216,7 @@ impl WindowJoinProcessor {
             row_converters,
             schemas: [None, None],
             key_fields: [Vec::new(), Vec::new()],
+            empty_partition_key: Vec::new(),
             preencoded_key_indices: [None, None],
             input_kind_indices: [None, None],
             current_event_time: i64::MIN,
@@ -574,7 +580,7 @@ impl WindowJoinProcessor {
             Some(index) => Ok(binary_column(batch, Some(index), "preencoded key")?
                 .value(row)
                 .to_vec()),
-            None if self.key_fields[side].is_empty() => Ok(Vec::new()),
+            None if self.key_fields[side].is_empty() => Ok(self.empty_partition_key.clone()),
             None => Ok(encode_binary_row(batch, row, &self.key_fields[side])?),
         }
     }

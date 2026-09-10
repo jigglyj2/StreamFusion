@@ -193,7 +193,7 @@ pub(super) fn migrate_legacy(
                     Header::decode(value)?;
                 }
             }
-            _ if key == TIMER_STATE_KEY => {}
+            _ if key == TIMER_STATE_KEY || key == SHARED_STATE_KEY => {}
             _ => {
                 return Err(DataFusionError::Execution(
                     "unknown window join checkpoint key".into(),
