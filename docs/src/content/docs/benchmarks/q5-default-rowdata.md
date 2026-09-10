@@ -1,37 +1,53 @@
 ---
 title: Q5 default WindowJoin release comparison
-description: Default-optimizer Q5 measurements, profiles, and remaining in-memory capacity limits.
+description: Bounded payload storage, default-optimizer Q5 measurements, and remaining performance work.
 ---
 
-At release code `a47c734026ec5590f9c8dbc9e66d598f8789b017`, Q5 accelerates with Flink's default
-`table.optimizer.multi-join.enabled=false`. Three alternating fresh-JVM pairs complete at one
-million events on both backends. StreamFusion has 6.5% lower median throughput in memory and
-5.8% higher median throughput on RocksDB. Larger in-memory attempts still exhaust retained-state
-allowance. This is an intermediate performance checkpoint, not evidence that Q5 is fully
-optimized or that the longer-profile requirement has been met on both backends.
+At release code `74995d3d0c0731d3974768f6c16e77dcc15a9991`, Q5 accelerates with Flink's default
+`table.optimizer.multi-join.enabled=false`. Bounded payload pages remove the demonstrated
+window-join retained-state failure: all one- and two-million-event measured forks complete, as
+do separate four-million-event profiles and collecting-sink validation on both backends.
+
+At two million events, median throughput is 1.6% lower in memory and 3.9% higher on RocksDB, whose
+wide timing range makes the apparent gain uncertain. Both backends are slower at one million.
+These results establish a capacity improvement, not a general speedup or a claim that all
+reasonable performance work is exhausted. Global-window state-read duplication remains a concrete
+follow-up from the profile inspection.
 
 The [older Q5 report](/StreamFusion/benchmarks/q5-rowdata/) uses the enabled multi-join optimizer
 and different memory-consumer weights. Its measurements must not be combined with these results.
 
 ## Measurements, September 10, 2026
 
-Each engine runs in three separate unprofiled JVMs. Order alternates Flink/StreamFusion,
+Each case uses three fresh unprofiled JVMs per engine, alternating Flink/StreamFusion,
 StreamFusion/Flink, Flink/StreamFusion. MAD is median absolute deviation. Timing is end-to-end:
 setup, EXPLAIN, native initialization, cluster startup, execution and cleanup; JVM launch,
 argument parsing and compilation are excluded. These are local measurements, not steady-state
 throughput guarantees.
 
-| Backend | Flink seconds: median [range]; MAD | StreamFusion seconds: median [range]; MAD | StreamFusion/Flink throughput |
-| --- | --- | --- | ---: |
-| In-memory | 6.411 [6.392–6.420]; 0.008 | 6.859 [6.758–6.940]; 0.080 | 0.935× |
-| RocksDB | 9.066 [8.786–9.947]; 0.280 | 8.570 [8.276–9.566]; 0.294 | 1.058× |
+| Backend | Input events | Flink seconds: median [range]; MAD | StreamFusion seconds: median [range]; MAD | StreamFusion/Flink throughput |
+| --- | ---: | --- | --- | ---: |
+| In-memory | 1,000,000 | 6.327 [6.286–6.349]; 0.022 | 6.522 [6.517–6.668]; 0.004 | 0.970× |
+| In-memory | 2,000,000 | 7.541 [7.370–7.541]; 0.000 | 7.660 [7.548–7.981]; 0.111 | 0.984× |
+| RocksDB | 1,000,000 | 7.366 [7.308–7.424]; 0.057 | 7.910 [7.732–7.974]; 0.064 | 0.931× |
+| RocksDB | 2,000,000 | 9.907 [9.399–16.822]; 0.508 | 9.534 [9.517–10.762]; 0.017 | 1.039× |
 
-StreamFusion loses all three in-memory pairs, whose engine ranges do not overlap. It wins all
-three RocksDB pairs, but their overall ranges overlap; the modest median gain is not a broad
-performance guarantee. Every run emits five blackhole records. Every StreamFusion EXPLAIN
-reports acceleration. Shared native-plan batch counts are 623/650/651 in memory and 763/771/743
-on RocksDB; native Calc counts are 68/71/73 and 128/132/126 respectively. Flink reports zero native
-activity. These invocation counters are not logical-record I/O metrics.
+StreamFusion loses all three pairs for both one-million-event cases and for two million in
+memory; their engine ranges do not overlap. At two million on RocksDB, StreamFusion wins two
+pairs and loses one. Flink ranges from 9.399 to 16.822 seconds, so StreamFusion's 3.9% median throughput
+advantage does not establish a reliable RocksDB speedup. No profiled timing enters this table.
+
+All 24 measured runs emit five blackhole records. Every StreamFusion EXPLAIN reports acceleration
+and every native counter is positive; Flink reports zero native activity. Invocation counts by fork:
+
+| Case | Shared native-plan batches | Native Calc batches |
+| --- | --- | --- |
+| In-memory, 1M | 644 / 631 / 623 | 73 / 72 / 68 |
+| In-memory, 2M | 1185 / 1185 / 1179 | 132 / 132 / 131 |
+| RocksDB, 1M | 769 / 775 / 779 | 132 / 131 / 128 |
+| RocksDB, 2M | 1417 / 1411 / 1431 | 249 / 250 / 253 |
+
+These invocation counters are distinct from Flink's logical-record I/O metrics.
 
 Both engines use the same deterministic Nexmark RowData source and original SQL, the unmodified
 Flink blackhole sink, parallelism four, UTC, disabled mini-batching, one-second exactly-once
@@ -42,74 +58,91 @@ required `java.nio` opening. No Kafka services or connector benchmarks are invol
 The machine is an Intel Core i7-12650H under WSL2, Linux 6.18.33.2, with OpenJDK 24.0.2. The clean
 measurement checkout builds Rust with release optimization, native CPU features, frame pointers
 and separate profiling symbols. CPU baseline is `44dd0ad765af32a3`. Core native SHA-256 is
-`0096134f91d274495cd4e2b3985e4ad279b2e87903972fe8d44fee5c57f77d1a`; RocksDB native SHA-256 is
+`3cc1abe1b2341f50c354949a8c4f7008dc2979ec4081d0fb59c0e954d7f7c86a`; RocksDB native SHA-256 is
 `fe1af76cd4e48dc789eca1eb720d1fdea5b67d40f465956401c39a6653f08862`.
 Metadata retains complete JVM flags, upstream revisions and patches, classpath and artifact
 properties. Flink's local patches are the permitted planner installation/class-loading and
 post-StreamGraph resource-finalization hooks; operator algorithms, source and sink remain intact.
 
-## General improvement and validation
+## General improvements and validation
 
-The earlier `a4dcc33d` implementation exhausted whole-window decoding workspace at one million
-events on both backends. The new close adapter retains one decoded right window, loads bounded
-ordered left pages, and executes the actual DataFusion join for each page. It shares Arrow buffers
-and reclaims acknowledged left payloads only after that page reaches DataFusion EOF. It preserves
-Flink's left-major output order without an extra JVM/native crossing between pages. No memory
-budget or tuning option changes. The complete right window still must fit its allowance.
+The close adapter retains one decoded right window and processes ordered left pages through the
+actual DataFusion join. It shares Arrow buffers and reclaims acknowledged left payloads only
+after DataFusion EOF, preserving Flink's left-major order without extra JVM/native handoffs.
+The complete right window still must fit its allowance.
 
-Forty-five focused Rust window-join tests pass with both backends available, including a 20,003-row
-left window with only 4 MiB remaining, exact pair order, output ownership and cancellation followed
-by cross-backend recovery. Twenty-eight focused Java tests cover runtime parity, complete metric
-surface, rescaling, aligned/unaligned channel recovery and selected SQL. Eight opt-in official Q5
-cases compare collecting-sink bytes and blackhole counts at 20,000 events, both backends,
-parallelism one/four and both multi-join optimizer settings. Profiling does not replace these tests.
+The storage change appends immutable payload pages of at most 256 rows and normally 16 KiB,
+sharing the partition/window prefix and ordered-tree entry across those rows. A native regression
+stores 10,000 rows as 40 payload entries with less than 1 MiB of retained in-memory growth.
+This reduces actual storage, without reducing accounting or changing Flink's allocation rules.
+The [window-join contract](/StreamFusion/operators/window-join/) documents the versioned encoding,
+old-state compatibility, wide-row handling and recovery behavior.
 
-## CPU profiles and remaining limits
+Forty-eight focused Rust window-join tests pass with both backends available, including a
+20,003-row left window with only 4 MiB remaining, exact duplicate-pair order, output ownership,
+malformed page framing, old indexed-state restore and cancellation followed by cross-backend
+recovery. Twenty-eight focused Java tests cover runtime parity, complete metric surface,
+rescaling, aligned/unaligned channel recovery and selected SQL. Eight opt-in official Q5 cases
+compare collecting-sink bytes and blackhole counts at 20,000 events, both backends, parallelism
+one/four and both multi-join settings.
 
-Separate async-profiler 4.5 runs use 10 ms CPU sampling, Java non-safepoint sampling, native DWARF
-unwinding and JFR output. RocksDB completes at two million events. In-memory attempts at two
-million and 1.25 million events fail, so the completed in-memory diagnostic uses one million.
-**That diagnostic does not satisfy the longer-workload profile requirement.** Profiled timings
-are excluded from the measurement table. Completed pairs each emit five rows; native-plan/Calc
-counts are 644/70 in memory and 1,429/254 on RocksDB.
+Additional separate fresh-JVM collecting-sink runs at four million events and parallelism four
+match all five result records and materialized results on both backends. Every output SHA-256 is
+`6bac5b936f972ff1878172fcc7bf67153321641a26c5e6c3ef81d4a2d8de3230`. Fixed-arrival operator tests
+compare ordered changelog bytes; independent jobs may interleave windows differently. Collecting
+runs validate results and are excluded from the blackhole performance comparison.
 
-The following inclusive shares use all process CPU samples as denominator. Categories overlap:
-JNI includes downstream computation, and DataFusion includes stream execution. Sampling and
-native unwinding can miss frames; zero means no matching sample, not zero execution cost.
+## Longer CPU profiles
+
+Separate four-million-event async-profiler 4.5 runs complete for both engines on both backends,
+with 10 ms CPU sampling, Java non-safepoint sampling, native DWARF unwinding and JFR output.
+Each emits five records. StreamFusion's shared native-plan/Calc invocation counts are 2,271/257
+in memory and 2,784/501 on RocksDB. RocksDB profiles preload the same verified native plugin to
+expose its symbols; unprofiled measurements do not preload it.
+
+The following inclusive shares use all process CPU samples as denominator: 3,974/3,612 samples
+for Flink/StreamFusion in memory and 5,819/4,856 on RocksDB. Categories overlap: JNI includes
+underlying computation and DataFusion includes stream execution. Sampling and native unwinding
+can miss frames; zero means no matching sample, not zero execution cost.
 
 | CPU category | Memory Flink / StreamFusion | RocksDB Flink / StreamFusion |
 | --- | ---: | ---: |
-| Source polling, including downstream calls | 16.65% / 15.16% | 18.18% / 16.90% |
-| RowData copying | 8.16% / 3.50% | 8.26% / 3.90% |
-| RowData-to-Arrow writing | 0% / 1.17% | 0% / 1.28% |
-| Arrow C Data / JNI, inclusive | 0% / 9.05% | 0% / 31.63% |
-| Native plan lowering | 0% / 0.05% | 0% / 0.03% |
-| DataFusion execution | 0% / 7.42% | 0% / 12.63% |
-| Arrow-backed output access | 0% / 0.05% | 0% / 0% |
-| JVM JIT compilation | 41.57% / 43.84% | 29.36% / 30.99% |
+| Source polling, including downstream calls | 30.40% / 27.21% | 22.31% / 20.57% |
+| RowData copying | 14.19% / 6.04% | 10.41% / 4.14% |
+| RowData-to-Arrow writing | 0.00% / 2.49% | 0.00% / 1.63% |
+| Arrow C Data / JNI, inclusive | 0.00% / 19.10% | 0.00% / 38.98% |
+| Native plan lowering | 0.00% / 0.00% | 0.00% / 0.02% |
+| DataFusion execution | 0.00% / 17.03% | 0.00% / 16.23% |
+| Arrow-backed output access | 0.00% / 0.00% | 0.00% / 0.00% |
+| JVM JIT compilation | 28.46% / 32.34% | 20.50% / 24.24% |
 
-The completed RocksDB profile attributes 20.60% of StreamFusion CPU samples to RocksDB frames,
-7.27% to native global-window execution, 4.19% to the window-join adapter and 2.47% to its closing
-path, including decoding and deletion. Corresponding in-memory global-window and window-join
-shares are 5.04% and 1.49%. Some native stacks omit their Rust callers, so these are observed
-inclusive shares rather than exhaustive operator attribution. Large JIT shares also limit what
-these short end-to-end runs establish about steady-state compute performance.
+StreamFusion's observed window-join adapter share is 1.52% in memory and 2.49% on RocksDB; its
+closing path is 0.42% and 1.22%. Global-window execution is larger, at 13.95% and 12.32%, with
+state lookups, hashing, allocation and timer work beneath window firing. RocksDB frames account
+for 34.49% of Flink's and 23.87% of StreamFusion's process samples. Some storage stacks omit Rust
+callers, so these are observed shares rather than exhaustive operator attribution.
 
-Both failed in-memory attempts request another 225,475 bytes for native state node `4294967341`.
-At two million events, 61,803,681 bytes are reserved and 27,091 remain; at 1.25 million,
-61,814,302 are reserved and 16,244 remain. Flink completes both matching runs. This is a retained
-native-state capacity limit, distinct from the earlier whole-window decoder reservation failure.
-A diagnostic maps this owner to `WindowJoin[45]`. Its per-row payload entries repeat the
-partition/window prefix and ordered-tree overhead. The subsequent storage change appends bounded
-payload pages while retaining the separate ordered index and original memory allowance. A native
-regression stores 10,000 rows as 40 entries with less than 1 MiB retained in memory. Old indexed
-windows remain readable until they close; the [window-join contract](/StreamFusion/operators/window-join/)
-describes encoding versions and recovery. These results do not change the `a47c7340` measurements
-above: a release rerun, completed longer in-memory profile and further general optimization remain
-outstanding.
+Inspection found that the global-window firing adapter duplicates each requested state key in
+its deduplication map and its ordered read list. Reducing that duplication is a general next
+optimization; neither these profiles nor the throughput measurements establish its benefit yet.
+Large JIT and source shares also limit conclusions about steady-state compute. The measured
+capacity is not an unlimited-memory guarantee: retained state, complete right windows and
+DataFusion workspace remain subject to Flink's original allowance.
 
-Raw metadata, all runs, completed per-engine JFRs, CPU/allocation collapsed stacks, flame graphs,
-differential flame graphs and category definitions are under
-`streamfusion-nexmark-benchmarks/target/measurements/q5-default/a47c7340/`, in `hashmap-1m`,
-`rocksdb-1m`, `hashmap-1m-profile`, and `rocksdb-2m-profile`. Failed diagnostic JFRs and logs remain
-in `hashmap-2m-profile` and `hashmap-1250k-profile`; they are not completed comparison profiles.
+## Earlier capacity evidence
+
+At `a4dcc33d`, whole-window decode staging failed at one million events on both backends.
+`a47c7340` introduced bounded left decoding and completed three measured pairs at one million:
+6.411/6.859 seconds median Flink/StreamFusion in memory, and 9.066/8.570 on RocksDB. Its longer
+in-memory attempts still failed on `WindowJoin[45]`: another 225,475 bytes were denied with
+61,803,681 already held and 27,091 available at two million events. A separate unprofiled
+1.25-million-event diagnostic reproduced the retained-state failure. The payload-page change
+addresses that entry overhead; the new runs above complete through four million.
+
+Earlier and current results are separate measurements; changes in Flink's baseline timings
+prevent interpreting their raw elapsed-time difference as the isolated effect of this change.
+Raw evidence remains under `streamfusion-nexmark-benchmarks/target/measurements/q5-default/`.
+The `74995d3d/` directory contains `hashmap-1m`, `rocksdb-1m`, `hashmap-2m`, `rocksdb-2m`, both
+`*-4m-profile` directories and `collecting-validation.json`. Metadata, every run, per-engine JFRs,
+CPU/allocation collapsed stacks, flame graphs, differential flame graphs and category definitions
+are retained. Historical failures and profiles remain in the `a4dcc33d/` and `a47c7340/` directories.

@@ -93,7 +93,7 @@ metric surfaces, ordered changelog bytes and controls against actual Flink opera
 
 Q5 has ordinary planner, collecting-sink and blackhole integration coverage with default
 WindowJoin selection. The [default Q5 release report](/StreamFusion/benchmarks/q5-default-rowdata/)
-records completed million-event measurements on both backends and the remaining larger-input
-in-memory capacity limit. Historical Q5 results used the enabled multi-join optimizer. See
+records completed one- and two-million-event measurements on both backends, plus four-million-event
+profiles and collecting-sink parity after the payload-page change. Historical Q5 results used the enabled multi-join optimizer. See
 [Joins](../joins/) for the detailed
 compute, ownership, state and recovery contracts.

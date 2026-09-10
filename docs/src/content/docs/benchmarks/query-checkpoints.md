@@ -27,13 +27,14 @@ The subsequent inner-window integration admits Q5 with the default optimizer set
 original SQL, generated SQL parity, Arrow exchange topology, original memory bindings, complete
 metrics, aligned/unaligned channel replay and rescaling are verified. Collecting-sink bytes and
 unmodified-blackhole record counts match Flink at 20,000 events, parallelism one and four, on
-both backends. The enabled multi-join path is rechecked too. Bounded left-page decoding fixes
-its initial one-million-event workspace failure. The
-[default Q5 release report](/StreamFusion/benchmarks/q5-default-rowdata/) now records three
-alternating measured pairs on both backends: median throughput is 6.5% lower in memory and 5.8%
-higher on RocksDB. Separate profiles complete at one million events in memory and two million
-on RocksDB. Larger in-memory attempts fail on retained-state capacity, so the required longer
-in-memory profile and further general optimization remain outstanding; Q5's checkpoint is incomplete.
+both backends. The enabled multi-join path is rechecked too. Bounded left decoding and immutable
+payload pages remove the demonstrated staging and retained-entry capacity failures. The
+[default Q5 release report](/StreamFusion/benchmarks/q5-default-rowdata/) records three alternating
+measured pairs at one and two million events on both backends, plus completed four-million-event
+profiles and separate collecting-sink parity. At two million, median throughput is 1.6% lower
+in memory and 3.9% higher on RocksDB, with substantial RocksDB timing dispersion. The longer
+in-memory profile gap is resolved. Profile inspection identifies duplicate read-key storage in
+global-window firing as a concrete remaining optimization; Q5 is not claimed fully optimized.
 Q8's full query validation follows Q5; this is not a new full-suite admission or performance audit.
 
 Eight focused integration cases recheck Q6 and Q14 on current code: Q6 still fails Flink's
@@ -45,7 +46,7 @@ complete standalone release-report/profile evidence. The full goal is not comple
 Raw EXPLAIN results and blocker checks are retained under
 `streamfusion-nexmark-benchmarks/target/measurements/suite-audit/`. These checks do not rerun
 the full suite's runtime parity or performance on one common commit. The next implementation
-target is Q5's remaining retained-state capacity limit; the historical checkpoints below retain their stated scope.
+target is Q5's duplicate global-window read-key storage; the historical checkpoints below retain their stated scope.
 
 ## Delivery history and scope
 
