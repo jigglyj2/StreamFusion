@@ -758,7 +758,10 @@ execution at 50,000 events on both backends and parallelism 1/4. Complete materi
 bytes match in all cases; parallelism one also matches every ordered changelog byte and blackhole
 record count. Parallel input channels can change intermediate rankings, so independent parallel
 jobs do not assert identical transient changelogs. Fixed-arrival operator tests compare the
-complete changelog and timestamp envelopes. Release measurements and profiling are pending.
+complete changelog and timestamp envelopes. The [release comparison](/StreamFusion/benchmarks/q19-rowdata/) reports 2.530× median throughput
+at 2M in-memory events (wide overlapping ranges) and 3.798× at 4M RocksDB events (disjoint
+ranges). The failed 4M Flink in-memory baseline and native 3M profile budget limit are explicit;
+complete longer profiles use 2.5M in-memory and 8M RocksDB events.
 
 The retained append-only constant-range computation now uses DataFusion batch ordering and
 per-arrival bounded selection over fixed-width priorities. Twenty Rust checks and generated

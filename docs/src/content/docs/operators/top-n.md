@@ -48,7 +48,9 @@ those shapes retain Flink's own planning error. The following broader implementa
 available for direct development/parity tests and are not production-admitted. Original Nexmark Q19
 uses the admitted range `[1,10]`. Its RowData catalog preserves the original
 price-only ordering; additional tie-breakers are not part of that query. See
-[query checkpoints](/StreamFusion/benchmarks/query-checkpoints/#q19-original-auction-top-10).
+[query checkpoints](/StreamFusion/benchmarks/query-checkpoints/#q19-original-auction-top-10)
+and the [Q19 release comparison](/StreamFusion/benchmarks/q19-rowdata/), including its
+in-memory budget limit, timing dispersion and both-backend profiles.
 
 For bounded `RANK`, the planner retains Flink's hash or singleton exchange and replaces the paired
 local/global sort-rank stages with one keyed, tie-aware bounded selection. It only performs this

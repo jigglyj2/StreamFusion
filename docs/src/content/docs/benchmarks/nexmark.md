@@ -85,7 +85,12 @@ admission using DataFusion cumulative windows, with exact single-source changelo
 parallel validation of tied winners from the original readers. Its
 [release comparison](/StreamFusion/benchmarks/q18-rowdata/) reaches 4.431× median throughput
 at 10M RocksDB events, while the 1M/2M in-memory comparisons favor Flink. The 10M Flink
-in-memory baseline failed with a heartbeat timeout; no ratio is reported for that case. Q10's SELECT path is now catalogued with
+in-memory baseline failed with a heartbeat timeout; no ratio is reported for that case.
+Q19's original auction Top-10 now passes ordinary admission and collecting/blackhole validation.
+Its [release comparison](/StreamFusion/benchmarks/q19-rowdata/) reports 2.530× median throughput
+at 2M in-memory events with overlapping ranges, and 3.798× at 4M RocksDB events with disjoint
+ranges. It also records the failed 4M Flink baseline and native 3M in-memory profile budget limit.
+Q10's SELECT path is now catalogued with
 numeric `DATE_FORMAT`; its blackhole comparison does not exercise filesystem partition commits
 or rolling policies. See the query checkpoint page for its delivery status. Q14's built-in expressions
 have parity coverage, but its original Java UDF still awaits the proposed architecture exception;
