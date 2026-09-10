@@ -6,7 +6,8 @@ description: Shared HOP window admission, release measurements, and managed-memo
 Q5 now passes ordinary admission and collecting/blackhole integration on in-memory and default
 RocksDB state with either multi-join optimizer setting. The measurements below establish the
 historical `table.optimizer.multi-join.enabled=true` path only. The current default `false` path
-selects the shared native `StreamExecWindowJoin`; it has not completed a performance checkpoint.
+selects the shared native `StreamExecWindowJoin`; its newer measurements and remaining limits
+are recorded in the [default-path report](/StreamFusion/benchmarks/q5-default-rowdata/).
 The enabled-preset plan's local/global
 HOP COUNT feeds both a binary join and an attached MAX branch. The reused aggregate has one
 native owner; its Calc and attached local MAX consume shared Arrow batches in that same native
@@ -29,7 +30,7 @@ Closed-window decoding requested **35,353,936 additional bytes**, with 4,240 byt
 that scratch consumer. Available allowance was 2,389,986 bytes in memory and 31,067,879 bytes on
 RocksDB. The matching Flink runs completed and each emitted five rows. These are capacity
 diagnostics: the planned three measured pairs did not complete, so there is **no valid median or
-speedup for the default WindowJoin path**.
+speedup for the default WindowJoin path at that revision**.
 
 Both engines used the original RowData source, unmodified blackhole sink, parallelism four,
 disabled mini-batching, one-second exactly-once checkpoints, 1 GiB managed memory and consumer
@@ -44,8 +45,9 @@ At `a4dcc33d`, the close adapter staged all encoded payloads and deletion keys f
 Arrow decoding. The subsequent bounded decoder shares the complete right Arrow window across
 left pages and reclaims each completed left page. A native regression closes 20,003 left rows with
 4 MiB of remaining allowance on both backends; separate cancellation/restore tests cover partial
-close progress. This does not yet establish the one-million-event benchmark result: release
-reruns, longer profiles and complete alternating measurements remain outstanding. Raw failure logs and metadata
+close progress. At `a47c7340`, all three one-million-event pairs now complete on both backends;
+the [new report](/StreamFusion/benchmarks/q5-default-rowdata/) retains the remaining larger-input
+in-memory failure and profiling limitation. Raw failure logs and metadata for `a4dcc33d`
 are retained under `streamfusion-nexmark-benchmarks/target/measurements/q5-default/a4dcc33d/`.
 
 ## Measurements, September 8, 2026

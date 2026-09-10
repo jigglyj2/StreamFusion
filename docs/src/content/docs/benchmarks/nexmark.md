@@ -9,8 +9,9 @@ Current delivery follows [numbered query checkpoints](/StreamFusion/benchmarks/q
 The September 10 audit checks the pinned Q0–Q23 suite; there is no Q24 in that checkout.
 That audit admitted 20 query plans on both backends with Flink's default disabled multi-join
 optimizer. Subsequent WindowJoin integration admits Q5 and verifies collecting/blackhole parity;
-its default-path release measurements and Q8's query checkpoint are pending. Earlier Q5/Q8
-measurements used the enabled multi-join preset. Q6 has no supported upstream streaming baseline,
+its [default-path measurements](/StreamFusion/benchmarks/q5-default-rowdata/) now complete at one
+million events on both backends, with a remaining larger-input in-memory capacity limit. Q8's
+query checkpoint is pending. Earlier Q5/Q8 measurements used the enabled multi-join preset. Q6 has no supported upstream streaming baseline,
 and Q14 retains its original Java-UDF fallback. These are admission results, not a fresh
 execution/parity or performance run of the entire suite. The full goal remains incomplete.
 

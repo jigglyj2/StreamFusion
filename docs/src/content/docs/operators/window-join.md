@@ -85,6 +85,8 @@ metrics, `leftNumLateRecordsDropped`, `leftLateRecordsDroppedRate`, `rightNumLat
 metric surfaces, ordered changelog bytes and controls against actual Flink operators.
 
 Q5 has ordinary planner, collecting-sink and blackhole integration coverage with default
-WindowJoin selection. Current release measurements and mixed profiles for this path are pending;
-historical Q5 results used the enabled multi-join optimizer. See [Joins](../joins/) for the detailed
+WindowJoin selection. The [default Q5 release report](/StreamFusion/benchmarks/q5-default-rowdata/)
+records completed million-event measurements on both backends and the remaining larger-input
+in-memory capacity limit. Historical Q5 results used the enabled multi-join optimizer. See
+[Joins](../joins/) for the detailed
 compute, ownership, state and recovery contracts.
