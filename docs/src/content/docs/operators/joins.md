@@ -83,8 +83,26 @@ avoids this split without copying payloads or adding a Java boundary. Tests cove
 nulls/duplicates, empty windows, output batches bounded by 64/4,096 rows, the ordering
 counterexample and release of DataFusion build reservations after cancellation.
 This is compute/lifecycle evidence against an independent row oracle, not Flink SQL parity or
-production admission. Full output-buffer leases, large-window workspace admission, persisted
-state migration, timers, metrics, shared-plan composition and recovery remain implementation work.
+production admission. Full output-buffer leases, bounded closed-window execution, timer/metric
+parity, shared-plan composition and Flink checkpoint/channel recovery remain implementation work.
+
+The retained state handle now appends individual Arrow-encoded payload rows and updates a
+29-byte window index, instead of reloading and rewriting both sides of a growing window.
+Partition prefixes are length-framed, window-end ordering uses Arrow 59 row encoding, and each
+side retains a stable arrival ordinal. Payload entries are separate from the window index.
+Both RocksDB and the ordered in-memory backend read closed windows in ordered pages and batch
+their deletions. Flink partition hashing and existing timer identities remain unchanged.
+Timer sets are serialized at checkpoint time, rather than on incoming batches.
+
+The indexed format is versioned; restore migrates legacy `SFWJ/2` values once while preserving
+duplicate arrival order. Direct native tests cover migration, backend switching, 1→2 rescaling,
+negative window ends, distinct partition prefixes, large payload entries, and constant incoming
+batch I/O as a window grows. The handle rejects on-time retractions and drops late retractions,
+matching the ordering of checks in Flink's `WindowJoinHelper`; it also preserves Flink's
+maximum-window-end sentinel and wrapping deadline arithmetic. Coarse Flink reservations admit
+batch staging, closed-window decode/output workspace, and checkpoint migration. The retained
+handle still materializes the fired windows together and can fail admission for large watermarks;
+these state tests do not establish full operator or checkpoint/channel parity or a Nexmark speedup.
 
 **Retained implementation scope:** Partial implementation for bounded hash/adaptive/sort-merge/nested-loop joins and for
 synchronous regular, multi-way, time-bounded, and temporal streaming joins.

@@ -19,10 +19,17 @@ use crate::exchange::{assign_key_group, encode_binary_row, KeyField};
 use crate::memory_pool::HostMemoryReservation;
 use crate::planner::arrow_schema;
 use crate::state::{
-    KeyedState, MemoryKeyedState, NativeTimerService, RocksPluginKeyedState, StateKey, StateKeyRef,
-    StateMutation, TimerDomain, TimerKey,
+    KeyedState, NativeTimerService, OrderedMemoryKeyedState, RocksPluginKeyedState, StateKey,
+    StateKeyRef, StateMutation, TimerDomain, TimerKey,
 };
 use crate::{decode_plan, proto};
+
+mod indexed_state;
+mod legacy_state;
+use indexed_state::{Header, WindowKeys};
+use legacy_state::decode_state;
+#[cfg(test)]
+use legacy_state::{encode_state, JoinWindowState};
 
 use super::window_aggregate::local_to_timer_epoch;
 use super::window_table_function::timestamp_millis;
@@ -31,8 +38,6 @@ const INSERT: i8 = 0;
 const UPDATE_BEFORE: i8 = 1;
 const UPDATE_AFTER: i8 = 2;
 const DELETE: i8 = 3;
-const STATE_MAGIC: &[u8; 4] = b"SFWJ";
-const STATE_VERSION: u8 = 2;
 const WINDOW_KEY_PREFIX: u8 = 1;
 const TIMER_STATE_KEY: &[u8] = b"\0streamfusion-window-join-timers";
 
@@ -42,6 +47,8 @@ pub(crate) struct WindowJoinProcessor {
     shift_time_zone: Tz,
     max_parallelism: u32,
     state: Box<dyn KeyedState>,
+    window_key_converter: RowConverter,
+    dirty_timer_groups: BTreeSet<u32>,
     timers: NativeTimerService,
     visible_schemas: [SchemaRef; 2],
     output_schema: SchemaRef,
@@ -60,17 +67,11 @@ pub(crate) struct WindowJoinProcessor {
     timers_fired: u64,
 }
 
-#[derive(Default, Debug, PartialEq, Eq)]
-struct JoinWindowState {
-    left: Vec<Vec<u8>>,
-    right: Vec<Vec<u8>>,
-}
-
 struct StagedWindow {
     key: StateKey,
     window_end: i64,
-    value: JoinWindowState,
-    touched: bool,
+    keys: WindowKeys,
+    value: Header,
 }
 
 impl WindowJoinProcessor {
@@ -83,7 +84,7 @@ impl WindowJoinProcessor {
     ) -> Result<Self> {
         let scratch = state_reservation.sibling("native window join batch scratch and output");
         let timers = state_reservation.sibling("native window join timers");
-        let state = Box::new(MemoryKeyedState::new(
+        let state = Box::new(OrderedMemoryKeyedState::new(
             first_key_group,
             last_key_group,
             state_reservation,
@@ -195,6 +196,8 @@ impl WindowJoinProcessor {
             shift_time_zone,
             max_parallelism,
             state,
+            window_key_converter: RowConverter::new(vec![SortField::new(DataType::Int64)])?,
+            dirty_timer_groups: BTreeSet::new(),
             timers: NativeTimerService::new(first_key_group, last_key_group, timer_reservation)?,
             visible_schemas,
             output_schema,
@@ -231,8 +234,9 @@ impl WindowJoinProcessor {
             .map(|keys| keys.iter().flatten().map(<[u8]>::len).sum::<usize>())
             .unwrap_or(0);
         let base = copied_rows
-            .saturating_add(copied_keys)
-            .saturating_add(batch.num_rows().saturating_mul(144));
+            .saturating_mul(8)
+            .saturating_add(copied_keys.saturating_mul(8))
+            .saturating_add(batch.num_rows().saturating_mul(512));
         self.scratch_reservation.resize(base)?;
         let encoded_rows =
             self.row_converters[side].convert_columns(&batch.columns()[..visible_count]);
@@ -272,8 +276,8 @@ impl WindowJoinProcessor {
             let Some(window_end) = timestamp_millis(window_end_column, row)? else {
                 continue;
             };
-            let deadline = self.timer_timestamp(window_end.saturating_sub(1))?;
-            if deadline <= self.current_event_time {
+            let deadline = self.timer_timestamp(window_end.wrapping_sub(1))?;
+            if window_end != i64::MAX && deadline <= self.current_event_time {
                 self.late_records_dropped[side] = self.late_records_dropped[side].saturating_add(1);
                 continue;
             }
@@ -282,16 +286,20 @@ impl WindowJoinProcessor {
             let state_key = window_state_key(key_group, &group_key, window_end);
             let next = unique.len();
             let index = *unique.entry(state_key).or_insert(next);
-            let accumulate = match kinds.value(row) {
-                INSERT | UPDATE_AFTER => true,
-                UPDATE_BEFORE | DELETE => false,
+            match kinds.value(row) {
+                INSERT | UPDATE_AFTER => {}
+                UPDATE_BEFORE | DELETE => {
+                    return Err(DataFusionError::Execution(
+                        "Flink Window Join does not support on-time retraction input".into(),
+                    ))
+                }
                 other => {
                     return Err(DataFusionError::Execution(format!(
                         "unknown Flink RowKind byte {other}"
                     )));
                 }
             };
-            changes.push((index, accumulate, encoded_rows.row(row).data().to_vec()));
+            changes.push((index, encoded_rows.row(row).data().to_vec()));
         }
         if unique.is_empty() {
             return self.empty_output();
@@ -304,93 +312,64 @@ impl WindowJoinProcessor {
             .into_iter()
             .map(|key| key.expect("window join state index is populated"))
             .collect::<Vec<_>>();
-        let refs = keys
+        let window_keys = keys
             .iter()
-            .map(|key| StateKeyRef {
-                key_group: key.key_group,
-                key: &key.key,
+            .map(|key| WindowKeys::new(key, &mut self.window_key_converter))
+            .collect::<Result<Vec<_>>>()?;
+        let refs = window_keys
+            .iter()
+            .map(|keys| StateKeyRef {
+                key_group: keys.header.key_group,
+                key: &keys.header.key,
             })
             .collect::<Vec<_>>();
         let existing = self.state.get_batch(&refs, &self.scratch_reservation)?;
-        let _loaded_state_workspace =
-            crate::state::reserve_decoded_values(&existing, &self.scratch_reservation)?;
         self.state_read_batches = self.state_read_batches.saturating_add(1);
         let mut staged = keys
             .into_iter()
+            .zip(window_keys)
             .zip(existing)
-            .map(|(key, bytes)| {
+            .map(|((key, keys), bytes)| {
                 Ok(StagedWindow {
                     window_end: decode_window_end(&key.key)?,
                     key,
+                    keys,
                     value: bytes
-                        .map(|bytes| decode_state(bytes.as_ref()))
+                        .map(|v| Header::decode(v.as_ref()))
                         .transpose()?
                         .unwrap_or_default(),
-                    touched: false,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        let mut dirty_groups = BTreeSet::new();
-        for (index, accumulate, row) in changes {
+        let mut mutations = Vec::with_capacity(changes.len() + staged.len());
+        for (index, row) in changes {
             let entry = &mut staged[index];
-            let was_empty = entry.value.left.is_empty() && entry.value.right.is_empty();
-            let values = if side == 0 {
-                &mut entry.value.left
-            } else {
-                &mut entry.value.right
-            };
-            if accumulate {
-                values.push(row);
-            } else {
-                let position = values
-                    .iter()
-                    .position(|candidate| *candidate == row)
-                    .ok_or_else(|| {
-                        DataFusionError::Execution(
-                            "window join received a retraction without a matching row".to_string(),
-                        )
-                    })?;
-                values.remove(position);
-            }
-            let is_empty = entry.value.left.is_empty() && entry.value.right.is_empty();
+            let sequence = entry.value.append(side, row.len())?;
+            mutations.push(StateMutation {
+                key: entry.keys.payload_key(side, sequence),
+                value: Some(row),
+            });
+        }
+        for entry in staged {
             let timer = TimerKey {
-                timestamp: self.timer_timestamp(entry.window_end.saturating_sub(1))?,
-                key: entry.key.key.clone(),
+                timestamp: self.timer_timestamp(entry.window_end.wrapping_sub(1))?,
+                key: entry.key.key,
                 namespace: entry.window_end.to_le_bytes().to_vec(),
             };
-            if was_empty && !is_empty {
-                if self
-                    .timers
-                    .register(entry.key.key_group, TimerDomain::EventTime, timer)?
-                {
-                    self.timer_registrations = self.timer_registrations.saturating_add(1);
-                    dirty_groups.insert(entry.key.key_group);
-                }
-            } else if !was_empty
-                && is_empty
-                && self
-                    .timers
-                    .delete(entry.key.key_group, TimerDomain::EventTime, &timer)?
+            if self
+                .timers
+                .register(entry.key.key_group, TimerDomain::EventTime, timer)?
             {
-                self.timer_deletions = self.timer_deletions.saturating_add(1);
-                dirty_groups.insert(entry.key.key_group);
+                self.timer_registrations = self.timer_registrations.saturating_add(1);
+                self.dirty_timer_groups.insert(entry.key.key_group);
             }
-            entry.touched = true;
+            mutations.push(StateMutation {
+                key: entry.keys.header,
+                value: Some(entry.value.encode()),
+            });
         }
-        let mut mutations = staged
-            .into_iter()
-            .filter(|entry| entry.touched)
-            .map(|entry| StateMutation {
-                key: entry.key,
-                value: (!(entry.value.left.is_empty() && entry.value.right.is_empty()))
-                    .then(|| encode_state(&entry.value)),
-            })
-            .collect::<Vec<_>>();
-        self.append_timer_mutations(&mut mutations, dirty_groups)?;
-        if !mutations.is_empty() {
-            self.state.write_batch(mutations)?;
-            self.state_write_batches = self.state_write_batches.saturating_add(1);
-        }
+        self.state.write_batch(mutations)?;
+        self.state_write_batches = self.state_write_batches.saturating_add(1);
         self.empty_output()
     }
 
@@ -398,50 +377,97 @@ impl WindowJoinProcessor {
         if watermark <= self.current_event_time {
             return self.empty_output();
         }
+        let mut workspace = self
+            .scratch_reservation
+            .sibling("window join closed-window payload and output workspace");
+        workspace.resize(
+            self.timers
+                .due_timer_bytes(TimerDomain::EventTime, watermark)
+                .saturating_mul(4),
+        )?;
         self.current_event_time = watermark;
         let fired = self.timers.advance(TimerDomain::EventTime, watermark)?;
         self.timers_fired = self.timers_fired.saturating_add(fired.len() as u64);
         if fired.is_empty() {
             return self.empty_output();
         }
-        let refs = fired
+        let keys = fired
             .iter()
-            .map(|timer| StateKeyRef {
-                key_group: timer.key_group,
-                key: &timer.timer.key,
+            .map(|timer| {
+                WindowKeys::new(
+                    &StateKey {
+                        key_group: timer.key_group,
+                        key: timer.timer.key.clone(),
+                    },
+                    &mut self.window_key_converter,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let refs = keys
+            .iter()
+            .map(|key| StateKeyRef {
+                key_group: key.header.key_group,
+                key: &key.header.key,
             })
             .collect::<Vec<_>>();
         let states = self.state.get_batch(&refs, &self.scratch_reservation)?;
-        let _loaded_state_workspace =
-            crate::state::reserve_decoded_values(&states, &self.scratch_reservation)?;
         self.state_read_batches = self.state_read_batches.saturating_add(1);
+        let headers = states
+            .into_iter()
+            .map(|state| {
+                state
+                    .map(|v| Header::decode(v.as_ref()))
+                    .transpose()?
+                    .ok_or_else(|| {
+                        DataFusionError::Execution("window join timer has no window index".into())
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let bound = headers.iter().zip(&keys).fold(0usize, |n, (header, keys)| {
+            n.saturating_add(header.workspace_bound(keys))
+        });
+        let field_headroom = self
+            .visible_schemas
+            .iter()
+            .map(|schema| schema.fields().len())
+            .sum::<usize>()
+            .saturating_mul(1024);
+        workspace.resize(
+            workspace
+                .size()
+                .saturating_add(bound)
+                .saturating_add(field_headroom)
+                .saturating_add(super::sortable_state::PAGE_BYTES),
+        )?;
         let mut rows = Vec::new();
-        let mut mutations = Vec::with_capacity(fired.len() * 2);
-        let mut dirty_groups = BTreeSet::new();
-        for (group, (timer, state)) in fired.into_iter().zip(states).enumerate() {
-            dirty_groups.insert(timer.key_group);
-            if let Some(state) = state {
-                let state = decode_state(state.as_ref())?;
-                let group = i32::try_from(group).map_err(|_| {
-                    DataFusionError::Execution(
-                        "window join fired group count exceeds i32".to_string(),
-                    )
-                })?;
-                rows.extend(state.left.into_iter().map(|row| (group, 0, row)));
-                rows.extend(state.right.into_iter().map(|row| (group, 1, row)));
-            }
+        let mut mutations = Vec::new();
+        for (group, ((timer, keys), header)) in fired.into_iter().zip(keys).zip(headers).enumerate()
+        {
+            let group = i32::try_from(group).map_err(|_| {
+                DataFusionError::Execution("window join fired group count exceeds i32".into())
+            })?;
+            indexed_state::read_window(
+                self.state.as_ref(),
+                &keys,
+                &header,
+                group,
+                &mut rows,
+                &mut mutations,
+            )?;
+            self.state_read_batches = self.state_read_batches.saturating_add(1);
+            self.dirty_timer_groups.insert(timer.key_group);
             mutations.push(StateMutation {
-                key: StateKey {
-                    key_group: timer.key_group,
-                    key: timer.timer.key,
-                },
+                key: keys.header,
                 value: None,
             });
         }
-        self.append_timer_mutations(&mut mutations, dirty_groups)?;
+        // Construct before deleting durable payloads. A failed allocation must fail the task,
+        // whose last Flink checkpoint remains the recovery authority.
+        let output = self.output_batch(rows)?;
         self.state.write_batch(mutations)?;
         self.state_write_batches = self.state_write_batches.saturating_add(1);
-        let output = self.output_batch(rows)?;
+        self.scratch_reservation
+            .grow_from(&mut workspace, output.get_array_memory_size())?;
         self.finish_output(output, 0)
     }
 
@@ -465,7 +491,11 @@ impl WindowJoinProcessor {
         self.scratch_reservation.sibling("native state transfer")
     }
 
-    pub(crate) fn snapshot_key_group(&self, key_group: u32) -> Result<crate::state::SnapshotBytes> {
+    pub(crate) fn snapshot_key_group(
+        &mut self,
+        key_group: u32,
+    ) -> Result<crate::state::SnapshotBytes> {
+        self.flush_timers(key_group)?;
         self.state
             .snapshot_key_group(key_group, &self.scratch_reservation)
     }
@@ -473,6 +503,13 @@ impl WindowJoinProcessor {
     pub(crate) fn restore_key_group(&mut self, key_group: u32, bytes: &[u8]) -> Result<()> {
         self.state
             .restore_key_group(key_group, bytes, &self.scratch_reservation)?;
+        indexed_state::migrate_legacy(
+            self.state.as_mut(),
+            key_group,
+            bytes,
+            &mut self.window_key_converter,
+            &self.scratch_reservation,
+        )?;
         let timer = self.state.get_batch(
             &[StateKeyRef {
                 key_group,
@@ -489,23 +526,28 @@ impl WindowJoinProcessor {
         Ok(())
     }
 
-    pub(crate) fn checkpoint(&self, directory: &std::path::Path) -> Result<()> {
+    pub(crate) fn checkpoint(&mut self, directory: &std::path::Path) -> Result<()> {
+        for group in self.dirty_timer_groups.iter().copied().collect::<Vec<_>>() {
+            self.flush_timers(group)?;
+        }
         self.state.checkpoint(directory)
     }
 
-    fn append_timer_mutations(
-        &self,
-        mutations: &mut Vec<StateMutation>,
-        key_groups: BTreeSet<u32>,
-    ) -> Result<()> {
-        for key_group in key_groups {
-            mutations.push(StateMutation {
+    fn flush_timers(&mut self, key_group: u32) -> Result<()> {
+        if self.dirty_timer_groups.contains(&key_group) {
+            let mut workspace = self
+                .scratch_reservation
+                .sibling("window join timer checkpoint workspace");
+            // Timer serialization scales with retained timer keys, not incoming records.
+            workspace.resize(self.timers.snapshot_size_bound(key_group)?)?;
+            self.state.write_batch(vec![StateMutation {
                 key: StateKey {
                     key_group,
                     key: TIMER_STATE_KEY.to_vec(),
                 },
                 value: Some(self.timers.snapshot_key_group(key_group)?),
-            });
+            }])?;
+            self.dirty_timer_groups.remove(&key_group);
         }
         Ok(())
     }
@@ -718,60 +760,6 @@ fn decode_window_end(key: &[u8]) -> Result<i64> {
     Ok(i64::from_be_bytes(key[key.len() - 8..].try_into().unwrap()))
 }
 
-fn encode_state(state: &JoinWindowState) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(STATE_MAGIC);
-    bytes.push(STATE_VERSION);
-    for rows in [&state.left, &state.right] {
-        bytes.extend_from_slice(&(rows.len() as u32).to_le_bytes());
-        for row in rows {
-            bytes.extend_from_slice(&(row.len() as u32).to_le_bytes());
-            bytes.extend_from_slice(row);
-        }
-    }
-    bytes
-}
-
-fn decode_state(bytes: &[u8]) -> Result<JoinWindowState> {
-    if bytes.len() < 13 || &bytes[..4] != STATE_MAGIC || bytes[4] != STATE_VERSION {
-        return Err(DataFusionError::Execution(
-            "invalid native window join state".to_string(),
-        ));
-    }
-    let mut offset = 5;
-    let left = decode_rows(bytes, &mut offset)?;
-    let right = decode_rows(bytes, &mut offset)?;
-    if offset != bytes.len() {
-        return Err(DataFusionError::Execution(
-            "window join state has trailing bytes".to_string(),
-        ));
-    }
-    Ok(JoinWindowState { left, right })
-}
-
-fn decode_rows(bytes: &[u8], offset: &mut usize) -> Result<Vec<Vec<u8>>> {
-    let count = read_u32(bytes, offset)? as usize;
-    let mut rows = Vec::with_capacity(count);
-    for _ in 0..count {
-        let length = read_u32(bytes, offset)? as usize;
-        let end = offset.checked_add(length).ok_or_else(truncated)?;
-        rows.push(bytes.get(*offset..end).ok_or_else(truncated)?.to_vec());
-        *offset = end;
-    }
-    Ok(rows)
-}
-
-fn read_u32(bytes: &[u8], offset: &mut usize) -> Result<u32> {
-    let end = offset.checked_add(4).ok_or_else(truncated)?;
-    let value = bytes.get(*offset..end).ok_or_else(truncated)?;
-    *offset = end;
-    Ok(u32::from_le_bytes(value.try_into().unwrap()))
-}
-
-fn truncated() -> DataFusionError {
-    DataFusionError::Execution("truncated native window join state".to_string())
-}
-
 fn row_converter(schema: &SchemaRef) -> Result<RowConverter> {
     let fields = schema
         .fields()
@@ -793,243 +781,6 @@ fn row_converter(schema: &SchemaRef) -> Result<RowConverter> {
 mod datafusion_probe;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::memory_pool::{tests_support::TestBroker, HostMemoryReservation};
-    use arrow::array::{ArrayRef, BinaryArray, Int64Array, TimestampMillisecondArray};
-    use prost::Message;
-
-    #[test]
-    fn canonical_state_preserves_both_sides_and_duplicate_rows() {
-        let state = JoinWindowState {
-            left: vec![b"left".to_vec(), b"left".to_vec()],
-            right: vec![b"right".to_vec()],
-        };
-        assert_eq!(decode_state(&encode_state(&state)).unwrap(), state);
-    }
-
-    #[test]
-    fn accounts_join_rows_keys_timers_and_state_in_host_memory() {
-        let broker = Arc::new(TestBroker::new(64 << 20));
-        let mut processor = WindowJoinProcessor::new(
-            &plan(),
-            128,
-            0,
-            127,
-            HostMemoryReservation::new(broker.clone(), "window join accounting"),
-        )
-        .unwrap();
-        let empty_state = broker.reserved();
-        let output = processor
-            .process_arrow(
-                0,
-                batch(
-                    &[7, 8],
-                    &[100, 100],
-                    &[b"left", b"right"],
-                    &[INSERT, INSERT],
-                ),
-            )
-            .unwrap();
-
-        assert!(broker.reserved() > empty_state);
-        drop(output);
-        drop(processor);
-        assert_eq!(broker.reserved(), 0);
-    }
-
-    #[test]
-    fn retractions_restore_and_rescale_without_changing_window_contents() {
-        let broker = Arc::new(TestBroker::new(1 << 30));
-        let mut source = WindowJoinProcessor::new(
-            &plan(),
-            128,
-            0,
-            127,
-            HostMemoryReservation::new(broker.clone(), "window join source"),
-        )
-        .unwrap();
-        source
-            .process_arrow(
-                0,
-                batch(&[7, 7], &[100, 100], &[b"left", b"left"], &[INSERT, INSERT]),
-            )
-            .unwrap();
-        source
-            .process_arrow(0, batch(&[7], &[100], &[b"left"], &[DELETE]))
-            .unwrap();
-        source
-            .process_arrow(1, batch(&[7], &[100], &[b"right"], &[INSERT]))
-            .unwrap();
-        assert_eq!(&source.statistics()[..2], &[3, 3]);
-        let snapshots = (0..128)
-            .map(|key_group| source.snapshot_key_group(key_group).unwrap())
-            .collect::<Vec<_>>();
-
-        let mut lower = WindowJoinProcessor::new(
-            &plan(),
-            128,
-            0,
-            63,
-            HostMemoryReservation::new(broker.clone(), "window join lower"),
-        )
-        .unwrap();
-        let mut upper = WindowJoinProcessor::new(
-            &plan(),
-            128,
-            64,
-            127,
-            HostMemoryReservation::new(broker, "window join upper"),
-        )
-        .unwrap();
-        for (key_group, snapshot) in snapshots.iter().enumerate() {
-            let target = if key_group < 64 {
-                &mut lower
-            } else {
-                &mut upper
-            };
-            target
-                .restore_key_group(key_group as u32, snapshot)
-                .unwrap();
-        }
-
-        let outputs = [
-            lower.advance_event_time(99).unwrap(),
-            upper.advance_event_time(99).unwrap(),
-        ];
-        let rows = outputs
-            .iter()
-            .flat_map(|output| {
-                [2, 5].into_iter().flat_map(|column| {
-                    output
-                        .column(column)
-                        .as_any()
-                        .downcast_ref::<BinaryArray>()
-                        .unwrap()
-                        .iter()
-                        .flatten()
-                })
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(rows, vec![b"left".as_slice(), b"right".as_slice()]);
-        assert_eq!(lower.statistics()[5] + upper.statistics()[5], 0);
-    }
-
-    #[test]
-    fn canonical_join_state_moves_from_memory_to_rocksdb() {
-        let Ok(plugin_path) = std::env::var("STREAMFUSION_TEST_ROCKSDB_PLUGIN") else {
-            return;
-        };
-        let broker = Arc::new(TestBroker::new(1 << 30));
-        let mut memory = WindowJoinProcessor::new(
-            &plan(),
-            128,
-            0,
-            127,
-            HostMemoryReservation::new(broker.clone(), "window join memory source"),
-        )
-        .unwrap();
-        memory
-            .process_arrow(0, batch(&[7], &[100], &[b"left"], &[INSERT]))
-            .unwrap();
-        memory
-            .process_arrow(1, batch(&[7], &[100], &[b"right"], &[INSERT]))
-            .unwrap();
-        let snapshots = (0..128)
-            .map(|key_group| memory.snapshot_key_group(key_group).unwrap())
-            .collect::<Vec<_>>();
-
-        let directory = tempfile::tempdir().unwrap();
-        let mut rocks = WindowJoinProcessor::new_rocksdb(
-            &plan(),
-            128,
-            0,
-            127,
-            std::path::Path::new(&plugin_path),
-            directory.path(),
-            64 << 20,
-            HostMemoryReservation::new(broker, "window join RocksDB scratch"),
-        )
-        .unwrap();
-        for (key_group, snapshot) in snapshots.iter().enumerate() {
-            rocks.restore_key_group(key_group as u32, snapshot).unwrap();
-            assert_eq!(
-                rocks.snapshot_key_group(key_group as u32).unwrap(),
-                *snapshot
-            );
-        }
-        let output = rocks.advance_event_time(99).unwrap();
-        assert_eq!(output.num_rows(), 2);
-        assert_eq!(rocks.statistics()[5], 0);
-    }
-
-    fn plan() -> Vec<u8> {
-        proto::NativePlan {
-            protocol_version: crate::PLAN_PROTOCOL_VERSION,
-            root: Some(proto::Operator {
-                plan_node_id: 0,
-                metric_name: String::new(),
-                clear_record_timestamps: false,
-                metric_uid: None,
-                operator: Some(proto::operator::Operator::WindowJoin(proto::WindowJoin {
-                    left_key_indices: vec![0],
-                    right_key_indices: vec![0],
-                    left_window_end_index: 1,
-                    right_window_end_index: 1,
-                    left_schema: Some(test_schema()),
-                    right_schema: Some(test_schema()),
-                    shift_time_zone: "UTC".to_string(),
-                })),
-            }),
-        }
-        .encode_to_vec()
-    }
-
-    fn test_schema() -> proto::Schema {
-        proto::Schema {
-            fields: vec![
-                proto_field(
-                    "key",
-                    proto::logical_type::Type::Bigint(proto::EmptyType::default()),
-                ),
-                proto_field(
-                    "window_end",
-                    proto::logical_type::Type::Timestamp(proto::PrecisionType { precision: 3 }),
-                ),
-                proto_field(
-                    "payload",
-                    proto::logical_type::Type::Binary(proto::EmptyType::default()),
-                ),
-            ],
-        }
-    }
-
-    fn proto_field(name: &str, r#type: proto::logical_type::Type) -> proto::Field {
-        proto::Field {
-            name: name.to_string(),
-            r#type: Some(proto::LogicalType {
-                nullable: true,
-                r#type: Some(r#type),
-            }),
-        }
-    }
-
-    fn batch(keys: &[i64], window_end: &[i64], rows: &[&[u8]], kinds: &[i8]) -> RecordBatch {
-        RecordBatch::try_from_iter(vec![
-            ("key", Arc::new(Int64Array::from(keys.to_vec())) as ArrayRef),
-            (
-                "window_end",
-                Arc::new(TimestampMillisecondArray::from(window_end.to_vec())) as ArrayRef,
-            ),
-            (
-                "payload",
-                Arc::new(BinaryArray::from_vec(rows.to_vec())) as ArrayRef,
-            ),
-            (
-                "__streamfusion_input_row_kind",
-                Arc::new(Int8Array::from(kinds.to_vec())) as ArrayRef,
-            ),
-        ])
-        .unwrap()
-    }
-}
+mod indexed_tests;
+#[cfg(test)]
+mod tests;

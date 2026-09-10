@@ -173,12 +173,39 @@ impl NativeTimerService {
             .sum()
     }
 
+    /// Coarse capacity of due timers, usable to admit a drain before ownership leaves the index.
+    /// Future timers must not inflate a watermark's temporary workspace requirement.
+    pub(crate) fn due_timer_bytes(&self, domain: TimerDomain, progress: i64) -> usize {
+        self.groups
+            .iter()
+            .flat_map(|group| {
+                timer_set_ref(group, domain)
+                    .iter()
+                    .take_while(|timer| timer.timestamp <= progress)
+            })
+            .fold(0usize, |n, timer| n.saturating_add(timer_heap_size(timer)))
+    }
+
     pub(crate) fn next_timestamp(&self, domain: TimerDomain) -> Option<i64> {
         self.groups
             .iter()
             .filter_map(|group| timer_set_ref(group, domain).first())
             .map(|timer| timer.timestamp)
             .min()
+    }
+
+    /// Byte bound for one serialized key group, for coarse checkpoint-workspace admission.
+    pub(crate) fn snapshot_size_bound(&self, key_group: u32) -> Result<usize> {
+        let group = self.group(key_group)?;
+        Ok(group
+            .event_time
+            .iter()
+            .chain(&group.processing_time)
+            .fold(13usize, |n, timer| {
+                n.saturating_add(17)
+                    .saturating_add(timer.key.len())
+                    .saturating_add(timer.namespace.len())
+            }))
     }
 
     pub(crate) fn snapshot_key_group(&self, key_group: u32) -> Result<Vec<u8>> {
@@ -188,7 +215,7 @@ impl NativeTimerService {
             .len()
             .checked_add(group.processing_time.len())
             .ok_or_else(|| DataFusionError::Execution("native timer count overflow".to_string()))?;
-        let mut output = Vec::new();
+        let mut output = Vec::with_capacity(self.snapshot_size_bound(key_group)?);
         output.extend_from_slice(SNAPSHOT_MAGIC);
         output.push(SNAPSHOT_VERSION);
         output.extend_from_slice(&key_group.to_le_bytes());
@@ -526,6 +553,11 @@ mod tests {
             .unwrap();
         let group_one = before.snapshot_key_group(1).unwrap();
         let group_two = before.snapshot_key_group(2).unwrap();
+        assert_eq!(before.snapshot_size_bound(1).unwrap(), group_one.len());
+        assert_eq!(before.snapshot_size_bound(2).unwrap(), group_two.len());
+        assert_eq!(before.due_timer_bytes(TimerDomain::EventTime, 19), 0);
+        assert!(before.due_timer_bytes(TimerDomain::EventTime, 20) > 0);
+        assert_eq!(before.due_timer_bytes(TimerDomain::ProcessingTime, 20), 0);
 
         let mut left = service(0, 1, broker.clone());
         left.restore_key_group(1, &group_one).unwrap();
