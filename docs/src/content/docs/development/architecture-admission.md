@@ -63,6 +63,11 @@ and metric identity through multiple Arrow exits. Unsupported schemas, settings,
 subsets retain their precise fallback reasons. Sources and sinks may use explicit Arrow/RowData
 edge adapters; an internal RowData operator or an intermediate JNI round trip is not admitted.
 
+A synchronous Flink `StreamExecJoin` inner join with equi keys now uses the same admitted native
+region, without enabling the multi-join optimizer. Shared regular/MultiJoin metric, changelog,
+checkpoint and channel-replay tests verify both original implementations. Active and persisted
+settings are combined before rejecting async state, mini-batching and changelog-state wrapping.
+
 A binary Flink `StreamExecMultiJoin` with a common equi key lowers to the regular join algorithm.
 Its shared-region composition is admitted after generated metric/changelog comparisons, keyed
 rescaling and channel replay tests. Persistent state permits the common equality keys plus

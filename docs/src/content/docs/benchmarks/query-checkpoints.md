@@ -781,15 +781,27 @@ integration cases. These establish correctness and admission, not a performance 
 
 ## Q20 filtered bid/auction join
 
-Q20 joins bids with their auction information and filters category 10. The catalog preserves
-the original projection and predicate, adding only column labels for the positional sink and
-redundant qualifications. The existing benchmark enables Flink's multi-join optimizer on both
-engines and uses the admitted binary MultiJoin path. A fresh original-SQL check with Flink's
-default optimizer setting selects `StreamExecJoin`, whose architecture/persistent-state gate
-still prevents acceleration. The catalog's 50,000-event collecting comparisons match on both
-backends and parallelism 1/4, but this does not establish default regular-join admission.
+Q20 now passes ordinary admission with both Flink's default `StreamExecJoin` and its binary
+MultiJoin representation. The existing shared native runtime executes both; outer, semi/anti,
+cross, unique-key, unsupported residual and unsupported state/configuration subsets retain
+precise whole-plan fallback. Active async-state, mini-batch and changelog-state settings are
+checked even when absent from the node's persisted configuration.
 
-The shared binary-join matrix now also uses Flink's actual `StreamingJoinOperator` as its
-oracle. All 76 regular/MultiJoin metric, changelog, rescaling and checkpoint/channel-replay
-cases pass. Connecting this verified regular subset to ordinary planner admission and then
-completing original-query integration and release profiling are the next steps.
+The catalog preserves the original projection and category-10 predicate, adding only column
+labels for the positional sink and redundant qualifications. Nine original-SQL planning cases
+check catalog equivalence and execute the original blackhole schema/SELECT with both planners,
+both backends and both optimizer settings. Eight collecting/blackhole cases at 50,000 events
+compare complete result/changelog bytes and record counts on both backends, parallelism 1/4,
+and both join choices. Independent join inputs may interleave output differently; fixed-arrival
+operator tests compare the ordered changelog and timestamp envelopes.
+
+The shared binary-join matrix runs against Flink's actual `StreamingJoinOperator` and MultiJoin
+functions. All 76 metric, changelog, rescaling and checkpoint/channel-replay cases pass. Default
+SQL topology guards verify one native join/Calc state owner behind two Arrow IPC input edges.
+The admission checkpoint passed 19 focused unit checks and 17 original-query integration cases.
+Release measurement and profiling are the next checkpoint.
+
+The benchmark preserves its established multi-join-enabled preset. The existing Flink option
+can override that preset for benchmark-only validation: `-Dtable.optimizer.multi-join.enabled=false`.
+This chooses Flink's default two-input join in both engines. It is not a StreamFusion deployment
+option or an acceleration bypass.

@@ -100,7 +100,7 @@ class StreamFusionArchitectureSupportTest {
     }
 
     @Test
-    void regularJoinReportsRemainingMemoryRestrictionWithoutObsoleteStorageOrOutputRestrictions() {
+    void regularInnerJoinSatisfiesSharedStateArchitectureAdmission() {
         var join = new StreamExecJoin(
                 config,
                 new JoinSpec(FlinkJoinType.INNER, new int[] {0}, new int[] {0}, new boolean[] {true}, null),
@@ -114,9 +114,7 @@ class StreamFusionArchitectureSupportTest {
         join.setInputEdges(List.of());
         List<String> reasons = new ArrayList<>();
         StreamFusionArchitectureSupport.collect(new ExecNodeGraph(List.of(join)), reasons);
-        assertThat(String.join("\n", reasons))
-                .contains("retained-state/buffer admission")
-                .doesNotContain("dirty-page", "whole-key", "fan-out is not yet drained");
+        assertThat(reasons).isEmpty();
     }
 
     @Test
@@ -234,7 +232,7 @@ class StreamFusionArchitectureSupportTest {
     }
 
     @Test
-    void deduplicateUsesTheSharedRegionCapabilityWithoutRemovingItsMemoryGate() {
+    void deduplicateUsesTheSharedRegionCapabilityWithoutRemovingItsProcessingTimeGate() {
         var source = new BatchExecTableSourceScan(config, null, type, "source boundary");
         source.setInputEdges(List.of());
         var before = unary(
@@ -253,7 +251,7 @@ class StreamFusionArchitectureSupportTest {
         StreamFusionArchitectureSupport.collect(new ExecNodeGraph(List.of(after)), reasons);
         assertThat(reasons).hasSize(1);
         assertThat(reasons.get(0))
-                .contains("StreamExecDeduplicate", "retained-state/buffer admission")
+                .contains("StreamExecDeduplicate", "processing-time computation and shared recovery remain unverified")
                 .doesNotContain("intermediate JNI", "fused native ExecutionPlan");
     }
 

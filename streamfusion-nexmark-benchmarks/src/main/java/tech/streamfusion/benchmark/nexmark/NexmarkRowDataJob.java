@@ -153,7 +153,14 @@ public final class NexmarkRowDataJob {
                 tables.getConfig().set(OptimizerConfigOptions.TABLE_OPTIMIZER_DISTINCT_AGG_SPLIT_ENABLED, true);
             }
             tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, parallelism);
-            tables.getConfig().set(OptimizerConfigOptions.TABLE_OPTIMIZER_MULTI_JOIN_ENABLED, true);
+            // Preserve the established benchmark preset while allowing original/default
+            // Flink join selection to be validated with the existing Flink option.
+            tables.getConfig()
+                    .getConfiguration()
+                    .setString(
+                            OptimizerConfigOptions.TABLE_OPTIMIZER_MULTI_JOIN_ENABLED.key(),
+                            System.getProperty(
+                                    OptimizerConfigOptions.TABLE_OPTIMIZER_MULTI_JOIN_ENABLED.key(), "true"));
             if (query.equals("bounded-sort") || query.equals("bounded-sort-limit") || query.equals("bounded-rank")) {
                 tables.getConfig().getConfiguration().setString("__table.exec.sort.non-temporal.enabled__", "true");
             }

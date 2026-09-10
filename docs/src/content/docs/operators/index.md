@@ -18,7 +18,7 @@ This matrix follows the query operations documented by Flink 2.3, including the 
 | [Group aggregation](group-aggregation/) | **Partial** (synchronous keyed BIGINT aggregates; memory and default RocksDB) | Yes | DataFusion accumulators with Flink keyed state and changelog adapters |
 | [Window aggregation](window-aggregation/) | **Partial** (two-phase UTC HOP COUNT/MIN/MAX) | Yes | DataFusion grouped accumulators, native keyed slices and Flink control lifecycle |
 | [OVER aggregation](over-aggregation/) | **Temporarily gated** (whole-plan Flink fallback) | Yes | Native ordered state, timers, absorbed batch sort, and aggregate kernels |
-| [Joins](joins/) | **Partial** (binary inner MultiJoin with bounded comparisons; memory and default RocksDB) | By join type | Native keyed state, vectorized predicates, and timers |
+| [Joins](joins/) | **Partial** (binary inner regular/MultiJoin with bounded comparisons; memory and default RocksDB) | By join type | Native keyed state, vectorized predicates, and timers |
 | [Window joins](window-join/) | **Temporarily gated** (whole-plan Flink fallback) | Yes | Native two-sided window state plus Flink join conditions |
 | [Set operations](set-operations/) | **Partial** (`UNION ALL`; stateful rewrites gated) | By physical rewrite | Arrow IPC at Flink multi-input gates; native aggregate/join state and row replication |
 | [Exchange](exchange/) | **Partial** (hash and singleton) | Yes | Native Flink-compatible key grouping with Flink-owned network transport |

@@ -6,7 +6,7 @@ sidebar:
 ---
 
 **Current status:** Partial. Synchronous binary `INNER` joins represented by Flink's
-`StreamExecMultiJoin` use the shared native plan with in-memory or default RocksDB state when their complete
+`StreamExecJoin` or binary `StreamExecMultiJoin` use the shared native plan with in-memory or default RocksDB state when their complete
 condition is covered by common equi keys and optional boolean combinations of direct
 column/literal comparisons or null checks. Comparison/null-check operands may also use a
 `TIMESTAMP(3)` column plus or minus a non-null literal day-time interval. Other computed residual
@@ -26,8 +26,10 @@ The shared binary-join conformance matrix also runs against Flink's actual synch
 across regular and MultiJoin oracles verify complete metrics/changelogs for equality, range,
 timestamp-offset and wide predicates, plus backend-switch savepoints, 1→2→1 rescaling,
 incremental SST reuse and actual aligned/unaligned Arrow channel replay. This verifies the
-existing native runtime for the regular-join subset; ordinary `StreamExecJoin` selection
-remains gated pending the planner admission checkpoint.
+existing native runtime for the regular-join subset. Ordinary `StreamExecJoin` now selects it
+with Flink's default optimizer settings; enabling the multi-join optimizer is not required.
+Admission combines active and persisted configuration, so async state, mini-batching and
+changelog-state wrapping cannot evade fallback when an option is absent from persisted metadata.
 
 Regular-join capability checks and protobuf construction belong to the planner bundle, where
 Flink's `JoinSpec` and Calcite classes are visible. Runtime operators remain in the runtime
@@ -236,7 +238,12 @@ The two-input streaming bridge executes a persistent `RegularJoinExec` and downs
 inside one reusable native plan tree. Left/right ports are explicit protobuf children; native
 stages share Arrow arrays directly and only the outer output stream transfers accounting to Java.
 The join's logical output counters describe its own output before downstream stages, which have
-separate stage counts. Selected regular joins now use the same fragment/state-capability interface
+separate stage counts. Flink-specific code owns keyed multiset updates, retraction counts and
+per-arrival transitions: DataFusion's symmetric hash join consumes append-only Arrow rows and
+has no Flink RowKind/retraction or key-group snapshot contract. DataFusion evaluates residual
+predicates and Arrow kernels gather output; equality-only keyed candidates require no residual
+computation. Generated tests against both Flink join functions verify all four RowKinds and
+control boundaries for the admitted inner subset. Selected regular joins use the same fragment/state-capability interface
 as deduplication, with one generic keyed-region runtime and no special lifecycle-owner fusion hook.
 The region retains planned exchange frames and decodes them once at its input edge.
 Metric-owner lookup follows the protobuf tree rather
