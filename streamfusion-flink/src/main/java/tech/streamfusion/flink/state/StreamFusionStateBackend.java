@@ -19,7 +19,6 @@ import org.apache.flink.runtime.state.hashmap.HashMapStateBackend;
 /** Delegating Flink backend that adds standard incremental handles for native RocksDB state. */
 public final class StreamFusionStateBackend implements StateBackend {
     private static final long serialVersionUID = 1L;
-    private static final String NATIVE_OPERATOR_PREFIX = "streamfusion-";
 
     private final StateBackend delegate;
     private final String nativeBackendType;
@@ -44,7 +43,7 @@ public final class StreamFusionStateBackend implements StateBackend {
         }
         KeyedStateBackendParametersImpl<K> delegateParameters = new KeyedStateBackendParametersImpl<>(parameters);
         delegateParameters.setStateHandles(delegateHandles);
-        boolean nativeOperator = isNativeOperator(parameters.getOperatorIdentifier());
+        boolean nativeOperator = NativeStateOwnership.owns(parameters);
         NativeRocksDbMemoryLease rocksDbMemory = null;
         StateBackend keyedDelegate = delegate;
         if (nativeOperator && "rocksdb".equals(nativeBackendType)) {
@@ -116,10 +115,6 @@ public final class StreamFusionStateBackend implements StateBackend {
     @Override
     public String getName() {
         return "StreamFusion(" + delegate.getName() + ")";
-    }
-
-    static boolean isNativeOperator(String operatorIdentifier) {
-        return operatorIdentifier != null && operatorIdentifier.startsWith(NATIVE_OPERATOR_PREFIX);
     }
 
     private static String backendType(StateBackend backend) {

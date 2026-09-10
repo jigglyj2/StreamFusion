@@ -89,6 +89,9 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
         this.plan = plan.clone();
         this.localWindowResources = localWindowResources;
         this.stateIds = List.copyOf(stateIds);
+        if (!stateIds.isEmpty()) {
+            tech.streamfusion.flink.state.NativeStateOwnership.register(environment, config, getClass());
+        }
         this.lookupSources = lookupSources;
         ended = new boolean[inputTypes.size()];
         List<Input> ports = new ArrayList<>();

@@ -10,7 +10,8 @@ channel/day grouping. This report measures release commit
 At one million events, StreamFusion reaches **0.709× Flink's median throughput in memory**
 and **1.389× on RocksDB**. At ten million, the RocksDB ratio is **0.912×**. This is an initial
 baseline, with remaining state-capacity and performance work; it does not establish a general
-speedup or a performance ceiling.
+speedup or a performance ceiling. These results precede the native RocksDB ownership repair
+described below; release measurements after that repair remain pending.
 
 ## Validation
 
@@ -82,14 +83,114 @@ The retained artifacts are under
 This establishes completion at the default operator/state ratio, not a throughput improvement.
 Across 48,275 Flink and 73,117 StreamFusion CPU samples, inclusive RocksDB shares were 65.823%
 and 75.623%. StreamFusion index-reader and decompression frames remained at 49.949% and 52.324%
-(overlapping categories), so the larger cache share did not eliminate that bottleneck. Scalar
+(overlapping categories). A later live-database audit showed that the changed weights did not
+reach the intended native cache: the unneeded Java backend held the state-backend share. Scalar
 array conversion fell to 0.003% after the separate scalar-retention change; these profiles do not
 isolate a causal throughput gain from that change. No profiled elapsed time is used as a result.
 
 The harness now preserves Flink's configured/default weights instead of automatically imposing
 90/10. Explicit measurement overrides remain available through the standard Flink setting.
-The unprofiled results above remain the original 90/10 baseline; measurements of the corrected
-release under the default weights are pending.
+The unprofiled results above remain the original 90/10 baseline. A subsequent default-weight
+campaign at `747b033a0bcf7a787713abad6a78ae73f4a1b4ae` measured 0.492× in memory and 1.110×
+on RocksDB at 1M, and 0.557× on RocksDB at 10M. These measurements preceded the ownership
+repair below and cannot be presented as performance of the intended native-cache ownership.
+Their full forks, dispersion and profiles remain under the corresponding `747b033a/` directory.
+
+## Default-weight measurements before ownership repair
+
+Release `747b033a0bcf7a787713abad6a78ae73f4a1b4ae` includes direct retention of evaluated DataFusion scalars
+and retirement of completed DISTINCT computation workspace before Arrow output allocation.
+Both engines receive Flink's default `OPERATOR:70,STATE_BACKEND:70,PYTHON:30` weights and the
+same 1 GiB managed-memory budget. These runs precede the ownership repair described below. They are not an isolated code-change
+speedup over the historical 90/10 baseline below. All other measurement settings remain the same.
+
+Each case contains three unprofiled fresh-JVM pairs, alternating F/SF, SF/F, F/SF. Times are
+end-to-end seconds; MAD is median absolute deviation. Ratios divide Flink median time by
+StreamFusion median time. Every fork is retained.
+
+| Backend | Events | Engine | Median (s) | Range (s) | MAD (s) | Throughput ratio |
+| --- | ---: | --- | ---: | --- | ---: | ---: |
+| hashmap | 1,000,000 | flink | 6.617 | 5.760–7.110 | 0.493 | — |
+| hashmap | 1,000,000 | streamfusion | 13.461 | 7.888–14.068 | 0.607 | 0.492× |
+| rocksdb | 1,000,000 | flink | 9.363 | 8.713–12.586 | 0.650 | — |
+| rocksdb | 1,000,000 | streamfusion | 8.431 | 8.345–8.498 | 0.066 | 1.110× |
+| rocksdb | 10,000,000 | flink | 56.121 | 55.499–87.178 | 0.623 | — |
+| rocksdb | 10,000,000 | streamfusion | 100.673 | 77.866–103.391 | 2.717 | 0.557× |
+
+| Backend | Events | Blackhole records per engine/fork | StreamFusion native plan / Calc batches |
+| --- | ---: | ---: | --- |
+| hashmap | 1,000,000 | 920,000 | 416 / 144, 421 / 148, 398 / 138 |
+| rocksdb | 1,000,000 | 920,000 | 419 / 146, 423 / 148, 441 / 158 |
+| rocksdb | 10,000,000 | 9,200,000 | 3718 / 1248, 3751 / 1254, 3715 / 1246 |
+
+The longer memory profile uses 1.25M events at this release. The completed 20M RocksDB
+profile uses `3d7317704cbe74d5d0a3bab10925892d3b43025c`, the identical native binary and
+explicit 50/50/30 weights. With no Python consumers, its effective operator/state ratio equals
+the 70/70/30 measured configuration. That profile predates only the harness-default change,
+which its explicit override bypasses. It is reused here without rerunning the identical native path.
+Neither profile contributes a throughput measurement.
+
+| Inclusive CPU sample category | hashmap 1,250,000 F / SF | rocksdb 20,000,000 F / SF |
+| --- | ---: | ---: |
+| memory budget callbacks | 0.000 / 0.263 | 0.000 / 0.141 |
+| garbage collection | 5.841 / 2.797 | 0.648 / 0.330 |
+| row copy | 14.136 / 4.936 | 8.278 / 2.305 |
+| rowdata to arrow write | 0.000 / 0.856 | 0.000 / 0.472 |
+| arrow c data jni inclusive | 0.000 / 30.207 | 0.000 / 87.123 |
+| native plan lowering | 0.000 / 0.033 | 0.000 / 0.001 |
+| DataFusion frames, inclusive | 0.000 / 28.924 | 0.000 / 14.276 |
+| datafusion functions and expressions | 0.000 / 3.192 | 0.000 / 1.510 |
+| scalar to array conversion | 0.000 / 0.000 | 0.000 / 0.003 |
+| native group aggregate | 0.000 / 29.385 | 0.000 / 13.493 |
+| native distinct membership | 0.000 / 10.925 | 0.000 / 4.839 |
+| native membership state | 0.000 / 7.634 | 0.000 / 3.675 |
+| native state serialization | 0.000 / 2.205 | 0.000 / 0.732 |
+| arrow gather | 0.000 / 0.066 | 0.000 / 0.096 |
+| arrow row view access | 0.000 / 2.303 | 0.000 / 0.996 |
+| source poll inclusive | 24.260 / 13.689 | 14.890 / 7.198 |
+| rocksdb inclusive | 0.000 / 0.000 | 65.823 / 75.623 |
+| native artifact loading | 0.000 / 1.283 | 0.000 / 0.082 |
+| jit compile | 33.567 / 29.253 | 2.970 / 1.990 |
+
+All shares use total process CPU samples. Categories overlap; JNI includes downstream work,
+and the broad DataFusion category includes stream wrappers. A zero is no matching sample,
+not proof that an operation has no cost.
+
+hashmap profile: 2568 / 3039 Flink / StreamFusion CPU samples; both engines emit
+1,150,000 blackhole records. Native plan / Calc batches: 500 / 176.
+
+rocksdb profile: 48275 / 73117 Flink / StreamFusion CPU samples; both engines emit
+18,400,000 blackhole records. Native plan / Calc batches: 7482 / 2528.
+
+New run logs, metadata, medians, CPU/alloc collapsed stacks, JFRs, per-engine flame graphs
+and the memory differential flame graph are retained under
+`streamfusion-nexmark-benchmarks/target/measurements/q16/747b033a/`.
+The reused RocksDB profile and differential graph remain at the path in the equal-weight
+diagnostic section. The verified native SHA-256 is
+`55d7010b67473690440b0310ce51483192b272709a804c5f1d096e5e94bba793`;
+RocksDB remains `fe1af76cd4e48dc789eca1eb720d1fdea5b67d40f465956401c39a6653f08862`.
+Machine/runtime, CPU baseline, upstream revisions and profiling method match the baseline
+method below. No builds ran alongside measured or profiled forks.
+
+## Native RocksDB ownership defect
+
+Reading the live 10M native fork's database OPTIONS/LOG files showed four native caches of
+14,913,080 bytes and four Java caches of 111,848,106 bytes. The configured Flink weights were
+70/70/30. Flink's own run had four 223,696,213-byte caches; it did not declare the additional
+native operator consumer. Cache totals are not additive live usage: write buffers charge their
+shared cache, and capacities describe allowances.
+
+The backend's former `streamfusion-` transformation-name prefix did not match Flink's actual
+runtime-class-based operator identifier. Consequently it created the Java RocksDB delegate and
+the native database took a smaller fallback reservation from `OPERATOR`. This is an ownership
+bug, not evidence that RocksDB needs different algorithms, larger deployment budgets or a private
+patch. The [native state contract](/StreamFusion/development/native-state/) now uses explicit
+task-local registration before backend creation. The state-backend lease is assigned to the
+native owner, while Flink's keyed lifecycle uses its intended heap shell.
+
+Live audit files are retained in `747b033a/live-options/` alongside the campaign. Earlier RocksDB
+results remain historical measurements of the executed path; they do not establish performance
+with the intended cache ownership. Corrected release measurements remain pending.
 
 ## Acceleration and output evidence
 

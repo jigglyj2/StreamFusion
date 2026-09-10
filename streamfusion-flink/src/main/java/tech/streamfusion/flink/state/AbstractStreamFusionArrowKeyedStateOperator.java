@@ -11,8 +11,12 @@ import org.apache.flink.runtime.state.CheckpointStreamFactory;
 import org.apache.flink.runtime.state.KeyGroupRange;
 import org.apache.flink.runtime.state.StateInitializationContext;
 import org.apache.flink.runtime.state.StateSnapshotContext;
+import org.apache.flink.streaming.api.graph.StreamConfig;
 import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
 import org.apache.flink.streaming.api.operators.OperatorSnapshotFutures;
+import org.apache.flink.streaming.api.operators.Output;
+import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
+import org.apache.flink.streaming.runtime.tasks.StreamTask;
 import org.apache.flink.table.runtime.keyselector.RowDataKeySelector;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
@@ -27,6 +31,12 @@ public abstract class AbstractStreamFusionArrowKeyedStateOperator extends Abstra
     protected AbstractStreamFusionArrowKeyedStateOperator(
             byte[] serializedPlan, String stateName, NativeKeyedStateBridge bridge) {
         lifecycle = new NativeKeyedStateLifecycle(serializedPlan, stateName, bridge);
+    }
+
+    @Override
+    public void setup(StreamTask<?, ?> task, StreamConfig config, Output<StreamRecord<ArrowRowDataBatch>> output) {
+        super.setup(task, config, output);
+        NativeStateOwnership.register(task.getEnvironment(), config, getClass());
     }
 
     @Override

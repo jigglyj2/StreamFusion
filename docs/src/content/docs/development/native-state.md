@@ -351,13 +351,29 @@ For a planner-owned native operator, the adapter creates only a lightweight heap
 shell for Flink's current-key and key-group lifecycle. Creating an otherwise empty Java RocksDB
 instance beside the native database would duplicate cache reservations and checkpoint work. The
 native database instead leases the task's normal Flink `STATE_BACKEND` managed-memory fraction;
-Arrow buffers and operator scratch continue to use the operator's `OPERATOR` fraction. Operators
-that do not carry StreamFusion's planner-owned identifier still receive the configured Flink
-backend unchanged, so an all-or-nothing fallback remains an ordinary Flink RocksDB job.
-As in Flink's embedded backend, all native RocksDB instances in the task manager share one LRU
+Arrow buffers and operator scratch continue to use the operator's `OPERATOR` fraction.
+Native operators register their exact Flink operator/subtask identifier during construction or
+setup, before keyed-backend creation. The identity uses Flink's own `OperatorSubtaskDescriptionText`,
+including the runtime class, operator ID and subtask. Registration is task-local runtime metadata,
+not a deployment setting, and survives Flink discarding its serialized operator factories.
+Unregistered operators receive the configured Flink backend unchanged, so an all-or-nothing
+fallback remains an ordinary Flink RocksDB job.
+Native RocksDB instances attached to the same Flink shared-memory resource share one LRU
 block cache and one cache-charged write-buffer manager. The corresponding Flink shared-memory
 resource is reserved once and reference-counted across operators, rather than multiplying the
 state-backend fraction for every native database.
+
+A Q16 live-database audit found that the former `streamfusion-` transformation-name prefix
+check did not match Flink's runtime-class-based identifier. That path opened a Java RocksDB
+backend and gave the native database a fallback reservation from the operator pool. At
+`747b033a`, the 70/70-weight run had four native caches of 14,913,080 bytes plus four Java
+caches of 111,848,106 bytes. The ownership registration corrects that selection; it does not
+increase Flink's budget or change RocksDB settings, state encodings or checkpoint algorithms.
+Tests use Flink's real identifier format, verify the exact native lease, prove that the Java
+RocksDB constructor is bypassed only for registered owners, check task/subtask isolation and
+reservation release, and assert the heap delegate in the generated native-region recovery harness.
+The former empty Java RocksDB shell produces no managed checkpoint handle with either full
+or incremental checkpoints; the native state encoding and its existing restore path are unchanged.
 
 Both full and incremental regular RocksDB checkpoints use native checkpoint files. The existing
 Flink `execution.checkpointing.incremental` setting controls reuse: when enabled, completed immutable

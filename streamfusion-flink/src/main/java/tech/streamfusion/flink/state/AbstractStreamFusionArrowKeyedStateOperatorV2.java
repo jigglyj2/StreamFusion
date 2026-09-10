@@ -36,6 +36,7 @@ public abstract class AbstractStreamFusionArrowKeyedStateOperatorV2 extends Abst
         super(parameters, inputCount);
         lifecycle = new NativeKeyedStateLifecycle(serializedPlan, stateName, bridge);
         taskEnvironment = parameters.getContainingTask().getEnvironment();
+        NativeStateOwnership.register(taskEnvironment, parameters.getStreamConfig(), getClass());
     }
 
     @Override

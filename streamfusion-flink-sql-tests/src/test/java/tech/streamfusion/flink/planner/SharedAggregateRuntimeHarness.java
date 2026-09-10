@@ -154,6 +154,12 @@ final class SharedAggregateRuntimeHarness extends KeyedMultiInputStreamOperatorT
         setup(ArrowRowDataBatchSerializer.INSTANCE);
         if (restore != null) initializeState(restore);
         open();
+        // Assert the production factory/constructor registered this exact Flink subtask. A
+        // Java RocksDB delegate here would hide a second cache behind the native state path.
+        assertThat(region().getKeyedStateBackend())
+                .isInstanceOf(tech.streamfusion.flink.state.StreamFusionKeyedStateBackend.class)
+                .extracting("delegate")
+                .isInstanceOf(org.apache.flink.runtime.state.heap.HeapKeyedStateBackend.class);
         var field = StreamFusionArrowNativeRegionOperator.class.getDeclaredField("memory");
         field.setAccessible(true);
         nativeMemory = (FlinkManagedMemory) ((StreamFusionTaskMemory) field.get(region())).nativeMemoryManager();
