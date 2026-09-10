@@ -114,8 +114,12 @@ Retaining output competes for Flink's existing budget; denial occurs before the 
 Cancellation releases temporary workspace while retained output remains valid and accounted for.
 This is reservation-based admission for growing buffers, not an allocation-by-allocation ledger.
 
-State appends individual payload entries and updates a 29-byte window header per incoming batch;
-it does not rewrite a growing opaque partition value. Partition prefixes are length-framed,
+State appends immutable payload pages (up to 256 rows or a 16 KiB target, with individually
+admitted wider rows) and updates a 29-byte window header per incoming batch. It does not rewrite
+old pages or a growing opaque partition value. New `SFWI/4` windows use `SFWP/1` page framing;
+restored `SFWI/3` windows keep their original row entries until they close, and legacy `SFWJ/2`
+windows migrate on restore. The page key contains its first arrival ordinal; payloads preserve
+all subsequent ordinals in sequence. Partition prefixes are length-framed,
 window ends use Arrow row ordering, and each side preserves a stable arrival ordinal. Memory
 and RocksDB both use ordered range reads and batched deletion. Flink partition hashing remains
 separate; keyless shared joins use Flink's eight-byte empty `BinaryRowData` key.

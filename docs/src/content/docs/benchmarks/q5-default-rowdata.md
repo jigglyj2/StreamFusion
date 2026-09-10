@@ -99,10 +99,14 @@ Both failed in-memory attempts request another 225,475 bytes for native state no
 At two million events, 61,803,681 bytes are reserved and 27,091 remain; at 1.25 million,
 61,814,302 are reserved and 16,244 remain. Flink completes both matching runs. This is a retained
 native-state capacity limit, distinct from the earlier whole-window decoder reservation failure.
-The next investigation must identify that state's owner and reduce actual retained storage or
-provide a semantically valid bounded path. Reducing accounting without storage evidence or
-changing Flink's allocation rules would not resolve it. A completed longer in-memory profile and
-further general optimization remain outstanding.
+A diagnostic maps this owner to `WindowJoin[45]`. Its per-row payload entries repeat the
+partition/window prefix and ordered-tree overhead. The subsequent storage change appends bounded
+payload pages while retaining the separate ordered index and original memory allowance. A native
+regression stores 10,000 rows as 40 entries with less than 1 MiB retained in memory. Old indexed
+windows remain readable until they close; the [window-join contract](/StreamFusion/operators/window-join/)
+describes encoding versions and recovery. These results do not change the `a47c7340` measurements
+above: a release rerun, completed longer in-memory profile and further general optimization remain
+outstanding.
 
 Raw metadata, all runs, completed per-engine JFRs, CPU/allocation collapsed stacks, flame graphs,
 differential flame graphs and category definitions are under

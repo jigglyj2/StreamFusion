@@ -10,7 +10,7 @@ use arrow::array::Int64Array;
 
 const INDEX: u8 = 0x91;
 const PAYLOAD: u8 = 0x92;
-const HEADER_MAGIC: &[u8; 5] = b"SFWI\x03";
+const HEADER_MAGIC: &[u8; 4] = b"SFWI";
 
 pub(super) struct WindowKeys {
     pub(super) header: StateKey,
@@ -53,10 +53,20 @@ impl WindowKeys {
     }
 }
 
-#[derive(Default)]
 pub(super) struct Header {
+    pub(super) paged: bool,
     counts: [u64; 2],
     bytes: u64,
+}
+
+impl Default for Header {
+    fn default() -> Self {
+        Self {
+            paged: true,
+            counts: [0; 2],
+            bytes: 0,
+        }
+    }
 }
 
 impl Header {
@@ -80,6 +90,7 @@ impl Header {
     pub(super) fn encode(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(29);
         bytes.extend_from_slice(HEADER_MAGIC);
+        bytes.push(if self.paged { 4 } else { 3 });
         for value in [self.counts[0], self.counts[1], self.bytes] {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
@@ -87,13 +98,14 @@ impl Header {
     }
 
     pub(super) fn decode(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() != 29 || &bytes[..5] != HEADER_MAGIC {
+        if bytes.len() != 29 || &bytes[..4] != HEADER_MAGIC || !matches!(bytes[4], 3 | 4) {
             return Err(DataFusionError::Execution(
                 "invalid window join index version or length".into(),
             ));
         }
         let value = |offset| u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
         let header = Self {
+            paged: bytes[4] == 4,
             counts: [value(5), value(13)],
             bytes: value(21),
         };
@@ -156,14 +168,19 @@ pub(super) fn read_window(
                         "window join payload order has a gap or invalid side".into(),
                     ));
                 }
-                seen[side] = seen[side].checked_add(1).ok_or_else(overflow)?;
-                bytes = bytes.checked_add(value.len() as u64).ok_or_else(overflow)?;
+                let payload = payload_pages::Rows::new(value, header.paged)?;
+                seen[side] = seen[side]
+                    .checked_add(payload.len() as u64)
+                    .ok_or_else(overflow)?;
+                bytes = bytes
+                    .checked_add(payload.bytes() as u64)
+                    .ok_or_else(overflow)?;
                 if seen[side] > header.counts[side] || bytes > header.bytes {
                     return Err(DataFusionError::Execution(
                         "window join payload exceeds its index".into(),
                     ));
                 }
-                rows.push((group, side as i8, value.to_vec()));
+                rows.extend(payload.iter().map(|row| (group, side as i8, row.to_vec())));
                 deletes.push(StateMutation {
                     key: StateKey {
                         key_group: keys.header.key_group,
@@ -247,13 +264,7 @@ pub(super) fn migrate_legacy(
         );
         workspace.resize(bound)?;
         for (side, rows) in [legacy.left, legacy.right].into_iter().enumerate() {
-            for row in rows {
-                let sequence = header.append(side, row.len())?;
-                mutations.push(StateMutation {
-                    key: keys.payload_key(side, sequence),
-                    value: Some(row),
-                });
-            }
+            payload_pages::append(&keys, &mut header, side, rows, &mut mutations)?;
         }
         mutations.push(StateMutation {
             key: keys.header,

@@ -118,7 +118,7 @@ fn incoming_batches_read_only_headers_and_never_rewrite_retained_rows_or_timers(
         let output = processor.advance_event_time(99).unwrap();
         assert_eq!(output.num_rows(), 256);
         assert_eq!(io.range_reads.load(Ordering::Relaxed), 1);
-        assert_eq!(io.scanned_rows.load(Ordering::Relaxed), 256);
+        assert!(io.scanned_rows.load(Ordering::Relaxed) < 256);
         drop(output);
         drop(processor);
         assert_eq!(broker.reserved(), 0);
@@ -398,7 +398,7 @@ fn future_index_versions_and_mixed_legacy_snapshots_are_rejected_on_restore() {
             ));
         } else {
             let (_, value) = entries.iter_mut().find(|(k, _)| k[0] == 0x91).unwrap();
-            value[4] = 4;
+            value[4] = 5;
         }
         let bytes = streamfusion_state_abi::encode_key_group_snapshot(
             group,

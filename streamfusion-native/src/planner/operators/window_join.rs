@@ -29,6 +29,9 @@ mod closing;
 mod computation;
 mod indexed_state;
 mod legacy_state;
+mod payload_pages;
+#[cfg(test)]
+mod payload_pages_tests;
 pub(crate) mod planning;
 pub(crate) mod shared_execution;
 use indexed_state::{Header, WindowKeys};
@@ -369,14 +372,13 @@ impl WindowJoinProcessor {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        let mut mutations = Vec::with_capacity(changes.len() + staged.len());
+        let mut grouped = (0..staged.len()).map(|_| Vec::new()).collect::<Vec<_>>();
         for (index, row) in changes {
-            let entry = &mut staged[index];
-            let sequence = entry.value.append(side, row.len())?;
-            mutations.push(StateMutation {
-                key: entry.keys.payload_key(side, sequence),
-                value: Some(row),
-            });
+            grouped[index].push(row);
+        }
+        let mut mutations = Vec::new();
+        for (entry, rows) in staged.iter_mut().zip(grouped) {
+            payload_pages::append(&entry.keys, &mut entry.value, side, rows, &mut mutations)?;
         }
         for entry in staged {
             let timer = TimerKey {

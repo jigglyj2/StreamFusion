@@ -52,13 +52,20 @@ left pages of at most 256 rows, with bounded decode bytes. Each page uses a fres
 execution to reset its build state; adjacent native stages still exchange Arrow directly. No Java
 candidate-matching loop is used.
 
-Native state separates payload entries from an Arrow-row ordering index. Both backends use
-ordered range access and batch writes; growing partition values are not rewritten on every row.
+Native state separates payload pages from an Arrow-row ordering index. New windows append
+immutable pages of at most 256 rows and normally at most 16 KiB; a single wider row retains its
+own admitted page. Each incoming batch updates a 29-byte header and writes only new pages.
+Both backends use ordered range access and batch writes; growing partition values are not rewritten.
 Flink partition hashing and key-group identity remain separate from sortable state keys. A left
 page's entries are reclaimed only after its DataFusion output drains. The right entries, header
 and timer remain until all pages finish. A partial-close cursor cannot be checkpointed: input and
 checkpoint operations remain blocked during the invocation, and failure recovers Flink's previous
-checkpoint. Persisted encodings are unchanged.
+checkpoint. New windows use `SFWI/4` headers and length-framed `SFWP/1` payload pages. Restored
+`SFWI/3` windows remain in their original per-row encoding for subsequent appends until they
+close; new windows alongside them use pages. Legacy `SFWJ/2` windows migrate to pages on restore.
+This preserves cross-backend restore and rescaling without an eager rewrite of growing indexed
+windows. Earlier readers reject the new header version. The shared `SFWF/2` semantic contract
+remains unchanged.
 
 Coarse reservations cover retained state, large Arrow inputs and outputs, and DataFusion's
 candidate/filter workspace through Flink's original managed-memory allowances. Shared buffers

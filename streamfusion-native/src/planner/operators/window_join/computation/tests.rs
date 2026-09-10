@@ -90,27 +90,27 @@ async fn generated_closed_state_runs_datafusion_in_flink_order_with_retained_out
                 let predicate = filter(&p);
                 p.begin_watermark(99).unwrap();
                 let owner = p.state_memory();
-                let closed = p.next_closed_window().unwrap().unwrap();
-                let mut stream = ClosedWindowStream::try_new(
-                    closed,
-                    predicate,
-                    context(&owner, batch_size),
-                    &owner,
-                )
-                .unwrap();
                 let mut outputs = Vec::new();
                 let mut actual = Vec::new();
-                while let Some(batch) = stream.next().await {
-                    let batch = batch.unwrap();
-                    assert!(batch.num_rows() <= batch_size);
-                    actual.extend(pairs(&batch));
-                    outputs.push(batch);
+                while let Some(closed) = p.next_closed_window().unwrap() {
+                    let mut stream = ClosedWindowStream::try_new(
+                        closed,
+                        predicate.clone(),
+                        context(&owner, batch_size),
+                        &owner,
+                    )
+                    .unwrap();
+                    while let Some(batch) = stream.next().await {
+                        let batch = batch.unwrap();
+                        assert!(batch.num_rows() <= batch_size);
+                        actual.extend(pairs(&batch));
+                        outputs.push(batch);
+                    }
+                    assert!(stream.completed());
+                    drop(stream);
+                    p.finish_closed_window().unwrap();
                 }
-                assert!(stream.completed());
                 assert!(outputs.len() > 1);
-                p.finish_closed_window().unwrap();
-                assert!(p.next_closed_window().unwrap().is_none());
-                drop(stream);
                 drop(p);
                 let expected = left
                     .iter()

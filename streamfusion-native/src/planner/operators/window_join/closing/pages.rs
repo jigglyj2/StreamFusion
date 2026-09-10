@@ -54,24 +54,39 @@ pub(super) fn decode(
         keys.header.key_group,
         &start.key,
         end.as_deref(),
-        PAGE_ROWS,
+        if header.paged && !complete {
+            1
+        } else {
+            PAGE_ROWS
+        },
         page_bytes,
         &mut |page| {
-            let page_bytes = page.iter().try_fold(0u64, |sum, (_, value)| {
-                sum.checked_add(value.len() as u64)
-                    .ok_or_else(invalid_index)
-            })?;
-            let count = rows.len().saturating_add(page.len());
+            let mut payload_bytes = 0usize;
+            let mut row_count = 0usize;
+            for &(_, value) in page {
+                let payload = payload_pages::Rows::new(value, header.paged)?;
+                payload_bytes = payload_bytes
+                    .checked_add(payload.bytes())
+                    .ok_or_else(invalid_index)?;
+                row_count = row_count
+                    .checked_add(payload.len())
+                    .ok_or_else(invalid_index)?;
+            }
+            let count = rows.len().saturating_add(row_count);
+            if !complete && header.paged && !rows.is_empty() && count > PAGE_ROWS {
+                return Ok(false);
+            }
             let next = first.checked_add(count as u64).ok_or_else(invalid_index)?;
-            bytes = bytes.checked_add(page_bytes).ok_or_else(invalid_index)?;
+            bytes = bytes
+                .checked_add(payload_bytes as u64)
+                .ok_or_else(invalid_index)?;
             if next > header.counts()[side] || bytes > header.bytes() {
                 return Err(invalid_index());
             }
             workspace.try_grow(
-                usize::try_from(page_bytes)
-                    .unwrap_or(usize::MAX)
+                payload_bytes
                     .saturating_mul(8)
-                    .saturating_add(page.len().saturating_mul(256)),
+                    .saturating_add(row_count.saturating_mul(256)),
             )?;
             for &(key, value) in page {
                 let expected = first + rows.len() as u64;
@@ -81,10 +96,13 @@ pub(super) fn decode(
                 {
                     return Err(invalid_index());
                 }
-                max_row_bytes = max_row_bytes.max(value.len());
-                rows.push(value.to_vec());
+                let payload = payload_pages::Rows::new(value, header.paged)?;
+                for row in payload.iter() {
+                    max_row_bytes = max_row_bytes.max(row.len());
+                    rows.push(row.to_vec());
+                }
             }
-            Ok(complete)
+            Ok(complete || (header.paged && rows.len() < PAGE_ROWS))
         },
     )?;
     processor.state_read_batches = processor.state_read_batches.saturating_add(1);
@@ -117,24 +135,56 @@ pub(super) fn delete_rows(
     side: usize,
     first: u64,
     count: u64,
+    max_row_bytes: usize,
 ) -> Result<()> {
     let mut workspace = processor
         .scratch_reservation
         .sibling("window join completed page deletes");
-    let mut cursor = first;
-    let end = first.checked_add(count).ok_or_else(invalid_index)?;
-    while cursor < end {
-        let size = (end - cursor).min(PAGE_ROWS as u64) as usize;
-        workspace.resize(size.saturating_mul(keys.side_prefix(side).len().saturating_add(128)))?;
-        let deletes = (cursor..cursor + size as u64)
-            .map(|sequence| StateMutation {
-                key: keys.payload_key(side, sequence),
-                value: None,
-            })
-            .collect();
+    if count == 0 {
+        return Ok(());
+    }
+    let end = keys.payload_key(side, first.checked_add(count).ok_or_else(invalid_index)?);
+    let mut start = keys.payload_key(side, first).key;
+    let prefix_bytes = keys.side_prefix(side).len();
+    let page_bytes = max_row_bytes
+        .saturating_add(prefix_bytes)
+        .saturating_add(128)
+        .max(32 << 10);
+    workspace.resize(
+        page_bytes
+            .saturating_mul(2)
+            .saturating_add(PAGE_ROWS.saturating_mul(prefix_bytes.saturating_add(128))),
+    )?;
+    loop {
+        let mut deletes = Vec::new();
+        processor.state.visit_range(
+            keys.header.key_group,
+            &start,
+            Some(&end.key),
+            PAGE_ROWS,
+            page_bytes,
+            &mut |page| {
+                for &(key, _) in page {
+                    deletes.push(StateMutation {
+                        key: StateKey {
+                            key_group: keys.header.key_group,
+                            key: key.to_vec(),
+                        },
+                        value: None,
+                    });
+                }
+                Ok(false)
+            },
+        )?;
+        processor.state_read_batches = processor.state_read_batches.saturating_add(1);
+        let Some(last) = deletes.last() else {
+            break;
+        };
+        start = last.key.key.clone();
+        // The acknowledged prefix is immutable; an inclusive seek after deletion resumes
+        // at its successor without retaining a growing list of payload keys.
         processor.state.write_batch(deletes)?;
         processor.state_write_batches = processor.state_write_batches.saturating_add(1);
-        cursor += size as u64;
     }
     Ok(())
 }
