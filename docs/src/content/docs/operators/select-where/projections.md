@@ -696,6 +696,8 @@ pattern compilation and regex DFA caches; growing payloads are reserved separate
 shrinks to the actual final output buffers and survives native consumers and slices until their
 last owner releases them. Memory denial is recoverable and occurs before the large buffers are
 allocated. There is no per-row JNI accounting or separate deployment setting.
+The [Q21 release comparison](/StreamFusion/benchmarks/q21-rowdata/) reports faster 10M-event
+medians and slower 1M-event medians, with full dispersion and separate mixed CPU profiles.
 
 `REGEXP`, `REGEXP_COUNT`, `REGEXP_EXTRACT_ALL`, `REGEXP_INSTR`, `REGEXP_SUBSTR`, `REGEXP_REPLACE`,
 and the `SIMILAR TO` predicates remain on Flink. Their general Java `Pattern` syntax, matching,

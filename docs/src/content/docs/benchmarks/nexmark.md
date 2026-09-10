@@ -95,8 +95,9 @@ numeric `DATE_FORMAT`; its blackhole comparison does not exercise filesystem par
 or rolling policies. See the query checkpoint page for its delivery status. Q14's built-in expressions
 have parity coverage, but its original Java UDF still awaits the proposed architecture exception;
 Q21 now uses the verified literal-regex subset through DataFusion and passes ordinary admission
-and collecting/blackhole parity on both backend configurations. Its release measurements remain
-pending. Q12's processing-time SQL is catalogued, but its windows align to the live Flink clock.
+and collecting/blackhole parity on both backend configurations. Its
+[release comparison](/StreamFusion/benchmarks/q21-rowdata/) reports 1.315× / 1.172× median throughput
+at 10M events (hashmap / RocksDB configured), with disjoint ranges; both 1M cases favor Flink. Q12's processing-time SQL is catalogued, but its windows align to the live Flink clock.
 A bounded max-speed run may finish before a timer fires, and finishing input does not emit the final
 open window. Empty or partial results do not establish parity or acceleration. Its UTC TUMBLE COUNT operator now has ordinary
 selection, controlled-clock changelog/metric parity, both-backend recovery and live SQL execution

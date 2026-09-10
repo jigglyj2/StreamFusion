@@ -829,5 +829,8 @@ input selection, grammar validation and output accounting through the last slice
 The implementation checkpoint passes 13 native checks, 32 focused Java unit checks and nine
 original-query integration cases. Planning and collecting/blackhole validation exercise both backend configurations
 and parallelism 1/4 at 50,000 events. Q21 is stateless, so these are not RocksDB state-performance
-or recovery-capacity results. Release measurement, profiling and reasonable optimization on
-both backend configurations remain the next checkpoint; no Q21 performance result is claimed yet.
+or recovery-capacity results. The [release comparison](/StreamFusion/benchmarks/q21-rowdata/) completes three alternating
+measured pairs at 1M and 10M events and separate 20M profiles on both configurations. At 10M,
+StreamFusion reaches 1.315× / 1.172× median throughput (hashmap / RocksDB configured), with
+all pairs faster and disjoint ranges; both 1M comparisons favor Flink. All planned forks complete.
+The bounded Q21 checkpoint is delivered; Q22 is next.
