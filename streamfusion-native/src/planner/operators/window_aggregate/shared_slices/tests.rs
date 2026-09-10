@@ -175,6 +175,7 @@ fn backends() -> Vec<bool> {
 mod attached;
 mod checkpoint;
 mod distinct;
+mod firing;
 mod generated;
 mod tumble;
 

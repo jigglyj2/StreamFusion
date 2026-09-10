@@ -12,6 +12,8 @@ use std::sync::{
 #[derive(Default)]
 pub(crate) struct Io {
     pub(crate) read_batches: AtomicUsize,
+    pub(crate) duplicate_read_keys: AtomicUsize,
+    pub(crate) max_read_rows: AtomicUsize,
     pub(crate) write_batches: AtomicUsize,
     pub(crate) range_reads: AtomicUsize,
     pub(crate) read_bytes: AtomicUsize,
@@ -21,6 +23,8 @@ pub(crate) struct Io {
 impl Io {
     pub(crate) fn reset(&self) {
         self.read_batches.store(0, Ordering::Relaxed);
+        self.duplicate_read_keys.store(0, Ordering::Relaxed);
+        self.max_read_rows.store(0, Ordering::Relaxed);
         self.write_batches.store(0, Ordering::Relaxed);
         self.range_reads.store(0, Ordering::Relaxed);
         self.read_bytes.store(0, Ordering::Relaxed);
@@ -39,6 +43,16 @@ impl KeyedState for Observed {
         owner: &HostMemoryReservation,
     ) -> Result<StateReadBatch<'a>> {
         self.io.read_batches.fetch_add(1, Ordering::Relaxed);
+        let distinct = keys
+            .iter()
+            .map(|key| (key.key_group, key.key))
+            .collect::<std::collections::HashSet<_>>();
+        self.io
+            .duplicate_read_keys
+            .fetch_add(keys.len() - distinct.len(), Ordering::Relaxed);
+        self.io
+            .max_read_rows
+            .fetch_max(keys.len(), Ordering::Relaxed);
         let result = self.inner.get_batch(keys, owner)?;
         self.io.read_bytes.fetch_add(
             result.iter().flatten().map(|v| v.len()).sum::<usize>(),

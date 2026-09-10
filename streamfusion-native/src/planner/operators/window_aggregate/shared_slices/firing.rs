@@ -94,20 +94,17 @@ impl SharedSlices {
             let rows = self
                 .end_codec
                 .convert_columns(&[Arc::new(Int64Array::from(slice_ends)) as ArrayRef])?;
-            let mut unique =
-                HashMap::<StateKey, usize, RandomState>::with_hasher(RandomState::new());
-            let mut keys = Vec::new();
-            let mut assignments = Vec::new();
-            for (row, index) in (offset..end).enumerate() {
-                let timer = &fired[index / slices];
-                let key = codec::key(timer.key_group, &timer.timer.key, rows.row(row).as_ref());
-                let next = keys.len();
-                let slot = *unique.entry(key.clone()).or_insert_with(|| {
-                    keys.push(key);
-                    next
-                });
-                assignments.push((index / slices, slot));
-            }
+            // Every callback drains one timestamp frontier. Its timers have distinct
+            // (key-group, partition) identities, and each positive-width slice has a
+            // different end within that window. These read keys are already unique.
+            // Keep one owned key per request instead of cloning it into a dedup map.
+            let keys = (offset..end)
+                .enumerate()
+                .map(|(row, index)| {
+                    let timer = &fired[index / slices];
+                    codec::key(timer.key_group, &timer.timer.key, rows.row(row).as_ref())
+                })
+                .collect::<Vec<_>>();
             let refs = keys
                 .iter()
                 .map(|key| StateKeyRef {
@@ -143,10 +140,10 @@ impl SharedSlices {
                 .collect::<Result<Vec<_>>>()?;
             let mut selected = Vec::new();
             let mut groups = Vec::new();
-            for (group, slot) in assignments {
-                if let Some(state) = &states[slot] {
+            for (slot, state) in states.iter().enumerate() {
+                if let Some(state) = state {
                     selected.push(state);
-                    groups.push(group);
+                    groups.push((offset + slot) / slices);
                 }
             }
             self.compute

@@ -290,6 +290,13 @@ slice does not reserve its entire parent allocation again. A constrained-memory 
 both backends retains a 16,384-row parent, merges a 32-row slice, and verifies every overlapping
 window result plus the producer's lifetime after the window closes.
 
+Global firing drains one timer timestamp at a time. Its partition/slice requests are already
+unique, so the adapter keeps one owned key per request without a duplicate-key hash map or
+assignment directory. Reads remain bounded to 4,096 keys and output callbacks to 1,024 timers;
+DataFusion receives the same accumulator/group order across read-page boundaries. A generated
+both-backend regression covers duplicate partials, missing slices, negative windows and callbacks
+that span both limits. Persisted state, Flink timer semantics and metric definitions are unchanged.
+
 ### Global HOP slicer
 
 The global fragment builder admits append-only UTC event-time HOP partials for COUNT and

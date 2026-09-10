@@ -123,8 +123,11 @@ for 34.49% of Flink's and 23.87% of StreamFusion's process samples. Some storage
 callers, so these are observed shares rather than exhaustive operator attribution.
 
 Inspection found that the global-window firing adapter duplicates each requested state key in
-its deduplication map and its ordered read list. Reducing that duplication is a general next
-optimization; neither these profiles nor the throughput measurements establish its benefit yet.
+its deduplication map and its ordered read list. The subsequent firing change removes the redundant map and assignment directory: each callback
+handles one timestamp frontier, whose partition/slice requests are already unique. The generated
+boundary test preserves group assignments across 4,096-key read pages and 1,024-timer output
+callbacks. Neither these profiles nor the measurements above establish that change's throughput
+benefit; it still needs a release rerun.
 Large JIT and source shares also limit conclusions about steady-state compute. The measured
 capacity is not an unlimited-memory guarantee: retained state, complete right windows and
 DataFusion workspace remain subject to Flink's original allowance.
