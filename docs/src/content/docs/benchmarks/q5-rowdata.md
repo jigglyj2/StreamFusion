@@ -3,7 +3,11 @@ title: Q5 RowData release comparison
 description: Shared HOP window admission, release measurements, and managed-memory limits.
 ---
 
-Q5 is admitted by the ordinary planner on in-memory and default RocksDB state. Its local/global
+Q5 is admitted on in-memory and default RocksDB state with the benchmark's
+`table.optimizer.multi-join.enabled=true` preset. With Flink's default `false`, the September 10
+audit instead selects `StreamExecWindowJoin` and retains whole-plan fallback. The measurements
+below establish the enabled-preset path only; default window-join integration remains unfinished.
+Its local/global
 HOP COUNT feeds both a binary join and an attached MAX branch. The reused aggregate has one
 native owner; its Calc and attached local MAX consume shared Arrow batches in that same native
 plan. Flink retains exchanges, resource assignment, checkpoints and recovery.

@@ -3,7 +3,10 @@ title: Q8 RowData release comparison
 description: DISTINCT TUMBLE admission, release measurements, and mixed JVM/native profiles.
 ---
 
-Q8 now accelerates through ordinary whole-plan selection on in-memory and default RocksDB state.
+Q8 accelerates on in-memory and default RocksDB state with the benchmark's
+`table.optimizer.multi-join.enabled=true` preset. With Flink's default `false`, the September 10
+audit selects the still-gated `StreamExecWindowJoin`. The measurements below establish the
+enabled-preset path only; default window-join integration remains unfinished.
 Its two DISTINCT TUMBLE branches use DataFusion grouped presence state and join on the person/seller
 and window bounds. Flink retains planning, routing, resource assignment, watermarks and recovery.
 

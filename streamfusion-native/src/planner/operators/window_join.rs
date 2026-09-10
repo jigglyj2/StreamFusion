@@ -790,6 +790,9 @@ fn row_converter(schema: &SchemaRef) -> Result<RowConverter> {
 }
 
 #[cfg(test)]
+mod datafusion_probe;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::memory_pool::{tests_support::TestBroker, HostMemoryReservation};

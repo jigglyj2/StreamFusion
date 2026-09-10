@@ -17,6 +17,26 @@ These short integration runs are not performance measurements.
 
 ## Current checkpoint
 
+The September 10 audit covers the pinned upstream suite, Q0–Q23. There is no Q24 in that
+checkout. Forty-four fresh-JVM EXPLAIN checks at production code `78414b06` use Flink's
+default `table.optimizer.multi-join.enabled=false`, mini-batching disabled and both backends.
+Twenty query plans are admitted. Q5 and Q8 select `StreamExecWindowJoin` and fall back;
+their earlier delivery evidence used the benchmark's enabled multi-join preset. This is a
+remaining coverage gap, not permission to remove the window-join lifecycle gate.
+
+Eight focused integration cases recheck Q6 and Q14 on current code: Q6 still fails Flink's
+bounded non-time OVER planning; Q14 executes its original Java UDF through whole-plan Flink
+fallback with positive output and zero native activity. Its proposed batch-callback exception
+is not approved. Q0–Q2 have admission/parity evidence but still lack the later checkpoints'
+complete standalone release-report/profile evidence. The full goal is not complete.
+
+Raw EXPLAIN results and blocker checks are retained under
+`streamfusion-nexmark-benchmarks/target/measurements/suite-audit/`. These checks do not rerun
+the full suite's runtime parity or performance on one common commit. The next implementation
+target is Q5's default window join; the historical checkpoints below retain their stated scope.
+
+## Delivery history and scope
+
 Q3's supported synchronous binary inner equi-join path is delivered on both in-memory and
 default RocksDB backends. Ordinary admission, complete collected changelog comparison, the
 default metric surface, checkpoint/backend-switch/rescaling/channel-replay contracts, and
@@ -34,7 +54,7 @@ differently, so those end-to-end materialized results supplement the determinist
 The [Q4 release comparison](/StreamFusion/benchmarks/q4-rowdata/) records a general batched
 join-predicate optimization, approximate in-memory parity and a 15.5% RocksDB median throughput
 gain at one million events, with overlapping ranges. Separate longer profiles cover both engines
-and backends. Q5's ordinary plan now accelerates local/global
+and backends. Q5's plan with the enabled multi-join optimizer accelerates local/global
 HOP COUNT, attached MAX and a reused aggregate with two Arrow exits on both backends. Generated
 SQL and channel-recovery tests cover that shared ownership and control path. Opt-in official
 Nexmark tests match complete changelog and materialized results at 10,000 events, parallelism one
@@ -68,7 +88,8 @@ flushes, global nullable/composite keys, complete registered metrics, canonical 
 restore, rescaling and aligned/unaligned channel replay. Global wide-key memory admission includes
 logical key payloads and avoids a duplicate-key index. Ordinary selection admits this verified
 DISTINCT TUMBLE subset; VARCHAR aggregate calls and DISTINCT HOP remain gated. Official Q8
-parity passes at 10,000 events, parallelism one and four, on both backends: complete collected
+parity with the enabled multi-join optimizer passes at 10,000 events, parallelism one and four,
+on both backends: complete collected
 changelog bytes, materialized results, positive native plan activity and no standalone local-window
 JNI batches. The [Q8 release comparison](/StreamFusion/benchmarks/q8-rowdata/) records one- and
 ten-million-event measurements and separate two-/twenty-million-event profiles on both backends.

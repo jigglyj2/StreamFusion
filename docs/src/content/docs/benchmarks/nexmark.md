@@ -6,8 +6,12 @@ description: The north-star Kafka-in/Kafka-out comparison.
 The north-star benchmark compares StreamFusion with native Flink using the Nexmark streaming workload. Both engines consume the same officially generated Nexmark events from Kafka and write results back to Kafka with exactly-once delivery.
 
 Current delivery follows [numbered query checkpoints](/StreamFusion/benchmarks/query-checkpoints/).
-Q0–Q2 have been rechecked for planner admission. Q3 now passes in-memory admission and parity;
-its RocksDB path and release performance checkpoint remain outstanding. Performance results below are historical and do not imply current planner admission.
+The September 10 audit checks the pinned Q0–Q23 suite; there is no Q24 in that checkout.
+With Flink's default disabled multi-join optimizer, 20 query plans pass admission on both
+backends. Q5 and Q8 still fall back on `StreamExecWindowJoin`; their earlier measurements used
+the benchmark's enabled multi-join preset. Q6 has no supported upstream streaming baseline,
+and Q14 retains its original Java-UDF fallback. These are admission results, not a fresh
+execution/parity or performance run of the entire suite. The full goal remains incomplete.
 
 ## Benchmark matrix
 

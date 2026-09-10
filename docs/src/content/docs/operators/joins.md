@@ -67,6 +67,25 @@ whole-plan fallback in the packaged distribution even when flat-classpath SQL te
 The cached CSV lookup subset below is also admitted. Other join paths are retained for development and direct parity tests under
 [architecture admission](/StreamFusion/development/architecture-admission/).
 
+### Default window-join gap
+
+With Flink's default disabled multi-join optimizer, Nexmark Q5 and Q8 select
+`StreamExecWindowJoin`, which still retains whole-plan fallback. Earlier measurements of
+those queries enabled the multi-join optimizer and exercised a supported binary join instead.
+The retained window-join handle is not integrated into the common native execution-plan,
+state, control and per-stage metric lifecycle and must not be admitted on those results.
+
+A test-only DataFusion 55 investigation evaluates a closed insert-only inner window with
+`NestedLoopJoinExec` and a physical comparison predicate. A complete right-window Arrow input
+preserves Flink `WindowJoinHelper`'s left-row/right-row iteration order; the normal DataFusion
+memory source splits batches and can change that order. The existing native reusable Arrow input
+avoids this split without copying payloads or adding a Java boundary. Tests cover generated
+nulls/duplicates, empty windows, output batches bounded by 64/4,096 rows, the ordering
+counterexample and release of DataFusion build reservations after cancellation.
+This is compute/lifecycle evidence against an independent row oracle, not Flink SQL parity or
+production admission. Full output-buffer leases, large-window workspace admission, persisted
+state migration, timers, metrics, shared-plan composition and recovery remain implementation work.
+
 **Retained implementation scope:** Partial implementation for bounded hash/adaptive/sort-merge/nested-loop joins and for
 synchronous regular, multi-way, time-bounded, and temporal streaming joins.
 
