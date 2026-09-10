@@ -669,8 +669,12 @@ collected changelog at parallelism one, materialized results at both parallelism
 record counts negotiated independently of the collecting sink. All accelerated runs require
 positive native activity. Independent parallel jobs may interleave channels differently; controlled
 runtime tests remain the byte-parity evidence for identical input ordering. The
-[initial release comparison](/StreamFusion/benchmarks/q16-rowdata/) reports three alternating
-pairs at 1M on both backends and 10M on RocksDB, plus separate longer profiles. Ratios are
-0.709× in memory and 1.389× on RocksDB at 1M, and 0.912× on RocksDB at 10M, with dispersion
-and failed memory cases recorded. Q16's performance work remains active: the long profile
-identifies repeated RocksDB index-block reads/decompression as a leading cost.
+[corrected release comparison](/StreamFusion/benchmarks/q16-rowdata/) reports three alternating
+pairs at 1M on both backends and 10M on RocksDB, plus separate longer profiles. Release
+`94d996f0` gives the native database its intended Flink state-backend lease and removes the
+unneeded Java RocksDB instance. Ratios are 0.487× in memory and 1.073× on RocksDB at 1M,
+and 1.354× on RocksDB at 10M. The 10M ranges overlap; Flink wins one of the three pairs.
+The long profile still identifies index reads/decompression as leading native CPU costs.
+Historical measurements and failed memory cases remain linked from the report. This is Q16's
+verified delivery checkpoint, not a claim of a performance ceiling or speedup on every backend.
+Q17 is the next query checkpoint.

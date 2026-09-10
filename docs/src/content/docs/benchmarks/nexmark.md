@@ -74,8 +74,10 @@ runs and faster ten-million-event medians with both backend configurations. Q15'
 filtered DISTINCT aggregates now pass ordinary whole-plan admission on both backends; its
 [release report](/StreamFusion/benchmarks/q15-rowdata/) records measured performance and memory limits.
 Q16 now passes ordinary admission and parity checks on both backends; its
-[initial release report](/StreamFusion/benchmarks/q16-rowdata/) records measured performance,
-profiles and capacity limits. Q16 performance work and Q17's delivery checkpoint remain open. Q10's SELECT path is now catalogued with
+[release report](/StreamFusion/benchmarks/q16-rowdata/) records the native RocksDB ownership
+repair, measured performance, profiles and capacity limits. It reaches 1.354× Flink's median
+throughput on 10M RocksDB events, with overlapping ranges, while 1M in-memory execution remains
+slower. Q17 is the next delivery checkpoint. Q10's SELECT path is now catalogued with
 numeric `DATE_FORMAT`; its blackhole comparison does not exercise filesystem partition commits
 or rolling policies. See the query checkpoint page for its delivery status. Q14's built-in expressions
 have parity coverage, but its original Java UDF still awaits the proposed architecture exception;
