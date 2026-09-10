@@ -236,11 +236,12 @@ DISTINCT groups, following Flink's append-only data-view behavior. It retains Da
 computation and batched state I/O, skips writes for unchanged membership, and preserves legacy
 counted groups during restore. Generated insert-only Flink parity covers metrics, checkpoints,
 channel replay and rescaling. The [Q15 release comparison](/StreamFusion/benchmarks/q15-rowdata/)
-now includes independently growing memory-state tables at `3f77da61`: 1.189× RocksDB and 0.729×
-in-memory median throughput at one million events, and 1.561× RocksDB throughput at ten million.
-Separate longer profiles cover both backends. The ten-million-event in-memory attempt passes the
-former large table-replacement peak but still exhausts retained-state capacity. No large in-memory
-result or incremental throughput gain over the preceding StreamFusion build is claimed.
+now includes packed point-state entries at `158ff8b3`: 1.221× RocksDB and 0.676× in-memory
+median throughput at one million events, and 1.748× RocksDB throughput at ten million. The
+120,000-entry storage fixture fits a 15 MiB share that cannot hold the previous unpacked directory.
+Separate longer profiles cover both backends. The ten-million-event in-memory attempt still
+exhausts retained-state capacity. No large in-memory result or incremental throughput gain over
+the preceding StreamFusion build is claimed; the report retains dispersion and every failed case.
 
 While Q14's JVM UDF architecture decision is pending, original Q15 now passes ordinary
 whole-plan selection with its filtered DISTINCT aggregates unchanged. The benchmark catalog

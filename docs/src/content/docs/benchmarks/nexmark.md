@@ -65,17 +65,19 @@ binary MultiJoin), q9 (residual join plus Top-1), q11
 (event-time session aggregation), q19 (Top-N), q20 (regular join), q22 (URL directory extraction),
 and q23 (two regular joins). A deterministic `interval-join` workload exercises
 Flink's constant-bound event-time interval physical operator.
-This catalog is not production admission. Q3's binary inner equi-join path is admitted with in-memory
-state; other stateful families and RocksDB retain their gates. The query checkpoint page records
-current selection separately from implementation.
+Catalog inclusion alone does not establish production admission. The
+[query checkpoint page](/StreamFusion/benchmarks/query-checkpoints/) records ordinary selection,
+backend validation and remaining fallback conditions separately from implementation.
 Q13 is catalogued with its original legacy CSV side input and passes ordinary lookup admission.
 Its [release comparison](/StreamFusion/benchmarks/q13-rowdata/) reports slower one-million-event
-runs and faster ten-million-event medians with both backend configurations. q15, q16, and q17 still require an
-unsupported join shape or surrounding operator. Q10's SELECT path is now catalogued with
+runs and faster ten-million-event medians with both backend configurations. Q15's original
+filtered DISTINCT aggregates now pass ordinary whole-plan admission on both backends; its
+[release report](/StreamFusion/benchmarks/q15-rowdata/) records measured performance and memory limits.
+Q16 and Q17 have not yet completed their production delivery checkpoints. Q10's SELECT path is now catalogued with
 numeric `DATE_FORMAT`; its blackhole comparison does not exercise filesystem partition commits
-or rolling policies. See the query checkpoint page for its delivery status. q14 uses a Java UDF, mixed decimal
-arithmetic beyond the q1 conversion shape, and timestamp calendar extraction; q21 uses Java-regex
-semantics. Q12's processing-time SQL is catalogued, but its windows align to the live Flink clock.
+or rolling policies. See the query checkpoint page for its delivery status. Q14's built-in expressions
+have parity coverage, but its original Java UDF still awaits the proposed architecture exception;
+q21 uses Java-regex semantics. Q12's processing-time SQL is catalogued, but its windows align to the live Flink clock.
 A bounded max-speed run may finish before a timer fires, and finishing input does not emit the final
 open window. Empty or partial results do not establish parity or acceleration. Its UTC TUMBLE COUNT operator now has ordinary
 selection, controlled-clock changelog/metric parity, both-backend recovery and live SQL execution
