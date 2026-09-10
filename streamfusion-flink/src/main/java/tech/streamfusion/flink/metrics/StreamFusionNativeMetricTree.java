@@ -211,6 +211,16 @@ public final class StreamFusionNativeMetricTree implements AutoCloseable {
                 processingTime);
     }
 
+    public boolean hasNativeGauges() {
+        return gauges != null && !gauges.isEmpty();
+    }
+
+    public void update(tech.streamfusion.nativebridge.NativeInvocationSnapshot snapshot) {
+        update(snapshot.metrics());
+        if (gauges != null) gauges.update(snapshot.gauges());
+        else if (snapshot.gauges().length != 0) throw new IllegalArgumentException("Unexpected native gauges");
+    }
+
     public void update(NativeExecutionContext context) {
         update(context.metricSnapshot());
         if (gauges != null) gauges.update();

@@ -377,6 +377,19 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
         else output.collect(sharedOutputs.outputTag(port), new StreamRecord<>(batch));
     }
 
+    private void refreshNativeObservations() {
+        final tech.streamfusion.nativebridge.NativeInvocationSnapshot snapshot;
+        try {
+            snapshot = memory.executionContext()
+                    .invocationSnapshot(metricTree.hasNativeGauges(), processingTimers.requiresDeadlines());
+        } catch (RuntimeException | Error failure) {
+            metricTree.updateAfterFailure(memory.executionContext(), failure);
+            throw failure;
+        }
+        metricTree.update(snapshot);
+        processingTimers.refresh(snapshot.deadlines());
+    }
+
     private void process(int port, ArrowRowDataBatch input) {
         controls.requireHealthy();
         FlinkMetricParity.replacePhysicalRecords(
@@ -387,8 +400,7 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
             metricTree.updateAfterFailure(memory.executionContext(), failure);
             throw failure;
         }
-        metricTree.update(memory.executionContext());
-        processingTimers.refresh();
+        refreshNativeObservations();
     }
 
     @Override
@@ -434,8 +446,7 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
                     metricTree.updateAfterFailure(memory.executionContext(), failure);
                     throw failure;
                 }
-                metricTree.update(memory.executionContext());
-                processingTimers.refresh();
+                refreshNativeObservations();
             } else {
                 throw new IllegalArgumentException("Native region input must be Arrow or an exchange-edge IPC frame");
             }

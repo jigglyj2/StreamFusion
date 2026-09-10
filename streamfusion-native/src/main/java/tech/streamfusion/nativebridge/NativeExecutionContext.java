@@ -167,6 +167,14 @@ public final class NativeExecutionContext implements AutoCloseable {
     }
 
     /** Reads cumulative (plan ID, logical input rows, logical output rows) triples in one call. */
+    public static native int invocationSnapshotEdgeVersion();
+
+    public NativeInvocationSnapshot invocationSnapshot(boolean gauges, boolean deadlines) {
+        return new NativeInvocationSnapshot(readInvocationSnapshot(handle(), gauges, deadlines));
+    }
+
+    private static native long[] readInvocationSnapshot(long handle, boolean gauges, boolean deadlines);
+
     public long[] metricSnapshot() {
         return readMetricSnapshot(handle());
     }

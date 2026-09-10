@@ -16,6 +16,7 @@ mod exchange;
 mod execution_context;
 mod group_aggregate;
 mod interval_join;
+mod invocation_snapshot;
 mod local_group_aggregate;
 mod local_window_aggregate;
 mod lookup_resources;

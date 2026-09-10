@@ -120,6 +120,20 @@ class NativeRegionProcessingTimeSchedulerTest {
         }
     }
 
+    @Test
+    void completionSnapshotSchedulesTimersWithoutPollingNativeAgain() throws Exception {
+        var f = new Fixture(true);
+        assertThat(f.driver.requiresDeadlines()).isTrue();
+        f.pending.put(1L, 99L);
+        f.driver.refresh(new long[] {1, 99});
+        assertThat(f.reads).isZero();
+        assertThat(f.service.getNumActiveTimers()).isEqualTo(1);
+        f.service.setCurrentTime(100);
+        assertThat(f.pending).isEmpty();
+        assertThat(f.reads).isEqualTo(1); // Control completion still checks advancement.
+        assertThat(new Fixture(false).driver.requiresDeadlines()).isFalse();
+    }
+
     private static final class RecordingService extends TestProcessingTimeService {
         private final List<ProcessingTimeCallback> callbacks = new ArrayList<>();
 
