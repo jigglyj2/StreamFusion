@@ -84,6 +84,10 @@ final class StreamFusionJoinSupport {
     static String unsupportedReason(StreamExecWindowJoin join, ProcessorContext context) {
         ExecEdge left = join.getInputEdges().get(0);
         ExecEdge right = join.getInputEdges().get(1);
+        var merged = org.apache.flink.configuration.Configuration.fromMap(
+                context.getPlanner().getTableConfig().getConfiguration().toMap());
+        merged.addAll(org.apache.flink.configuration.Configuration.fromMap(
+                join.getPersistedConfig().toMap()));
         try {
             Class<?> translator = Class.forName(
                     WINDOW_JOIN_TRANSLATOR_CLASS, true, StreamFusionRuntimeClasses.class.getClassLoader());
@@ -104,7 +108,7 @@ final class StreamFusionJoinSupport {
                     windowJoinSpec(join),
                     windowJoinLeftWindowing(join),
                     windowJoinRightWindowing(join),
-                    join.getPersistedConfig());
+                    merged);
         } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException e) {
             throw new IllegalStateException("Could not inspect StreamFusion WindowJoin support", e);
         } catch (InvocationTargetException e) {

@@ -286,13 +286,22 @@ impl WindowJoinProcessor {
                 DataFusionError::Execution("window join RowKinds are not Int8".to_string())
             })?;
         let window_end_column = batch.column(self.window_end_index(side));
+        // Flink attached window aggregates carry the end as epoch-millisecond BIGINT.
+        // A TVF boundary can still expose the same value as Arrow Timestamp(Millisecond).
+        let epoch_ends = window_end_column
+            .as_any()
+            .downcast_ref::<arrow::array::Int64Array>();
         let mut unique = HashMap::<StateKey, usize, RandomState>::with_capacity_and_hasher(
             batch.num_rows(),
             RandomState::new(),
         );
         let mut changes = Vec::with_capacity(batch.num_rows());
         for row in 0..batch.num_rows() {
-            let Some(window_end) = timestamp_millis(window_end_column, row)? else {
+            let end = match epoch_ends {
+                Some(values) => (!values.is_null(row)).then(|| values.value(row)),
+                None => timestamp_millis(window_end_column, row)?,
+            };
+            let Some(window_end) = end else {
                 continue;
             };
             let deadline = self.timer_timestamp(window_end.wrapping_sub(1))?;

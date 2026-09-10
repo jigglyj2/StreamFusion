@@ -25,7 +25,6 @@ struct SharedWindowJoin {
     kernel: WindowJoinProcessor,
     filter: Option<JoinFilter>,
     invocation: InvocationState,
-    restored_watermark: Option<i64>,
     contract: Vec<u8>,
     first_group: u32,
     last_group: u32,
@@ -72,14 +71,16 @@ impl WindowJoinFactory {
         // BinaryRowDataUtil.EMPTY_ROW has the eight-byte header even at arity zero.
         // Keep partition identity identical to the Flink selector and native exchange.
         kernel.empty_partition_key = vec![0; 8];
-        if let Some(watermark) = binding.restored_watermark {
-            kernel.current_event_time = watermark;
+        if binding.restored_watermark.is_some() {
+            return Err(invalid(
+                "Flink WindowJoin restores timers, not an operator watermark",
+            ));
         }
         let filter = computation::validate(&kernel.plan)?;
         let mut config = kernel.plan.clone();
         config.left_input = None;
         config.right_input = None;
-        let mut contract = b"SFWF\x01".to_vec();
+        let mut contract = b"SFWF\x02".to_vec();
         contract.extend_from_slice(&Sha256::digest(config.encode_to_vec()));
         let metadata_schema = Arc::new(Schema::new(vec![
             Field::new(OWNED_TIMESTAMP_V1, DataType::Int64, true),
@@ -98,7 +99,6 @@ impl WindowJoinFactory {
                 kernel,
                 filter,
                 invocation: InvocationState::Idle,
-                restored_watermark: binding.restored_watermark,
                 contract,
                 first_group: binding.first_key_group,
                 last_group: binding.last_key_group,
@@ -187,7 +187,6 @@ impl PersistentOperatorFactory for WindowJoinFactory {
     fn restore(&self, group: u32, bytes: &[u8]) -> Result<()> {
         let mut owner = self.owner.lock().map_err(|_| poisoned())?;
         owner.invocation.require_idle(NAME)?;
-        let watermark = owner.restored_watermark.ok_or_else(|| invalid("shared window join restore requires Flink's union-operator watermark in state-binding protocol 3"))?;
         // Validate before mutating the backend. Empty groups still carry the plan contract.
         let mut memory = owner.kernel.state_memory();
         memory.resize(bytes.len().saturating_mul(4).saturating_add(4096))?;
@@ -204,7 +203,9 @@ impl PersistentOperatorFactory for WindowJoinFactory {
         }
         drop(entries);
         owner.kernel.restore_key_group(group, bytes)?;
-        owner.kernel.current_event_time = watermark;
+        // Flink InternalTimerServiceImpl restores timer queues but starts its clock
+        // at MIN_VALUE. Replayed records must see that clock, including late rows.
+        owner.kernel.current_event_time = i64::MIN;
         Ok(())
     }
     fn checkpoint(&self, directory: &std::path::Path) -> Result<()> {

@@ -72,86 +72,71 @@ The cached CSV lookup subset below is also admitted. Other join paths are retain
 With Flink's default disabled multi-join optimizer, Nexmark Q5 and Q8 select
 `StreamExecWindowJoin`, which still retains whole-plan fallback. Earlier measurements of
 those queries enabled the multi-join optimizer and exercised a supported binary join instead.
-The Java planner still selects the retained candidate-matching handle. A Rust shared-runtime
-binding is now implemented, but Java integration and full Flink conformance remain required;
-these development results do not admit the default plans.
+The selected window-join node now builds a fragment for the common native region, and no longer
+constructs the legacy Java candidate-matching operator. Production admission still requires
+full SQL/topology, resource, metric, checkpoint/channel, and release benchmark validation.
+The development checks below do not establish default Q5/Q8 acceleration or a speedup.
 
-The planner now has a version-3 inner-window contract with explicit left/right native children,
-SQL schemas, equality keys, per-key null filters, and a serialized residual expression. It
-explicitly clears record timestamps. Rust assigns identities through both children and lowers
-the predicate to a DataFusion `JoinFilter`; only referenced columns enter the filter's candidate
-batch. A DataFusion `CASE` skips residual evaluation for filtered null keys, preserving Flink's
-null-key wrapper even when the residual could throw. Current contract validation rejects non-UTC
-time, non-inner joins, mismatched or unsupported equality keys, and invalid predicates. Legacy
-state-only protobufs remain readable and do not imply native compute support. This contract is
-a prerequisite; the retained Java translator has not yet been switched to shared execution.
+The version-3 inner-window contract has explicit left/right native children, SQL schemas,
+equality keys, per-key null filters, and a serialized residual expression. Adjacent native
+operators compose in one DataFusion tree; window-join output is Arrow with INSERT row kinds and
+absent record timestamps. Rust lowers the residual to a DataFusion `JoinFilter`, referencing only
+the columns needed for computation. A DataFusion `CASE` skips residual evaluation for filtered
+null keys, preserving Flink's null-key wrapper even when the residual could throw.
 
-Native closed-window computation now uses DataFusion 55 `NestedLoopJoinExec` and the lowered
-protobuf predicate. Complete left/right Arrow inputs use the native reusable input node:
-DataFusion's normal memory source splits batches and can change Flink's left-row/right-row
-emission order. The single left batch retains its existing Flink buffer allowance; a private
-build-pool view lets DataFusion retain it without charging the same payload twice. That view
-rejects other consumers or storage beyond the admitted input.
+Current validation rejects non-inner joins, non-UTC event time, incompatible equality keys,
+collection payloads, async state, and changelog-state wrapping. Attached window ends accept
+Flink's epoch-millisecond `BIGINT` and Arrow `TIMESTAMP(3)`; ingestion reads either representation
+directly. Scalar payloads and bounded primitive comparison, arithmetic, boolean, null-check and
+conditional predicates are supported by the compute contract. Predicates requiring expanding
+kernels, floating NaN guards, decimal conversion, timestamp-offset kernels or other unadmitted
+workspaces retain precise fallback. Planner inspection uses the active table configuration
+merged with the persisted operator configuration, including its time zone.
 
-The stream admits coarse candidate/filter/coalescer workspace before execution, returns bounded
-output batches, and transfers already admitted allowance to their buffer owners. Shared slices
-reuse the same backing-allocation owner, including when the first exported slice has a non-zero
-offset. Retaining output batches consumes the same Flink allowance; insufficient budget fails
-before the next kernel poll. Cancellation releases compute workspace while retained outputs stay
-valid and accounted for. Current bounded computation supports scalar payloads and primitive
-DataFusion comparison, arithmetic, boolean, null-check and conditional predicates. Expanding or
-unsupported predicate kernels and collection payloads are rejected pending suitable admission.
+Closed-window computation uses DataFusion 55 `NestedLoopJoinExec`. Complete left/right Arrow
+inputs use the reusable native input node: DataFusion's normal memory source can split input
+batches and change Flink's left-row/right-row emission order. A private build-pool view retains
+the already accounted left batch without charging its shared buffers again; it rejects unrelated
+consumers or storage beyond that input. Small windows cap DataFusion's batch capacity at their
+maximum possible pair count, avoiding a full default-batch workspace for a tiny result.
 
-Tests run generated duplicate payloads through indexed state and DataFusion on memory and
-RocksDB, compare complete ordered outputs to an independent row oracle, and retain output after
-processor disposal. They also cover empty windows, predicate errors, cancellation, budget denial,
-and the input-splitting ordering counterexample. This is direct native compute/state/ownership
-evidence, not full Flink SQL or production admission. Java planner integration and generated
-Flink metric, changelog, checkpoint and channel parity remain required before enabling Q5/Q8.
+Coarse reservations cover candidate/filter/coalescer workspace before execution. Output receives
+its existing buffer allowance through shared ownership, including non-zero-offset slices.
+Retaining output competes for Flink's existing budget; denial occurs before the next kernel poll.
+Cancellation releases temporary workspace while retained output remains valid and accounted for.
+This is reservation-based admission for growing buffers, not an allocation-by-allocation ledger.
 
-The retained state handle now appends individual Arrow-encoded payload rows and updates a
-29-byte window index, instead of reloading and rewriting both sides of a growing window.
-Partition prefixes are length-framed, window-end ordering uses Arrow 59 row encoding, and each
-side retains a stable arrival ordinal. Payload entries are separate from the window index.
-Both RocksDB and the ordered in-memory backend read closed windows in ordered pages and batch
-their deletions. Flink partition hashing and existing timer identities remain unchanged.
-Timer sets are serialized at checkpoint time, rather than on incoming batches.
+State appends individual payload entries and updates a 29-byte window header per incoming batch;
+it does not rewrite a growing opaque partition value. Partition prefixes are length-framed,
+window ends use Arrow row ordering, and each side preserves a stable arrival ordinal. Memory
+and RocksDB both use ordered range reads and batched deletion. Flink partition hashing remains
+separate; keyless shared joins use Flink's eight-byte empty `BinaryRowData` key.
 
-The indexed format is versioned; restore migrates legacy `SFWJ/2` values once while preserving
-duplicate arrival order. Direct native tests cover migration, backend switching, 1→2 rescaling,
-negative window ends, distinct partition prefixes, large payload entries, and constant incoming
-batch I/O as a window grows. The handle rejects on-time retractions and drops late retractions,
-matching the ordering of checks in Flink's `WindowJoinHelper`; it also preserves Flink's
-maximum-window-end sentinel and wrapping deadline arithmetic. Coarse Flink reservations admit
-batch staging, closed-window decode/output workspace, and checkpoint migration. The retained
-handle still materializes the fired windows together and can fail admission for large watermarks;
-these state tests do not establish full operator or checkpoint/channel parity or a Nexmark speedup.
+A watermark closes one window at a time. Its timer and indexed state remain until the DataFusion
+output stream has drained successfully. Ordinary invocation EOF, end-input, and checkpoint
+preparation do not fire windows. Failed or cancelled invocations prevent checkpointing and reuse.
+Late retractions drop before changelog validation, matching Flink; on-time retractions are rejected.
+Maximum window-end sentinels and wrapping deadline arithmetic retain Flink's behavior.
 
-A native-only ingestion and close API is now available for shared-execution integration. It
-loads just one due window, decodes each side into its own SQL Arrow batch, and attaches the
-already admitted buffer allowance to those batches. It does not construct the legacy candidate
-metadata or transfer ownership to Java. The timer and indexed payload remain until the caller
-acknowledges that the window's output has drained. Input, snapshots, checkpoints, and restore
-are rejected during a drain; a failed close requires recovery from the previous Flink checkpoint.
-Direct tests on both backends cover one-window range reads, empty sides, duplicate arrival order,
-retained buffer ownership, cancellation, cross-backend recovery, and denial before payload reads.
-The shared Rust binding now connects this API to the common DataFusion execution stream. It
-accepts two Arrow children, drains them before addressed controls, and composes with downstream
-native operators directly. Output carries INSERT, an absent record timestamp, and detached row
-ordinals. Keyless joins use Flink's eight-byte empty `BinaryRowData` header for partition hashing;
-the retained legacy handle keeps its previous stored identity. Ordinary invocation EOF, end-input
-and checkpoint-preparation events do not fire windows;
-watermarks do. A cancelled or failed invocation prevents checkpointing and reuse.
+Shared snapshots carry an `SFWF/2` operator-contract fingerprint in every key group. **Window joins
+restore timer queues with their watermark reset to `Long.MIN_VALUE`, as Flink does.** They do not
+use window aggregates' persisted union-operator clocks. This matters for replayed rows arriving
+before the first restored watermark. The earlier, unadmitted `SFWF/1` shared snapshot contract,
+unmarked legacy-handle snapshots, and mismatched operator contracts are rejected. Legacy
+state-handle `SFWJ/2` migration remains separate from shared-runtime admission.
 
 The binding exposes Flink's `leftNumLateRecordsDropped`/`leftLateRecordsDroppedRate`,
-`rightNumLateRecordsDropped`/`rightLateRecordsDroppedRate`, and `watermarkLatency`, alongside
-logical-record stage counters from the shared metric tree. Shared checkpoints carry an `SFWF/1`
-operator-contract fingerprint in each key group and require Flink's restored union-operator
-watermark, including for empty groups. Unmarked legacy-handle snapshots and different contracts
-are rejected by the shared binding. Direct shared-runtime tests cover cross-backend canonical
-restore, 1→2 rescaling, RocksDB checkpoint import into memory, cancellation and the metric protocol.
-These checks do not replace generated Flink harness parity. The retained Java translator and
-its legacy watermark-output path remain unchanged, and production admission remains gated.
+`rightNumLateRecordsDropped`/`rightLateRecordsDroppedRate`, and `watermarkLatency`, plus logical
+stage I/O counters through the shared metric tree. Generated Flink harness comparisons exercise
+the production shared Arrow/JNI runtime followed by a native calc on both backends. They compare
+ordered serialized changelogs and record timestamps for duplicates, nullable payloads/keys,
+INSERT/UPDATE_AFTER, late retractions, and watermark output. They also check stage logical-record
+counts and compare all five operator-specific counters, meters and the watermark-latency gauge
+against Flink using the same processing clock. Recovery cases include empty and
+populated timer state, canonical backend changes, and aligned/unaligned operator snapshots.
+These operator snapshots do not establish in-flight channel recovery or full SQL admission.
+Direct native tests additionally cover 1→2 rescaling, migration, contract rejection, buffer
+ownership, cancellation, bounded workspace, and ordered state operations.
 
 **Retained implementation scope:** Partial implementation for bounded hash/adaptive/sort-merge/nested-loop joins and for
 synchronous regular, multi-way, time-bounded, and temporal streaming joins.

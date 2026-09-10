@@ -334,3 +334,34 @@ fn expanding_predicates_are_rejected_before_allocating_candidate_batches() {
         .to_string()
         .contains("expanding or unsupported"));
 }
+
+#[tokio::test]
+async fn tiny_windows_bound_capacity_by_possible_pairs_not_default_batch_size() {
+    for rocks in backends() {
+        let (mut p, broker, _dir) = processor(rocks, 0, 127);
+        for side in 0..2 {
+            p.ingest_arrow(
+                side,
+                batch(&[9; 3], &[100; 3], &[b"x".as_slice(); 3], &[INSERT; 3]),
+            )
+            .unwrap();
+        }
+        p.begin_watermark(99).unwrap();
+        let owner = p.state_memory();
+        let closed = p.next_closed_window().unwrap().unwrap();
+        let mut pressure = p.state_memory();
+        pressure
+            .resize(pressure.available_capacity().unwrap().unwrap() - (1 << 20))
+            .unwrap();
+        let mut stream =
+            ClosedWindowStream::try_new(closed, None, context(&owner, 8192), &owner).unwrap();
+        let batch = stream.next().await.unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 9);
+        assert!(stream.next().await.is_none());
+        assert!(stream.completed());
+        p.finish_closed_window().unwrap();
+        assert!(p.next_closed_window().unwrap().is_none());
+        drop((batch, stream, pressure, p));
+        assert_eq!(broker.reserved(), 0);
+    }
+}

@@ -136,11 +136,9 @@ impl NativeExecutionContext {
             if window_join {
                 shared_window_join::validate_node(node, binding.max_parallelism)?;
             }
-            if binding.restored_watermark.is_some()
-                && (options.protocol_version < 3 || !(window || window_join))
-            {
+            if binding.restored_watermark.is_some() && (options.protocol_version < 3 || !window) {
                 return Err(invalid(
-                    "restored operator watermarks require a window binding and protocol 3",
+                    "restored operator watermarks require a WindowAggregate binding and protocol 3",
                 ));
             }
             if window {

@@ -79,7 +79,13 @@ impl ClosedWindowStream {
         // NLJ processes one complete right input (or a small left range). The physical
         // candidate can exceed the returned batch size, but never depends on left*right.
         // Cover decode-independent gather/filter buffers, coalescer queues and Arrow padding.
-        let rows = context.session_config().batch_size().max(right.num_rows());
+        // Small windows cannot produce more than their Cartesian cardinality. Give DF
+        // that same batch cap so its internal buffer capacities obey the smaller bound.
+        let batch_size = context
+            .session_config()
+            .batch_size()
+            .min(left.num_rows().saturating_mul(right.num_rows()).max(1));
+        let rows = batch_size.max(right.num_rows());
         let row_width = closed.max_row_bytes[0]
             .saturating_add(closed.max_row_bytes[1])
             .saturating_add(fields.saturating_mul(16))
@@ -106,7 +112,7 @@ impl ClosedWindowStream {
         let context = Arc::new(TaskContext::new(
             context.task_id(),
             context.session_id(),
-            context.session_config().clone(),
+            context.session_config().clone().with_batch_size(batch_size),
             context.scalar_functions().clone(),
             context.higher_order_functions().clone(),
             context.aggregate_functions().clone(),

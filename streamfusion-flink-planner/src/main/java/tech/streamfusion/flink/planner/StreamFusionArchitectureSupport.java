@@ -71,6 +71,7 @@ final class StreamFusionArchitectureSupport {
     // Composition coverage is distinct from the persistent-memory gate and semantic/config checks.
     private static final Set<String> REGION_READY = Set.of(
             "StreamExecJoin",
+            "StreamExecWindowJoin",
             "StreamExecLookupJoin",
             "StreamExecRank",
             "StreamExecCalc",
