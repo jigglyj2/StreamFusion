@@ -37,7 +37,7 @@ class SharedAggregateChannelRecoveryTest {
             TaskStateSnapshot checkpoint;
             try (var task = create(rocks, unaligned, null)) {
                 var first = row(Long.MAX_VALUE, RowKind.INSERT);
-                oracle.processElement(new StreamRecord<>(first));
+                oracle.processElement(new StreamRecord<>(oracleInput(first)));
                 send(task, allocator, memory, 0, first, false);
                 drain(oracle.getOutput(), expected);
                 assertThat(bytes(task)).containsExactly(expected.getCopyOfBuffer());
@@ -51,7 +51,7 @@ class SharedAggregateChannelRecoveryTest {
                 var barrier = new CheckpointBarrier(1, 1, options);
                 task.processEvent(barrier, 0, 0);
                 var inflight = row(1L, RowKind.UPDATE_AFTER);
-                oracle.processElement(new StreamRecord<>(inflight));
+                oracle.processElement(new StreamRecord<>(oracleInput(inflight)));
                 send(task, allocator, memory, 1, inflight, unaligned);
                 task.processEvent(barrier, 0, 1);
                 long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15);
@@ -75,7 +75,7 @@ class SharedAggregateChannelRecoveryTest {
             try (var restored = create(rocks, unaligned, checkpoint)) {
                 restored.processAll();
                 for (var value : List.of(row(Long.MAX_VALUE, RowKind.UPDATE_BEFORE), row(1L, RowKind.DELETE))) {
-                    oracle.processElement(new StreamRecord<>(value));
+                    oracle.processElement(new StreamRecord<>(oracleInput(value)));
                     send(restored, allocator, memory, 0, value, false);
                 }
                 drain(oracle.getOutput(), expected);
@@ -110,8 +110,16 @@ class SharedAggregateChannelRecoveryTest {
         return row;
     }
 
+    protected RowData oracleInput(GenericRowData row) throws Exception {
+        return row;
+    }
+
+    protected int[] groupingIndices() {
+        return new int[] {0};
+    }
+
     private byte[] exchange() {
-        return NativeExchangePlanSerializer.hash(inputType(), new int[] {0}, 1, 1, true);
+        return NativeExchangePlanSerializer.hash(inputType(), groupingIndices(), 1, 1, true);
     }
 
     private StreamTaskMailboxTestHarness<RowData> create(boolean rocks, boolean unaligned, TaskStateSnapshot state)

@@ -38,7 +38,11 @@ class StreamFusionPersistentAdmissionTest {
             var aggregate = aggregate(function, false, new BigIntType(), new VarCharType(), true);
             assertThat(StreamFusionPersistentAdmission.unsupportedReason(aggregate, null))
                     .isNull();
-            if (function != SqlStdOperatorTable.MIN && function != SqlStdOperatorTable.MAX)
+            if (function == SqlStdOperatorTable.COUNT)
+                assertThat(StreamFusionPersistentAdmission.unsupportedReason(
+                                aggregate(function, true, new BigIntType(), new VarCharType(), true), null))
+                        .isNull();
+            else if (function != SqlStdOperatorTable.MIN && function != SqlStdOperatorTable.MAX)
                 assertThat(StreamFusionPersistentAdmission.unsupportedReason(
                                 aggregate(function, true, new BigIntType(), new VarCharType(), true), null))
                         .contains("non-DISTINCT");

@@ -6,15 +6,45 @@ sidebar:
 ---
 
 **Current status:** Partial. Ordinary planning admits synchronous keyed `StreamExecGroupAggregate`
-with BIGINT `COUNT` (including DISTINCT), and non-DISTINCT `SUM`, `SUM0`, `MIN`, `MAX`, and `AVG`; aggregate arguments must
-be BIGINT, and grouping keys must be BIGINT, INTEGER, or VARCHAR. Both in-memory and supported
-default RocksDB state use the common native execution tree. Existing semantic checks still
+with BIGINT `COUNT` (including DISTINCT), and non-DISTINCT BIGINT `SUM`, `SUM0`, `MIN`, `MAX`,
+and `AVG`. Append-only, non-DISTINCT VARCHAR `MIN`/`MAX` are also admitted when the aggregate
+input directly consumes an original Flink HASH exchange. Grouping keys must be BIGINT, INTEGER,
+or VARCHAR. Both in-memory and supported default RocksDB state use the common native execution tree. Existing semantic checks still
 reject unsupported TTL, async state, metrics, and backend configurations.
 
 Mini-batch, singleton/global, SELECT DISTINCT, other argument/result/key types, and other physical
 aggregate families retain whole-plan fallback under the
 [architecture admission requirements](/StreamFusion/development/architecture-admission/).
 The broader native paths below remain development implementations, not production coverage.
+
+VARCHAR extrema use DataFusion's UTF-8 byte ordering. Flink's `BinaryStringData.compareTo` can
+instead use UTF-16 ordering when both operands cache Java strings; those orders differ across
+some supplementary Unicode characters. Flink's HASH exchange uses a non-chainable keyed
+partitioner and RowData serialization, so every incoming string is binary-backed and preserves
+DataFusion's order. Admission requires that direct boundary and does not look through a subsequent
+Calc that might recreate Java-backed strings. Retractable string extrema, DISTINCT variants and
+unproven input boundaries retain precise whole-plan fallback. There is no upstream runtime patch,
+extra production serialization, character restriction or new configuration option.
+
+Generated tests pass identical logical inputs through the original exchange's RowData wire
+representation into Flink's SQL-generated handler and through Arrow into the native region.
+They compare every changelog byte, record envelope, watermark and registered metric for nulls,
+empty strings, embedded NULs, trailing spaces, combining characters, BMP/supplementary ordering,
+long values, nullable FILTERs, composite keys and mixed BIGINT DISTINCT counts. Recovery tests
+cover canonical/backend-switch restore, full/incremental aligned/unaligned checkpoints, actual
+channel replay and 1-to-2-to-1 rescaling through all 16 test key groups. A separate comparator
+test retains the Java-backed ordering difference and verifies the planner boundary guard.
+The upstream Flink `AggregateITCase.testBigDataOfMinMaxWithBinaryString` SQL/input case
+and a generated Unicode SQL case also compare complete changelogs through ordinary planning
+on both backends. The original Nexmark Q16 SQL reaches the unmodified blackhole sink with
+positive native batch counters on both backends; its release performance comparison is pending.
+
+Large incoming and historical string values remain subject to coarse batch admission. A tiny
+input batch may repeat a large retained maximum in every UPDATE_BEFORE/UPDATE_AFTER record;
+credit for those event copies and Arrow output is admitted before state mutation. Native tests
+exercise denied large incoming values and repeated 64 KiB historical extrema on both backends,
+verify unchanged state after denial, and retain snapshot accounting until its last owner releases it.
+The existing canonical accumulator encoding, Flink budgets and metric definitions are unchanged.
 
 **Retained implementation scope:** Partial implementation for timer-free keyed and global streaming aggregates and
 bounded hash aggregates, including grouping sets, `ROLLUP`, and `CUBE` in both runtime modes.
@@ -61,7 +91,7 @@ argument identity anchored to its first aggregate call, so physical input-column
 does not change membership identity. Their key group remains the hash of the original Flink BinaryRow, independent
 of Arrow ordering bytes. This layout applies to synchronous raw-input plans whose DISTINCT
 calls are all COUNT over supported non-floating scalar arguments: Boolean, signed integers,
-VARCHAR, decimal, date, time and timestamp. Production admission remains the BIGINT subset
+VARCHAR, decimal, date, time and timestamp. Production admission for DISTINCT remains the BIGINT subset
 described above. Floating-point DISTINCT, DISTINCT SUM/AVG, mini-batches, partial merging and
 bounded final aggregation retain their existing inline state paths and admission conditions.
 
@@ -135,8 +165,9 @@ Ordinary SQL planning now admits that subset, including nullable FILTER predicat
 distinct calls alongside ordinary BIGINT aggregates. Generated SQL tests compare the complete
 Flink-serialized changelog multiset for three seeds on each backend, with all four RowKinds,
 duplicate values, nulls and independent filters. DISTINCT SUM/AVG, non-BIGINT arguments,
-global aggregation and mini-batching retain precise whole-plan fallback. Q15 release performance
-measurement remains outstanding; no DISTINCT speedup is claimed.
+global aggregation and mini-batching retain precise whole-plan fallback. The
+[Q15 release comparison](/StreamFusion/benchmarks/q15-rowdata/) records measured performance,
+separate profiles and the remaining large in-memory capacity limit.
 
 Custom arithmetic remains for floating sums/averages (vectorized reassociation changes bits),
 decimal arithmetic (Flink overflow can poison the accumulator), DISTINCT sums/averages, and
@@ -146,7 +177,7 @@ Mixed-changelog bundles use the same DataFusion accumulators while retaining the
 ordered state updates and resetting the temporary cache at each Flink bundle boundary. These are specific semantic exceptions; wrapping custom computation in
 an `ExecutionPlan` is not itself DataFusion compute reuse. Generated direct-native tests compare
 bounded results to unmodified Flink SQL on both state backends, and the existing generated
-streaming suites compare every changelog record. Production admission is limited to the synchronous keyed BIGINT subset above.
+streaming suites compare every changelog record. Production admission is limited to the synchronous keyed BIGINT and VARCHAR extrema subsets described above.
 
 Planned schemas and row codecs now have a separate shape-based admission before Arrow type
 lowering, including recursive codec construction's temporary null arrays. Compact protobuf byte
@@ -389,7 +420,7 @@ local/aggregate invocation counters, and check Arrow topology plus original stag
 A separate common-unary harness compares the complete default local metric surface with Flink's
 SQL-generated `MapBundleOperator`, including count triggers, empty arrivals, watermark/pre-barrier
 drains, finish and timestamp-less INSERT partials. This is not full-type, arbitrary failure-path,
-two-phase in-flight recovery or end-to-end allocation/performance parity. Production admission is limited to the synchronous keyed BIGINT subset above.
+two-phase in-flight recovery or end-to-end allocation/performance parity. Production admission is limited to the synchronous keyed BIGINT and VARCHAR extrema subsets described above.
 
 The generated retained-kernel JNI test also compares ordered `RowDataSerializer` changelog bytes
 against the original SQL-planned Flink mini-batch operator for both backends, three seeds and

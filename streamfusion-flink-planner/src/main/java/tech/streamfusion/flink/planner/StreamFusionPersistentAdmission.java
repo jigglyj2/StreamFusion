@@ -76,6 +76,11 @@ final class StreamFusionPersistentAdmission {
         if (calls.length == 0)
             return "aggregate persistent admission: SELECT DISTINCT retains its separate production gate";
         for (var call : calls) {
+            if (StreamFusionStringAggregateAdmission.isStringExtremum(call)) {
+                String reason = StreamFusionStringAggregateAdmission.unsupportedReason(aggregate, call, input);
+                if (reason != null) return reason;
+                continue;
+            }
             if (!INTEGER_AGGREGATES.contains(call.getAggregation().getKind())
                     || (call.isDistinct() && call.getAggregation().getKind() != SqlKind.COUNT)
                     || call.getType().getSqlTypeName() != org.apache.calcite.sql.type.SqlTypeName.BIGINT)

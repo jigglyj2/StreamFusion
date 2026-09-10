@@ -9,6 +9,7 @@ mod mini_batch;
 mod decoded_admission;
 mod group_lifecycle;
 mod schema_allocation;
+mod string_extrema;
 
 fn logical_bigint(nullable: bool) -> proto::LogicalType {
     proto::LogicalType {
