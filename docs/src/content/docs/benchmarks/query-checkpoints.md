@@ -678,3 +678,25 @@ The long profile still identifies index reads/decompression as leading native CP
 Historical measurements and failed memory cases remain linked from the report. This is Q16's
 verified delivery checkpoint, not a claim of a performance ceiling or speedup on every backend.
 Q17 is the next query checkpoint.
+
+## Q17 original auction statistics
+
+Original Q17 now passes ordinary whole-plan admission and is included in the RowData catalog
+with its unchanged SELECT and original ten-column result schema. It groups by auction/day and
+uses filtered COUNT plus MIN, MAX, AVG and SUM over BIGINT prices. All calls reuse the existing
+DataFusion accumulators and the documented Flink integer-width/AVG adaptations. No operator
+algorithm, query-shape special case, new configuration or admission bypass was added.
+
+The opt-in original-SQL planning test passes for both engines/backends. Production checks use
+50,000 events at parallelism one and four on both backends: exact single-source collecting
+changelogs, identical parallel materializations, and independent blackhole output counts, with
+positive native activity for every accelerated run. Independent parallel jobs do not establish
+identical input ordering; the generated common-aggregate fixtures provide same-order byte parity.
+Those fixtures also pass full metric comparisons, topology checks, canonical/backend-switch
+restore, aligned/unaligned checkpoints, channel replay and rescaling. Nullable filters/arguments,
+integer overflow and truncating averages are covered by the existing generated and Flink SQL
+aggregate harnesses. See [group aggregation](/StreamFusion/operators/group-aggregation/).
+
+Release/native-CPU RowData-to-blackhole measurements and longer mixed JVM/native profiles on
+both backends remain pending. This establishes catalog/admission and correctness coverage,
+not a Q17 performance result or a completed performance checkpoint.

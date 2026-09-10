@@ -42,6 +42,11 @@ unchanged Q16 SELECT and its original result schema. Its
 [release comparison](/StreamFusion/benchmarks/q16-rowdata/) records the corrected native RocksDB
 ownership, three measured fork pairs per case, separate longer profiles and remaining performance
 and capacity limits.
+Original Q17 is also catalogued unchanged. Its auction/day grouped BIGINT COUNT, filtered COUNT,
+SUM, MIN, MAX and integer AVG use these existing DataFusion accumulators and semantic adapters.
+Original-SQL admission and collecting/blackhole parity pass at parallelism one/four on both
+backends. The common generated aggregate topology, full metrics and recovery checks also pass;
+Q17 release measurements remain pending. No additional operator subset was admitted for this query.
 
 Large incoming and historical string values remain subject to coarse batch admission. A tiny
 input batch may repeat a large retained maximum in every UPDATE_BEFORE/UPDATE_AFTER record;
