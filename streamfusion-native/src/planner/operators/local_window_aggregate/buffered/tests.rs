@@ -231,11 +231,18 @@ fn denied_input_admission_leaves_existing_partials_and_credit_intact() {
         &buffer,
         &(0..1000).map(|key| (key, 1000)).collect::<Vec<_>>(),
     );
+    let mut pressure = HostMemoryReservation::new(broker.clone(), "other operators");
+    pressure
+        .resize(pressure.available_capacity().unwrap().unwrap() - (16 << 10))
+        .unwrap();
+    let charged = broker.reserved();
     assert!(buffer
         .push(batch)
         .unwrap_err()
         .to_string()
         .contains("Flink denied"));
+    assert_eq!(broker.reserved(), charged);
+    drop(pressure);
     assert_eq!(broker.reserved(), retained);
     let first = buffer.control(ControlEvent::BeforeCheckpoint(1)).unwrap();
     assert_eq!(drain(&mut buffer, first), vec![(1, 2, 2000)]);
@@ -473,3 +480,5 @@ fn nullable_rowtime_schema_accepts_values_but_rejects_null_before_state_changes(
     let first = buffer.control(ControlEvent::BeforeCheckpoint(1)).unwrap();
     assert_eq!(drain(&mut buffer, first), vec![(1, 1, 2000), (2, 1, 2000)]);
 }
+
+mod admission;

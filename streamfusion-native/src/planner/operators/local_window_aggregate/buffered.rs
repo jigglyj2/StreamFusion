@@ -43,6 +43,7 @@ struct InputCursor {
     batch: RecordBatch,
     clock: Option<Int64Array>,
     keys: Option<arrow::row::Rows>,
+    compute_rows: usize,
     offset: usize,
 }
 struct FlushCursor {
@@ -242,8 +243,7 @@ impl BufferedWindow {
             ));
         }
         // Also admit replacement hash/group vectors during growth before touching state.
-        let allowance = self.input_workspace(&batch, batch.num_rows().min(COMPUTE_ROWS))?;
-        self.kernel.reservation.resize(allowance)?;
+        let compute_rows = self.admit_input(&batch, batch.num_rows().min(COMPUTE_ROWS))?;
         let keys = if self.kernel.plan.grouping_indices.is_empty() {
             None
         } else {
@@ -260,6 +260,7 @@ impl BufferedWindow {
             batch,
             clock,
             keys,
+            compute_rows,
             offset: 0,
         });
         self.poll_pending()
@@ -298,10 +299,12 @@ impl BufferedWindow {
 
     fn consume_segment(&mut self, cursor: &mut InputCursor) -> Result<bool> {
         let start = cursor.offset;
-        let rows = (cursor.batch.num_rows() - start).min(COMPUTE_ROWS);
-        self.kernel
-            .reservation
-            .resize(self.input_workspace(&cursor.batch, rows)?)?;
+        let rows = self.admit_input(
+            &cursor.batch,
+            (cursor.batch.num_rows() - start).min(cursor.compute_rows),
+        )?;
+        // Reuse a reduced cap for this input instead of retrying denied large chunks.
+        cursor.compute_rows = rows;
         let end = start + rows;
         let mut indices = Vec::with_capacity(rows);
         let mut pressure = false;
@@ -389,6 +392,19 @@ impl BufferedWindow {
         }
         self.account_retained()?;
         Ok(pressure)
+    }
+
+    // Admission precedes all index, accumulator and Flink-buffer mutations. Smaller
+    // Arrow slices change only internal work; they never flush partials or advance clocks.
+    fn admit_input(&mut self, batch: &RecordBatch, mut rows: usize) -> Result<usize> {
+        loop {
+            let allowance = self.input_workspace(batch, rows)?;
+            match self.kernel.reservation.resize(allowance) {
+                Ok(()) => return Ok(rows),
+                Err(DataFusionError::ResourcesExhausted(_)) if rows > 1 => rows /= 2,
+                Err(error) => return Err(error.context("local window input workspace admission")),
+            }
+        }
     }
 
     // Keep the batch's encoded keys while advancing bounded zero-copy compute slices.
@@ -493,7 +509,10 @@ impl BufferedWindow {
             .size()
             .checked_add(64 * 1024)
             .ok_or_else(overflow)?;
-        self.kernel.reservation.try_grow(extra)?;
+        self.kernel
+            .reservation
+            .try_grow(extra)
+            .map_err(|error| error.context("local window flush workspace admission"))?;
         let values = self.kernel.grouped_compute.as_mut().unwrap().finish()?;
         self.flushing = Some(FlushCursor { values, offset: 0 });
         self.account_retained()

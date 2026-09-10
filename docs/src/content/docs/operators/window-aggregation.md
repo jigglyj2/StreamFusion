@@ -187,7 +187,12 @@ after flushing. The previous duplicate-key index
 and blanket replacement reservation exhausted that same allowance before reaching the flush.
 The incoming Arrow batch and its encoded keys remain retained while DataFusion consumes
 zero-copy slices of at most 2,048 rows. Scratch and index-growth reservations are renewed at
-those compute boundaries; finishing a slice does not emit a partial or add a JNI batch crossing.
+those compute boundaries. When a compute request exceeds the available share, admission halves
+the slice size before mutating state and keeps the reduced cap for the remainder of that input.
+The full input-key reservation remains included; inability to admit even one row still fails.
+A pressure regression compares ordered checkpoint partials against an unpressured run and checks
+that smaller slices emit no early partials. Finishing a slice does not emit a partial or add a
+JNI batch crossing.
 Flink-compatible watermark, checkpoint pre-barrier and memory-pressure boundaries flush partials
 in first-appearance order, including future slices when a trigger flushes the buffer. Outputs are
 timestamp-less INSERT partials, limited to 2,048 rows per pull. Invocation EOF and end-input alone

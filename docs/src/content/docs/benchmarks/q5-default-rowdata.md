@@ -11,8 +11,12 @@ do separate four-million-event profiles and collecting-sink validation on both b
 At two million events, median throughput is 1.6% lower in memory and 3.9% higher on RocksDB, whose
 wide timing range makes the apparent gain uncertain. Both backends are slower at one million.
 These results establish a capacity improvement, not a general speedup or a claim that all
-reasonable performance work is exhausted. Global-window state-read duplication remains a concrete
-follow-up from the profile inspection.
+reasonable performance work is exhausted. The subsequent `4afbcd6f` change removes redundant
+global-window state-read deduplication. Its two-million-event RocksDB comparison stopped when
+the second StreamFusion fork failed a local-window reservation: 591,107 additional bytes were
+denied with 166,781 available. That incomplete case has no valid median or speedup. The historical
+results below remain tied to `74995d3d`; adaptive local compute admission now has focused pressure
+coverage, but its benchmark validation is still pending.
 
 The [older Q5 report](/StreamFusion/benchmarks/q5-rowdata/) uses the enabled multi-join optimizer
 and different memory-consumer weights. Its measurements must not be combined with these results.
