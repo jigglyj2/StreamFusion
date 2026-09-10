@@ -51,6 +51,19 @@ transfers its owned bytes; the accumulator computation and every required interm
 remain unchanged. Other scalar types retain their existing conversion. The existing canonical
 accumulator encoding, Flink budgets and metric definitions are unchanged.
 
+After the synchronous computation finishes, the operator drops its temporary DataFusion
+accumulators and prepared columns. Once staged DISTINCT maps have been consumed into dirty
+state, it frees the emptied membership lookup/reset tables before admitting Arrow output.
+Their reservation retains the moved dirty key/value buffers and mutation-vector capacity until
+the existing single backend write completes. This retires a completed computation phase without
+changing input batch size, per-record changelogs, state access counts or persisted encodings.
+A wide filtered-count fixture compares one 4,096-row batch with smaller-batch execution and
+canonical state on both backends under a 32 MiB operator allowance. A separate ownership test
+checks that finished lookup workspace is released while dirty buffers remain charged.
+Restoring the previous workspace lifetime makes the same 32 MiB fixture fail an additional
+10,617,216-byte output reservation with only 6,140,272 bytes available; no budget increase is
+needed for the corrected lifetime.
+
 **Retained implementation scope:** Partial implementation for timer-free keyed and global streaming aggregates and
 bounded hash aggregates, including grouping sets, `ROLLUP`, and `CUBE` in both runtime modes.
 

@@ -56,6 +56,26 @@ completed engine comparison or twenty-million-event memory profile. Failed logs 
 profile remain available. No budget, checkpoint setting or source/sink behavior was changed to
 make either case pass.
 
+## Equal-weight diagnostic
+
+A separate 20M profile at the same baseline commit used
+`OPERATOR:50,STATE_BACKEND:50,PYTHON:30` for both engines. With no Python consumers, that is
+the same operator/state ratio as Flink's default 70/70 weights. It retained the same total
+managed memory, heap, parallelism, checkpoint and source/sink settings. It is separate from
+the 90/10 measured results above and is not an optimization speedup comparison.
+
+Flink completed with 18.4M output records. StreamFusion failed on an additional 9,271,328-byte
+batch scratch/output reservation, with 27,221,600 bytes already reserved by that consumer and
+8,954,619 bytes available. Those figures describe that consumer and broker availability, not
+the entire task's allocation. No successful throughput or complete profile comparison is claimed.
+The evidence is retained in `rocksdb/profiles-20000000-weights-50-50/` under the campaign.
+
+This exposed a later-than-needed workspace lifetime: emptied membership lookup tables and
+finished-computation credit survived while Arrow output was allocated. The phase-retirement
+change described in [group aggregation](/StreamFusion/operators/group-aggregation/) is a tested
+prerequisite; its release comparison and a repeated default-ratio diagnostic remain pending.
+The benchmark default has not been changed to make this failed case pass.
+
 ## Acceleration and output evidence
 
 All successful StreamFusion forks require whole-plan acceleration and nonzero native batches;

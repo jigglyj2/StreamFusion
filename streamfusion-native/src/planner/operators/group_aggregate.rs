@@ -718,6 +718,11 @@ impl GroupAggregateProcessor {
             touched[key_index] = true;
         }
 
+        // DataFusion accumulators and prepared columns are no longer needed once every
+        // required changelog transition is captured. Release them before encoding output.
+        drop(row_kernels);
+        drop(row_inputs);
+        drop(kernels);
         let member_mutations = membership_batch
             .as_mut()
             .map(|members| {
@@ -748,6 +753,9 @@ impl GroupAggregateProcessor {
             })
             .collect();
         mutations.extend(member_mutations);
+        if let Some(members) = &mut membership_batch {
+            members.finish_computation()?;
+        }
         // Consuming staged_values above drops all decoded maps. Only encoded mutations
         // remain; retire their unused decode headroom before allocating Arrow output.
         // New-state growth is independently covered by the incoming batch allowance.

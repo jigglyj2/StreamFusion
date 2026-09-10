@@ -7,7 +7,8 @@ pub(in crate::planner::operators::group_aggregate) struct MembershipBatch {
     members: HashMap<StateKey, Member, RandomState>,
     cleanup: HashMap<StateKey, (), RandomState>,
     reset: Vec<bool>,
-    _workspace: HostMemoryReservation,
+    workspace: HostMemoryReservation,
+    mutation_bytes: usize,
     pub(in crate::planner::operators::group_aggregate) read_batches: u64,
 }
 
@@ -122,7 +123,8 @@ impl MembershipLayout {
             members,
             cleanup,
             reset,
-            _workspace: workspace,
+            workspace: workspace,
+            mutation_bytes: 0,
             read_batches,
         })
     }
@@ -174,6 +176,40 @@ impl MembershipBatch {
                 .drain()
                 .map(|(key, ())| StateMutation { key, value: None }),
         );
+        // The caller appends these entries to the header-mutation vector. Two descriptors
+        // per entry cover that vector's geometric capacity; key/value buffers move intact.
+        self.mutation_bytes = mutations.iter().fold(
+            mutations
+                .len()
+                .saturating_mul(2 * std::mem::size_of::<StateMutation>()),
+            |bytes, mutation| {
+                bytes
+                    .saturating_add(mutation.key.key.capacity())
+                    .saturating_add(mutation.value.as_ref().map_or(0, Vec::capacity))
+            },
+        );
         mutations
+    }
+
+    /// Call only after the staged accumulator maps have been consumed into dirty state.
+    /// Drop the input-sized lookup tables before admitting Arrow output. Only the moved
+    /// mutation buffers remain live under this batch's ownership until the backend flush.
+    pub(in crate::planner::operators::group_aggregate) fn finish_computation(
+        &mut self,
+    ) -> Result<()> {
+        if !self.members.is_empty() || !self.cleanup.is_empty() {
+            return Err(DataFusionError::Internal(
+                "DISTINCT computation must drain mutations before retiring workspace".into(),
+            ));
+        }
+        if self.mutation_bytes > self.workspace.size() {
+            return Err(DataFusionError::Internal(
+                "DISTINCT mutations exceeded admitted batch workspace".into(),
+            ));
+        }
+        self.members.shrink_to_fit();
+        self.cleanup.shrink_to_fit();
+        self.reset = Vec::new();
+        self.workspace.resize(self.mutation_bytes)
     }
 }
