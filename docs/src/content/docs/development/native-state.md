@@ -304,7 +304,9 @@ denial, immutable-buffer ownership, tombstone retention and canonical restore te
 storage contract. This demonstrates a smaller growth peak at that tested size, not unbounded
 state capacity or a completed large Nexmark checkpoint. Canonical snapshot buffering and retained
 payloads can still exhaust the allowance. The [Q15 release report](/StreamFusion/benchmarks/q15-rowdata/)
-predates this directory change; new release measurements are required to establish its effect.
+now includes this directory change. The ten-million-event in-memory attempt passes the earlier
+large replacement boundary but still exhausts retained-state capacity; smaller allocation peaks
+alone do not establish sufficient capacity for that workload.
 
 The ordered operator format identifies StreamFusion encoding version 1 and Arrow row encoding
 major version 59. Runtime and plugin ABI versions must match. Unknown operator encoding versions
