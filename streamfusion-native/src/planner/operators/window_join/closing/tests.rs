@@ -55,9 +55,9 @@ fn closes_one_window_at_a_time_and_keeps_timer_until_completion_on_both_backends
                 .ingest_arrow(0, batch(&[9], &[100], &[b"blocked"], &[INSERT]))
                 .is_err());
             p.finish_closed_window().unwrap();
-            // Only the required final tail check reads state during acknowledgement.
-            // Payload deletion must not rescan either already validated side.
-            assert_eq!(io.range_reads.load(Ordering::Relaxed), reads + 3);
+            // Both scans already reached their range ends. Acknowledgement needs neither
+            // another tail check nor a rescan of the validated payloads for deletion.
+            assert_eq!(io.range_reads.load(Ordering::Relaxed), reads + 2);
             assert_eq!(p.timers.timer_count(TimerDomain::EventTime), remaining - 1);
             retained.extend(closed.inputs);
         }
@@ -214,7 +214,11 @@ fn wide_multi_page_acknowledgements_delete_known_entries_without_payload_reads()
             p.finish_closed_window().unwrap();
             assert_eq!(
                 io.range_reads.load(Ordering::Relaxed),
-                reads + usize::from(consumed == count)
+                reads
+                    + usize::from(
+                        consumed == count
+                            && rows == crate::planner::operators::sortable_state::PAGE_ROWS
+                    )
             );
             // The final tail check is empty too: no payload bytes may be reread to delete.
             assert_eq!(io.read_bytes.load(Ordering::Relaxed), bytes);

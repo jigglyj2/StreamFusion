@@ -18,6 +18,7 @@ pub(super) struct Decoded {
     pub bytes: u64,
     pub max_row_bytes: usize,
     pub entries: PayloadEntries,
+    pub exhausted: bool,
 }
 
 pub(super) fn decode(
@@ -58,6 +59,9 @@ pub(super) fn decode(
     let mut starts = Vec::new();
     let mut bytes = 0u64;
     let mut max_row_bytes = 0;
+    // A successful range visit reaches its end unless this decoder stopped the visitor.
+    // Remember that validation across computation; the active watermark forbids new input.
+    let mut exhausted = true;
     processor.state.visit_range(
         keys.header.key_group,
         &start.key,
@@ -82,6 +86,7 @@ pub(super) fn decode(
             }
             let count = rows.len().saturating_add(row_count);
             if !complete && header.paged && !rows.is_empty() && count > PAGE_ROWS {
+                exhausted = false;
                 return Ok(false);
             }
             let next = first.checked_add(count as u64).ok_or_else(invalid_index)?;
@@ -113,7 +118,9 @@ pub(super) fn decode(
                     rows.push(row.to_vec());
                 }
             }
-            Ok(complete || (header.paged && rows.len() < PAGE_ROWS))
+            let keep_reading = complete || (header.paged && rows.len() < PAGE_ROWS);
+            exhausted &= keep_reading;
+            Ok(keep_reading)
         },
     )?;
     processor.state_read_batches = processor.state_read_batches.saturating_add(1);
@@ -141,6 +148,7 @@ pub(super) fn decode(
             starts,
             _memory: entry_memory,
         },
+        exhausted,
     })
 }
 

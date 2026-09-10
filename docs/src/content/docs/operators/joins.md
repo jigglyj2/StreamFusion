@@ -134,8 +134,11 @@ a coarse reservation. Once a left page's DataFusion output reaches EOF, those or
 direct deletes in batches of at most 256 entries; acknowledgement does not rescan payloads to
 rediscover keys. The complete right side retains its entry ordinals until the final page completes,
 when its entries, header and timer are retired. Legacy row entries use the same validated-ordinal
-path. The final left-tail lookahead and total byte/count checks still reject extra or inconsistent
-payloads before final mutation. StreamFusion's state-read diagnostic counts actual read calls and
+path. A completed initial range scan already validates the absence of extra left payloads, so
+completion reuses that invocation-local proof. If decoding stopped early at a page boundary or
+for legacy row entries, a bounded tail lookahead still runs before final mutation. Total byte/count
+checks remain mandatory in both cases. Input and checkpoints stay blocked while the proof is
+retained, so the validated prefix cannot change. StreamFusion's state-read diagnostic counts actual read calls and
 therefore excludes the removed deletion scans; Flink's metric definitions are unchanged.
 The partial-close cursor is invocation-local, never persisted. Ordinary invocation EOF, end-input,
 and checkpoint preparation do not fire windows. Failed or cancelled invocations prevent

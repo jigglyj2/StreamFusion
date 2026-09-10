@@ -16,9 +16,15 @@ pub(super) struct PendingWindow {
     right: pages::Decoded,
     left_cursor: u64,
     seen_bytes: u64,
-    in_flight_rows: Option<(u64, pages::PayloadEntries)>,
+    in_flight_page: Option<PendingPage>,
     // The cursor is invocation-local. No checkpoint may observe a partly closed window.
     _memory: HostMemoryReservation,
+}
+
+struct PendingPage {
+    rows: u64,
+    entries: pages::PayloadEntries,
+    exhausted: bool,
 }
 
 pub(crate) struct ClosedWindow {
@@ -71,7 +77,7 @@ impl WindowJoinProcessor {
         if self
             .pending_window
             .as_ref()
-            .is_some_and(|p| p.in_flight_rows.is_some())
+            .is_some_and(|p| p.in_flight_page.is_some())
         {
             return Err(DataFusionError::Execution(
                 "window join must finish the current page before loading another".into(),
@@ -96,7 +102,11 @@ impl WindowJoinProcessor {
         if pending.seen_bytes > pending.header.bytes() {
             return Err(pages::invalid_index());
         }
-        pending.in_flight_rows = Some((left.batch.num_rows() as u64, left.entries));
+        pending.in_flight_page = Some(PendingPage {
+            rows: left.batch.num_rows() as u64,
+            entries: left.entries,
+            exhausted: left.exhausted,
+        });
         let closed = ClosedWindow {
             inputs: [left.batch, pending.right.batch.clone()],
             max_row_bytes: [left.max_row_bytes, pending.right.max_row_bytes],
@@ -155,7 +165,7 @@ impl WindowJoinProcessor {
             seen_bytes: right.bytes,
             right,
             left_cursor: 0,
-            in_flight_rows: None,
+            in_flight_page: None,
             _memory: memory,
         });
         Ok(true)
@@ -176,7 +186,11 @@ impl WindowJoinProcessor {
         let mut pending = self.pending_window.take().ok_or_else(|| {
             DataFusionError::Execution("window join has no pending closed window".into())
         })?;
-        let (rows, entries) = pending.in_flight_rows.take().ok_or_else(|| {
+        let PendingPage {
+            rows,
+            entries,
+            exhausted,
+        } = pending.in_flight_page.take().ok_or_else(|| {
             DataFusionError::Execution("window join has no output page to acknowledge".into())
         })?;
         let next = pending
@@ -185,10 +199,16 @@ impl WindowJoinProcessor {
             .ok_or_else(pages::invalid_index)?;
         let finished = next == pending.header.counts()[0];
         if finished {
-            // A final bounded lookahead rejects extra payloads beyond the header's count.
-            // Do this before mutation, including for an empty left input.
-            let tail = pages::decode(self, &pending.keys, &pending.header, 0, next, false)?;
-            if tail.batch.num_rows() != 0 || pending.seen_bytes != pending.header.bytes() {
+            // Initial decoding already validates the tail when it reaches the range end.
+            // A bounded/legacy page that stopped its visitor still needs this lookahead.
+            // Keep both checks before mutation; no input can change the acknowledged prefix.
+            if !exhausted {
+                let tail = pages::decode(self, &pending.keys, &pending.header, 0, next, false)?;
+                if tail.batch.num_rows() != 0 {
+                    return Err(pages::invalid_index());
+                }
+            }
+            if pending.seen_bytes != pending.header.bytes() {
                 return Err(pages::invalid_index());
             }
         }
@@ -221,5 +241,7 @@ impl WindowJoinProcessor {
     }
 }
 
+#[cfg(test)]
+mod tail_tests;
 #[cfg(test)]
 mod tests;

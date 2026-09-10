@@ -124,9 +124,11 @@ larger, simpler redundant state reads while retaining DataFusion computation. Ne
 measurements are required before claiming any improvement over this baseline.
 
 The subsequent source change retains validated payload-entry ordinals and deletes them directly
-in bounded batches after DataFusion output drains. It preserves legacy state encodings, the
-final tail check, checkpoint boundaries and output ownership. The focused native fixtures verify
-that acknowledgement rereads no payload bytes; release remeasurement remains pending.
+in bounded batches after DataFusion output drains. It preserves legacy state encodings,
+checkpoint boundaries and output ownership. Completion also reuses the end-of-range proof when
+initial decoding already reached EOF, retaining the tail lookahead for stopped scans. Focused
+native fixtures verify that acknowledgement rereads no payload bytes and that extra payloads
+are still rejected before mutation. Follow-up release work remains in progress.
 
 ## Capacity and excluded profiling attempts
 

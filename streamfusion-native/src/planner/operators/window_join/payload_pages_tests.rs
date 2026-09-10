@@ -113,12 +113,13 @@ fn v3_row_entries_restore_append_and_retire_without_reinterpreting_payloads() {
                 .downcast_ref::<BinaryArray>()
                 .unwrap();
             actual.extend(payload.iter().map(|v| v.unwrap().to_vec()));
+            // The four-row legacy window stops at its first row-entry page; the new
+            // singleton paged window already reaches EOF during its initial scan.
+            let tail_reads = usize::from(closed.inputs[0].num_rows() == 4);
             drop(closed);
             let reads = io.range_reads.load(Ordering::Relaxed);
             restored.finish_closed_window().unwrap();
-            // Each of these small windows needs only the final tail validation. This
-            // also checks direct deletion of the nonempty legacy right-side entries.
-            assert_eq!(io.range_reads.load(Ordering::Relaxed), reads + 1);
+            assert_eq!(io.range_reads.load(Ordering::Relaxed), reads + tail_reads);
         }
         assert_eq!(
             actual,
