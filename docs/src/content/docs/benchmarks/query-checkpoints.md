@@ -721,10 +721,9 @@ for large incoming and historical rows, and exercise the shared production runti
 channel replay and rescaling paths. Keep the gate until those contracts are demonstrated;
 then validate original-query collecting parity and release performance on both backends.
 
-The compute audit found a concrete reuse opportunity: the retained row-time path currently
-selects winners with handwritten timestamp comparisons. DataFusion's plain `ROW_NUMBER`
-evaluator alone numbers already ordered input and does not produce Flink's per-arrival updates.
-Cumulative DataFusion MIN/MAX windows, already used by the native Top-1 implementation, can
-supply the running timestamp extremum while StreamFusion retains state and changelog ownership.
-The adaptation must preserve Flink's asymmetric tie rule: keep-last replaces on equal timestamps,
-whereas keep-first requires a strictly earlier timestamp. This replacement is not implemented yet.
+The retained row-time path now uses DataFusion cumulative MIN/MAX windows to select every
+per-arrival winner, including historical state. StreamFusion retains state and changelog ownership.
+Flink's asymmetric tie rule is explicit: keep-last replaces on equal timestamps, whereas keep-first
+requires a strictly earlier timestamp. A plain `ROW_NUMBER` evaluator over sorted input does not
+supply those intermediate updates. This is a compute prerequisite; production admission and
+release performance remain pending.

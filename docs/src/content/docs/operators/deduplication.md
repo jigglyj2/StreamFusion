@@ -91,6 +91,25 @@ the previous row as `UPDATE_BEFORE` followed by the replacement as `UPDATE_AFTER
 
 ## Implementation
 
+The retained row-time path delegates running timestamp extrema to DataFusion cumulative
+MIN/MAX window expressions. It groups incoming indices by state key, prepends the historical
+timestamp when present, and evaluates every arrival in its original per-key order. StreamFusion
+uses the resulting extrema to emit Flink's exact changelog: keep-last accepts an equal timestamp,
+while keep-first requires a strictly earlier timestamp. A plain sorted `ROW_NUMBER` result would
+lose intermediate updates and cannot replace this adaptation. Payloads remain outside the
+fixed-width compute workspace; the existing Arrow gather/row codec materializes selected output.
+
+The DataFusion workspace has a coarse batch reservation retained with the winner mask. Winner
+selection completes before any state mutation, and losing arrivals do not copy historical rows.
+This changes neither persisted state bytes nor the one-read/one-write state-batch contract.
+Generated timestamp/tie checks supplement the existing Flink changelog and memory tests.
+This compute prerequisite passes 21 focused Rust checks and 136 Java checks: key/envelope and
+backend parity, complete shared metrics, 1-to-2-to-1 rescaling with canonical backend switches,
+aligned/unaligned checkpoints, incremental SST reuse, actual two-channel Arrow IPC replay and
+one-runtime Arrow topology. These tests compare against uninterrupted Flink, including timestamp
+ties and out-of-order arrivals. Production SQL admission remains gated pending its separate audit
+and original-Q18 collecting validation.
+
 The production paths remain Arrow-backed between source and sink boundaries. Rust gathers selected
 columns once and returns row-kind and input-ordinal envelope metadata with the batch. Row-time state
 stores the ordering value per key and stores an Arrow row encoding when `UPDATE_BEFORE` output needs
