@@ -24,18 +24,26 @@ import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 class SharedBinaryJoinMetricSurfaceTest {
     @ParameterizedTest
     @CsvSource({
-        "false,EQUALITY",
-        "true,EQUALITY",
-        "false,RANGE",
-        "true,RANGE",
-        "false,TIMESTAMP_OFFSET",
-        "true,TIMESTAMP_OFFSET",
-        "false,WIDE_RANGE",
-        "true,WIDE_RANGE"
+        "false,EQUALITY,false",
+        "false,EQUALITY,true",
+        "true,EQUALITY,false",
+        "true,EQUALITY,true",
+        "false,RANGE,false",
+        "false,RANGE,true",
+        "true,RANGE,false",
+        "true,RANGE,true",
+        "false,TIMESTAMP_OFFSET,false",
+        "false,TIMESTAMP_OFFSET,true",
+        "true,TIMESTAMP_OFFSET,false",
+        "true,TIMESTAMP_OFFSET,true",
+        "false,WIDE_RANGE,false",
+        "false,WIDE_RANGE,true",
+        "true,WIDE_RANGE,false",
+        "true,WIDE_RANGE,true"
     })
-    void defaultMetricsAndChangelogMatchFlinkAcrossBothInputsAndBackends(boolean rocks, Predicate predicate)
-            throws Exception {
-        var fixture = SharedBinaryJoinMetricFixture.forPredicate(predicate);
+    void defaultMetricsAndChangelogMatchFlinkAcrossBothInputsAndBackends(
+            boolean rocks, Predicate predicate, boolean regularOracle) throws Exception {
+        var fixture = SharedBinaryJoinMetricFixture.forPredicate(predicate).withRegularOracle(regularOracle);
         try (var join = fixture.join(rocks);
                 var calc = fixture.calc();
                 var target = new KeyedNativeMetricHarness(
@@ -99,7 +107,7 @@ class SharedBinaryJoinMetricSurfaceTest {
                     assertThat(target.output.getCopyOfBuffer()).containsExactly(expected.getCopyOfBuffer());
                     compare(join, calc, target);
                 }
-                join.harness.region().prepareSnapshotPreBarrier(arrival);
+                join.prepareSnapshotPreBarrier(arrival);
                 calc.harness.getOperator().prepareSnapshotPreBarrier(arrival);
                 target.region().prepareSnapshotPreBarrier(arrival);
                 compare(join, calc, target);
@@ -109,7 +117,7 @@ class SharedBinaryJoinMetricSurfaceTest {
 
     private static void drain(
             SharedBinaryJoinMetricFixture fixture,
-            FlinkMultiInputMetricOracle join,
+            FlinkJoinMetricOracle join,
             FlinkStageMetricOracle calc,
             DataOutputSerializer bytes)
             throws Exception {
@@ -118,8 +126,7 @@ class SharedBinaryJoinMetricSurfaceTest {
     }
 
     private static void compare(
-            FlinkMultiInputMetricOracle join, FlinkStageMetricOracle calc, KeyedNativeMetricHarness target)
-            throws Exception {
+            FlinkJoinMetricOracle join, FlinkStageMetricOracle calc, KeyedNativeMetricHarness target) throws Exception {
         List<InternalOperatorMetricGroup> oracles = List.of(join.group(), calc.group());
         for (int stage = 0; stage < oracles.size(); stage++) {
             var expected = oracles.get(stage);

@@ -32,28 +32,46 @@ import tech.streamfusion.flink.operator.StreamFusionNativeRegionOperatorFactory;
 class SharedBinaryJoinRecoveryTest {
     @ParameterizedTest(name = "rocks={0}, mode={1}, predicate={2}")
     @CsvSource({
-        "false,0,EQUALITY",
-        "true,0,EQUALITY",
-        "false,1,EQUALITY",
-        "true,1,EQUALITY",
-        "false,2,EQUALITY",
-        "true,2,EQUALITY",
-        "false,0,RANGE",
-        "true,0,RANGE",
-        "false,1,RANGE",
-        "true,1,RANGE",
-        "false,2,RANGE",
-        "true,2,RANGE",
-        "false,0,TIMESTAMP_OFFSET",
-        "true,0,TIMESTAMP_OFFSET",
-        "false,1,TIMESTAMP_OFFSET",
-        "true,1,TIMESTAMP_OFFSET",
-        "false,2,TIMESTAMP_OFFSET",
-        "true,2,TIMESTAMP_OFFSET"
+        "false,0,EQUALITY,false",
+        "false,0,EQUALITY,true",
+        "true,0,EQUALITY,false",
+        "true,0,EQUALITY,true",
+        "false,1,EQUALITY,false",
+        "false,1,EQUALITY,true",
+        "true,1,EQUALITY,false",
+        "true,1,EQUALITY,true",
+        "false,2,EQUALITY,false",
+        "false,2,EQUALITY,true",
+        "true,2,EQUALITY,false",
+        "true,2,EQUALITY,true",
+        "false,0,RANGE,false",
+        "false,0,RANGE,true",
+        "true,0,RANGE,false",
+        "true,0,RANGE,true",
+        "false,1,RANGE,false",
+        "false,1,RANGE,true",
+        "true,1,RANGE,false",
+        "true,1,RANGE,true",
+        "false,2,RANGE,false",
+        "false,2,RANGE,true",
+        "true,2,RANGE,false",
+        "true,2,RANGE,true",
+        "false,0,TIMESTAMP_OFFSET,false",
+        "false,0,TIMESTAMP_OFFSET,true",
+        "true,0,TIMESTAMP_OFFSET,false",
+        "true,0,TIMESTAMP_OFFSET,true",
+        "false,1,TIMESTAMP_OFFSET,false",
+        "false,1,TIMESTAMP_OFFSET,true",
+        "true,1,TIMESTAMP_OFFSET,false",
+        "true,1,TIMESTAMP_OFFSET,true",
+        "false,2,TIMESTAMP_OFFSET,false",
+        "false,2,TIMESTAMP_OFFSET,true",
+        "true,2,TIMESTAMP_OFFSET,false",
+        "true,2,TIMESTAMP_OFFSET,true"
     })
     void canonicalBackendSwitchAndAlignedUnalignedRescalingPreserveJoinChangelog(
-            boolean rocks, int mode, Predicate predicate) throws Exception {
-        var fixture = SharedBinaryJoinMetricFixture.forPredicate(predicate);
+            boolean rocks, int mode, Predicate predicate, boolean regularOracle) throws Exception {
+        var fixture = SharedBinaryJoinMetricFixture.forPredicate(predicate).withRegularOracle(regularOracle);
         try (var oracle = fixture.join(rocks);
                 var calc = fixture.calc();
                 var allocator = new RootAllocator(64L << 20)) {
@@ -131,7 +149,7 @@ class SharedBinaryJoinRecoveryTest {
     private static void compare(
             SharedBinaryJoinMetricFixture fixture,
             List<KeyedNativeMetricHarness> targets,
-            FlinkMultiInputMetricOracle oracle,
+            FlinkJoinMetricOracle oracle,
             FlinkStageMetricOracle calc,
             RootAllocator allocator,
             int port,

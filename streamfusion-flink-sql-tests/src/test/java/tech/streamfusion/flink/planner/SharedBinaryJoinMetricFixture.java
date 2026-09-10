@@ -38,6 +38,7 @@ final class SharedBinaryJoinMetricFixture {
     static final RowType OUTPUT = RowType.of(new BigIntType(), new VarCharType(), new BigIntType(), new VarCharType());
     private final Configuration config = new Configuration();
     private final boolean outer;
+    private boolean regularOracle;
     final RowType input;
     final RowType output;
 
@@ -179,7 +180,12 @@ final class SharedBinaryJoinMetricFixture {
         return StreamFusionNativeRegionTranslator.composeWithInputs(calc, List.of(join));
     }
 
-    FlinkMultiInputMetricOracle join(boolean rocks) throws Exception {
+    SharedBinaryJoinMetricFixture withRegularOracle(boolean regular) {
+        regularOracle = regular;
+        return this;
+    }
+
+    FlinkJoinMetricOracle join(boolean rocks) throws Exception {
         var attributes = Map.of(1, List.of(new ConditionAttributeRef(0, 0, 1, 0)));
         var extractor = new AttributeBasedJoinKeyExtractor(attributes, List.of(input, input));
         var types = new FlinkTypeFactory(getClass().getClassLoader(), FlinkTypeSystem.INSTANCE);
@@ -194,6 +200,7 @@ final class SharedBinaryJoinMetricFixture {
                 : rex.makeCall(org.apache.calcite.sql.fun.SqlStdOperatorTable.AND, equality, condition);
         var generated = org.apache.flink.table.planner.plan.utils.JoinUtil.generateConditionFunction(
                 config, getClass().getClassLoader(), completeCondition, input, input);
+        if (regularOracle) return regularJoin(rocks, generated);
         var factory = new StreamingMultiJoinOperatorFactory(
                 List.of(InternalTypeInfo.of(input), InternalTypeInfo.of(input)),
                 List.of(JoinInputSideSpec.withoutUniqueKey(), JoinInputSideSpec.withoutUniqueKey()),
@@ -220,6 +227,10 @@ final class SharedBinaryJoinMetricFixture {
         harness.setup(new RowDataSerializer(output));
         harness.open();
         return new FlinkMultiInputMetricOracle(harness, 2);
+    }
+
+    private FlinkRegularJoinMetricOracle regularJoin(boolean rocks, GeneratedJoinCondition generated) throws Exception {
+        return RegularJoinFlinkHarness.create(input, output, generated, rocks, operatorId(0), name(0));
     }
 
     FlinkStageMetricOracle calc() throws Exception {

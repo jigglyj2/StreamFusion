@@ -12,19 +12,21 @@ import org.apache.flink.streaming.runtime.streamrecord.LatencyMarker;
 import org.apache.flink.streaming.runtime.streamrecord.StreamElement;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.runtime.watermarkstatus.WatermarkStatus;
-import org.apache.flink.streaming.util.KeyedMultiInputStreamOperatorTestHarness;
 import org.apache.flink.table.data.RowData;
 
-/** Adds the task-level counting wrappers/gauges omitted by Flink's bare multiple-input harness. */
-final class FlinkMultiInputMetricOracle implements FlinkJoinMetricOracle {
-    final Harness harness;
+/** Adds the task-level counting wrappers/gauges omitted by Flink's bare two-input harness. */
+final class FlinkRegularJoinMetricOracle implements FlinkJoinMetricOracle {
+    final org.apache.flink.streaming.util.KeyedTwoInputStreamOperatorTestHarness<RowData, RowData, RowData, RowData>
+            harness;
     private final WatermarkGauge[] inputs;
     private final WatermarkGauge output = new WatermarkGauge();
 
-    FlinkMultiInputMetricOracle(Harness harness, int arity) {
+    FlinkRegularJoinMetricOracle(
+            org.apache.flink.streaming.util.KeyedTwoInputStreamOperatorTestHarness<RowData, RowData, RowData, RowData>
+                    harness) {
         this.harness = harness;
-        inputs = new WatermarkGauge[arity];
-        for (int port = 0; port < arity; port++) {
+        inputs = new WatermarkGauge[2];
+        for (int port = 0; port < 2; port++) {
             inputs[port] = new WatermarkGauge();
             group().gauge(MetricNames.currentInputWatermarkName(port + 1), inputs[port]);
         }
@@ -33,21 +35,30 @@ final class FlinkMultiInputMetricOracle implements FlinkJoinMetricOracle {
     }
 
     public InternalOperatorMetricGroup group() {
-        return (InternalOperatorMetricGroup) harness.region().getMetricGroup();
+        return (InternalOperatorMetricGroup) harness.getOperator().getMetricGroup();
     }
 
     @SuppressWarnings("unchecked")
     public void accept(int port, StreamElement event) throws Exception {
         if (event instanceof StreamRecord) {
             group().getIOMetricGroup().getNumRecordsInCounter().inc();
-            harness.processElement(port, (StreamRecord<RowData>) event);
+            if (port == 0) harness.processElement1((StreamRecord<RowData>) event);
+            else harness.processElement2((StreamRecord<RowData>) event);
         } else if (event instanceof Watermark) {
             inputs[port].setCurrentWatermark(((Watermark) event).getTimestamp());
-            harness.processWatermark(port, (Watermark) event);
-        } else if (event instanceof WatermarkStatus) harness.processWatermarkStatus(port, (WatermarkStatus) event);
-        else if (event instanceof LatencyMarker)
-            harness.region().getInputs().get(port).processLatencyMarker((LatencyMarker) event);
-        else throw new AssertionError("Uncovered control " + event);
+            if (port == 0) harness.processWatermark1((Watermark) event);
+            else harness.processWatermark2((Watermark) event);
+        } else if (event instanceof WatermarkStatus) {
+            if (port == 0) harness.processWatermarkStatus1((WatermarkStatus) event);
+            else harness.processWatermarkStatus2((WatermarkStatus) event);
+        } else if (event instanceof LatencyMarker) {
+            if (port == 0)
+                ((org.apache.flink.table.runtime.operators.join.stream.StreamingJoinOperator) harness.getOperator())
+                        .processLatencyMarker1((LatencyMarker) event);
+            else
+                ((org.apache.flink.table.runtime.operators.join.stream.StreamingJoinOperator) harness.getOperator())
+                        .processLatencyMarker2((LatencyMarker) event);
+        } else throw new AssertionError("Uncovered control " + event);
     }
 
     public List<StreamElement> drain() {
@@ -65,21 +76,11 @@ final class FlinkMultiInputMetricOracle implements FlinkJoinMetricOracle {
 
     @Override
     public void prepareSnapshotPreBarrier(long checkpoint) throws Exception {
-        harness.region().prepareSnapshotPreBarrier(checkpoint);
+        harness.getOperator().prepareSnapshotPreBarrier(checkpoint);
     }
 
     @Override
     public void close() throws Exception {
         harness.close();
-    }
-
-    static final class Harness extends KeyedMultiInputStreamOperatorTestHarness<RowData, RowData> {
-        Harness(org.apache.flink.streaming.api.operators.StreamOperatorFactory<RowData> factory) throws Exception {
-            super(factory, 16, 1, 0);
-        }
-
-        org.apache.flink.streaming.api.operators.MultipleInputStreamOperator<RowData> region() {
-            return getCastedOperator();
-        }
     }
 }

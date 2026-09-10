@@ -778,3 +778,18 @@ checkpoints, canonical backend switches, 1-to-2-to-1 rescaling, incremental SST 
 channel replay with full Top-10 candidate sets. The final shared prerequisite passed 27 native
 checks and 109 focused Java checks; ordinary admission adds one planner test and nine original-query
 integration cases. These establish correctness and admission, not a performance claim.
+
+## Q20 filtered bid/auction join
+
+Q20 joins bids with their auction information and filters category 10. The catalog preserves
+the original projection and predicate, adding only column labels for the positional sink and
+redundant qualifications. The existing benchmark enables Flink's multi-join optimizer on both
+engines and uses the admitted binary MultiJoin path. A fresh original-SQL check with Flink's
+default optimizer setting selects `StreamExecJoin`, whose architecture/persistent-state gate
+still prevents acceleration. The catalog's 50,000-event collecting comparisons match on both
+backends and parallelism 1/4, but this does not establish default regular-join admission.
+
+The shared binary-join matrix now also uses Flink's actual `StreamingJoinOperator` as its
+oracle. All 76 regular/MultiJoin metric, changelog, rescaling and checkpoint/channel-replay
+cases pass. Connecting this verified regular subset to ordinary planner admission and then
+completing original-query integration and release profiling are the next steps.

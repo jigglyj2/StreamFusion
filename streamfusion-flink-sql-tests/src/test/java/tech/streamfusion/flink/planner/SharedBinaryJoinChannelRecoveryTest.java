@@ -28,22 +28,34 @@ import tech.streamfusion.flink.exchange.ArrowExchangeBatch;
 class SharedBinaryJoinChannelRecoveryTest {
     @ParameterizedTest
     @CsvSource({
-        "false,false,EQUALITY",
-        "false,true,EQUALITY",
-        "true,false,EQUALITY",
-        "true,true,EQUALITY",
-        "false,false,RANGE",
-        "false,true,RANGE",
-        "true,false,RANGE",
-        "true,true,RANGE",
-        "false,false,TIMESTAMP_OFFSET",
-        "false,true,TIMESTAMP_OFFSET",
-        "true,false,TIMESTAMP_OFFSET",
-        "true,true,TIMESTAMP_OFFSET"
+        "false,false,EQUALITY,false",
+        "false,false,EQUALITY,true",
+        "false,true,EQUALITY,false",
+        "false,true,EQUALITY,true",
+        "true,false,EQUALITY,false",
+        "true,false,EQUALITY,true",
+        "true,true,EQUALITY,false",
+        "true,true,EQUALITY,true",
+        "false,false,RANGE,false",
+        "false,false,RANGE,true",
+        "false,true,RANGE,false",
+        "false,true,RANGE,true",
+        "true,false,RANGE,false",
+        "true,false,RANGE,true",
+        "true,true,RANGE,false",
+        "true,true,RANGE,true",
+        "false,false,TIMESTAMP_OFFSET,false",
+        "false,false,TIMESTAMP_OFFSET,true",
+        "false,true,TIMESTAMP_OFFSET,false",
+        "false,true,TIMESTAMP_OFFSET,true",
+        "true,false,TIMESTAMP_OFFSET,false",
+        "true,false,TIMESTAMP_OFFSET,true",
+        "true,true,TIMESTAMP_OFFSET,false",
+        "true,true,TIMESTAMP_OFFSET,true"
     })
-    void flinkReplaysInflightArrowFramesAgainstRestoredJoinState(boolean rocks, boolean unaligned, Predicate predicate)
-            throws Exception {
-        var fixture = SharedBinaryJoinMetricFixture.forPredicate(predicate);
+    void flinkReplaysInflightArrowFramesAgainstRestoredJoinState(
+            boolean rocks, boolean unaligned, Predicate predicate, boolean regularOracle) throws Exception {
+        var fixture = SharedBinaryJoinMetricFixture.forPredicate(predicate).withRegularOracle(regularOracle);
         try (var oracle = fixture.join(rocks);
                 var calc = fixture.calc();
                 var allocator = new RootAllocator(64L << 20)) {

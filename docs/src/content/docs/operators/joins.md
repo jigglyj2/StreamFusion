@@ -21,6 +21,14 @@ tests cover this path. Q3 passes ordinary admission and collecting/blackhole int
 backends. The [Q3 release comparison](/StreamFusion/benchmarks/q3-rowdata/) records corrected
 measurements and profiles for both, including small larger-run median gains and slower smaller runs.
 
+The shared binary-join conformance matrix also runs against Flink's actual synchronous
+`StreamingJoinOperator`, with non-unique inner-join state on both inputs. Seventy-six cases
+across regular and MultiJoin oracles verify complete metrics/changelogs for equality, range,
+timestamp-offset and wide predicates, plus backend-switch savepoints, 1→2→1 rescaling,
+incremental SST reuse and actual aligned/unaligned Arrow channel replay. This verifies the
+existing native runtime for the regular-join subset; ordinary `StreamExecJoin` selection
+remains gated pending the planner admission checkpoint.
+
 Regular-join capability checks and protobuf construction belong to the planner bundle, where
 Flink's `JoinSpec` and Calcite classes are visible. Runtime operators remain in the runtime
 bundle and receive the completed native plan. This boundary also applies to the binary MultiJoin
