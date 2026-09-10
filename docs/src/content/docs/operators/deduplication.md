@@ -112,7 +112,9 @@ ties and out-of-order arrivals. Original Q18 is covered separately by ordinary S
 One-source ordered changelogs match byte-for-byte; parallel final rows are checked against the
 original readers' legal last winners because equal rowtimes make channel interleaving observable.
 See [query checkpoints](/StreamFusion/benchmarks/query-checkpoints/) for the exact validation scope.
-Its release performance checkpoint remains pending.
+Its [release comparison](/StreamFusion/benchmarks/q18-rowdata/) reports 4.431× median throughput
+at 10M RocksDB events, slower 1M/2M in-memory execution and a failed 10M Flink in-memory baseline.
+Separate longer mixed profiles cover both backends; these results do not establish a performance ceiling.
 
 The production paths remain Arrow-backed between source and sink boundaries. Rust gathers selected
 columns once and returns row-kind and input-ordinal envelope metadata with the batch. Row-time state

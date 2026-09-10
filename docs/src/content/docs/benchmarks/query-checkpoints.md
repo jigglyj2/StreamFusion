@@ -732,5 +732,11 @@ It does not discard arbitrary mismatches or claim byte-identical results across 
 input-channel interleavings. Controlled shared-runtime tests retain complete byte parity for
 identical arrival order. Independent original blackhole counts match at this validation size.
 
-Release/native-CPU measured forks and longer mixed profiles on both backends remain pending.
-This is the admission/correctness checkpoint, not a Q18 performance result or optimization ceiling.
+The [release comparison](/StreamFusion/benchmarks/q18-rowdata/) at `80df432a` completes three
+alternating measured pairs at 1M events on both backends, 2M in memory and 10M with RocksDB,
+plus separate longer mixed profiles. The 10M RocksDB median throughput ratio is 4.431×, with
+all native forks faster and disjoint ranges. The 1M comparisons and 2M in-memory comparison
+favor Flink at the median. The first 10M Flink in-memory fork failed with a TaskManager heartbeat
+timeout before any native fork; no ratio or native capacity claim is made for that case.
+This completes Q18's bounded admission, correctness and performance checkpoint, without claiming
+a performance ceiling. Q19 is the next query checkpoint.

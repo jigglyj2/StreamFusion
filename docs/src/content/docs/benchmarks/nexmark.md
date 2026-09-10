@@ -82,7 +82,10 @@ collecting/blackhole parity on both backends. Its [release comparison](/StreamFu
 reaches 1.104× / 1.130× median throughput at 10M events (hashmap / RocksDB), with overlapping
 in-memory ranges; both 1M comparisons favor Flink. Q18 now has ordinary row-time deduplication
 admission using DataFusion cumulative windows, with exact single-source changelog checks and
-parallel validation of tied winners from the original readers. Its release measurements remain pending. Q10's SELECT path is now catalogued with
+parallel validation of tied winners from the original readers. Its
+[release comparison](/StreamFusion/benchmarks/q18-rowdata/) reaches 4.431× median throughput
+at 10M RocksDB events, while the 1M/2M in-memory comparisons favor Flink. The 10M Flink
+in-memory baseline failed with a heartbeat timeout; no ratio is reported for that case. Q10's SELECT path is now catalogued with
 numeric `DATE_FORMAT`; its blackhole comparison does not exercise filesystem partition commits
 or rolling policies. See the query checkpoint page for its delivery status. Q14's built-in expressions
 have parity coverage, but its original Java UDF still awaits the proposed architecture exception;
