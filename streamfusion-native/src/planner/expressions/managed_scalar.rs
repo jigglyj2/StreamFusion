@@ -37,12 +37,14 @@ enum Policy {
     FixedMath,
     DateFormat(usize),
     RegexExtract,
+    SplitIndex,
 }
 impl Policy {
     fn label(self) -> &'static str {
         match self {
             Self::Repeat => "native scalar REPEAT workspace and output",
             Self::RegexExtract => "native scalar REGEXP_EXTRACT workspace and output",
+            Self::SplitIndex => "native scalar SPLIT_INDEX workspace and output",
             Self::FixedMath => "native scalar fixed math workspace and output",
             Self::DateFormat(_) => "native scalar DATE_FORMAT workspace and output",
         }
@@ -51,6 +53,7 @@ impl Policy {
         match self {
             Self::Repeat => repeat::workspace(args),
             Self::RegexExtract => super::regexp_extract::memory::workspace(args),
+            Self::SplitIndex => super::string_split_index::memory::workspace(args),
             Self::FixedMath => fixed_math::workspace(args),
             Self::DateFormat(bytes) => args
                 .number_rows
@@ -167,6 +170,13 @@ pub(crate) fn install(
                 .is_some()
             {
                 Policy::RegexExtract
+            } else if function
+                .fun()
+                .inner()
+                .downcast_ref::<super::string_split_index::SplitIndex>()
+                .is_some()
+            {
+                Policy::SplitIndex
             } else if function.name() == "repeat" {
                 Policy::Repeat
             } else if fixed_math::supports(function, schema)? {

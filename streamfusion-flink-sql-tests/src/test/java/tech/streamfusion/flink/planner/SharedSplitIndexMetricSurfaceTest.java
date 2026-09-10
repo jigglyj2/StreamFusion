@@ -3,13 +3,11 @@ package tech.streamfusion.flink.planner;
 
 import org.junit.jupiter.api.Test;
 
-class SharedRegexExtractMetricSurfaceTest {
+class SharedSplitIndexMetricSurfaceTest {
     @Test
     void generatedChangelogControlsAndRegisteredStageMetricsMatchFlink() throws Exception {
         SharedStringScalarMetricAssertions.assertParity(
-                new SharedRegexExtractMetricFixture(),
-                row -> row % 11 == 0
-                        ? "missing"
-                        : "prefix&channel_id=" + (row % 5 == 0 ? "" : "漢😀é" + row) + "&tail=1");
+                new SharedSplitIndexMetricFixture(),
+                row -> row % 11 == 0 ? "missing" : "prefix/" + (row % 5 == 0 ? "" : "漢😀é" + row + "::tail") + "/end");
     }
 }

@@ -1,134 +1,78 @@
-// Copyright 2026 StreamFusion Authors
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-
+// Copyright 2026 StreamFusion Authors. Licensed under the Apache License, Version 2.0.
+//! Flink's zero-based SPLIT_INDEX using DataFusion splitting and list extraction.
+use arrow::array::RecordBatch;
+use arrow::datatypes::{DataType, Field, Schema};
+use datafusion::common::config::ConfigOptions;
+use datafusion::error::{DataFusionError, Result};
+use datafusion::logical_expr::{
+    ColumnarValue, Operator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+};
+use datafusion::physical_expr::expressions::{BinaryExpr, CaseExpr, CastExpr, Column, Literal};
+use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr};
+use datafusion::scalar::ScalarValue;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+pub(super) mod memory;
+#[cfg(test)]
+mod tests;
 
-use arrow::array::{Array, Int64Array, StringArray};
-use arrow::datatypes::{DataType, Field, FieldRef, Schema};
-use arrow::record_batch::RecordBatch;
-use datafusion::error::{DataFusionError, Result};
-use datafusion::logical_expr::ColumnarValue;
-use datafusion::physical_expr::expressions::CastExpr;
-use datafusion::physical_expr::PhysicalExpr;
-
-#[derive(Debug, Eq)]
-struct FlinkSplitIndexExpr {
-    value: Arc<dyn PhysicalExpr>,
+#[derive(Debug)]
+pub(super) struct SplitIndex {
     delimiter: String,
-    index: Arc<dyn PhysicalExpr>,
+    signature: Signature,
+    schema: Arc<Schema>,
+    kernel: Arc<dyn PhysicalExpr>,
 }
-
-impl PartialEq for FlinkSplitIndexExpr {
+impl PartialEq for SplitIndex {
     fn eq(&self, other: &Self) -> bool {
-        self.value.eq(&other.value)
-            && self.delimiter == other.delimiter
-            && self.index.eq(&other.index)
+        self.delimiter == other.delimiter
     }
 }
-
-impl Hash for FlinkSplitIndexExpr {
+impl Eq for SplitIndex {}
+impl Hash for SplitIndex {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.value.hash(state);
         self.delimiter.hash(state);
-        self.index.hash(state);
     }
 }
-
-impl std::fmt::Display for FlinkSplitIndexExpr {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            formatter,
-            "SPLIT_INDEX({}, {:?}, {})",
-            self.value, self.delimiter, self.index
-        )
+impl ScalarUDFImpl for SplitIndex {
+    fn name(&self) -> &str {
+        "flink_split_index"
     }
-}
-
-impl PhysicalExpr for FlinkSplitIndexExpr {
-    fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+    fn return_type(&self, types: &[DataType]) -> Result<DataType> {
+        if types != [DataType::Utf8, DataType::Int64] {
+            return Err(DataFusionError::Plan(
+                "SPLIT_INDEX requires Utf8 and Int64".into(),
+            ));
+        }
         Ok(DataType::Utf8)
     }
-
-    fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
-        Ok(true)
+    fn is_strict(&self) -> bool {
+        true
     }
-
-    fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let values = self.value.evaluate(batch)?.into_array(batch.num_rows())?;
-        let indices = self.index.evaluate(batch)?.into_array(batch.num_rows())?;
-        let values = values
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .ok_or_else(|| {
-                DataFusionError::Execution("SPLIT_INDEX expected Utf8 input".to_string())
-            })?;
-        let indices = indices
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .ok_or_else(|| {
-                DataFusionError::Execution("SPLIT_INDEX expected Int64 index".to_string())
-            })?;
-        let mut output = Vec::with_capacity(batch.num_rows());
-        for row in 0..batch.num_rows() {
-            let selected = if values.is_null(row) || indices.is_null(row) {
-                None
-            } else {
-                split_index(values.value(row), &self.delimiter, indices.value(row))
-            };
-            output.push(selected);
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let scalar = args
+            .args
+            .iter()
+            .all(|value| matches!(value, ColumnarValue::Scalar(_)));
+        let rows = if scalar { 1 } else { args.number_rows };
+        let columns = args
+            .args
+            .into_iter()
+            .map(|value| value.into_array(rows))
+            .collect::<Result<Vec<_>>>()?;
+        let batch = RecordBatch::try_new(self.schema.clone(), columns)?;
+        let result = self.kernel.evaluate(&batch)?.into_array(rows)?;
+        if scalar {
+            Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(
+                &result, 0,
+            )?))
+        } else {
+            Ok(ColumnarValue::Array(result))
         }
-        Ok(ColumnarValue::Array(Arc::new(StringArray::from(output))))
     }
-
-    fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
-        let source = self.value.return_field(input_schema)?;
-        Ok(Arc::new(Field::new(source.name(), DataType::Utf8, true)))
-    }
-
-    fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
-        vec![&self.value, &self.index]
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        children: Vec<Arc<dyn PhysicalExpr>>,
-    ) -> Result<Arc<dyn PhysicalExpr>> {
-        Ok(Arc::new(Self {
-            value: Arc::clone(&children[0]),
-            delimiter: self.delimiter.clone(),
-            index: Arc::clone(&children[1]),
-        }))
-    }
-
-    fn fmt_sql(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "SPLIT_INDEX(")?;
-        self.value.fmt_sql(formatter)?;
-        write!(formatter, ", {:?}, ", self.delimiter)?;
-        self.index.fmt_sql(formatter)?;
-        write!(formatter, ")")
-    }
-}
-
-fn split_index<'a>(value: &'a str, delimiter: &str, index: i64) -> Option<&'a str> {
-    if value.is_empty() || index < 0 {
-        return None;
-    }
-    let requested = usize::try_from(index).ok()?;
-    let mut start = 0;
-    for _ in 0..requested {
-        let relative = value[start..].find(delimiter)?;
-        start += relative + delimiter.len();
-    }
-    let end = value[start..]
-        .find(delimiter)
-        .map_or(value.len(), |relative| start + relative);
-    Some(&value[start..end])
 }
 
 pub(crate) fn create(
@@ -139,34 +83,70 @@ pub(crate) fn create(
 ) -> Result<Arc<dyn PhysicalExpr>> {
     if delimiter.is_empty() {
         return Err(DataFusionError::Plan(
-            "SPLIT_INDEX delimiter must be nonempty".to_string(),
+            "SPLIT_INDEX delimiter must be nonempty".into(),
         ));
     }
-    if value.data_type(schema)? != DataType::Utf8 {
+    if value.data_type(schema)? != DataType::Utf8 || index.data_type(schema)? != DataType::Int32 {
         return Err(DataFusionError::Plan(
-            "SPLIT_INDEX requires Arrow Utf8 input".to_string(),
+            "SPLIT_INDEX requires VARCHAR and INTEGER".into(),
         ));
     }
-    Ok(Arc::new(FlinkSplitIndexExpr {
-        value,
-        delimiter: delimiter.to_string(),
-        index: Arc::new(CastExpr::new(index, DataType::Int64, None)),
-    }))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::split_index;
-
-    #[test]
-    fn selects_one_field_without_materializing_all_fields() {
-        assert_eq!(split_index("a/b/c", "/", 0), Some("a"));
-        assert_eq!(split_index("a/b/c", "/", 2), Some("c"));
-        assert_eq!(split_index("a//c/", "/", 1), Some(""));
-        assert_eq!(split_index("a//c/", "/", 3), Some(""));
-        assert_eq!(split_index("a/b", "/", 2), None);
-        assert_eq!(split_index("", "/", 0), None);
-        assert_eq!(split_index("a/b", "/", -1), None);
-        assert_eq!(split_index("a界b界c", "界", 1), Some("b"));
-    }
+    let inner_schema = Arc::new(Schema::new(vec![
+        Field::new("value", DataType::Utf8, true),
+        Field::new("index", DataType::Int64, true),
+    ]));
+    let parts = Arc::new(ScalarFunctionExpr::try_new(
+        datafusion_functions_nested::string::string_to_array_udf(),
+        vec![
+            Arc::new(Column::new("value", 0)),
+            Arc::new(Literal::new(ScalarValue::Utf8(Some(delimiter.into())))),
+        ],
+        &inner_schema,
+        Arc::new(ConfigOptions::new()),
+    )?);
+    // Arrow List uses i32 offsets. DF rejects index i32::MAX + 1 instead of returning
+    // NULL. Flink's zero-based INTEGER maximum can never address such a list; reject
+    // it along with negative indices before invoking DF's one-based extraction.
+    let one_based = Arc::new(BinaryExpr::new(
+        Arc::new(Column::new("index", 1)),
+        Operator::Plus,
+        Arc::new(Literal::new(ScalarValue::Int64(Some(1)))),
+    ));
+    let index_column = Arc::new(Column::new("index", 1)) as Arc<dyn PhysicalExpr>;
+    let valid = Arc::new(BinaryExpr::new(
+        Arc::new(BinaryExpr::new(
+            index_column.clone(),
+            Operator::GtEq,
+            Arc::new(Literal::new(ScalarValue::Int64(Some(0)))),
+        )),
+        Operator::And,
+        Arc::new(BinaryExpr::new(
+            index_column,
+            Operator::Lt,
+            Arc::new(Literal::new(ScalarValue::Int64(Some(i32::MAX as i64)))),
+        )),
+    ));
+    let element = Arc::new(ScalarFunctionExpr::try_new(
+        datafusion_functions_nested::extract::array_element_udf(),
+        vec![parts, one_based],
+        &inner_schema,
+        Arc::new(ConfigOptions::new()),
+    )?);
+    let kernel = Arc::new(CaseExpr::try_new(
+        None,
+        vec![(valid, element)],
+        Some(Arc::new(Literal::new(ScalarValue::Utf8(None)))),
+    )?);
+    let function = SplitIndex {
+        delimiter: delimiter.into(),
+        signature: Signature::exact(vec![DataType::Utf8, DataType::Int64], Volatility::Immutable),
+        schema: inner_schema,
+        kernel,
+    };
+    Ok(Arc::new(ScalarFunctionExpr::try_new(
+        Arc::new(ScalarUDF::new_from_impl(function)),
+        vec![value, Arc::new(CastExpr::new(index, DataType::Int64, None))],
+        schema,
+        Arc::new(ConfigOptions::new()),
+    )?))
 }

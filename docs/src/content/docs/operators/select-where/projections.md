@@ -598,6 +598,17 @@ DataFusion `string_to_array` plus dynamic array extraction, preserving Flink's z
 empty tokens, and null result for negative, out-of-range, empty-input, or null arguments. Empty
 and dynamic delimiters stay on Flink because an empty delimiter activates Java whitespace
 splitting, which is not equivalent to DataFusion's empty-delimiter behavior.
+The native adapter uses DataFusion conditional expressions to exclude negative indices and the
+maximum `INTEGER` before one-based list extraction: DataFusion rejects an index beyond Arrow's
+32-bit list-offset range, while Flink returns null. DataFusion `split_part` alone is insufficient
+because it returns an empty string for a missing field, which Flink distinguishes from an empty
+token. No custom string-splitting loop is retained. A coarse reservation covers the growing
+list/token buffers, conditional selection, extraction, and scalar broadcasting before the
+DataFusion kernels run; the output keeps its reservation until the last Arrow consumer releases
+it, including sliced consumers. The split is stateless and uses the existing fused Calc metric
+and control-event behavior. Generated parity tests cover all row kinds, Unicode and multibyte
+delimiters, repeated and trailing delimiters, nested expressions, nulls, integer extremes, and
+wide or delimiter-dense inputs, alongside adapted Flink SQL cases and stage-metric comparisons.
 `BIN(value)` is accelerated for `TINYINT`, `SMALLINT`, `INTEGER`, and `BIGINT` expressions. A
 dedicated native vector expression widens each value to a signed 64-bit integer and emits the same
 un-padded two's-complement representation as Flink, including 64 digits for negative values and
