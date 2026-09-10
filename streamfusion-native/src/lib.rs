@@ -104,6 +104,24 @@ fn assign_plan_node_ids(
             }
             assign_child(&mut node.input, next_id, assigned, protocol_version)
         }
+        Some(WindowJoin(node)) => {
+            if crate::planner::operators::window_join::planning::is_native_contract(node)
+                && protocol_version < RECORD_POLICY_PLAN_PROTOCOL_VERSION
+            {
+                return Err(DataFusionError::Plan(
+                    "native window join requires plan protocol version 3".into(),
+                ));
+            }
+            if crate::planner::operators::window_join::planning::is_native_contract(node)
+                && !operator.clear_record_timestamps
+            {
+                return Err(DataFusionError::Plan(
+                    "native window join requires cleared record timestamps".into(),
+                ));
+            }
+            assign_child(&mut node.left_input, next_id, assigned, protocol_version)?;
+            assign_child(&mut node.right_input, next_id, assigned, protocol_version)
+        }
         Some(RegularJoin(node)) => {
             assign_child(&mut node.left_input, next_id, assigned, protocol_version)?;
             assign_child(&mut node.right_input, next_id, assigned, protocol_version)

@@ -6,16 +6,14 @@
 
 use std::sync::Arc;
 
-use arrow::array::{Array, Int64Array, UInt64Array};
+use arrow::array::{Array, Int64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion::common::JoinType;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::execution::context::{SessionConfig, SessionContext};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
-use datafusion::logical_expr::Operator;
-use datafusion::physical_expr::expressions::{BinaryExpr, Column};
-use datafusion::physical_plan::joins::{utils::JoinFilter, NestedLoopJoinExec};
+use datafusion::physical_plan::joins::NestedLoopJoinExec;
 use datafusion::physical_plan::ExecutionPlan;
 use futures::StreamExt;
 
@@ -24,7 +22,7 @@ use crate::memory_pool::{tests_support::TestBroker, FlinkMemoryPool};
 fn schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
         Field::new("value", DataType::Int64, true),
-        Field::new("ordinal", DataType::UInt64, false),
+        Field::new("ordinal", DataType::Int64, false),
     ]))
 }
 
@@ -33,8 +31,8 @@ fn batch(values: &[Option<i64>], first: usize) -> RecordBatch {
         schema(),
         vec![
             Arc::new(Int64Array::from(values.to_vec())),
-            Arc::new(UInt64Array::from_iter_values(
-                first as u64..(first + values.len()) as u64,
+            Arc::new(Int64Array::from_iter_values(
+                first as i64..(first + values.len()) as i64,
             )),
         ],
     )
@@ -73,24 +71,12 @@ fn join(
     } else {
         MemorySourceConfig::try_new_exec(&[right], schema(), None).unwrap()
     };
-    let filter_schema = Arc::new(Schema::new(vec![
-        Field::new("left", DataType::Int64, true),
-        Field::new("right", DataType::Int64, true),
-    ]));
-    let filter = JoinFilter::new(
-        Arc::new(BinaryExpr::new(
-            Arc::new(Column::new("left", 0)),
-            Operator::GtEq,
-            Arc::new(Column::new("right", 1)),
-        )),
-        JoinFilter::build_column_indices(vec![0], vec![0]),
-        filter_schema,
-    );
+    let filter = super::planning::filter(&super::planning::tests::comparison_plan()).unwrap();
     Arc::new(
         NestedLoopJoinExec::try_new(
             MemorySourceConfig::try_new_exec(&[left], schema(), None).unwrap(),
             right,
-            Some(filter),
+            filter,
             &JoinType::Inner,
             None,
         )
@@ -102,17 +88,17 @@ fn identities(batch: &RecordBatch) -> Vec<(u64, u64)> {
     let left = batch
         .column(1)
         .as_any()
-        .downcast_ref::<UInt64Array>()
+        .downcast_ref::<Int64Array>()
         .unwrap();
     let right = batch
         .column(3)
         .as_any()
-        .downcast_ref::<UInt64Array>()
+        .downcast_ref::<Int64Array>()
         .unwrap();
     assert_eq!(left.null_count(), 0);
     assert_eq!(right.null_count(), 0);
     (0..batch.num_rows())
-        .map(|row| (left.value(row), right.value(row)))
+        .map(|row| (left.value(row) as u64, right.value(row) as u64))
         .collect()
 }
 

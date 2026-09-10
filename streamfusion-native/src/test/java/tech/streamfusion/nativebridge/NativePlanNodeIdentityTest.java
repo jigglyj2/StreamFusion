@@ -23,6 +23,28 @@ import tech.streamfusion.proto.plan.v1.Union;
 
 class NativePlanNodeIdentityTest {
     @Test
+    void windowJoinChildrenReceiveStableDistinctStageIdentities() throws Exception {
+        NativePlan plan = NativePlan.newBuilder()
+                .setProtocolVersion(3)
+                .setRoot(Operator.newBuilder()
+                        .setClearRecordTimestamps(true)
+                        .setWindowJoin(tech.streamfusion.proto.plan.v1.WindowJoin.newBuilder()
+                                .setJoinType(tech.streamfusion.proto.plan.v1.RegularJoinType.REGULAR_JOIN_TYPE_INNER)
+                                .setLeftInput(Operator.newBuilder()
+                                        .setInput(Input.newBuilder().setInputIndex(0)))
+                                .setRightInput(Operator.newBuilder()
+                                        .setInput(Input.newBuilder().setInputIndex(1)))))
+                .build();
+        NativePlan identified = NativePlan.parseFrom(NativePlanNodeIdentity.assign(plan.toByteArray()));
+        assertThat(identified.getRoot().getPlanNodeId()).isEqualTo(1);
+        assertThat(identified.getRoot().getWindowJoin().getLeftInput().getPlanNodeId())
+                .isEqualTo(2);
+        assertThat(identified.getRoot().getWindowJoin().getRightInput().getPlanNodeId())
+                .isEqualTo(3);
+        assertThat(NativePlanNodeIdentity.assign(identified.toByteArray())).containsExactly(identified.toByteArray());
+    }
+
+    @Test
     void lookupSnapshotIdentityStaysStableWhileProbeChildrenAreAssigned() throws Exception {
         NativePlan original = NativePlan.newBuilder()
                 .setProtocolVersion(3)

@@ -62,6 +62,13 @@ fn unary_binary_and_variadic_copies_preserve_only_their_own_configuration() {
             bounded_final_output: true,
             ..Default::default()
         })),
+        Kind::WindowJoin(Box::new(proto::WindowJoin {
+            left_key_indices: vec![0],
+            right_key_indices: vec![1],
+            filter_nulls: vec![true],
+            join_type: proto::RegularJoinType::Inner as i32,
+            ..Default::default()
+        })),
         Kind::Union(proto::Union { inputs: vec![] }),
     ];
     for kind in configurations {
@@ -70,6 +77,10 @@ fn unary_binary_and_variadic_copies_preserve_only_their_own_configuration() {
         match source.operator.as_mut().unwrap() {
             Kind::Deduplicate(value) => value.input = Some(Box::new(child.clone())),
             Kind::RegularJoin(value) => {
+                value.left_input = Some(Box::new(child.clone()));
+                value.right_input = Some(Box::new(child.clone()));
+            }
+            Kind::WindowJoin(value) => {
                 value.left_input = Some(Box::new(child.clone()));
                 value.right_input = Some(Box::new(child.clone()));
             }

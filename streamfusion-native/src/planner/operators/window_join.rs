@@ -26,6 +26,7 @@ use crate::{decode_plan, proto};
 
 mod indexed_state;
 mod legacy_state;
+pub(crate) mod planning;
 use indexed_state::{Header, WindowKeys};
 use legacy_state::decode_state;
 #[cfg(test)]
@@ -144,7 +145,7 @@ impl WindowJoinProcessor {
             .root
             .ok_or_else(|| DataFusionError::Plan("window join plan has no root".to_string()))?;
         let plan = match root.operator {
-            Some(proto::operator::Operator::WindowJoin(plan)) => plan,
+            Some(proto::operator::Operator::WindowJoin(plan)) => *plan,
             _ => {
                 return Err(DataFusionError::Plan(
                     "window join handle requires a WindowJoin root".to_string(),
@@ -716,6 +717,9 @@ fn validate_plan(plan: &proto::WindowJoin, max_parallelism: u32) -> Result<()> {
         return Err(DataFusionError::Plan(
             "window join key/schema contract is invalid".to_string(),
         ));
+    }
+    if planning::is_native_contract(plan) {
+        planning::filter(plan)?;
     }
     Ok(())
 }

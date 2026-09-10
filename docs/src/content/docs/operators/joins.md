@@ -75,8 +75,18 @@ those queries enabled the multi-join optimizer and exercised a supported binary 
 The retained window-join handle is not integrated into the common native execution-plan,
 state, control and per-stage metric lifecycle and must not be admitted on those results.
 
+The planner now has a version-3 inner-window contract with explicit left/right native children,
+SQL schemas, equality keys, per-key null filters, and a serialized residual expression. It
+explicitly clears record timestamps. Rust assigns identities through both children and lowers
+the predicate to a DataFusion `JoinFilter`; only referenced columns enter the filter's candidate
+batch. A DataFusion `CASE` skips residual evaluation for filtered null keys, preserving Flink's
+null-key wrapper even when the residual could throw. Current contract validation rejects non-UTC
+time, non-inner joins, mismatched or unsupported equality keys, and invalid predicates. Legacy
+state-only protobufs remain readable and do not imply native compute support. This contract is
+a prerequisite; the retained Java candidate matcher has not yet been replaced by shared execution.
+
 A test-only DataFusion 55 investigation evaluates a closed insert-only inner window with
-`NestedLoopJoinExec` and a physical comparison predicate. A complete right-window Arrow input
+`NestedLoopJoinExec` and the lowered protobuf predicate. A complete right-window Arrow input
 preserves Flink `WindowJoinHelper`'s left-row/right-row iteration order; the normal DataFusion
 memory source splits batches and can change that order. The existing native reusable Arrow input
 avoids this split without copying payloads or adding a Java boundary. Tests cover generated

@@ -24,7 +24,9 @@ import org.apache.flink.table.planner.plan.nodes.exec.spec.JoinSpec;
 import org.apache.flink.table.planner.utils.TableConfigUtils;
 import org.apache.flink.table.runtime.generated.GeneratedJoinCondition;
 import org.apache.flink.table.runtime.keyselector.RowDataKeySelector;
+import org.apache.flink.table.runtime.operators.join.FlinkJoinType;
 import org.apache.flink.table.runtime.util.TimeWindowUtil;
+import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatchTypeInfo;
 import tech.streamfusion.flink.exchange.NativeExchangeFrame;
@@ -63,14 +65,8 @@ public final class StreamFusionWindowJoinTranslator {
         String shiftTimeZone = TimeWindowUtil.getShiftTimeZone(
                         leftWindowing.getTimeAttributeType(), TableConfigUtils.getLocalTimeZone(config))
                 .getId();
-        byte[] plan = StreamFusionWindowJoinPlan.create(
-                leftType,
-                rightType,
-                joinSpec.getLeftKeys(),
-                joinSpec.getRightKeys(),
-                leftWindowEnd,
-                rightWindowEnd,
-                shiftTimeZone);
+        byte[] plan = StreamFusionWindowJoinPlan.createNativeInner(
+                leftType, rightType, joinSpec, leftWindowEnd, rightWindowEnd, shiftTimeZone);
         StreamFusionStateBackendFactory.install(environment);
         Transformation<RowData> keyedLeft = keyed(left, leftType, joinSpec.getLeftKeys(), config, environment);
         Transformation<RowData> keyedRight = keyed(right, rightType, joinSpec.getRightKeys(), config, environment);
@@ -125,8 +121,18 @@ public final class StreamFusionWindowJoinTranslator {
         if (!leftWindowing.isRowtime() || !rightWindowing.isRowtime()) {
             return "window time: Flink does not support processing-time Window Join";
         }
-        if (joinSpec.getLeftKeys().length != joinSpec.getRightKeys().length) {
-            return "join keys: left and right key counts differ";
+        if (joinSpec.getJoinType() != FlinkJoinType.INNER) {
+            return "window join: native computation currently requires INNER semantics";
+        }
+        if (!TimeWindowUtil.getShiftTimeZone(
+                        leftWindowing.getTimeAttributeType(), TableConfigUtils.getLocalTimeZone(config))
+                .getId()
+                .equals("UTC")) {
+            return "window join: native computation currently requires UTC event time";
+        }
+        if (joinSpec.getLeftKeys().length != joinSpec.getRightKeys().length
+                || joinSpec.getLeftKeys().length != joinSpec.getFilterNulls().length) {
+            return "join keys: left, right, and null-filter key counts differ";
         }
         for (int key : joinSpec.getLeftKeys()) {
             if (key < 0 || key >= leftType.getFieldCount()) {
@@ -138,6 +144,20 @@ public final class StreamFusionWindowJoinTranslator {
                 return "right join key: index " + key + " is outside the input row";
             }
         }
+        for (int i = 0; i < joinSpec.getLeftKeys().length; i++) {
+            LogicalType leftKey = leftType.getTypeAt(joinSpec.getLeftKeys()[i]);
+            LogicalType rightKey = rightType.getTypeAt(joinSpec.getRightKeys()[i]);
+            if (!leftKey.copy(true).equals(rightKey.copy(true)) || !nativeKey(leftKey)) {
+                return "join keys: native Window Join requires matching Flink-compatible scalar equality keys";
+            }
+        }
+        if (joinSpec.getNonEquiCondition().isPresent()) {
+            String failure = tech.streamfusion.flink.calc.StreamFusionCalcTranslator.operatorConditionFailure(
+                    joinSpec.getNonEquiCondition().get(),
+                    StreamFusionWindowJoinPlan.conditionInputType(leftType, rightType),
+                    "window join condition");
+            if (failure != null) return failure;
+        }
         if (config.get(ExecutionConfigOptions.TABLE_EXEC_ASYNC_STATE_ENABLED)) {
             return "state: Flink async-state mode is not implemented by native Window Join";
         }
@@ -145,6 +165,22 @@ public final class StreamFusionWindowJoinTranslator {
             return "state: Flink changelog-state wrapping is not implemented by native Window Join";
         }
         return null;
+    }
+
+    private static boolean nativeKey(LogicalType type) {
+        switch (type.getTypeRoot()) {
+            case BOOLEAN:
+            case TINYINT:
+            case SMALLINT:
+            case INTEGER:
+            case BIGINT:
+            case VARCHAR:
+            case VARBINARY:
+            case DECIMAL:
+                return true;
+            default:
+                return false;
+        }
     }
 
     private static Transformation<RowData> keyed(

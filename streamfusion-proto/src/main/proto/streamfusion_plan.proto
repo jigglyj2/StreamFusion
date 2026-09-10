@@ -383,9 +383,10 @@ enum TopNRankType {
   TOP_N_RANK_TYPE_RANK = 2;
 }
 
-// Two-input event-time Window Join state. Rust stores schema-aware Arrow rows and emits a nullable
-// Arrow candidate batch at timer firing. The Java control edge evaluates Flink's generated
-// condition through zero-copy Arrow RowData views and gathers the final Arrow result once.
+// Two-input event-time Window Join. Fields 1..7 retain the legacy state-handle encoding.
+// A native compute contract requires protocol 3, explicit physical children, join type,
+// null-key policy, and a native residual predicate. The operator clears record timestamps.
+// Legacy state-only plans do not imply native computation or shared-runtime admission.
 message WindowJoin {
   repeated uint32 left_key_indices = 1;
   repeated uint32 right_key_indices = 2;
@@ -394,6 +395,13 @@ message WindowJoin {
   Schema left_schema = 5;
   Schema right_schema = 6;
   string shift_time_zone = 7;
+  Operator left_input = 8;
+  Operator right_input = 9;
+  RegularJoinType join_type = 10;
+  repeated bool filter_nulls = 11;
+  // References address left SQL fields followed by right SQL fields. Equality partitioning is
+  // specified by the key indices above; do not include window-bound equality a second time.
+  Expression residual_condition = 12;
 }
 
 // Timer-free keyed deduplication. The initial runtime supports insert-only rowtime input,

@@ -178,15 +178,18 @@ pub(super) fn plan() -> Vec<u8> {
             metric_name: String::new(),
             clear_record_timestamps: false,
             metric_uid: None,
-            operator: Some(proto::operator::Operator::WindowJoin(proto::WindowJoin {
-                left_key_indices: vec![0],
-                right_key_indices: vec![0],
-                left_window_end_index: 1,
-                right_window_end_index: 1,
-                left_schema: Some(test_schema()),
-                right_schema: Some(test_schema()),
-                shift_time_zone: "UTC".to_string(),
-            })),
+            operator: Some(proto::operator::Operator::WindowJoin(Box::new(
+                proto::WindowJoin {
+                    left_key_indices: vec![0],
+                    right_key_indices: vec![0],
+                    left_window_end_index: 1,
+                    right_window_end_index: 1,
+                    left_schema: Some(test_schema()),
+                    right_schema: Some(test_schema()),
+                    shift_time_zone: "UTC".to_string(),
+                    ..Default::default()
+                },
+            ))),
         }),
     }
     .encode_to_vec()

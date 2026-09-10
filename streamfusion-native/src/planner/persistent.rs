@@ -101,6 +101,12 @@ pub(crate) fn children(node: &proto::Operator) -> Result<Vec<&proto::Operator>> 
     let child = match node.operator.as_ref() {
         Some(Input(_) | Values(_)) => return Ok(Vec::new()),
         Some(Union(node)) => return Ok(node.inputs.iter().collect()),
+        Some(WindowJoin(node)) => {
+            return [node.left_input.as_deref(), node.right_input.as_deref()]
+                .into_iter()
+                .map(required)
+                .collect()
+        }
         Some(RegularJoin(node)) => {
             return [node.left_input.as_deref(), node.right_input.as_deref()]
                 .into_iter()
@@ -129,9 +135,7 @@ pub(crate) fn children(node: &proto::Operator) -> Result<Vec<&proto::Operator>> 
         Some(BoundedSort(node)) => node.input.as_deref(),
         Some(BoundedRank(node)) => node.input.as_deref(),
         // These legacy handle contracts still need explicit child edges before generic lowering.
-        Some(
-            WindowJoin(_) | IntervalJoin(_) | TemporalJoin(_) | MultiJoin(_) | MatchRecognize(_),
-        ) => {
+        Some(IntervalJoin(_) | TemporalJoin(_) | MultiJoin(_) | MatchRecognize(_)) => {
             return Err(DataFusionError::Plan(
                 "native operator contract does not yet specify physical child edges".into(),
             ))
