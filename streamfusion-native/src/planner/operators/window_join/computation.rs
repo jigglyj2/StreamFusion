@@ -19,6 +19,9 @@ use std::task::{Context, Poll};
 
 mod admission;
 
+#[cfg(test)]
+mod paging_tests;
+
 /// Shared resource installation calls this before opening state, so unsupported kernels
 /// are not first discovered after a window has accumulated input.
 pub(super) fn validate(plan: &proto::WindowJoin) -> Result<Option<JoinFilter>> {

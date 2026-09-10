@@ -47,15 +47,24 @@ record timestamp. Ordinary batch EOF, end-input and checkpoint preparation do no
 The native WindowJoin and adjacent native operators compose in one DataFusion execution tree.
 Flink network edges carry standard Arrow IPC frames, decoded once at the receiving native-plan
 edge. DataFusion `NestedLoopJoinExec` and its `JoinFilter` compute closed-window results while
-preserving Flink's left/right duplicate order. No Java candidate-matching loop is used.
+preserving Flink's left/right duplicate order. A complete right Arrow window is shared across
+left pages of at most 256 rows, with bounded decode bytes. Each page uses a fresh DataFusion join
+execution to reset its build state; adjacent native stages still exchange Arrow directly. No Java
+candidate-matching loop is used.
 
 Native state separates payload entries from an Arrow-row ordering index. Both backends use
 ordered range access and batch writes; growing partition values are not rewritten on every row.
-Flink partition hashing and key-group identity remain separate from sortable state keys.
+Flink partition hashing and key-group identity remain separate from sortable state keys. A left
+page's entries are reclaimed only after its DataFusion output drains. The right entries, header
+and timer remain until all pages finish. A partial-close cursor cannot be checkpointed: input and
+checkpoint operations remain blocked during the invocation, and failure recovers Flink's previous
+checkpoint. Persisted encodings are unchanged.
 
 Coarse reservations cover retained state, large Arrow inputs and outputs, and DataFusion's
 candidate/filter workspace through Flink's original managed-memory allowances. Shared buffers
-are counted once. Small windows cap batch capacity at their possible pair count; larger work
+are counted once. Left-side staging stays bounded rather than copying a complete growing window.
+The complete right side and DataFusion candidate workspace must still fit. Small pages cap batch
+capacity at their possible pair count; larger work
 returns a recoverable budget error when it cannot be admitted. Temporary allocation descriptors
 do not require individual reservations or per-allocation JNI calls.
 
@@ -64,7 +73,9 @@ pending timers with its watermark reset to `Long.MIN_VALUE`, matching Flink; it 
 window aggregates' persisted watermark clocks. Shared snapshots use the versioned `SFWF/2`
 contract and reject incompatible operator contracts and earlier unadmitted shared encodings.
 Tests cover canonical backend changes, aligned and unaligned snapshots, in-flight Arrow frame
-replay, and 1→2 key-group redistribution on both backends.
+replay, and 1→2 key-group redistribution on both backends. Native tests additionally close a
+20,003-row left window with only 4 MiB of remaining allowance and restore a cancelled multi-page
+window after earlier pages have completed.
 
 ## Metrics and validation
 

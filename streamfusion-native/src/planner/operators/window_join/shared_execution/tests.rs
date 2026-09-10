@@ -5,6 +5,7 @@ use super::super::indexed_tests::backends;
 use super::*;
 
 mod checkpoints;
+mod paging;
 use crate::execution_context::NativeExecutionContext;
 use crate::memory_pool::tests_support::TestBroker;
 use futures::StreamExt;

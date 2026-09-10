@@ -99,12 +99,14 @@ kernels, floating NaN guards, decimal conversion, timestamp-offset kernels or ot
 workspaces retain precise fallback. Planner inspection uses the active table configuration
 merged with the persisted operator configuration, including its time zone.
 
-Closed-window computation uses DataFusion 55 `NestedLoopJoinExec`. Complete left/right Arrow
-inputs use the reusable native input node: DataFusion's normal memory source can split input
-batches and change Flink's left-row/right-row emission order. A private build-pool view retains
-the already accounted left batch without charging its shared buffers again; it rejects unrelated
-consumers or storage beyond that input. Small windows cap DataFusion's batch capacity at their
-maximum possible pair count, avoiding a full default-batch workspace for a tiny result.
+Closed-window computation uses DataFusion 55 `NestedLoopJoinExec`. A complete, admitted right
+Arrow window is shared across bounded left pages in arrival order. Each pair uses the reusable
+native input node: splitting the right input would change Flink's left-row/right-row emission
+order. A private build-pool view retains the already accounted left page without charging its
+shared buffers again; it rejects unrelated consumers or storage beyond that input. Each page
+caps DataFusion's batch capacity at its maximum possible pair count, avoiding a full default-batch
+workspace for a tiny result. Creating a join execution for each left page resets DataFusion's
+build state while retaining Flink's duplicate order; no intermediate JNI handoff is introduced.
 
 Coarse reservations cover candidate/filter/coalescer workspace before execution. Output receives
 its existing buffer allowance through shared ownership, including non-zero-offset slices.
@@ -118,9 +120,14 @@ window ends use Arrow row ordering, and each side preserves a stable arrival ord
 and RocksDB both use ordered range reads and batched deletion. Flink partition hashing remains
 separate; keyless shared joins use Flink's eight-byte empty `BinaryRowData` key.
 
-A watermark closes one window at a time. Its timer and indexed state remain until the DataFusion
-output stream has drained successfully. Ordinary invocation EOF, end-input, and checkpoint
-preparation do not fire windows. Failed or cancelled invocations prevent checkpointing and reuse.
+A watermark closes one window at a time, decoding at most 256 left rows per page with a byte
+limit derived from the existing memory allowance. Encoded copies and deletion keys no longer
+grow with the complete left window. Right-side decode and candidate computation must still fit
+their reservations. A left page's payload entries are deleted in a batch only after its DataFusion
+output reaches EOF; the right state, header and timer remain until the final page completes.
+The partial-close cursor is invocation-local, never persisted. Ordinary invocation EOF, end-input,
+and checkpoint preparation do not fire windows. Failed or cancelled invocations prevent
+checkpointing and reuse and recover the previous Flink checkpoint.
 Late retractions drop before changelog validation, matching Flink; on-time retractions are rejected.
 Maximum window-end sentinels and wrapping deadline arithmetic retain Flink's behavior.
 

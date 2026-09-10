@@ -45,6 +45,12 @@ impl WindowKeys {
             key,
         }
     }
+
+    pub(super) fn side_prefix(&self, side: usize) -> Vec<u8> {
+        let mut key = self.payload.clone();
+        key.push(side as u8);
+        key
+    }
 }
 
 #[derive(Default)]
@@ -54,6 +60,13 @@ pub(super) struct Header {
 }
 
 impl Header {
+    pub(super) fn counts(&self) -> [u64; 2] {
+        self.counts
+    }
+
+    pub(super) fn bytes(&self) -> u64 {
+        self.bytes
+    }
     pub(super) fn append(&mut self, side: usize, bytes: usize) -> Result<u64> {
         let ordinal = self.counts[side];
         self.counts[side] = ordinal.checked_add(1).ok_or_else(overflow)?;

@@ -31,7 +31,8 @@ both backends. The enabled multi-join path is rechecked too. Release measurement
 for the default WindowJoin path are still pending, so the Q5 delivery checkpoint is incomplete.
 Its first one-million-event attempts hit a closed-window decode reservation limit on both
 backends; [capacity evidence](/StreamFusion/benchmarks/q5-rowdata/) records the failed attempts
-without reporting a median or speedup. Bounded decoding is the next demonstrated blocker.
+without reporting a median or speedup. A bounded left-page decoder now addresses that staging
+limit; release reruns must establish its effect on the benchmark before completing the checkpoint.
 Q8's full query validation follows Q5; this is not a new full-suite admission or performance audit.
 
 Eight focused integration cases recheck Q6 and Q14 on current code: Q6 still fails Flink's
@@ -43,7 +44,7 @@ complete standalone release-report/profile evidence. The full goal is not comple
 Raw EXPLAIN results and blocker checks are retained under
 `streamfusion-nexmark-benchmarks/target/measurements/suite-audit/`. These checks do not rerun
 the full suite's runtime parity or performance on one common commit. The next implementation
-target is Q5's default window-join decode memory; the historical checkpoints below retain their stated scope.
+target is Q5's default window-join release validation; the historical checkpoints below retain their stated scope.
 
 ## Delivery history and scope
 

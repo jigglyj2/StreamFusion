@@ -9,7 +9,7 @@ use datafusion::execution::context::{SessionConfig, SessionContext};
 use datafusion::execution::memory_pool::{MemoryConsumer, MemoryPool};
 use futures::StreamExt;
 
-fn context(owner: &HostMemoryReservation, rows: usize) -> Arc<TaskContext> {
+pub(super) fn context(owner: &HostMemoryReservation, rows: usize) -> Arc<TaskContext> {
     let runtime = RuntimeEnvBuilder::new()
         .with_memory_pool(owner.datafusion_pool(512 << 20))
         .build_arc()
@@ -44,7 +44,7 @@ fn filter(p: &WindowJoinProcessor) -> Option<JoinFilter> {
     super::super::planning::filter(&plan).unwrap()
 }
 
-fn pairs(batch: &RecordBatch) -> Vec<(Vec<u8>, Vec<u8>)> {
+pub(super) fn pairs(batch: &RecordBatch) -> Vec<(Vec<u8>, Vec<u8>)> {
     let a = batch
         .column(2)
         .as_any()

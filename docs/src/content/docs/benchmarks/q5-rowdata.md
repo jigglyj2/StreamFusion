@@ -40,10 +40,12 @@ symbols. Its core artifact SHA-256 was
 `1162f0fc8e239bcaa5ef6ad6cb69095ea717fc001194c33671977bdadde4151d`; RocksDB's was
 `fe1af76cd4e48dc789eca1eb720d1fdea5b67d40f465956401c39a6653f08862`.
 
-The current close adapter stages all encoded payloads and deletion keys for a window before Arrow
-decoding. Bounding that staging is the next performance task; weakening Flink's memory accounting
-or substituting the enabled multi-join plan would not resolve this default-path limit. Separate
-longer profiles and complete alternating measurements remain outstanding. Raw logs and metadata
+At `a4dcc33d`, the close adapter staged all encoded payloads and deletion keys for a window before
+Arrow decoding. The subsequent bounded decoder shares the complete right Arrow window across
+left pages and reclaims each completed left page. A native regression closes 20,003 left rows with
+4 MiB of remaining allowance on both backends; separate cancellation/restore tests cover partial
+close progress. This does not yet establish the one-million-event benchmark result: release
+reruns, longer profiles and complete alternating measurements remain outstanding. Raw failure logs and metadata
 are retained under `streamfusion-nexmark-benchmarks/target/measurements/q5-default/a4dcc33d/`.
 
 ## Measurements, September 8, 2026

@@ -1,16 +1,23 @@
 // Copyright 2026 StreamFusion Authors
 // Licensed under the Apache License, Version 2.0.
 
-//! One closed window at a time, with durable completion after its native output drains.
+//! Ordered left pages from one closed window, acknowledged after native output drains.
 
 use super::*;
 use crate::memory_pool::{arrow_lease::host_batch, buffer_size::batch_bytes};
 
+mod pages;
+
 pub(super) struct PendingWindow {
     key_group: u32,
     timer: TimerKey,
-    deletes: Vec<StateMutation>,
-    // Deletion keys and the copied timer stay admitted until durable completion.
+    keys: WindowKeys,
+    header: Header,
+    right: pages::Decoded,
+    left_cursor: u64,
+    seen_bytes: u64,
+    in_flight_rows: Option<u64>,
+    // The cursor is invocation-local. No checkpoint may observe a partly closed window.
     _memory: HostMemoryReservation,
 }
 
@@ -40,7 +47,7 @@ impl WindowJoinProcessor {
         Ok(())
     }
 
-    /// Decode only the next due window. Errors leave the drain active: the task must fail
+    /// Decode the next left page against a complete right window. Errors leave the drain active: the task must fail
     /// and recover its previous Flink checkpoint, never checkpoint partially emitted output.
     pub(crate) fn next_closed_window(&mut self) -> Result<Option<ClosedWindow>> {
         self.require_usable_drain()?;
@@ -61,24 +68,56 @@ impl WindowJoinProcessor {
     }
 
     fn load_closed_window(&mut self) -> Result<Option<ClosedWindow>> {
-        if self.pending_window.is_some() {
+        if self
+            .pending_window
+            .as_ref()
+            .is_some_and(|p| p.in_flight_rows.is_some())
+        {
             return Err(DataFusionError::Execution(
-                "window join must finish the current window before loading another".into(),
+                "window join must finish the current page before loading another".into(),
             ));
         }
-        let Some(watermark) = self.draining_watermark else {
+        if self.pending_window.is_none() && !self.open_closed_window()? {
             return Ok(None);
+        }
+        let mut pending = self.pending_window.take().expect("opened window");
+        let left = pages::decode(
+            self,
+            &pending.keys,
+            &pending.header,
+            0,
+            pending.left_cursor,
+            false,
+        )?;
+        pending.seen_bytes = pending
+            .seen_bytes
+            .checked_add(left.bytes)
+            .ok_or_else(pages::invalid_index)?;
+        if pending.seen_bytes > pending.header.bytes() {
+            return Err(pages::invalid_index());
+        }
+        pending.in_flight_rows = Some(left.batch.num_rows() as u64);
+        let closed = ClosedWindow {
+            inputs: [left.batch, pending.right.batch.clone()],
+            max_row_bytes: [left.max_row_bytes, pending.right.max_row_bytes],
+        };
+        self.pending_window = Some(pending);
+        Ok(Some(closed))
+    }
+
+    fn open_closed_window(&mut self) -> Result<bool> {
+        let Some(watermark) = self.draining_watermark else {
+            return Ok(false);
         };
         let Some((key_group, timer)) = self.timers.next_due(TimerDomain::EventTime, watermark)
         else {
             self.draining_watermark = None;
-            return Ok(None);
+            return Ok(false);
         };
-        let mut workspace = self
+        let mut memory = self
             .scratch_reservation
-            .sibling("window join closed-window decode");
-        // Admit copies and the fixed-size header before touching payload state.
-        workspace.resize(
+            .sibling("window join pending completion");
+        memory.resize(
             timer
                 .key
                 .len()
@@ -99,85 +138,27 @@ impl WindowJoinProcessor {
                 key_group,
                 key: &keys.header.key,
             }],
-            &workspace,
+            &memory,
         )?;
         self.state_read_batches = self.state_read_batches.saturating_add(1);
-        let header = values.pop().flatten().ok_or_else(|| {
+        let value = values.pop().flatten().ok_or_else(|| {
             DataFusionError::Execution("window join timer has no window index".into())
         })?;
-        let header = Header::decode(header.as_ref())?;
-        let fields = self
-            .visible_schemas
-            .iter()
-            .map(|s| s.fields().len())
-            .sum::<usize>();
-        workspace.try_grow(
-            header
-                .workspace_bound(&keys)
-                .saturating_add(fields.saturating_mul(1024))
-                .saturating_add(super::super::sortable_state::PAGE_BYTES),
-        )?;
-        let mut rows = Vec::new();
-        let mut deletes = Vec::new();
-        indexed_state::read_window(
-            self.state.as_ref(),
-            &keys,
-            &header,
-            0,
-            &mut rows,
-            &mut deletes,
-        )?;
-        self.state_read_batches = self.state_read_batches.saturating_add(1);
-        deletes.push(StateMutation {
-            key: keys.header,
-            value: None,
-        });
-        let mut batches = Vec::with_capacity(2);
-        for side in 0..2 {
-            let converter = &self.row_converters[side];
-            let parser = converter.parser();
-            let columns = converter.convert_rows(
-                rows.iter()
-                    .filter(|(_, s, _)| *s == side as i8)
-                    .map(|(_, _, row)| parser.parse(row)),
-            )?;
-            let batch = RecordBatch::try_new(self.visible_schemas[side].clone(), columns)?;
-            let memory = workspace.split(batch_bytes(&batch)?, "closed window Arrow payload")?;
-            batches.push(host_batch(batch, memory)?);
-        }
-        let mut max_row_bytes = [0usize; 2];
-        for (_, side, row) in &rows {
-            max_row_bytes[*side as usize] = max_row_bytes[*side as usize].max(row.len());
-        }
-        // Drop decode payloads before returning their workspace to Flink.
-        drop(rows);
-        let retained = deletes
-            .iter()
-            .fold(
-                timer
-                    .key
-                    .capacity()
-                    .saturating_add(timer.namespace.capacity()),
-                |n, delete| n.saturating_add(delete.key.key.capacity()),
-            )
-            .saturating_add(
-                deletes
-                    .capacity()
-                    .saturating_mul(std::mem::size_of::<StateMutation>()),
-            );
-        let pending_memory = workspace.split(retained, "window join pending completion")?;
+        let header = Header::decode(value.as_ref())?;
+        drop(value);
+        let right = pages::decode(self, &keys, &header, 1, 0, true)?;
         self.pending_window = Some(PendingWindow {
             key_group,
             timer,
-            deletes,
-            _memory: pending_memory,
+            keys,
+            header,
+            seen_bytes: right.bytes,
+            right,
+            left_cursor: 0,
+            in_flight_rows: None,
+            _memory: memory,
         });
-        let right = batches.pop().expect("right window batch");
-        let left = batches.pop().expect("left window batch");
-        Ok(Some(ClosedWindow {
-            inputs: [left, right],
-            max_row_bytes,
-        }))
+        Ok(true)
     }
 
     /// Call only after the DataFusion output stream reaches EOF. The shared execution guard
@@ -192,11 +173,39 @@ impl WindowJoinProcessor {
     }
 
     fn commit_closed_window(&mut self) -> Result<()> {
-        let pending = self.pending_window.as_mut().ok_or_else(|| {
+        let mut pending = self.pending_window.take().ok_or_else(|| {
             DataFusionError::Execution("window join has no pending closed window".into())
         })?;
-        self.state
-            .write_batch(std::mem::take(&mut pending.deletes))?;
+        let rows = pending.in_flight_rows.take().ok_or_else(|| {
+            DataFusionError::Execution("window join has no output page to acknowledge".into())
+        })?;
+        let next = pending
+            .left_cursor
+            .checked_add(rows)
+            .ok_or_else(pages::invalid_index)?;
+        let finished = next == pending.header.counts()[0];
+        if finished {
+            // A final bounded lookahead rejects extra payloads beyond the header's count.
+            // Do this before mutation, including for an empty left input.
+            let tail = pages::decode(self, &pending.keys, &pending.header, 0, next, false)?;
+            if tail.batch.num_rows() != 0 || pending.seen_bytes != pending.header.bytes() {
+                return Err(pages::invalid_index());
+            }
+        }
+        // The page's DataFusion output reached EOF. Reclaim just these payloads now;
+        // input/checkpoint/restore remain blocked throughout the watermark invocation.
+        // Failure or cancellation can only recover the previous Flink checkpoint.
+        pages::delete_rows(self, &pending.keys, 0, pending.left_cursor, rows)?;
+        if !finished {
+            pending.left_cursor = next;
+            self.pending_window = Some(pending);
+            return Ok(());
+        }
+        pages::delete_rows(self, &pending.keys, 1, 0, pending.header.counts()[1])?;
+        self.state.write_batch(vec![StateMutation {
+            key: pending.keys.header,
+            value: None,
+        }])?;
         self.state_write_batches = self.state_write_batches.saturating_add(1);
         if !self
             .timers
@@ -208,7 +217,6 @@ impl WindowJoinProcessor {
         }
         self.dirty_timer_groups.insert(pending.key_group);
         self.timers_fired = self.timers_fired.saturating_add(1);
-        self.pending_window = None;
         Ok(())
     }
 }

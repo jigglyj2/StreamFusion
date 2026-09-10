@@ -44,7 +44,8 @@ fn closes_one_window_at_a_time_and_keeps_timer_until_completion_on_both_backends
         for remaining in (1..=48).rev() {
             let reads = io.range_reads.load(Ordering::Relaxed);
             let closed = p.next_closed_window().unwrap().unwrap();
-            assert_eq!(io.range_reads.load(Ordering::Relaxed), reads + 1);
+            // One complete right range and one bounded left page.
+            assert_eq!(io.range_reads.load(Ordering::Relaxed), reads + 2);
             assert_eq!(p.timers.timer_count(TimerDomain::EventTime), remaining);
             for input in &closed.inputs {
                 assert_eq!(input.num_columns(), 3); // No legacy side/group candidate metadata.
