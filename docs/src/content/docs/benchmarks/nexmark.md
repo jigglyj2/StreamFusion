@@ -17,7 +17,10 @@ collecting/blackhole parity under both optimizer settings on both backends. Q7's
 results and longer profiles. Individual row-state entries reduce captured native RocksDB flush
 bytes by approximately 74%, but both backend medians remain slower with wide variation.
 A two-million-event native RocksDB capacity probe passes; in-memory capacity remains limited.
-Q8's default-path release comparison is pending. Earlier Q5/Q8 measurements used the enabled multi-join preset.
+Q8's [default-path baseline](/StreamFusion/benchmarks/q8-default-rowdata/) completes one/ten-million-event
+measurements plus 12.5-million-event profiles and collecting parity. Its native medians are slower;
+redundant window-payload deletion scans are the next optimization target. Earlier Q5/Q8 measurements
+used the enabled multi-join preset.
 Q6 has no supported upstream streaming baseline,
 and Q14 retains its original Java-UDF fallback. These are admission results, not a fresh
 execution/parity or performance run of the entire suite. The full goal remains incomplete.

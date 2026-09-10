@@ -7,7 +7,8 @@ Q8 now passes ordinary selection and official collecting/blackhole parity with b
 default `table.optimizer.multi-join.enabled=false` and the benchmark's enabled preset, on both
 backends and at parallelism one/four. The former uses the shared native WindowJoin added during
 Q5 integration. The September 8 measurements below cover only the enabled multi-join preset;
-a fresh default-path performance comparison remains pending.
+the [default-path baseline](/StreamFusion/benchmarks/q8-default-rowdata/) now records release `d4a3db14`
+with separate one/ten-million-event measurements, collecting parity, profiles and current limits.
 Its two DISTINCT TUMBLE branches use DataFusion grouped presence state and join on the person/seller
 and window bounds. Flink retains planning, routing, resource assignment, watermarks and recovery.
 
