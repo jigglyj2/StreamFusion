@@ -126,8 +126,9 @@ class StreamFusionArrowRegularJoinOperatorTest {
                 assertThat(((Counter) metrics.get("processedRows")).getCount()).isEqualTo(3L);
                 assertThat(((Counter) metrics.get("emittedRows")).getCount()).isEqualTo(2L);
                 assertThat(((Counter) metrics.get("emittedInserts")).getCount()).isEqualTo(2L);
+                // These small groups stay inline in their manifest: one batched read per arrival.
                 assertThat(((Counter) metrics.get("stateReadBatches")).getCount())
-                        .isEqualTo(5L);
+                        .isEqualTo(3L);
                 assertThat(((Counter) metrics.get("stateWriteBatches")).getCount())
                         .isEqualTo(3L);
                 assertThat(((Gauge<?>) metrics.get("pendingEventTimeTimers")).getValue())
@@ -198,7 +199,8 @@ class StreamFusionArrowRegularJoinOperatorTest {
             assertThat(((Counter) metrics.get("processedRows")).getCount()).isEqualTo(2L);
             assertThat(((Counter) metrics.get("emittedRows")).getCount()).isEqualTo(1L);
             assertThat(((Counter) metrics.get("emittedInserts")).getCount()).isEqualTo(1L);
-            assertThat(((Counter) metrics.get("stateReadBatches")).getCount()).isEqualTo(3L);
+            // Both input batches read only compact manifests; neither loads separate pages.
+            assertThat(((Counter) metrics.get("stateReadBatches")).getCount()).isEqualTo(2L);
             assertThat(((Counter) metrics.get("stateWriteBatches")).getCount()).isEqualTo(2L);
             assertThat(((Gauge<?>) metrics.get("numSpillFiles")).getValue()).isEqualTo(0L);
             assertThat(((Gauge<?>) metrics.get("spillInBytes")).getValue()).isEqualTo(0L);

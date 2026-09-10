@@ -234,7 +234,7 @@ public final class StreamFusionNativeRegionTranslator {
         // An existing subtree can produce explicit RowKinds even when no Calc follows it.
         // Its downstream stages require the v2 envelope-aware native kernels as a unit.
         if (base != null && !stages.isEmpty()) {
-            version = 2;
+            version = Math.max(2, version);
         }
         for (byte[] bytes : stages) {
             NativePlan plan = decode(bytes);

@@ -19,9 +19,21 @@ final class RegularJoinFlinkHarness {
     static FlinkRegularJoinMetricOracle create(
             RowType input, RowType output, GeneratedJoinCondition condition, boolean rocks, OperatorID id, String name)
             throws Exception {
+        return create(input, input, output, condition, rocks, id, name);
+    }
+
+    static FlinkRegularJoinMetricOracle create(
+            RowType left,
+            RowType right,
+            RowType output,
+            GeneratedJoinCondition condition,
+            boolean rocks,
+            OperatorID id,
+            String name)
+            throws Exception {
         var join = new StreamingJoinOperator(
-                InternalTypeInfo.of(input),
-                InternalTypeInfo.of(input),
+                InternalTypeInfo.of(left),
+                InternalTypeInfo.of(right),
                 condition,
                 JoinInputSideSpec.withoutUniqueKey(),
                 JoinInputSideSpec.withoutUniqueKey(),
@@ -31,9 +43,11 @@ final class RegularJoinFlinkHarness {
                 0,
                 0);
         var keys = KeySelectorUtil.getRowDataSelector(
-                RegularJoinFlinkHarness.class.getClassLoader(), new int[] {0}, InternalTypeInfo.of(input));
+                RegularJoinFlinkHarness.class.getClassLoader(), new int[] {0}, InternalTypeInfo.of(left));
+        var rightKeys = KeySelectorUtil.getRowDataSelector(
+                RegularJoinFlinkHarness.class.getClassLoader(), new int[] {0}, InternalTypeInfo.of(right));
         var harness = new KeyedTwoInputStreamOperatorTestHarness<RowData, RowData, RowData, RowData>(
-                join, keys, keys, keys.getProducedType(), 16, 1, 0);
+                join, keys, rightKeys, keys.getProducedType(), 16, 1, 0);
         harness.setStateBackend(
                 rocks
                         ? new org.apache.flink.state.rocksdb.EmbeddedRocksDBStateBackend(true)

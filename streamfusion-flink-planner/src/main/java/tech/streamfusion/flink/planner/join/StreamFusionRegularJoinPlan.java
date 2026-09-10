@@ -117,12 +117,18 @@ public final class StreamFusionRegularJoinPlan {
         for (boolean filter : filterNulls) {
             join.addFilterNulls(filter);
         }
-        return Operator.newBuilder().setRegularJoin(join).build();
+        // StreamingJoinOperator never sets its TimestampedCollector's record timestamp.
+        // This policy also makes a bare join's output own its envelope at an IPC edge;
+        // it must not depend on a following Calc to detach arrival ordinals.
+        return Operator.newBuilder()
+                .setRegularJoin(join)
+                .setClearRecordTimestamps(!boundedFinalOutput)
+                .build();
     }
 
     private static byte[] nativePlan(Operator root) {
         return NativePlan.newBuilder()
-                .setProtocolVersion(1)
+                .setProtocolVersion(root.getClearRecordTimestamps() ? 3 : 1)
                 .setRoot(root)
                 .build()
                 .toByteArray();

@@ -170,6 +170,13 @@ class StreamFusionNativeRegionTranslatorTest {
             assertThat(decoded.getRoot().getClearRecordTimestamps()).isTrue();
             assertThat(decoded.getRoot().getCalc().getInput()).isEqualTo(EDGE);
         }
+        // Appending an older fragment cannot downgrade an upstream record policy.
+        var grown = NativePlan.parseFrom(StreamFusionNativeRegionTranslator.composeAbove(stage, List.of(plan(FIRST))));
+        assertThat(grown.getProtocolVersion()).isEqualTo(3);
+        assertThat(grown.getRoot().getCalc().getInput().getClearRecordTimestamps())
+                .isTrue();
+        assertThat(StreamFusionNativeRegionTranslator.composeAbove(grown.toByteArray(), List.of()))
+                .isEqualTo(grown.toByteArray());
         byte[] invalid = NativePlan.parseFrom(stage).toBuilder()
                 .setProtocolVersion(2)
                 .build()

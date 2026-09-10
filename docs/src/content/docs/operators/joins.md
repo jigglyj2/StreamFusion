@@ -34,6 +34,28 @@ in-memory budget limits in larger profiles.
 Admission combines active and persisted configuration, so async state, mini-batching and
 changelog-state wrapping cannot evade fallback when an option is absent from persisted metadata.
 
+Streaming regular joins explicitly clear record timestamps in the version-3 native plan, matching
+Flink's `StreamingJoinOperator`. Their Arrow output owns its RowKind and absent-timestamp envelope,
+including when a bare join ends a native region before an exchange. A following Calc is not required
+to detach input arrival ordinals. The existing DataFusion record-policy projection shares payload
+buffers and reserves its metadata arrays; no Java row reconstruction or additional JNI crossing is
+needed. Generic plan composition preserves that protocol version when older fragments are appended.
+
+Generated tests compare bare joins and two joins in one native tree with the actual Flink operators:
+ordered changelog bytes, record timestamps, all four RowKinds, 5,000-row fan-out, complete stage metrics
+and control events, with Arrow inputs and native IPC inputs on both backends. Additional two-join
+tests cover canonical backend switching, 1→2→1 rescaling, aligned/unaligned snapshots, incremental
+SST reuse, and replay of an in-flight third-input Arrow frame through both restored stages.
+These contracts apply to composed binary joins. A genuine three-input `StreamExecMultiJoin` remains
+subject to whole-plan fallback until its common execution-plan and lifecycle integration is verified.
+Original Nexmark Q23, with only the `dateTime` identifier quoted for Flink 2.3, passes ordinary
+planning plus collecting-result and unmodified-blackhole-count parity on both backends at
+parallelism 1 and 4 with 100,000 events. This uses Flink's default disabled multi-join optimizer;
+an explicit enabled-optimizer test checks the precise three-input fallback. The pinned upstream
+generator adds `FIRST_PERSON_ID` twice to bid bidders, so short runs can produce no matches;
+the Q23 tests require positive output. The generator remains unmodified. Release performance
+and profiling are a separate delivery requirement; these integration tests provide no speedup claim.
+
 Regular-join capability checks and protobuf construction belong to the planner bundle, where
 Flink's `JoinSpec` and Calcite classes are visible. Runtime operators remain in the runtime
 bundle and receive the completed native plan. This boundary also applies to the binary MultiJoin
