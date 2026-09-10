@@ -91,6 +91,8 @@ fn load_impl(
 }
 
 mod loading;
+mod restore;
+pub(super) use restore::restore_from_checkpoint;
 mod mutations;
 pub(super) use mutations::mutations;
 
@@ -142,9 +144,20 @@ pub(super) fn restore(
     bytes: &[u8],
     owner: &HostMemoryReservation,
 ) -> Result<()> {
-    let count = streamfusion_state_abi::validate_key_group_snapshot(group, bytes)
+    let entries = streamfusion_state_abi::key_group_snapshot_entries(group, bytes)
         .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-    let mut memory = owner.sibling("regular join canonical page validation and migration");
+    let count = entries.len();
+    let legacy = count > 0
+        && entries
+            .into_iter()
+            .all(|(_, value)| value.starts_with(STATE_MAGIC));
+    if !legacy {
+        restore::validate_snapshot(group, bytes, owner)?;
+        return state.restore_key_group(group, bytes, owner);
+    }
+    // Historical opaque SFRJ values need migration. Keep its explicit reservation separate from
+    // current paged snapshots, whose payloads are validated and dropped one page at a time.
+    let mut memory = owner.sibling("regular join legacy state migration");
     memory.resize(
         bytes
             .len()
@@ -152,18 +165,6 @@ pub(super) fn restore(
             .saturating_add(count.saturating_mul(512)),
     )?;
     let entries = decode_key_group_snapshot(group, bytes)?;
-    let legacy = !entries.is_empty()
-        && entries
-            .iter()
-            .all(|(_, value)| value.starts_with(STATE_MAGIC));
-    if !legacy {
-        decode_entries(group, &entries)?;
-        // Validation is finished. The backend consumes the original canonical bytes, not
-        // these decoded keys/pages; do not retain both workspaces through restore.
-        drop(entries);
-        drop(memory);
-        return state.restore_key_group(group, bytes, owner);
-    }
     let mut migrated = Vec::new();
     for (key, value) in entries {
         let value = decode_state(&value)?;

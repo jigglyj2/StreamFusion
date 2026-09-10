@@ -34,6 +34,15 @@ in-memory budget limits in larger profiles.
 Admission combines active and persisted configuration, so async state, mini-batching and
 changelog-state wrapping cannot evade fallback when an option is absent from persisted metadata.
 
+Current paged regular-join RocksDB checkpoints restore through bounded state scans and batched
+imports. Validation checks every manifest reference and payload identity, rejects missing/orphaned
+records, and releases each decoded page instead of reconstructing a complete key group or hot-key
+history. Row-layout bitmaps are traversed without expanding a whole identity vector. Canonical
+snapshot validation borrows keys and values from its admitted frame and decodes one payload page
+at a time. Canonical snapshot transport still holds a complete key-group frame; legacy opaque
+`SFRJ` migration retains its separate workspace reservation. Neither path changes Flink's checkpoint
+ownership, key-group assignment, or backend-switch format.
+
 Streaming regular joins explicitly clear record timestamps in the version-3 native plan, matching
 Flink's `StreamingJoinOperator`. Their Arrow output owns its RowKind and absent-timestamp envelope,
 including when a bare join ends a native region before an exchange. A following Calc is not required

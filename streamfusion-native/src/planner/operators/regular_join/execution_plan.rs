@@ -45,6 +45,16 @@ impl PersistentOperatorFactory for RegularJoinFactory {
             .map_err(|_| poisoned())?
             .restore_key_group(key_group, bytes)
     }
+    fn restore_from_checkpoint(
+        &self,
+        group: u32,
+        source: &crate::state::RocksPluginKeyedState,
+        owner: &crate::memory_pool::HostMemoryReservation,
+    ) -> Result<()> {
+        let mut processor = self.0.lock().map_err(|_| poisoned())?;
+        processor.require_idle_stream()?;
+        super::paged_state::restore_from_checkpoint(processor.state.as_mut(), source, group, owner)
+    }
     fn checkpoint(&self, directory: &std::path::Path) -> Result<()> {
         self.0.lock().map_err(|_| poisoned())?.checkpoint(directory)
     }

@@ -86,9 +86,9 @@ fn append_bitmaps(bytes: &mut Vec<u8>, ids: impl Iterator<Item = u64>) {
 }
 
 /// Validate before allocating expanded identity vectors, including hostile persisted bitmaps.
-fn scan(
+pub(super) fn scan(
     bytes: &[u8],
-    mut row: impl FnMut(usize, u64),
+    mut row: impl FnMut(usize, u64, u64) -> Result<()>,
 ) -> Result<([Option<bool>; 2], [u64; 2], usize)> {
     let mut r = Reader::new(bytes, MAGIC)?;
     let mut matchable = [None; 2];
@@ -121,7 +121,7 @@ fn scan(
                     return Err(invalid());
                 }
                 total = total.checked_add(1).ok_or_else(invalid)?;
-                row(side, id);
+                row(side, id, next)?;
                 bits &= bits - 1;
             }
         }
@@ -131,7 +131,7 @@ fn scan(
 }
 
 pub(super) fn workspace(bytes: &[u8]) -> Result<usize> {
-    let (_, _, count) = scan(bytes, |_, _| {})?;
+    let (_, _, count) = scan(bytes, |_, _, _| Ok(()))?;
     Ok(bytes
         .len()
         .saturating_mul(8)
@@ -139,9 +139,12 @@ pub(super) fn workspace(bytes: &[u8]) -> Result<usize> {
 }
 
 pub(super) fn decode(bytes: &[u8]) -> Result<Manifest> {
-    scan(bytes, |_, _| {})?;
+    scan(bytes, |_, _, _| Ok(()))?;
     let mut ids: [Vec<u64>; 2] = Default::default();
-    let (matchable, next_row_id, _) = scan(bytes, |side, id| ids[side].push(id))?;
+    let (matchable, next_row_id, _) = scan(bytes, |side, id, _| {
+        ids[side].push(id);
+        Ok(())
+    })?;
     Ok(Manifest {
         layout: Layout::Rows,
         next_row_id,

@@ -281,3 +281,40 @@ pub(super) fn decode_entry(
     }
     Ok(rows)
 }
+
+/// Visit persisted references without expanding row-layout bitmaps into a hot-key-sized vector.
+/// The visitor must drop decoded payloads between pages. Compact payloads are intrinsically bounded.
+pub(super) fn visit_manifest_entries(
+    bytes: &[u8],
+    owner: &HostMemoryReservation,
+    mut entry: impl FnMut(usize, u64, u64, Layout) -> Result<()>,
+) -> Result<usize> {
+    if row_entries::is_manifest(bytes) {
+        let (_, _, count) =
+            row_entries::scan(bytes, |side, id, next| entry(side, id, next, Layout::Rows))?;
+        if count == 0 {
+            return Err(invalid());
+        }
+        return Ok(count);
+    }
+    let mut memory = owner.sibling("join checkpoint manifest validation");
+    memory.resize(manifest_workspace(bytes)?)?;
+    let manifest = decode_manifest(bytes)?;
+    if let Some(rows) = manifest.inline {
+        if rows.iter().all(Vec::is_empty) {
+            return Err(invalid());
+        }
+        return Ok(0);
+    }
+    let mut count = 0;
+    for (side, pages) in manifest.pages.iter().enumerate() {
+        for &id in pages {
+            entry(side, id, manifest.next_row_id[side], manifest.layout)?;
+            count += 1;
+        }
+    }
+    if count == 0 {
+        return Err(invalid());
+    }
+    Ok(count)
+}
