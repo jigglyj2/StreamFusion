@@ -3,6 +3,10 @@ title: Q7 default-optimizer release comparison
 description: Bounded join staging, verified one-million-event results, and remaining RocksDB checkpoint costs.
 ---
 
+This report retains the `f4886002` measurements and diagnosis. The subsequent
+[row-entry state report](/StreamFusion/benchmarks/q7-row-entry-rowdata/) verifies reduced flush
+volume at `d4a3db14`, with new measurements, collecting parity and capacity results.
+
 At release code `f4886002654e94b24fb84b9c966f413966bd93e2`, original Q7 accelerates on both
 backends with Flink's default `table.optimizer.multi-join.enabled=false`. All one-million-event
 measured forks and separate collecting runs complete, as do longer 1.25-million-event profiles.
@@ -85,11 +89,13 @@ symbol preloader is recorded in metadata. Per-engine flame graphs, CPU/wall coll
 and differential CPU flame graphs are retained. All four jobs emit one record; native-plan /
 Calc counts are 620/168 in memory and 1,205/332 on RocksDB.
 
-The table gives inclusive percentages of all-process CPU samples as Flink / StreamFusion.
+The table gives inclusive percentages of captured CPU samples as Flink / StreamFusion.
 Denominators are 3,138 / 3,268 in memory and 3,574 / 4,229 on RocksDB. Categories overlap:
 JNI and DataFusion frames include downstream native work, and the DataFusion category includes
 StreamFusion execution-plan adaptations, not only library kernels. Unwinding can omit callers;
-zero means no matching sample, not proof of zero cost.
+zero means no matching sample, not proof of zero cost. Standalone native background-thread
+coverage was not established; these percentages must not be read as exhaustive process CPU
+accounting. The subsequent report records this limitation explicitly.
 
 | CPU category | In-memory F / SF | RocksDB F / SF |
 | --- | ---: | ---: |

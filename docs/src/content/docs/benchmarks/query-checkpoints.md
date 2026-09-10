@@ -43,12 +43,15 @@ Their official integration cases now explicitly cover both optimizer settings, p
 and four, and both backends, comparing collecting-sink bytes and unmodified-blackhole counts at
 10,000 events. Positive native-plan activity and zero standalone local-window JNI batches are
 required. These checks establish default-path query parity; earlier performance reports retain
-their stated optimizer settings and capacity limits. The [current Q7 comparison](/StreamFusion/benchmarks/q7-default-rowdata/)
+their stated optimizer settings and capacity limits. The [current Q7 comparison](/StreamFusion/benchmarks/q7-row-entry-rowdata/)
 completes one-million-event measurements and collecting parity plus 1.25-million-event profiles
-on both backends at `f4886002`. Bounded zero-copy join staging improves demonstrated capacity,
-but two-million-event in-memory attempts still fail. Q7's in-memory timing is inconclusive;
-RocksDB has 65.6% lower median throughput and substantial synchronous checkpoint flush waits.
-That demonstrated bottleneck remains under investigation before Q8's default-path release comparison.
+on both backends at `d4a3db14`. Individual row-state entries and selective payload reads reduce
+captured native RocksDB flush-input bytes by approximately 74% against the prior layout.
+StreamFusion still loses all three measured pairs on each backend, with wide timing variation:
+median throughput ratios are 0.263× in memory and 0.401× on RocksDB. A native-only two-million-event
+RocksDB capacity probe passes; in-memory mutation admission still fails, and the prior Flink
+baseline also failed at that size. Slow-fork profiling remains open; no optimality claim is made.
+Q8's default-path release comparison is the next measurement checkpoint.
 
 Eight Q6 planning cases cover both engines, both backends and both optimizer settings: Flink
 still rejects bounded non-time OVER. Q14's previously verified original Java UDF retains
