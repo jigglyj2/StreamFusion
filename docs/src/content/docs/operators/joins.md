@@ -28,6 +28,9 @@ timestamp-offset and wide predicates, plus backend-switch savepoints, 1→2→1 
 incremental SST reuse and actual aligned/unaligned Arrow channel replay. This verifies the
 existing native runtime for the regular-join subset. Ordinary `StreamExecJoin` now selects it
 with Flink's default optimizer settings; enabling the multi-join optimizer is not required.
+Q20's [release comparison](/StreamFusion/benchmarks/q20-rowdata/) reports 3.928× median
+throughput with RocksDB at 1M events, slower in-memory execution, and explicit native
+in-memory budget limits in larger profiles.
 Admission combines active and persisted configuration, so async state, mini-batching and
 changelog-state wrapping cannot evade fallback when an option is absent from persisted metadata.
 

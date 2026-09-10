@@ -799,7 +799,11 @@ The shared binary-join matrix runs against Flink's actual `StreamingJoinOperator
 functions. All 76 metric, changelog, rescaling and checkpoint/channel-replay cases pass. Default
 SQL topology guards verify one native join/Calc state owner behind two Arrow IPC input edges.
 The admission checkpoint passed 19 focused unit checks and 17 original-query integration cases.
-Release measurement and profiling are the next checkpoint.
+The [release comparison](/StreamFusion/benchmarks/q20-rowdata/) completes three alternating
+1M-event pairs on both backends and separate longer mixed profiles. RocksDB reaches 3.928×
+median throughput with disjoint ranges; in-memory throughput is 0.394× with overlapping ranges.
+Native in-memory profiles at 1.5M and 2M exhaust their existing Flink allowance, while both
+engines complete at 1.1M. The bounded Q20 checkpoint is documented with those limits; Q21 is next.
 
 The benchmark preserves its established multi-join-enabled preset. The existing Flink option
 can override that preset for benchmark-only validation: `-Dtable.optimizer.multi-join.enabled=false`.
