@@ -3,10 +3,11 @@ title: Q8 RowData release comparison
 description: DISTINCT TUMBLE admission, release measurements, and mixed JVM/native profiles.
 ---
 
-Q8 accelerates on in-memory and default RocksDB state with the benchmark's
-`table.optimizer.multi-join.enabled=true` preset. With Flink's default `false`, the September 10
-audit selects the still-gated `StreamExecWindowJoin`. The measurements below establish the
-enabled-preset path only; default window-join integration remains unfinished.
+Q8 now passes ordinary selection and official collecting/blackhole parity with both Flink's
+default `table.optimizer.multi-join.enabled=false` and the benchmark's enabled preset, on both
+backends and at parallelism one/four. The former uses the shared native WindowJoin added during
+Q5 integration. The September 8 measurements below cover only the enabled multi-join preset;
+a fresh default-path performance comparison remains pending.
 Its two DISTINCT TUMBLE branches use DataFusion grouped presence state and join on the person/seller
 and window bounds. Flink retains planning, routing, resource assignment, watermarks and recovery.
 
@@ -57,7 +58,8 @@ Artifact SHA-256 values:
 
 `NexmarkQ8ProductionIT` separately checks complete collected changelog bytes and materialized
 results at 10,000 events, parallelism one and four, on both backends. It requires ordinary selection,
-positive native plan activity and zero standalone local-window JNI invocations. Generated SQL
+positive native plan activity and zero standalone local-window JNI invocations. It now also
+checks unmodified-blackhole record counts and explicitly exercises both optimizer settings. Generated SQL
 covers nullable composite Unicode keys, negative epochs and multiple window sizes. Native and
 Flink-generated operator tests cover full registered metrics, canonical backend switching,
 one-to-two-to-one rescaling and aligned/unaligned Arrow channel replay. Equal-window-end output

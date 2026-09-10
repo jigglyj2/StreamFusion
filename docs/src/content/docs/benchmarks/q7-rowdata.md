@@ -49,7 +49,8 @@ Artifact SHA-256 values:
 - RocksDB: `39a6c768f5074c0a2c51fee3d30b662933bc8e8bd3a7bdf2d612e3756aba30f9`.
 
 `NexmarkQ7ProductionIT` separately compares complete collected changelog and materialized results
-at 10,000 events, parallelism one and four, on both backends. It requires ordinary acceleration,
+at 10,000 events, parallelism one and four, on both backends. It now explicitly covers both
+multi-join optimizer settings and compares unmodified-blackhole counts. It requires ordinary acceleration,
 positive native plan activity and zero standalone local-window JNI invocations. Generated
 shared-runtime fixtures compare Flink changelog bytes and complete default metric surfaces,
 canonical backend switching, rescaling, and aligned/unaligned input-channel replay. Timestamp

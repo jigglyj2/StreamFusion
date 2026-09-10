@@ -31,22 +31,31 @@ both backends. The enabled multi-join path is rechecked too. Bounded left decodi
 payload pages remove the demonstrated staging and retained-entry capacity failures. The
 [default Q5 release report](/StreamFusion/benchmarks/q5-default-rowdata/) records three alternating
 measured pairs at one and two million events on both backends, plus completed four-million-event
-profiles and separate collecting-sink parity. At two million, median throughput is 1.6% lower
-in memory and 3.9% higher on RocksDB, with substantial RocksDB timing dispersion. The longer
-in-memory profile gap is resolved. Profile inspection identifies duplicate read-key storage in
-global-window firing as a concrete remaining optimization; Q5 is not claimed fully optimized.
-Q8's full query validation follows Q5; this is not a new full-suite admission or performance audit.
+profiles and separate collecting-sink parity. At `60eb188c`, median throughput is 4.8%/5.4% lower
+in memory at one/two million events and 21.1%/1.6% higher on RocksDB. The small RocksDB gain has
+overlapping timing ranges; the larger gain uses a materially slower Flink baseline than earlier
+runs. Redundant global read-key deduplication is removed, and local compute admission adapts
+its slice size under pressure without changing Flink's flush points. Q5 is not consistently
+faster than Flink or claimed optimal.
 
-Eight focused integration cases recheck Q6 and Q14 on current code: Q6 still fails Flink's
-bounded non-time OVER planning; Q14 executes its original Java UDF through whole-plan Flink
-fallback with positive output and zero native activity. Its proposed batch-callback exception
-is not approved. Q0–Q2 have admission/parity evidence but still lack the later checkpoints'
+Current Q7 and Q8 EXPLAIN checks admit both backends with the default disabled multi-join optimizer.
+Their official integration cases now explicitly cover both optimizer settings, parallelism one
+and four, and both backends, comparing collecting-sink bytes and unmodified-blackhole counts at
+10,000 events. Positive native-plan activity and zero standalone local-window JNI batches are
+required. These checks establish default-path query parity; earlier performance reports retain
+their stated optimizer settings and capacity limits. Q7's older million-event memory failure is
+being rechecked before proceeding with Q8's default-path release comparison.
+
+Eight Q6 planning cases cover both engines, both backends and both optimizer settings: Flink
+still rejects bounded non-time OVER. Q14's previously verified original Java UDF retains
+whole-plan Flink fallback with positive output and zero native activity. Its proposed batch-callback
+exception is not approved. Q0–Q2 have admission/parity evidence but still lack the later checkpoints'
 complete standalone release-report/profile evidence. The full goal is not complete.
 
 Raw EXPLAIN results and blocker checks are retained under
 `streamfusion-nexmark-benchmarks/target/measurements/suite-audit/`. These checks do not rerun
-the full suite's runtime parity or performance on one common commit. The next implementation
-target is Q5's duplicate global-window read-key storage; the historical checkpoints below retain their stated scope.
+the full suite's runtime parity or performance on one common commit. Current Q6–Q8 checks live in
+`target/measurements/q6-q8-default/`; the historical checkpoints below retain their stated scope.
 
 ## Delivery history and scope
 

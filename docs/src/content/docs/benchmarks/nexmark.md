@@ -11,8 +11,10 @@ That audit admitted 20 query plans on both backends with Flink's default disable
 optimizer. Subsequent WindowJoin integration admits Q5 and verifies collecting/blackhole parity;
 its [default-path measurements](/StreamFusion/benchmarks/q5-default-rowdata/) now complete at one
 and two million events, with four-million-event profiles and collecting-sink parity on both
-backends. Global-window read-key duplication remains a performance follow-up. Q8's query
-checkpoint is pending. Earlier Q5/Q8 measurements used the enabled multi-join preset. Q6 has no supported upstream streaming baseline,
+backends. Redundant global-window read-key deduplication is removed. Q7 and Q8 now pass official
+collecting/blackhole parity under both optimizer settings on both backends; Q8's default-path
+release comparison is pending. Earlier Q5/Q8 measurements used the enabled multi-join preset.
+Q6 has no supported upstream streaming baseline,
 and Q14 retains its original Java-UDF fallback. These are admission results, not a fresh
 execution/parity or performance run of the entire suite. The full goal remains incomplete.
 

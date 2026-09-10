@@ -28,9 +28,12 @@ class NexmarkQ6PlanningIT {
     }
 
     @ParameterizedTest
-    @CsvSource({"false,hashmap", "true,hashmap", "false,rocksdb", "true,rocksdb"})
-    void boundedOverAfterWinningBidRankHasNoFlinkStreamingBaseline(boolean nativeEngine, String backend)
-            throws Exception {
+    @CsvSource({
+        "false,hashmap,false", "true,hashmap,false", "false,rocksdb,false", "true,rocksdb,false",
+        "false,hashmap,true", "true,hashmap,true", "false,rocksdb,true", "true,rocksdb,true"
+    })
+    void boundedOverAfterWinningBidRankHasNoFlinkStreamingBaseline(
+            boolean nativeEngine, String backend, boolean multiJoin) throws Exception {
         clearPlanner();
         if (nativeEngine)
             System.setProperty(
@@ -38,7 +41,7 @@ class NexmarkQ6PlanningIT {
         var tables = TableEnvironment.create(EnvironmentSettings.inStreamingMode());
         tables.getConfig().getConfiguration().set(StateBackendOptions.STATE_BACKEND, backend);
         tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ENABLED, false);
-        tables.getConfig().set(OptimizerConfigOptions.TABLE_OPTIMIZER_MULTI_JOIN_ENABLED, true);
+        tables.getConfig().set(OptimizerConfigOptions.TABLE_OPTIMIZER_MULTI_JOIN_ENABLED, multiJoin);
         tables.executeSql(NexmarkRowDataJob.sourceDdl(10_000));
         NexmarkSqlJob.createViews(tables);
         tables.executeSql(
