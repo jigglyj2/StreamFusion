@@ -3,6 +3,12 @@ title: SQL test harness
 description: Verifying streaming SQL behavior against Apache Flink.
 ---
 
+SQL parity capture serializes schema-converted rows with Flink's `RowDataSerializer`,
+including RowKind, nulls, nested values, and field boundaries. It preserves arrival order
+by default. Display strings are not a parity encoding: for example, SQL NULL and the string
+`'null'` can have identical display text. Tests comparing an unordered insert-only relation
+must request that comparison explicitly; that mode rejects updating changelogs.
+
 The SQL harness is the primary correctness loop for planner and operator development. Each test executes equivalent streaming SQL through unmodified Flink planning and through the StreamFusion planner hook, then compares results rather than physical plan text.
 
 Plan snapshots are intentionally not the contract: StreamFusion is expected to replace parts of the plan. Observable result parity is the contract.

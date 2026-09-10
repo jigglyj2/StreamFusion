@@ -17,10 +17,6 @@ package tech.streamfusion.flink.sql;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.io.ByteArrayOutputStream;
-import java.io.DataOutputStream;
-import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import org.apache.flink.api.common.RuntimeExecutionMode;
@@ -111,8 +107,23 @@ abstract class SqlParityTestSupport {
     }
 
     protected static void assertParity(String sql, boolean streaming, boolean accelerationExpected) throws Exception {
-        byte[] flinkResult = execute(sql, streaming, false);
-        byte[] streamFusionResult = execute(sql, streaming, true);
+        assertParity(sql, streaming, accelerationExpected, SqlChangelogCapture.Order.CHANGELOG);
+    }
+
+    protected static void assertUnorderedInsertParity(String sql, boolean streaming) throws Exception {
+        assertUnorderedInsertParity(sql, streaming, true);
+    }
+
+    protected static void assertUnorderedInsertParity(String sql, boolean streaming, boolean accelerationExpected)
+            throws Exception {
+        assertParity(sql, streaming, accelerationExpected, SqlChangelogCapture.Order.UNORDERED_INSERTS);
+    }
+
+    private static void assertParity(
+            String sql, boolean streaming, boolean accelerationExpected, SqlChangelogCapture.Order order)
+            throws Exception {
+        byte[] flinkResult = execute(sql, streaming, false, order);
+        byte[] streamFusionResult = execute(sql, streaming, true, order);
 
         assertThat(StreamFusionPlannerFactory.createdPlannerCount()).isEqualTo(1);
         assertThat(StreamFusionPlannerFactory.translatedPlanCount()).isGreaterThan(0);
@@ -247,6 +258,12 @@ abstract class SqlParityTestSupport {
     }
 
     protected static byte[] execute(String sql, boolean streaming, boolean streamFusionEnabled) throws Exception {
+        return execute(sql, streaming, streamFusionEnabled, SqlChangelogCapture.Order.CHANGELOG);
+    }
+
+    private static byte[] execute(
+            String sql, boolean streaming, boolean streamFusionEnabled, SqlChangelogCapture.Order order)
+            throws Exception {
         if (streamFusionEnabled) {
             System.setProperty(
                     StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY, StreamFusionPlannerFactory.class.getName());
@@ -263,26 +280,16 @@ abstract class SqlParityTestSupport {
         tableEnvironment.getConfig().getConfiguration().set(ExecutionOptions.RUNTIME_MODE, runtimeMode);
         tableEnvironment.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
 
-        return collect(tableEnvironment.executeSql(sql));
+        return collect(tableEnvironment.executeSql(sql), order);
     }
 
     protected static byte[] collect(TableResult result) throws Exception {
-        try (CloseableIterator<Row> rows = result.collect();
-                ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-                DataOutputStream output = new DataOutputStream(bytes)) {
-            List<byte[]> encodedRows = new ArrayList<>();
-            while (rows.hasNext()) {
-                Row resultRow = rows.next();
-                byte[] row = (resultRow.getKind().shortString() + resultRow).getBytes(StandardCharsets.UTF_8);
-                encodedRows.add(row);
-            }
-            encodedRows.sort(SqlParityTestSupport::compareUnsigned);
-            for (byte[] row : encodedRows) {
-                output.writeInt(row.length);
-                output.write(row);
-            }
-            output.flush();
-            return bytes.toByteArray();
+        return collect(result, SqlChangelogCapture.Order.CHANGELOG);
+    }
+
+    private static byte[] collect(TableResult result, SqlChangelogCapture.Order order) throws Exception {
+        try (CloseableIterator<Row> rows = result.collect()) {
+            return SqlChangelogCapture.encode(result.getResolvedSchema().toPhysicalRowDataType(), rows, order);
         }
     }
 
