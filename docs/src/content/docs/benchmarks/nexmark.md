@@ -12,8 +12,10 @@ optimizer. Subsequent WindowJoin integration admits Q5 and verifies collecting/b
 its [default-path measurements](/StreamFusion/benchmarks/q5-default-rowdata/) now complete at one
 and two million events, with four-million-event profiles and collecting-sink parity on both
 backends. Redundant global-window read-key deduplication is removed. Q7 and Q8 now pass official
-collecting/blackhole parity under both optimizer settings on both backends; Q8's default-path
-release comparison is pending. Earlier Q5/Q8 measurements used the enabled multi-join preset.
+collecting/blackhole parity under both optimizer settings on both backends. Q7's
+[current default-path report](/StreamFusion/benchmarks/q7-default-rowdata/) verifies one-million-event
+results and longer profiles, while documenting slower RocksDB execution, checkpoint flush waits
+and unresolved two-million-event capacity. Q8's default-path release comparison is pending. Earlier Q5/Q8 measurements used the enabled multi-join preset.
 Q6 has no supported upstream streaming baseline,
 and Q14 retains its original Java-UDF fallback. These are admission results, not a fresh
 execution/parity or performance run of the entire suite. The full goal remains incomplete.

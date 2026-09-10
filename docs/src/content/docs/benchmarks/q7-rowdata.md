@@ -3,6 +3,10 @@ title: Q7 RowData release comparison
 description: TUMBLE and timestamp-join admission, smaller-workload measurements, and capacity limits.
 ---
 
+For current default-optimizer measurements at one million events, complete longer profiles and
+remaining capacity limits, see the [new Q7 report](/StreamFusion/benchmarks/q7-default-rowdata/).
+The measurements below retain their historical release, optimizer and memory configuration.
+
 Q7 now accelerates through the ordinary planner on in-memory and default RocksDB state. Its
 local/global TUMBLE MAX uses DataFusion compute, and its timestamp join residual uses DataFusion
 integer arithmetic with Flink's full-range millisecond wrapping semantics. Flink still owns
