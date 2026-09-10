@@ -414,15 +414,25 @@ The retained two-input streaming runtime emits bounded Arrow C Stream batches, c
 rows with a smaller row target for wide payloads. It does not first collect the complete fan-out.
 Residual predicates use bounded vectorized candidate chunks, while equality-only/null-rejected
 keys need no match bitmap. Input and historical-state memory remains charged until the input batch
-is fully consumed. State uses stable per-side row IDs and 64-row pages. Batch admission fetches all
-manifests in one lookup, then any external pages in a second lookup; the single end-of-batch
-write contains only changed pages and changed manifest metadata. Keys with at most 64 total rows
-and an encoded size of at most 8 KiB keep their directory and payloads in one compact backend
-entry. This removes a second entry and lookup for sparse keys; larger keys keep independently
-writable pages. Growth, shrinkage and deletion switch representations in the same atomic write. Retracting an early row does not
-shift later pages, and association-count changes rewrite only their affected pages. Historical rows
-are still decoded for touched keys, so this is a write-amplification fix, not a claim of constant
-read or working-set cost for arbitrarily large keys. Checkpoints cannot observe a partially drained
+is fully consumed. State uses stable per-side row IDs. Batch admission fetches all manifests
+in one lookup, then external payloads in bulk reads of at most 4,096 entries; the end-of-batch write
+contains only changed payloads and directory metadata. Singleton keys whose encoded size fits
+8 KiB keep their directory and payload in one compact backend entry. Keys with multiple rows,
+or an oversized singleton, use individual payload entries and a presence bitmap for every
+64 row identities. Each payload key frames the equality-key prefix, input side and a big-endian
+stable identity; Flink partition hashing is unchanged. Appending or retracting a row updates its
+own entry and the small bitmap directory. Association-only changes update only that row's entry.
+Growth, shrinkage, legacy-layout migration and deletion switch representations in one atomic
+write. For a batch containing only INSERT/UPDATE_AFTER, existing row-entry payloads on the
+arriving side remain in the backend: the join loads their stable identities and appends the new
+rows. Matching candidates on the opposite side are fully loaded. A batch containing retractions
+loads both sides; legacy page/compact layouts also retain full reads for safe migration. This
+follows the Flink transition's actual state needs without skipping predicate computation or
+changing intermediate results. Retained identities are explicit metadata, not placeholder rows.
+This reduces repeated payload writes at the cost of more backend entries and batched lookup
+keys than the old 64-row page layout. Historical payloads needed for matching or retraction are
+still decoded for touched keys, so this is a write-amplification improvement, not a claim of
+constant read or working-set cost for arbitrarily large keys. Checkpoints cannot observe a partially drained
 batch. Cancellation or failure
 requires task recovery; the stream safely retains native ownership if its Java handle is released.
 After the final row has produced owned state mutations, the join drops decoded state, lookup
@@ -455,29 +465,38 @@ reservation. A constrained 10 MiB regression loads 2,048 historical rows at empt
 allocation peaks against the reservation. Arbitrarily large touched keys can still exceed the
 allowance and require recovery; the change does not bypass Flink's budget or add per-row I/O.
 
-Canonical SFS1 snapshots carry versioned `SFJM` manifests, `SFJP` pages and `SFJC` v1 compact
-entries, identical across native memory and RocksDB. Existing paged snapshots remain readable;
-small keys adopt the compact form when next written. Restoring legacy whole-key `SFRJ` v1/v2
-snapshots migrates them to the current layout. A runtime predating `SFJC` cannot restore new compact
-entries. Tests cover both-backend restore, sparse stable row IDs, both size thresholds, conversion
-in either direction, complete deletion and malformed/truncated records. A 100,000-key regression
-with 160-byte payloads fits a 36 MiB in-memory share and probes the retained rows; the previous
-separate-entry representation exhausts that same share.
+Canonical SFS1 snapshots carry versioned `SFJI/1` bitmap directories and single-row `SFJP/1`
+payloads, or `SFJC/1` compact singleton values, identically on native memory and RocksDB.
+Existing `SFJM/1` paged and multi-row `SFJC/1` snapshots remain readable. A touched legacy key
+adopts the current layout atomically; canonical restore preserves existing bytes until then.
+Restoring whole-key `SFRJ` v1/v2 snapshots migrates them to the current layout. A runtime predating
+`SFJI/1` cannot restore the new directories. Tests cover both-backend restore, sparse stable IDs,
+malformed bitmaps and payload identity mismatches, representation transitions and complete deletion.
+A repeated-key mutation regression appends 256 one-KiB rows in separate batches and writes less
+than twice the new payload volume, then checks that changing an association count writes only
+that row. This is storage-byte evidence, not a throughput measurement. Singleton keys retain
+the 100,000-key/160-byte-payload regression within a 36 MiB in-memory share.
 Compact-record decoding sizes its workspace from embedded page headers: payload bytes and coarse
 row-vector/Arc headroom. It does not apply the external-directory multiplier to embedded payloads.
 The first decoded page moves directly into its state vector. An 8 MiB regression loads 2,048
 compact keys with 512-byte payloads in one state read, verifies original/current payload sharing,
 and releases all credit; the previous directory estimate requested more than 9 MiB for decoding.
-Mutation staging likewise counts only records present in the old and new physical layouts:
-one root for a non-empty compact entry, with external-page metadata only for paged entries.
+Mutation staging admits encoded roots, large directory buffers and changed external-entry metadata
+at the batch boundary. It does not reserve mutation descriptors for unchanged row payloads.
 A 16,384-key batch now fits a 20 MiB share; its allocation peak is covered by coarse reservations,
 and retained payloads are probed after flushing. The previous estimate added almost 25 MiB for
 mutation metadata alone by counting absent roots and external pages. Layout transitions and
 canonical bytes remain covered by the same both-backend parity and recovery fixtures.
 Restore rejects missing, duplicate, orphan, and malformed page records before changing backend state.
-Physical RocksDB checkpoints retain the paged layout and the existing incremental checkpoint protocol.
+Physical RocksDB checkpoints retain the versioned native layout and the existing incremental checkpoint protocol.
+Payload-read key arrays, locations and backend-owned buffers have a coarse per-read allowance
+and are released before the next bulk read. Decoded state retains its separate allowance through
+the input computation. A 20,003-row regression fits a 12 MiB share, then appends under an extra 1 MiB remaining allowance
+without loading old arriving-side payloads. It verifies every retained payload afterward and
+requires an opposite-side read to enforce its full budget. All required payloads are loaded before processing the first input row;
+this does not introduce per-row state calls.
 The `StreamFusion.stateReadBatches` diagnostic counts actual backend lookups: one for a batch of
-new or compact keys, two when external historical pages exist. `stateWriteBatches` counts non-empty backend write batches, so a
+new or compact keys, plus one for each external payload read group. `stateWriteBatches` counts non-empty backend write batches, so a
 missing-row retraction that changes no state need not increment it.
 
 Flink `BatchExecHashJoin`, `BatchExecAdaptiveJoin`, and `BatchExecSortMergeJoin` equality joins use

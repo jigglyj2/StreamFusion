@@ -90,7 +90,23 @@ impl RegularJoinProcessor {
             .into_iter()
             .map(|key| key.expect("populated join key"))
             .collect::<Vec<_>>();
-        let (staged, reads) = paged_state::load(self.state.as_ref(), keys, &mut memory)?;
+        let kinds = batch
+            .column(self.input_kind_indices[side].expect("prepared schema"))
+            .as_any()
+            .downcast_ref::<Int8Array>()
+            .ok_or_else(|| {
+                DataFusionError::Execution("regular join RowKinds are not Int8".into())
+            })?;
+        let accumulating = kinds.null_count() == 0
+            && kinds
+                .values()
+                .iter()
+                .all(|kind| matches!(*kind, INSERT | UPDATE_AFTER));
+        let (staged, reads) = if accumulating {
+            paged_state::load_for_accumulation(self.state.as_ref(), keys, &mut memory, side)?
+        } else {
+            paged_state::load(self.state.as_ref(), keys, &mut memory)?
+        };
         self.state_read_batches = self.state_read_batches.saturating_add(reads);
         self.streaming_cursor = Some(StreamingCursor {
             side,

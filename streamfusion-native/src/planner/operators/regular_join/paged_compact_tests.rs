@@ -65,7 +65,7 @@ fn old_paged_and_compact_keys_transition_atomically_and_restore_on_both_backends
     let Ok(plugin) = std::env::var("STREAMFUSION_TEST_ROCKSDB_PLUGIN") else {
         return;
     };
-    for rocks in [false, true] {
+    for (rocks, initial_compact) in [(false, false), (true, false), (false, true), (true, true)] {
         let broker = Arc::new(TestBroker::new(32 << 20));
         let owner = HostMemoryReservation::new(broker.clone(), "compact transition test");
         let directory = tempfile::tempdir().unwrap();
@@ -90,24 +90,38 @@ fn old_paged_and_compact_keys_transition_atomically_and_restore_on_both_backends
             key: b"compact-key".to_vec(),
         };
         // Emulate the previous release's sparse-key manifest + separate page exactly.
-        let old = value(1, 12);
+        let old = value(3, 12);
         state
-            .write_batch(vec![
-                StateMutation {
+            .write_batch(if initial_compact {
+                vec![StateMutation {
                     key: paged_codec::manifest_key(&key),
-                    value: Some(paged_codec::encode_manifest(&old)),
-                },
-                StateMutation {
-                    key: paged_codec::page_key(&key, 0, 1),
-                    value: Some(paged_codec::encode_page(&old.left).unwrap()),
-                },
-            ])
+                    value: Some(paged_codec::encode_compact(&old).unwrap()),
+                }]
+            } else {
+                vec![
+                    StateMutation {
+                        key: paged_codec::manifest_key(&key),
+                        value: Some(paged_codec::encode_manifest(&old)),
+                    },
+                    StateMutation {
+                        key: paged_codec::page_key(&key, 0, 1),
+                        value: Some(paged_codec::encode_page(&old.left).unwrap()),
+                    },
+                ]
+            })
             .unwrap();
         let mut workspace = owner.sibling("batch");
         let (loaded, reads) =
             paged_state::load(state.as_ref(), vec![key.clone()], &mut workspace).unwrap();
-        assert_eq!(reads, 2);
-        assert!(!loaded[0].original_compact);
+        assert_eq!(reads, if initial_compact { 1 } else { 2 });
+        assert_eq!(
+            loaded[0].original_layout,
+            if initial_compact {
+                paged_codec::Layout::Compact
+            } else {
+                paged_codec::Layout::Pages
+            }
+        );
         assert_eq!(loaded[0].value, old);
         drop(loaded);
         workspace.resize(0).unwrap();
@@ -138,7 +152,10 @@ fn old_paged_and_compact_keys_transition_atomically_and_restore_on_both_backends
                 assert!(decoded.is_empty());
             } else {
                 assert_eq!(decoded, vec![(key.key.clone(), expected.clone())]);
-                assert_eq!(entries.len() == 1, paged_codec::compact_eligible(&expected));
+                assert_eq!(
+                    entries.len() == 1,
+                    count == 1 && paged_codec::compact_eligible(&expected)
+                );
             }
             let restored_directory = tempfile::tempdir().unwrap();
             let mut restored: Box<dyn KeyedState> = if rocks {
@@ -169,7 +186,7 @@ fn old_paged_and_compact_keys_transition_atomically_and_restore_on_both_backends
             }
             assert_eq!(
                 reads,
-                if count == 0 || paged_codec::compact_eligible(&expected) {
+                if count == 0 || (count == 1 && paged_codec::compact_eligible(&expected)) {
                     1
                 } else {
                     2
@@ -200,7 +217,8 @@ fn mixed_compact_and_external_pages_load_together_without_losing_input_key_order
             },
             value: value(count, 12),
             original: JoinState::default(),
-            original_compact: false,
+            original_layout: paged_codec::Layout::Pages,
+            unloaded: None,
             touched: true,
         })
         .collect::<Vec<_>>();
@@ -240,7 +258,8 @@ fn compact_payload_decode_does_not_reserve_eight_copies_of_retained_rows() {
             },
             value: value(1, 512),
             original: JoinState::default(),
-            original_compact: false,
+            original_layout: paged_codec::Layout::Pages,
+            unloaded: None,
             touched: true,
         })
         .collect::<Vec<_>>();

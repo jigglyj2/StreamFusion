@@ -4,13 +4,31 @@
 use super::paged_codec::*;
 use super::*;
 
-/// Two batched reads at input admission: manifests first, then all required pages. No lookup is
+/// Batched reads at input admission: manifests first, then bounded groups of payloads. No lookup is
 /// performed while evaluating individual input rows or draining output. Stable row identities
-/// keep deletes from shifting all later pages.
+/// keep deletes from shifting later payload identities.
 pub(super) fn load(
     state: &dyn KeyedState,
     keys: Vec<StateKey>,
     owner: &mut HostMemoryReservation,
+) -> Result<(Vec<StagedState>, u64)> {
+    load_impl(state, keys, owner, None)
+}
+
+pub(super) fn load_for_accumulation(
+    state: &dyn KeyedState,
+    keys: Vec<StateKey>,
+    owner: &mut HostMemoryReservation,
+    side: usize,
+) -> Result<(Vec<StagedState>, u64)> {
+    load_impl(state, keys, owner, Some(side))
+}
+
+fn load_impl(
+    state: &dyn KeyedState,
+    keys: Vec<StateKey>,
+    owner: &mut HostMemoryReservation,
+    accumulating_side: Option<usize>,
 ) -> Result<(Vec<StagedState>, u64)> {
     let manifest_keys = keys.iter().map(manifest_key).collect::<Vec<_>>();
     let manifest_refs = refs(&manifest_keys);
@@ -22,160 +40,59 @@ pub(super) fn load(
         .iter()
         .map(|value| value.as_ref().map(|v| decode_manifest(v)).transpose())
         .collect::<Result<Vec<_>>>()?;
-    let page_workspace = manifests
-        .iter()
-        .enumerate()
-        .fold(0usize, |bytes, (index, manifest)| {
-            let count = manifest.as_ref().map_or(0, |manifest| {
-                if manifest.inline.is_some() {
-                    0
-                } else {
-                    manifest.pages.iter().map(Vec::len).sum::<usize>()
-                }
-            });
-            bytes.saturating_add(count.saturating_mul(keys[index].key.len().saturating_add(256)))
-        });
-    owner.try_grow(page_workspace)?;
-    let mut page_keys = Vec::new();
-    let mut locations = Vec::new();
-    for (index, manifest) in manifests.iter().enumerate() {
-        if let Some(manifest) = manifest {
-            if manifest.inline.is_some() {
-                continue;
-            }
-            for side in 0..2 {
-                for &page in &manifest.pages[side] {
-                    page_keys.push(page_key(&keys[index], side, page));
-                    locations.push((index, side, page));
-                }
-            }
-        }
-    }
-    let mut staged = keys
-        .into_iter()
-        .zip(manifests)
-        .map(|(key, manifest)| {
-            let original_compact = manifest.as_ref().is_some_and(|m| m.inline.is_some());
-            let value = manifest
-                .map(|m| {
-                    let [left, right] = m.inline.unwrap_or_default();
-                    JoinState {
-                        next_row_id: m.next_row_id,
-                        left_matchable: m.matchable[0],
-                        right_matchable: m.matchable[1],
-                        left,
-                        right,
-                    }
-                })
-                .unwrap_or_default();
-            StagedState {
-                key,
-                value,
-                original: JoinState::default(),
-                original_compact,
-                touched: false,
-            }
-        })
-        .collect::<Vec<_>>();
-    if !page_keys.is_empty() {
-        let refs = refs(&page_keys);
-        let values = state.get_batch(&refs, owner)?;
-        // One reservation covers decoded payloads, growing row vectors and the shallow
-        // original-state clone. Serialized backend read buffers own their separate credit.
-        owner.try_grow(values.iter().flatten().try_fold(0usize, |n, value| {
-            Ok::<_, DataFusionError>(n.saturating_add(decode_workspace(value)?))
-        })?)?;
-        for ((index, side, page), value) in locations.into_iter().zip(values) {
-            let value = value.ok_or_else(|| {
-                DataFusionError::Execution("regular join manifest references a missing page".into())
-            })?;
-            let state = &mut staged[index].value;
-            let rows = decode_page(&value, page, state.next_row_id[side])?;
-            if side == 0 {
-                state.left.extend(rows);
+    drop(values);
+    drop(manifest_refs);
+    drop(manifest_keys);
+    let mut requests = Vec::new();
+    let mut staged = Vec::with_capacity(keys.len());
+    for (index, (key, manifest)) in keys.into_iter().zip(manifests).enumerate() {
+        let original_layout = manifest.as_ref().map_or(Layout::Compact, |m| m.layout);
+        let mut unloaded = None;
+        let value = if let Some(manifest) = manifest {
+            let [left, right] = if let Some(inline) = manifest.inline {
+                inline
             } else {
-                state.right.extend(rows);
+                for (side, ids) in manifest.pages.into_iter().enumerate() {
+                    if accumulating_side == Some(side)
+                        && manifest.layout == Layout::Rows
+                        && !ids.is_empty()
+                    {
+                        unloaded = Some(UnloadedRows { side, ids });
+                    } else {
+                        requests.push((index, side, manifest.layout, ids));
+                    }
+                }
+                Default::default()
+            };
+            JoinState {
+                next_row_id: manifest.next_row_id,
+                left_matchable: manifest.matchable[0],
+                right_matchable: manifest.matchable[1],
+                left,
+                right,
             }
-        }
+        } else {
+            JoinState::default()
+        };
+        staged.push(StagedState {
+            key,
+            value,
+            original: JoinState::default(),
+            original_layout,
+            unloaded,
+            touched: false,
+        });
     }
+    let reads = loading::load_entries(state, &mut staged, requests, owner)?;
     for entry in &mut staged {
         entry.original = entry.value.clone();
     }
-    Ok((staged, if page_keys.is_empty() { 1 } else { 2 }))
+    Ok((staged, 1 + reads))
 }
 
-pub(super) fn mutations(entry: &StagedState) -> Result<Vec<StateMutation>> {
-    let mut mutations = Vec::new();
-    let compact = compact_eligible(&entry.value);
-    for (side, (before, after)) in [
-        (&entry.original.left, &entry.value.left),
-        (&entry.original.right, &entry.value.right),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let mut before = pages(if entry.original_compact { &[] } else { before }).peekable();
-        let mut after = pages(if compact { &[] } else { after }).peekable();
-        while before.peek().is_some() || after.peek().is_some() {
-            let page = match (before.peek(), after.peek()) {
-                (Some((left, _)), Some((right, _))) => (*left).min(*right),
-                (Some((page, _)), None) | (None, Some((page, _))) => *page,
-                _ => unreachable!(),
-            };
-            let old = if before.peek().is_some_and(|(id, _)| *id == page) {
-                before.next().unwrap().1
-            } else {
-                &[]
-            };
-            let new = if after.peek().is_some_and(|(id, _)| *id == page) {
-                after.next().unwrap().1
-            } else {
-                &[]
-            };
-            let unchanged = old.len() == new.len()
-                && old.iter().zip(new).all(|(a, b)| {
-                    a.id == b.id
-                        && a.associations == b.associations
-                        && (Arc::ptr_eq(&a.row, &b.row) || a.row == b.row)
-                });
-            if !unchanged {
-                mutations.push(StateMutation {
-                    key: page_key(&entry.key, side, page),
-                    value: if new.is_empty() {
-                        None
-                    } else {
-                        Some(encode_page(new)?)
-                    },
-                });
-            }
-        }
-    }
-    let old = (!(entry.original.left.is_empty() && entry.original.right.is_empty()))
-        .then(|| {
-            if entry.original_compact {
-                encode_compact(&entry.original)
-            } else {
-                Ok(encode_manifest(&entry.original))
-            }
-        })
-        .transpose()?;
-    let new = (!(entry.value.left.is_empty() && entry.value.right.is_empty()))
-        .then(|| {
-            if compact {
-                encode_compact(&entry.value)
-            } else {
-                Ok(encode_manifest(&entry.value))
-            }
-        })
-        .transpose()?;
-    if old != new {
-        mutations.push(StateMutation {
-            key: manifest_key(&entry.key),
-            value: new,
-        });
-    }
-    Ok(mutations)
-}
+mod loading;
+mod mutations;
+pub(super) use mutations::mutations;
 
 pub(super) fn batch_mutations(
     entries: &[StagedState],
@@ -205,29 +122,7 @@ pub(super) fn batch_mutations(
 }
 
 fn mutation_workspace(entry: &StagedState) -> usize {
-    // Derived page keys repeat the logical equality key. Its size need not be proportional to
-    // the stored payload (a bounded projection may retain no payload at all).
-    // A compact entry has one physical record, including its payload. Admit directories
-    // for external pages only in layouts that actually encode those pages. The original
-    // and current roots can coexist during comparison; empty states encode no root.
-    let count = [
-        (&entry.original, entry.original_compact),
-        (&entry.value, compact_eligible(&entry.value)),
-    ]
-    .into_iter()
-    .fold(0usize, |count, (state, compact)| {
-        if state.left.is_empty() && state.right.is_empty() {
-            return count;
-        }
-        count.saturating_add(1).saturating_add(if compact {
-            0
-        } else {
-            pages(&state.left)
-                .count()
-                .saturating_add(pages(&state.right).count())
-        })
-    });
-    count.saturating_mul(entry.key.key.len().saturating_add(512))
+    mutations::workspace(entry)
 }
 
 fn refs(keys: &[StateKey]) -> Vec<StateKeyRef<'_>> {
@@ -279,7 +174,8 @@ pub(super) fn restore(
             },
             value,
             original: JoinState::default(),
-            original_compact: false,
+            original_layout: Layout::Pages,
+            unloaded: None,
             touched: true,
         };
         memory.try_grow(mutation_workspace(&entry))?;
@@ -348,11 +244,11 @@ pub(super) fn decode_entries(
                 break;
             }
             for &page in &manifest.pages[side] {
-                let key = page_key(&logical, side, page);
+                let key = entry_key(&logical, side, page, manifest.layout);
                 let bytes = index.get(key.key.as_slice()).ok_or_else(|| {
                     DataFusionError::Execution("missing regular join snapshot page".into())
                 })?;
-                let rows = decode_page(bytes, page, state.next_row_id[side])?;
+                let rows = decode_entry(bytes, page, state.next_row_id[side], manifest.layout)?;
                 if side == 0 {
                     state.left.extend(rows);
                 } else {

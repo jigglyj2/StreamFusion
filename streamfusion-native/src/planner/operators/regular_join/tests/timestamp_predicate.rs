@@ -139,7 +139,8 @@ fn timestamp_predicates_keep_bounded_arrow_workspace_for_batched_and_hot_key_can
                     key: vec![],
                 },
                 original: JoinState::default(),
-                original_compact: false,
+                original_layout: paged_codec::Layout::Pages,
+                unloaded: None,
                 value,
                 touched: false,
             };

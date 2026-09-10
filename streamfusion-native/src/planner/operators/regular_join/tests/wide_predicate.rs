@@ -69,7 +69,8 @@ fn wide_cross_row_and_hot_key_predicates_bound_bytes_without_changing_masks() {
                 key: vec![],
             },
             original: JoinState::default(),
-            original_compact: false,
+            original_layout: paged_codec::Layout::Pages,
+            unloaded: None,
             value,
             touched: false,
         };

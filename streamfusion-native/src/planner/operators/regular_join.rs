@@ -20,6 +20,8 @@ mod paged_state;
 mod paged_state_tests;
 pub(crate) mod region;
 mod region_input;
+#[cfg(test)]
+mod row_entries_tests;
 mod state_codec;
 mod streaming;
 mod transitions;
@@ -84,11 +86,19 @@ struct JoinState {
     right_matchable: Option<bool>,
 }
 
+struct UnloadedRows {
+    side: usize,
+    ids: Vec<u64>,
+}
+
 struct StagedState {
     key: StateKey,
     value: JoinState,
     original: JoinState,
-    original_compact: bool,
+    original_layout: paged_codec::Layout,
+    // An accumulating input never reads old payloads on its own side. Their identities remain
+    // in the directory; payloads stay untouched in the backend. No placeholder rows are used.
+    unloaded: Option<UnloadedRows>,
     touched: bool,
 }
 

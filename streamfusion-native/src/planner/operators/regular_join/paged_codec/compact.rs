@@ -71,6 +71,7 @@ pub(super) fn decode(bytes: &[u8]) -> Result<Manifest> {
         }
     }
     reader.finish()?;
+    manifest.layout = Layout::Compact;
     manifest.inline = Some(inline);
     Ok(manifest)
 }

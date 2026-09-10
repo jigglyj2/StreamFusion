@@ -29,7 +29,8 @@ fn fixture() -> StagedState {
             key: b"hot-key".to_vec(),
         },
         original: value.clone(),
-        original_compact: false,
+        original_layout: paged_codec::Layout::Rows,
+        unloaded: None,
         value,
         touched: true,
     }
@@ -75,7 +76,7 @@ fn paged_decode_reserves_payload_and_row_vectors_within_a_bounded_share() {
 }
 
 #[test]
-fn hot_key_changes_write_only_stable_dirty_pages() {
+fn hot_key_changes_write_only_changed_row_payloads() {
     let mut entry = fixture();
     assert!(paged_state::mutations(&entry).unwrap().is_empty());
     entry.value.left.push(StoredRow {
@@ -85,31 +86,31 @@ fn hot_key_changes_write_only_stable_dirty_pages() {
     });
     entry.value.next_row_id[0] += 1;
     let mutations = paged_state::mutations(&entry).unwrap();
-    assert_eq!(mutations.len(), 2); // one new page plus the small page directory
+    assert_eq!(mutations.len(), 2); // one new row plus the bitmap directory
     assert!(
         mutations
             .iter()
             .filter_map(|change| change.value.as_ref())
             .map(Vec::len)
             .sum::<usize>()
-            < 512
+            < 1024
     );
 
     let mut entry = fixture();
     entry.value.left.remove(1);
     let mutations = paged_state::mutations(&entry).unwrap();
-    assert_eq!(mutations.len(), 1);
-    assert_eq!(mutations[0].key, paged_codec::page_key(&entry.key, 0, 0));
-    assert!(mutations[0].value.as_ref().unwrap().len() < 64 * 1040);
+    assert_eq!(mutations.len(), 2);
+    assert_eq!(mutations[0].key, paged_codec::row_key(&entry.key, 0, 1));
+    assert!(mutations[0].value.is_none());
 
     let mut entry = fixture();
     entry.value.left.drain(..64);
     let mutations = paged_state::mutations(&entry).unwrap();
-    assert_eq!(mutations.len(), 2);
+    assert_eq!(mutations.len(), 65);
     assert_eq!(
         mutations[0],
         StateMutation {
-            key: paged_codec::page_key(&entry.key, 0, 0),
+            key: paged_codec::row_key(&entry.key, 0, 0),
             value: None
         }
     );
@@ -118,7 +119,7 @@ fn hot_key_changes_write_only_stable_dirty_pages() {
     entry.value.right[65].associations = 1;
     let mutations = paged_state::mutations(&entry).unwrap();
     assert_eq!(mutations.len(), 1);
-    assert_eq!(mutations[0].key, paged_codec::page_key(&entry.key, 1, 1));
+    assert_eq!(mutations[0].key, paged_codec::row_key(&entry.key, 1, 65));
 }
 
 #[test]

@@ -4,6 +4,17 @@
 use super::*;
 
 mod compact;
+mod row_entries;
+pub(super) use row_entries::{
+    encode as encode_rows_manifest, encode_with_unloaded as encode_rows_with_unloaded, row_key,
+};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Layout {
+    Compact,
+    Pages,
+    Rows,
+}
 pub(super) use compact::{eligible as compact_eligible, encode as encode_compact};
 
 pub(super) const PAGE_ROWS: u64 = 64;
@@ -11,6 +22,7 @@ const MANIFEST_MAGIC: &[u8] = b"SFJM\x01";
 const PAGE_MAGIC: &[u8] = b"SFJP\x01";
 
 pub(super) struct Manifest {
+    pub(super) layout: Layout,
     pub(super) next_row_id: [u64; 2],
     pub(super) matchable: [Option<bool>; 2],
     pub(super) pages: [Vec<u64>; 2],
@@ -69,6 +81,9 @@ pub(super) fn encode_manifest(state: &JoinState) -> Vec<u8> {
 }
 
 pub(super) fn decode_manifest(bytes: &[u8]) -> Result<Manifest> {
+    if row_entries::is_manifest(bytes) {
+        return row_entries::decode(bytes);
+    }
     if compact::is_compact(bytes) {
         return compact::decode(bytes);
     }
@@ -108,6 +123,7 @@ fn read_manifest(reader: &mut Reader<'_>) -> Result<Manifest> {
         }
     }
     Ok(Manifest {
+        layout: Layout::Pages,
         next_row_id,
         matchable,
         pages,
@@ -181,7 +197,9 @@ pub(super) fn decode_workspace(bytes: &[u8]) -> Result<usize> {
 /// Compact records contain payloads as well as directory metadata. Keep their decoded
 /// payload/row-vector admission separate from the small external-page directory estimate.
 pub(super) fn manifest_workspace(bytes: &[u8]) -> Result<usize> {
-    if compact::is_compact(bytes) {
+    if row_entries::is_manifest(bytes) {
+        row_entries::workspace(bytes)
+    } else if compact::is_compact(bytes) {
         compact::workspace(bytes)
     } else {
         Ok(bytes.len().saturating_mul(8))
@@ -189,7 +207,9 @@ pub(super) fn manifest_workspace(bytes: &[u8]) -> Result<usize> {
 }
 
 pub(super) fn is_manifest(bytes: &[u8]) -> bool {
-    bytes.starts_with(MANIFEST_MAGIC) || compact::is_compact(bytes)
+    bytes.starts_with(MANIFEST_MAGIC)
+        || compact::is_compact(bytes)
+        || row_entries::is_manifest(bytes)
 }
 
 fn invalid() -> DataFusionError {
@@ -232,4 +252,32 @@ impl<'a> Reader<'a> {
             Err(invalid())
         }
     }
+}
+
+pub(super) fn entry_key(key: &StateKey, side: usize, id: u64, layout: Layout) -> StateKey {
+    match layout {
+        Layout::Rows => row_key(key, side, id),
+        _ => page_key(key, side, id),
+    }
+}
+
+pub(super) fn decode_entry(
+    bytes: &[u8],
+    id: u64,
+    next: u64,
+    layout: Layout,
+) -> Result<Vec<StoredRow>> {
+    let rows = decode_page(
+        bytes,
+        if layout == Layout::Rows {
+            id / PAGE_ROWS
+        } else {
+            id
+        },
+        next,
+    )?;
+    if layout == Layout::Rows && (rows.len() != 1 || rows[0].id != id) {
+        return Err(invalid());
+    }
+    Ok(rows)
 }
