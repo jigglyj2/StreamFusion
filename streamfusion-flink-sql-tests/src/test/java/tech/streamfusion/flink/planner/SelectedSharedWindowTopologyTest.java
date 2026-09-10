@@ -19,9 +19,10 @@ import org.apache.flink.table.api.config.ExecutionConfigOptions;
 import org.apache.flink.table.api.config.OptimizerConfigOptions;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.InstantiationUtil;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.ResourceLock;
 import org.junit.jupiter.api.parallel.Resources;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatchSerializer;
 import tech.streamfusion.flink.operator.StreamFusionNativeRegionOperatorFactory;
@@ -30,8 +31,9 @@ import tech.streamfusion.proto.plan.v1.NativeRegionPlan;
 
 @ResourceLock(Resources.SYSTEM_PROPERTIES)
 class SelectedSharedWindowTopologyTest {
-    @Test
-    void selectedReuseHasOneOwnerTwoArrowExitsAndOriginalStateAndBufferBindings() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void selectedReuseHasOneOwnerTwoArrowExitsAndOriginalStateAndBufferBindings(boolean multiJoin) throws Exception {
         var originalFactory = System.getProperty(StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY);
         var originalProcessor = System.getProperty(StreamFusionPlannerFactory.EXEC_GRAPH_PROCESSOR_PROPERTY);
         try {
@@ -47,8 +49,7 @@ class SelectedSharedWindowTopologyTest {
                         Types.ROW_NAMED(new String[] {"k", "ts"}, Types.LONG, Types.LOCAL_DATE_TIME));
                 var tables = StreamTableEnvironment.create(env);
                 tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_ASYNC_STATE_ENABLED, false);
-                // The Nexmark benchmark selects Flink's binary MultiJoin path.
-                tables.getConfig().set(OptimizerConfigOptions.TABLE_OPTIMIZER_MULTI_JOIN_ENABLED, true);
+                tables.getConfig().set(OptimizerConfigOptions.TABLE_OPTIMIZER_MULTI_JOIN_ENABLED, multiJoin);
                 tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ENABLED, false);
                 tables.getConfig()
                         .set(
@@ -68,8 +69,8 @@ class SelectedSharedWindowTopologyTest {
                                         + ") SELECT a.k, a.n FROM counts a JOIN (SELECT MAX(n) m, s, e FROM counts GROUP BY s, e) b ON a.s=b.s AND a.e=b.e AND a.n>=b.m"));
                 assertThat(SelectedLocalWindowSqlProbe.originals)
                         .extracting(node -> node.getClass().getSimpleName())
-                        .contains("StreamExecMultiJoin")
-                        .doesNotContain("StreamExecWindowJoin");
+                        .contains(multiJoin ? "StreamExecMultiJoin" : "StreamExecWindowJoin")
+                        .doesNotContain(multiJoin ? "StreamExecWindowJoin" : "StreamExecMultiJoin");
                 var sharedStages = SelectedLocalWindowSqlProbe.selected.stream()
                         .filter(node -> node instanceof StreamFusionNativePlanNode
                                 && ((StreamFusionNativePlanNode) node)
@@ -101,11 +102,35 @@ class SelectedSharedWindowTopologyTest {
                                 new Configuration())
                         .generate();
                 int sharedOwners = 0;
+                int windowJoins = 0;
                 var stageIds = new HashSet<Long>();
                 for (var node : graph.getStreamNodes()) {
                     if (!(node.getOperatorFactory() instanceof StreamFusionNativeRegionOperatorFactory)) continue;
                     var factory = (StreamFusionNativeRegionOperatorFactory) node.getOperatorFactory();
-                    if (!(boolean) field(factory, "sharedRegion")) continue;
+                    if (!(boolean) field(factory, "sharedRegion")) {
+                        var plan =
+                                tech.streamfusion.proto.plan.v1.NativePlan.parseFrom((byte[]) field(factory, "plan"));
+                        var pending = new java.util.ArrayList<tech.streamfusion.proto.plan.v1.Operator>();
+                        pending.add(plan.getRoot());
+                        while (!pending.isEmpty()) {
+                            var operator = pending.remove(pending.size() - 1);
+                            if (operator.hasWindowJoin()) {
+                                windowJoins++;
+                                assertThat(node.getTypeSerializerOut()).isInstanceOf(ArrowRowDataBatchSerializer.class);
+                                assertThat(node.getTypeSerializersIn())
+                                        .hasSize(2)
+                                        .allSatisfy(serializer -> assertThat(serializer)
+                                                .isInstanceOf(
+                                                        tech.streamfusion.flink.exchange.NativeExchangeFrameSerializer
+                                                                .class));
+                                assertThat(((List<?>) field(factory, "stateIds")).contains(operator.getPlanNodeId()))
+                                        .isTrue();
+                                assertThat(operator.getClearRecordTimestamps()).isTrue();
+                            }
+                            pending.addAll(tech.streamfusion.flink.proto.NativePhysicalPlan.children(operator));
+                        }
+                        continue;
+                    }
                     sharedOwners++;
                     var plan = NativeRegionPlan.parseFrom((byte[]) field(factory, "plan"));
                     assertThat(plan.getStagesCount()).isEqualTo(3);
@@ -132,6 +157,7 @@ class SelectedSharedWindowTopologyTest {
                     var resources = (NativeLocalWindowResources) field(restored, "localWindowResources");
                     assertThat(resources.isPending()).isFalse();
                 }
+                assertThat(windowJoins).isEqualTo(multiJoin ? 0 : 1);
                 assertThat(sharedOwners).isEqualTo(1);
                 assertThat(stageIds).hasSize(3);
                 assertThat(graph.getJobGraph().getNumberOfVertices()).isPositive();

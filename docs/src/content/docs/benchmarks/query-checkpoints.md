@@ -20,9 +20,16 @@ These short integration runs are not performance measurements.
 The September 10 audit covers the pinned upstream suite, Q0–Q23. There is no Q24 in that
 checkout. Forty-four fresh-JVM EXPLAIN checks at production code `78414b06` use Flink's
 default `table.optimizer.multi-join.enabled=false`, mini-batching disabled and both backends.
-Twenty query plans are admitted. Q5 and Q8 select `StreamExecWindowJoin` and fall back;
-their earlier delivery evidence used the benchmark's enabled multi-join preset. This is a
-remaining coverage gap, not permission to remove the window-join lifecycle gate.
+That audit admitted twenty query plans. Q5 and Q8 selected `StreamExecWindowJoin` and fell back;
+their earlier delivery evidence used the benchmark's enabled multi-join preset.
+
+The subsequent inner-window integration admits Q5 with the default optimizer setting. Its
+original SQL, generated SQL parity, Arrow exchange topology, original memory bindings, complete
+metrics, aligned/unaligned channel replay and rescaling are verified. Collecting-sink bytes and
+unmodified-blackhole record counts match Flink at 20,000 events, parallelism one and four, on
+both backends. The enabled multi-join path is rechecked too. Release measurement and profiling
+for the default WindowJoin path are still pending, so the Q5 delivery checkpoint is incomplete.
+Q8's full query validation follows Q5; this is not a new full-suite admission or performance audit.
 
 Eight focused integration cases recheck Q6 and Q14 on current code: Q6 still fails Flink's
 bounded non-time OVER planning; Q14 executes its original Java UDF through whole-plan Flink
@@ -33,7 +40,7 @@ complete standalone release-report/profile evidence. The full goal is not comple
 Raw EXPLAIN results and blocker checks are retained under
 `streamfusion-nexmark-benchmarks/target/measurements/suite-audit/`. These checks do not rerun
 the full suite's runtime parity or performance on one common commit. The next implementation
-target is Q5's default window join; the historical checkpoints below retain their stated scope.
+target is Q5's default window-join performance; the historical checkpoints below retain their stated scope.
 
 ## Delivery history and scope
 

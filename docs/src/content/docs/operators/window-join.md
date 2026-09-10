@@ -5,11 +5,10 @@ sidebar:
   order: 10
 ---
 
-**Current status:** Temporarily uses whole-plan Flink fallback under the
-[architecture admission requirements](/StreamFusion/development/architecture-admission/). The native paths
-described below are retained for development and direct parity tests; SQL planning does not select them.
-
-**Retained implementation scope:** Implementation for Flink's event-time Window Join physical node.
+**Current status:** Partial. Synchronous attached event-time `INNER` window joins use DataFusion
+inside the common native plan with in-memory or default RocksDB state. Whole-plan admission still
+requires supported children, expressions, sources, sinks, and backend settings. Enabling Flink's
+multi-join optimizer is not required.
 
 ## SQL example
 
@@ -22,38 +21,59 @@ AND l.window_start = r.window_start
 AND l.window_end = r.window_end;
 ```
 
+The example accelerates only if its window-assignment children and scalar types also satisfy
+their own admission rules. Support for an attached WindowJoin does not admit every TVF family.
+
 ## Acceleration and fallback
 
-StreamFusion accelerates attached `TUMBLE`, `HOP`, `CUMULATE`, and `SESSION` inputs when Flink
-recognizes the equality predicates on the join keys, `window_start`, and `window_end` as a Window
-Join. Inner, left, right, full, semi, and anti join modes use Flink's generated remaining-condition
-code, null-key filtering, and output row layout. Arbitrary nullable scalar and nested join keys and
-payloads use schema-aware Arrow-row state and are covered byte-for-byte across the complete Flink
-logical-type surface.
+Both inputs must carry attached window ends in epoch-millisecond `BIGINT` or `TIMESTAMP(3)`
+columns. The window time zone must resolve to UTC. Equality keys may be absent; otherwise they
+must have matching supported boolean, integer, string, binary, or decimal types. Payloads must
+be scalar. Bounded primitive comparisons, arithmetic, boolean expressions, null checks and
+conditionals may form the residual predicate. Unsupported computed workspaces retain fallback.
 
-`INSERT`, `UPDATE_AFTER`, `UPDATE_BEFORE`, and `DELETE` inputs use exact multiset semantics,
-including duplicate rows. Results are emitted once when the coalesced two-input watermark closes a
-window. Flink 2.3 currently rejects updating children before it creates a Window Join physical
-node, so SQL-reachable plans are append-only; the complete native changelog contract is covered
-directly for restore/rescaling and is ready if that planner restriction changes. Each side has an
-independent late-record counter and rate. Flink does not plan
-processing-time Window Join; a non-attached strategy, async state, changelog-state wrapping, or an
-unsupported surrounding physical node produces an explicit whole-plan fallback reason.
+Outer, semi and anti joins, nested payloads or unsupported keys, non-UTC window time, mini-batching,
+async state and changelog-state wrapping retain explicit whole-plan fallback. Shared backend
+admission also checks the original Flink memory and metric configuration. Unsupported surrounding
+nodes cause the whole plan to fall back.
 
-## Implementation
+SQL-reachable inputs are append-only: `INSERT` and `UPDATE_AFTER` append duplicate-preserving
+entries. On-time retractions are rejected; late records drop before changelog validation, matching
+Flink's WindowJoin. A coalesced input watermark closes windows, emitting INSERT records with no
+record timestamp. Ordinary batch EOF, end-input and checkpoint preparation do not fire windows.
 
-Both network inputs remain Arrow IPC frames until they enter the two-input operator, so raw Arrow
-batches never cross a Flink network edge. Rust computes the Flink key group and performs one
-backend multi-get and one atomic write per incoming side batch. It keeps ordered duplicate Arrow
-rows for both sides and returns one nullable Arrow candidate batch when a timer fires. Java applies
-the generated Flink join condition through zero-copy Arrow-backed `RowData` views, then gathers the
-final Arrow result directly from the candidate vectors. It does not serialize state as
-`BinaryRowData`, transpose timer output, or reconstruct payload rows on the JVM.
+## Execution, memory and state
 
-The managed in-memory and direct RocksDB backends share canonical per-key-group row and timer
-bytes. Aligned and unaligned checkpoints, cross-backend savepoints, and key-group redistribution
-therefore preserve both sides and pending timers; direct RocksDB checkpoints retain incremental SST
-reuse. State, timers, encoded Arrow rows, hash collections, temporary join materialization, and
-exported Arrow buffers are charged through Flink managed memory.
+The native WindowJoin and adjacent native operators compose in one DataFusion execution tree.
+Flink network edges carry standard Arrow IPC frames, decoded once at the receiving native-plan
+edge. DataFusion `NestedLoopJoinExec` and its `JoinFilter` compute closed-window results while
+preserving Flink's left/right duplicate order. No Java candidate-matching loop is used.
 
-See the [Flink 2.3 Window join documentation](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/window-join/).
+Native state separates payload entries from an Arrow-row ordering index. Both backends use
+ordered range access and batch writes; growing partition values are not rewritten on every row.
+Flink partition hashing and key-group identity remain separate from sortable state keys.
+
+Coarse reservations cover retained state, large Arrow inputs and outputs, and DataFusion's
+candidate/filter workspace through Flink's original managed-memory allowances. Shared buffers
+are counted once. Small windows cap batch capacity at their possible pair count; larger work
+returns a recoverable budget error when it cannot be admitted. Temporary allocation descriptors
+do not require individual reservations or per-allocation JNI calls.
+
+Flink owns checkpoint coordination, channel state, restore and rescaling. WindowJoin restores
+pending timers with its watermark reset to `Long.MIN_VALUE`, matching Flink; it does not use
+window aggregates' persisted watermark clocks. Shared snapshots use the versioned `SFWF/2`
+contract and reject incompatible operator contracts and earlier unadmitted shared encodings.
+Tests cover canonical backend changes, aligned and unaligned snapshots, in-flight Arrow frame
+replay, and 1→2 key-group redistribution on both backends.
+
+## Metrics and validation
+
+Each stage retains Flink's logical-record I/O counters, operator scope and identity, latency
+metrics, `leftNumLateRecordsDropped`, `leftLateRecordsDroppedRate`, `rightNumLateRecordsDropped`,
+`rightLateRecordsDroppedRate`, and `watermarkLatency`. Generated tests compare complete registered
+metric surfaces, ordered changelog bytes and controls against actual Flink operators.
+
+Q5 has ordinary planner, collecting-sink and blackhole integration coverage with default
+WindowJoin selection. Current release measurements and mixed profiles for this path are pending;
+historical Q5 results used the enabled multi-join optimizer. See [Joins](../joins/) for the detailed
+compute, ownership, state and recovery contracts.

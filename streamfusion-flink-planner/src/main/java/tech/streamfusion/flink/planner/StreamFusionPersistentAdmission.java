@@ -34,6 +34,16 @@ final class StreamFusionPersistentAdmission {
             if (node instanceof org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecRank)
                 return StreamFusionAppendTopNAdmission.unsupportedReason(
                         (org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecRank) node, activeConfig);
+            if (node instanceof org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWindowJoin) {
+                var window = (org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecWindowJoin) node;
+                if (FlinkExecNodeAccess.windowJoinSpec(window).getJoinType() != FlinkJoinType.INNER)
+                    return "window join persistent admission: only INNER semantics are verified";
+                var config = activeConfig == null ? new Configuration() : Configuration.fromMap(activeConfig.toMap());
+                config.addAll(Configuration.fromMap(window.getPersistedConfig().toMap()));
+                if (config.get(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ENABLED))
+                    return "window join persistent admission: mini-batch control semantics remain unverified";
+                return null;
+            }
             if (node instanceof StreamExecJoin) {
                 var join = FlinkExecNodeAccess.regularJoinSpec((StreamExecJoin) node);
                 if (join.getJoinType() != FlinkJoinType.INNER || join.getLeftKeys().length == 0)

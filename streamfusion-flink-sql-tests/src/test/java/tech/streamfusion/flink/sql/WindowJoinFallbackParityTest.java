@@ -19,6 +19,7 @@ import org.apache.flink.types.Row;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import tech.streamfusion.flink.StreamFusionPlannerFactory;
+import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 
 class WindowJoinFallbackParityTest extends SqlParityTestSupport {
     @ParameterizedTest
@@ -34,8 +35,7 @@ class WindowJoinFallbackParityTest extends SqlParityTestSupport {
         byte[] streamFusion = execute(windowCall, "JOIN", "", true);
 
         assertThat(streamFusion).isEqualTo(flink);
-        SqlFallbackAssertions.nativeBatchesAreZero(StreamFusionPlannerFactory.nativeWindowJoinBatchCount());
-        SqlFallbackAssertions.admission();
+        assertWindowFallback("bounded candidate workspace currently requires scalar payloads");
     }
 
     @ParameterizedTest
@@ -48,8 +48,10 @@ class WindowJoinFallbackParityTest extends SqlParityTestSupport {
         byte[] streamFusion = execute(window, joinMode, remainingCondition, true);
 
         assertThat(streamFusion).isEqualTo(flink);
-        SqlFallbackAssertions.nativeBatchesAreZero(StreamFusionPlannerFactory.nativeWindowJoinBatchCount());
-        SqlFallbackAssertions.admission();
+        assertWindowFallback(
+                joinMode.equals("JOIN")
+                        ? "bounded candidate workspace currently requires scalar payloads"
+                        : "native computation currently requires INNER semantics");
     }
 
     @ParameterizedTest
@@ -59,8 +61,22 @@ class WindowJoinFallbackParityTest extends SqlParityTestSupport {
         byte[] streamFusion = executeExistenceJoin(exists, true);
 
         assertThat(streamFusion).isEqualTo(flink);
-        SqlFallbackAssertions.nativeBatchesAreZero(StreamFusionPlannerFactory.nativeWindowJoinBatchCount());
-        SqlFallbackAssertions.admission();
+        assertWindowFallback("native computation currently requires INNER semantics");
+    }
+
+    private static void assertWindowFallback(String reason) {
+        SqlFallbackAssertions.unaccelerated();
+        var explain = StreamFusionPlanningDiagnostics.explain();
+        assertThat(explain).contains(": window join: " + reason);
+        assertThat(explain.lines()
+                        .filter(line -> line.startsWith("Fallback:"))
+                        .collect(java.util.stream.Collectors.toList()))
+                .isNotEmpty()
+                .allSatisfy(line -> assertThat(line)
+                        .matches(
+                                value ->
+                                        value.contains(": architecture:") || value.contains(": window join: " + reason),
+                                "documented window or architecture restriction"));
     }
 
     private static byte[] executeExistenceJoin(boolean exists, boolean streamFusionEnabled) throws Exception {

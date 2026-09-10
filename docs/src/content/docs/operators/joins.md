@@ -64,18 +64,24 @@ bundle and receive the completed native plan. This boundary also applies to the 
 representation used by Q3–Q5; loading its translator from the runtime classloader would cause
 whole-plan fallback in the packaged distribution even when flat-classpath SQL tests pass.
 
-The cached CSV lookup subset below is also admitted. Other join paths are retained for development and direct parity tests under
+The inner window-join and cached CSV lookup subsets below are also admitted. Other join paths are retained for development and direct parity tests under
 [architecture admission](/StreamFusion/development/architecture-admission/).
 
-### Default window-join gap
+### Attached inner window joins
 
-With Flink's default disabled multi-join optimizer, Nexmark Q5 and Q8 select
-`StreamExecWindowJoin`, which still retains whole-plan fallback. Earlier measurements of
-those queries enabled the multi-join optimizer and exercised a supported binary join instead.
-The selected window-join node now builds a fragment for the common native region, and no longer
-constructs the legacy Java candidate-matching operator. Production admission still requires
-full SQL/topology, resource, metric, checkpoint/channel, and release benchmark validation.
-The development checks below do not establish default Q5/Q8 acceleration or a speedup.
+Supported `StreamExecWindowJoin` nodes now select the common native region with Flink's default
+disabled multi-join optimizer. The node builds a native fragment; it does not construct the
+legacy Java candidate-matching operator. Admission covers synchronous inner joins with scalar
+payloads, compatible equality keys or no equality keys, UTC event time, and bounded residual
+predicates. Memory and default RocksDB state are supported. Mini-batching and the unsupported
+semantic/configuration subsets below retain precise whole-plan fallback.
+
+Q5's original SQL is checked with ordinary selection, generated SQL parity, two-input Arrow
+exchange topology, original Flink managed-memory bindings, complete stage metrics, and checkpoint
+recovery. Separate collecting and unmodified-blackhole runs exercise both backends at parallelism
+one and four. Release measurement and profiling of this default WindowJoin path remain pending;
+earlier Q5/Q8 measurements enabled the multi-join optimizer and exercised a binary join instead.
+Q8's complete query checkpoint remains separate from this operator admission.
 
 The version-3 inner-window contract has explicit left/right native children, SQL schemas,
 equality keys, per-key null filters, and a serialized residual expression. Adjacent native
@@ -142,7 +148,7 @@ checkpoints on both backends. The unaligned cases replay an in-flight Arrow exch
 verify exactly-once output after the restored watermark. Flink's state-repartitioning utility
 also exercises 1→2 rescaling across 16 key groups, including canonical savepoints that switch
 backends; duplicate emission order is compared against Flink. These are focused runtime checks,
-not evidence of production SQL admission or Nexmark performance. Direct native tests additionally
+not themselves evidence of Nexmark performance. Direct native tests additionally
 cover migration, contract rejection, buffer ownership, cancellation, bounded workspace, and
 ordered state operations.
 
