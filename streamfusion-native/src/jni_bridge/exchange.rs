@@ -23,8 +23,8 @@ use crate::memory_pool::{
     HostMemoryReservation, JvmMemoryReservationBroker, MemoryReservationBroker,
 };
 
-struct AccountedBytes {
-    bytes: Vec<u8>,
+pub(super) struct AccountedFrames {
+    pub(super) frames: Vec<crate::exchange::RoutedFrame>,
     _reservation: HostMemoryReservation,
 }
 
@@ -62,8 +62,7 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeExchangeBridge_
                 );
                 jni::errors::Error::JavaException
             })?;
-            env.byte_array_from_slice(&encoded.bytes)
-                .map(|array| array.into_raw())
+            export_frames(env, &encoded.frames)
         })
         .resolve::<ThrowRuntimeExAndDefault>()
 }
@@ -171,9 +170,27 @@ unsafe fn route(
     input_array_address: *mut FFI_ArrowArray,
     input_schema_address: *mut FFI_ArrowSchema,
     broker: Arc<dyn MemoryReservationBroker>,
-) -> Result<AccountedBytes> {
+) -> Result<AccountedFrames> {
     let plan = decode_exchange_plan(plan_bytes)?;
     let keys = exchange_key_fields(&plan)?;
+    unsafe {
+        route_prepared(
+            &plan,
+            &keys,
+            input_array_address,
+            input_schema_address,
+            broker,
+        )
+    }
+}
+
+pub(super) unsafe fn route_prepared(
+    plan: &crate::proto::NativeExchangePlan,
+    keys: &[(usize, crate::exchange::KeyField)],
+    input_array_address: *mut FFI_ArrowArray,
+    input_schema_address: *mut FFI_ArrowSchema,
+    broker: Arc<dyn MemoryReservationBroker>,
+) -> Result<AccountedFrames> {
     let batch = unsafe { import_record_batch(input_array_address, input_schema_address) }?;
 
     // Routing materializes at most one copy of the input columns across the key-group
@@ -191,7 +208,7 @@ unsafe fn route(
     }
     let frames = frame_hash_exchange_batch_projected(
         batch,
-        &keys,
+        keys,
         plan.max_parallelism,
         plan.parallelism,
         plan.preserve_key_groups,
@@ -214,15 +231,59 @@ unsafe fn route(
     )?;
     reservation.resize(frame_bytes)?;
 
-    let encoded_size = encode_frames_size(&frames)?;
-    reservation.try_grow(encoded_size)?;
-    let bytes = encode_frames_with_capacity(&frames, encoded_size)?;
-    drop(frames);
-    reservation.resize(bytes.capacity())?;
-    Ok(AccountedBytes {
-        bytes,
+    Ok(AccountedFrames {
+        frames,
         _reservation: reservation,
     })
+}
+
+/// Copy IPC parts directly into their final Java transport array. Building a concatenated Rust
+/// envelope first would copy every payload once more and retain a second full-batch workspace.
+pub(super) fn export_frames(
+    env: &mut jni::Env<'_>,
+    frames: &[crate::exchange::RoutedFrame],
+) -> jni::errors::Result<jbyteArray> {
+    let size = encode_frames_size(frames).map_err(|error| super::common::throw(env, error))?;
+    if size > i32::MAX as usize {
+        return Err(super::common::throw(
+            env,
+            "exchange JNI output exceeds Java's array limit",
+        ));
+    }
+    let output = env.new_byte_array(size)?;
+    put_bytes(env, &output, 0, &(frames.len() as u32).to_le_bytes())?;
+    let mut offset = 4;
+    for routed in frames {
+        let frame = routed.frame();
+        let mut header = [0u8; 12];
+        header[..4].copy_from_slice(&routed.key_group().to_le_bytes());
+        header[4..8].copy_from_slice(&(frame.metadata.len() as u32).to_le_bytes());
+        header[8..].copy_from_slice(&(frame.body.len() as u32).to_le_bytes());
+        for part in [
+            header.as_slice(),
+            frame.metadata.as_slice(),
+            frame.body.as_slice(),
+        ] {
+            if !part.is_empty() {
+                put_bytes(env, &output, offset, part)?;
+            }
+            offset += part.len();
+        }
+    }
+    Ok(output.into_raw())
+}
+
+fn put_bytes(
+    env: &mut jni::Env<'_>,
+    output: &JByteArray<'_>,
+    offset: usize,
+    bytes: &[u8],
+) -> jni::errors::Result<()> {
+    // JNI's jbyte is signed, with the same size/alignment and all the same bit patterns as u8.
+    let signed = unsafe {
+        std::slice::from_raw_parts(bytes.as_ptr().cast::<jni::sys::jbyte>(), bytes.len())
+    };
+    output.set_region(env, offset as i32, signed)
 }
 
 unsafe fn decode(
@@ -339,6 +400,7 @@ fn encode_frames_size(frames: &[crate::exchange::RoutedFrame]) -> Result<usize> 
     })
 }
 
+#[cfg(test)]
 fn encode_frames_with_capacity(
     frames: &[crate::exchange::RoutedFrame],
     capacity: usize,
@@ -359,6 +421,7 @@ fn encode_frames_with_capacity(
     Ok(bytes)
 }
 
+#[cfg(test)]
 fn write_u32(bytes: &mut Vec<u8>, value: usize, label: &str) -> Result<()> {
     let value = u32::try_from(value).map_err(|_| {
         DataFusionError::Execution(format!("exchange {label} exceeds the JNI frame limit"))

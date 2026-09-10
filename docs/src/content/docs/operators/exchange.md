@@ -5,6 +5,12 @@ sidebar:
   order: 12
 ---
 
+The writer binds its validated routing plan, key descriptors, and Flink reservation broker once at
+task open and reuses them for each Arrow batch. Native IPC metadata and bodies are copied directly
+into the final Java transport envelope, without an intermediate concatenated Rust payload. The
+standard Arrow IPC wire format and key-group metadata are unchanged. Early routing or admission
+failures release any unconsumed Arrow C Data exports before their descriptor storage is closed.
+
 **Current status:** Hash and singleton exchanges are accelerated when the entire physical plan is eligible.
 
 ## SQL example

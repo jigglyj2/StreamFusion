@@ -13,6 +13,7 @@ mod changelog_normalize;
 mod common;
 mod deduplicate;
 mod exchange;
+mod exchange_router;
 mod execution_context;
 mod group_aggregate;
 mod interval_join;

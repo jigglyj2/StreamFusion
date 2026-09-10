@@ -91,6 +91,58 @@ class NativeExchangeCDataRoundTripTest {
         }
     }
 
+    @Test
+    void cachedRouterReusesItsPlanPreservesFrameBytesAndReleasesOwnership() {
+        RowType type = RowType.of(new IntType(false));
+        for (boolean unaligned : new boolean[] {false, true}) {
+            byte[] plan = NativeExchangePlanSerializer.hash(type, new int[] {0}, 128, 4, unaligned, false);
+            NativeMemoryManager memory = TestingNativeMemoryManager.create();
+            try (RootAllocator allocator = new RootAllocator();
+                    ArrowRowDataBatch input = ArrowRowDataBatch.transpose(
+                            List.of(GenericRowData.of(1), GenericRowData.of(42), GenericRowData.of(1)),
+                            type,
+                            allocator);
+                    ArrowExchangeBatch.EnvelopeBatch envelope = ArrowExchangeBatch.withEnvelope(input, type)) {
+                var expected = ArrowExchangeCDataBridge.route(plan, envelope.batch(), allocator, memory);
+                var router = new tech.streamfusion.nativebridge.NativeExchangeRouter(plan, memory);
+                try {
+                    long available = memory.available();
+                    assertThat(available).isLessThan(memory.limit());
+                    for (int batch = 0; batch < 3; batch++) {
+                        var actual = ArrowExchangeCDataBridge.route(router, envelope.batch());
+                        assertThat(actual).hasSize(expected.size());
+                        for (int frame = 0; frame < actual.size(); frame++) {
+                            assertThat(actual.get(frame).keyGroup())
+                                    .isEqualTo(expected.get(frame).keyGroup());
+                            assertThat(actual.get(frame).metadata())
+                                    .isEqualTo(expected.get(frame).metadata());
+                            assertThat(actual.get(frame).body())
+                                    .isEqualTo(expected.get(frame).body());
+                        }
+                        assertThat(memory.available()).isEqualTo(available);
+                    }
+                } finally {
+                    router.close();
+                }
+                router.close();
+                assertThat(memory.available()).isEqualTo(memory.limit());
+                long arrowBytes = allocator.getAllocatedMemory();
+                org.assertj.core.api.Assertions.assertThatThrownBy(
+                                () -> ArrowExchangeCDataBridge.route(router, envelope.batch()))
+                        .hasMessageContaining("closed");
+                assertThat(allocator.getAllocatedMemory()).isEqualTo(arrowBytes);
+                org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                                ArrowExchangeCDataBridge.route(new byte[] {1}, envelope.batch(), allocator, memory))
+                        .isInstanceOf(IllegalStateException.class);
+                assertThat(allocator.getAllocatedMemory()).isEqualTo(arrowBytes);
+                org.assertj.core.api.Assertions.assertThatThrownBy(
+                                () -> new tech.streamfusion.nativebridge.NativeExchangeRouter(new byte[] {1}, memory))
+                        .isInstanceOf(IllegalStateException.class);
+                assertThat(memory.available()).isEqualTo(memory.limit());
+            }
+        }
+    }
+
     private static final class ResultRow {
         private final int value;
         private final RowKind kind;

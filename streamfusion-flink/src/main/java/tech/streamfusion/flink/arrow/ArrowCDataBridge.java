@@ -351,7 +351,7 @@ public final class ArrowCDataBridge {
         }
     }
 
-    private static void releaseInputExports(ArrowArray array, ArrowSchema schema) {
+    static void releaseInputExports(ArrowArray array, ArrowSchema schema) {
         // Closing a C handle frees its struct, not the producer's exported allocation. Rust
         // clears release when it consumes the handle; early admission failure leaves Java
         // responsible for the still-live callback, just like the shared C Stream edge.
