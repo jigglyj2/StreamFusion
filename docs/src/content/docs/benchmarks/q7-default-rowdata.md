@@ -121,6 +121,51 @@ The next investigation must compare state volume and flush/compaction behavior w
 Flink's memory allocation and checkpoint semantics. Small reservation callbacks account for
 about 0.3% of native-job CPU samples, so they are not the leading optimization target.
 
+## Follow-up flush diagnostics
+
+Two further pairs at 1.25 million events pass ordinary blackhole execution while an external
+observer copies each job's open RocksDB LOG/OPTIONS files and samples SST file sizes every
+200 ms. One pair is unprofiled; the other has the same CPU/wall profiler configuration as above.
+Both are diagnostic runs, excluded from the performance table. The observer can miss a final log
+suffix during database cleanup, so the following values describe captured flush events rather
+than an exact lifetime database-write counter.
+
+| Captured flush events | Flink | StreamFusion |
+| --- | ---: | ---: |
+| Unprofiled: flush-input bytes | 172,060,230 | 1,165,188,941 |
+| Unprofiled: flush-input entries | 1,069,660 | 1,122,644 |
+| Profiled: flush-input bytes | 184,979,280 | 1,182,528,355 |
+| Profiled: flush-input entries | 1,150,010 | 1,137,017 |
+| Profiled: completed flushes | 33 | 57 |
+
+The native backend repeatedly flushes much larger values for similar entry counts. Captured
+native flush reasons include write-buffer-manager pressure; the profiled run also records writes
+stopping behind two immutable memtables. Both engines have five observed databases, comprising
+four join subtasks and one global window subtask. The unprofiled diagnostic's native elapsed time
+was substantially shorter than the earlier measured forks, reinforcing the timing variability;
+it is not substituted for the required measured comparison.
+
+The code provides a concrete mechanism for this write amplification. Flink's
+`JoinRecordStateViews.InputSideHasNoUniqueKey` updates a MapState entry for the individual record.
+StreamFusion's `regular_join/paged_state.rs` rewrites a compact equality-key value when it changes;
+that value includes previously retained rows. Larger keys rewrite the affected fixed page of up
+to 64 row identities. The compact cap bounds one rewrite, but does not bound cumulative bytes
+rewritten as repeated keys receive more input across batches. The 1,024-row staging slices can
+increase those batch boundaries. This is a general join-state storage issue, not a Q7-specific
+compute opportunity. DataFusion predicate evaluation must remain in the native compute path.
+
+Reducing retained-payload rewrites is the next implementation direction. It must preserve stable
+row identities, duplicate/retraction order, association counts, old-state decoding, both backend
+representations and atomic batched writes. Increasing Flink's memory allowance or skipping
+checkpoint flushes would not resolve the architectural cause. The captured byte difference and
+stall logs identify a useful target, but do not isolate its share of elapsed time from profiler
+and host effects or prove that it is the only source of slowdown.
+
+Diagnostic artifacts are retained in `rocksdb-1250k-flush-diagnostic` and
+`rocksdb-1250k-flush-profile-diagnostic` under the release measurement directory, including
+`flush-summary.json`, database-path mappings, observations, original logs/options and the latter
+pair's JFR files. No upstream code or benchmark source settings changed for these observations.
+
 ## Remaining capacity and performance work
 
 The 1,024-row zero-copy slices bound transient touched-key staging without adding JNI crossings,
