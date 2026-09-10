@@ -106,6 +106,12 @@ reports 1.018× / 1.027× median throughput at 10M events, with overlapping rang
 outcomes: near parity rather than a robust speedup. Both 1M cases favor Flink. Q21 and Q22 are
 stateless; their backend configurations do not establish RocksDB state-performance evidence.
 
+Q23's default two-join plan now owns its record envelopes at native region edges and passes
+non-empty original-query parity plus composed-join metric/recovery checks. Its
+[release comparison](/StreamFusion/benchmarks/q23-rowdata/) reports slower 100k runs on both
+backends, a variable 1.311× median at 500k with RocksDB, and an in-memory budget failure at
+500k. The optional genuine three-input MultiJoin still falls back as a whole plan.
+
 Q12's processing-time SQL is catalogued, but its windows align to the live Flink clock.
 A bounded max-speed run may finish before a timer fires, and finishing input does not emit the final
 open window. Empty or partial results do not establish parity or acceleration. Its UTC TUMBLE COUNT operator now has ordinary

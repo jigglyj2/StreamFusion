@@ -53,8 +53,10 @@ planning plus collecting-result and unmodified-blackhole-count parity on both ba
 parallelism 1 and 4 with 100,000 events. This uses Flink's default disabled multi-join optimizer;
 an explicit enabled-optimizer test checks the precise three-input fallback. The pinned upstream
 generator adds `FIRST_PERSON_ID` twice to bid bidders, so short runs can produce no matches;
-the Q23 tests require positive output. The generator remains unmodified. Release performance
-and profiling are a separate delivery requirement; these integration tests provide no speedup claim.
+the Q23 tests require positive output. The generator remains unmodified. The
+[Q23 release comparison](/StreamFusion/benchmarks/q23-rowdata/) reports slower 100k runs,
+a variable 1.311× RocksDB median at 500k, complete separate profiles, and an in-memory
+budget failure at 500k. These bounded results do not establish a performance ceiling.
 
 Regular-join capability checks and protobuf construction belong to the planner bundle, where
 Flink's `JoinSpec` and Calcite classes are visible. Runtime operators remain in the runtime
