@@ -45,7 +45,11 @@ input batch may repeat a large retained maximum in every UPDATE_BEFORE/UPDATE_AF
 credit for those event copies and Arrow output is admitted before state mutation. Native tests
 exercise denied large incoming values and repeated 64 KiB historical extrema on both backends,
 verify unchanged state after denial, and retain snapshot accounting until its last owner releases it.
-The existing canonical accumulator encoding, Flink budgets and metric definitions are unchanged.
+Evaluated DataFusion BIGINT and VARCHAR scalars transfer directly into the Flink state adapter,
+without creating and reading a one-element Arrow array for each changelog transition. VARCHAR
+transfers its owned bytes; the accumulator computation and every required intermediate result
+remain unchanged. Other scalar types retain their existing conversion. The existing canonical
+accumulator encoding, Flink budgets and metric definitions are unchanged.
 
 **Retained implementation scope:** Partial implementation for timer-free keyed and global streaming aggregates and
 bounded hash aggregates, including grouping sets, `ROLLUP`, and `CUBE` in both runtime modes.

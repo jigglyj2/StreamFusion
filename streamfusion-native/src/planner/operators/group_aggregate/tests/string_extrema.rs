@@ -128,3 +128,39 @@ fn large_incoming_extrema_cannot_allocate_unadmitted_retained_state() {
     drop(processor);
     assert_eq!(broker.reserved(), 0);
 }
+
+#[test]
+fn evaluated_scalars_preserve_the_existing_flink_state_codec() {
+    use datafusion::scalar::ScalarValue;
+    let mut values = vec![
+        ScalarValue::Int64(None),
+        ScalarValue::Int64(Some(i64::MIN)),
+        ScalarValue::Int64(Some(i64::MAX)),
+        ScalarValue::Utf8(None),
+        ScalarValue::Utf8(Some(String::new())),
+        ScalarValue::Utf8(Some("\0é e\u{301} \u{e000} \u{10000}".into())),
+        ScalarValue::Utf8(Some("z".repeat(64 << 10))),
+        ScalarValue::Boolean(Some(true)),
+        ScalarValue::Date32(Some(-17)),
+        ScalarValue::Decimal128(Some(-123456), 20, 3),
+    ];
+    values.push(ScalarValue::TimestampMillisecond(Some(i64::MIN), None));
+    for value in values {
+        let expected = aggregate_value(value.to_array().unwrap().as_ref(), 0).unwrap();
+        assert_eq!(values::scalar_aggregate_value(value).unwrap(), expected);
+    }
+}
+
+#[test]
+fn evaluated_string_transfers_its_large_owned_buffer() {
+    let value = "retained maximum".repeat(8192);
+    let allocation = value.as_ptr();
+    let capacity = value.capacity();
+    let Some(AggregateValue::Bytes(value)) =
+        values::scalar_aggregate_value(datafusion::scalar::ScalarValue::Utf8(Some(value))).unwrap()
+    else {
+        panic!("string result must retain byte state");
+    };
+    assert_eq!(value.as_ptr(), allocation);
+    assert_eq!(value.capacity(), capacity);
+}

@@ -148,8 +148,7 @@ impl RowKernels {
             } else {
                 native.retract_batch(&[input.slice(row, 1)])?;
             }
-            let array = native.evaluate()?.to_array()?;
-            let value = aggregate_value(array.as_ref(), 0)?;
+            let value = values::scalar_aggregate_value(native.evaluate()?)?;
             match &mut state.accumulators[index] {
                 Accumulator::Count(count) => {
                     *count = match value {

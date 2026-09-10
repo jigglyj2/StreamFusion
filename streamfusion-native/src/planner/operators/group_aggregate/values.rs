@@ -49,6 +49,22 @@ pub(in crate::planner::operators) fn aggregate_filter(
     Ok(!filter.is_null(row) && filter.value(row))
 }
 
+/// Retain DataFusion's evaluated scalar directly when its representation matches Flink
+/// state. Building a one-element Arrow array first duplicates string payloads and buffers
+/// on every required changelog transition. Other scalar types keep their existing codec.
+pub(super) fn scalar_aggregate_value(
+    value: datafusion::scalar::ScalarValue,
+) -> Result<Option<AggregateValue>> {
+    use datafusion::scalar::ScalarValue;
+    match value {
+        ScalarValue::Int64(value) => Ok(value.map(|value| AggregateValue::Int(value as i128))),
+        ScalarValue::Utf8(value) => {
+            Ok(value.map(|value| AggregateValue::Bytes(value.into_bytes())))
+        }
+        value => aggregate_value(value.to_array()?.as_ref(), 0),
+    }
+}
+
 pub(in crate::planner::operators) fn aggregate_value(
     array: &dyn Array,
     row: usize,
