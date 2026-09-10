@@ -10,6 +10,9 @@ million events on each backend. This establishes a baseline and an optimization 
 completion of Q8 performance work. The [older Q8 report](/StreamFusion/benchmarks/q8-rowdata/)
 uses the enabled multi-join optimizer and different consumer weights; its results are separate.
 
+The [subsequent state-access report](/StreamFusion/benchmarks/q8-state-access-rowdata/) records
+the completed fixes and release comparison at `f66d0afb`. This page retains the original baseline.
+
 ## Measurements, September 10, 2026
 
 Each size/backend has three fresh unprofiled JVMs per engine, alternating Flink/StreamFusion,
@@ -128,7 +131,8 @@ in bounded batches after DataFusion output drains. It preserves legacy state enc
 checkpoint boundaries and output ownership. Completion also reuses the end-of-range proof when
 initial decoding already reached EOF, retaining the tail lookahead for stopped scans. Focused
 native fixtures verify that acknowledgement rereads no payload bytes and that extra payloads
-are still rejected before mutation. Follow-up release work remains in progress.
+are still rejected before mutation. The follow-up report above verifies the resulting release;
+StreamFusion remains slower than Flink on both backends.
 
 ## Capacity and excluded profiling attempts
 

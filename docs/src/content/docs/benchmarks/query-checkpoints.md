@@ -51,12 +51,14 @@ StreamFusion still loses all three measured pairs on each backend, with wide tim
 median throughput ratios are 0.263× in memory and 0.401× on RocksDB. A native-only two-million-event
 RocksDB capacity probe passes; in-memory mutation admission still fails, and the prior Flink
 baseline also failed at that size. Slow-fork profiling remains open; no optimality claim is made.
-The [Q8 default-path baseline](/StreamFusion/benchmarks/q8-default-rowdata/) now completes one/ten-million-event
-measurements and 12.5-million-event collecting parity and profiles on both backends at `d4a3db14`.
-StreamFusion loses every measured pair: throughput ratios are 0.797×/0.592× in memory and
-0.691×/0.503× on RocksDB at one/ten million. A twenty-million-event native in-memory profile fails
-retained-state admission. Profiles identify redundant window-payload deletion scans; optimization
-and post-change measurements remain open.
+The [Q8 state-access report](/StreamFusion/benchmarks/q8-state-access-rowdata/) completes one/ten-million-event
+measurements and 12.5-million-event collecting parity and profiles on both backends at `f66d0afb`.
+Direct payload deletion and reuse of validated range exhaustion remove redundant state reads;
+the ten-million-event native RocksDB median falls from 31.84s to 26.52s against the earlier release.
+StreamFusion still loses every measured pair: throughput ratios are 0.798×/0.691× in memory and
+0.874×/0.562× on RocksDB at one/ten million. The earlier twenty-million-event native in-memory
+capacity failure is not revalidated at this release. The two demonstrated redundant-read fixes
+are complete; the performance gap remains explicit, and Q9 is the next numbered checkpoint.
 
 Eight Q6 planning cases cover both engines, both backends and both optimizer settings: Flink
 still rejects bounded non-time OVER. Q14's previously verified original Java UDF retains
