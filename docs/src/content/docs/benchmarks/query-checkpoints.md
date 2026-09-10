@@ -650,3 +650,23 @@ enabling StreamFusion and explicit opt-in for non-identical operators. Separate 
 tuning parameters, memory budgets and admission bypasses are not permitted. Benchmark-only
 measurement controls do not become deployment settings. Unsupported Flink settings require
 an explicit fallback rather than silent substitution with native defaults.
+
+## Q16 admission and correctness
+
+Original Q16 adds a VARCHAR maximum and composite channel/day grouping to the filtered
+BIGINT DISTINCT counts verified for Q15. Ordinary planning now admits its complete plan
+on both backends. String extrema continue to use DataFusion's MIN/MAX kernels. Admission
+requires append-only inputs directly after the original Flink HASH exchange, whose binary
+string comparison matches DataFusion; a Calc after the exchange, retractable strings and
+DISTINCT string extrema retain precise whole-plan fallback. This is a general physical
+boundary rule, without a Nexmark expression or character-set special case.
+
+[Group aggregation](/StreamFusion/operators/group-aggregation/) records the generated Unicode,
+FILTER, composite-key, full changelog/metric, memory-denial and both-backend recovery checks.
+The RowData catalog preserves Q16's original SELECT and result schema. Its opt-in integration
+checks pass with 50,000 events, parallelism one/four and both backends. They compare the complete
+collected changelog at parallelism one, materialized results at both parallelisms, and blackhole
+record counts negotiated independently of the collecting sink. All accelerated runs require
+positive native activity. Independent parallel jobs may interleave channels differently; controlled
+runtime tests remain the byte-parity evidence for identical input ordering. Release measurements
+and mixed JVM/native profiles remain outstanding; admission alone establishes no speedup.

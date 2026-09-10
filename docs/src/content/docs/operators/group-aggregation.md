@@ -37,7 +37,8 @@ test retains the Java-backed ordering difference and verifies the planner bounda
 The upstream Flink `AggregateITCase.testBigDataOfMinMaxWithBinaryString` SQL/input case
 and a generated Unicode SQL case also compare complete changelogs through ordinary planning
 on both backends. The original Nexmark Q16 SQL reaches the unmodified blackhole sink with
-positive native batch counters on both backends; its release performance comparison is pending.
+positive native batch counters on both backends. The RowData benchmark catalog includes the
+unchanged Q16 SELECT and its original result schema; its release performance comparison is pending.
 
 Large incoming and historical string values remain subject to coarse batch admission. A tiny
 input batch may repeat a large retained maximum in every UPDATE_BEFORE/UPDATE_AFTER record;

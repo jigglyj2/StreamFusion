@@ -73,6 +73,12 @@ final class NexmarkRowDataQueryCatalog {
                 "`day` STRING, total_bids BIGINT, rank1_bids BIGINT, rank2_bids BIGINT, rank3_bids BIGINT, "
                         + "total_bidders BIGINT, rank1_bidders BIGINT, rank2_bidders BIGINT, rank3_bidders BIGINT, "
                         + "total_auctions BIGINT, rank1_auctions BIGINT, rank2_auctions BIGINT, rank3_auctions BIGINT");
+        schemas.put(
+                "q16",
+                "channel STRING, `day` STRING, `minute` STRING, total_bids BIGINT, "
+                        + "rank1_bids BIGINT, rank2_bids BIGINT, rank3_bids BIGINT, "
+                        + "total_bidders BIGINT, rank1_bidders BIGINT, rank2_bidders BIGINT, rank3_bidders BIGINT, "
+                        + "total_auctions BIGINT, rank1_auctions BIGINT, rank2_auctions BIGINT, rank3_auctions BIGINT");
         schemas.put("q18", FULL_BID_COLUMNS);
         schemas.put("q19", FULL_BID_COLUMNS + ", rank_number BIGINT");
         schemas.put(
