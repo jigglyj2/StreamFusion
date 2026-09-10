@@ -53,10 +53,12 @@ final class FlinkRegularJoinMetricOracle implements FlinkJoinMetricOracle {
             else harness.processWatermarkStatus2((WatermarkStatus) event);
         } else if (event instanceof LatencyMarker) {
             if (port == 0)
-                ((org.apache.flink.table.runtime.operators.join.stream.StreamingJoinOperator) harness.getOperator())
+                ((org.apache.flink.streaming.api.operators.TwoInputStreamOperator<RowData, RowData, RowData>)
+                                harness.getOperator())
                         .processLatencyMarker1((LatencyMarker) event);
             else
-                ((org.apache.flink.table.runtime.operators.join.stream.StreamingJoinOperator) harness.getOperator())
+                ((org.apache.flink.streaming.api.operators.TwoInputStreamOperator<RowData, RowData, RowData>)
+                                harness.getOperator())
                         .processLatencyMarker2((LatencyMarker) event);
         } else throw new AssertionError("Uncovered control " + event);
     }

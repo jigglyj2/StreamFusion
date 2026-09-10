@@ -131,12 +131,20 @@ stage I/O counters through the shared metric tree. Generated Flink harness compa
 the production shared Arrow/JNI runtime followed by a native calc on both backends. They compare
 ordered serialized changelogs and record timestamps for duplicates, nullable payloads/keys,
 INSERT/UPDATE_AFTER, late retractions, and watermark output. They also check stage logical-record
-counts and compare all five operator-specific counters, meters and the watermark-latency gauge
-against Flink using the same processing clock. Recovery cases include empty and
-populated timer state, canonical backend changes, and aligned/unaligned operator snapshots.
-These operator snapshots do not establish in-flight channel recovery or full SQL admission.
-Direct native tests additionally cover 1→2 rescaling, migration, contract rejection, buffer
-ownership, cancellation, bounded workspace, and ordered state operations.
+counts and compare the complete registered metric surface, operator identity, latency-marker
+metrics, and runtime-dependent metric semantics against Flink using the same processing clock.
+Keyed and keyless cases cover residual predicates, idle/active transitions, and late records on
+both inputs. Recovery cases include empty and populated timer state, canonical backend changes,
+and aligned/unaligned operator snapshots.
+
+Flink task-harness tests additionally restore pending windows through aligned and unaligned
+checkpoints on both backends. The unaligned cases replay an in-flight Arrow exchange frame and
+verify exactly-once output after the restored watermark. Flink's state-repartitioning utility
+also exercises 1→2 rescaling across 16 key groups, including canonical savepoints that switch
+backends; duplicate emission order is compared against Flink. These are focused runtime checks,
+not evidence of production SQL admission or Nexmark performance. Direct native tests additionally
+cover migration, contract rejection, buffer ownership, cancellation, bounded workspace, and
+ordered state operations.
 
 **Retained implementation scope:** Partial implementation for bounded hash/adaptive/sort-merge/nested-loop joins and for
 synchronous regular, multi-way, time-bounded, and temporal streaming joins.
