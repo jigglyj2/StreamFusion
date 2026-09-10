@@ -16,7 +16,7 @@ This matrix follows the query operations documented by Flink 2.3, including the 
 | [Windowing TVFs](window-tvf/) | **Partial** (standalone aligned TVFs; `SESSION` gated) | Yes | Native aligned assignment and keyed session merging |
 | [Watermark assignment](watermark-assignment/) | **Plan-compatible** | Flink-owned | Distinct StreamFusion node delegating Flink's exact timer and idleness runtime |
 | [Group aggregation](group-aggregation/) | **Partial** (synchronous keyed BIGINT aggregates; memory and default RocksDB) | Yes | DataFusion accumulators with Flink keyed state and changelog adapters |
-| [Window aggregation](window-aggregation/) | **Partial** (two-phase UTC HOP COUNT/MIN/MAX) | Yes | DataFusion grouped accumulators, native keyed slices and Flink control lifecycle |
+| [Window aggregation](window-aggregation/) | **Partial** (verified UTC TUMBLE/HOP, DISTINCT-only TUMBLE, and SESSION/processing-time TUMBLE COUNT(*) subsets) | Yes | DataFusion grouped accumulators, native keyed slices and Flink control lifecycle |
 | [OVER aggregation](over-aggregation/) | **Temporarily gated** (whole-plan Flink fallback) | Yes | Native ordered state, timers, absorbed batch sort, and aggregate kernels |
 | [Joins](joins/) | **Partial** (binary inner regular/MultiJoin with bounded comparisons; memory and default RocksDB) | By join type | Native keyed state, vectorized predicates, and timers |
 | [Window joins](window-join/) | **Partial** (synchronous UTC inner joins with scalar payloads; memory and default RocksDB) | Yes | DataFusion closed-window joins and predicates with ordered native state |
@@ -27,7 +27,7 @@ This matrix follows the query operations documented by Flink 2.3, including the 
 | [LIMIT](limit/) | **Partial** (bounded Arrow-slice limits; streaming stateful paths gated) | Yes | Arrow slicing or native counter/Top-N state |
 | [Top-N](top-n/) | **Partial** (verified append-only partitioned ROW_NUMBER constant ranges) | Yes | DataFusion selection, batched point/ordered state in one native region |
 | [Window Top-N](window-top-n/) | **Temporarily gated** (whole-plan Flink fallback) | Yes | Native per-window state plus Flink's exact generated comparator |
-| [Deduplication](deduplication/) | **Temporarily gated** (whole-plan Flink fallback) | Yes | Native batched raw keyed state |
+| [Deduplication](deduplication/) | **Partial** (synchronous row-time keep-first/keep-last updating plans; verified types, memory and default RocksDB) | Yes | DataFusion cumulative extrema with batched native keyed state |
 | [Window deduplication](window-deduplication/) | **Temporarily gated** (whole-plan Flink fallback) | Yes | Native retractable per-window keyed state and timers |
 | [Pattern recognition](pattern-recognition/) | **Temporarily gated** (whole-plan Flink fallback) | Yes | Native fixed-sequence state machine; Flink CEP fallback for general NFA/timer shapes |
 | [Changelog conversion](changelog-conversion/) | **Partial** (`DropUpdateBefore`; normalization gated) | By conversion | Native keyed upsert normalization and Flink-compatible row-kind handling |

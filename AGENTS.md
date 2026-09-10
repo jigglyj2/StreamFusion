@@ -40,6 +40,19 @@ claim that an operator is streaming is not sufficient justification. Reuse DataF
 within streaming stateful operators too, without changing Flink's observable changelog
 or batching away required intermediate results.
 
+Establish Flink compatibility by inspecting the corresponding Flink implementation's
+source code, comparing it with the candidate DataFusion implementation, running the
+applicable upstream Flink SQL tests against StreamFusion, and adding StreamFusion-owned
+generated parity tests. Include upstream connector tests when implementing connectors.
+Source inspection and both test layers are required; matching SQL signatures or a few
+example results is not sufficient evidence of compatibility.
+
+When DataFusion does not provide a Flink-compatible implementation, consult Arroyo and
+RisingWave for inspiration for the necessary native operator or semantic adaptation.
+Keep Flink's implementation and parity tests authoritative for behavior, preserve the
+Flink-owned control plane, and continue using DataFusion for compatible computation
+within that operator.
+
 ## Project Structure & Module Organization
 
 Structure this project like Flink and use Flink's own module boundaries as the default model.
@@ -78,7 +91,8 @@ coverage, fallback conditions, or other user-visible functionality changes. Keep
 operator status pages explicit about current support; do not document planned work as
 implemented.
 
-StreamFusion plan replacement is all-or-nothing. Accelerate a plan only when every
+StreamFusion plan replacement is all-or-nothing across the entire streaming job,
+including every root of a multi-root physical graph. Accelerate a plan only when every
 internal node has a StreamFusion physical operator. Sources and sinks are the only
 exceptions and must use a StreamFusion connector or a lightweight Flink RowData Arrow
 batch view. EXPLAIN output must state why the whole plan fell back and give a reason for
@@ -173,10 +187,13 @@ following Comet's operator protobuf model. Protobuf is the control/plan format; 
 Data/C Stream remains the batch transport. Reject unknown or semantically unsupported
 messages with an EXPLAIN fallback reason rather than approximating Flink behavior.
 
-Treat DataFusion Comet as the primary architectural reference for planner work and
-communication between JVM operators and native operators. Follow its model of planner
-rules selecting distinct accelerator exec nodes while leaving the engine's original
-nodes available for fallback; do not add acceleration branches inside Flink operators.
+Treat DataFusion Comet as the primary architectural reference for planning, native
+memory limits and reservation/admission behavior, and communication between JVM operators
+and native operators. Apply its memory model within Flink's existing budgets as described
+below. The intentional planning exception is whole-job, all-or-nothing acceleration.
+Follow its model of planner rules selecting distinct accelerator exec nodes while
+leaving the engine's original nodes available for fallback; do not add acceleration
+branches inside Flink operators.
 Also follow Comet's protobuf plan communication, Arrow batch transport, ownership, and
 metric propagation patterns unless Flink semantics require a documented difference.
 
@@ -232,9 +249,10 @@ into behavior that may not be byte-identical to Flink.
 
 The user-facing runtime configuration surface must be the same as Flink's. The only
 StreamFusion-specific runtime options allowed are enabling StreamFusion and explicitly
-opting into operators whose behavior is not identical to Flink's. Use existing Flink
-settings and their semantics for all other runtime parameters; do not introduce separate
-StreamFusion tuning knobs, memory budgets, or admission bypasses. Internal implementation
+opting into accelerated functionality whose result sets may not be byte-identical to
+Flink's. Use existing Flink settings and their semantics for all other runtime parameters;
+do not introduce separate StreamFusion tuning knobs, memory budgets, or admission bypasses.
+Internal implementation
 constants and benchmark-only measurement controls must not become deployment options.
 
 When implementing a native source or sink, translate every relevant Java/Flink
