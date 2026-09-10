@@ -45,7 +45,10 @@ still apply. EXPLAIN reports the reason for every unsupported node in the comple
 Global rank/LIMIT, larger/variable ranges, retract/update-fast strategies and other types remain
 gated. Flink 2.3 does not implement streaming `RANK` or `DENSE_RANK` in this physical operator;
 those shapes retain Flink's own planning error. The following broader implementations remain
-available for direct development/parity tests and are not production-admitted.
+available for direct development/parity tests and are not production-admitted. Original Nexmark Q19
+requires range `[1,10]` and therefore falls back. Its RowData catalog preserves the original
+price-only ordering; additional tie-breakers are not part of that query. See
+[query checkpoints](/StreamFusion/benchmarks/query-checkpoints/#q19-original-auction-top-10).
 
 For bounded `RANK`, the planner retains Flink's hash or singleton exchange and replaces the paired
 local/global sort-rank stages with one keyed, tie-aware bounded selection. It only performs this

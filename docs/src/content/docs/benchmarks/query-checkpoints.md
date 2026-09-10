@@ -740,3 +740,19 @@ favor Flink at the median. The first 10M Flink in-memory fork failed with a Task
 timeout before any native fork; no ratio or native capacity claim is made for that case.
 This completes Q18's bounded admission, correctness and performance checkpoint, without claiming
 a performance ceiling. Q19 is the next query checkpoint.
+
+
+## Q19 original auction Top-10
+
+Original Q19 orders bids within each auction by `price DESC` and returns ranks one through ten.
+The RowData catalog now preserves that SELECT exactly. The previous catalog added timestamp,
+bidder and string tie-breakers that changed which tied bids survive; those extra order keys
+have been removed. The original blackhole schema includes the rank number and has no primary key.
+
+Ordinary planner selection still falls back the complete plan: persistent rank admission is
+verified only for append-only `ROW_NUMBER` range `[1,1]`, whereas Q19 requires `[1,10]`.
+`NexmarkQ19PlanningIT` checks the unchanged SELECT and runs the original SQL/blackhole plan with
+StreamFusion selected and unselected on both backends, requiring the precise fallback reason
+and zero native activity. This is a fallback baseline, not accelerated Q19 coverage or a
+performance result. Larger-range DataFusion computation and the shared runtime's memory,
+metric and recovery contracts remain the next demonstrated blockers.
