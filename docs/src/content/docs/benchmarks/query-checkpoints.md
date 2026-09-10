@@ -760,5 +760,8 @@ The retained append-only constant-range computation now uses DataFusion batch or
 per-arrival bounded selection over fixed-width priorities. Twenty Rust checks and generated
 comparisons against Flink's `AppendOnlyTopNFunction` verify this compute prerequisite, including
 complete changelog bytes across ranges `[1,2]`, `[1,10]`, `[2,5]` and `[1,64]`, both backends and
-three Arrow batch sizes. This does not unlock Q19 yet: the shared runtime, large-output memory,
+three Arrow batch sizes. The subsequent output-admission prerequisite reserves descriptor
+workspace in coarse chunks and actual repeated payloads before gathering or writing state;
+23 focused Rust checks include both-backend refusal before writes and output ownership.
+This does not unlock Q19 yet: shared runtime composition, remaining retained-state admission,
 metric and recovery contracts remain the next demonstrated blockers.

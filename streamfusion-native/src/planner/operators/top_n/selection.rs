@@ -244,7 +244,7 @@ pub(super) fn emit_difference(
     sources: &[Arc<RecordBatch>],
     before: &[CandidateRef],
     after: &[CandidateRef],
-    output: &mut Vec<OutputEvent>,
+    output: &mut output_admission::OutputBuffer,
 ) -> Result<()> {
     if plan.output_rank_number || plan.rank_start > 1 {
         for index in 0..before.len().max(after.len()) {
@@ -263,24 +263,24 @@ pub(super) fn emit_difference(
                             candidate: old,
                             rank,
                             kind: UPDATE_BEFORE,
-                        });
+                        })?;
                     }
                     output.push(OutputEvent {
                         candidate: next,
                         rank,
                         kind: UPDATE_AFTER,
-                    });
+                    })?;
                 }
                 (Some(old), None) => output.push(OutputEvent {
                     candidate: old,
                     rank,
                     kind: DELETE,
-                }),
+                })?,
                 (None, Some(next)) => output.push(OutputEvent {
                     candidate: next,
                     rank,
                     kind: INSERT,
-                }),
+                })?,
                 (None, None) => unreachable!(),
             }
         }
@@ -307,24 +307,24 @@ pub(super) fn emit_difference(
                         candidate: old,
                         rank: 0,
                         kind: UPDATE_BEFORE,
-                    });
+                    })?;
                 }
                 output.push(OutputEvent {
                     candidate: next,
                     rank: 0,
                     kind: UPDATE_AFTER,
-                });
+                })?;
             }
             (None, Some(next)) => output.push(OutputEvent {
                 candidate: next,
                 rank: 0,
                 kind: INSERT,
-            }),
+            })?,
             (Some(old), None) => output.push(OutputEvent {
                 candidate: old,
                 rank: 0,
                 kind: DELETE,
-            }),
+            })?,
             (None, None) => {}
         }
         return Ok(());
@@ -335,7 +335,7 @@ pub(super) fn emit_difference(
                 candidate: *old,
                 rank: 0,
                 kind: DELETE,
-            }),
+            })?,
             // Append/retract strategies keep the exact candidate reference for an unchanged
             // row. Short-circuit that identity before value equality: SQL floating equality
             // deliberately treats NaN differently from the sort comparator, but an untouched
@@ -355,13 +355,13 @@ pub(super) fn emit_difference(
                         candidate: *old,
                         rank: 0,
                         kind: UPDATE_BEFORE,
-                    });
+                    })?;
                 }
                 output.push(OutputEvent {
                     candidate: *next,
                     rank: 0,
                     kind: UPDATE_AFTER,
-                });
+                })?;
             }
             Some(_) => {}
         }
@@ -372,7 +372,7 @@ pub(super) fn emit_difference(
                 candidate: *next,
                 rank: 0,
                 kind: INSERT,
-            });
+            })?;
         }
     }
     Ok(())

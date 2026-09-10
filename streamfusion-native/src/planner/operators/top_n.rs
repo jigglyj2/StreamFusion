@@ -7,6 +7,7 @@ pub(crate) mod compare;
 mod datafusion_append;
 mod datafusion_top_one;
 pub(crate) mod execution_plan;
+mod output_admission;
 mod planning;
 mod selection;
 mod state;

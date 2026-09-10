@@ -102,6 +102,15 @@ complete changelog bytes with Flink's `AppendOnlyTopNFunction` across four rank 
 backends and batch sizes 1/7/64, with nullable composite ordering, cutoff ties, offsets and
 optional rank/update-before output.
 
+This constant-range DataFusion path also admits growing changelog output independently of input
+size. Descriptor workspace grows in 64 KiB chunks. Before state mutations are written or Arrow
+output is gathered, it reserves the selected payload, counting each repeated historical row's
+output bytes. Row sizing is cached per distinct selected row, using the common nested/variable-
+width Arrow selection allowance. Output credit moves to the native/C Data edge without a release
+and readmission gap. Memory refusal produces an error before any backend write. Twenty-three
+focused Rust checks cover descriptor refusal, large output amplification on both backends and
+retained Arrow output ownership. Shared production admission for larger ranges remains gated.
+
 Generated Flink FastTop1Function comparisons cover complete per-arrival changelog bytes, nullable
 partition/sort keys, mixed sort directions, timestamp endpoints, distinct payloads at tied keys,
 optional rank output and multiple Arrow batch sizes on both backends.

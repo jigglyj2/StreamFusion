@@ -246,7 +246,11 @@ impl TopNProcessor {
         } else {
             None
         };
-        let mut output = Vec::new();
+        let mut output = output_admission::OutputBuffer::new(
+            &sources,
+            &self.scratch_reservation,
+            append_selection.is_some(),
+        )?;
         let mut triggering_rows = Vec::new();
         let append_limit_end = is_append_limit(&self.plan)
             .then(|| usize::try_from(self.plan.rank_end.unwrap()).unwrap_or(usize::MAX));
@@ -273,7 +277,7 @@ impl TopNProcessor {
                             candidate,
                             rank: rank as i64,
                             kind: INSERT,
-                        });
+                        })?;
                     }
                 }
                 continue;
@@ -423,6 +427,8 @@ impl TopNProcessor {
                 .first()
                 .is_some_and(|group| group.next_sequence >= self.plan.rank_end.unwrap());
 
+        // Admit actual repeated payloads before materializing Arrow or committing dirty state.
+        output.reserve_payload(&sources)?;
         let (mutations, touched_group_count) = self.state_mutations(
             &sources,
             groups,
@@ -438,11 +444,18 @@ impl TopNProcessor {
             self.state_write_batches = self.state_write_batches.saturating_add(1);
         }
         self.saturated_append_limit = saturates_append_limit;
-        let output = output_batch(&self.plan, &self.output_schema, &sources, output)?;
-        if self.native_schema.is_some() {
-            execution_plan::with_envelope(output, &batch, &triggering_rows)
+        let (events, mut output_memory) = output.into_parts();
+        let output = output_batch(&self.plan, &self.output_schema, &sources, events)?;
+        let output = if self.native_schema.is_some() {
+            execution_plan::with_envelope(output, &batch, &triggering_rows)?
         } else {
-            Ok(output)
+            output
+        };
+        if let Some(memory) = &mut output_memory {
+            // Preserve the existing credit until the outer C Data/native edge takes ownership.
+            self.scratch_reservation
+                .grow_from(memory, output.get_array_memory_size())?;
         }
+        Ok(output)
     }
 }
