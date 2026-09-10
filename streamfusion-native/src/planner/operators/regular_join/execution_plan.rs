@@ -22,6 +22,10 @@ use super::RegularJoinProcessor;
 use crate::planner::persistent::PersistentOperatorFactory;
 use crate::proto;
 
+// Bound the number of equality keys whose decoded history and dirty encodings coexist.
+// These are internal zero-copy Arrow batches, not additional Flink/JNI input events.
+const STATE_BATCH_ROWS: usize = 1024;
+
 pub(crate) struct RegularJoinFactory(pub(crate) Arc<Mutex<RegularJoinProcessor>>);
 impl PersistentOperatorFactory for RegularJoinFactory {
     fn supports_owned_envelope(&self) -> bool {
@@ -161,6 +165,7 @@ impl ExecutionPlan for RegularJoinExec {
             inputs: Vec::new(),
             side: 0,
             processing_input: false,
+            pending_input: None,
             complete: false,
             terminal: false,
         };
@@ -179,6 +184,7 @@ struct JoinPlanStream {
     inputs: Vec<SendableRecordBatchStream>,
     side: usize,
     processing_input: bool,
+    pending_input: Option<(RecordBatch, usize)>,
     complete: bool,
     terminal: bool,
 }
@@ -199,6 +205,20 @@ impl JoinPlanStream {
                 }
                 self.processing_input = false;
             }
+            if let Some((batch, offset)) = self.pending_input.take() {
+                let rows = batch.num_rows().min(STATE_BATCH_ROWS);
+                let slice = batch.slice(0, rows);
+                if rows < batch.num_rows() {
+                    self.pending_input =
+                        Some((batch.slice(rows, batch.num_rows() - rows), offset + rows));
+                }
+                self.processor
+                    .lock()
+                    .map_err(|_| poisoned())?
+                    .begin_region_input(self.side, slice, offset)?;
+                self.processing_input = true;
+                continue;
+            }
             if self.side == self.inputs.len() {
                 self.complete = true;
                 self.processor
@@ -213,11 +233,7 @@ impl JoinPlanStream {
                 Poll::Ready(Some(Err(error))) => return Poll::Ready(Err(error)),
                 Poll::Ready(Some(Ok(batch))) if batch.num_rows() == 0 => {}
                 Poll::Ready(Some(Ok(batch))) => {
-                    self.processor
-                        .lock()
-                        .map_err(|_| poisoned())?
-                        .begin_region_input(self.side, batch)?;
-                    self.processing_input = true;
+                    self.pending_input = Some((batch, 0));
                 }
             }
         }

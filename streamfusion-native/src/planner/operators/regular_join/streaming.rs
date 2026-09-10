@@ -13,6 +13,7 @@ pub(super) struct StreamingCursor {
     staged: Vec<StagedState>,
     indices: Vec<usize>,
     row: usize,
+    input_offset: usize,
     change: Option<ChangeCursor>,
     matches: Option<CandidateMatches>,
     candidate_batch: CandidateBatch,
@@ -31,20 +32,30 @@ impl RegularJoinProcessor {
     #[cfg(test)]
     pub(crate) fn begin_streaming_batch(&mut self, side: usize, batch: RecordBatch) -> Result<()> {
         self.require_idle_stream()?;
-        self.begin_streaming_batch_impl(side, batch)
+        self.begin_streaming_batch_impl(side, batch, 0)
     }
 
-    pub(super) fn begin_region_input(&mut self, side: usize, batch: RecordBatch) -> Result<()> {
+    pub(super) fn begin_region_input(
+        &mut self,
+        side: usize,
+        batch: RecordBatch,
+        input_offset: usize,
+    ) -> Result<()> {
         if !self.streaming_region_active || self.streaming_failed || self.streaming_cursor.is_some()
         {
             return Err(DataFusionError::Execution(
                 "regular join region input is not idle".into(),
             ));
         }
-        self.begin_streaming_batch_impl(side, batch)
+        self.begin_streaming_batch_impl(side, batch, input_offset)
     }
 
-    fn begin_streaming_batch_impl(&mut self, side: usize, batch: RecordBatch) -> Result<()> {
+    fn begin_streaming_batch_impl(
+        &mut self,
+        side: usize,
+        batch: RecordBatch,
+        input_offset: usize,
+    ) -> Result<()> {
         if side > 1 || self.plan.bounded_final_output {
             return Err(DataFusionError::Execution(
                 "invalid streaming regular join input".into(),
@@ -88,6 +99,7 @@ impl RegularJoinProcessor {
             staged,
             indices,
             row: 0,
+            input_offset,
             change: None,
             matches: None,
             candidate_batch: CandidateBatch::default(),
@@ -232,7 +244,7 @@ impl RegularJoinProcessor {
                         kind,
                         accumulate,
                         Arc::from(input),
-                        i32::try_from(cursor.row).map_err(|_| {
+                        i32::try_from(cursor.input_offset + cursor.row).map_err(|_| {
                             DataFusionError::Execution(
                                 "regular join input exceeds Int32 ordinals".into(),
                             )

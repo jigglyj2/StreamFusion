@@ -315,3 +315,5 @@ fn persistent_region_rejects_invalid_identities_and_missing_or_misdirected_ports
         assert_eq!(broker.reserved(), 0);
     }
 }
+
+mod slicing;

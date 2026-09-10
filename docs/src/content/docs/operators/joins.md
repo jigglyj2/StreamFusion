@@ -178,6 +178,19 @@ masks and a 50,003-candidate hot key: measured temporary allocation peaks fit th
 workspace, budget denial releases credit, and broker calls follow chunks rather than rows.
 These tests support production admission for the bounded residual-comparison subset above.
 
+The streaming regular-join execution plan consumes at most 1,024 input rows per state-work batch.
+It slices the upstream Arrow batch without copying payloads, loads all touched state keys at the
+start of each slice, and writes dirty entries together when that slice drains. This bounds the
+number of keys whose decoded history and mutation encodings coexist. It adds no JNI crossings
+and preserves original input-row origins, per-record changelog order and logical stage metrics.
+The full input invocation must reach EOF before checkpoints or another input are accepted;
+cancellation between slices still requires recovery. Repeated keys in separate slices incur
+additional batched state access, so this trades some batching efficiency for lower staging peaks.
+It does not bound retained join state or the history of one hot key; those still must fit Flink's
+allowance. A native regression accepts and retracts a sliced 16,387-key input within a 10 MiB
+state/workspace allowance, verifies ordered output and canonical state against an unsplit reference,
+and confirms that the original whole-input workspace request exceeds that allowance.
+
 Residual evaluation now also batches candidate pairs across consecutive incoming rows. A cache
 holds at most 4,096 candidate pairs and 4,096 input descriptors, with an additional 8 MiB
 coarse workspace limit for wide payloads. It uses one reservation for
@@ -194,14 +207,14 @@ successful path does not add a budget query.
 Generated wide-payload Flink tests compare all changelog transitions and registered metrics on
 both backends; native tests cover cross-row chunks, hot keys, and oversized-pair admission.
 The state transitions still consume these masks in original input order, including outer/semi/anti
-association counts in retained implementations. State writes and output draining retain their
-existing state batch boundaries, and the persisted format is unchanged. If predicate or output
+association counts in retained implementations. State writes occur at the state-work batch boundaries described above; output-only pulls do not
+add state reads or writes, and the persisted format is unchanged. If predicate or output
 admission is denied while an output prefix is ready, the stream emits that admitted prefix and
 resumes its cursor on the next pull. An empty output halves its fan-out target down to two slots,
 keeping a null-padding retraction adjacent to its joined row. These smaller Arrow outputs add no
 state reads/writes or native-plan invocations. If the minimum transition cannot fit, execution
 still fails recoverably. Generated wide-payload metric/changelog tests and native pressure tests
-cover these continuations, including exact persisted state and one write per input batch.
+cover these continuations, including exact persisted state and one write per state-work batch.
 
 The Q4 release profiles before this change attributed about 6–7% of process CPU samples to JVM
 memory reservation callbacks. A native regression test reproduced 4,119 budget callbacks for
