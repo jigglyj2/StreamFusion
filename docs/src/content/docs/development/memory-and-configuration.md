@@ -62,7 +62,8 @@ No separate StreamFusion memory budget or admission bypass is supported.
 
 Native operators in the same Flink slot and job share one OPERATOR reservation pool. Flink
 resolves its ceiling from the slot's managed-memory size, active use cases, state-backend flag
-and configured consumer weights. An individual native operator may use free capacity beyond
+and configured consumer weights. This adapts Comet's shared execution-memory model to Flink's
+slot-owned MemoryManager. An individual native operator may use free capacity beyond
 its relative operator-weight share; admission checks the aggregate pool and Flink's actual
 remaining memory. This replaces the former private native-operator ceilings. It does not
 combine memory across slots or jobs, or borrow from the STATE_BACKEND/PYTHON portions.

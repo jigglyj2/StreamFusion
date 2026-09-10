@@ -11,7 +11,8 @@ At 250,000 events, the combined six-fork median input throughput is 23.4% below 
 and 3.11 times Flink on RocksDB. The RocksDB advantage does not repeat across measurement sets:
 the first three-pair set gives 3.62×, the second 0.95×. Both sets and every fork are retained below.
 These short end-to-end runs show substantial variation and establish no reliable general or
-steady-state speedup. The one-million-event in-memory attempt still fails on state capacity.
+steady-state speedup. The September 8 one-million-event in-memory attempt fails on state capacity;
+the later shared-memory capacity check below completes that size.
 Separate 500,000-event CPU profiles complete on both backends; their timings are excluded below.
 
 The September 10 admission recheck passes eight `NexmarkQ9ProductionIT` cases explicitly covering
@@ -20,6 +21,51 @@ parallelism one/four. Each case compares final collected bytes at 10,000 events 
 checks positive unmodified-blackhole output and native activity. Shared-plan execution retains
 zero standalone Top-N invocations. These are integration checks, not new performance results;
 the measurements and capacity failures below remain tied to their September 8 release.
+
+## September 10 shared-memory capacity check
+
+Release `ee008d54c3de84a9e83278e9d9fa73998ad66426` replaces private native-operator ceilings
+with the slot's shared OPERATOR pool. Q9 now completes one million events through the unmodified
+blackhole sink on both backends. The immediately preceding `f5d707c9` in-memory attempt failed
+state-mutation admission, requesting 694,848 bytes with 522,756 available. Both releases use
+the default disabled multi-join optimizer, parallelism four, UTC, disabled mini-batching,
+one-second exactly-once checkpoints, a 1 GiB JVM heap, 1 GiB managed memory, 2 GiB maximum JVM
+direct memory and weights `OPERATOR:70,STATE_BACKEND:70,PYTHON:30`. No budget was increased.
+
+Each new blackhole capacity case has one fresh JVM per engine. These are completion checks,
+not a throughput comparison; their times and single-fork ratios are not benchmark results.
+StreamFusion emits 159,713 changelog records in each case, with native-plan / Calc counts
+2,282/330 in memory and 2,230/322 on RocksDB. Flink emits 159,751 and 159,518 respectively;
+intermediate winner transitions depend on input interleaving. All native jobs report acceleration.
+
+The first million-event in-memory collecting pair completes with 59,959 final rows each, but
+its strict final-output hash comparison fails. Three diagnostic reruns (Flink, StreamFusion,
+Flink) establish that two unmodified Flink jobs themselves choose different final payloads:
+only auction `23839` differs, at price `880617` and bid timestamp `2020-09-13T12:26:40`.
+All ordering fields and the other 59,958 rows agree. The tied bids' extra strings have lengths
+64 and 74; Q9 supplies no further tie-breaker. StreamFusion matches the first diagnostic Flink
+result completely. This is not evidence that every independently scheduled final result set
+must hash identically, and the original failed comparison is retained.
+
+The two observed in-memory final hashes are
+`06b9b0afc81bff8511412175323867b896e2d3085b4262d45eb2a4014fef4ad6` and
+`7df0c691a1b09657a9ee0f3eade18d04af4293b06e97403eb52431906db364f5`.
+Fixed-arrival operator tests compare every transition, including exact ordering-key ties with
+distinct payloads. The query and generator are unchanged; no additional tie-breaker or relaxed
+production comparator is introduced. This check establishes removal of the demonstrated memory
+admission failure, not lower physical memory consumption or completion of Q9 performance work.
+
+The separate million-event RocksDB collecting pair matches all 59,959 materialized rows and
+the `06b9b0af...` hash above exactly. Eight focused Top-1 conformance cases also pass, comparing
+the complete byte-level changelog for identical arrival order across both backends and multiple
+batch sizes, including distinct payloads tied on every ordering field. The shared-memory change
+passes 121 other selected memory, join parity, metric, original-buffer-geometry, recovery and
+Q5/Q8/Q9 production-integration checks.
+
+Evidence remains under `streamfusion-nexmark-benchmarks/target/measurements/q9-default/ee008d54/`,
+including blackhole metadata/logs, the original `collecting-validation-1000000.json`, diagnostic
+row dumps, `collecting-rocksdb-validation-1000000.json` and `winning-bid-differences.json`.
+The previous `f5d707c9/` failure remains separate.
 
 ## Measurements, September 8, 2026
 

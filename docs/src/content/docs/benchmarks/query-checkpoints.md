@@ -62,9 +62,13 @@ are complete; the performance gap remains explicit, and Q9 is the next numbered 
 
 Q9's current admission recheck passes eight production integration cases under both optimizer
 settings, both backends and parallelism one/four. They compare final collected bytes and verify
-positive blackhole output and native activity. Its larger-capacity/performance revalidation is
-next; the [older Q9 results](/StreamFusion/benchmarks/q9-rowdata/) retain their original release
-and settings.
+positive blackhole output and native activity. Shared OPERATOR memory at `ee008d54` subsequently
+allows its formerly failing million-event in-memory blackhole case to complete; RocksDB completes
+too, without increasing configured memory. These single-fork capacity checks are not performance
+results. The larger in-memory collecting comparison exposes one tied winner whose payload also
+differs between repeated unmodified Flink jobs. The [Q9 report](/StreamFusion/benchmarks/q9-rowdata/)
+retains that failed hash comparison and the diagnostic evidence; older performance results keep
+their original release and settings.
 
 Eight Q6 planning cases cover both engines, both backends and both optimizer settings: Flink
 still rejects bounded non-time OVER. Q14's previously verified original Java UDF retains
