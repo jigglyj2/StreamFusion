@@ -20,7 +20,7 @@ final class StreamFusionSharedNativeRegion {
     private final byte[] plan;
     private final java.lang.reflect.Method translation;
     private final List<Long> stateIds;
-    private final java.util.Map<Long, tech.streamfusion.flink.arrow.CsvLookupSnapshotSource> lookupSources =
+    private final java.util.Map<Long, tech.streamfusion.flink.arrow.ArrowLookupSnapshotSource> lookupSources =
             new java.util.LinkedHashMap<>();
     private final StreamFusionOriginalWindowResources resources;
     private List<Transformation<RowData>> outputs;

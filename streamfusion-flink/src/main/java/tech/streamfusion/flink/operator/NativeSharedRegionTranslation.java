@@ -52,7 +52,7 @@ public final class NativeSharedRegionTranslation {
             List<Long> stateIds,
             StreamExecutionEnvironment environment,
             Function<List<Transformation<?>>, Map<Long, FlinkOperatorMemoryShare>> resolver,
-            Map<Long, tech.streamfusion.flink.arrow.CsvLookupSnapshotSource> sources) {
+            Map<Long, tech.streamfusion.flink.arrow.ArrowLookupSnapshotSource> sources) {
         var lookupSources = new tech.streamfusion.flink.join.NativeLookupSources(sources);
         var plan = decode(bytes);
         NativeSharedRegionOutputs.validate(plan, outputTypes.size());

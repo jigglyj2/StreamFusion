@@ -7,14 +7,14 @@ import org.apache.arrow.vector.VectorUnloader;
 import org.apache.arrow.vector.ipc.ArrowReader;
 import org.apache.arrow.vector.types.pojo.Schema;
 
-/** Arrow C Stream reader over the existing Flink CSV source boundary. */
-final class CsvLookupSnapshotReader extends ArrowReader {
-    private final CsvLookupSnapshotSource.Cursor cursor;
+/** Arrow C Stream reader over a finite connector snapshot boundary. */
+final class ArrowLookupSnapshotReader extends ArrowReader {
+    private final ArrowLookupSnapshotSource.Cursor cursor;
     private final Schema schema;
     private boolean closed;
 
-    CsvLookupSnapshotReader(
-            CsvLookupSnapshotSource source, BufferAllocator allocator, ClassLoader loader, int batchRows)
+    ArrowLookupSnapshotReader(
+            ArrowLookupSnapshotSource source, BufferAllocator allocator, ClassLoader loader, int batchRows)
             throws Exception {
         super(allocator);
         schema = ArrowUtils.toArrowSchema(source.rowType());
@@ -23,7 +23,7 @@ final class CsvLookupSnapshotReader extends ArrowReader {
 
     @Override
     public boolean loadNextBatch() throws IOException {
-        if (closed) throw new IOException("CSV snapshot reader is closed");
+        if (closed) throw new IOException("Lookup snapshot reader is closed");
         prepareLoadNextBatch();
         try (ArrowRowDataBatch batch = cursor.nextBatch()) {
             if (batch == null) return false;

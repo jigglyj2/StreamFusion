@@ -20,7 +20,7 @@ public final class ArrowLookupSnapshotBindings {
             byte[] state,
             byte[] task,
             boolean region,
-            Map<Long, CsvLookupSnapshotSource> sources,
+            Map<Long, ArrowLookupSnapshotSource> sources,
             BufferAllocator allocator,
             ClassLoader loader,
             int batchRows)
@@ -34,8 +34,8 @@ public final class ArrowLookupSnapshotBindings {
             for (var source : sources.entrySet()) {
                 ArrowArrayStream stream = ArrowArrayStream.allocateNew(allocator);
                 owned.streams.add(stream);
-                CsvLookupSnapshotReader reader =
-                        new CsvLookupSnapshotReader(source.getValue(), allocator, loader, batchRows);
+                ArrowLookupSnapshotReader reader =
+                        new ArrowLookupSnapshotReader(source.getValue(), allocator, loader, batchRows);
                 try {
                     Data.exportArrayStream(allocator, reader, stream);
                 } catch (RuntimeException | Error failure) {

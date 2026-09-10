@@ -17,7 +17,7 @@ interface StreamFusionNativePlanNode extends ExecNode<RowData> {
     byte[] nativePlanFragment(PlannerBase planner);
 
     /** Task-open immutable source, carried separately from the portable plan. */
-    default tech.streamfusion.flink.arrow.CsvLookupSnapshotSource lookupSource() {
+    default tech.streamfusion.flink.arrow.ArrowLookupSnapshotSource lookupSource() {
         return null;
     }
 

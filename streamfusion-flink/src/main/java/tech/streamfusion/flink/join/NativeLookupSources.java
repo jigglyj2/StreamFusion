@@ -7,7 +7,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import org.apache.arrow.memory.BufferAllocator;
 import tech.streamfusion.flink.arrow.ArrowLookupSnapshotBindings;
-import tech.streamfusion.flink.arrow.CsvLookupSnapshotSource;
+import tech.streamfusion.flink.arrow.ArrowLookupSnapshotSource;
 import tech.streamfusion.flink.proto.NativePhysicalPlan;
 import tech.streamfusion.nativebridge.NativeExecutionContext;
 import tech.streamfusion.nativebridge.NativeMemoryManager;
@@ -19,9 +19,9 @@ import tech.streamfusion.proto.plan.v1.Operator;
 public final class NativeLookupSources implements Serializable {
     private static final long serialVersionUID = 1L;
     public static final NativeLookupSources NONE = new NativeLookupSources(Map.of());
-    private final Map<Long, CsvLookupSnapshotSource> sources;
+    private final Map<Long, ArrowLookupSnapshotSource> sources;
 
-    public NativeLookupSources(Map<Long, CsvLookupSnapshotSource> sources) {
+    public NativeLookupSources(Map<Long, ? extends ArrowLookupSnapshotSource> sources) {
         this.sources = java.util.Collections.unmodifiableMap(new LinkedHashMap<>(sources));
         if (sources.entrySet().stream()
                 .anyMatch(entry -> entry.getKey() == null || entry.getKey() <= 0 || entry.getValue() == null))

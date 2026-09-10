@@ -63,7 +63,7 @@ public final class StreamFusionNativeRegionTranslator {
                             List<Transformation<?>>,
                             java.util.Map<Long, tech.streamfusion.flink.memory.FlinkOperatorMemoryShare>>
                     resolver,
-            java.util.Map<Long, tech.streamfusion.flink.arrow.CsvLookupSnapshotSource> sources) {
+            java.util.Map<Long, tech.streamfusion.flink.arrow.ArrowLookupSnapshotSource> sources) {
         var lookupSources = new tech.streamfusion.flink.join.NativeLookupSources(sources);
         if (inputs.isEmpty() || inputs.size() != inputTypes.size()) {
             throw new IllegalArgumentException("Native region external inputs and types must have matching arity");

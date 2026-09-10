@@ -70,7 +70,7 @@ final class StreamFusionStatelessRegion {
             List<byte[]> plans = new ArrayList<>();
             List<Long> stateIds = new ArrayList<>();
             var lookupSources =
-                    new java.util.LinkedHashMap<Long, tech.streamfusion.flink.arrow.CsvLookupSnapshotSource>();
+                    new java.util.LinkedHashMap<Long, tech.streamfusion.flink.arrow.ArrowLookupSnapshotSource>();
             StreamFusionOriginalWindowResources resources = null;
             for (ExecNode<?> stage : stages) {
                 var nativeStage = (StreamFusionNativePlanNode) stage;
@@ -121,7 +121,7 @@ final class StreamFusionStatelessRegion {
             List<byte[]> fragments,
             List<Long> stateIds,
             StreamFusionOriginalWindowResources resources,
-            java.util.Map<Long, tech.streamfusion.flink.arrow.CsvLookupSnapshotSource> lookupSources)
+            java.util.Map<Long, tech.streamfusion.flink.arrow.ArrowLookupSnapshotSource> lookupSources)
             throws ReflectiveOperationException {
         var inputPlan = runtime.getMethod("inputPlan", int.class);
         var compose = runtime.getMethod("composeWithInputs", byte[].class, List.class);
