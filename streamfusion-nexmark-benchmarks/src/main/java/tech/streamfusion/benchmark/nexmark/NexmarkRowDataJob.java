@@ -35,15 +35,12 @@ public final class NexmarkRowDataJob {
                 TaskManagerOptions.MANAGED_MEMORY_SIZE,
                 MemorySize.ofMebiBytes(
                         Long.getLong("streamfusion.nexmark.managed-memory-mb", MANAGED_MEMORY_MEBIBYTES)));
-        // These Arrow-heavy jobs need more scratch/output memory than Flink's default 50/50
-        // split, while their one-million-event RocksDB working set needs far less than half a
-        // GiB of cache. This is Flink's standard consumer-weight setting and is identical for
-        // both engines.
-        configuration.setString(
-                TaskManagerOptions.MANAGED_MEMORY_CONSUMER_WEIGHTS.key(),
-                System.getProperty(
-                        TaskManagerOptions.MANAGED_MEMORY_CONSUMER_WEIGHTS.key(),
-                        "OPERATOR:90,STATE_BACKEND:10,PYTHON:30"));
+        // Preserve Flink's configured/default weights unless this measurement explicitly
+        // supplies the standard Flink setting. Do not tune the default to a workload size.
+        String weights = System.getProperty(TaskManagerOptions.MANAGED_MEMORY_CONSUMER_WEIGHTS.key());
+        if (weights != null) {
+            configuration.setString(TaskManagerOptions.MANAGED_MEMORY_CONSUMER_WEIGHTS.key(), weights);
+        }
     }
 
     private NexmarkRowDataJob() {}

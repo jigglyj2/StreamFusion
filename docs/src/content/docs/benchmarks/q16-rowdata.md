@@ -73,8 +73,23 @@ The evidence is retained in `rocksdb/profiles-20000000-weights-50-50/` under the
 This exposed a later-than-needed workspace lifetime: emptied membership lookup tables and
 finished-computation credit survived while Arrow output was allocated. The phase-retirement
 change described in [group aggregation](/StreamFusion/operators/group-aggregation/) is a tested
-prerequisite; its release comparison and a repeated default-ratio diagnostic remain pending.
-The benchmark default has not been changed to make this failed case pass.
+prerequisite. Repeating the same 20M equal-weight profile at release commit
+`3d7317704cbe74d5d0a3bab10925892d3b43025c` completed on both engines, each emitting 18.4M
+blackhole records. StreamFusion reported 7,482 native plan batches and 2,528 native Calc batches.
+The retained artifacts are under
+`streamfusion-nexmark-benchmarks/target/measurements/q16/3d731770/rocksdb/profiles-20000000-weights-50-50/`.
+
+This establishes completion at the default operator/state ratio, not a throughput improvement.
+Across 48,275 Flink and 73,117 StreamFusion CPU samples, inclusive RocksDB shares were 65.823%
+and 75.623%. StreamFusion index-reader and decompression frames remained at 49.949% and 52.324%
+(overlapping categories), so the larger cache share did not eliminate that bottleneck. Scalar
+array conversion fell to 0.003% after the separate scalar-retention change; these profiles do not
+isolate a causal throughput gain from that change. No profiled elapsed time is used as a result.
+
+The harness now preserves Flink's configured/default weights instead of automatically imposing
+90/10. Explicit measurement overrides remain available through the standard Flink setting.
+The unprofiled results above remain the original 90/10 baseline; measurements of the corrected
+release under the default weights are pending.
 
 ## Acceleration and output evidence
 

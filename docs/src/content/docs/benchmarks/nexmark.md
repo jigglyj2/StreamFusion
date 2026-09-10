@@ -372,13 +372,14 @@ scratch, exported Arrow, RocksDB cache, and write-buffer allocations remain admi
 operator's existing Flink managed-memory reservation. These are local diagnostic results, not
 portable performance claims.
 
-The RowData harness uses 1,024 MiB of Flink managed memory by default and sets Flink's standard
-managed-memory consumer weights to `OPERATOR:90,STATE_BACKEND:10,PYTHON:30` for both engines. The
-bounded workloads have small RocksDB working sets but retain multiple Arrow batches and native
-operator scratch buffers, so the default Flink 50/50 split between the two active consumers is not
-representative. Pass the ordinary
-`-Dtaskmanager.memory.managed.consumer-weights=OPERATOR:...,STATE_BACKEND:...,PYTHON:...` property to
-override the harness choice; StreamFusion does not introduce a separate deployment memory budget.
+The RowData harness uses 1,024 MiB of Flink managed memory by default and preserves Flink's
+configured/default managed-memory consumer weights. Flink 2.3 defaults to
+`OPERATOR:70,STATE_BACKEND:70,PYTHON:30`; only consumer kinds present in a slot share its budget.
+Earlier reports used an explicit `OPERATOR:90,STATE_BACKEND:10,PYTHON:30` harness default;
+their historical measurements retain that setting. New reports record the weights actually used.
+An explicit measurement may pass the ordinary
+`-Dtaskmanager.memory.managed.consumer-weights=OPERATOR:...,STATE_BACKEND:...,PYTHON:...` property
+for both engines. StreamFusion does not introduce a separate deployment memory budget.
 
 On the September 4, 2026 one-million-event `incremental-group-aggregate` run for commits `00d5bfe`
 and `c946c63`, three alternating fresh-JVM forks at parallelism one measured 94.6% in-memory
