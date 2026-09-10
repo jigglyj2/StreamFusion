@@ -183,6 +183,46 @@ async fn splitting_the_right_window_changes_flink_emission_order() {
 }
 
 #[tokio::test]
+async fn sequential_left_pages_preserve_flink_order_with_a_complete_right_window() {
+    // A closed window need not decode every left payload at once. Keep the complete
+    // right input so DF never interleaves different left rows across right pages.
+    // This probes the compute contract only; bounded state reads, pending deletes,
+    // output leases and cancellation still belong to the production close adapter.
+    for seed in 0..3 {
+        let left = (0..301)
+            .map(|i| (i % 13 != 0).then_some((i * 7 + seed) % 19 - 9))
+            .collect::<Vec<_>>();
+        let right = (0..257)
+            .map(|i| (i % 11 != 0).then_some((i * 3 + seed) % 17 - 8))
+            .collect::<Vec<_>>();
+        for page_size in [1, 32, 256] {
+            let (context, broker) = context(64);
+            let right_batch = batch(&right, 0);
+            let mut actual = Vec::new();
+            for (page, values) in left.chunks(page_size).enumerate() {
+                let plan = join(
+                    vec![batch(values, page * page_size)],
+                    vec![right_batch.clone()],
+                    true,
+                );
+                let mut stream = plan.execute(0, context.task_ctx()).unwrap();
+                while let Some(batch) = stream.next().await {
+                    actual.extend(identities(&batch.unwrap()));
+                }
+                drop(stream);
+                drop(plan);
+                assert_eq!(broker.reserved(), 0);
+            }
+            assert_eq!(
+                actual,
+                expected(&left, &right),
+                "seed={seed} page_size={page_size}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn empty_and_null_only_closed_windows_emit_nothing() {
     for (left, right) in [
         (vec![], vec![Some(3)]),

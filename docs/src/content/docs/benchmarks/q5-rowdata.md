@@ -3,11 +3,11 @@ title: Q5 RowData release comparison
 description: Shared HOP window admission, release measurements, and managed-memory limits.
 ---
 
-Q5 is admitted on in-memory and default RocksDB state with the benchmark's
-`table.optimizer.multi-join.enabled=true` preset. With Flink's default `false`, the September 10
-audit instead selects `StreamExecWindowJoin` and retains whole-plan fallback. The measurements
-below establish the enabled-preset path only; default window-join integration remains unfinished.
-Its local/global
+Q5 now passes ordinary admission and collecting/blackhole integration on in-memory and default
+RocksDB state with either multi-join optimizer setting. The measurements below establish the
+historical `table.optimizer.multi-join.enabled=true` path only. The current default `false` path
+selects the shared native `StreamExecWindowJoin`; it has not completed a performance checkpoint.
+The enabled-preset plan's local/global
 HOP COUNT feeds both a binary join and an attached MAX branch. The reused aggregate has one
 native owner; its Calc and attached local MAX consume shared Arrow batches in that same native
 plan. Flink retains exchanges, resource assignment, checkpoints and recovery.
@@ -16,6 +16,35 @@ At one million input events, StreamFusion has 0.9% lower median input throughput
 10.8% higher median input throughput on RocksDB. A ten-million-event in-memory attempt fails
 when Flink denies join-state decoding workspace. This checkpoint does not establish a large-input
 capacity or steady-state performance advantage.
+
+## Default WindowJoin capacity check, September 10, 2026
+
+At code `a4dcc33d`, the original Q5 SQL passes default-optimizer planning and exact collecting-sink
+comparison, plus positive native activity and unmodified-blackhole count parity, at 20,000 events
+and parallelism one and four on both backends. Generated runtime tests additionally cover the
+complete metric surface, aligned/unaligned channel replay and rescaling. See [Window joins](/StreamFusion/operators/window-join/).
+
+The first one-million-event release measurement attempt failed in StreamFusion on both backends.
+Closed-window decoding requested **35,353,936 additional bytes**, with 4,240 bytes already held by
+that scratch consumer. Available allowance was 2,389,986 bytes in memory and 31,067,879 bytes on
+RocksDB. The matching Flink runs completed and each emitted five rows. These are capacity
+diagnostics: the planned three measured pairs did not complete, so there is **no valid median or
+speedup for the default WindowJoin path**.
+
+Both engines used the original RowData source, unmodified blackhole sink, parallelism four,
+disabled mini-batching, one-second exactly-once checkpoints, 1 GiB managed memory and consumer
+weights `OPERATOR:70,STATE_BACKEND:70,PYTHON:30`. JVM flags were `-Xms1g -Xmx1g`,
+`-XX:MaxDirectMemorySize=2g`, `-XX:ActiveProcessorCount=4`, UTC, and the Arrow `java.nio` opening.
+The clean release checkout used native CPU instructions, frame pointers and separate profiling
+symbols. Its core artifact SHA-256 was
+`1162f0fc8e239bcaa5ef6ad6cb69095ea717fc001194c33671977bdadde4151d`; RocksDB's was
+`fe1af76cd4e48dc789eca1eb720d1fdea5b67d40f465956401c39a6653f08862`.
+
+The current close adapter stages all encoded payloads and deletion keys for a window before Arrow
+decoding. Bounding that staging is the next performance task; weakening Flink's memory accounting
+or substituting the enabled multi-join plan would not resolve this default-path limit. Separate
+longer profiles and complete alternating measurements remain outstanding. Raw logs and metadata
+are retained under `streamfusion-nexmark-benchmarks/target/measurements/q5-default/a4dcc33d/`.
 
 ## Measurements, September 8, 2026
 
