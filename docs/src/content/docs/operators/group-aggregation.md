@@ -46,7 +46,9 @@ Original Q17 is also catalogued unchanged. Its auction/day grouped BIGINT COUNT,
 SUM, MIN, MAX and integer AVG use these existing DataFusion accumulators and semantic adapters.
 Original-SQL admission and collecting/blackhole parity pass at parallelism one/four on both
 backends. The common generated aggregate topology, full metrics and recovery checks also pass;
-Q17 release measurements remain pending. No additional operator subset was admitted for this query.
+[Q17 release measurements](/StreamFusion/benchmarks/q17-rowdata/) favor StreamFusion at 10M
+events on both backends and Flink at 1M. Three measured pairs and longer profiles per backend
+are retained, including the slow in-memory fork. No additional operator subset was admitted.
 
 Large incoming and historical string values remain subject to coarse batch admission. A tiny
 input batch may repeat a large retained maximum in every UPDATE_BEFORE/UPDATE_AFTER record;

@@ -697,6 +697,10 @@ restore, aligned/unaligned checkpoints, channel replay and rescaling. Nullable f
 integer overflow and truncating averages are covered by the existing generated and Flink SQL
 aggregate harnesses. See [group aggregation](/StreamFusion/operators/group-aggregation/).
 
-Release/native-CPU RowData-to-blackhole measurements and longer mixed JVM/native profiles on
-both backends remain pending. This establishes catalog/admission and correctness coverage,
-not a Q17 performance result or a completed performance checkpoint.
+The [release comparison](/StreamFusion/benchmarks/q17-rowdata/) completes this checkpoint at
+`88d4e066`. Three alternating measured pairs per case give 0.892× / 0.939× median throughput
+at 1M and 1.104× / 1.130× at 10M (hashmap / RocksDB). The 10M in-memory ranges overlap,
+including a retained slow native fork; all three 10M RocksDB pairs favor StreamFusion. Separate
+20M profiles on both backends identify source/copy and aggregate execution costs, with relatively
+small native RocksDB costs. No query-specific algorithm or additional optimization was introduced.
+This is measured local evidence, not a performance ceiling. Q18 is the next query checkpoint.

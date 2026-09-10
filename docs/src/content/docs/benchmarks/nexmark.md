@@ -78,7 +78,9 @@ Q16 now passes ordinary admission and parity checks on both backends; its
 repair, measured performance, profiles and capacity limits. It reaches 1.354× Flink's median
 throughput on 10M RocksDB events, with overlapping ranges, while 1M in-memory execution remains
 slower. Q17's unchanged auction-statistics SELECT now passes ordinary admission and
-collecting/blackhole parity on both backends; its release performance checkpoint is pending. Q10's SELECT path is now catalogued with
+collecting/blackhole parity on both backends. Its [release comparison](/StreamFusion/benchmarks/q17-rowdata/)
+reaches 1.104× / 1.130× median throughput at 10M events (hashmap / RocksDB), with overlapping
+in-memory ranges; both 1M comparisons favor Flink. Q10's SELECT path is now catalogued with
 numeric `DATE_FORMAT`; its blackhole comparison does not exercise filesystem partition commits
 or rolling policies. See the query checkpoint page for its delivery status. Q14's built-in expressions
 have parity coverage, but its original Java UDF still awaits the proposed architecture exception;

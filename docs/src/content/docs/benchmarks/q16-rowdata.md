@@ -102,12 +102,12 @@ wrappers around custom state work. Zero means no matching sample, not zero actua
 
 CPU sample counts (Flink / StreamFusion): hashmap 2694 / 3060; rocksdb 41222 / 61331.
 
-PROFILE_At 1M, all three in-memory pairs favor Flink, with disjoint timing ranges. The first native
-fork takes 7.773 seconds; the next two take 13.418 and 13.459 seconds. All are included, and
-the current CPU profile does not establish the cause of that wall-time spread. All three 1M
-RocksDB pairs favor StreamFusion, also with disjoint ranges. At 10M RocksDB, StreamFusion wins
-two pairs and Flink wins one; ranges overlap substantially. The median gain is local evidence,
-not a universal speedup or proof of a performance ceiling.
+The in-memory profile includes 8.693% native memory-backend access and 4.346% checkpoint/snapshot
+work. It does not establish why the unprofiled native forks span 7.773–13.459 seconds.
+The RocksDB profile still spends 45.126% of native-run samples in index reads and 43.784% in
+decompression. Snappy decompression/copy routines and libc are leading sampled leaves. Correcting
+the cache lease fixes ownership but does not remove these costs. This evidence does not justify
+changing upstream RocksDB/Snappy algorithms or diverging from Flink's cache settings.
 
 For RocksDB profiles only, a launcher loads the same verified native plugin through JVM
 `System.load` before benchmark main. This lets async-profiler observe a library normally loaded
