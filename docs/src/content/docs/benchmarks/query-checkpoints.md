@@ -704,3 +704,27 @@ including a retained slow native fork; all three 10M RocksDB pairs favor StreamF
 20M profiles on both backends identify source/copy and aggregate execution costs, with relatively
 small native RocksDB costs. No query-specific algorithm or additional optimization was introduced.
 This is measured local evidence, not a performance ceiling. Q18 is the next query checkpoint.
+
+
+## Q18 original last bid: admission blocker
+
+The original SQL selects the latest bid for each bidder/auction with row-time `ROW_NUMBER`
+and `rank_number <= 1`. Rechecking ordinary planning after Q17 confirms complete Flink fallback
+on both state backends. EXPLAIN identifies `StreamExecDeduplicate` and its unverified persistent
+execution contracts. The original source/blackhole job succeeds in either planner selection,
+with no native invocations; this is a fallback check, not an accelerated performance result.
+
+The retained [deduplication implementation](/StreamFusion/operators/deduplication/) already
+has generated changelog/envelope and metric coverage plus direct state restore tests. Before
+production admission, audit its computation against DataFusion, verify coarse memory ownership
+for large incoming and historical rows, and exercise the shared production runtime's checkpoint,
+channel replay and rescaling paths. Keep the gate until those contracts are demonstrated;
+then validate original-query collecting parity and release performance on both backends.
+
+The compute audit found a concrete reuse opportunity: the retained row-time path currently
+selects winners with handwritten timestamp comparisons. DataFusion's plain `ROW_NUMBER`
+evaluator alone numbers already ordered input and does not produce Flink's per-arrival updates.
+Cumulative DataFusion MIN/MAX windows, already used by the native Top-1 implementation, can
+supply the running timestamp extremum while StreamFusion retains state and changelog ownership.
+The adaptation must preserve Flink's asymmetric tie rule: keep-last replaces on equal timestamps,
+whereas keep-first requires a strictly earlier timestamp. This replacement is not implemented yet.
