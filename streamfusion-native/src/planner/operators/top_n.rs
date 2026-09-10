@@ -4,6 +4,7 @@
 mod batch;
 mod bounded;
 pub(crate) mod compare;
+mod datafusion_append;
 mod datafusion_top_one;
 pub(crate) mod execution_plan;
 mod planning;

@@ -200,12 +200,27 @@ impl TopNProcessor {
                     .collect(),
             })
             .collect::<Vec<_>>();
+        let append_selection = if datafusion_append::compatible(&self.plan, &sources) {
+            Some(datafusion_append::Selection::new(
+                &sources,
+                &groups,
+                &row_groups,
+                &self.scratch_reservation,
+            )?)
+        } else {
+            None
+        };
         if let Some(orders) = &sources.orders {
             for (i, group) in groups.iter_mut().enumerate() {
                 if values[i].as_ref().is_some_and(|v| {
                     !v.starts_with(crate::planner::operators::sortable_state::FORMAT)
                 }) {
                     // Old snapshots predate independent descending null placement.
+                    if let Some(selection) = &append_selection {
+                        let count = group.candidates.len();
+                        selection.retain(&mut group.candidates, count)?;
+                        continue;
+                    }
                     group.candidates.sort_by(|a, b| {
                         orders[a.source]
                             .row(a.row)
@@ -302,6 +317,12 @@ impl TopNProcessor {
                             group.candidates.clear();
                             group.candidates.push(candidate);
                         }
+                    } else if let Some(selection) = &append_selection {
+                        selection.insert(
+                            &mut group.candidates,
+                            candidate,
+                            usize::try_from(rank_end.max(0)).unwrap_or(usize::MAX),
+                        )?;
                     } else {
                         insert_sorted(
                             &self.plan,

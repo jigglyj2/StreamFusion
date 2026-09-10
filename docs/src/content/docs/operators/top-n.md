@@ -87,6 +87,21 @@ later row. A 64 KiB winner followed by 4,095 arrivals stays below 4 MiB of obser
 in a constrained-memory regression. Other ranges, retract/update strategies, bounded-final modes
 and comparator-incompatible types keep their existing implementations and planner gates.
 
+The retained constant-range append-only `ROW_NUMBER` path for ranges ending above one now
+also delegates selection to DataFusion. One batch sort orders Arrow-encoded keys with persisted
+arrival sequences and assigns fixed-width priorities. Each arrival uses DataFusion's bounded
+sort over the retained candidate priorities, then the existing Flink adapter emits that arrival's
+rank/changelog changes. Payloads and wide order keys stay outside those repeated sorts. A coarse
+reservation covers the batch priority tables and per-arrival sort workspace for their full lifetime.
+Legacy candidate order migration uses the same DataFusion ordering for this subset; persisted
+state encodings and ordered candidate entries are unchanged. This is a compute prerequisite:
+larger ranges still fall back in production until shared runtime, output-memory, metric and
+recovery admission is verified. Twenty focused Rust checks pass, including per-prefix order,
+wide retained keys, memory refusal and old-state migration. Eight generated Java cases compare
+complete changelog bytes with Flink's `AppendOnlyTopNFunction` across four rank ranges, both
+backends and batch sizes 1/7/64, with nullable composite ordering, cutoff ties, offsets and
+optional rank/update-before output.
+
 Generated Flink FastTop1Function comparisons cover complete per-arrival changelog bytes, nullable
 partition/sort keys, mixed sort directions, timestamp endpoints, distinct payloads at tied keys,
 optional rank output and multiple Arrow batch sizes on both backends.

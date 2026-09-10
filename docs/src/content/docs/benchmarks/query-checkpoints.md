@@ -754,5 +754,11 @@ verified only for append-only `ROW_NUMBER` range `[1,1]`, whereas Q19 requires `
 `NexmarkQ19PlanningIT` checks the unchanged SELECT and runs the original SQL/blackhole plan with
 StreamFusion selected and unselected on both backends, requiring the precise fallback reason
 and zero native activity. This is a fallback baseline, not accelerated Q19 coverage or a
-performance result. Larger-range DataFusion computation and the shared runtime's memory,
+performance result.
+
+The retained append-only constant-range computation now uses DataFusion batch ordering and
+per-arrival bounded selection over fixed-width priorities. Twenty Rust checks and generated
+comparisons against Flink's `AppendOnlyTopNFunction` verify this compute prerequisite, including
+complete changelog bytes across ranges `[1,2]`, `[1,10]`, `[2,5]` and `[1,64]`, both backends and
+three Arrow batch sizes. This does not unlock Q19 yet: the shared runtime, large-output memory,
 metric and recovery contracts remain the next demonstrated blockers.
