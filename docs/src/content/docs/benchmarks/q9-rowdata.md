@@ -14,6 +14,13 @@ These short end-to-end runs show substantial variation and establish no reliable
 steady-state speedup. The one-million-event in-memory attempt still fails on state capacity.
 Separate 500,000-event CPU profiles complete on both backends; their timings are excluded below.
 
+The September 10 admission recheck passes eight `NexmarkQ9ProductionIT` cases explicitly covering
+Flink's default disabled multi-join optimizer and the enabled preset, both backends and
+parallelism one/four. Each case compares final collected bytes at 10,000 events and separately
+checks positive unmodified-blackhole output and native activity. Shared-plan execution retains
+zero standalone Top-N invocations. These are integration checks, not new performance results;
+the measurements and capacity failures below remain tied to their September 8 release.
+
 ## Measurements, September 8, 2026
 
 Each backend uses six fresh unprofiled JVMs per engine, in two sets of three pairs. Engine order

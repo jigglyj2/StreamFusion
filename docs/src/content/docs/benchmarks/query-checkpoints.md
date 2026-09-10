@@ -60,6 +60,12 @@ StreamFusion still loses every measured pair: throughput ratios are 0.798×/0.69
 capacity failure is not revalidated at this release. The two demonstrated redundant-read fixes
 are complete; the performance gap remains explicit, and Q9 is the next numbered checkpoint.
 
+Q9's current admission recheck passes eight production integration cases under both optimizer
+settings, both backends and parallelism one/four. They compare final collected bytes and verify
+positive blackhole output and native activity. Its larger-capacity/performance revalidation is
+next; the [older Q9 results](/StreamFusion/benchmarks/q9-rowdata/) retain their original release
+and settings.
+
 Eight Q6 planning cases cover both engines, both backends and both optimizer settings: Flink
 still rejects bounded non-time OVER. Q14's previously verified original Java UDF retains
 whole-plan Flink fallback with positive output and zero native activity. Its proposed batch-callback
