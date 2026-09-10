@@ -763,5 +763,10 @@ complete changelog bytes across ranges `[1,2]`, `[1,10]`, `[2,5]` and `[1,64]`, 
 three Arrow batch sizes. The subsequent output-admission prerequisite reserves descriptor
 workspace in coarse chunks and actual repeated payloads before gathering or writing state;
 23 focused Rust checks include both-backend refusal before writes and output ownership.
-This does not unlock Q19 yet: shared runtime composition, remaining retained-state admission,
-metric and recovery contracts remain the next demonstrated blockers.
+The shared binding now supports constant append-only ranges and composes with adjacent native
+Calc stages. Ordered state writes encode only new final candidates; losing-only batches perform
+no writes. Native coverage includes migration, retained-history admission and cross-backend
+restore. Generated Java checks compare complete metrics/changelogs and exercise aligned/unaligned
+checkpoints, canonical backend switches, 1-to-2-to-1 rescaling, incremental SST reuse and actual
+channel replay with full Top-10 candidate sets. This completes the shared-runtime prerequisite;
+ordinary Q19 selection and original-query parity remain the next checkpoint before benchmarking.

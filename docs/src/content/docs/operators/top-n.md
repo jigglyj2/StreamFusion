@@ -95,8 +95,8 @@ rank/changelog changes. Payloads and wide order keys stay outside those repeated
 reservation covers the batch priority tables and per-arrival sort workspace for their full lifetime.
 Legacy candidate order migration uses the same DataFusion ordering for this subset; persisted
 state encodings and ordered candidate entries are unchanged. This is a compute prerequisite:
-larger ranges still fall back in production until shared runtime, output-memory, metric and
-recovery admission is verified. Twenty focused Rust checks pass, including per-prefix order,
+larger ranges still fall back in production pending ordinary SQL admission and original-query
+validation. The shared runtime contracts are verified separately below. Twenty focused Rust checks pass, including per-prefix order,
 wide retained keys, memory refusal and old-state migration. Eight generated Java cases compare
 complete changelog bytes with Flink's `AppendOnlyTopNFunction` across four rank ranges, both
 backends and batch sizes 1/7/64, with nullable composite ordering, cutoff ties, offsets and
@@ -114,6 +114,23 @@ retained Arrow output ownership. Shared production admission for larger ranges r
 Generated Flink FastTop1Function comparisons cover complete per-arrival changelog bytes, nullable
 partition/sort keys, mixed sort directions, timestamp endpoints, distinct payloads at tied keys,
 optional rank output and multiple Arrow batch sizes on both backends.
+
+The shared native binding now also accepts constant append-only `ROW_NUMBER` ranges above one,
+including offsets. It composes Calc → Top-N → Calc as one Arrow execution tree with one state
+owner and stable stage identities. Larger ranges preserve the ordered index and separate candidate
+payloads. State writes encode only final new candidates, delete displaced entries, and leave
+unchanged payloads in the backend. Batches containing only losing arrivals write neither candidates
+nor metadata. Discarded arrival identities do not need persistence: the stored next sequence already
+exceeds every retained sequence, preserving future tie order. Old flat state migrates on first access.
+
+Twenty-seven focused native checks cover this binding, migration, batched writes, both-backend
+restore, output lifetime, and refusal of historical-state workspace when new input is small.
+Generated Java conformance checks compare complete stage metric surfaces, deterministic values,
+latency semantics, ordered changelog and timestamp envelopes for four ranges and all output flags
+on both backends. Top-10 recovery checks use three seeds and full candidate sets across aligned/
+unaligned checkpoints, canonical backend switches, 1→2→1 rescaling, incremental SST reuse and
+actual two-channel Arrow IPC replay. Ordinary larger-range SQL admission remains gated at this
+prerequisite checkpoint; this is not yet accelerated Q19 coverage or a performance result.
 
 The shared append-only Top-1 binding now composes between native Calc stages. Java emits a
 protobuf fragment and binds its state to the common native runtime; intermediate Arrow output
@@ -155,7 +172,7 @@ requires acceleration and identical final keyed result bytes at parallelism one/
 backends. Its independently scheduled join inputs can produce different intermediate winning-bid
 transitions even across repeated unmodified Flink runs. The fixed-arrival operator tests retain
 complete changelog comparisons; the independent-job test does not claim identical transient
-changelogs. The shared fragment remains restricted to the production subset described above. The existing `topNComparatorCalls`
+changelogs. Top-1 production selection remains subject to the restrictions described above. The existing `topNComparatorCalls`
 diagnostic counts adapter comparator calls; it does not count comparisons inside DataFusion kernels.
 The [Q9 release comparison](/StreamFusion/benchmarks/q9-rowdata/) documents bounded measurements,
 profiles, substantial timing variation and the remaining million-event join-state capacity limit.

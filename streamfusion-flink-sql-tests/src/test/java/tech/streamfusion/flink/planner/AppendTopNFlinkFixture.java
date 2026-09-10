@@ -20,13 +20,19 @@ import tech.streamfusion.proto.plan.v1.NativePlan;
 /** Original Flink append Top-N, reusing SQL-generated nullable key selectors and comparators. */
 final class AppendTopNFlinkFixture {
     private final TopOneFlinkFixture base;
-    private final int start;
-    private final int end;
+    final int start;
+    final int end;
+    final boolean ascending;
+    final boolean rankNumber;
+    final boolean before;
     final RowType input;
     final RowType output;
 
     AppendTopNFlinkFixture(boolean ascending, boolean rankNumber, boolean before, int start, int end) throws Exception {
         base = new TopOneFlinkFixture(ascending, rankNumber, before);
+        this.ascending = ascending;
+        this.rankNumber = rankNumber;
+        this.before = before;
         this.start = start;
         this.end = end;
         input = base.input;
@@ -39,8 +45,16 @@ final class AppendTopNFlinkFixture {
         return plan.build().toByteArray();
     }
 
-    @SuppressWarnings("unchecked")
     KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> oracle(boolean rocks) throws Exception {
+        var harness = harness(rocks, 1, 0);
+        harness.setup(new RowDataSerializer(output));
+        harness.open();
+        return harness;
+    }
+
+    @SuppressWarnings("unchecked")
+    KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> harness(
+            boolean rocks, int parallelism, int subtask) throws Exception {
         var original = ((KeyedProcessOperator<RowData, RowData, RowData>) base.stage.getOperator()).getUserFunction();
         var function = new AppendOnlyTopNFunction(
                 (StateTtlConfig) FlinkExecNodeAccess.field(original, AbstractTopNFunction.class, "ttlConfig"),
@@ -61,14 +75,12 @@ final class AppendTopNFlinkFixture {
                 (KeySelector<RowData, RowData>) base.stage.getStateKeySelector(),
                 (InternalTypeInfo<RowData>) base.stage.getStateKeyType(),
                 16,
-                1,
-                0);
+                parallelism,
+                subtask);
         harness.setStateBackend(
                 rocks
                         ? new org.apache.flink.state.rocksdb.EmbeddedRocksDBStateBackend(true)
                         : new org.apache.flink.runtime.state.hashmap.HashMapStateBackend());
-        harness.setup(new RowDataSerializer(output));
-        harness.open();
         return harness;
     }
 }

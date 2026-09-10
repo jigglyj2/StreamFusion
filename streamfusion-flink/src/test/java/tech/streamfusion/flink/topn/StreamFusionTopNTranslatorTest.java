@@ -32,14 +32,18 @@ class StreamFusionTopNTranslatorTest {
     }
 
     @Test
-    void sharedFragmentRequiresVerifiedTopOneRangeAndStateConfiguration() throws Exception {
+    void sharedFragmentAcceptsConstantRangesAndRequiresVerifiedStateConfiguration() throws Exception {
         var config = new Configuration();
         var node = tech.streamfusion.proto.plan.v1.NativePlan.parseFrom(shared(config, 1))
                 .getRoot()
                 .getTopN();
         assertThat(node.getRankEnd()).isOne();
         assertThat(node.getInput().hasInput()).isTrue();
-        assertThatThrownBy(() -> shared(config, 2)).hasMessageContaining("range [1,1]");
+        assertThat(tech.streamfusion.proto.plan.v1.NativePlan.parseFrom(shared(config, 10))
+                        .getRoot()
+                        .getTopN()
+                        .getRankEnd())
+                .isEqualTo(10);
         config.set(org.apache.flink.table.api.config.ExecutionConfigOptions.TABLE_EXEC_ASYNC_STATE_ENABLED, true);
         assertThatThrownBy(() -> shared(config, 1)).hasMessageContaining("synchronous state");
         config.set(org.apache.flink.table.api.config.ExecutionConfigOptions.TABLE_EXEC_ASYNC_STATE_ENABLED, false);

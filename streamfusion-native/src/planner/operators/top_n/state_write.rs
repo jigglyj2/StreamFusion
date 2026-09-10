@@ -13,8 +13,11 @@ impl TopNProcessor {
         index_credit: &mut HostMemoryReservation,
         now_millis: i64,
     ) -> Result<(Vec<StateMutation>, usize)> {
-        if self.native_schema.is_some() {
+        if self.native_schema.is_some() && self.plan.rank_end == Some(1) {
             return self.top_one_mutations(sources, groups, indexed);
+        }
+        if self.plan.state_ttl_millis == 0 && datafusion_append::compatible(&self.plan, sources) {
+            return self.append_mutations(sources, groups, indexed, index_credit);
         }
         let touched_group_count = groups.len();
         let converter = self.row_converter.as_ref().expect("input schema prepared");

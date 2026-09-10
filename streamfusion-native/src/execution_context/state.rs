@@ -11,7 +11,7 @@ use crate::planner::operators::{
     },
     regular_join::{execution_plan::RegularJoinFactory, RegularJoinProcessor},
     top_n::{
-        execution_plan::{self as top_one, TopOneFactory},
+        execution_plan::{self as top_n_execution, TopNFactory},
         TopNProcessor,
     },
     window_aggregate::shared_execution::{self as shared_window, WindowFactory},
@@ -121,7 +121,7 @@ impl NativeExecutionContext {
                 validate_native_node(node)?;
             }
             if matches!(node.operator, Some(proto::operator::Operator::TopN(_))) {
-                top_one::validate_node(node, binding.max_parallelism)?;
+                top_n_execution::validate_node(node, binding.max_parallelism)?;
             }
             let window = matches!(
                 node.operator,
@@ -354,7 +354,7 @@ fn create(
             GroupAggregateProcessor::with_state(bytes, max, first, last, state, scratch)?,
         ))))),
         Some(proto::operator::Operator::TopN(_)) => {
-            Ok(Arc::new(TopOneFactory(Arc::new(Mutex::new(
+            Ok(Arc::new(TopNFactory(Arc::new(Mutex::new(
                 TopNProcessor::with_state_with_range(bytes, max, first, last, state, scratch)?,
             )))))
         }

@@ -59,24 +59,23 @@ public final class StreamFusionTopNTranslator {
                 config);
         if (reason != null) throw new IllegalArgumentException(reason);
         if (!"APPEND_FAST".equals(strategyName)
-                || rankStart != 1
-                || !Long.valueOf(1).equals(rankEnd)
+                || rankEnd == null
                 || variableRankEndIndex != null
                 || sortSpec.getFieldSize() == 0
                 || stateTtlMillis != 0) {
             throw new IllegalArgumentException(
-                    "Shared Top-1 requires append-only ROW_NUMBER range [1,1], explicit ordering and disabled state TTL");
+                    "Shared Top-N requires append-only ROW_NUMBER with a constant rank range, explicit ordering and disabled state TTL");
         }
         if (config.get(org.apache.flink.table.api.config.ExecutionConfigOptions.TABLE_EXEC_ASYNC_STATE_ENABLED)
                 || config.get(org.apache.flink.table.api.config.ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ENABLED)
                 || !config.get(org.apache.flink.table.api.config.ExecutionConfigOptions.IDLE_STATE_RETENTION)
                         .isZero()) {
             throw new IllegalArgumentException(
-                    "Shared Top-1 requires synchronous state, disabled mini-batching and disabled state TTL");
+                    "Shared Top-N requires synchronous state, disabled mini-batching and disabled state TTL");
         }
         if (!config.get(TABLE_EXEC_RANK_TOPN_CACHE_SIZE).equals(TABLE_EXEC_RANK_TOPN_CACHE_SIZE.defaultValue()))
             throw new IllegalArgumentException(
-                    "Shared Top-1 does not represent custom table.exec.rank.topn-cache-size");
+                    "Shared Top-N does not represent custom table.exec.rank.topn-cache-size");
         String metrics = tech.streamfusion.flink.metrics.NativeStateMetricSupport.unsupportedReason(config);
         if (metrics != null) throw new IllegalArgumentException(metrics);
         return StreamFusionTopNPlan.create(

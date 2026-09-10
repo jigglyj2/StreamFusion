@@ -352,7 +352,10 @@ fn unsupported_top_one_bindings_fail_before_opening_backend_resources() {
             unreachable!()
         };
         match variant {
-            0 => top.rank_end = Some(2),
+            0 => {
+                top.rank_end = None;
+                top.variable_rank_end_index = Some(0);
+            }
             1 => top.state_ttl_millis = 1,
             2 => top.strategy = proto::TopNStrategy::Retract as i32,
             3 => top.rank_type = 999,
@@ -406,3 +409,5 @@ fn large_native_input_is_rejected_before_state_mutation() {
     drop(owner);
     assert_eq!(broker.reserved(), 0);
 }
+
+mod append;
