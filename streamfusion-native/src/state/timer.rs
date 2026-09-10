@@ -116,6 +116,18 @@ impl NativeTimerService {
         Ok(removed.is_some())
     }
 
+    /// Inspect the next due identity without removing it. A streaming timer callback can
+    /// retain durable state until its output drains, then delete this exact identity.
+    /// Iteration order is identical to `advance_limited`, including key-group priority.
+    pub(crate) fn next_due(&self, domain: TimerDomain, progress: i64) -> Option<(u32, &TimerKey)> {
+        self.groups.iter().enumerate().find_map(|(offset, group)| {
+            timer_set_ref(group, domain)
+                .first()
+                .filter(|timer| timer.timestamp <= progress)
+                .map(|timer| (self.first_key_group + offset as u32, timer))
+        })
+    }
+
     /// Removes all timers at or before `progress`, preserving deterministic Flink key-group and
     /// timer ordering. Operators may register more timers while handling the returned values.
     pub(crate) fn advance(
@@ -459,6 +471,47 @@ mod tests {
             key: key.to_vec(),
             namespace: namespace.to_vec(),
         }
+    }
+
+    #[test]
+    fn peeking_and_acknowledging_due_timers_matches_bulk_order_without_early_removal() {
+        let broker = Arc::new(TestBroker::new(1 << 20));
+        let mut incremental = service(2, 4, broker.clone());
+        let mut bulk = service(2, 4, broker.clone());
+        for group in 2..=4 {
+            for timestamp in [17, 5, 9, 21] {
+                for domain in [TimerDomain::EventTime, TimerDomain::ProcessingTime] {
+                    let entry = timer(timestamp, &[group as u8], b"window");
+                    incremental.register(group, domain, entry.clone()).unwrap();
+                    bulk.register(group, domain, entry).unwrap();
+                }
+            }
+        }
+        for domain in [TimerDomain::EventTime, TimerDomain::ProcessingTime] {
+            for progress in [4, 9, 17, i64::MAX] {
+                let expected = bulk.advance(domain, progress).unwrap();
+                let mut actual = Vec::new();
+                while let Some((group, entry)) = incremental.next_due(domain, progress) {
+                    let entry = entry.clone();
+                    let before = incremental.snapshot_key_group(group).unwrap();
+                    assert_eq!(
+                        incremental.next_due(domain, progress),
+                        Some((group, &entry))
+                    );
+                    assert_eq!(incremental.snapshot_key_group(group).unwrap(), before);
+                    assert!(incremental.delete(group, domain, &entry).unwrap());
+                    actual.push(FiredTimer {
+                        key_group: group,
+                        domain,
+                        timer: entry,
+                    });
+                }
+                assert_eq!(actual, expected);
+            }
+        }
+        drop(incremental);
+        drop(bulk);
+        assert_eq!(broker.reserved(), 0);
     }
 
     #[test]

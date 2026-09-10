@@ -9,18 +9,18 @@ use arrow::array::{Int64Array, TimestampMillisecondArray};
 use std::collections::BTreeMap;
 use std::sync::atomic::Ordering;
 
-fn backends() -> Vec<bool> {
+pub(super) fn backends() -> Vec<bool> {
     if std::env::var_os("STREAMFUSION_TEST_ROCKSDB_PLUGIN").is_some() {
         vec![false, true]
     } else {
         vec![false]
     }
 }
-fn other_backend(rocks: bool) -> bool {
+pub(super) fn other_backend(rocks: bool) -> bool {
     !rocks && std::env::var_os("STREAMFUSION_TEST_ROCKSDB_PLUGIN").is_some()
 }
 
-fn processor(
+pub(super) fn processor(
     rocks: bool,
     first: u32,
     last: u32,
@@ -56,7 +56,7 @@ fn processor(
     }
 }
 
-fn observe(processor: &mut WindowJoinProcessor) -> Arc<Io> {
+pub(super) fn observe(processor: &mut WindowJoinProcessor) -> Arc<Io> {
     let replacement =
         Box::new(OrderedMemoryKeyedState::new(0, 0, processor.state_memory()).unwrap());
     let inner = std::mem::replace(&mut processor.state, replacement);

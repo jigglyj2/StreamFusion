@@ -24,6 +24,7 @@ use crate::state::{
 };
 use crate::{decode_plan, proto};
 
+mod closing;
 mod indexed_state;
 mod legacy_state;
 pub(crate) mod planning;
@@ -59,6 +60,9 @@ pub(crate) struct WindowJoinProcessor {
     preencoded_key_indices: [Option<usize>; 2],
     input_kind_indices: [Option<usize>; 2],
     current_event_time: i64,
+    draining_watermark: Option<i64>,
+    closing_failed: bool,
+    pending_window: Option<closing::PendingWindow>,
     scratch_reservation: HostMemoryReservation,
     late_records_dropped: [u64; 2],
     state_read_batches: u64,
@@ -208,6 +212,9 @@ impl WindowJoinProcessor {
             preencoded_key_indices: [None, None],
             input_kind_indices: [None, None],
             current_event_time: i64::MIN,
+            draining_watermark: None,
+            closing_failed: false,
+            pending_window: None,
             scratch_reservation,
             late_records_dropped: [0, 0],
             state_read_batches: 0,
@@ -219,6 +226,14 @@ impl WindowJoinProcessor {
     }
 
     pub(crate) fn process_arrow(&mut self, side: usize, batch: RecordBatch) -> Result<RecordBatch> {
+        self.ingest_arrow(side, batch)?;
+        self.empty_output()
+    }
+
+    /// Native ingestion has no output or Arrow Java ownership transfer. The legacy handle
+    /// adds its empty candidate batch; shared execution can call this directly.
+    pub(crate) fn ingest_arrow(&mut self, side: usize, batch: RecordBatch) -> Result<()> {
+        self.require_idle()?;
         if side > 1 {
             return Err(DataFusionError::Execution(
                 "window join side must be zero or one".to_string(),
@@ -245,13 +260,8 @@ impl WindowJoinProcessor {
             Ok(encoded_rows) => self.process_arrow_accounted(side, &batch, &encoded_rows),
             Err(error) => Err(error.into()),
         };
-        match result {
-            Ok(output) => self.finish_output(output, base),
-            Err(error) => {
-                self.scratch_reservation.resize(0)?;
-                Err(error)
-            }
-        }
+        self.scratch_reservation.resize(0)?;
+        result
     }
 
     fn process_arrow_accounted(
@@ -259,7 +269,7 @@ impl WindowJoinProcessor {
         side: usize,
         batch: &RecordBatch,
         encoded_rows: &Rows,
-    ) -> Result<RecordBatch> {
+    ) -> Result<()> {
         let kinds = batch
             .column(self.input_kind_indices[side].expect("schema prepared"))
             .as_any()
@@ -303,7 +313,7 @@ impl WindowJoinProcessor {
             changes.push((index, encoded_rows.row(row).data().to_vec()));
         }
         if unique.is_empty() {
-            return self.empty_output();
+            return Ok(());
         }
         let mut ordered_keys = (0..unique.len()).map(|_| None).collect::<Vec<_>>();
         for (key, index) in unique {
@@ -371,10 +381,11 @@ impl WindowJoinProcessor {
         }
         self.state.write_batch(mutations)?;
         self.state_write_batches = self.state_write_batches.saturating_add(1);
-        self.empty_output()
+        Ok(())
     }
 
     pub(crate) fn advance_event_time(&mut self, watermark: i64) -> Result<RecordBatch> {
+        self.require_idle()?;
         if watermark <= self.current_event_time {
             return self.empty_output();
         }
@@ -496,12 +507,14 @@ impl WindowJoinProcessor {
         &mut self,
         key_group: u32,
     ) -> Result<crate::state::SnapshotBytes> {
+        self.require_idle()?;
         self.flush_timers(key_group)?;
         self.state
             .snapshot_key_group(key_group, &self.scratch_reservation)
     }
 
     pub(crate) fn restore_key_group(&mut self, key_group: u32, bytes: &[u8]) -> Result<()> {
+        self.require_idle()?;
         self.state
             .restore_key_group(key_group, bytes, &self.scratch_reservation)?;
         indexed_state::migrate_legacy(
@@ -528,6 +541,7 @@ impl WindowJoinProcessor {
     }
 
     pub(crate) fn checkpoint(&mut self, directory: &std::path::Path) -> Result<()> {
+        self.require_idle()?;
         for group in self.dirty_timer_groups.iter().copied().collect::<Vec<_>>() {
             self.flush_timers(group)?;
         }

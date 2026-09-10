@@ -114,6 +114,17 @@ batch staging, closed-window decode/output workspace, and checkpoint migration. 
 handle still materializes the fired windows together and can fail admission for large watermarks;
 these state tests do not establish full operator or checkpoint/channel parity or a Nexmark speedup.
 
+A native-only ingestion and close API is now available for shared-execution integration. It
+loads just one due window, decodes each side into its own SQL Arrow batch, and attaches the
+already admitted buffer allowance to those batches. It does not construct the legacy candidate
+metadata or transfer ownership to Java. The timer and indexed payload remain until the caller
+acknowledges that the window's output has drained. Input, snapshots, checkpoints, and restore
+are rejected during a drain; a failed close requires recovery from the previous Flink checkpoint.
+Direct tests on both backends cover one-window range reads, empty sides, duplicate arrival order,
+retained buffer ownership, cancellation, cross-backend recovery, and denial before payload reads.
+This API is not yet connected to the common DataFusion execution stream, and does not change
+production admission or the retained Java handle's watermark output path.
+
 **Retained implementation scope:** Partial implementation for bounded hash/adaptive/sort-merge/nested-loop joins and for
 synchronous regular, multi-way, time-bounded, and temporal streaming joins.
 
