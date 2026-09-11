@@ -50,21 +50,30 @@ pub(in super::super) fn flush(
             let manifest_bytes = manifest_bound(
                 &entry.original,
                 entry.original_layout,
-                entry.unloaded.as_ref(),
+                entry.unloaded.as_ref().map(|rows| &rows.original_ids),
             )
             .saturating_add(manifest_bound(
                 &entry.value,
                 layout,
-                entry.unloaded.as_ref(),
+                entry.unloaded.as_ref().map(|rows| &rows.ids),
             ));
             writer.admit_extra(manifest_bytes.saturating_mul(4))?;
-            let old = mutations::root(
-                &entry.original,
-                entry.original_layout,
-                entry.unloaded.as_ref(),
+            let changed_layout = layout != entry.original_layout;
+            let old = if changed_layout {
+                None
+            } else {
+                mutations::root(
+                    &entry.original,
+                    entry.original_layout,
+                    entry.unloaded.as_ref().map(|rows| &rows.original_ids),
+                )?
+            };
+            let new = mutations::root(
+                &entry.value,
+                layout,
+                entry.unloaded.as_ref().map(|rows| &rows.ids),
             )?;
-            let new = mutations::root(&entry.value, layout, entry.unloaded.as_ref())?;
-            if old != new {
+            if changed_layout || old != new {
                 drop(old);
                 let extra = new.as_ref().map_or(0, Vec::capacity);
                 writer.push(
@@ -85,7 +94,7 @@ pub(in super::super) fn flush(
     writer.finish()
 }
 
-fn manifest_bound(state: &JoinState, layout: Layout, unloaded: Option<&UnloadedRows>) -> usize {
+fn manifest_bound(state: &JoinState, layout: Layout, unloaded: Option<&[EntryIds; 2]>) -> usize {
     if layout == Layout::Compact {
         return 8192;
     }
@@ -94,7 +103,9 @@ fn manifest_bound(state: &JoinState, layout: Layout, unloaded: Option<&UnloadedR
             pages(&state.left)
                 .count()
                 .saturating_add(pages(&state.right).count())
-                .saturating_add(unloaded.map_or(0, |rows| rows.ids.bitmap_count())),
+                .saturating_add(unloaded.map_or(0, |ids| {
+                    ids.iter().map(EntryIds::bitmap_count).sum::<usize>()
+                })),
         ),
     )
 }
@@ -103,10 +114,13 @@ fn manifest_bound(state: &JoinState, layout: Layout, unloaded: Option<&UnloadedR
 /// Bound their retained ownership once while keeping both row-vector capacities admitted.
 fn retained_bytes(entry: &StagedState) -> usize {
     let mut bytes = entry.key.key.capacity().saturating_add(512).saturating_add(
-        entry
-            .unloaded
-            .as_ref()
-            .map_or(0, |rows| rows.ids.allocated_bytes()),
+        entry.unloaded.as_ref().map_or(0, |rows| {
+            rows.ids
+                .iter()
+                .chain(&rows.original_ids)
+                .map(EntryIds::allocated_bytes)
+                .sum::<usize>()
+        }),
     );
     for (old, new) in [
         (&entry.original.left, &entry.value.left),

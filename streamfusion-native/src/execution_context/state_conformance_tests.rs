@@ -12,6 +12,7 @@ const LIMIT: usize = 32 << 20;
 mod checkpoint_import;
 mod lifecycle;
 mod log_configuration;
+mod spill_configuration;
 
 fn plans() -> Vec<proto::NativePlan> {
     let input = Some(Box::new(proto::Operator {
@@ -49,6 +50,7 @@ fn plans() -> Vec<proto::NativePlan> {
 
 fn resources() -> proto::NativeStateBindings {
     proto::NativeStateBindings {
+        spill_directories: Vec::new(),
         protocol_version: 1,
         bindings: vec![proto::NativeStateBinding {
             restored_watermark: None,

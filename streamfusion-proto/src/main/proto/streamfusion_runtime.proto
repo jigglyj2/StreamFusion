@@ -9,6 +9,8 @@ option java_package = "tech.streamfusion.proto.plan.v1";
 message NativeStateBindings {
   uint32 protocol_version = 1;
   repeated NativeStateBinding bindings = 2;
+  // Protocol 4: task-local directories assigned by Flink's IOManager, shared by native owners.
+  repeated string spill_directories = 3;
 }
 
 message NativeStateBinding {

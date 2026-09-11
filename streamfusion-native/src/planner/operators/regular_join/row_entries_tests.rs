@@ -165,7 +165,7 @@ fn history_load_bounds_bulk_workspace_and_skips_unused_accumulating_payloads() {
             .unwrap();
     assert_eq!(reads, 1);
     assert!(loaded[0].value.left.is_empty());
-    assert_eq!(loaded[0].unloaded.as_ref().unwrap().ids.len(), 20_003);
+    assert_eq!(loaded[0].unloaded.as_ref().unwrap().ids[0].len(), 20_003);
     let new = StoredRow {
         id: 20_003,
         row: Arc::from(&b"new"[..]),
@@ -245,10 +245,7 @@ fn dense_history_directories_stay_compressed_through_decode_and_reencoding() {
             ..Default::default()
         },
         original_layout: Layout::Rows,
-        unloaded: Some(UnloadedRows {
-            side: 0,
-            ids: manifest.pages.into_iter().next().unwrap(),
-        }),
+        unloaded: Some(UnloadedRows::new(manifest.pages)),
         touched: true,
     };
     assert!(paged_state::mutations(&entry).unwrap().is_empty());

@@ -148,20 +148,24 @@ public final class NativeRegionStateLifecycle implements AutoCloseable {
                 // The plugin shares its cache/write-buffer manager for this lease, as it
                 // does for separate Flink native state owners. Do not multiply the budget.
                 final long lease = stateLease;
-                return NativeStateResources.serialize(stateIds.stream()
-                        .map(id -> rocks
-                                ? NativeStateResources.rocksDb(
-                                        id,
-                                        maxParallelism,
-                                        range.getStartKeyGroup(),
-                                        range.getEndKeyGroup(),
-                                        directory.resolve("node-" + id),
-                                        lease,
-                                        NativeRocksDbLogDirectory.resolve(directory.resolve("node-" + id)))
-                                : NativeStateResources.memory(
-                                        id, maxParallelism, range.getStartKeyGroup(), range.getEndKeyGroup()))
-                        .map(windowClocks::bind)
-                        .collect(Collectors.toList()));
+                return NativeStateResources.serialize(
+                        stateIds.stream()
+                                .map(id -> rocks
+                                        ? NativeStateResources.rocksDb(
+                                                id,
+                                                maxParallelism,
+                                                range.getStartKeyGroup(),
+                                                range.getEndKeyGroup(),
+                                                directory.resolve("node-" + id),
+                                                lease,
+                                                NativeRocksDbLogDirectory.resolve(directory.resolve("node-" + id)))
+                                        : NativeStateResources.memory(
+                                                id, maxParallelism, range.getStartKeyGroup(), range.getEndKeyGroup()))
+                                .map(windowClocks::bind)
+                                .collect(Collectors.toList()),
+                        java.util.Arrays.stream(environment.getIOManager().getSpillingDirectories())
+                                .map(java.io.File::toPath)
+                                .collect(Collectors.toList()));
             };
             memory = sharedRegion
                     ? StreamFusionTaskMemory.createRegionWithState(

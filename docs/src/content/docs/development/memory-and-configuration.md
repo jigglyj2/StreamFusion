@@ -113,6 +113,13 @@ and write-buffer-manager lease. Legacy embedded runners without that lease retai
 original operator-share-based fallback sizing; sharing execution capacity does not enlarge
 their caches. No Flink dependency patch or deployment option is added by this change.
 
+Streaming inner joins can prepare historical payloads in bounded Arrow IPC spill pages when
+resident admission fails. Flink's IOManager directories are passed as internal task resources;
+DataFusion owns temporary files and disk accounting. Read, decode, predicate, output and directory
+workspace still require host reservations. Replay adds no per-row RocksDB or JNI calls, and state
+writes/checkpoints retain the completed-batch boundary. This does not spill the in-memory backend's
+retained state itself; see the [join memory and state contract](/operators/joins/).
+
 Sharing removes stranded private allowances; it does not guarantee unlimited in-memory state,
 automatic spill for every workspace, or equivalence to Flink's shared JVM heap. The full native
 pool can still reject a large buffer or retained-state growth. Benchmark capacity comparisons

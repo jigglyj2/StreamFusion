@@ -52,6 +52,7 @@ fn plan(owned: bool) -> proto::NativePlan {
 }
 fn resources(rocks: Option<(&str, &std::path::Path)>) -> proto::NativeStateBindings {
     proto::NativeStateBindings {
+        spill_directories: Vec::new(),
         protocol_version: 1,
         bindings: vec![proto::NativeStateBinding {
             plan_node_id: 3,

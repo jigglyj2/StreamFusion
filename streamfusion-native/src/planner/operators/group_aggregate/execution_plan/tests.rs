@@ -84,6 +84,7 @@ fn plan(changelog: bool) -> proto::NativePlan {
 }
 fn binding(rocks: Option<(&str, &std::path::Path)>) -> proto::NativeStateBindings {
     proto::NativeStateBindings {
+        spill_directories: Vec::new(),
         protocol_version: 1,
         bindings: vec![proto::NativeStateBinding {
             restored_watermark: None,

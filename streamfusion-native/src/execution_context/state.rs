@@ -62,12 +62,28 @@ impl NativeExecutionContext {
         )?;
         let options = proto::NativeStateBindings::decode(bytes)
             .map_err(|error| invalid(format!("invalid state-binding protobuf: {error}")))?;
-        if !matches!(options.protocol_version, 1 | 2 | 3)
+        if !matches!(options.protocol_version, 1 | 2 | 3 | 4)
             || self.protocol_version() < crate::ENVELOPE_PLAN_PROTOCOL_VERSION
             || options.bindings.is_empty()
         {
             return Err(invalid("unsupported state-binding protocol version"));
         }
+        let spill = if options.protocol_version == 4 {
+            Some(crate::spill::Resources::new(
+                options
+                    .spill_directories
+                    .iter()
+                    .map(std::path::PathBuf::from)
+                    .collect(),
+            )?)
+        } else {
+            if !options.spill_directories.is_empty() {
+                return Err(invalid(
+                    "spill directories require state-binding protocol 4",
+                ));
+            }
+            None
+        };
         let mut ids = HashSet::new();
         let mut directories = HashSet::new();
         // Validate the entire request before opening any database or constructing operator state.
@@ -201,7 +217,7 @@ impl NativeExecutionContext {
                 .iter()
                 .find(|(id, _)| *id == binding.plan_node_id)
                 .map(|(_, buffer)| *buffer);
-            let factory = create(node, &bare, binding, state_memory, buffer)?;
+            let factory = create(node, &bare, binding, state_memory, buffer, spill.clone())?;
             bindings.push((binding.plan_node_id, factory));
         }
         self.bind_persistent(bindings)?;
@@ -317,7 +333,8 @@ impl NativeExecutionContext {
                 memory_limit: reader_limit as u64,
                 log_directory,
             };
-            let source = RocksPluginKeyedState::open_checkpoint_configured(&reader, first, last, None)?;
+            let source =
+                RocksPluginKeyedState::open_checkpoint_configured(&reader, first, last, None)?;
             for group in first..=last {
                 owner.restore_from_checkpoint(group, &source, &memory)?;
             }
@@ -334,6 +351,7 @@ fn create(
     binding: &proto::NativeStateBinding,
     memory: HostMemoryReservation,
     buffer: Option<super::task_resources::WindowBuffer>,
+    spill: Option<Arc<crate::spill::Resources>>,
 ) -> Result<Arc<dyn PersistentOperatorFactory>> {
     use crate::state::{KeyedState, MemoryKeyedState, RocksPluginKeyedState};
     let max = binding.max_parallelism;
@@ -386,8 +404,11 @@ fn create(
             )))))
         }
         Some(proto::operator::Operator::RegularJoin(_)) => {
+            let mut processor =
+                RegularJoinProcessor::with_state(bytes, max, first, last, state, scratch)?;
+            processor.set_spill_resources(spill)?;
             Ok(Arc::new(RegularJoinFactory(Arc::new(Mutex::new(
-                RegularJoinProcessor::with_state(bytes, max, first, last, state, scratch)?,
+                processor,
             )))))
         }
         _ => Err(invalid("unsupported native state binding")),

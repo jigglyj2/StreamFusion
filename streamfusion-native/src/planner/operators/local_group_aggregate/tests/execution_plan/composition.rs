@@ -61,6 +61,7 @@ fn non_keyed_and_keyed_factories_share_tree_controls_metrics_and_recovery() {
         )
         .unwrap();
         let bindings = proto::NativeStateBindings {
+            spill_directories: Vec::new(),
             protocol_version: 1,
             bindings: vec![proto::NativeStateBinding {
                 restored_watermark: None,

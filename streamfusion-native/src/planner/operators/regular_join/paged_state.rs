@@ -12,26 +12,33 @@ pub(super) fn load(
     keys: Vec<StateKey>,
     owner: &mut HostMemoryReservation,
 ) -> Result<(Vec<StagedState>, u64)> {
-    load_impl(state, keys, owner, None)
+    let mut reads = 0;
+    let staged = load_counted(state, keys, owner, None, &mut reads)?;
+    Ok((staged, reads))
 }
 
+#[cfg(test)]
 pub(super) fn load_for_accumulation(
     state: &dyn KeyedState,
     keys: Vec<StateKey>,
     owner: &mut HostMemoryReservation,
     side: usize,
 ) -> Result<(Vec<StagedState>, u64)> {
-    load_impl(state, keys, owner, Some(side))
+    let mut reads = 0;
+    let staged = load_counted(state, keys, owner, Some(side), &mut reads)?;
+    Ok((staged, reads))
 }
 
-fn load_impl(
+pub(super) fn load_counted(
     state: &dyn KeyedState,
     keys: Vec<StateKey>,
     owner: &mut HostMemoryReservation,
     accumulating_side: Option<usize>,
-) -> Result<(Vec<StagedState>, u64)> {
+    reads: &mut u64,
+) -> Result<Vec<StagedState>> {
     let manifest_keys = keys.iter().map(manifest_key).collect::<Vec<_>>();
     let manifest_refs = refs(&manifest_keys);
+    *reads = reads.saturating_add(1);
     let values = state.get_batch(&manifest_refs, owner)?;
     owner.try_grow(values.iter().flatten().try_fold(0usize, |bytes, value| {
         Ok::<_, DataFusionError>(bytes.saturating_add(manifest_workspace(value)?))
@@ -57,7 +64,9 @@ fn load_impl(
                         && manifest.layout == Layout::Rows
                         && !ids.is_empty()
                     {
-                        unloaded = Some(UnloadedRows { side, ids });
+                        let mut directories: [EntryIds; 2] = Default::default();
+                        directories[side] = ids;
+                        unloaded = Some(UnloadedRows::new(directories));
                     } else {
                         requests.push((index, side, manifest.layout, ids));
                     }
@@ -83,11 +92,11 @@ fn load_impl(
             touched: false,
         });
     }
-    let reads = loading::load_entries(state, &mut staged, requests, owner)?;
+    loading::load_entries(state, &mut staged, requests, owner, reads)?;
     for entry in &mut staged {
         entry.original = entry.value.clone();
     }
-    Ok((staged, 1 + reads))
+    Ok(staged)
 }
 
 mod flushing;
@@ -97,6 +106,8 @@ pub(super) use flushing::flush;
 mod restore;
 pub(super) use restore::restore_from_checkpoint;
 mod mutations;
+#[cfg(test)]
+mod unloaded_tests;
 pub(super) use mutations::mutations;
 
 pub(super) fn batch_mutations(

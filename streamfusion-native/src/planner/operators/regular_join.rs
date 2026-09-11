@@ -19,10 +19,12 @@ mod paged_compact_tests;
 mod paged_state;
 #[cfg(test)]
 mod paged_state_tests;
+mod prepared_history;
 pub(crate) mod region;
 mod region_input;
 #[cfg(test)]
 mod row_entries_tests;
+mod spilled_rows;
 mod state_codec;
 mod streaming;
 mod transitions;
@@ -88,8 +90,19 @@ struct JoinState {
 }
 
 struct UnloadedRows {
-    side: usize,
-    ids: paged_codec::EntryIds,
+    ids: [paged_codec::EntryIds; 2],
+    original_ids: [paged_codec::EntryIds; 2],
+}
+
+impl UnloadedRows {
+    // Most staged keys have no external history. Keep their per-key slot compact instead of
+    // embedding four vector directories in every slot of a high-cardinality input batch.
+    fn new(ids: [paged_codec::EntryIds; 2]) -> Box<Self> {
+        Box::new(Self {
+            original_ids: ids.clone(),
+            ids,
+        })
+    }
 }
 
 struct StagedState {
@@ -97,9 +110,9 @@ struct StagedState {
     value: JoinState,
     original: JoinState,
     original_layout: paged_codec::Layout,
-    // An accumulating input never reads old payloads on its own side. Their identities remain
-    // in the directory; payloads stay untouched in the backend. No placeholder rows are used.
-    unloaded: Option<UnloadedRows>,
+    // Historical payloads can remain in the backend or a prepared spill stream. Preserve both
+    // directories so dirty writes need only their changed identities, never placeholder rows.
+    unloaded: Option<Box<UnloadedRows>>,
     touched: bool,
 }
 
@@ -159,6 +172,7 @@ pub(crate) struct RegularJoinProcessor {
     bounded_runtime: Option<Arc<bounded_datafusion::JoinRuntime>>,
     bounded_output_finished: bool,
     streaming_cursor: Option<streaming::StreamingCursor>,
+    spill_resources: Option<Arc<crate::spill::Resources>>,
     streaming_failed: bool,
     streaming_region_active: bool,
     streaming_invocation_active: bool,
@@ -374,6 +388,7 @@ impl RegularJoinProcessor {
             bounded_runtime: None,
             bounded_output_finished: false,
             streaming_cursor: None,
+            spill_resources: None,
             streaming_failed: false,
             streaming_region_active: false,
             streaming_invocation_active: false,

@@ -229,6 +229,7 @@ fn installing_more_state_owners_has_linear_retained_configuration_cost() {
         }
         .encode_to_vec();
         let options = proto::NativeStateBindings {
+            spill_directories: Vec::new(),
             protocol_version: 1,
             bindings,
         }

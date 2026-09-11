@@ -206,8 +206,9 @@ and preserves original input-row origins, per-record changelog order and logical
 The full input invocation must reach EOF before checkpoints or another input are accepted;
 cancellation between slices still requires recovery. Repeated keys in separate slices incur
 additional batched state access, so this trades some batching efficiency for lower staging peaks.
-It does not bound retained join state or the history of one hot key; those still must fit Flink's
-allowance. A native regression accepts and retracts a sliced 16,387-key input within a 10 MiB
+Retained in-memory state still consumes Flink's allowance. Streaming inner joins can prepare
+oversized historical payloads in bounded spill pages, as described below; other join families
+retain their existing managed-memory admission limits. A native regression accepts and retracts a sliced 16,387-key input within a 10 MiB
 state/workspace allowance, verifies ordered output and canonical state against an unsplit reference,
 and confirms that the original whole-input workspace request exceeds that allowance.
 
@@ -513,8 +514,8 @@ the backend without expanding their identity vector. Mutation encoding copies re
 merges new rows into the final partial bitmap directly. This changes no persisted bytes. A
 million-row directory regression covers sparse/dense identity iteration and allocation size; an
 actual 64,003-row RocksDB history accepts another row with 256 KiB of scratch, one directory read,
-and two writes. Opposite-side historical payloads are still retained for batch computation and can
-exceed the managed budget; the compressed directory does not resolve that separate limitation.
+and two writes. Streaming inner joins also have a bounded prepared-history path for opposite-side
+payloads that cannot remain resident within the managed budget.
 
 A repeated-key mutation regression appends 256 one-KiB rows in separate batches and writes less
 than twice the new payload volume, then checks that changing an association count writes only
@@ -536,7 +537,35 @@ a failure after any page invalidates the operator until recovery from the previo
 An 8 MiB dirty-payload regression fits a 14 MiB allowance including the RocksDB cache and keeps
 new flush allocations below 3 MiB. Injected second-page failures on both backends reject snapshots
 and further input, and replay from the preceding checkpoint preserves the full output changelog.
-These bounds cover write scratch; opposite-side historical payloads still must fit the managed budget.
+Streaming inner joins first attempt resident batch preparation while reserving room for bounded
+predicate/output work. If that admission fails, they release the attempt's decoded rows and batch
+all required state reads into a temporary Arrow IPC history. This can repeat reads from the rejected
+attempt; diagnostic read counts include those calls. Replay performs no RocksDB reads. It admits
+one history page at a time, evaluates residuals through DataFusion, and preserves each input's
+complete ordered changelog before advancing to the next input. Historical retractions resolve
+against stable row identities during preparation, so duplicate rows inserted in the same batch
+are not accidentally removed twice.
+
+The task passes all of Flink IOManager's spill directories through state-binding protocol 4.
+A lazily created DataFusion disk manager owns the temporary files and disk accounting. There is
+no new deployment setting or independent disk quota. Shared directory metadata, read/decode pages,
+Arrow IPC encoding, residuals and output remain admitted through Flink's existing memory pool.
+Current row-layout state keeps payloads in RocksDB; legacy compact/page records migrate through
+bounded writes only after computation completes. The final dirty flush runs on stream exhaustion,
+after the last output encoding has been handed off. Checkpoints and new inputs remain excluded
+until that flush succeeds. Cancellation or a write failure releases prepared history and requires
+Flink recovery; the temporary files are not checkpoint state.
+
+Native pressure tests replay more than 6 MiB of historical payload with 4 MiB of available
+workspace on both backends, compare ordered output and canonical state against the resident path,
+and cover both input sides, all four RowKinds, duplicates, absent retractions, residual predicates,
+null-filtered/null-safe keys, legacy formats, cancellation and flush failure. Generated Arrow C Stream tests compare complete
+serialized changelogs and logical-record counters against Flink on both backends while requiring
+an actual spill file. This path applies to streaming inner joins with task resource bindings;
+outer/semi/anti joins and standalone legacy bridge handles retain their existing admission behavior.
+Large individual rows, directories, retained in-memory backend state or another workspace can
+still exhaust the assigned budget. These tests are correctness and allocation-limit evidence,
+not throughput measurements.
 
 The corresponding upstream Flink duplicate-key inner-join and retracting left-join cases pass
 across ten parameterized executions covering the upstream mini-batch/backend/async combinations.

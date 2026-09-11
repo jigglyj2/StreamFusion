@@ -42,6 +42,7 @@ impl ChangeCursor {
     /// Returns true once the transition is complete. `limit` includes rows already in output.
     /// The caller admits descriptor/payload workspace before calling and retains staged state
     /// until the complete input batch has drained; no checkpoint may observe a partial change.
+    #[cfg(test)]
     pub(super) fn drain(
         &mut self,
         state: &mut JoinState,
@@ -49,6 +50,30 @@ impl ChangeCursor {
         output: &mut Vec<OutputRow>,
         limit: usize,
     ) -> Result<bool> {
+        self.drain_page(state, matches, output, limit, true)
+    }
+
+    /// Historical retractions were resolved while batching backend reads. Do not also remove
+    /// an equal row inserted earlier in this input batch.
+    pub(super) fn retracted_history(&mut self) {
+        self.initialized = true;
+    }
+
+    /// A non-final page is supported only for INNER joins, whose opposite history is immutable.
+    /// Returns true when this page has drained; only the final page completes the input change.
+    pub(super) fn drain_page(
+        &mut self,
+        state: &mut JoinState,
+        matches: &CandidateMatches,
+        output: &mut Vec<OutputRow>,
+        limit: usize,
+        final_page: bool,
+    ) -> Result<bool> {
+        if !final_page && self.join_type != proto::RegularJoinType::Inner {
+            return Err(DataFusionError::Internal(
+                "paged history requires an inner join".into(),
+            ));
+        }
         if limit < 2 {
             return Err(DataFusionError::Internal(
                 "regular join output limit must be at least two".into(),
@@ -152,6 +177,10 @@ impl ChangeCursor {
                 }
                 self.candidate += 1;
             }
+        }
+        if !final_page {
+            self.candidate = 0;
+            return Ok(true);
         }
         let count = matches.count();
         let emit_own = if semi && self.side == 0 {

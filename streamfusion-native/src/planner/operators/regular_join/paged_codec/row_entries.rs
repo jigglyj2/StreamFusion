@@ -32,7 +32,7 @@ pub(in super::super) fn encode(state: &JoinState) -> Vec<u8> {
 
 pub(in super::super) fn encode_with_unloaded(
     state: &JoinState,
-    unloaded: Option<&UnloadedRows>,
+    unloaded: Option<&[EntryIds; 2]>,
 ) -> Vec<u8> {
     let mut bytes = header(
         [state.left_matchable, state.right_matchable],
@@ -42,9 +42,8 @@ pub(in super::super) fn encode_with_unloaded(
         // Preserve old bitmaps directly. Only new rows are grouped, including an append into
         // the retained directory's final partial bitmap; historical IDs are never enumerated.
         let bitmaps = unloaded
-            .filter(|u| u.side == side)
             .into_iter()
-            .flat_map(|u| u.ids.bitmaps())
+            .flat_map(|ids| ids[side].bitmaps())
             .chain(
                 rows.chunk_by(|a, b| a.id / PAGE_ROWS == b.id / PAGE_ROWS)
                     .map(|rows| {

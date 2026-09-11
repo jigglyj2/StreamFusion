@@ -64,6 +64,19 @@ public final class NativeStateResources {
                 .toByteArray();
     }
 
+    /** Flink's existing IOManager assignment, shared by all state owners in a fused region. */
+    public static byte[] serialize(List<NativeStateBinding> bindings, List<Path> spillDirectories) {
+        if (spillDirectories.isEmpty()) throw new IllegalArgumentException("Flink spill directories must not be empty");
+        return NativeStateBindings.newBuilder()
+                .setProtocolVersion(4)
+                .addAllBindings(bindings)
+                .addAllSpillDirectories(spillDirectories.stream()
+                        .map(path -> path.toAbsolutePath().normalize().toString())
+                        .collect(java.util.stream.Collectors.toList()))
+                .build()
+                .toByteArray();
+    }
+
     private static NativeStateBinding.Builder binding(long nodeId, int maxParallelism, int first, int last) {
         if (nodeId <= 0
                 || maxParallelism <= 0

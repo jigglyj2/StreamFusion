@@ -60,6 +60,7 @@ fn resources(
     rocks: Option<&std::path::Path>,
 ) -> proto::NativeStateBindings {
     proto::NativeStateBindings {
+        spill_directories: Vec::new(),
         protocol_version: if watermark.is_some() { 3 } else { 1 },
         bindings: vec![proto::NativeStateBinding {
             plan_node_id: 3,

@@ -2,15 +2,52 @@
 // Licensed under the Apache License, Version 2.0.
 
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use datafusion::error::{DataFusionError, Result};
-use datafusion::execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
+use datafusion::execution::disk_manager::{DiskManager, DiskManagerBuilder, DiskManagerMode};
+
+/// Share Flink's assignment within a native region; create DataFusion's working directories only
+/// when an operator actually needs to spill. File owners keep their manager alive through close.
+pub(crate) struct Resources {
+    directories: Vec<PathBuf>,
+    manager: Mutex<Option<Arc<DiskManager>>>,
+}
+
+impl Resources {
+    pub(crate) fn new(directories: Vec<PathBuf>) -> Result<Arc<Self>> {
+        validate(&directories)?;
+        Ok(Arc::new(Self {
+            directories,
+            manager: Mutex::new(None),
+        }))
+    }
+
+    pub(crate) fn manager(&self) -> Result<Arc<DiskManager>> {
+        let mut manager = self.manager.lock().map_err(|_| {
+            DataFusionError::Execution("native spill resource lock poisoned".into())
+        })?;
+        if let Some(manager) = manager.as_ref() {
+            return Ok(manager.clone());
+        }
+        let created = Arc::new(disk_manager(self.directories.clone())?.build()?);
+        *manager = Some(created.clone());
+        Ok(created)
+    }
+}
 
 /// Use Flink's assigned local directories and DataFusion's spill-file ownership/accounting.
 /// Flink's IOManager imposes no separate byte quota: inheriting DataFusion's default 100 GiB
 /// ceiling would reject an otherwise valid Flink job. Filesystem capacity and I/O errors still
 /// apply. This is an internal resource translation, not a new deployment setting.
 pub(crate) fn disk_manager(directories: Vec<PathBuf>) -> Result<DiskManagerBuilder> {
+    validate(&directories)?;
+    Ok(DiskManagerBuilder::default()
+        .with_mode(DiskManagerMode::Directories(directories))
+        .with_max_temp_directory_size(u64::MAX))
+}
+
+fn validate(directories: &[PathBuf]) -> Result<()> {
     if directories.is_empty()
         || directories
             .iter()
@@ -20,9 +57,7 @@ pub(crate) fn disk_manager(directories: Vec<PathBuf>) -> Result<DiskManagerBuild
             "native spilling requires existing absolute Flink IOManager directories".into(),
         ));
     }
-    Ok(DiskManagerBuilder::default()
-        .with_mode(DiskManagerMode::Directories(directories))
-        .with_max_temp_directory_size(u64::MAX))
+    Ok(())
 }
 
 #[cfg(test)]
@@ -30,6 +65,19 @@ mod tests {
     use super::*;
     use std::io::Write;
     use std::sync::Arc;
+
+    #[test]
+    fn assigned_resources_are_lazy_and_share_one_disk_manager() {
+        let root = tempfile::tempdir().unwrap();
+        let resources = Resources::new(vec![root.path().to_path_buf()]).unwrap();
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+        let first = resources.manager().unwrap();
+        let second = resources.manager().unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(first.max_temp_directory_size(), u64::MAX);
+        drop((first, second, resources));
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+    }
 
     #[test]
     fn tracks_spill_bytes_and_releases_files_with_the_last_owner() {

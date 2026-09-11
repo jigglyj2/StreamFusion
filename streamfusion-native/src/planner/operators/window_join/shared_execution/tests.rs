@@ -61,6 +61,7 @@ fn resources(
     last: u32,
 ) -> proto::NativeStateBindings {
     proto::NativeStateBindings {
+        spill_directories: Vec::new(),
         protocol_version: 3,
         bindings: vec![proto::NativeStateBinding {
             plan_node_id: 3,
