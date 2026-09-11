@@ -26,7 +26,9 @@ import org.apache.flink.streaming.util.KeyedOneInputStreamOperatorTestHarness;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.planner.codegen.sort.SortCodeGenerator;
+import org.apache.flink.table.planner.plan.nodes.exec.spec.SortSpec;
 import org.apache.flink.table.runtime.keyselector.EmptyRowDataKeySelector;
+import org.apache.flink.table.runtime.operators.sort.ProcTimeSortOperator;
 import org.apache.flink.table.runtime.operators.sort.RowTimeSortOperator;
 import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
 import org.apache.flink.table.runtime.typeutils.RowDataSerializer;
@@ -39,7 +41,7 @@ class GeneratedTemporalSortParityTest {
     void generatedChangelogsMatchFlinkBytesAfterCrossBackendRestoreAndLateRows() throws Exception {
         for (int seed = 0; seed < 4; seed++) {
             List<GenericRowData> input = input(seed);
-            byte[] expected = flink(input);
+            byte[] expected = flink(input, false);
             for (boolean sourceRocks : new boolean[] {false, true}) {
                 try (RootAllocator allocator = new RootAllocator(64L << 20)) {
                     OperatorSubtaskState snapshot;
@@ -58,6 +60,37 @@ class GeneratedTemporalSortParityTest {
                         restored.processWatermark(new Watermark(4000));
                         assertThat(restored.bytes.getCopyOfBuffer())
                                 .as("seed %s, source RocksDB %s", seed, sourceRocks)
+                                .isEqualTo(expected);
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    void generatedProcessingTimersMatchFlinkBytesAcrossRestoreAndRepeatedCallbacks() throws Exception {
+        for (int seed = 0; seed < 4; seed++) {
+            List<GenericRowData> input = input(seed);
+            byte[] expected = flink(input, true);
+            for (boolean sourceRocks : new boolean[] {false, true}) {
+                try (RootAllocator allocator = new RootAllocator(64L << 20)) {
+                    OperatorSubtaskState snapshot;
+                    int batchSize = new int[] {1, 17, 128, 257}[seed];
+                    try (var source = harness(true, null, sourceRocks)) {
+                        source.setProcessingTime(40);
+                        append(source, allocator, input.subList(0, 256), batchSize);
+                        snapshot = source.snapshotWithLocalState(
+                                        1, 1, SavepointType.savepoint(SavepointFormatType.CANONICAL))
+                                .getJobManagerOwnedState();
+                    }
+                    try (var restored = harness(true, snapshot, !sourceRocks)) {
+                        restored.setProcessingTime(40);
+                        append(restored, allocator, input.subList(256, input.size()), batchSize);
+                        restored.setProcessingTime(41);
+                        process(restored, allocator, row(4000, 0, "future", RowKind.INSERT));
+                        restored.setProcessingTime(42);
+                        assertThat(restored.bytes.getCopyOfBuffer())
+                                .as("processing-time seed %s, source RocksDB %s", seed, sourceRocks)
                                 .isEqualTo(expected);
                     }
                 }
@@ -96,11 +129,18 @@ class GeneratedTemporalSortParityTest {
         return rows;
     }
 
-    private byte[] flink(List<GenericRowData> input) throws Exception {
+    private byte[] flink(List<GenericRowData> input, boolean processingTime) throws Exception {
         var comparator = new SortCodeGenerator(
-                        new Configuration(), getClass().getClassLoader(), PARITY_ROW_TYPE, SORT_SPEC)
+                        new Configuration(),
+                        getClass().getClassLoader(),
+                        PARITY_ROW_TYPE,
+                        processingTime
+                                ? SortSpec.builder().addField(1, true, true).build()
+                                : SORT_SPEC)
                 .generateRecordComparator("GeneratedTemporalParityComparator");
-        var operator = new RowTimeSortOperator(InternalTypeInfo.of(PARITY_ROW_TYPE), 0, comparator);
+        var operator = processingTime
+                ? new ProcTimeSortOperator(InternalTypeInfo.of(PARITY_ROW_TYPE), comparator)
+                : new RowTimeSortOperator(InternalTypeInfo.of(PARITY_ROW_TYPE), 0, comparator);
         try (var harness = new KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData>(
                 operator,
                 EmptyRowDataKeySelector.INSTANCE,
@@ -111,18 +151,30 @@ class GeneratedTemporalSortParityTest {
             RowDataSerializer serializer = new RowDataSerializer(PARITY_ROW_TYPE);
             harness.setup(serializer);
             harness.open();
+            if (processingTime) {
+                harness.setProcessingTime(40);
+            }
             for (GenericRowData row : input) {
                 // Flink's temporal operator reads the compact millisecond field through getLong.
                 harness.processElement(
                         new StreamRecord<>(serializer.toBinaryRow(row).copy()));
             }
-            harness.processWatermark(new Watermark(3000));
-            harness.processElement(new StreamRecord<>(
-                    serializer.toBinaryRow(row(1000, 0, "late", RowKind.DELETE)).copy()));
+            if (processingTime) {
+                harness.setProcessingTime(41);
+            } else {
+                harness.processWatermark(new Watermark(3000));
+                harness.processElement(new StreamRecord<>(serializer
+                        .toBinaryRow(row(1000, 0, "late", RowKind.DELETE))
+                        .copy()));
+            }
             harness.processElement(new StreamRecord<>(serializer
                     .toBinaryRow(row(4000, 0, "future", RowKind.INSERT))
                     .copy()));
-            harness.processWatermark(new Watermark(4000));
+            if (processingTime) {
+                harness.setProcessingTime(42);
+            } else {
+                harness.processWatermark(new Watermark(4000));
+            }
             DataOutputSerializer bytes = new DataOutputSerializer(1024);
             for (RowData row : harness.extractOutputValues()) {
                 serializer.serialize(row, bytes);

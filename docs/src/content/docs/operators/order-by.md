@@ -119,9 +119,18 @@ RowKind and encoded payload. Timer firing reads admitted pages of up to 1,024 en
 remains readable and migrates when its group next receives rows; that legacy conversion still
 requires memory for the old list. Canonical snapshots preserve either layout across backends.
 
+Timer registrations and firings write or delete versioned 11-byte markers in the same mutation
+batch as the row changes. The native timer index reserves registrations once per input batch;
+checkpoint restore rebuilds it from bounded marker pages. Old timer snapshots migrate once during
+restore, preserving the original timer identities and last-fired event timestamp. Physical RocksDB
+restore imports bounded state pages without constructing a canonical copy of the whole key group.
+Both time domains drain at most 4,096 timers per native invocation. The first processing-time
+callback still clears the complete pending list; subsequent already-registered callbacks see an
+empty list, as in Flink.
+
 The complete fired row set and DataFusion output workspace are still materialized under the memory
-budget, and timer persistence still rewrites the timer snapshot when it changes. Those are remaining
-scalability limits of this gated implementation; these storage changes do not enable SQL admission.
+budget. That remains a scalability limit of this gated implementation; these storage changes do
+not enable SQL admission.
 
 Temporal sort stores the secondary keys
 in Arrow's order-preserving row encoding with the planned direction and null placement, so firing a

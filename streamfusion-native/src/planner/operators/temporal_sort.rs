@@ -26,6 +26,7 @@ use crate::{decode_plan, proto};
 mod legacy_state;
 mod row_state;
 mod sorting;
+mod timer_state;
 
 const INSERT: i8 = 0;
 const UPDATE_BEFORE: i8 = 1;
@@ -37,7 +38,7 @@ const TIMER_STATE_KEY: &[u8] = b"\0streamfusion-temporal-sort-timers";
 const LAST_TRIGGER_STATE_KEY: &[u8] = b"\0streamfusion-temporal-sort-last-trigger";
 const INPUT_KIND_COLUMN: &str = "__streamfusion_input_row_kind";
 const PROCESSING_TIME_COLUMN: &str = "__streamfusion_processing_time";
-const MAX_EVENT_TIME_TIMERS_PER_OUTPUT: usize = 4_096;
+const MAX_TIMERS_PER_OUTPUT: usize = 4_096;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct BufferedRow {
@@ -303,27 +304,21 @@ impl TemporalSortProcessor {
         let mut pending =
             row_state::append(self.state.as_ref(), incoming, &self.scratch_reservation)?;
         self.state_read_batches = self.state_read_batches.saturating_add(1);
+        let timestamps = timestamps
+            .into_iter()
+            .zip(&pending.was_empty)
+            .filter_map(|(timestamp, was_empty)| (*was_empty).then_some(timestamp))
+            .collect();
         let domain = self.domain();
-        let mut timer_dirty = false;
-        for (timestamp, was_empty) in timestamps.into_iter().zip(&pending.was_empty) {
-            if *was_empty
-                && self.timers.register(
-                    self.key_group,
-                    domain,
-                    TimerKey {
-                        timestamp,
-                        key: rows_state_key(self.key_group, timestamp).key,
-                        namespace: Vec::new(),
-                    },
-                )?
-            {
-                self.timer_registrations = self.timer_registrations.saturating_add(1);
-                timer_dirty = true;
-            }
-        }
-        if timer_dirty {
-            self.append_timer_mutation(&mut pending.mutations)?;
-        }
+        let (registered, _timer_workspace) = timer_state::register(
+            &mut self.timers,
+            self.key_group,
+            domain,
+            timestamps,
+            &mut pending.mutations,
+            &self.scratch_reservation,
+        )?;
+        self.timer_registrations = self.timer_registrations.saturating_add(registered as u64);
         self.state.write_batch(pending.mutations)?;
         self.state_write_batches = self.state_write_batches.saturating_add(1);
         Ok(())
@@ -347,24 +342,15 @@ impl TemporalSortProcessor {
             &self.scratch_reservation,
         )?;
         self.state_read_batches = self.state_read_batches.saturating_add(1);
-        let mut timer_dirty = false;
-        for timestamp in timer_timestamps {
-            if self.timers.register(
-                self.key_group,
-                TimerDomain::ProcessingTime,
-                TimerKey {
-                    timestamp,
-                    key: key.key.clone(),
-                    namespace: Vec::new(),
-                },
-            )? {
-                self.timer_registrations = self.timer_registrations.saturating_add(1);
-                timer_dirty = true;
-            }
-        }
-        if timer_dirty {
-            self.append_timer_mutation(&mut pending.mutations)?;
-        }
+        let (registered, _timer_workspace) = timer_state::register(
+            &mut self.timers,
+            self.key_group,
+            TimerDomain::ProcessingTime,
+            timer_timestamps.into_iter().collect(),
+            &mut pending.mutations,
+            &self.scratch_reservation,
+        )?;
+        self.timer_registrations = self.timer_registrations.saturating_add(registered as u64);
         self.state.write_batch(pending.mutations)?;
         self.state_write_batches = self.state_write_batches.saturating_add(1);
         Ok(())
@@ -395,12 +381,13 @@ impl TemporalSortProcessor {
         // One timer per callback degenerates into thousands of JNI calls, while an unbounded drain
         // can exceed the task's output-memory slice. Processing time deliberately retains Flink's
         // one shared ListState callback semantics.
-        let fired = if domain == TimerDomain::EventTime {
-            self.timers
-                .advance_limited(domain, progress, MAX_EVENT_TIME_TIMERS_PER_OUTPUT)?
-        } else {
-            self.timers.advance(domain, progress)?
-        };
+        let fired = self
+            .timers
+            .advance_owned_limited(domain, progress, MAX_TIMERS_PER_OUTPUT)?;
+        let mut callback_memory = self
+            .scratch_reservation
+            .sibling("temporal timer callback identities");
+        callback_memory.resize(fired.len().saturating_mul(512))?;
         self.timers_fired = self.timers_fired.saturating_add(fired.len() as u64);
         if fired.is_empty() {
             return Ok(RecordBatch::new_empty(self.output_schema.clone()));
@@ -412,10 +399,10 @@ impl TemporalSortProcessor {
             .unwrap_or(i64::MIN);
         let mut seen = hashbrown::HashSet::<StateKey, RandomState>::with_hasher(RandomState::new());
         let mut keys = Vec::with_capacity(fired.len());
-        for fired in fired {
+        for fired in fired.iter() {
             let key = StateKey {
                 key_group: fired.key_group,
-                key: fired.timer.key,
+                key: fired.timer.key.clone(),
             };
             if seen.insert(key.clone()) {
                 keys.push(key);
@@ -435,7 +422,10 @@ impl TemporalSortProcessor {
                 value: Some(self.last_triggering_timestamp.to_le_bytes().to_vec()),
             });
         }
-        self.append_timer_mutation(&mut mutations)?;
+        mutations.extend(fired.iter().map(|fired| StateMutation {
+            key: timer_state::marker_key(fired.key_group, fired.domain, fired.timer.timestamp),
+            value: None,
+        }));
         self.state.write_batch(mutations)?;
         self.state_write_batches = self.state_write_batches.saturating_add(1);
         self.output_row_groups(row_groups)
@@ -549,51 +539,42 @@ impl TemporalSortProcessor {
     pub(crate) fn restore_key_group(&mut self, key_group: u32, bytes: &[u8]) -> Result<()> {
         self.state
             .restore_key_group(key_group, bytes, &self.scratch_reservation)?;
-        let restored = self.state.get_batch(
-            &[
-                StateKeyRef {
-                    key_group,
-                    key: TIMER_STATE_KEY,
-                },
-                StateKeyRef {
-                    key_group,
-                    key: LAST_TRIGGER_STATE_KEY,
-                },
-            ],
+        self.restore_control_state(key_group)
+    }
+
+    pub(crate) fn restore_physical_key_group(
+        &mut self,
+        key_group: u32,
+        source: &RocksPluginKeyedState,
+    ) -> Result<()> {
+        crate::state::import_key_group(
+            self.state.as_mut(),
+            source,
+            key_group,
+            &self.scratch_reservation,
+            &mut |_, _| Ok(()),
+        )?;
+        self.restore_control_state(key_group)
+    }
+
+    fn restore_control_state(&mut self, key_group: u32) -> Result<()> {
+        let domain = self.domain();
+        let last_trigger = timer_state::restore(
+            self.state.as_mut(),
+            &mut self.timers,
+            key_group,
+            domain,
             &self.scratch_reservation,
         )?;
-        let _loaded_state_workspace =
-            crate::state::reserve_decoded_values(&restored, &self.scratch_reservation)?;
         self.state_read_batches = self.state_read_batches.saturating_add(1);
-        if let Some(bytes) = restored[0].as_ref() {
-            self.timers.restore_key_group(key_group, bytes.as_ref())?;
-        }
         if key_group == self.key_group {
-            if let Some(bytes) = restored[1].as_ref() {
-                self.last_triggering_timestamp =
-                    i64::from_le_bytes(bytes.as_ref().try_into().map_err(|_| {
-                        DataFusionError::Execution(
-                            "invalid temporal sort last-trigger state".to_string(),
-                        )
-                    })?);
-            }
+            self.last_triggering_timestamp = last_trigger;
         }
         Ok(())
     }
 
     pub(crate) fn checkpoint(&self, directory: &std::path::Path) -> Result<()> {
         self.state.checkpoint(directory)
-    }
-
-    fn append_timer_mutation(&self, mutations: &mut Vec<StateMutation>) -> Result<()> {
-        mutations.push(StateMutation {
-            key: StateKey {
-                key_group: self.key_group,
-                key: TIMER_STATE_KEY.to_vec(),
-            },
-            value: Some(self.timers.snapshot_key_group(self.key_group)?),
-        });
-        Ok(())
     }
 
     fn domain(&self) -> TimerDomain {

@@ -6,7 +6,7 @@ use crate::memory_pool::tests_support::TestBroker;
 use crate::state::observed_tests::{Io, Observed};
 use std::sync::atomic::Ordering;
 
-fn backends(
+pub(super) fn backends(
     owner: &HostMemoryReservation,
     directory: &std::path::Path,
 ) -> Vec<Box<dyn KeyedState>> {

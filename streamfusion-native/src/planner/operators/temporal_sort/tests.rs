@@ -186,7 +186,7 @@ fn processor(processing_time: bool, broker: Arc<TestBroker>) -> TemporalSortProc
     .unwrap()
 }
 
-fn plan(processing_time: bool) -> Vec<u8> {
+pub(super) fn plan(processing_time: bool) -> Vec<u8> {
     proto::NativePlan {
         protocol_version: crate::PLAN_PROTOCOL_VERSION,
         root: Some(proto::Operator {
@@ -269,4 +269,51 @@ fn batch(
         ));
     }
     RecordBatch::try_from_iter(columns).unwrap()
+}
+
+#[test]
+fn processing_callbacks_bound_timer_work_but_clear_all_pending_rows_on_the_first_callback() {
+    let broker = Arc::new(TestBroker::new(64 << 20));
+    let mut processor = processor(true, broker.clone());
+    let count = MAX_TIMERS_PER_OUTPUT + 113;
+    let numbers = (0..count)
+        .map(|index| (index % 7) as i32)
+        .collect::<Vec<_>>();
+    let timestamps = (0..count)
+        .map(|index| index as i64 + 100)
+        .collect::<Vec<_>>();
+    processor
+        .process_arrow(batch(
+            &vec![0; count],
+            &numbers,
+            &vec!["payload"; count],
+            &vec![INSERT; count],
+            Some(&timestamps),
+        ))
+        .unwrap();
+    let output = processor.advance_processing_time(i64::MAX).unwrap();
+    assert_eq!(
+        output.num_rows(),
+        count,
+        "Flink's first callback clears the complete logical list"
+    );
+    assert_eq!(processor.statistics()[4], MAX_TIMERS_PER_OUTPUT as u64);
+    assert_eq!(processor.statistics()[6], 113);
+    assert_eq!(
+        processor
+            .advance_processing_time(i64::MAX)
+            .unwrap()
+            .num_rows(),
+        0
+    );
+    assert_eq!(processor.statistics()[4], count as u64);
+    assert_eq!(processor.statistics()[6], 0);
+    let snapshot = processor.snapshot_key_group(0).unwrap();
+    assert!(crate::state::decode_key_group_snapshot(0, &snapshot)
+        .unwrap()
+        .is_empty());
+    drop(snapshot);
+    drop(output);
+    drop(processor);
+    assert_eq!(broker.reserved(), 0);
 }
