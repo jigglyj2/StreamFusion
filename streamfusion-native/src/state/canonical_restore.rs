@@ -39,7 +39,7 @@ pub(super) fn restore(
     Ok(())
 }
 
-pub(super) fn require_empty(
+pub(crate) fn require_empty(
     destination: &dyn KeyedState,
     group: u32,
     owner: &HostMemoryReservation,

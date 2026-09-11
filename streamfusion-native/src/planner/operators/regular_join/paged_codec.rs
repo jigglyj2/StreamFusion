@@ -8,7 +8,8 @@ mod entry_ids;
 pub(super) use entry_ids::EntryIds;
 mod row_entries;
 pub(super) use row_entries::{
-    encode as encode_rows_manifest, encode_with_unloaded as encode_rows_with_unloaded, row_key,
+    encode as encode_rows_manifest, encode_dense as encode_dense_manifest,
+    encode_with_unloaded as encode_rows_with_unloaded, row_key,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -17,7 +18,9 @@ pub(super) enum Layout {
     Pages,
     Rows,
 }
-pub(super) use compact::{eligible as compact_eligible, encode as encode_compact};
+pub(super) use compact::{
+    eligible as compact_eligible, encode as encode_compact, MAX_BYTES as MAX_COMPACT_BYTES,
+};
 
 pub(super) const PAGE_ROWS: u64 = 64;
 const MANIFEST_MAGIC: &[u8] = b"SFJM\x01";
@@ -151,11 +154,26 @@ fn append_page(bytes: &mut Vec<u8>, rows: &[StoredRow]) {
     bytes.extend_from_slice(PAGE_MAGIC);
     bytes.extend_from_slice(&(rows.len() as u32).to_le_bytes());
     for row in rows {
-        bytes.extend_from_slice(&row.id.to_le_bytes());
-        bytes.extend_from_slice(&row.associations.to_le_bytes());
-        bytes.extend_from_slice(&(row.row.len() as u32).to_le_bytes());
-        bytes.extend_from_slice(&row.row);
+        append_row(bytes, row.id, row.associations, &row.row);
     }
+}
+
+fn append_row(bytes: &mut Vec<u8>, id: u64, associations: i32, row: &[u8]) {
+    bytes.extend_from_slice(&id.to_le_bytes());
+    bytes.extend_from_slice(&associations.to_le_bytes());
+    bytes.extend_from_slice(&(row.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(row);
+}
+
+pub(super) fn encode_row(id: u64, associations: i32, row: &[u8]) -> Result<Vec<u8>> {
+    if row.len() > u32::MAX as usize {
+        return Err(invalid());
+    }
+    let mut bytes = Vec::with_capacity(25 + row.len());
+    bytes.extend_from_slice(PAGE_MAGIC);
+    bytes.extend_from_slice(&1u32.to_le_bytes());
+    append_row(&mut bytes, id, associations, row);
+    Ok(bytes)
 }
 
 pub(super) fn decode_page(bytes: &[u8], page: u64, next_id: u64) -> Result<Vec<StoredRow>> {

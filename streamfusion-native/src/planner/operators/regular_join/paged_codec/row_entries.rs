@@ -34,18 +34,10 @@ pub(in super::super) fn encode_with_unloaded(
     state: &JoinState,
     unloaded: Option<&UnloadedRows>,
 ) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(MAGIC);
-    for value in [state.left_matchable, state.right_matchable] {
-        bytes.push(match value {
-            None => 0,
-            Some(false) => 1,
-            Some(true) => 2,
-        });
-    }
-    for id in state.next_row_id {
-        bytes.extend_from_slice(&id.to_le_bytes());
-    }
+    let mut bytes = header(
+        [state.left_matchable, state.right_matchable],
+        state.next_row_id,
+    );
     for (side, rows) in [&state.left, &state.right].into_iter().enumerate() {
         // Preserve old bitmaps directly. Only new rows are grouped, including an append into
         // the retained directory's final partial bitmap; historical IDs are never enumerated.
@@ -64,6 +56,45 @@ pub(in super::super) fn encode_with_unloaded(
                     }),
             );
         append_bitmaps(&mut bytes, bitmaps);
+    }
+    bytes
+}
+
+fn header(matchable: [Option<bool>; 2], next: [u64; 2]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(MAGIC);
+    for value in matchable {
+        bytes.push(match value {
+            None => 0,
+            Some(false) => 1,
+            Some(true) => 2,
+        });
+    }
+    for id in next {
+        bytes.extend_from_slice(&id.to_le_bytes());
+    }
+    bytes
+}
+
+/// Legacy SFRJ assigns dense identities while decoding. Emit the same presence bitmaps directly,
+/// without allocating an ID per row or retaining the payloads used to derive them.
+pub(in super::super) fn encode_dense(matchable: [Option<bool>; 2], counts: [u64; 2]) -> Vec<u8> {
+    let mut bytes = header(matchable, counts);
+    for count in counts {
+        append_bitmaps(
+            &mut bytes,
+            (0..count.div_ceil(PAGE_ROWS)).map(|page| {
+                let rows = (count - page * PAGE_ROWS).min(PAGE_ROWS);
+                (
+                    page,
+                    if rows == 64 {
+                        u64::MAX
+                    } else {
+                        (1u64 << rows) - 1
+                    },
+                )
+            }),
+        );
     }
     bytes
 }

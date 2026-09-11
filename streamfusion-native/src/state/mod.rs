@@ -2,6 +2,7 @@
 // Licensed under the Apache License, Version 2.0
 
 mod canonical_restore;
+pub(crate) use canonical_restore::require_empty as require_empty_key_group;
 mod checkpoint_import;
 pub(crate) use checkpoint_import::import_key_group;
 mod memory;

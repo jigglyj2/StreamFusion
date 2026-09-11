@@ -490,7 +490,21 @@ payloads, or `SFJC/1` compact singleton values, identically on native memory and
 Existing `SFJM/1` paged and multi-row `SFJC/1` snapshots remain readable. A touched legacy key
 adopts the current layout at the completed input-batch boundary; canonical restore preserves
 existing bytes until then.
-Restoring whole-key `SFRJ` v1/v2 snapshots migrates them to the current layout. A runtime predating
+Restoring whole-key `SFRJ` v1/v2 snapshots migrates them to the current layout. Migration validates
+all legacy values before its first write, borrows their payloads, and constructs dense presence
+bitmaps without expanding row identities. It uses the same bounded state writer as streaming
+flushes. Canonical input no longer becomes a second owned key group, a decoded history, a full
+mutation collection, and another canonical frame. Physical migration reads bounded source pages
+and preserves the existing compact-singleton and external-row bytes on both backends. Duplicate
+legacy canonical keys and malformed records are rejected before destination mutation.
+A large individual legacy RocksDB value must still fit its admitted read buffer; migration does
+not make the old opaque value independently seekable. Canonical input frames retain their own
+reservation for their complete lifetime. An 8 MiB canonical hot-key fixture migrates with less
+than 3 MiB of new allocations, with its input frame and destination cache separately charged.
+A physical legacy key group larger than 8 MiB restores within a 4 MiB allowance including both
+RocksDB caches. Corrupt later records leave the destination unchanged in both input formats.
+
+A runtime predating
 `SFJI/1` cannot restore the new directories. Tests cover both-backend restore, sparse stable IDs,
 malformed bitmaps and payload identity mismatches, representation transitions and complete deletion.
 Runtime directory decoding keeps `SFJI/1` presence bitmaps compressed. Payload reads expand only

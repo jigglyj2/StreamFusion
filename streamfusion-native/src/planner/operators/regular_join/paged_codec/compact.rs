@@ -4,7 +4,7 @@
 use super::*;
 
 const MAGIC: &[u8] = b"SFJC\x01";
-const MAX_BYTES: usize = 8 * 1024;
+pub(in super::super) const MAX_BYTES: usize = 8 * 1024;
 
 /// Small equality keys share one backend entry for their directory and payloads. Hot/large
 /// keys retain stable independently writable pages. The cap bounds rewrite amplification.

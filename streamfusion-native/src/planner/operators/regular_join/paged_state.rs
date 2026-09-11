@@ -91,7 +91,9 @@ fn load_impl(
 }
 
 mod flushing;
+mod legacy_restore;
 mod loading;
+mod write_batch;
 pub(super) use flushing::flush;
 mod restore;
 pub(super) use restore::restore_from_checkpoint;
@@ -157,50 +159,12 @@ pub(super) fn restore(
         restore::validate_snapshot(group, bytes, owner)?;
         return state.restore_key_group(group, bytes, owner);
     }
-    // Historical opaque SFRJ values need migration. Keep its explicit reservation separate from
-    // current paged snapshots, whose payloads are validated and dropped one page at a time.
-    let mut memory = owner.sibling("regular join legacy state migration");
-    memory.resize(
-        bytes
-            .len()
-            .saturating_mul(16)
-            .saturating_add(count.saturating_mul(512)),
-    )?;
-    let entries = decode_key_group_snapshot(group, bytes)?;
-    let mut migrated = Vec::new();
-    for (key, value) in entries {
-        let value = decode_state(&value)?;
-        let entry = StagedState {
-            key: StateKey {
-                key_group: group,
-                key,
-            },
-            value,
-            original: JoinState::default(),
-            original_layout: Layout::Pages,
-            unloaded: None,
-            touched: true,
-        };
-        memory.try_grow(mutation_workspace(&entry))?;
-        migrated.extend(mutations(&entry)?);
-    }
-    migrated.sort_by(|left, right| left.key.key.cmp(&right.key.key));
-    let size = 16
-        + migrated
-            .iter()
-            .map(|entry| 8 + entry.key.key.len() + entry.value.as_ref().unwrap().len())
-            .sum::<usize>();
-    let mut writer = streamfusion_state_abi::SnapshotWriter::new(group, migrated.len(), size)
-        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-    for entry in migrated {
-        writer
-            .append(&entry.key.key, entry.value.as_ref().unwrap())
-            .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-    }
-    let bytes = writer
-        .finish()
-        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-    state.restore_key_group(group, &bytes, owner)
+    legacy_restore::restore(
+        state,
+        legacy_restore::Source::Canonical(bytes),
+        group,
+        owner,
+    )
 }
 
 pub(super) fn decode_entries(

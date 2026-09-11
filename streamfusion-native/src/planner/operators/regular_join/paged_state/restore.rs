@@ -90,8 +90,12 @@ pub(in super::super) fn restore_from_checkpoint(
         if legacy != total {
             return Err(invalid("mixed legacy and paged records"));
         }
-        let bytes = source.snapshot_key_group(group, owner)?;
-        return super::restore(state, group, &bytes, owner);
+        return legacy_restore::restore(
+            state,
+            legacy_restore::Source::Physical(source),
+            group,
+            owner,
+        );
     }
     let mut consumed = 0usize;
     let mut references = owner.sibling("join checkpoint page references");
