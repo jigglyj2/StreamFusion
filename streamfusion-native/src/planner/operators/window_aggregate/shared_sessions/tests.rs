@@ -5,6 +5,7 @@ use super::*;
 use crate::memory_pool::tests_support::TestBroker;
 use prost::Message;
 
+mod checkpoint;
 mod io;
 mod workspace;
 

@@ -423,8 +423,8 @@ OVER and window aggregation share timer reload logic with the timer-based restor
 OVER's pending terminal output and bounded Sort's heap/cursor state reset after restoration just
 as they do for canonical snapshots. Generated bounded-sort changelogs exercise physical restore
 to both backends, followed by additional updates and final output comparison against Flink.
-Shared slicing-window factories now page physical imports; the shared session-window restore
-adapter still materializes its canonical input for legacy interval/index migration.
+Shared slicing and current session-window factories now page physical imports. Only legacy
+session interval/index migration still materializes its canonical input.
 
 Window Join now pages physical imports in both its standalone bridge and fused factory, and
 streams canonical snapshot output from the fused factory. Current indexed checkpoints validate
@@ -440,7 +440,13 @@ Slicing windows validate one accumulator at a time with a reusable reservation, 
 and restore timers. Processing-time windows use the same slice adapter and continue to require
 Flink's pre-checkpoint buffer flush before emitting a snapshot. Plan/version markers and Flink's
 union-operator watermark remain mandatory restore inputs; invalid markers fail before target
-mutation. Session-window physical restore still uses its existing complete migration validator.
+mutation. Current session checkpoints validate consecutive intervals in key order, retaining only
+one partition prefix and end rather than a second full interval index. Unordered older canonical
+frames sort admitted borrowed descriptors without copying accumulator payloads. Current-session
+validation preserves inclusive overlap rejection and checks encoded ends against the restored
+watermark before importing state. A 10,000-session fixture verifies canonical and physical restore
+under a budget that rejects the previous whole-group reservation, including both RocksDB caches.
+Legacy SFWS/SFWI session migration still uses its existing complete migration validator.
 
 All physical restore entry points now open existing checkpoints read-only through state-component
 ABI 10. Missing directories, missing CURRENT files, and corrupt/missing manifests fail restoration;

@@ -142,6 +142,14 @@ impl super::shared_kernel::SharedWindowKernel for SharedSessions {
     fn restore(&mut self, group: u32, bytes: &[u8], watermark: i64) -> Result<()> {
         SharedSessions::restore(self, group, bytes, watermark)
     }
+    fn restore_physical(
+        &mut self,
+        group: u32,
+        source: &crate::state::RocksPluginKeyedState,
+        watermark: i64,
+    ) -> Result<()> {
+        Self::restore_physical(self, group, source, watermark)
+    }
     fn checkpoint(&mut self, directory: &std::path::Path) -> Result<()> {
         SharedSessions::checkpoint(self, directory)
     }

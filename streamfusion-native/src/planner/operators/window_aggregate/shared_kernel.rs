@@ -24,11 +24,7 @@ pub(super) trait SharedWindowKernel: Send {
         group: u32,
         source: &crate::state::RocksPluginKeyedState,
         watermark: i64,
-    ) -> Result<()> {
-        // Legacy session migration still validates a complete replacement before installation.
-        let bytes = source.snapshot_key_group(group, &self.kernel().scratch_reservation)?;
-        self.restore(group, &bytes, watermark)
-    }
+    ) -> Result<()>;
     fn checkpoint(&mut self, directory: &std::path::Path) -> Result<()>;
 
     fn input_schema(&self) -> Result<SchemaRef> {

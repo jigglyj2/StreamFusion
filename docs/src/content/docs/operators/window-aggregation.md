@@ -358,8 +358,10 @@ Shared slicing windows import physical RocksDB checkpoints in bounded pages and 
 accumulators individually, avoiding a whole-key-group decoding copy. Shared slicing and session
 windows stream canonical snapshot output directly from state. Processing-time snapshots still
 require Flink's pre-checkpoint buffer flush. Large timer sets and individual accumulator values
-remain subject to admission. Session-window physical restore retains its complete legacy
-migration validator; these changes do not expand SQL admission.
+remain subject to admission. Current session checkpoints also import in pages and validate
+consecutive ordered intervals without retaining a second complete interval index. Older unordered
+canonical frames sort borrowed references. Legacy SFWS/SFWI migration retains its complete
+validator; these changes do not expand SQL admission.
 
 The shared execution adapter preserves Arrow ownership through adjacent Calc stages and attaches
 timestamp-less INSERT metadata without re-admitting or copying payload buffers. Watermark output
