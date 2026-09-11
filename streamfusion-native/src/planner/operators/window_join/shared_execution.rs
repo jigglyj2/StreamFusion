@@ -184,24 +184,56 @@ impl PersistentOperatorFactory for WindowJoinFactory {
         owner.write_contract(group)?;
         owner.kernel.snapshot_key_group(group)
     }
+    fn write_snapshot(
+        &self,
+        group: u32,
+        sink: &mut crate::state::snapshot_stream::SnapshotSink<'_>,
+    ) -> Result<usize> {
+        let mut owner = self.owner.lock().map_err(|_| poisoned())?;
+        owner.invocation.require_idle(NAME)?;
+        owner.write_contract(group)?;
+        owner.kernel.write_snapshot(group, sink)
+    }
+    fn restore_from_checkpoint(
+        &self,
+        group: u32,
+        source: &crate::state::RocksPluginKeyedState,
+        memory: &HostMemoryReservation,
+    ) -> Result<()> {
+        let mut owner = self.owner.lock().map_err(|_| poisoned())?;
+        owner.invocation.require_idle(NAME)?;
+        let contract = source.get_batch(
+            &[StateKeyRef {
+                key_group: group,
+                key: SHARED_STATE_KEY,
+            }],
+            memory,
+        )?;
+        if contract[0].as_deref() != Some(owner.contract.as_slice()) {
+            return Err(invalid(
+                "shared window join checkpoint contract/version differs from the planned operator",
+            ));
+        }
+        owner.kernel.restore_physical_key_group(group, source)?;
+        owner.kernel.current_event_time = i64::MIN;
+        Ok(())
+    }
     fn restore(&self, group: u32, bytes: &[u8]) -> Result<()> {
         let mut owner = self.owner.lock().map_err(|_| poisoned())?;
         owner.invocation.require_idle(NAME)?;
         // Validate before mutating the backend. Empty groups still carry the plan contract.
-        let mut memory = owner.kernel.state_memory();
-        memory.resize(bytes.len().saturating_mul(4).saturating_add(4096))?;
-        let entries = crate::state::decode_key_group_snapshot(group, bytes)?;
+        let entries = streamfusion_state_abi::key_group_snapshot_entries(group, bytes)
+            .map_err(|error| invalid(&error.to_string()))?;
         if entries
-            .iter()
-            .find(|(key, _)| key == SHARED_STATE_KEY)
-            .map(|(_, value)| value.as_slice())
+            .filter(|(key, _)| *key == SHARED_STATE_KEY)
+            .map(|(_, value)| value)
+            .next()
             != Some(owner.contract.as_slice())
         {
             return Err(invalid(
                 "shared window join checkpoint contract/version differs from the planned operator",
             ));
         }
-        drop(entries);
         owner.kernel.restore_key_group(group, bytes)?;
         // Flink InternalTimerServiceImpl restores timer queues but starts its clock
         // at MIN_VALUE. Replayed records must see that clock, including late rows.

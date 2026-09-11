@@ -8,6 +8,9 @@ use super::super::sortable_state::{prefix, prefix_end, FORMAT, PAGE_BYTES, PAGE_
 use super::*;
 use arrow::array::Int64Array;
 
+mod checkpoint;
+pub(super) use checkpoint::{restore_canonical, restore_physical};
+
 const INDEX: u8 = 0x91;
 const PAYLOAD: u8 = 0x92;
 const HEADER_MAGIC: &[u8; 4] = b"SFWI";
@@ -198,84 +201,6 @@ pub(super) fn read_window(
         ));
     }
     Ok(())
-}
-
-/// Convert the old SFWJ/2 whole-window values once at restore, preserving duplicate arrival
-/// order and the original timer identities. Canonical snapshots remain backend independent.
-pub(super) fn migrate_legacy(
-    state: &mut dyn KeyedState,
-    group: u32,
-    snapshot: &[u8],
-    converter: &mut RowConverter,
-    owner: &HostMemoryReservation,
-) -> Result<()> {
-    let mut workspace = owner.sibling("window join checkpoint migration workspace");
-    workspace.resize(snapshot.len().saturating_mul(8).saturating_add(65536))?;
-    let entries = crate::state::decode_key_group_snapshot(group, snapshot)?;
-    for (key, value) in &entries {
-        match key.first() {
-            Some(&WINDOW_KEY_PREFIX) => {
-                decode_window_end(key)?;
-            }
-            Some(&INDEX) | Some(&PAYLOAD) => {
-                validate_indexed_key(key)?;
-                if key[0] == INDEX {
-                    Header::decode(value)?;
-                }
-            }
-            _ if key == TIMER_STATE_KEY || key == SHARED_STATE_KEY => {}
-            _ => {
-                return Err(DataFusionError::Execution(
-                    "unknown window join checkpoint key".into(),
-                ))
-            }
-        }
-    }
-    let has_legacy = entries
-        .iter()
-        .any(|(k, _)| k.first() == Some(&WINDOW_KEY_PREFIX));
-    let has_index = entries
-        .iter()
-        .any(|(k, _)| matches!(k.first(), Some(&INDEX) | Some(&PAYLOAD)));
-    if has_legacy && has_index {
-        return Err(DataFusionError::Execution(
-            "window join checkpoint mixes legacy and indexed state".into(),
-        ));
-    }
-    if !has_legacy {
-        return Ok(());
-    }
-    let mut mutations = Vec::new();
-    let mut bound = workspace.size();
-    for (key, value) in entries {
-        if key.first() != Some(&WINDOW_KEY_PREFIX) {
-            continue;
-        }
-        let timer = StateKey {
-            key_group: group,
-            key,
-        };
-        let keys = WindowKeys::new(&timer, converter)?;
-        let legacy = decode_state(&value)?;
-        let mut header = Header::default();
-        bound = bound.saturating_add(
-            (legacy.left.len() + legacy.right.len())
-                .saturating_mul(keys.payload.len().saturating_add(128)),
-        );
-        workspace.resize(bound)?;
-        for (side, rows) in [legacy.left, legacy.right].into_iter().enumerate() {
-            payload_pages::append(&keys, &mut header, side, rows, &mut mutations)?;
-        }
-        mutations.push(StateMutation {
-            key: keys.header,
-            value: Some(header.encode()),
-        });
-        mutations.push(StateMutation {
-            key: timer,
-            value: None,
-        });
-    }
-    state.write_batch(mutations)
 }
 
 fn validate_indexed_key(key: &[u8]) -> Result<()> {

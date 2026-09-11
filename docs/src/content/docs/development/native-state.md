@@ -423,8 +423,17 @@ OVER and window aggregation share timer reload logic with the timer-based restor
 OVER's pending terminal output and bounded Sort's heap/cursor state reset after restoration just
 as they do for canonical snapshots. Generated bounded-sort changelogs exercise physical restore
 to both backends, followed by additional updates and final output comparison against Flink.
-Window Join still uses its canonical adapter pending migration of its legacy-index validation;
-shared window factories have their own semantic restore hooks and still need paged import support.
+Shared window aggregate factories have their own semantic restore hooks and still need paged
+import support.
+
+Window Join now pages physical imports in both its standalone bridge and fused factory, and
+streams canonical snapshot output from the fused factory. Current indexed checkpoints validate
+borrowed entries without a whole-group decoding reservation. Legacy SFWJ/2 snapshots migrate one
+window value at a time; each old opaque window still requires its own admitted decoding workspace.
+Unknown keys, mixed legacy/indexed encodings, and incompatible shared plan contracts fail restore.
+The shared contract is checked before target mutation, and restored timer clocks still start at
+Flink's minimum watermark. Tests cover a group larger than 8 MiB restored and streamed with a
+4 MiB destination budget, legacy migration on both backends, and failed checkpoint sink cleanup.
 
 All physical restore entry points now open existing checkpoints read-only through state-component
 ABI 10. Missing directories, missing CURRENT files, and corrupt/missing manifests fail restoration;
