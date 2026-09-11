@@ -1,64 +1,11 @@
 // Copyright 2026 StreamFusion Authors
 // Licensed under the Apache License, Version 2.0.
 
-use super::write_batch::Writer;
 use super::*;
 use crate::planner::operators::regular_join::state_codec::StateView;
+use crate::state::StateBatchWriter as Writer;
 
-pub(super) enum Source<'a> {
-    Canonical(&'a [u8]),
-    Physical(&'a RocksPluginKeyedState),
-}
-
-impl Source<'_> {
-    fn visit(
-        &self,
-        group: u32,
-        owner: &HostMemoryReservation,
-        visitor: &mut dyn FnMut(&[u8], &[u8]) -> Result<()>,
-    ) -> Result<()> {
-        match self {
-            Self::Canonical(bytes) => {
-                for (key, value) in streamfusion_state_abi::key_group_snapshot_entries(group, bytes)
-                    .map_err(|error| DataFusionError::Execution(error.to_string()))?
-                {
-                    visitor(key, value)?;
-                }
-                Ok(())
-            }
-            Self::Physical(source) => {
-                source.visit_key_group_admitted(group, 1024, 256 << 10, owner, &mut |page| {
-                    for &(key, value) in page {
-                        visitor(key, value)?;
-                    }
-                    Ok(())
-                })
-            }
-        }
-    }
-
-    fn validate(&self, group: u32, owner: &HostMemoryReservation) -> Result<()> {
-        if let Self::Canonical(bytes) = self {
-            let entries = streamfusion_state_abi::key_group_snapshot_entries(group, bytes)
-                .map_err(|error| DataFusionError::Execution(error.to_string()))?;
-            let mut memory = owner.sibling("legacy join borrowed key validation");
-            memory.resize(entries.len().saturating_mul(size_of::<&[u8]>() * 2))?;
-            let mut keys = entries.map(|(key, _)| key).collect::<Vec<_>>();
-            keys.sort_unstable();
-            if keys.windows(2).any(|pair| pair[0] == pair[1]) {
-                return Err(DataFusionError::Execution(
-                    "duplicate legacy regular join checkpoint key".into(),
-                ));
-            }
-        }
-        // Physical RocksDB keys are unique. Validate every immutable legacy value before the
-        // first destination write; no owned row payload or key-group snapshot is constructed.
-        self.visit(group, owner, &mut |_, value| {
-            StateView::parse(value)?;
-            Ok(())
-        })
-    }
-}
+pub(super) use crate::state::CheckpointSource as Source;
 
 pub(super) fn restore(
     destination: &mut dyn KeyedState,
@@ -66,7 +13,11 @@ pub(super) fn restore(
     group: u32,
     owner: &HostMemoryReservation,
 ) -> Result<()> {
-    source.validate(group, owner)?;
+    source.validate_unique_keys(group, owner)?;
+    source.visit(group, owner, &mut |_, value| {
+        StateView::parse(value)?;
+        Ok(())
+    })?;
     crate::state::require_empty_key_group(destination, group, owner)?;
     let mut memory = owner.sibling("legacy join migration write page");
     let mut key_memory = owner.sibling("legacy join migration logical key and compact value");

@@ -3,7 +3,7 @@
 
 use super::*;
 
-use super::write_batch::Writer;
+use crate::state::StateBatchWriter as Writer;
 
 /// Called only after every input transition completes. Writes may span backend pages, but no
 /// checkpoint may observe an intermediate page; any error requires task recovery.

@@ -81,7 +81,11 @@ Admission failure poisons the invocation so it must recover through a fresh cont
 session computation can be resumed. Boundary tests retain output credit after context close and
 verify early denial before state access. Canonical native tests switch backends while restoring
 Flink's operator watermark. Legacy `SFWS`/`SFWI` append-only snapshots migrate to ordered entries
-only after their indexes, accumulators and timers agree; retained retraction-event state is rejected.
+only after their indexes, accumulators and timers agree; retained retraction-event state is rejected
+before decoding an event collection. Generated legacy-migration tests create real retained-kernel
+checkpoints, restore through the production JNI boundary, and compare the complete changelog
+against SQL-generated Flink sessions after older bridging arrivals and timer firings. Both canonical
+and physical inputs restore into either native backend.
 Generated SESSION recovery tests now compare exact changelog bytes with a SQL-generated Flink
 operator across canonical backend switches, aligned and unaligned checkpoints, and key-group
 rescaling from one to two subtasks and back. Nullable keys route through Arrow IPC; live sessions
@@ -360,8 +364,21 @@ windows stream canonical snapshot output directly from state. Processing-time sn
 require Flink's pre-checkpoint buffer flush. Large timer sets and individual accumulator values
 remain subject to admission. Current session checkpoints also import in pages and validate
 consecutive ordered intervals without retaining a second complete interval index. Older unordered
-canonical frames sort borrowed references. Legacy SFWS/SFWI migration retains its complete
-validator; these changes do not expand SQL admission.
+canonical frames sort borrowed references.
+
+Legacy SFWS/SFWI migration retains only admitted interval/key metadata and timer state during
+validation. It releases each decoded accumulator before reading another, then writes the current
+format in bounded pages. It never imports the obsolete records into the destination or builds a
+complete mutation collection. Timer registrations go directly into the restored timer service in
+batches; migration no longer serializes a temporary service just to load those timers again.
+Join and session migration share the same checkpoint-source and bounded-write helpers.
+An 8 MiB MIN-string fixture restores with a 4 MiB allowance on RocksDB, including source and
+destination caches for physical input; canonical input keeps its complete frame separately charged.
+The test checks less than 3 MiB of new allocations and exactly one write of each current record.
+Malformed indexes, timers, duplicate keys and unsupported replay events fail before destination
+writes. Failure after a write page invalidates the context until fresh checkpoint recovery.
+Validation metadata and live timers still grow with session count, and each individual legacy
+value must fit its admitted read/decode workspace. These changes do not expand SQL admission.
 
 The shared execution adapter preserves Arrow ownership through adjacent Calc stages and attaches
 timestamp-less INSERT metadata without re-admitting or copying payload buffers. Watermark output

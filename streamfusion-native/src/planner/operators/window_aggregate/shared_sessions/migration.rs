@@ -1,166 +1,120 @@
 // Copyright 2026 StreamFusion Authors
 // Licensed under the Apache License, Version 2.0.
 
-//! Canonical migration from the retained SFWS session payload / SFWI interval-list format.
-//! Build and validate the complete replacement before changing this key group's state.
+//! Validate legacy SFWS/SFWI state before migration, then write only the current format.
+//! Source payloads remain borrowed and destination writes share the native bounded writer.
 
 use super::*;
-use std::collections::{BTreeMap, BTreeSet};
+use crate::state::{CheckpointSource as Source, StateBatchWriter};
+mod timers;
+use timers::TimerBatch;
+mod validation;
 
 impl SharedSessions {
     pub(super) fn migrate_legacy(
         &mut self,
         group: u32,
-        original: &[u8],
-        entries: &[(Vec<u8>, Vec<u8>)],
+        source: Source<'_>,
         watermark: i64,
     ) -> Result<()> {
-        let mut indexes = BTreeMap::new();
-        let mut expected_indexes = BTreeMap::<Vec<u8>, BTreeSet<(i64, i64)>>::new();
-        let mut partitions = BTreeMap::<Vec<u8>, assignments::Assignments>::new();
-        let mut rows = Vec::new();
-        let mut old_registrations = Vec::new();
-        let mut old_timer_bytes = None;
-        for (key, value) in entries {
-            if key == TIMER_STATE_KEY {
-                old_timer_bytes = Some(value.as_slice());
-            } else if key.first() == Some(&SESSION_INDEX_PREFIX) {
-                let intervals = decode_session_index(value)?;
-                let count = intervals.len();
-                let intervals = intervals.into_iter().collect::<BTreeSet<_>>();
-                if intervals.len() != count
-                    || indexes.insert(key[1..].to_vec(), intervals).is_some()
-                {
-                    return Err(DataFusionError::Execution(
-                        "duplicate legacy session index".into(),
-                    ));
-                }
-            } else if key.first() == Some(&WINDOW_KEY_PREFIX) {
-                let (start, end) = decode_window_state_key_bounds(key)?;
-                let (grouping, state, events) = decode_session_state(value, &self.kernel.calls)?;
-                if !events.is_empty() || start >= end || end - 1 <= watermark {
-                    return Err(DataFusionError::Execution(
-                        "legacy migration requires live append-only session state".into(),
-                    ));
-                }
-                let prefix = codec::prefix(&grouping)?;
-                partitions
-                    .entry(prefix.clone())
-                    .or_default()
-                    .existing(start, end)?;
-                expected_indexes
-                    .entry(group_key_from_window_state_key(key)?.to_vec())
-                    .or_default()
-                    .insert((start, end));
-                rows.push((prefix, start, end, state));
-                old_registrations.push((
-                    group,
-                    TimerDomain::EventTime,
-                    TimerKey {
-                        timestamp: end - 1,
-                        key: key.to_vec(),
-                        namespace: window_namespace(start, end),
-                    },
-                ));
-            } else {
-                return Err(DataFusionError::Execution(
-                    "unsupported legacy session state entry".into(),
-                ));
+        let owner = self
+            .kernel
+            .scratch_reservation
+            .sibling("session legacy migration");
+        validation::validate(source, group, &self.kernel.calls, watermark, &owner)?;
+        crate::state::require_empty_key_group(self.kernel.state.as_ref(), group, &owner)?;
+        self.kernel.timers.visit_key_group(group, &mut |_, _| {
+            Err(DataFusionError::Execution(format!(
+                "timer key group {group} was restored more than once"
+            )))
+        })?;
+        let result = self.write_legacy_migration(group, source, &owner);
+        if result.is_err() {
+            self.failed = true;
+        }
+        result
+    }
+
+    fn write_legacy_migration(
+        &mut self,
+        group: u32,
+        source: Source<'_>,
+        owner: &HostMemoryReservation,
+    ) -> Result<()> {
+        let marker = self.marker();
+        let mut page = owner.sibling("session migration write page");
+        let mut workspace = owner.sibling("session migration value");
+        let mut writes = 0;
+        let mut writer =
+            StateBatchWriter::new(self.kernel.state.as_mut(), &mut page, 0, &mut writes)?;
+        let mut pending = TimerBatch::new(owner);
+        source.visit(group, owner, &mut |key, value| {
+            if key.first() != Some(&WINDOW_KEY_PREFIX) {
+                return Ok(());
             }
-        }
-        if indexes != expected_indexes {
-            return Err(DataFusionError::Execution(
-                "legacy session index differs from its accumulators".into(),
-            ));
-        }
-        let mut old_timers = NativeTimerService::new(
-            group,
-            group,
-            self.kernel
-                .scratch_reservation
-                .sibling("legacy session timer validation"),
-        )?;
-        old_timers.register_batch(old_registrations)?;
-        if let Some(bytes) = old_timer_bytes {
-            if old_timers.snapshot_key_group(group)? != bytes {
-                return Err(DataFusionError::Execution(
-                    "legacy session timers differ from live state".into(),
-                ));
-            }
-        } else if !rows.is_empty() {
-            return Err(DataFusionError::Execution(
-                "legacy session snapshot is missing timers".into(),
-            ));
-        }
-        drop(old_timers);
-        let end_rows = self
-            .end_codec
-            .convert_columns(&[Arc::new(Int64Array::from_iter_values(
-                rows.iter().map(|(_, _, end, _)| *end),
-            )) as ArrayRef])?;
-        let mut mutations = entries
-            .iter()
-            .map(|(key, _)| StateMutation {
+            admit_workspace(
+                &mut workspace,
+                value_workspace(key, value, self.kernel.calls.len()),
+            )?;
+            let (start, end) = decode_window_state_key_bounds(key)?;
+            let (grouping, state) = decode_append_only_session_state(value, &self.kernel.calls)?;
+            let prefix = codec::prefix(&grouping)?;
+            let end_rows = self
+                .end_codec
+                .convert_columns(&[Arc::new(Int64Array::from(vec![end])) as ArrayRef])?;
+            let key = codec::key(group, &prefix, end_rows.row(0).as_ref());
+            pending.push(
+                group,
+                end - 1,
+                &key.key,
+                &end.to_le_bytes(),
+                &mut self.kernel.timers,
+            )?;
+            writer.push(
+                key.key.len().saturating_add(value.len()).saturating_add(64),
+                key.key.capacity(),
+                || {
+                    Ok(StateMutation {
+                        key,
+                        value: Some(codec::encode(start, end, &state)),
+                    })
+                },
+            )
+        })?;
+        pending.flush(&mut self.kernel.timers)?;
+        drop((pending, workspace));
+        let timer_bytes = self.kernel.timers.snapshot_size(group)?;
+        writer.push(TIMER_STATE_KEY.len().saturating_add(timer_bytes), 0, || {
+            Ok(StateMutation {
                 key: StateKey {
                     key_group: group,
-                    key: key.to_vec(),
+                    key: TIMER_STATE_KEY.to_vec(),
                 },
-                value: None,
+                value: Some(self.kernel.timers.snapshot_key_group(group)?),
             })
-            .collect::<Vec<_>>();
-        let mut registrations = Vec::new();
-        for (index, (prefix, start, end, state)) in rows.into_iter().enumerate() {
-            let key = codec::key(group, &prefix, end_rows.row(index).as_ref());
-            registrations.push((
-                group,
-                TimerDomain::EventTime,
-                TimerKey {
-                    timestamp: end - 1,
-                    key: key.key.clone(),
-                    namespace: end.to_le_bytes().to_vec(),
-                },
-            ));
-            mutations.push(StateMutation {
-                key,
-                value: Some(codec::encode(start, end, &state)),
-            });
-        }
-        let mut timers = NativeTimerService::new(
-            group,
-            group,
-            self.kernel
-                .scratch_reservation
-                .sibling("migrated session timers"),
+        })?;
+        writer.push(
+            checkpoint::MARKER_KEY.len().saturating_add(marker.len()),
+            marker.capacity(),
+            || {
+                Ok(StateMutation {
+                    key: StateKey {
+                        key_group: group,
+                        key: checkpoint::MARKER_KEY.to_vec(),
+                    },
+                    value: Some(marker),
+                })
+            },
         )?;
-        timers.register_batch(registrations)?;
-        let timer_bytes = timers.snapshot_key_group(group)?;
-        mutations.push(StateMutation {
-            key: StateKey {
-                key_group: group,
-                key: TIMER_STATE_KEY.to_vec(),
-            },
-            value: Some(timer_bytes.clone()),
-        });
-        mutations.push(StateMutation {
-            key: StateKey {
-                key_group: group,
-                key: checkpoint::MARKER_KEY.to_vec(),
-            },
-            value: Some(self.marker()),
-        });
-        drop(timers);
-        self.kernel
-            .state
-            .restore_key_group(group, original, &self.kernel.scratch_reservation)?;
-        if let Err(error) = self
-            .kernel
-            .state
-            .write_batch(mutations)
-            .and_then(|()| self.kernel.timers.restore_key_group(group, &timer_bytes))
-        {
-            self.failed = true;
-            return Err(error);
-        }
-        Ok(())
+        writer.finish()
     }
+}
+
+fn value_workspace(key: &[u8], value: &[u8], calls: usize) -> usize {
+    value
+        .len()
+        .saturating_mul(8)
+        .saturating_add(key.len().saturating_mul(4))
+        .saturating_add(calls.saturating_mul(512))
+        .saturating_add(65536)
 }

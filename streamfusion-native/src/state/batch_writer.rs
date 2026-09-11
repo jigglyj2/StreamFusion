@@ -2,13 +2,15 @@
 // Licensed under the Apache License, Version 2.0.
 
 use super::*;
+use crate::memory_pool::HostMemoryReservation;
+use datafusion::error::DataFusionError;
+use std::mem::size_of;
 
-// Leave room for directory mutations alongside the normal 1,024-row input slice.
-// The byte ceiling independently bounds wide-row encoding.
+// Bound write descriptors separately from encoded payload bytes.
 const WRITE_ROWS: usize = 4096;
 const WRITE_BYTES: usize = 256 << 10;
 
-pub(super) struct Writer<'a> {
+pub(crate) struct StateBatchWriter<'a> {
     state: &'a mut dyn KeyedState,
     memory: &'a mut HostMemoryReservation,
     retained: usize,
@@ -17,8 +19,8 @@ pub(super) struct Writer<'a> {
     writes: &'a mut u64,
 }
 
-impl<'a> Writer<'a> {
-    pub(super) fn new(
+impl<'a> StateBatchWriter<'a> {
+    pub(crate) fn new(
         state: &'a mut dyn KeyedState,
         memory: &'a mut HostMemoryReservation,
         retained: usize,
@@ -35,11 +37,11 @@ impl<'a> Writer<'a> {
         })
     }
 
-    pub(super) fn release_retained(&mut self, bytes: usize) {
+    pub(crate) fn release_retained(&mut self, bytes: usize) {
         self.retained = self.retained.saturating_sub(bytes);
     }
 
-    pub(super) fn finish(mut self) -> Result<()> {
+    pub(crate) fn finish(mut self) -> Result<()> {
         self.retained = 0;
         self.flush(0)?;
         self.memory.resize(0)
@@ -72,7 +74,7 @@ impl<'a> Writer<'a> {
         Ok(())
     }
 
-    pub(super) fn admit_extra(&mut self, extra: usize) -> Result<()> {
+    pub(crate) fn admit_extra(&mut self, extra: usize) -> Result<()> {
         match self.admit(self.bytes, self.pending.len(), extra) {
             Err(DataFusionError::ResourcesExhausted(_)) if !self.pending.is_empty() => {
                 self.flush(0)?;
@@ -82,7 +84,7 @@ impl<'a> Writer<'a> {
         }
     }
 
-    pub(super) fn push(
+    pub(crate) fn push(
         &mut self,
         bytes: usize,
         extra: usize,

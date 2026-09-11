@@ -1,6 +1,10 @@
 // Copyright 2026 StreamFusion Authors
 // Licensed under the Apache License, Version 2.0
 
+mod batch_writer;
+pub(crate) use batch_writer::StateBatchWriter;
+mod checkpoint_source;
+pub(crate) use checkpoint_source::CheckpointSource;
 mod canonical_restore;
 pub(crate) use canonical_restore::require_empty as require_empty_key_group;
 mod checkpoint_import;

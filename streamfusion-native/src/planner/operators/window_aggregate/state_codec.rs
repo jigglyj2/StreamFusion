@@ -148,11 +148,7 @@ pub(in crate::planner::operators) fn encode_session_state(
     bytes
 }
 
-pub(in crate::planner::operators) fn decode_session_state(
-    bytes: &[u8],
-    calls: &[Call],
-) -> Result<(Vec<u8>, AccumulatorState, Vec<SessionEvent>)> {
-    let mut reader = WindowBytesReader::new(bytes);
+fn session_header(reader: &mut WindowBytesReader<'_>) -> Result<(usize, usize, usize)> {
     if reader.read_exact(4)? != SESSION_STATE_MAGIC || reader.read_u8()? != 1 {
         return Err(DataFusionError::Execution(
             "invalid native session window state".to_string(),
@@ -161,6 +157,37 @@ pub(in crate::planner::operators) fn decode_session_state(
     let grouping_length = reader.read_u32()? as usize;
     let aggregate_length = reader.read_u32()? as usize;
     let event_count = reader.read_u32()? as usize;
+    Ok((grouping_length, aggregate_length, event_count))
+}
+
+/// Reject replay-based session state before allocating its event collection during migration.
+pub(in crate::planner::operators) fn decode_append_only_session_state(
+    bytes: &[u8],
+    calls: &[Call],
+) -> Result<(Vec<u8>, AccumulatorState)> {
+    let mut reader = WindowBytesReader::new(bytes);
+    let (grouping_length, aggregate_length, events) = session_header(&mut reader)?;
+    if events != 0 {
+        return Err(DataFusionError::Execution(
+            "legacy migration requires live append-only session state".into(),
+        ));
+    }
+    let grouping = reader.read_exact(grouping_length)?.to_vec();
+    let state = decode_state(reader.read_exact(aggregate_length)?, calls)?;
+    if !reader.is_empty() {
+        return Err(DataFusionError::Execution(
+            "native session window state has trailing bytes".into(),
+        ));
+    }
+    Ok((grouping, state))
+}
+
+pub(in crate::planner::operators) fn decode_session_state(
+    bytes: &[u8],
+    calls: &[Call],
+) -> Result<(Vec<u8>, AccumulatorState, Vec<SessionEvent>)> {
+    let mut reader = WindowBytesReader::new(bytes);
+    let (grouping_length, aggregate_length, event_count) = session_header(&mut reader)?;
     let grouping = reader.read_exact(grouping_length)?.to_vec();
     let accumulator = decode_state(reader.read_exact(aggregate_length)?, calls)?;
     reader.validate_count(

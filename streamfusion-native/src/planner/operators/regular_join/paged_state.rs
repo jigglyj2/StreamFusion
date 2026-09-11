@@ -93,7 +93,6 @@ fn load_impl(
 mod flushing;
 mod legacy_restore;
 mod loading;
-mod write_batch;
 pub(super) use flushing::flush;
 mod restore;
 pub(super) use restore::restore_from_checkpoint;

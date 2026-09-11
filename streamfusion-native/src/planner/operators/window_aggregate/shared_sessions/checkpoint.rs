@@ -81,9 +81,11 @@ impl SharedSessions {
         let entries = streamfusion_state_abi::key_group_snapshot_entries(group, bytes)
             .map_err(|error| DataFusionError::Execution(error.to_string()))?;
         if !entries.into_iter().any(|(key, _)| key == MARKER_KEY) {
-            self.admit(bytes.len().saturating_mul(8).saturating_add(64 * 1024))?;
-            let entries = crate::state::decode_key_group_snapshot(group, bytes)?;
-            self.migrate_legacy(group, bytes, &entries, watermark)?;
+            self.migrate_legacy(
+                group,
+                crate::state::CheckpointSource::Canonical(bytes),
+                watermark,
+            )?;
             return self.finish_restore(watermark);
         }
         let entries = || {
@@ -144,9 +146,13 @@ impl SharedSessions {
         };
         let marker = source.get_batch(&[marker_key], &self.kernel.scratch_reservation)?;
         if marker[0].is_none() {
-            // Legacy interval/index migration still needs its complete semantic validator.
-            let bytes = source.snapshot_key_group(group, &self.kernel.scratch_reservation)?;
-            return self.restore(group, &bytes, watermark);
+            drop(marker);
+            self.migrate_legacy(
+                group,
+                crate::state::CheckpointSource::Physical(source),
+                watermark,
+            )?;
+            return self.finish_restore(watermark);
         }
         {
             let marker = self.marker();
