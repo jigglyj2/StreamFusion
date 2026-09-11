@@ -84,6 +84,12 @@ replay, and 1→2 key-group redistribution on both backends. Native tests additi
 20,003-row left window with only 4 MiB of remaining allowance and restore a cancelled multi-page
 window after earlier pages have completed.
 
+Physical checkpoint import uses bounded pages after index and shared-contract validation.
+Canonical output streams directly from state; canonical input validation borrows the supplied
+frame. Legacy whole-window state migrates one admitted window at a time. A native test restores
+and streams more than 8 MiB of indexed state with a 4 MiB budget including reader/destination
+RocksDB cache allowances. Individual legacy values and retained timer indexes must still fit.
+
 ## Metrics and validation
 
 Each stage retains Flink's logical-record I/O counters, operator scope and identity, latency

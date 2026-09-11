@@ -57,6 +57,23 @@ impl SharedWindowKernel for SharedProcessingWindows {
     fn snapshot(&mut self, group: u32) -> Result<crate::state::SnapshotBytes> {
         Self::snapshot(self, group)
     }
+    fn write_snapshot(
+        &mut self,
+        group: u32,
+        sink: &mut crate::state::snapshot_stream::SnapshotSink<'_>,
+    ) -> Result<usize> {
+        self.require_snapshot_ready()?;
+        self.slices.write_snapshot(group, sink)
+    }
+    fn restore_physical(
+        &mut self,
+        group: u32,
+        source: &crate::state::RocksPluginKeyedState,
+        watermark: i64,
+    ) -> Result<()> {
+        self.require_healthy()?;
+        self.slices.restore_physical(group, source, watermark)
+    }
     fn restore(&mut self, group: u32, bytes: &[u8], watermark: i64) -> Result<()> {
         Self::restore(self, group, bytes, watermark)
     }

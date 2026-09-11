@@ -106,25 +106,19 @@ fn rocksdb_checkpoint_materializes_current_timers_without_per_input_index_writes
     drop(source.advance(1999).unwrap());
     source.checkpoint(&checkpoint).unwrap();
     source.process(&batch(&[(1, 7, 2000)])).unwrap();
-    let memory = HostMemoryReservation::new(broker.clone(), "checkpoint reader");
-    let reader = RocksPluginKeyedState::open_for_owner(
+    let mut memory = HostMemoryReservation::new(broker.clone(), "checkpoint reader cache");
+    memory.resize(8 << 20).unwrap();
+    let reader = RocksPluginKeyedState::open_checkpoint(
         std::path::Path::new(&std::env::var("STREAMFUSION_TEST_ROCKSDB_PLUGIN").unwrap()),
         &checkpoint,
         0,
         127,
         8 << 20,
-        &memory,
     )
     .unwrap();
     let mut restored = processor(broker.clone(), None, 0, 127);
     for group in 0..128 {
-        restored
-            .restore(
-                group,
-                &reader.snapshot_key_group(group, &memory).unwrap(),
-                1999,
-            )
-            .unwrap();
+        restored.restore_physical(group, &reader, 1999).unwrap();
     }
     let mut actual = Vec::new();
     while restored.next_timer().is_some() {
@@ -133,6 +127,7 @@ fn rocksdb_checkpoint_materializes_current_timers_without_per_input_index_writes
     assert_eq!(actual, [(1, 2, -2000, 4000), (1, 2, 0, 6000)]);
     drop(restored);
     drop(reader);
+    drop(memory);
     drop(source);
     assert_eq!(broker.reserved(), 0);
 }

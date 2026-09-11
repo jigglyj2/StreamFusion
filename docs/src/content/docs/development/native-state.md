@@ -423,8 +423,8 @@ OVER and window aggregation share timer reload logic with the timer-based restor
 OVER's pending terminal output and bounded Sort's heap/cursor state reset after restoration just
 as they do for canonical snapshots. Generated bounded-sort changelogs exercise physical restore
 to both backends, followed by additional updates and final output comparison against Flink.
-Shared window aggregate factories have their own semantic restore hooks and still need paged
-import support.
+Shared slicing-window factories now page physical imports; the shared session-window restore
+adapter still materializes its canonical input for legacy interval/index migration.
 
 Window Join now pages physical imports in both its standalone bridge and fused factory, and
 streams canonical snapshot output from the fused factory. Current indexed checkpoints validate
@@ -434,6 +434,13 @@ Unknown keys, mixed legacy/indexed encodings, and incompatible shared plan contr
 The shared contract is checked before target mutation, and restored timer clocks still start at
 Flink's minimum watermark. Tests cover a group larger than 8 MiB restored and streamed with a
 4 MiB destination budget, legacy migration on both backends, and failed checkpoint sink cleanup.
+
+Shared slicing and session-window factories stream canonical snapshot output directly from state.
+Slicing windows validate one accumulator at a time with a reusable reservation, then import pages
+and restore timers. Processing-time windows use the same slice adapter and continue to require
+Flink's pre-checkpoint buffer flush before emitting a snapshot. Plan/version markers and Flink's
+union-operator watermark remain mandatory restore inputs; invalid markers fail before target
+mutation. Session-window physical restore still uses its existing complete migration validator.
 
 All physical restore entry points now open existing checkpoints read-only through state-component
 ABI 10. Missing directories, missing CURRENT files, and corrupt/missing manifests fail restoration;

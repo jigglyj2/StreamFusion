@@ -102,6 +102,8 @@ fn indexed_restore_and_streamed_snapshot_do_not_require_a_whole_group_workspace(
         let broker = Arc::new(TestBroker::new(4 << 20));
         let owner = HostMemoryReservation::new(broker.clone(), "window join restore test");
         let target_dir = tempfile::tempdir().unwrap();
+        let mut target_cache = owner.sibling("destination RocksDB cache");
+        target_cache.resize(1 << 20).unwrap();
         let mut target = WindowJoinProcessor::new_rocksdb(
             &plan(),
             128,
@@ -147,6 +149,7 @@ fn indexed_restore_and_streamed_snapshot_do_not_require_a_whole_group_workspace(
         assert_eq!(size, expected.len() + 4);
         assert_eq!(offset, size);
         drop(target);
+        drop(target_cache);
         assert_eq!(broker.reserved(), 0);
     }
 }

@@ -132,6 +132,13 @@ impl super::shared_kernel::SharedWindowKernel for SharedSessions {
     fn snapshot(&mut self, group: u32) -> Result<crate::state::SnapshotBytes> {
         SharedSessions::snapshot(self, group)
     }
+    fn write_snapshot(
+        &mut self,
+        group: u32,
+        sink: &mut crate::state::snapshot_stream::SnapshotSink<'_>,
+    ) -> Result<usize> {
+        Self::write_snapshot(self, group, sink)
+    }
     fn restore(&mut self, group: u32, bytes: &[u8], watermark: i64) -> Result<()> {
         SharedSessions::restore(self, group, bytes, watermark)
     }

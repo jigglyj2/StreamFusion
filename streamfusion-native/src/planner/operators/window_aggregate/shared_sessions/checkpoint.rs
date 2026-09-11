@@ -51,6 +51,21 @@ impl SharedSessions {
         result
     }
 
+    pub(super) fn write_snapshot(
+        &mut self,
+        group: u32,
+        sink: &mut crate::state::snapshot_stream::SnapshotSink<'_>,
+    ) -> Result<usize> {
+        self.require_healthy()?;
+        self.flush_timers(group..=group)?;
+        let result =
+            self.kernel
+                .state
+                .write_snapshot(group, &self.kernel.scratch_reservation, sink);
+        self.kernel.scratch_reservation.resize(0)?;
+        result
+    }
+
     pub(super) fn checkpoint(&mut self, directory: &std::path::Path) -> Result<()> {
         self.require_healthy()?;
         self.flush_timers(self.kernel.timers.key_group_range())?;

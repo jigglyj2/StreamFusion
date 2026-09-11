@@ -266,3 +266,5 @@ fn a_watermark_jump_does_not_register_already_pending_windows_twice() {
         assert_eq!(broker.reserved(), 0);
     }
 }
+
+mod physical_restore;

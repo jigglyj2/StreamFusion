@@ -215,6 +215,27 @@ impl PersistentOperatorFactory for WindowFactory {
         owner.invocation.require_idle(SharedWindow::NAME)?;
         owner.window.snapshot(group)
     }
+    fn write_snapshot(
+        &self,
+        group: u32,
+        sink: &mut crate::state::snapshot_stream::SnapshotSink<'_>,
+    ) -> Result<usize> {
+        let mut owner = self.owner.lock().map_err(|_| poisoned())?;
+        owner.invocation.require_idle(SharedWindow::NAME)?;
+        owner.window.write_snapshot(group, sink)
+    }
+    fn restore_from_checkpoint(
+        &self,
+        group: u32,
+        source: &crate::state::RocksPluginKeyedState,
+        _memory: &HostMemoryReservation,
+    ) -> Result<()> {
+        let mut owner = self.owner.lock().map_err(|_| poisoned())?;
+        owner.invocation.require_idle(SharedWindow::NAME)?;
+        let watermark = owner.restored_watermark.ok_or_else(|| DataFusionError::Plan(
+            "shared window restore requires Flink's union-operator watermark in state-binding protocol 3".into()))?;
+        owner.window.restore_physical(group, source, watermark)
+    }
     fn restore(&self, group: u32, bytes: &[u8]) -> Result<()> {
         let mut owner = self.owner.lock().map_err(|_| poisoned())?;
         owner.invocation.require_idle(SharedWindow::NAME)?;
