@@ -8,7 +8,10 @@ use arrow::compute::take;
 use arrow::error::{ArrowError, Result};
 use arrow::record_batch::RecordBatch;
 
-use super::{assign_key_group, encode_binary_row, KeyField};
+use super::KeyField;
+
+mod routing_rows;
+use routing_rows::routing_rows;
 
 /// One destination's lightweight selection over a shared Arrow batch.
 #[derive(Debug, Clone)]
@@ -76,14 +79,7 @@ pub fn route_batch_by_key_group(
             "Flink exchange max parallelism {max_parallelism} is outside 1..=32768"
         )));
     }
-    let mut key_group_rows = vec![Vec::new(); max_parallelism as usize];
-    for row in 0..batch.num_rows() {
-        let key = encode_binary_row(&batch, row, key_fields)?;
-        let key_group = assign_key_group(&key, max_parallelism);
-        key_group_rows[key_group as usize].push(u32::try_from(row).map_err(|_| {
-            ArrowError::InvalidArgumentError("exchange batch exceeds UInt32 indexing".to_string())
-        })?);
-    }
+    let key_group_rows = routing_rows(&batch, key_fields, max_parallelism, max_parallelism)?;
     let batch = Arc::new(batch);
     Ok(key_group_rows
         .into_iter()
@@ -149,15 +145,7 @@ pub fn route_batch(
             "Flink exchange requires 0 < parallelism ({parallelism}) <= max parallelism ({max_parallelism}) <= 32768"
         )));
     }
-    let mut destination_rows = vec![Vec::new(); parallelism as usize];
-    for row in 0..batch.num_rows() {
-        let key = encode_binary_row(&batch, row, key_fields)?;
-        let key_group = assign_key_group(&key, max_parallelism);
-        let destination = key_group * parallelism / max_parallelism;
-        destination_rows[destination as usize].push(u32::try_from(row).map_err(|_| {
-            ArrowError::InvalidArgumentError("exchange batch exceeds UInt32 indexing".to_string())
-        })?);
-    }
+    let destination_rows = routing_rows(&batch, key_fields, max_parallelism, parallelism)?;
     let batch = Arc::new(batch);
     Ok(destination_rows
         .into_iter()

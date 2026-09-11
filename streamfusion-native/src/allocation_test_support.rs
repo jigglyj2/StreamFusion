@@ -10,24 +10,26 @@ use std::cell::Cell;
 #[derive(Clone, Copy, Default, Debug)]
 pub(crate) struct AllocationStats {
     pub(crate) live: isize,
+    pub(crate) allocations: usize,
     pub(crate) peak: usize,
 }
 thread_local! {
     static ACTIVE: Cell<bool> = const { Cell::new(false) };
-    static STATS: Cell<AllocationStats> = const { Cell::new(AllocationStats { live: 0, peak: 0 }) };
+    static STATS: Cell<AllocationStats> = const { Cell::new(AllocationStats { live: 0, peak: 0, allocations: 0 }) };
 }
 
 struct ObservedSystem;
 #[global_allocator]
 static ALLOCATOR: ObservedSystem = ObservedSystem;
 
-fn observe(delta: isize) {
+fn observe(delta: isize, allocation: bool) {
     // TLS can be unavailable during thread destruction. These Cells never allocate.
     let _ = ACTIVE.try_with(|active| {
         if active.get() {
             STATS.with(|stats| {
                 let mut value = stats.get();
                 value.live += delta;
+                value.allocations += usize::from(allocation);
                 value.peak = value.peak.max(value.live.max(0) as usize);
                 stats.set(value);
             });
@@ -39,25 +41,25 @@ unsafe impl GlobalAlloc for ObservedSystem {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let pointer = unsafe { System.alloc(layout) };
         if !pointer.is_null() {
-            observe(layout.size() as isize);
+            observe(layout.size() as isize, true);
         }
         pointer
     }
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         let pointer = unsafe { System.alloc_zeroed(layout) };
         if !pointer.is_null() {
-            observe(layout.size() as isize);
+            observe(layout.size() as isize, true);
         }
         pointer
     }
     unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
-        observe(-(layout.size() as isize));
+        observe(-(layout.size() as isize), false);
         unsafe { System.dealloc(pointer, layout) };
     }
     unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, size: usize) -> *mut u8 {
         let replacement = unsafe { System.realloc(pointer, layout, size) };
         if !replacement.is_null() {
-            observe(size as isize - layout.size() as isize);
+            observe(size as isize - layout.size() as isize, true);
         }
         replacement
     }
@@ -90,6 +92,7 @@ fn observations_track_live_peak_and_reset_between_scopes() {
     let (bytes, stats) = measure(|| Vec::<u8>::with_capacity(128));
     assert_eq!(stats.live, 128);
     assert_eq!(stats.peak, 128);
+    assert_eq!(stats.allocations, 1);
     drop(bytes); // Outside the measured scope; does not affect the next observation.
     let (_, stats) = measure(|| {
         let bytes = std::hint::black_box(Vec::<u8>::with_capacity(512));
@@ -97,11 +100,13 @@ fn observations_track_live_peak_and_reset_between_scopes() {
     });
     assert_eq!(stats.live, 0);
     assert_eq!(stats.peak, 512);
+    assert_eq!(stats.allocations, 1);
     let (bytes, stats) = measure(|| {
         let mut bytes = Vec::<u8>::with_capacity(16);
         bytes.reserve_exact(1024);
         bytes
     });
+    assert_eq!(stats.allocations, 2);
     assert_eq!(stats.live as usize, bytes.capacity());
     assert_eq!(stats.peak, bytes.capacity());
 }

@@ -39,9 +39,11 @@ are supported.
 
 Hash distribution is eligible for nullable or composite keys across supported Flink SQL types,
 including intervals, `ARRAY`, `MAP`, `MULTISET`, `ROW`, distinct types, and nested combinations.
-Scalar keys are encoded directly in Rust. For key shapes without an independently proven native
+Scalar keys are encoded directly in Rust using one reusable scratch buffer per batch. Both
+key-group and destination routing use the same key loop. For key shapes without an independently proven native
 encoder, the Java writer adds one input-only opaque `BinaryRowData` key sidecar. Rust hashes those
-canonical bytes directly and strips the sidecar before network transport. Singleton distribution is
+canonical bytes in place without copying each key and strips the sidecar before network transport.
+Null or non-word-aligned opaque keys produce a recoverable routing error. Singleton distribution is
 also eligible.
 
 The shared native key codec also supports Arrow lists, maps, and structs recursively for native
