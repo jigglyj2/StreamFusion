@@ -6,7 +6,9 @@ description: Production selection, shared native execution, and remaining whole-
 An implemented native kernel is not automatically eligible for production selection. The
 architecture admission pass checks the original physical graph before replacement. A rejected
 node keeps **every root and every operator on Flink**. EXPLAIN identifies each blocked operator
-and unsupported native connection. There is no admission bypass setting.
+and unsupported native connection. Replacement remains transactional through the final planning
+diagnostic write: an error restores every retained Flink edge before reporting fallback.
+There is no admission bypass setting.
 
 ## Architectural reference
 

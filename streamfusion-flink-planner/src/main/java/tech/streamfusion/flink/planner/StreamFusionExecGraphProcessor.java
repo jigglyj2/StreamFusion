@@ -90,9 +90,11 @@ public final class StreamFusionExecGraphProcessor implements ExecNodeGraphProces
                     }
                 }
                 var selected = new ExecNodeGraph(graph.getFlinkVersion(), roots);
-                graphRewrite.commit(() -> StreamFusionSharedNativeRegion.install(
-                        selected, context == null ? null : context.getPlanner()));
-                StreamFusionPlanningDiagnostics.accelerate();
+                graphRewrite.commit(() -> {
+                    StreamFusionSharedNativeRegion.install(selected, context == null ? null : context.getPlanner());
+                    // Diagnostic I/O can fail too. Keep it within the retained-edge rollback.
+                    StreamFusionPlanningDiagnostics.accelerate();
+                });
                 return selected;
             } catch (RuntimeException | LinkageError failure) {
                 StreamFusionPlanningDiagnostics.reject(
