@@ -84,7 +84,7 @@ class NativeExchangeRowCountTest {
         }
     }
 
-    private static byte[] header(long rows, byte kind, long bodyLength) {
+    static byte[] header(long rows, byte kind, long bodyLength) {
         var builder = new FlatBufferBuilder();
         int batch = RecordBatch.createRecordBatch(builder, rows, 0, 0, 0, 0);
         int message = Message.createMessage(builder, MetadataVersion.V5, kind, batch, bodyLength, 0);

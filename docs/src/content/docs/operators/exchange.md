@@ -99,7 +99,9 @@ until the native key encoder has the required exchange parity coverage. Both pat
 Rust routing and memory-admission implementation; this does not change the network frame format.
 
 Flink's record counters continue to report logical rows on both sides of the exchange;
-internal Arrow IPC frames are transport units and are not published as record counts.
+internal Arrow IPC frames are transport units and are not published as record counts. Failure
+paths count the input rows already received and the logical rows in each attempted output frame,
+including the frame whose consumer threw, following Flink's count-before-collect semantics.
 
 The exchange stays in StreamFusion's core Flink runtime and planner modules because that mirrors
 Flink's own module design; it is not a separately deployed connector or integration.

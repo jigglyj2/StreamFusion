@@ -65,16 +65,17 @@ public final class NativeExchangeWriterOperator extends AbstractStreamOperator<N
     @Override
     public void processElement(StreamRecord<ArrowRowDataBatch> element) throws Exception {
         ArrowRowDataBatch input = element.getValue();
+        FlinkMetricParity.replacePhysicalRecords(
+                getMetricGroup().getIOMetricGroup().getNumRecordsInCounter(), 1, input.size());
         try (ArrowExchangeBatch.EnvelopeBatch envelope =
                 ArrowExchangeBatch.withEnvelope(input, inputType, preencodedKeys(input))) {
             List<NativeExchangeFrame> frames = routing.route(envelope.batch(), managedMemory.allocator());
             for (NativeExchangeFrame frame : frames) {
+                // CountingOutput counts an attempted collect before invoking the consumer.
+                FlinkMetricParity.replacePhysicalRecords(
+                        getMetricGroup().getIOMetricGroup().getNumRecordsOutCounter(), 1, frame.logicalRowCount());
                 output.collect(new StreamRecord<>(frame));
             }
-            FlinkMetricParity.replacePhysicalRecords(
-                    getMetricGroup().getIOMetricGroup().getNumRecordsInCounter(), 1, input.size());
-            FlinkMetricParity.replacePhysicalRecords(
-                    getMetricGroup().getIOMetricGroup().getNumRecordsOutCounter(), frames.size(), input.size());
         }
     }
 
