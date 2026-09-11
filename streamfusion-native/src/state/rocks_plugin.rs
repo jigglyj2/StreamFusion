@@ -240,6 +240,7 @@ impl KeyedState for RocksPluginKeyedState {
                 Ok(true)
             },
         )
+        .map(|_| ())
     }
 
     fn visit_range_admitted(
@@ -251,7 +252,7 @@ impl KeyedState for RocksPluginKeyedState {
         bytes: usize,
         owner: &HostMemoryReservation,
         visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<bool>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         self.scan_range_admitted(group, start, end, rows, bytes, owner, visitor)
     }
 

@@ -27,6 +27,7 @@ impl RocksPluginKeyedState {
                 Ok(true)
             },
         )
+        .map(|_| ())
     }
 
     pub(crate) fn scan_range_admitted(
@@ -38,7 +39,7 @@ impl RocksPluginKeyedState {
         target_bytes: usize,
         owner: &HostMemoryReservation,
         visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<bool>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let rows = u32::try_from(max_rows).map_err(|_| {
             DataFusionError::Execution("state scan row limit exceeds UInt32".into())
         })?;
@@ -71,7 +72,7 @@ impl RocksPluginKeyedState {
             let complete = scan_complete(&page)?;
             if page.num_rows() == 0 {
                 return if complete {
-                    Ok(())
+                    Ok(true)
                 } else {
                     Err(DataFusionError::Execution(
                         "admitted state scan returned an empty incomplete page".into(),
@@ -89,7 +90,7 @@ impl RocksPluginKeyedState {
                 .map(|row| (keys.value(row), values.value(row)))
                 .collect::<Vec<_>>();
             if !visitor(&entries)? || complete {
-                return Ok(());
+                return Ok(complete);
             }
             let next = keys.value(keys.len() - 1);
             if after.as_ref().is_some_and(|after| next <= after.as_slice()) {

@@ -56,7 +56,7 @@ fn admitted_ordered_pages_stop_release_and_resume_on_both_backends() {
         // after the visitor stops would fail admission; stopping must release all page ownership.
         let mut blocker = owner.sibling("following page must not be fetched");
         let mut calls = 0;
-        state
+        let complete = state
             .visit_range_admitted(2, &[4], Some(&[12]), 3, 1024, &owner, &mut |page| {
                 calls += 1;
                 assert_eq!(page[0].0, &[4]);
@@ -65,6 +65,7 @@ fn admitted_ordered_pages_stop_release_and_resume_on_both_backends() {
             })
             .unwrap();
         assert_eq!(calls, 1);
+        assert!(!complete);
         drop(blocker);
         assert_eq!(broker.reserved(), baseline);
 
@@ -73,7 +74,7 @@ fn admitted_ordered_pages_stop_release_and_resume_on_both_backends() {
         loop {
             let mut found = false;
             let start = next.clone();
-            state
+            let complete = state
                 .visit_range_admitted(2, &start, Some(&[12]), 3, 1024, &owner, &mut |page| {
                     assert!(page.len() <= 3);
                     for (key, value) in page {
@@ -89,7 +90,9 @@ fn admitted_ordered_pages_stop_release_and_resume_on_both_backends() {
                 })
                 .unwrap();
             assert_eq!(broker.reserved(), baseline);
-            if !found {
+            assert!(found);
+            assert_eq!(complete, seen.last() == Some(&11));
+            if complete {
                 break;
             }
         }

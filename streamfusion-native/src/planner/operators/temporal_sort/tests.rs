@@ -237,7 +237,7 @@ fn proto_field(name: &str, r#type: proto::logical_type::Type) -> proto::Field {
     }
 }
 
-fn batch(
+pub(super) fn batch(
     timestamps: &[i64],
     values: &[i32],
     payloads: &[&str],
@@ -292,9 +292,15 @@ fn processing_callbacks_bound_timer_work_but_clear_all_pending_rows_on_the_first
         ))
         .unwrap();
     let output = processor.advance_processing_time(i64::MAX).unwrap();
+    let mut emitted = output.num_rows();
+    drop(output);
+    while processor.pending_drain.is_some() {
+        let page = processor.advance_processing_time(i64::MAX).unwrap();
+        assert!(page.num_rows() <= row_state::PAGE_ROWS);
+        emitted += page.num_rows();
+    }
     assert_eq!(
-        output.num_rows(),
-        count,
+        emitted, count,
         "Flink's first callback clears the complete logical list"
     );
     assert_eq!(processor.statistics()[4], MAX_TIMERS_PER_OUTPUT as u64);
@@ -313,7 +319,6 @@ fn processing_callbacks_bound_timer_work_but_clear_all_pending_rows_on_the_first
         .unwrap()
         .is_empty());
     drop(snapshot);
-    drop(output);
     drop(processor);
     assert_eq!(broker.reserved(), 0);
 }

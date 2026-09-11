@@ -118,30 +118,37 @@ or rewrite the historical payload. Both backends expose the same ordered prefix 
 the group prefix, Arrow secondary ordering key, and stable arrival ordinal; values contain the
 RowKind and encoded payload. Timer firing reads admitted pages of up to 1,024 entries with a
 256 KiB normal byte target. A larger individual row is admitted separately. Version 2 list state
-remains readable and migrates when its group next receives rows; that legacy conversion still
-requires memory for the old list. Canonical snapshots preserve either layout across backends.
+remains readable and migrates to the ordered layout during operator restore. Migration borrows row
+frames from the old encoded value and writes the new index in bounded batches; it does not construct
+a decoded list or retain all replacement entries. The old opaque value and its migration copy must
+still fit the managed budget. Canonical snapshots remain compatible across backends.
 
-Timer registrations and firings write or delete versioned 11-byte markers in the same mutation
-batch as the row changes. The native timer index reserves registrations once per input batch;
+Timer registrations write versioned 11-byte markers in the same mutation batch as the new rows.
+Firing removes emitted rows in bounded batches and deletes the due markers with the final output
+page. The native timer index reserves registrations once per input batch;
 checkpoint restore rebuilds it from bounded marker pages. Old timer snapshots migrate once during
 restore, preserving the original timer identities and last-fired event timestamp. Physical RocksDB
 restore imports bounded state pages without constructing a canonical copy of the whole key group.
-Both time domains drain at most 4,096 timers per native invocation. The first processing-time
-callback still clears the complete pending list; subsequent already-registered callbacks see an
-empty list, as in Flink.
+Both time domains select at most 4,096 due timers at a time. Each native invocation returns at most
+1,024 rows with a 256 KiB normal encoded-state byte target, including key and descriptor overhead;
+a larger single row is allowed when its actual workspace can be admitted. The first processing-time
+callback still drains the complete pending list before returning control to Flink; subsequent
+already-registered callbacks see an empty list, as in Flink.
 
-The complete fired row set and DataFusion output workspace are still materialized under the memory
-budget. That remains a scalability limit of this gated implementation; these storage changes do
-not enable SQL admission.
+An unfinished callback retains its next deadline while Java drains additional Arrow batches.
+New input, snapshots, and restore are rejected until the pending output is drained. A failure during
+execution or restore invalidates that processor: Flink must recreate it and restore the last
+checkpoint. Watermarks are forwarded only after all due output is collected. The live row payloads,
+deletion entries, and DataFusion output workspace are bounded by the output page, rather than the
+complete fired result set. These changes do not enable SQL admission.
 
-Temporal sort stores the secondary keys
-in Arrow's order-preserving row encoding with the planned direction and null placement, so firing a
-timer delegates ordering to DataFusion's batch sort over group IDs, encoded keys, and arrival
-ordinals, followed by one final Arrow decode. Explicit arrival ordinals retain Flink's stable tie
-order. The key arrays and sort workspace are admitted before sorting. Payloads are decoded only after
-DataFusion has selected their final order. Java constructs the physical plan and owns watermarks, barriers, distribution,
-recovery, and metric publication; Arrow C Data crosses only at the fused-plan edge. This follows
-Comet's distinct replacement-node and protobuf control-plane model.
+Temporal sort stores secondary keys in Arrow's order-preserving row encoding with the planned
+direction and null placement. The persisted ordering index establishes order across pages, including
+stable arrival ordinals for ties. Each page delegates ordering to DataFusion's batch sort over group
+IDs, encoded keys, and arrival ordinals before Arrow decoding. The key arrays and sort workspace are
+admitted before sorting, and payloads are decoded only after DataFusion has selected their order. Java constructs the physical plan and owns watermarks, barriers, distribution,
+recovery, and metric publication. The retained temporal-sort test operator uses Arrow C Data at its
+Java/native boundary; temporal sort is still excluded from accelerated fused plans.
 
 ## Benchmark evidence
 

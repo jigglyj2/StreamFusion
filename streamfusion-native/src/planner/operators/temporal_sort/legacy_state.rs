@@ -40,6 +40,7 @@ pub(super) fn encode_rows(rows: &[BufferedRow]) -> Result<Vec<u8>> {
     Ok(output)
 }
 
+#[cfg(test)]
 pub(super) fn workspace_size(bytes: &[u8], root_key_bytes: usize) -> Result<usize> {
     let count = row_count(bytes)?;
     Ok(bytes.len().saturating_mul(2).saturating_add(
@@ -64,10 +65,26 @@ fn row_count(bytes: &[u8]) -> Result<usize> {
     Ok(count)
 }
 
+#[cfg(test)]
 pub(super) fn decode_rows(bytes: &[u8]) -> Result<Vec<BufferedRow>> {
+    let mut rows = Vec::with_capacity(row_count(bytes)?);
+    visit_rows(bytes, &mut |kind, sort_key, row| {
+        rows.push(BufferedRow {
+            kind,
+            sort_key: sort_key.to_vec(),
+            row: row.to_vec(),
+        });
+        Ok(())
+    })?;
+    Ok(rows)
+}
+
+pub(super) fn visit_rows(
+    bytes: &[u8],
+    visitor: &mut dyn FnMut(i8, &[u8], &[u8]) -> Result<()>,
+) -> Result<usize> {
     let count = row_count(bytes)?;
     let mut offset = 9;
-    let mut rows = Vec::with_capacity(count);
     for _ in 0..count {
         let kind = *bytes.get(offset).ok_or_else(|| {
             DataFusionError::Execution("truncated temporal sort RowKind".to_string())
@@ -93,11 +110,7 @@ pub(super) fn decode_rows(bytes: &[u8]) -> Result<Vec<BufferedRow>> {
         let row = bytes
             .get(offset..end)
             .ok_or_else(|| DataFusionError::Execution("truncated temporal sort row".to_string()))?;
-        rows.push(BufferedRow {
-            kind,
-            sort_key: sort_key.to_vec(),
-            row: row.to_vec(),
-        });
+        visitor(kind, sort_key, row)?;
         offset = end;
     }
     if offset != bytes.len() {
@@ -105,7 +118,7 @@ pub(super) fn decode_rows(bytes: &[u8]) -> Result<Vec<BufferedRow>> {
             "temporal sort state has trailing bytes".to_string(),
         ));
     }
-    Ok(rows)
+    Ok(count)
 }
 
 fn read_u32(bytes: &[u8], offset: &mut usize) -> Result<u32> {

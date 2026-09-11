@@ -163,7 +163,7 @@ impl KeyedState for Observed {
         bytes: usize,
         owner: &HostMemoryReservation,
         f: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<bool>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         self.io.range_reads.fetch_add(1, Ordering::Relaxed);
         self.inner
             .visit_range_admitted(group, start, end, rows, bytes, owner, &mut |page| {

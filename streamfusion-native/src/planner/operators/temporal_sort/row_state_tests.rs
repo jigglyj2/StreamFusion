@@ -125,6 +125,14 @@ fn legacy_lists_migrate_without_changing_ties_or_cross_backend_restore() {
             let loaded = row_state::load(target.as_ref(), &[root.clone()], &owner).unwrap();
             assert_eq!(loaded.groups, vec![rows.clone()]);
             drop(loaded);
+            assert!(
+                row_state::append(target.as_ref(), vec![(root.clone(), vec![row(0)])], &owner)
+                    .err()
+                    .unwrap()
+                    .to_string()
+                    .contains("must migrate during restore")
+            );
+            migration::migrate_legacy_groups(target.as_mut(), 0, &owner, &mut 0).unwrap();
             let pending = row_state::append(
                 target.as_ref(),
                 vec![(root.clone(), (37..71).map(row).collect())],

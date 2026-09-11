@@ -32,7 +32,7 @@ impl OrderedMemoryKeyedState {
         max_bytes: usize,
         allow_large_entry: bool,
         visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<bool>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let group = &self.groups[self.index(group)?];
         if max_rows == 0 || max_bytes == 0 {
             return Err(DataFusionError::Execution(
@@ -40,7 +40,7 @@ impl OrderedMemoryKeyedState {
             ));
         }
         if end.is_some_and(|end| start >= end) {
-            return Ok(());
+            return Ok(true);
         }
         let upper = end.map(Bound::Excluded).unwrap_or(Bound::Unbounded);
         let mut page = Vec::with_capacity(max_rows.min(max_bytes / 96));
@@ -48,7 +48,7 @@ impl OrderedMemoryKeyedState {
         for (k, v) in group.range::<[u8], _>((Bound::Included(start), upper)) {
             if page.len() == max_rows {
                 if !visitor(&page)? {
-                    return Ok(());
+                    return Ok(false);
                 }
                 page.clear();
                 bytes = 0;
@@ -61,7 +61,7 @@ impl OrderedMemoryKeyedState {
             }
             if !page.is_empty() && bytes.saturating_add(size) > max_bytes {
                 if !visitor(&page)? {
-                    return Ok(());
+                    return Ok(false);
                 }
                 page.clear();
                 bytes = 0;
@@ -72,7 +72,7 @@ impl OrderedMemoryKeyedState {
         if !page.is_empty() {
             visitor(&page)?;
         }
-        Ok(())
+        Ok(true)
     }
 
     pub(crate) fn new(
@@ -238,6 +238,7 @@ impl KeyedState for OrderedMemoryKeyedState {
         visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<bool>,
     ) -> Result<()> {
         self.range(group, start, end, max_rows, max_bytes, false, visitor)
+            .map(|_| ())
     }
 
     fn visit_range_admitted(
@@ -249,7 +250,7 @@ impl KeyedState for OrderedMemoryKeyedState {
         bytes: usize,
         owner: &HostMemoryReservation,
         visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<bool>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let mut descriptors = owner.sibling("ordered state borrowed range page");
         descriptors.resize(rows.saturating_mul(32))?;
         // Values already belong to the retained state budget. Only page descriptors are new.

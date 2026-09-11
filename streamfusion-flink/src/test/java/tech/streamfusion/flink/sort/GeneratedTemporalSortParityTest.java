@@ -46,13 +46,13 @@ class GeneratedTemporalSortParityTest {
                 try (RootAllocator allocator = new RootAllocator(64L << 20)) {
                     OperatorSubtaskState snapshot;
                     int batchSize = new int[] {1, 17, 128, 257}[seed];
-                    try (var source = harness(false, null, sourceRocks)) {
+                    try (var source = harness(false, null, sourceRocks, 64L << 20)) {
                         append(source, allocator, input.subList(0, 256), batchSize);
                         snapshot = source.snapshotWithLocalState(
                                         1, 1, SavepointType.savepoint(SavepointFormatType.CANONICAL))
                                 .getJobManagerOwnedState();
                     }
-                    try (var restored = harness(false, snapshot, !sourceRocks)) {
+                    try (var restored = harness(false, snapshot, !sourceRocks, 64L << 20)) {
                         append(restored, allocator, input.subList(256, input.size()), batchSize);
                         restored.processWatermark(new Watermark(3000));
                         process(restored, allocator, row(1000, 0, "late", RowKind.DELETE));
@@ -61,6 +61,7 @@ class GeneratedTemporalSortParityTest {
                         assertThat(restored.bytes.getCopyOfBuffer())
                                 .as("seed %s, source RocksDB %s", seed, sourceRocks)
                                 .isEqualTo(expected);
+                        assertIo(restored, input.size() - 256 + 2, input.size() + 1);
                     }
                 }
             }
@@ -76,14 +77,14 @@ class GeneratedTemporalSortParityTest {
                 try (RootAllocator allocator = new RootAllocator(64L << 20)) {
                     OperatorSubtaskState snapshot;
                     int batchSize = new int[] {1, 17, 128, 257}[seed];
-                    try (var source = harness(true, null, sourceRocks)) {
+                    try (var source = harness(true, null, sourceRocks, 64L << 20)) {
                         source.setProcessingTime(40);
                         append(source, allocator, input.subList(0, 256), batchSize);
                         snapshot = source.snapshotWithLocalState(
                                         1, 1, SavepointType.savepoint(SavepointFormatType.CANONICAL))
                                 .getJobManagerOwnedState();
                     }
-                    try (var restored = harness(true, snapshot, !sourceRocks)) {
+                    try (var restored = harness(true, snapshot, !sourceRocks, 64L << 20)) {
                         restored.setProcessingTime(40);
                         append(restored, allocator, input.subList(256, input.size()), batchSize);
                         restored.setProcessingTime(41);
@@ -92,10 +93,17 @@ class GeneratedTemporalSortParityTest {
                         assertThat(restored.bytes.getCopyOfBuffer())
                                 .as("processing-time seed %s, source RocksDB %s", seed, sourceRocks)
                                 .isEqualTo(expected);
+                        assertIo(restored, input.size() - 256 + 1, input.size() + 1);
                     }
                 }
             }
         }
+    }
+
+    private static void assertIo(StreamFusionArrowTemporalSortOperatorTest.Harness harness, long inputs, long outputs) {
+        var io = harness.getOperator().getMetricGroup().getIOMetricGroup();
+        assertThat(io.getNumRecordsInCounter().getCount()).isEqualTo(inputs);
+        assertThat(io.getNumRecordsOutCounter().getCount()).isEqualTo(outputs);
     }
 
     private static void append(
@@ -116,9 +124,12 @@ class GeneratedTemporalSortParityTest {
     private static List<GenericRowData> input(int seed) {
         Random random = new Random(9217 + seed);
         List<GenericRowData> rows = new ArrayList<>();
-        for (int index = 0; index < 512; index++) {
-            GenericRowData row =
-                    row(1000L * (1 + random.nextInt(3)), random.nextInt(7), "é-" + index, RowKind.values()[index % 4]);
+        for (int index = 0; index < (seed == 3 ? 2049 : 512); index++) {
+            GenericRowData row = row(
+                    1000L * (1 + random.nextInt(3)),
+                    random.nextInt(7),
+                    "é-" + index + (seed == 3 ? "é".repeat(128) : ""),
+                    RowKind.values()[index % 4]);
             if (index % 11 == 0) {
                 row.setField(16, null);
                 row.setField(17, null);

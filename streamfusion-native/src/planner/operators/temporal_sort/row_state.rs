@@ -4,34 +4,34 @@
 //! Version 3 stores a small arrival counter at the legacy group key and independent ordered rows.
 //! The secondary Arrow row key determines ordering, and the arrival ordinal preserves Flink's
 //! stable ties. Payloads live in values, outside the ordering index. Version 2 list values remain
-//! readable and migrate only when their group receives another input batch.
+//! readable and migrate during operator restore before new input or timer draining.
 
 use super::*;
 
-const ROOT_HEADER: &[u8] = b"SFTS\x03";
-const ROW_HEADER: &[u8] = b"SFTR\x01";
+pub(super) const ROOT_HEADER: &[u8] = b"SFTS\x03";
+pub(super) const ROW_HEADER: &[u8] = b"SFTR\x01";
 const ROW_PREFIX: u8 = 9;
-const PAGE_ROWS: usize = 1024;
-const PAGE_BYTES: usize = 256 << 10;
+pub(super) const PAGE_ROWS: usize = 1024;
+pub(super) const PAGE_BYTES: usize = 256 << 10;
 
 pub(super) struct PendingRows {
     pub mutations: Vec<StateMutation>,
     pub was_empty: Vec<bool>,
     _memory: HostMemoryReservation,
-    _legacy_memory: HostMemoryReservation,
 }
 
+#[cfg(test)]
 pub(super) struct LoadedRows {
     pub groups: Vec<Vec<BufferedRow>>,
     pub mutations: Vec<StateMutation>,
     _memory: HostMemoryReservation,
 }
 
-fn invalid(message: &str) -> DataFusionError {
+pub(super) fn invalid(message: &str) -> DataFusionError {
     DataFusionError::Execution(format!("invalid temporal sort row state: {message}"))
 }
 
-fn next_arrival(value: &[u8]) -> Result<Option<u64>> {
+pub(super) fn next_arrival(value: &[u8]) -> Result<Option<u64>> {
     if !value.starts_with(ROOT_HEADER) {
         return Ok(None);
     }
@@ -46,7 +46,7 @@ fn next_arrival(value: &[u8]) -> Result<Option<u64>> {
     Ok(Some(next))
 }
 
-fn prefix(root: &[u8]) -> Result<Vec<u8>> {
+pub(super) fn prefix(root: &[u8]) -> Result<Vec<u8>> {
     let length = u32::try_from(root.len()).map_err(|_| invalid("group key length"))?;
     let mut prefix = Vec::with_capacity(5 + root.len());
     prefix.push(ROW_PREFIX);
@@ -104,22 +104,6 @@ pub(super) fn append(
         })
         .collect::<Vec<_>>();
     let existing = state.get_batch(&refs, owner)?;
-    let mut legacy_memory = owner.sibling("temporal sort legacy list migration");
-    // Admit the legacy decoder and changed entries from framed bytes and row descriptors;
-    // large opaque payloads must not acquire a multiplier intended for many small records.
-    let legacy_bytes = existing.iter().zip(&incoming).try_fold(
-        0usize,
-        |total, (value, (root, _))| match value {
-            Some(value) if !value.as_ref().starts_with(ROOT_HEADER) => {
-                Ok::<_, DataFusionError>(total.saturating_add(legacy_state::workspace_size(
-                    value.as_ref(),
-                    root.key.len(),
-                )?))
-            }
-            _ => Ok(total),
-        },
-    )?;
-    legacy_memory.resize(legacy_bytes)?;
     let mut mutations = Vec::new();
     let mut was_empty = Vec::with_capacity(incoming.len());
     for ((root, rows), existing) in incoming.into_iter().zip(existing) {
@@ -129,16 +113,9 @@ pub(super) fn append(
         let prefix = prefix(&root.key)?;
         let mut next = 0u64;
         if let Some(value) = existing {
-            if let Some(counter) = next_arrival(value.as_ref())? {
-                next = counter;
-            } else {
-                for row in legacy_state::decode_rows(value.as_ref())? {
-                    append_entry(&mut mutations, root.key_group, &prefix, next, row);
-                    next = next
-                        .checked_add(1)
-                        .ok_or_else(|| invalid("arrival overflow"))?;
-                }
-            }
+            next = next_arrival(value.as_ref())?.ok_or_else(|| {
+                invalid("legacy groups must migrate during restore before accepting input")
+            })?;
         }
         was_empty.push(next == 0);
         for row in rows {
@@ -160,10 +137,10 @@ pub(super) fn append(
         mutations,
         was_empty,
         _memory: memory,
-        _legacy_memory: legacy_memory,
     })
 }
 
+#[cfg(test)]
 pub(super) fn load(
     state: &dyn KeyedState,
     roots: &[StateKey],

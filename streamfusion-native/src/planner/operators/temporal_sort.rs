@@ -23,7 +23,9 @@ use crate::state::{
 };
 use crate::{decode_plan, proto};
 
+mod draining;
 mod legacy_state;
+mod migration;
 mod row_state;
 mod sorting;
 mod timer_state;
@@ -61,6 +63,8 @@ pub(crate) struct TemporalSortProcessor {
     input_kind_index: Option<usize>,
     processing_time_index: Option<usize>,
     last_triggering_timestamp: i64,
+    pending_drain: Option<draining::Drain>,
+    failed: bool,
     scratch_reservation: HostMemoryReservation,
     state_read_batches: u64,
     state_write_batches: u64,
@@ -173,6 +177,8 @@ impl TemporalSortProcessor {
             input_kind_index: None,
             processing_time_index: None,
             last_triggering_timestamp: i64::MIN,
+            pending_drain: None,
+            failed: false,
             scratch_reservation,
             state_read_batches: 0,
             state_write_batches: 0,
@@ -183,6 +189,15 @@ impl TemporalSortProcessor {
     }
 
     pub(crate) fn process_arrow(&mut self, batch: RecordBatch) -> Result<()> {
+        self.require_idle()?;
+        let result = self.process_arrow_inner(batch);
+        if result.is_err() {
+            self.failed = true;
+        }
+        result
+    }
+
+    fn process_arrow_inner(&mut self, batch: RecordBatch) -> Result<()> {
         self.prepare_schema(batch.schema())?;
         let visible_count = self.visible_schema.fields().len();
         let visible_bytes = batch.columns()[..visible_count]
@@ -374,63 +389,6 @@ impl TemporalSortProcessor {
         self.advance(TimerDomain::ProcessingTime, timestamp)
     }
 
-    fn advance(&mut self, domain: TimerDomain, progress: i64) -> Result<RecordBatch> {
-        // A watermark can make many timestamp groups ready at once. Drain a bounded group of them
-        // with bounded backend range reads, one mutation batch and one Arrow C Data export,
-        // preserving timer order.
-        // One timer per callback degenerates into thousands of JNI calls, while an unbounded drain
-        // can exceed the task's output-memory slice. Processing time deliberately retains Flink's
-        // one shared ListState callback semantics.
-        let fired = self
-            .timers
-            .advance_owned_limited(domain, progress, MAX_TIMERS_PER_OUTPUT)?;
-        let mut callback_memory = self
-            .scratch_reservation
-            .sibling("temporal timer callback identities");
-        callback_memory.resize(fired.len().saturating_mul(512))?;
-        self.timers_fired = self.timers_fired.saturating_add(fired.len() as u64);
-        if fired.is_empty() {
-            return Ok(RecordBatch::new_empty(self.output_schema.clone()));
-        }
-        let last_event_timestamp = fired
-            .iter()
-            .map(|fired| fired.timer.timestamp)
-            .max()
-            .unwrap_or(i64::MIN);
-        let mut seen = hashbrown::HashSet::<StateKey, RandomState>::with_hasher(RandomState::new());
-        let mut keys = Vec::with_capacity(fired.len());
-        for fired in fired.iter() {
-            let key = StateKey {
-                key_group: fired.key_group,
-                key: fired.timer.key.clone(),
-            };
-            if seen.insert(key.clone()) {
-                keys.push(key);
-            }
-        }
-        let loaded = row_state::load(self.state.as_ref(), &keys, &self.scratch_reservation)?;
-        self.state_read_batches = self.state_read_batches.saturating_add(1);
-        let row_groups = loaded.groups;
-        let mut mutations = loaded.mutations;
-        if domain == TimerDomain::EventTime && !row_groups.is_empty() {
-            self.last_triggering_timestamp = last_event_timestamp;
-            mutations.push(StateMutation {
-                key: StateKey {
-                    key_group: self.key_group,
-                    key: LAST_TRIGGER_STATE_KEY.to_vec(),
-                },
-                value: Some(self.last_triggering_timestamp.to_le_bytes().to_vec()),
-            });
-        }
-        mutations.extend(fired.iter().map(|fired| StateMutation {
-            key: timer_state::marker_key(fired.key_group, fired.domain, fired.timer.timestamp),
-            value: None,
-        }));
-        self.state.write_batch(mutations)?;
-        self.state_write_batches = self.state_write_batches.saturating_add(1);
-        self.output_row_groups(row_groups)
-    }
-
     fn output_row_groups(&mut self, row_groups: Vec<Vec<BufferedRow>>) -> Result<RecordBatch> {
         let row_count = row_groups.iter().map(Vec::len).sum::<usize>();
         if row_count == 0 {
@@ -503,12 +461,22 @@ impl TemporalSortProcessor {
     }
 
     pub(crate) fn next_event_time_timer(&self) -> i64 {
+        if !self.plan.processing_time {
+            if let Some(drain) = &self.pending_drain {
+                return drain.deadline;
+            }
+        }
         self.timers
             .next_timestamp(TimerDomain::EventTime)
             .unwrap_or(i64::MAX)
     }
 
     pub(crate) fn next_processing_time_timer(&self) -> i64 {
+        if self.plan.processing_time {
+            if let Some(drain) = &self.pending_drain {
+                return drain.deadline;
+            }
+        }
         self.timers
             .next_timestamp(TimerDomain::ProcessingTime)
             .unwrap_or(i64::MAX)
@@ -532,14 +500,15 @@ impl TemporalSortProcessor {
     }
 
     pub(crate) fn snapshot_key_group(&self, key_group: u32) -> Result<crate::state::SnapshotBytes> {
+        self.require_idle()?;
         self.state
             .snapshot_key_group(key_group, &self.scratch_reservation)
     }
 
     pub(crate) fn restore_key_group(&mut self, key_group: u32, bytes: &[u8]) -> Result<()> {
-        self.state
-            .restore_key_group(key_group, bytes, &self.scratch_reservation)?;
-        self.restore_control_state(key_group)
+        self.restore_with(key_group, |state, owner| {
+            state.restore_key_group(key_group, bytes, owner)
+        })
     }
 
     pub(crate) fn restore_physical_key_group(
@@ -547,17 +516,32 @@ impl TemporalSortProcessor {
         key_group: u32,
         source: &dyn KeyedState,
     ) -> Result<()> {
-        crate::state::import_key_group(
-            self.state.as_mut(),
-            source,
-            key_group,
-            &self.scratch_reservation,
-            &mut |_, _| Ok(()),
-        )?;
-        self.restore_control_state(key_group)
+        self.restore_with(key_group, |state, owner| {
+            crate::state::import_key_group(state, source, key_group, owner, &mut |_, _| Ok(()))
+        })
+    }
+
+    fn restore_with(
+        &mut self,
+        key_group: u32,
+        import: impl FnOnce(&mut dyn KeyedState, &HostMemoryReservation) -> Result<()>,
+    ) -> Result<()> {
+        self.require_idle()?;
+        let result = import(self.state.as_mut(), &self.scratch_reservation)
+            .and_then(|_| self.restore_control_state(key_group));
+        if result.is_err() {
+            self.failed = true;
+        }
+        result
     }
 
     fn restore_control_state(&mut self, key_group: u32) -> Result<()> {
+        migration::migrate_legacy_groups(
+            self.state.as_mut(),
+            key_group,
+            &self.scratch_reservation,
+            &mut self.state_write_batches,
+        )?;
         let domain = self.domain();
         let last_trigger = timer_state::restore(
             self.state.as_mut(),
@@ -574,6 +558,7 @@ impl TemporalSortProcessor {
     }
 
     pub(crate) fn checkpoint(&self, directory: &std::path::Path) -> Result<()> {
+        self.require_idle()?;
         self.state.checkpoint(directory)
     }
 
