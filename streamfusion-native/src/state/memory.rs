@@ -294,6 +294,29 @@ impl KeyedState for MemoryKeyedState {
         Ok(super::SnapshotBytes::owned(bytes, reservation))
     }
 
+    fn write_snapshot(
+        &self,
+        group: u32,
+        owner: &HostMemoryReservation,
+        sink: &mut super::snapshot_stream::SnapshotSink<'_>,
+    ) -> Result<usize> {
+        let group_state = self.group(group)?;
+        let mut memory = owner.sibling("canonical snapshot sorted references");
+        memory.resize(
+            group_state
+                .len()
+                .saturating_mul(size_of::<&entry::PackedEntry>()),
+        )?;
+        let mut entries = Vec::with_capacity(group_state.len());
+        entries.extend(group_state.entries());
+        entries.sort_unstable_by(|a, b| a.key().cmp(b.key()));
+        super::snapshot_stream::write_entries(
+            group,
+            entries.iter().map(|entry| (entry.key(), entry.value())),
+            sink,
+        )
+    }
+
     fn restore_key_group(
         &mut self,
         key_group: u32,

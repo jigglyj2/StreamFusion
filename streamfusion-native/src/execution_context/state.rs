@@ -237,6 +237,15 @@ impl NativeExecutionContext {
         self.state_control(id, false, |owner| owner.snapshot(key_group))
     }
 
+    pub(crate) fn write_snapshot_state(
+        &self,
+        id: u64,
+        group: u32,
+        sink: &mut crate::state::snapshot_stream::SnapshotSink<'_>,
+    ) -> Result<usize> {
+        self.state_control(id, false, |owner| owner.write_snapshot(group, sink))
+    }
+
     pub(crate) fn restore_state(&self, id: u64, key_group: u32, bytes: &[u8]) -> Result<()> {
         self.state_control(id, true, |owner| owner.restore(key_group, bytes))
     }

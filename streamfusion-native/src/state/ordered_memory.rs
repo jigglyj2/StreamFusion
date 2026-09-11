@@ -236,6 +236,22 @@ impl KeyedState for OrderedMemoryKeyedState {
         Ok(SnapshotBytes::owned(encoded, reservation))
     }
 
+    fn write_snapshot(
+        &self,
+        group: u32,
+        _owner: &HostMemoryReservation,
+        sink: &mut super::snapshot_stream::SnapshotSink<'_>,
+    ) -> Result<usize> {
+        let entries = &self.groups[self.index(group)?];
+        super::snapshot_stream::write_entries(
+            group,
+            entries
+                .iter()
+                .map(|(key, value)| (key.as_ref(), value.as_ref())),
+            sink,
+        )
+    }
+
     fn restore_key_group(
         &mut self,
         group: u32,

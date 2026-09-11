@@ -25,6 +25,17 @@ impl PersistentOperatorFactory for DeduplicateFactory {
             .map_err(|_| poisoned())?
             .snapshot_key_group(key_group)
     }
+    fn write_snapshot(
+        &self,
+        group: u32,
+        sink: &mut crate::state::snapshot_stream::SnapshotSink<'_>,
+    ) -> Result<usize> {
+        let processor = self.0.lock().map_err(|_| poisoned())?;
+        processor.require_idle()?;
+        processor
+            .state
+            .write_snapshot(group, &processor.scratch_reservation, sink)
+    }
     fn restore(&self, key_group: u32, bytes: &[u8]) -> Result<()> {
         self.0
             .lock()

@@ -347,6 +347,30 @@ impl KeyedState for RocksPluginKeyedState {
         ))
     }
 
+    fn write_snapshot(
+        &self,
+        group: u32,
+        owner: &HostMemoryReservation,
+        sink: &mut super::snapshot_stream::SnapshotSink<'_>,
+    ) -> Result<usize> {
+        let mut shape = super::snapshot_stream::Shape::default();
+        self.visit_key_group_admitted(group, 1024, 256 << 10, owner, &mut |page| {
+            for (key, value) in page {
+                shape.add(key, value)?;
+            }
+            Ok(())
+        })?;
+        let bytes = shape.start(group, sink)?;
+        // The factory holds its processor lock through both scans; checkpoints observe stable state.
+        self.visit_key_group_admitted(group, 1024, 256 << 10, owner, &mut |page| {
+            for (key, value) in page {
+                super::snapshot_stream::entry(key, value, sink)?;
+            }
+            Ok(())
+        })?;
+        Ok(bytes)
+    }
+
     fn restore_key_group(
         &mut self,
         key_group: u32,

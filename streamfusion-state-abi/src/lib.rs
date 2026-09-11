@@ -9,7 +9,7 @@ use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 mod snapshot_entries;
 pub use snapshot_entries::key_group_snapshot_entries;
 mod snapshot_writer;
-pub use snapshot_writer::SnapshotWriter;
+pub use snapshot_writer::{key_group_snapshot_header, SnapshotWriter};
 
 pub const STATE_BACKEND_ABI_VERSION: u32 = 9;
 pub const STATE_BACKEND_OK: i32 = 0;

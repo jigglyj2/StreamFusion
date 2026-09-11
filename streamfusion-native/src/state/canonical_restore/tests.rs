@@ -36,6 +36,22 @@ fn canonical_rocks_restore_needs_one_write_page_beyond_the_retained_input() {
     .unwrap();
     destination.restore_key_group(2, &bytes, &owner).unwrap();
     assert_eq!(broker.reserved(), input.size());
+    let stream_broker = Arc::new(TestBroker::new(3 << 20));
+    let stream_owner = HostMemoryReservation::new(stream_broker.clone(), "streamed checkpoint");
+    let mut cache = stream_owner.sibling("RocksDB cache");
+    cache.resize(1 << 20).unwrap();
+    assert!(destination.snapshot_key_group(2, &stream_owner).is_err());
+    assert_streamed(&destination, &bytes, &stream_owner);
+    assert_eq!(stream_broker.reserved(), 1 << 20);
+    assert!(destination
+        .write_snapshot(2, &stream_owner, &mut |_| {
+            Err(datafusion::error::DataFusionError::Execution(
+                "injected output failure".into(),
+            ))
+        })
+        .is_err());
+    assert_eq!(stream_broker.reserved(), 1 << 20);
+
     for start in (0u32..8192).step_by(128) {
         let keys = (start..start + 128)
             .map(u32::to_be_bytes)
@@ -83,7 +99,34 @@ fn paged_canonical_restore_preserves_bytes_and_validates_before_writes_on_memory
             &*state.snapshot_key_group(2, &owner).unwrap(),
             bytes.as_slice()
         );
+
+        let mut competing = owner.sibling("competing task owners");
+        competing
+            .resize((8 << 20) - broker.reserved() - (128 << 10))
+            .unwrap();
+        assert!(state.snapshot_key_group(2, &owner).is_err());
+        assert_streamed(state.as_ref(), &bytes, &owner);
+        drop(competing);
         drop(state);
         assert_eq!(broker.reserved(), 0);
     }
+}
+
+fn assert_streamed(state: &dyn KeyedState, expected: &[u8], owner: &HostMemoryReservation) {
+    let mut position = 0usize;
+    let mut header = true;
+    let written = state
+        .write_snapshot(2, owner, &mut |part| {
+            if header {
+                assert_eq!(part, (expected.len() as i32).to_be_bytes());
+                header = false;
+            } else {
+                assert_eq!(part, &expected[position..position + part.len()]);
+                position += part.len();
+            }
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(position, expected.len());
+    assert_eq!(written, 4 + expected.len());
 }

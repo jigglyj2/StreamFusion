@@ -17,6 +17,7 @@ pub(crate) use read_batch::StateReadBatch;
 mod rocks_plugin;
 mod snapshot;
 mod snapshot_bytes;
+pub(crate) mod snapshot_stream;
 pub(crate) use snapshot_bytes::SnapshotBytes;
 mod timer;
 mod value;
@@ -130,6 +131,17 @@ pub(crate) trait KeyedState: Send {
         key_group: u32,
         owner: &crate::memory_pool::HostMemoryReservation,
     ) -> Result<SnapshotBytes>;
+
+    /// Streams the existing length-framed canonical representation while state is held stable.
+    /// Backends override this to avoid materializing their complete key group.
+    fn write_snapshot(
+        &self,
+        group: u32,
+        owner: &crate::memory_pool::HostMemoryReservation,
+        sink: &mut snapshot_stream::SnapshotSink<'_>,
+    ) -> Result<usize> {
+        snapshot_stream::write_materialized(&self.snapshot_key_group(group, owner)?, sink)
+    }
 
     fn restore_key_group(
         &mut self,

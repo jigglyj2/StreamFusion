@@ -68,16 +68,19 @@ class NativeRegionCheckpointTest {
             byte[] expected = source.context.state().snapshot(2, 0);
             assertThat(expected.length).isGreaterThan(64 << 10);
             var bytes = new java.io.ByteArrayOutputStream();
+            var writes = new java.util.concurrent.atomic.AtomicInteger();
             var output = new java.io.DataOutputStream(new java.io.FilterOutputStream(bytes) {
                 @Override
                 public void write(byte[] value, int offset, int length) throws java.io.IOException {
                     assertThat(length).isLessThanOrEqualTo(64 << 10);
+                    writes.incrementAndGet();
                     out.write(value, offset, length);
                 }
             });
             long available = source.memory.available();
             assertThat(source.context.state().writeSnapshot(2, 0, output)).isEqualTo(4L + expected.length);
             assertThat(source.memory.available()).isEqualTo(available);
+            assertThat(writes.get()).isEqualTo((expected.length + 4 + (64 << 10) - 1) / (64 << 10));
             var stream = new java.io.DataInputStream(new java.io.ByteArrayInputStream(bytes.toByteArray()));
             int length = stream.readInt();
             target.context.state().restore(2, 0, stream, length);

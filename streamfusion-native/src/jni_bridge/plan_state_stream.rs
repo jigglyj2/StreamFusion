@@ -30,27 +30,18 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativePlanState_write
 ) -> jlong {
     env.with_env(|env| -> jni::errors::Result<_> {
         let context = execution_context::get(handle).map_err(|error| io_error(env, error))?;
-        let bytes = context
-            .snapshot_state(id as u64, group as u32)
-            .map_err(|error| io_error(env, error))?;
-        let length = jint::try_from(bytes.len()).map_err(|error| io_error(env, error))?;
-        let reservation = context.reservation("canonical snapshot JVM transport");
-        let size = bytes.len().min(CHUNK_BYTES);
+        let reservation = context.reservation("canonical snapshot buffered transport");
         reservation
-            .try_grow(size)
+            .try_grow(CHUNK_BYTES * 2)
             .map_err(|error| io_error(env, error))?;
-        let chunk = env.new_byte_array(size)?;
-        env.call_method(
-            &output,
-            jni_str!("writeInt"),
-            jni_sig!("(I)V"),
-            &[JValue::Int(length)],
-        )?;
-        for bytes in bytes.chunks(CHUNK_BYTES) {
-            // Java bytes and Rust u8 have the same one-byte representation; the view is borrowed.
+        let chunk = env.new_byte_array(CHUNK_BYTES)?;
+        let mut buffered = Vec::with_capacity(CHUNK_BYTES);
+        let mut flush = |bytes: &[u8]| -> datafusion::error::Result<()> {
             let signed =
                 unsafe { std::slice::from_raw_parts(bytes.as_ptr().cast::<i8>(), bytes.len()) };
-            chunk.set_region(env, 0, signed)?;
+            chunk
+                .set_region(env, 0, signed)
+                .map_err(|error| datafusion::error::DataFusionError::External(Box::new(error)))?;
             env.call_method(
                 &output,
                 jni_str!("write"),
@@ -60,9 +51,38 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativePlanState_write
                     JValue::Int(0),
                     JValue::Int(bytes.len() as jint),
                 ],
-            )?;
-        }
-        Ok(4 + jlong::from(length))
+            )
+            .map_err(|error| datafusion::error::DataFusionError::External(Box::new(error)))?;
+            Ok(())
+        };
+        let result = context
+            .write_snapshot_state(id as u64, group as u32, &mut |mut part: &[u8]| {
+                // Coalesce entry framing and small state values. JNI is crossed per transport chunk,
+                // never once per keyed entry. The backend's borrowed page remains alive until copied.
+                while !part.is_empty() {
+                    let count = part.len().min(CHUNK_BYTES - buffered.len());
+                    buffered.extend_from_slice(&part[..count]);
+                    part = &part[count..];
+                    if buffered.len() == CHUNK_BYTES {
+                        flush(&buffered)?;
+                        buffered.clear();
+                    }
+                }
+                Ok(())
+            })
+            .and_then(|bytes| {
+                if !buffered.is_empty() {
+                    flush(&buffered)?;
+                }
+                Ok(bytes as jlong)
+            });
+        result.map_err(|error| {
+            if env.exception_check() {
+                jni::errors::Error::JavaException
+            } else {
+                io_error(env, error)
+            }
+        })
     })
     .resolve::<ThrowRuntimeExAndDefault>()
 }

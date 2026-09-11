@@ -115,6 +115,17 @@ impl PersistentOperatorFactory for TopNFactory {
         processor.invocation.require_idle("Top-N snapshot")?;
         processor.snapshot_key_group(group)
     }
+    fn write_snapshot(
+        &self,
+        group: u32,
+        sink: &mut crate::state::snapshot_stream::SnapshotSink<'_>,
+    ) -> Result<usize> {
+        let processor = self.0.lock().map_err(|_| poisoned())?;
+        processor.invocation.require_idle("Top-N snapshot")?;
+        processor
+            .state
+            .write_snapshot(group, &processor.scratch_reservation, sink)
+    }
     fn restore(&self, group: u32, bytes: &[u8]) -> Result<()> {
         let mut processor = self.0.lock().map_err(|_| poisoned())?;
         processor.invocation.require_idle("Top-N restore")?;

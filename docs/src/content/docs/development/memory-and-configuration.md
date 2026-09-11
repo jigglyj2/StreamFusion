@@ -52,15 +52,22 @@ input needs no gathered payload. Partial selections reserve gather space from th
 logical buffer spans, avoiding multiplication of a shared IPC allocation by the schema width.
 Operations that expand output, such as `REPEAT`, must reserve their large output before allocation.
 
-Raw keyed checkpoints transfer canonical bytes through a 64 KiB JVM buffer directly to or from
-Flink's checkpoint streams. The existing length-framed format remains compatible with older
-savepoints. Both native payloads and transport buffers use the task budget; I/O failures release
-the buffers and leave Flink responsible for checkpoint failure and cleanup. Canonical decoding
-still materializes one native key-group payload, so this removes the duplicate whole-key-group
-Java allocation without claiming bounded native snapshot memory. Canonical restore on memory, ordered-memory, and RocksDB backends now borrows entries from that
-input and writes bounded pages, avoiding whole-key-group decode vectors and RocksDB write batches.
-A single large entry is separately admitted before its write. Physical RocksDB restore for
-paged joins, aggregates, deduplication, and Top-N imports bounded entry pages.
+Raw keyed checkpoints use bounded 64 KiB transport buffers to write Flink's checkpoint streams.
+Joins, aggregates, deduplication, and Top-N stream canonical entries without materializing the
+whole native key group. RocksDB makes one bounded scan for the frame size and a second for the
+entries while the operator holds state stable; unordered in-memory state sorts borrowed
+entry references, and ordered-memory state walks its existing index. Java callbacks occur per
+transport chunk rather than per state entry. Timer-rebuilding window factories retain their
+materialized snapshot path until their state/clock adapter supports streamed capture.
+
+The existing length-framed format remains compatible with older savepoints, including its signed
+32-bit frame-length limit. Canonical restore still retains one native key-group input payload,
+but uses a bounded JVM input buffer and borrows entries for paged writes on every backend.
+A single large entry is separately admitted before its write. This removes whole-key-group
+Java copies, duplicate decode vectors, and RocksDB write batches. Physical RocksDB restore for
+paged joins, aggregates, deduplication, and Top-N imports bounded entry pages. Reservations cover
+native buffers, sorted references, scan pages, and transport. I/O failures release temporary
+resources; Flink continues to own checkpoint failure, stream disposal, and recovery.
 
 ## Flink budgets and settings
 

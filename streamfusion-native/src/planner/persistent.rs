@@ -65,6 +65,14 @@ pub(crate) trait PersistentOperatorFactory: Send + Sync {
         ))
     }
 
+    fn write_snapshot(
+        &self,
+        group: u32,
+        sink: &mut crate::state::snapshot_stream::SnapshotSink<'_>,
+    ) -> Result<usize> {
+        crate::state::snapshot_stream::write_materialized(&self.snapshot(group)?, sink)
+    }
+
     fn restore(&self, _key_group: u32, _bytes: &[u8]) -> Result<()> {
         Err(DataFusionError::Plan(
             "persistent node has no shared restore binding".into(),
