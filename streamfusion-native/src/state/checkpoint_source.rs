@@ -9,7 +9,7 @@ use std::mem::size_of;
 #[derive(Clone, Copy)]
 pub(crate) enum CheckpointSource<'a> {
     Canonical(&'a [u8]),
-    Physical(&'a RocksPluginKeyedState),
+    Keyed(&'a dyn KeyedState),
 }
 
 impl CheckpointSource<'_> {
@@ -28,7 +28,7 @@ impl CheckpointSource<'_> {
                 }
                 Ok(())
             }
-            Self::Physical(source) => {
+            Self::Keyed(source) => {
                 source.visit_key_group_admitted(group, 1024, 256 << 10, owner, &mut |page| {
                     for &(key, value) in page {
                         visitor(key, value)?;
@@ -78,7 +78,7 @@ impl CheckpointSource<'_> {
                         .map(|(_, value)| value),
                 )
             }
-            Self::Physical(source) => {
+            Self::Keyed(source) => {
                 let values = source.get_batch(
                     &[StateKeyRef {
                         key_group: group,

@@ -77,7 +77,7 @@ impl SharedSlices {
     pub(super) fn restore_physical(
         &mut self,
         group: u32,
-        source: &crate::state::RocksPluginKeyedState,
+        source: &dyn crate::state::KeyedState,
         watermark: i64,
     ) -> Result<()> {
         self.require_restore_ready(watermark)?;

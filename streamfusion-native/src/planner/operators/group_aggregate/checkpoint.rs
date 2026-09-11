@@ -35,7 +35,7 @@ impl GroupAggregateProcessor {
     pub(crate) fn restore_physical_key_group(
         &mut self,
         group: u32,
-        source: &crate::state::RocksPluginKeyedState,
+        source: &dyn crate::state::KeyedState,
         owner: &HostMemoryReservation,
     ) -> Result<()> {
         self.invocation.require_idle("group aggregate")?;

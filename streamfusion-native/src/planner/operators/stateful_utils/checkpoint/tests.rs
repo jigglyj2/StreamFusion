@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::memory_pool::tests_support::TestBroker;
+use crate::state::RocksPluginKeyedState;
 use crate::state::{MemoryKeyedState, TimerKey};
 use std::sync::Arc;
 

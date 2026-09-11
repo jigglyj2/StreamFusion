@@ -503,7 +503,7 @@ impl WindowDeduplicateProcessor {
     pub(crate) fn restore_physical_key_group(
         &mut self,
         key_group: u32,
-        source: &crate::state::RocksPluginKeyedState,
+        source: &dyn crate::state::KeyedState,
     ) -> Result<()> {
         super::stateful_utils::restore_timer_checkpoint(
             self.state.as_mut(),

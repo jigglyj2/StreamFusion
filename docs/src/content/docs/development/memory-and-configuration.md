@@ -53,21 +53,40 @@ logical buffer spans, avoiding multiplication of a shared IPC allocation by the 
 Operations that expand output, such as `REPEAT`, must reserve their large output before allocation.
 
 Raw keyed checkpoints use bounded 64 KiB transport buffers to write Flink's checkpoint streams.
-Joins, aggregates, deduplication, and Top-N stream canonical entries without materializing the
-whole native key group. RocksDB makes one bounded scan for the frame size and a second for the
-entries while the operator holds state stable; unordered in-memory state sorts borrowed
-entry references, and ordered-memory state walks its existing index. Java callbacks occur per
-transport chunk rather than per state entry. Timer-rebuilding window factories retain their
-materialized snapshot path until their state/clock adapter supports streamed capture.
+Joins, aggregates, deduplication, Top-N, and shared window factories stream canonical entries
+without materializing the whole native key group. Timer-bearing windows persist their timer
+updates through bounded state writes before capture. RocksDB makes one bounded scan for the
+frame size and a second for the entries while the operator holds state stable; unordered
+in-memory state sorts borrowed entry references, and ordered-memory state walks its existing
+index. Java callbacks occur per transport chunk rather than per state entry.
 
-The existing length-framed format remains compatible with older savepoints, including its signed
-32-bit frame-length limit. Canonical restore still retains one native key-group input payload,
-but uses a bounded JVM input buffer and borrows entries for paged writes on every backend.
-A single large entry is separately admitted before its write. This removes whole-key-group
-Java copies, duplicate decode vectors, and RocksDB write batches. Physical RocksDB restore for
-paged joins, aggregates, deduplication, and Top-N imports bounded entry pages. Reservations cover
-native buffers, sorted references, scan pages, and transport. I/O failures release temporary
-resources; Flink continues to own checkpoint failure, stream disposal, and recovery.
+Small frames retain their existing positive 32-bit length and canonical `SFS1` payload bytes.
+Larger frames use an explicit `-1` marker followed by a positive 64-bit length. The stream JNI
+edge is version 2; current readers accept both frame forms, while older readers cannot consume
+large-frame savepoints. The canonical payload still uses 32-bit entry counts and individual
+key/value lengths. Length framing tests cover the 2 GiB boundary and larger declarations without
+allocating multi-gigabyte test payloads.
+
+Production restore streams a key group into a DataFusion-owned temporary file under Flink's
+IOManager directories. DataFusion sorts bounded Arrow batches containing only keys and file
+offsets, spilling under the same native memory reservation pool. A framing scan sizes merge batches
+from the widest key and available budget, so wide keys cannot turn a fixed row count into an
+oversized merge allocation. Payloads stay in the input file;
+the sorted offset directory stays on disk rather than growing an in-memory lookup table.
+Framing and duplicate-key validation finish before the source reaches a state factory. Factories
+then validate their operator encoding and import bounded pages through the same read-only
+checkpoint interface used for physical RocksDB restore. A single large key, value, or write page
+still requires admission; restore does not exempt retained in-memory backend state from its budget.
+Low-level embedded callers without task spill resources retain the admitted materialized restore
+path. Production tasks supply spill directories through state-binding protocol 4.
+
+Regression fixtures restore canonical payloads larger than 12 MiB with 4 MiB of free native memory
+into RocksDB, verify generated Flink changelog parity after restore, and force DataFusion sorting
+to spill for a high-cardinality key directory. Both state backends, unordered older payloads,
+truncation, duplicate keys, cross-backend recovery, and temporary-file cleanup are covered.
+Reservations cover scan pages, sort state, transport, and retained output values. Preparation
+failures leave state unchanged; an error after operator import begins requires task recovery.
+Flink continues to own checkpoint streams, checkpoint completion/failure, and recovery.
 
 ## Flink budgets and settings
 

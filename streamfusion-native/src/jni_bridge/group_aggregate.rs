@@ -178,7 +178,7 @@ impl AggregateProcessor {
     fn restore_physical_key_group(
         &mut self,
         group: u32,
-        source: &crate::state::RocksPluginKeyedState,
+        source: &dyn crate::state::KeyedState,
         owner: &HostMemoryReservation,
     ) -> datafusion::error::Result<()> {
         match self {

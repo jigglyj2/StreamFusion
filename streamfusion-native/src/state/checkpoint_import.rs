@@ -4,12 +4,12 @@
 use super::*;
 use crate::memory_pool::HostMemoryReservation;
 
-/// Populate an empty assigned key group from a stable, Flink-materialized RocksDB checkpoint.
+/// Populate an empty assigned key group from a stable, read-only checkpoint source.
 /// Import is an initialization operation: a failure may leave earlier pages installed, so the
 /// owning execution context must be discarded. It is never a live-state merge or transaction.
 pub(crate) fn import_key_group(
     destination: &mut dyn KeyedState,
-    source: &RocksPluginKeyedState,
+    source: &dyn KeyedState,
     group: u32,
     owner: &HostMemoryReservation,
     validate: &mut dyn FnMut(&[u8], &[u8]) -> Result<()>,

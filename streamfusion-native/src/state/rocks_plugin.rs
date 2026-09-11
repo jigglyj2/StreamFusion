@@ -101,6 +101,17 @@ impl RocksPluginKeyedState {
 }
 
 impl KeyedState for RocksPluginKeyedState {
+    fn visit_key_group_admitted(
+        &self,
+        group: u32,
+        rows: usize,
+        bytes: usize,
+        owner: &crate::memory_pool::HostMemoryReservation,
+        visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<()>,
+    ) -> Result<()> {
+        RocksPluginKeyedState::visit_key_group_admitted(self, group, rows, bytes, owner, visitor)
+    }
+
     fn get_batch<'a>(
         &'a self,
         keys: &[StateKeyRef<'_>],

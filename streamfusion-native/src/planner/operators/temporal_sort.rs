@@ -545,7 +545,7 @@ impl TemporalSortProcessor {
     pub(crate) fn restore_physical_key_group(
         &mut self,
         key_group: u32,
-        source: &RocksPluginKeyedState,
+        source: &dyn KeyedState,
     ) -> Result<()> {
         crate::state::import_key_group(
             self.state.as_mut(),

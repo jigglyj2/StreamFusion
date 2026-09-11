@@ -2,7 +2,6 @@
 // Licensed under the Apache License, Version 2.0.
 
 use super::*;
-use crate::state::RocksPluginKeyedState;
 
 fn invalid(message: &str) -> DataFusionError {
     DataFusionError::Execution(format!("invalid regular join checkpoint: {message}"))
@@ -72,7 +71,7 @@ pub(super) fn validate_snapshot(
 /// No key-group snapshot, decoded partition, or expanded row-identity bitmap is materialized.
 pub(in super::super) fn restore_from_checkpoint(
     state: &mut dyn KeyedState,
-    source: &RocksPluginKeyedState,
+    source: &dyn KeyedState,
     group: u32,
     owner: &HostMemoryReservation,
 ) -> Result<()> {
@@ -90,12 +89,7 @@ pub(in super::super) fn restore_from_checkpoint(
         if legacy != total {
             return Err(invalid("mixed legacy and paged records"));
         }
-        return legacy_restore::restore(
-            state,
-            legacy_restore::Source::Physical(source),
-            group,
-            owner,
-        );
+        return legacy_restore::restore(state, legacy_restore::Source::Keyed(source), group, owner);
     }
     let mut consumed = 0usize;
     let mut references = owner.sibling("join checkpoint page references");

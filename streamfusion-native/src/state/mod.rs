@@ -5,6 +5,8 @@ mod batch_writer;
 pub(crate) use batch_writer::StateBatchWriter;
 mod checkpoint_source;
 pub(crate) use checkpoint_source::CheckpointSource;
+mod canonical_file;
+pub(crate) use canonical_file::CanonicalFile;
 mod canonical_restore;
 pub(crate) use canonical_restore::require_empty as require_empty_key_group;
 mod checkpoint_import;
@@ -92,6 +94,19 @@ pub(crate) trait KeyedState: Send {
         max_bytes: usize,
         visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<()>,
     ) -> Result<()>;
+
+    /// A stable read source may own external buffers. Admit their actual pages, including an
+    /// oversized single entry, through the same host budget as the restoring operator.
+    fn visit_key_group_admitted(
+        &self,
+        group: u32,
+        rows: usize,
+        bytes: usize,
+        owner: &crate::memory_pool::HostMemoryReservation,
+        visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<()>,
+    ) -> Result<()> {
+        self.visit_prefix_admitted(group, &[], rows, bytes, owner, visitor)
+    }
 
     /// Visits matching entries in bounded pages, without requiring an ordering-capable
     /// in-memory backend. External ordered stores should seek directly to the prefix.

@@ -77,9 +77,7 @@ public final class NativeRegionStateParticipant implements NativeIncrementalStat
             }
             bytes += 2L * Integer.BYTES + (long) Long.BYTES * nodeIds.size();
             for (long id : nodeIds) {
-                int length = input.readInt();
-                state.restore(id, group, input, length);
-                bytes += Integer.BYTES + (long) length;
+                bytes += state.restoreFrame(id, group, input);
             }
         }
         return bytes;

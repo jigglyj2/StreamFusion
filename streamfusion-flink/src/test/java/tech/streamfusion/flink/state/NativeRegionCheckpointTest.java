@@ -109,11 +109,19 @@ class NativeRegionCheckpointTest {
             oversized.writeInt(IDS.size());
             for (long id : IDS) oversized.writeLong(id);
             oversized.writeInt(Integer.MAX_VALUE);
+            var extended = new DataOutputSerializer(40);
+            extended.write(oversized.getCopyOfBuffer(), 0, 24);
+            extended.writeInt(-1);
+            extended.writeLong(5L << 30);
             var truncated = new DataOutputSerializer(32);
             truncated.write(oversized.getCopyOfBuffer(), 0, 24);
             truncated.writeInt(4);
             truncated.writeByte(1);
-            for (byte[] bytes : List.of(new byte[8], oversized.getCopyOfBuffer(), truncated.getCopyOfBuffer())) {
+            for (byte[] bytes : List.of(
+                    new byte[8],
+                    oversized.getCopyOfBuffer(),
+                    extended.getCopyOfBuffer(),
+                    truncated.getCopyOfBuffer())) {
                 long available = region.memory.available();
                 var provider = new KeyGroupStatePartitionStreamProvider(new java.io.ByteArrayInputStream(bytes), 0);
                 var initialization =
@@ -399,7 +407,8 @@ class NativeRegionCheckpointTest {
                                     8L << 20)
                             : NativeStateResources.memory(id, GROUPS, range.getStartKeyGroup(), range.getEndKeyGroup()))
                     .collect(java.util.stream.Collectors.toList());
-            context = new NativeExecutionContext(plan, memory, NativeStateResources.serialize(bindings));
+            context = new NativeExecutionContext(
+                    plan, memory, NativeStateResources.serialize(bindings, List.of(directory)));
             participant = new NativeRegionStateParticipant(context.state(), IDS, range, directory);
             edge = new ArrowNativePlanBridge(context, TYPE, allocator);
         }

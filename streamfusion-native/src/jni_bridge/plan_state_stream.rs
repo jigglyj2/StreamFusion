@@ -2,10 +2,10 @@
 // Licensed under the Apache License, Version 2.0.
 
 //! Flink owns checkpoint streams. Transfer the existing canonical frame in bounded chunks;
-//! never retain another whole-key-group Java array alongside the native snapshot/restore bytes.
+//! production restore stages to admitted native spill files instead of retaining whole groups.
 use crate::execution_context;
 use jni::errors::ThrowRuntimeExAndDefault;
-use jni::objects::{JClass, JObject, JValue};
+use jni::objects::{JByteArray, JClass, JObject, JValue};
 use jni::sys::{jint, jlong};
 use jni::{jni_sig, jni_str, EnvUnowned};
 
@@ -16,7 +16,7 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativePlanState_strea
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
 ) -> jint {
-    1
+    2
 }
 
 #[unsafe(no_mangle)]
@@ -95,40 +95,68 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativePlanState_resto
     id: jlong,
     group: jint,
     input: JObject<'a>,
-    length: jint,
+    length: jlong,
 ) {
     env.with_env(|env| -> jni::errors::Result<_> {
-        let length = usize::try_from(length).map_err(|error| io_error(env, error))?;
+        let length = u64::try_from(length).map_err(|error| io_error(env, error))?;
         let context = execution_context::get(handle).map_err(|error| io_error(env, error))?;
-        let reservation = context.reservation("canonical restore bytes and JVM transport");
-        let size = length.min(CHUNK_BYTES);
+        let reservation = context.reservation("canonical restore JVM transport");
+        let size = length.min(CHUNK_BYTES as u64) as usize;
         reservation
-            .try_grow(length.saturating_add(size))
+            .try_grow(size)
             .map_err(|error| io_error(env, error))?;
         let chunk = env.new_byte_array(size)?;
-        // Admit both buffers before allocating or reading. A truncated Flink stream cannot mutate state.
-        let mut bytes = vec![0u8; length];
-        for bytes in bytes.chunks_mut(CHUNK_BYTES) {
-            env.call_method(
-                &input,
+        let mut reader = JavaInput {
+            env,
+            input,
+            chunk,
+            size,
+        };
+        let result = context.restore_state_reader(id as u64, group as u32, length, &mut reader);
+        drop(reader);
+        result.map_err(|error| {
+            if env.exception_check() {
+                jni::errors::Error::JavaException
+            } else {
+                io_error(env, error)
+            }
+        })
+    })
+    .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+/// One reusable Java byte array. Calls follow transport chunks, never state keys or sort rows.
+struct JavaInput<'env, 'local> {
+    env: &'env mut jni::Env<'local>,
+    input: JObject<'local>,
+    chunk: JByteArray<'local>,
+    size: usize,
+}
+impl std::io::Read for JavaInput<'_, '_> {
+    fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+        let count = bytes.len().min(self.size);
+        if count == 0 {
+            return Ok(0);
+        }
+        let result = (|| -> jni::errors::Result<()> {
+            self.env.call_method(
+                &self.input,
                 jni_str!("readFully"),
                 jni_sig!("([BII)V"),
                 &[
-                    JValue::Object(chunk.as_ref()),
+                    JValue::Object(self.chunk.as_ref()),
                     JValue::Int(0),
-                    JValue::Int(bytes.len() as jint),
+                    JValue::Int(count as jint),
                 ],
             )?;
-            let signed = unsafe {
-                std::slice::from_raw_parts_mut(bytes.as_mut_ptr().cast::<i8>(), bytes.len())
-            };
-            chunk.get_region(env, 0, signed)?;
-        }
-        context
-            .restore_state(id as u64, group as u32, &bytes)
-            .map_err(|error| io_error(env, error))
-    })
-    .resolve::<ThrowRuntimeExAndDefault>()
+            let signed =
+                unsafe { std::slice::from_raw_parts_mut(bytes.as_mut_ptr().cast::<i8>(), count) };
+            self.chunk.get_region(self.env, 0, signed)
+        })();
+        result
+            .map(|()| count)
+            .map_err(|error| std::io::Error::other(error.to_string()))
+    }
 }
 
 fn io_error(env: &mut jni::Env<'_>, error: impl std::fmt::Display) -> jni::errors::Error {

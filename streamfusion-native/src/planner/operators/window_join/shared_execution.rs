@@ -197,7 +197,7 @@ impl PersistentOperatorFactory for WindowJoinFactory {
     fn restore_from_checkpoint(
         &self,
         group: u32,
-        source: &crate::state::RocksPluginKeyedState,
+        source: &dyn crate::state::KeyedState,
         memory: &HostMemoryReservation,
     ) -> Result<()> {
         let mut owner = self.owner.lock().map_err(|_| poisoned())?;

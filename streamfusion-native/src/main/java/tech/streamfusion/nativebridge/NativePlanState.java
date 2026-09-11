@@ -36,9 +36,20 @@ public final class NativePlanState {
 
     /** Reads one canonical payload without allocating a second key-group-sized Java array. */
     public void restore(long planNodeId, int keyGroup, DataInputStream input, int length) throws IOException {
+        restore(planNodeId, keyGroup, input, (long) length);
+    }
+
+    public void restore(long planNodeId, int keyGroup, DataInputStream input, long length) throws IOException {
         validate(planNodeId, keyGroup);
         if (length < 0) throw new IOException("Invalid native snapshot length " + length);
         restoreStream(context.handle(), planNodeId, keyGroup, Objects.requireNonNull(input), length);
+    }
+
+    /** Reads an original Int32 frame or the version-two Int64 length extension. */
+    public long restoreFrame(long planNodeId, int keyGroup, DataInputStream input) throws IOException {
+        long length = NativeSnapshotFrame.readLength(input);
+        restore(planNodeId, keyGroup, input, length);
+        return NativeSnapshotFrame.framedBytes(length);
     }
 
     public void checkpoint(long planNodeId, Path directory) {
@@ -85,7 +96,7 @@ public final class NativePlanState {
             throws IOException;
 
     private static native void restoreStream(
-            long handle, long planNodeId, int keyGroup, DataInputStream input, int length) throws IOException;
+            long handle, long planNodeId, int keyGroup, DataInputStream input, long length) throws IOException;
 
     private static native void checkpoint(long handle, long planNodeId, String directory);
 

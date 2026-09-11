@@ -145,7 +145,7 @@ impl super::shared_kernel::SharedWindowKernel for SharedSessions {
     fn restore_physical(
         &mut self,
         group: u32,
-        source: &crate::state::RocksPluginKeyedState,
+        source: &dyn crate::state::KeyedState,
         watermark: i64,
     ) -> Result<()> {
         Self::restore_physical(self, group, source, watermark)

@@ -44,7 +44,8 @@ pub(crate) fn disk_manager(directories: Vec<PathBuf>) -> Result<DiskManagerBuild
     validate(&directories)?;
     Ok(DiskManagerBuilder::default()
         .with_mode(DiskManagerMode::Directories(directories))
-        .with_max_temp_directory_size(u64::MAX))
+        .with_max_temp_directory_size(u64::MAX)
+        .with_max_spill_merge_fan_in(8))
 }
 
 fn validate(directories: &[PathBuf]) -> Result<()> {

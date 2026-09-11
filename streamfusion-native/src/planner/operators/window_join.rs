@@ -547,7 +547,7 @@ impl WindowJoinProcessor {
     pub(crate) fn restore_physical_key_group(
         &mut self,
         key_group: u32,
-        source: &crate::state::RocksPluginKeyedState,
+        source: &dyn crate::state::KeyedState,
     ) -> Result<()> {
         self.require_idle()?;
         indexed_state::restore_physical(

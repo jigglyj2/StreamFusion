@@ -45,7 +45,7 @@ impl PersistentOperatorFactory for DeduplicateFactory {
     fn restore_from_checkpoint(
         &self,
         group: u32,
-        source: &crate::state::RocksPluginKeyedState,
+        source: &dyn crate::state::KeyedState,
         owner: &HostMemoryReservation,
     ) -> Result<()> {
         let mut processor = self.0.lock().map_err(|_| poisoned())?;

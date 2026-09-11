@@ -1,7 +1,6 @@
 // Copyright 2026 StreamFusion Authors. Licensed under the Apache License, Version 2.0.
 
 use super::*;
-use crate::state::RocksPluginKeyedState;
 
 pub(in super::super) fn restore_timer_state(
     state: &mut dyn KeyedState,
@@ -29,7 +28,7 @@ pub(in super::super) fn restore_timer_checkpoint(
     state: &mut dyn KeyedState,
     timers: &mut NativeTimerService,
     key_group: u32,
-    source: &RocksPluginKeyedState,
+    source: &dyn KeyedState,
     timer_state_key: &[u8],
     state_read_batches: &mut u64,
     owner: &HostMemoryReservation,

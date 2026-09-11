@@ -68,7 +68,7 @@ impl SharedWindowKernel for SharedProcessingWindows {
     fn restore_physical(
         &mut self,
         group: u32,
-        source: &crate::state::RocksPluginKeyedState,
+        source: &dyn crate::state::KeyedState,
         watermark: i64,
     ) -> Result<()> {
         self.require_healthy()?;

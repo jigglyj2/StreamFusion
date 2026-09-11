@@ -2,7 +2,6 @@
 // Licensed under the Apache License, Version 2.0.
 
 use super::*;
-use crate::state::RocksPluginKeyedState;
 
 #[derive(Default)]
 struct Encoding {
@@ -67,7 +66,7 @@ pub(in super::super) fn restore_canonical(
 pub(in super::super) fn restore_physical(
     state: &mut dyn KeyedState,
     group: u32,
-    source: &RocksPluginKeyedState,
+    source: &dyn KeyedState,
     converter: &mut RowConverter,
     owner: &HostMemoryReservation,
 ) -> Result<()> {
