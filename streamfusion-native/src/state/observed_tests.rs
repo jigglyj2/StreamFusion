@@ -154,6 +154,29 @@ impl KeyedState for Observed {
                 f(page)
             })
     }
+    fn visit_range_admitted(
+        &self,
+        group: u32,
+        start: &[u8],
+        end: Option<&[u8]>,
+        rows: usize,
+        bytes: usize,
+        owner: &HostMemoryReservation,
+        f: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<bool>,
+    ) -> Result<()> {
+        self.io.range_reads.fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .visit_range_admitted(group, start, end, rows, bytes, owner, &mut |page| {
+                self.io
+                    .scanned_rows
+                    .fetch_add(page.len(), Ordering::Relaxed);
+                self.io.read_bytes.fetch_add(
+                    page.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>(),
+                    Ordering::Relaxed,
+                );
+                f(page)
+            })
+    }
     fn checkpoint(&self, directory: &std::path::Path) -> Result<()> {
         self.inner.checkpoint(directory)
     }

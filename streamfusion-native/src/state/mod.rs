@@ -11,6 +11,8 @@ mod canonical_restore;
 pub(crate) use canonical_restore::require_empty as require_empty_key_group;
 mod checkpoint_import;
 pub(crate) use checkpoint_import::import_key_group;
+#[cfg(test)]
+mod admitted_range_tests;
 mod memory;
 #[cfg(test)]
 pub(crate) mod observed_tests;
@@ -166,6 +168,28 @@ pub(crate) trait KeyedState: Send {
         Err(datafusion::error::DataFusionError::Execution(
             "ordered ranges require an ordered state backend".into(),
         ))
+    }
+
+    /// Ordered pages with external payload admission and early termination. A single entry may
+    /// exceed the byte target when its actual allocation fits the host budget. Returning false
+    /// releases the current page without fetching a following page.
+    fn visit_range_admitted(
+        &self,
+        group: u32,
+        start: &[u8],
+        end: Option<&[u8]>,
+        rows: usize,
+        bytes: usize,
+        owner: &crate::memory_pool::HostMemoryReservation,
+        visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<bool>,
+    ) -> Result<()> {
+        let mut memory = owner.sibling("state ordered page");
+        memory.resize(
+            bytes
+                .saturating_add(rows.saturating_mul(32))
+                .saturating_add(4096),
+        )?;
+        self.visit_range(group, start, end, rows, bytes, visitor)
     }
 
     fn snapshot_key_group(

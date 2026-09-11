@@ -15,10 +15,21 @@ impl RocksPluginKeyedState {
         owner: &HostMemoryReservation,
         visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<()>,
     ) -> Result<()> {
-        self.visit_range_admitted(group, &[], None, max_rows, target_bytes, owner, visitor)
+        self.scan_range_admitted(
+            group,
+            &[],
+            None,
+            max_rows,
+            target_bytes,
+            owner,
+            &mut |page| {
+                visitor(page)?;
+                Ok(true)
+            },
+        )
     }
 
-    pub(crate) fn visit_range_admitted(
+    pub(crate) fn scan_range_admitted(
         &self,
         group: u32,
         start: &[u8],
@@ -26,7 +37,7 @@ impl RocksPluginKeyedState {
         max_rows: usize,
         target_bytes: usize,
         owner: &HostMemoryReservation,
-        visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<()>,
+        visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<bool>,
     ) -> Result<()> {
         let rows = u32::try_from(max_rows).map_err(|_| {
             DataFusionError::Execution("state scan row limit exceeds UInt32".into())
@@ -77,8 +88,7 @@ impl RocksPluginKeyedState {
             let entries = (0..page.num_rows())
                 .map(|row| (keys.value(row), values.value(row)))
                 .collect::<Vec<_>>();
-            visitor(&entries)?;
-            if complete {
+            if !visitor(&entries)? || complete {
                 return Ok(());
             }
             let next = keys.value(keys.len() - 1);

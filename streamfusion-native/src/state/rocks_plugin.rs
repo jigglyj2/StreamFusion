@@ -228,7 +228,31 @@ impl KeyedState for RocksPluginKeyedState {
         visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<()>,
     ) -> Result<()> {
         let end = super::prefix_end(prefix);
-        self.visit_range_admitted(group, prefix, end.as_deref(), rows, bytes, owner, visitor)
+        self.scan_range_admitted(
+            group,
+            prefix,
+            end.as_deref(),
+            rows,
+            bytes,
+            owner,
+            &mut |page| {
+                visitor(page)?;
+                Ok(true)
+            },
+        )
+    }
+
+    fn visit_range_admitted(
+        &self,
+        group: u32,
+        start: &[u8],
+        end: Option<&[u8]>,
+        rows: usize,
+        bytes: usize,
+        owner: &HostMemoryReservation,
+        visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<bool>,
+    ) -> Result<()> {
+        self.scan_range_admitted(group, start, end, rows, bytes, owner, visitor)
     }
 
     fn snapshot_key_group(
