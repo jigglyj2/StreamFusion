@@ -325,7 +325,6 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeSessionWindowTa
                 )
             })?;
             (|| -> datafusion::error::Result<()> {
-                use crate::state::KeyedState;
                 let target = unsafe { processor(target_handle) }?;
                 super::checkpoint_reader::import(
                     std::path::Path::new(&plugin_path.to_string()),
@@ -333,12 +332,7 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeSessionWindowTa
                     non_negative(first_key_group, "first key group")?,
                     non_negative(last_key_group, "last key group")?,
                     limit,
-                    |group, source| {
-                        target.restore_key_group(
-                            group,
-                            &source.snapshot_key_group(group, &target.state_memory())?,
-                        )
-                    },
+                    |group, source| target.restore_physical_key_group(group, source),
                 )
             })()
             .map_err(|error| throw(env, error))

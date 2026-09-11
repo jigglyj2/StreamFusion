@@ -417,6 +417,15 @@ with an adequate retained-state budget. Timer records themselves remain admitted
 and the timer index remains managed memory. These changes do not unlock gated SQL operators or
 remove canonical savepoint input buffers.
 
+The standalone Changelog Normalize, MultiJoin, MATCH_RECOGNIZE, OVER Aggregate, Window Aggregate,
+Session Window Table Function, and bounded Sort bridges use the same paged importer as well.
+OVER and window aggregation share timer reload logic with the timer-based restore helpers;
+OVER's pending terminal output and bounded Sort's heap/cursor state reset after restoration just
+as they do for canonical snapshots. Generated bounded-sort changelogs exercise physical restore
+to both backends, followed by additional updates and final output comparison against Flink.
+Window Join still uses its canonical adapter pending migration of its legacy-index validation;
+shared window factories have their own semantic restore hooks and still need paged import support.
+
 All physical restore entry points now open existing checkpoints read-only through state-component
 ABI 10. Missing directories, missing CURRENT files, and corrupt/missing manifests fail restoration;
 restore must never create an empty database or repair a checkpoint. Ordinary new-task database

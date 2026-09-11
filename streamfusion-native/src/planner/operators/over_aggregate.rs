@@ -1226,27 +1226,42 @@ impl OverAggregateProcessor {
     }
 
     pub(crate) fn restore_key_group(&mut self, key_group: u32, bytes: &[u8]) -> Result<()> {
-        self.state
-            .restore_key_group(key_group, bytes, &self.scratch_reservation)?;
-        let timer_key = StateKeyRef {
+        super::stateful_utils::restore_timer_state(
+            self.state.as_mut(),
+            &mut self.timers,
             key_group,
-            key: TIMER_STATE_KEY,
-        };
-        if let Some(timer_state) = self
-            .state
-            .get_batch(&[timer_key], &self.scratch_reservation)?
-            .pop()
-            .flatten()
-        {
-            self.timers
-                .restore_key_group(key_group, timer_state.as_ref())?;
-        }
+            bytes,
+            TIMER_STATE_KEY,
+            &mut self.state_read_batches,
+            &self.scratch_reservation,
+        )?;
+        self.finish_key_group_restore(key_group);
+        Ok(())
+    }
+
+    pub(crate) fn restore_physical_key_group(
+        &mut self,
+        key_group: u32,
+        source: &crate::state::RocksPluginKeyedState,
+    ) -> Result<()> {
+        super::stateful_utils::restore_timer_checkpoint(
+            self.state.as_mut(),
+            &mut self.timers,
+            key_group,
+            source,
+            TIMER_STATE_KEY,
+            &mut self.state_read_batches,
+            &self.scratch_reservation,
+        )?;
+        self.finish_key_group_restore(key_group);
+        Ok(())
+    }
+
+    fn finish_key_group_restore(&mut self, key_group: u32) {
         self.dirty_timer_groups.remove(&key_group);
         self.bounded_finish_key_group = self.first_key_group;
         self.bounded_pending.clear();
         self.bounded_drained = false;
-        self.state_read_batches = self.state_read_batches.saturating_add(1);
-        Ok(())
     }
 
     pub(crate) fn checkpoint(&mut self, directory: &std::path::Path) -> Result<()> {

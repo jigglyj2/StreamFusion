@@ -22,7 +22,7 @@ pub(super) use time::{local_to_epoch, local_to_timer_epoch};
 
 use ahash::RandomState;
 use arrow::array::{
-    Array, ArrayRef, BinaryArray, Int8Array, Int64Array, TimestampMillisecondArray,
+    Array, ArrayRef, BinaryArray, Int64Array, Int8Array, TimestampMillisecondArray,
 };
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -32,7 +32,7 @@ use chrono_tz::Tz;
 use datafusion::error::{DataFusionError, Result};
 use hashbrown::HashMap;
 
-use crate::exchange::{KeyField, assign_key_group, encode_binary_row_into};
+use crate::exchange::{assign_key_group, encode_binary_row_into, KeyField};
 use crate::memory_pool::HostMemoryReservation;
 use crate::state::{
     KeyedState, MemoryKeyedState, NativeTimerService, RocksPluginKeyedState, StateKey, StateKeyRef,
@@ -41,8 +41,8 @@ use crate::state::{
 use crate::{decode_plan, proto};
 
 use super::group_aggregate::{
-    AccumulatorState, AggregateValue, Call, aggregate_array, decode_state, encode_state,
-    lower_call, row_aggregate_values,
+    aggregate_array, decode_state, encode_state, lower_call, row_aggregate_values,
+    AccumulatorState, AggregateValue, Call,
 };
 use super::window_table_function::{assign_windows_into, timestamp_millis};
 
@@ -870,24 +870,32 @@ impl WindowAggregateProcessor {
     }
 
     pub(crate) fn restore_key_group(&mut self, key_group: u32, bytes: &[u8]) -> Result<()> {
-        self.state
-            .restore_key_group(key_group, bytes, &self.scratch_reservation)?;
-        let timer_key = StateKeyRef {
+        super::stateful_utils::restore_timer_state(
+            self.state.as_mut(),
+            &mut self.timers,
             key_group,
-            key: TIMER_STATE_KEY,
-        };
-        if let Some(timer_state) = self
-            .state
-            .get_batch(&[timer_key], &self.scratch_reservation)?
-            .pop()
-            .flatten()
-        {
-            self.state_read_batches = self.state_read_batches.saturating_add(1);
-            self.timers
-                .restore_key_group(key_group, timer_state.as_ref())?;
-        } else {
-            self.state_read_batches = self.state_read_batches.saturating_add(1);
-        }
+            bytes,
+            TIMER_STATE_KEY,
+            &mut self.state_read_batches,
+            &self.scratch_reservation,
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn restore_physical_key_group(
+        &mut self,
+        key_group: u32,
+        source: &crate::state::RocksPluginKeyedState,
+    ) -> Result<()> {
+        super::stateful_utils::restore_timer_checkpoint(
+            self.state.as_mut(),
+            &mut self.timers,
+            key_group,
+            source,
+            TIMER_STATE_KEY,
+            &mut self.state_read_batches,
+            &self.scratch_reservation,
+        )?;
         Ok(())
     }
 

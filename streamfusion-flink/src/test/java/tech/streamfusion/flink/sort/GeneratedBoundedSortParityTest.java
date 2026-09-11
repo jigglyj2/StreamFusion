@@ -53,6 +53,41 @@ class GeneratedBoundedSortParityTest {
         }
     }
 
+    @Test
+    void physicalCheckpointsPreserveGeneratedChangelogsOnBothRestoreBackends() throws Exception {
+        for (int seed = 0; seed < 3; seed++) {
+            var rows = input(seed);
+            byte[] expected = flink(rows);
+            for (boolean rocks : List.of(false, true)) {
+                org.apache.flink.runtime.checkpoint.OperatorSubtaskState snapshot;
+                try (var allocator = new RootAllocator(64L << 20)) {
+                    try (var source = StreamFusionArrowBoundedSortOperatorTest.harness(null, true)) {
+                        StreamFusionArrowBoundedSortOperatorTest.process(
+                                source, allocator, rows.subList(0, 256).toArray(new GenericRowData[0]));
+                        snapshot = source.snapshot(91, 91);
+                        assertThat(snapshot.getRawKeyedState()).isEmpty();
+                        assertThat(snapshot.getManagedKeyedState()).hasSize(1);
+                    }
+                    try (var restored = StreamFusionArrowBoundedSortOperatorTest.harness(snapshot, rocks)) {
+                        for (int start = 256; start < rows.size(); start += 17) {
+                            StreamFusionArrowBoundedSortOperatorTest.process(
+                                    restored,
+                                    allocator,
+                                    rows.subList(start, Math.min(start + 17, rows.size()))
+                                            .toArray(new GenericRowData[0]));
+                        }
+                        restored.endInput();
+                        assertThat(restored.bytes.getCopyOfBuffer())
+                                .as("physical restore seed %s, RocksDB %s", seed, rocks)
+                                .isEqualTo(expected);
+                    } finally {
+                        snapshot.discardState();
+                    }
+                }
+            }
+        }
+    }
+
     private static List<GenericRowData> input(int seed) {
         Random random = new Random(3197 + seed);
         List<GenericRowData> rows = new ArrayList<>();

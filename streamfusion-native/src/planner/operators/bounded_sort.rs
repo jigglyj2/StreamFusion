@@ -833,6 +833,25 @@ impl BoundedSortProcessor {
     pub(crate) fn restore_key_group(&mut self, key_group: u32, bytes: &[u8]) -> Result<()> {
         self.state
             .restore_key_group(key_group, bytes, &self.scratch)?;
+        self.finish_key_group_restore()
+    }
+
+    pub(crate) fn restore_physical_key_group(
+        &mut self,
+        key_group: u32,
+        source: &crate::state::RocksPluginKeyedState,
+    ) -> Result<()> {
+        crate::state::import_key_group(
+            self.state.as_mut(),
+            source,
+            key_group,
+            &self.scratch,
+            &mut |_, _| Ok(()),
+        )?;
+        self.finish_key_group_restore()
+    }
+
+    fn finish_key_group_restore(&mut self) -> Result<()> {
         if self.plan.physical_input_semantics {
             self.physical_heap.clear();
             self.physical_loaded_keys.clear();

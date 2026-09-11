@@ -522,6 +522,25 @@ impl SessionWindowTableFunctionProcessor {
     pub(crate) fn restore_key_group(&mut self, key_group: u32, bytes: &[u8]) -> Result<()> {
         self.state
             .restore_key_group(key_group, bytes, &self.scratch_reservation)?;
+        self.finish_key_group_restore(key_group)
+    }
+
+    pub(crate) fn restore_physical_key_group(
+        &mut self,
+        key_group: u32,
+        source: &crate::state::RocksPluginKeyedState,
+    ) -> Result<()> {
+        crate::state::import_key_group(
+            self.state.as_mut(),
+            source,
+            key_group,
+            &self.scratch_reservation,
+            &mut |_, _| Ok(()),
+        )?;
+        self.finish_key_group_restore(key_group)
+    }
+
+    fn finish_key_group_restore(&mut self, key_group: u32) -> Result<()> {
         let timer = self.state.get_batch(
             &[StateKeyRef {
                 key_group,
