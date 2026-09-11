@@ -143,6 +143,33 @@ class NativeExchangeCDataRoundTripTest {
         }
     }
 
+    @Test
+    void deniedWorkspaceReleasesExportsAndLeavesTheCachedRouterUsable() {
+        RowType type = RowType.of(new IntType(false));
+        byte[] plan = NativeExchangePlanSerializer.hash(type, new int[] {0}, 32768, 4, true, false);
+        NativeMemoryManager memory = TestingNativeMemoryManager.create(2L << 20);
+        try (RootAllocator allocator = new RootAllocator();
+                ArrowRowDataBatch input = ArrowRowDataBatch.transpose(List.of(GenericRowData.of(42)), type, allocator);
+                ArrowExchangeBatch.EnvelopeBatch envelope = ArrowExchangeBatch.withEnvelope(input, type);
+                var router = new tech.streamfusion.nativebridge.NativeExchangeRouter(plan, memory)) {
+            long arrowBytes = allocator.getAllocatedMemory();
+            long available = memory.available();
+            long competingReservation = available - (64L << 10);
+            assertThat(memory.tryReserve(competingReservation)).isTrue();
+            org.assertj.core.api.Assertions.assertThatThrownBy(
+                            () -> ArrowExchangeCDataBridge.route(router, envelope.batch()))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("Flink denied");
+            assertThat(memory.available()).isEqualTo(64L << 10);
+            assertThat(allocator.getAllocatedMemory()).isEqualTo(arrowBytes);
+            memory.release(competingReservation);
+            assertThat(ArrowExchangeCDataBridge.route(router, envelope.batch())).hasSize(1);
+            assertThat(memory.available()).isEqualTo(available);
+            assertThat(allocator.getAllocatedMemory()).isEqualTo(arrowBytes);
+        }
+        assertThat(memory.available()).isEqualTo(memory.limit());
+    }
+
     private static final class ResultRow {
         private final int value;
         private final RowKind kind;

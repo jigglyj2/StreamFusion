@@ -75,6 +75,16 @@ rows form a contiguous range uses an Arrow slice, including non-zero offsets; IP
 slice without first copying it into another Arrow batch. Only scattered destination rows require
 a gather. Nullable, nested, variable-width, decimal, and changelog values retain their Flink bytes.
 
+Routing reserves bucket descriptors, row selections, and reusable key scratch before allocating
+those workspaces. Before each destination is gathered and encoded, it reserves a conservative
+Arrow gather/IPC allowance while keeping previously encoded frames charged. The allowance covers
+nested child selections, validity and offset rebasing, IPC padding, and buffer growth. It counts
+transmitted buffer lengths rather than charging a shared input allocation once per column. Input
+buffers retain their existing Arrow ownership accounting. Completed frame capacities stay reserved
+until their Java transport envelopes have been exported; admission or encoding failure releases
+partial frames and their reservations. This uses Flink's existing native execution budget and has
+no separate tuning option or per-row reservation callback.
+
 The writer still runs as a separate Java runtime operator: an upstream native output is imported
 into Arrow Java and exported back through C Data for routing. This is a remaining integration
 limitation; the shared Rust routing entry point alone does not remove that boundary crossing.
