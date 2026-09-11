@@ -60,13 +60,17 @@ class TopNParityTest extends SqlParityTestSupport {
     }
 
     @Test
-    void globalOrderByLimitOffsetMatchesFlink() throws Exception {
-        assertParity(
+    void globalOrderByLimitOffsetFallsBackWithRankAdmission() throws Exception {
+        assertFallbackParity(
                 "SELECT id, label FROM (VALUES (3, 'c'), (1, 'a'), (4, 'd'), (2, 'b')) "
                         + "AS input(id, label) ORDER BY id LIMIT 2 OFFSET 1",
                 true);
 
-        SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativeTopNBatchCount(), 1);
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isZero();
+        assertThat(tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics.explain())
+                .contains("StreamExecSortLimit")
+                .contains("global rank and LIMIT remain gated");
+        assertThat(StreamFusionPlannerFactory.nativeTopNBatchCount()).isZero();
     }
 
     @Test

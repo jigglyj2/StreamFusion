@@ -19,9 +19,9 @@ LIMIT 100 OFFSET 10;
 
 ## Acceleration and fallback
 
-StreamFusion replaces Flink's `StreamExecLimit`, represented by an unordered, all-in-one
+The standalone native implementation represents Flink's `StreamExecLimit` as an unordered, all-in-one
 `ROW_NUMBER` range. The range must have a constant upper bound and must not expose a rank column.
-Other unordered rank shapes fall back with an EXPLAIN reason. An ordered finite range is handled by
+Other unordered rank shapes fall back with an EXPLAIN reason. Production admission checks the complete rank family, including Flink's `StreamExecLimit` and `StreamExecSortLimit` subclasses, before graph replacement. Streaming LIMIT therefore reports the rank admission reason instead of failing later during native plan lowering. An ordered finite range is handled by
 [Top-N](../top-n/); a bounded full `ORDER BY` uses the native [ORDER BY](../order-by/) operator.
 
 For bounded SQL, StreamFusion also replaces Flink's local and global `BatchExecLimit` stages. That

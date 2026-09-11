@@ -47,8 +47,11 @@ class TopNOpaquePayloadTypeParityTest extends SqlParityTestSupport {
         byte[] streamFusion = executeLimit(true);
 
         assertThat(streamFusion).isEqualTo(flink);
-        SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativeTopNBatchCount(), 1);
-        SqlArchitectureAssertions.admission();
+        SqlFallbackAssertions.nativeBatchesAreZero(StreamFusionPlannerFactory.nativeTopNBatchCount());
+        SqlFallbackAssertions.admission();
+        assertThat(tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics.explain())
+                .contains("StreamExecLimit")
+                .contains("rank persistent admission:");
     }
 
     private static byte[] executeTopN(boolean streamFusion) throws Exception {

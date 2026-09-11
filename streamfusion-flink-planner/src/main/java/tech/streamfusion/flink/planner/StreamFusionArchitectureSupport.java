@@ -96,7 +96,7 @@ final class StreamFusionArchitectureSupport {
         Map<ExecNode<?>, List<String>> shared;
         try {
             shared = StreamFusionNativeRegionOwnership.unsupportedSharedStages(
-                    graph, node -> isNative(node.getClass().getSimpleName()));
+                    graph, node -> isNative(familyName(node)));
         } catch (IllegalArgumentException failure) {
             rejections.add("native-region-layout\narchitecture: " + failure.getMessage());
             shared = Map.of();
@@ -131,7 +131,7 @@ final class StreamFusionArchitectureSupport {
                     + "one external input and multiple exits; independent fusion would "
                     + "duplicate execution and per-stage metrics");
         }
-        boolean persistent = PERSISTENT_STATE.contains(name);
+        boolean persistent = PERSISTENT_STATE.contains(familyName(node));
         if (node instanceof CommonExecWindowTableFunction) {
             try {
                 persistent |= FlinkExecNodeAccess.windowStrategy((CommonExecWindowTableFunction) node)
@@ -156,13 +156,23 @@ final class StreamFusionArchitectureSupport {
         for (int index = 0; index < node.getInputEdges().size(); index++) {
             ExecEdge edge = node.getInputEdges().get(index);
             String child = edge.getSource().getClass().getSimpleName();
-            if (isNative(name) && isNative(child) && !sameReadyRegion(node, edge.getSource())) {
+            if (isNative(familyName(node))
+                    && isNative(familyName(edge.getSource()))
+                    && !sameReadyRegion(node, edge.getSource())) {
                 rejections.add(nodePath + "/input[" + index + "]\narchitecture: " + child + " -> " + name
                         + " is not admitted as a general fused native ExecutionPlan region with complete per-stage "
                         + "metric parity; intermediate JNI/Java handoff is not allowed");
             }
             visit(edge.getSource(), nodePath + "/input[" + index + "]", visited, shared, rejections, config);
         }
+    }
+
+    private static String familyName(ExecNode<?> node) {
+        // Flink LIMIT and SortLimit inherit rank execution/state semantics. Their concrete
+        // names must never let them bypass the same admission and ownership checks as rank.
+        if (node instanceof org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecRank)
+            return "StreamExecRank";
+        return node.getClass().getSimpleName();
     }
 
     private static boolean isNative(String name) {
@@ -181,7 +191,7 @@ final class StreamFusionArchitectureSupport {
     }
 
     private static boolean isRegionReady(ExecNode<?> node) {
-        if (REGION_READY.contains(node.getClass().getSimpleName())) return true;
+        if (REGION_READY.contains(familyName(node))) return true;
         if (!(node instanceof StreamExecMultiJoin)) return false;
         try {
             // Binary INNER MultiJoin is covered by the shared regular-join/Calc metric,
