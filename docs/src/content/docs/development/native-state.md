@@ -184,8 +184,9 @@ Physical RocksDB checkpoints put each owner's files in a `node-<id>` directory. 
 file-checkpoint adapter uploads those directories in one handle and retains each namespace in
 its SST reuse keys when incremental checkpoints are enabled. Shared-context checkpoint import uses the canonical key-group contract for the assigned
 range and charges its temporary RocksDB reader and transfer buffers to the task's memory budget.
-Shared group aggregation imports bounded entry pages; other factories retain their canonical
-snapshot adapter until their semantic restore hooks support a paged import.
+Shared group aggregation, deduplication, Top-N, and regular join import bounded entry pages;
+other factories retain their canonical snapshot adapter until their semantic restore hooks
+support a paged import.
 There is no operator-specific checkpoint-import JNI bridge on this path.
 Missing RocksDB `CURRENT` files are rejected rather than opening a new empty database during restore.
 
@@ -406,6 +407,15 @@ A JNI regression restores over 10 MiB of retained deduplication rows with a 4 Mi
 budget on a RocksDB destination, then checks every key and the restored update-before payload.
 The same checkpoint also restores to the in-memory backend with enough budget for retained state;
 RocksDB cache allowances remain separate from this working-memory measurement.
+
+Window Rank, Window Deduplicate, Interval Join, and Temporal Join standalone bridges also import
+physical checkpoints in bounded pages. They share the canonical restore path's timer reload logic,
+preserve both timer domains and assigned key groups, and clear dirty timer markers after a successful
+import. An 8 MiB payload fixture restores to RocksDB with a 4 MiB budget including reader/target
+cache allowances, then verifies every payload and timer firing; the same fixture restores to memory
+with an adequate retained-state budget. Timer records themselves remain admitted whole values,
+and the timer index remains managed memory. These changes do not unlock gated SQL operators or
+remove canonical savepoint input buffers.
 
 All physical restore entry points now open existing checkpoints read-only through state-component
 ABI 10. Missing directories, missing CURRENT files, and corrupt/missing manifests fail restoration;
