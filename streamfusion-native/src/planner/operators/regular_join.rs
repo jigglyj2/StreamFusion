@@ -9,6 +9,7 @@ mod candidates;
 mod change_cursor;
 #[cfg(test)]
 mod change_cursor_tests;
+mod checkpoint;
 pub(crate) mod execution_plan;
 mod input_memory;
 mod native_output;
@@ -1105,31 +1106,6 @@ impl RegularJoinProcessor {
             self.state_write_batches,
             self.fused_calc_batches,
         ]
-    }
-
-    pub(crate) fn state_memory(&self) -> HostMemoryReservation {
-        self.scratch_reservation.sibling("native state transfer")
-    }
-
-    pub(crate) fn snapshot_key_group(&self, key_group: u32) -> Result<crate::state::SnapshotBytes> {
-        self.require_idle_stream()?;
-        self.state
-            .snapshot_key_group(key_group, &self.scratch_reservation)
-    }
-
-    pub(crate) fn restore_key_group(&mut self, key_group: u32, bytes: &[u8]) -> Result<()> {
-        self.require_idle_stream()?;
-        paged_state::restore(
-            self.state.as_mut(),
-            key_group,
-            bytes,
-            &self.scratch_reservation,
-        )
-    }
-
-    pub(crate) fn checkpoint(&self, directory: &std::path::Path) -> Result<()> {
-        self.require_idle_stream()?;
-        self.state.checkpoint(directory)
     }
 
     fn group_key(&self, side: usize, batch: &RecordBatch, row: usize) -> Result<Vec<u8>> {

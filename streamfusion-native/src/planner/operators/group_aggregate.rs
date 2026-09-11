@@ -32,6 +32,7 @@ use crate::state::{
 use crate::{decode_plan, proto};
 
 mod accumulator;
+mod checkpoint;
 mod control;
 pub(super) mod datafusion_compute;
 #[cfg(test)]
@@ -1546,32 +1547,6 @@ impl GroupAggregateProcessor {
         self.input_schema = Some(schema);
         self.schema_reservation = Some(schema_reservation);
         Ok(())
-    }
-
-    pub(crate) fn state_memory(&self) -> HostMemoryReservation {
-        self.scratch_reservation.sibling("native state transfer")
-    }
-
-    pub(crate) fn snapshot_key_group(&self, key_group: u32) -> Result<crate::state::SnapshotBytes> {
-        self.invocation.require_idle("group aggregate")?;
-        self.state
-            .snapshot_key_group(key_group, &self.scratch_reservation)
-    }
-
-    pub(crate) fn checkpoint(&self, directory: &std::path::Path) -> Result<()> {
-        self.invocation.require_idle("group aggregate")?;
-        self.state.checkpoint(directory)
-    }
-
-    pub(crate) fn restore_key_group(&mut self, key_group: u32, bytes: &[u8]) -> Result<()> {
-        self.invocation.require_idle("group aggregate")?;
-        for (_, value) in streamfusion_state_abi::key_group_snapshot_entries(key_group, bytes)
-            .map_err(|error| DataFusionError::Execution(error.to_string()))?
-        {
-            membership::validate_restored_header(self.membership_layout.as_ref(), value)?;
-        }
-        self.state
-            .restore_key_group(key_group, bytes, &self.scratch_reservation)
     }
 }
 

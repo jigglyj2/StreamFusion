@@ -175,6 +175,21 @@ impl AggregateProcessor {
         }
     }
 
+    fn restore_physical_key_group(
+        &mut self,
+        group: u32,
+        source: &crate::state::RocksPluginKeyedState,
+        owner: &HostMemoryReservation,
+    ) -> datafusion::error::Result<()> {
+        match self {
+            Self::Group(processor) => processor.restore_physical_key_group(group, source, owner),
+            Self::Global(processor) => processor.restore_physical_key_group(group, source, owner),
+            Self::Incremental(processor) => {
+                processor.restore_physical_key_group(group, source, owner)
+            }
+        }
+    }
+
     fn checkpoint(&self, directory: &std::path::Path) -> datafusion::error::Result<()> {
         match self {
             Self::Group(processor) => processor.checkpoint(directory),
@@ -513,7 +528,7 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeGroupAggregateB
                 )
             })?;
             (|| -> datafusion::error::Result<()> {
-                use crate::state::{KeyedState, RocksPluginKeyedState};
+                use crate::state::RocksPluginKeyedState;
                 let source = RocksPluginKeyedState::open(
                     std::path::Path::new(&plugin_path),
                     std::path::Path::new(&checkpoint_path),
@@ -522,12 +537,10 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeGroupAggregateB
                     memory_limit,
                 )?;
                 let target = unsafe { processor(target_handle) }?;
+                let owner = target.state_memory();
                 for key_group in first_key_group..=last_key_group {
                     let key_group = non_negative(key_group, "key group")?;
-                    target.restore_key_group(
-                        key_group,
-                        &source.snapshot_key_group(key_group, &target.state_memory())?,
-                    )?;
+                    target.restore_physical_key_group(key_group, &source, &owner)?;
                 }
                 Ok(())
             })()

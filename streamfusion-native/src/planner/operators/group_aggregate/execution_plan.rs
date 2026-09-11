@@ -113,15 +113,7 @@ impl PersistentOperatorFactory for GroupAggregateFactory {
     ) -> Result<()> {
         let mut processor = self.0.lock().map_err(|_| poisoned())?;
         processor.require_native_state_boundary()?;
-        processor.invocation.require_idle("group aggregate")?;
-        let GroupAggregateProcessor {
-            state,
-            membership_layout,
-            ..
-        } = &mut *processor;
-        crate::state::import_key_group(state.as_mut(), source, group, owner, &mut |_, value| {
-            membership::validate_restored_header(membership_layout.as_ref(), value)
-        })
+        processor.restore_physical_key_group(group, source, owner)
     }
 
     fn checkpoint(&self, directory: &std::path::Path) -> Result<()> {

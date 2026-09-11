@@ -290,7 +290,7 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeDeduplicateBrid
                 )
             })?;
             (|| -> datafusion::error::Result<()> {
-                use crate::state::{KeyedState, RocksPluginKeyedState};
+                use crate::state::RocksPluginKeyedState;
                 let source = RocksPluginKeyedState::open(
                     std::path::Path::new(&plugin_path),
                     std::path::Path::new(&checkpoint_path),
@@ -299,10 +299,10 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeDeduplicateBrid
                     memory_limit,
                 )?;
                 let mut target = unsafe { processor(target_handle) }?;
+                let owner = target.state_memory();
                 for key_group in first_key_group..=last_key_group {
                     let key_group = non_negative(key_group, "key group")?;
-                    let snapshot = source.snapshot_key_group(key_group, &target.state_memory())?;
-                    target.restore_key_group(key_group, &snapshot)?;
+                    target.restore_physical_key_group(key_group, &source, &owner)?;
                 }
                 Ok(())
             })()

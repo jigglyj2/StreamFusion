@@ -386,15 +386,27 @@ Previously, disabling incremental checkpoints routed native RocksDB state throug
 canonical buffer. Large Q15 state exposed that mismatch with Flink. Regular checkpoints now avoid
 that buffer while retaining Flink's synchronous consistency boundary, asynchronous upload,
 cancellation and key-group restore lifecycle. Canonical savepoints still use the portable raw-keyed
-format, and memory checkpoints retain their canonical path. Whole-group canonical savepoint
-buffering remains a capacity limitation. Factories other than shared group aggregation still import physical files through whole-key-group
-canonical buffers. Shared group aggregation now uses the paged import described below. A completed
-large checkpoint or benchmark does not by itself establish restore capacity at that size.
-Canonical savepoint buffering and retained HashMap growth remain separate limits.
+format, and memory checkpoints retain their canonical path. Shared deduplication, Top-N, regular
+join, and group aggregation stream canonical snapshot output and page physical imports. Temporal
+sort also pages physical imports and rebuilds its timer markers separately. Other operator paths
+still need migration from whole-group buffers. Canonical restore still retains its input frame,
+and retained in-memory state growth remains a separate limit. A completed large checkpoint or
+benchmark does not by itself establish restore capacity at that size.
 Legacy operator checkpoint diagnostics count full uploads in checkpoint bytes but do not label
 them as incremental checkpoints or increment SST-reuse counters.
 
-Shared group aggregation now imports physical RocksDB checkpoints through ABI-9 admitted scans.
+The standalone JNI bridges for deduplication, regular join, Top-N, and grouped aggregation now
+share their processors' paged physical restore implementation with fused-plan factories. Global
+aggregation delegates to the same grouped processor; incremental aggregation also imports pages
+and rejects restoration while a bundle is pending. Join page-reference validation, aggregate
+membership-header validation, and Top-N output-state reset remain part of their owning processors.
+The legacy regular-join state format still uses its existing whole-group migration path.
+A JNI regression restores over 10 MiB of retained deduplication rows with a 4 MiB native working
+budget on a RocksDB destination, then checks every key and the restored update-before payload.
+The same checkpoint also restores to the in-memory backend with enough budget for retained state;
+RocksDB cache allowances remain separate from this working-memory measurement.
+
+These physical RocksDB imports use ABI-9 admitted scans.
 Each call selects at most 1,024 entries with a 256 KiB page target, admits payload and conversion
 workspace once, and transfers key/value Arrow BinaryViews directly between the native components.
 A single larger legacy key or value may occupy a page by itself after the host admits it. The
@@ -404,10 +416,11 @@ and copied write buffers have separate bounded reservations. The ordinary strict
 retains its existing hard byte limit.
 
 Flink still materializes file handles, supplies key-group assignments and coordinates recovery.
-The aggregate factory validates its idle state boundary and the destination group must be empty.
+Each processor validates its restore boundary and the destination group must be empty.
 Successful pages populate the assigned backend directly without assembling or decoding a whole
 canonical snapshot. A failed initialization may have installed earlier pages; the execution context
-is poisoned and Flink must discard it. It cannot resume processing partially restored state.
+must be discarded by Flink. Fused contexts poison failed initialization; standalone handle callers
+must also discard the failed handle instead of processing partially restored state.
 Canonical savepoint formats, stored aggregate/member encodings and the checkpoint file format do
 not change as a consequence of paging. No intermediate Java batches or per-record JNI callbacks
 are introduced.

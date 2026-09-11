@@ -281,7 +281,7 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeTopNBridge_impo
             let memory_limit = usize::try_from(memory_limit)
                 .map_err(|_| throw(env, "RocksDB restore memory limit must fit usize"))?;
             (|| -> datafusion::error::Result<()> {
-                use crate::state::{KeyedState, RocksPluginKeyedState};
+                use crate::state::RocksPluginKeyedState;
                 let source = RocksPluginKeyedState::open(
                     std::path::Path::new(&plugin_path.to_string()),
                     std::path::Path::new(&checkpoint_path.to_string()),
@@ -290,12 +290,10 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeTopNBridge_impo
                     memory_limit,
                 )?;
                 let target = unsafe { processor(target_handle) }?;
+                let owner = target.state_memory();
                 for key_group in first_key_group..=last_key_group {
                     let key_group = non_negative(key_group, "key group")?;
-                    target.restore_key_group(
-                        key_group,
-                        &source.snapshot_key_group(key_group, &target.state_memory())?,
-                    )?;
+                    target.restore_physical_key_group(key_group, &source, &owner)?;
                 }
                 Ok(())
             })()

@@ -91,6 +91,15 @@ impl GlobalGroupAggregateProcessor {
         self.inner.restore_key_group(key_group, bytes)
     }
 
+    pub(crate) fn restore_physical_key_group(
+        &mut self,
+        group: u32,
+        source: &crate::state::RocksPluginKeyedState,
+        owner: &HostMemoryReservation,
+    ) -> Result<()> {
+        self.inner.restore_physical_key_group(group, source, owner)
+    }
+
     pub(crate) fn checkpoint(&self, directory: &std::path::Path) -> Result<()> {
         self.inner.checkpoint(directory)
     }

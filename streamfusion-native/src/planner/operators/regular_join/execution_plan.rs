@@ -63,8 +63,7 @@ impl PersistentOperatorFactory for RegularJoinFactory {
         owner: &crate::memory_pool::HostMemoryReservation,
     ) -> Result<()> {
         let mut processor = self.0.lock().map_err(|_| poisoned())?;
-        processor.require_idle_stream()?;
-        super::paged_state::restore_from_checkpoint(processor.state.as_mut(), source, group, owner)
+        processor.restore_physical_key_group(group, source, owner)
     }
     fn checkpoint(&self, directory: &std::path::Path) -> Result<()> {
         self.0.lock().map_err(|_| poisoned())?.checkpoint(directory)

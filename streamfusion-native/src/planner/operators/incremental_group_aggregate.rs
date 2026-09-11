@@ -299,6 +299,26 @@ impl IncrementalGroupAggregateProcessor {
             .restore_key_group(key_group, bytes, &self.scratch_reservation)
     }
 
+    pub(crate) fn restore_physical_key_group(
+        &mut self,
+        group: u32,
+        source: &crate::state::RocksPluginKeyedState,
+        owner: &HostMemoryReservation,
+    ) -> Result<()> {
+        if self.pending_elements != 0 {
+            return Err(DataFusionError::Execution(
+                "cannot restore incremental aggregate with a pending bundle".into(),
+            ));
+        }
+        crate::state::import_key_group(
+            self.state.as_mut(),
+            source,
+            group,
+            owner,
+            &mut |_, _| Ok(()),
+        )
+    }
+
     pub(crate) fn checkpoint(&self, directory: &std::path::Path) -> Result<()> {
         self.state.checkpoint(directory)
     }
@@ -684,6 +704,7 @@ fn lower_key_fields(
 
 #[cfg(test)]
 mod tests {
+    mod checkpoint;
     use super::*;
     use crate::memory_pool::tests_support::TestBroker;
     use crate::planner::operators::group_aggregate::AggregateValue;
