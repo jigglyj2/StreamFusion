@@ -7,6 +7,7 @@ mod control;
 mod exchange_framer;
 mod exchange_writer;
 mod key_group;
+pub(crate) mod managed_routing;
 mod native_channel;
 mod network_stream;
 mod partitioner;

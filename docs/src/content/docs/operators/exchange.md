@@ -68,6 +68,15 @@ batch stays in Rust; it is not imported into Arrow Java and exported back to Rus
 regions use plan protocol 3 even when their tree contains only stateless UNION stages. The incoming
 allocation aligns the IPC body so fixed-width and decimal buffers do not need decoder alignment
 copies; padding and the allocation capacity are included in the single payload reservation.
+Routing projects away input-only key sidecars before gathering any payload. A destination whose
+rows form a contiguous range uses an Arrow slice, including non-zero offsets; IPC writes that
+slice without first copying it into another Arrow batch. Only scattered destination rows require
+a gather. Nullable, nested, variable-width, decimal, and changelog values retain their Flink bytes.
+
+The writer still runs as a separate Java runtime operator: an upstream native output is imported
+into Arrow Java and exported back through C Data for routing. This is a remaining integration
+limitation; the shared Rust routing entry point alone does not remove that boundary crossing.
+
 Flink's record counters continue to report logical rows on both sides of the exchange;
 internal Arrow IPC frames are transport units and are not published as record counts.
 

@@ -2,7 +2,6 @@
 // Licensed under the Apache License, Version 2.0.
 
 use arrow::array::{Array, StructArray};
-use std::mem::size_of;
 use std::sync::Arc;
 
 use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
@@ -15,17 +14,12 @@ use jni::sys::{jbyteArray, jint, jlong};
 use jni::EnvUnowned;
 
 use super::common::import_record_batch;
-use crate::exchange::{
-    decode_exchange_plan, exchange_key_fields, frame_hash_exchange_batch_projected,
-};
+use crate::exchange::{decode_exchange_plan, exchange_key_fields};
 use crate::memory_pool::{
     HostMemoryReservation, JvmMemoryReservationBroker, MemoryReservationBroker,
 };
 
-pub(super) struct AccountedFrames {
-    pub(super) frames: Vec<crate::exchange::RoutedFrame>,
-    _reservation: HostMemoryReservation,
-}
+use crate::exchange::managed_routing::{route_record_batch, AccountedFrames};
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeExchangeBridge_routeArrowBatch<
@@ -192,48 +186,7 @@ pub(super) unsafe fn route_prepared(
 ) -> Result<AccountedFrames> {
     let batch = unsafe { import_record_batch(input_array_address, input_schema_address) }?;
 
-    // Routing materializes at most one copy of the input columns across the key-group
-    // batches. Reserve that working set before asking Arrow to allocate it.
-    let mut reservation = HostMemoryReservation::new(broker, "native exchange buffers");
-    reservation.try_grow(batch.get_array_memory_size())?;
-    let mut transport_column_count = plan
-        .schema
-        .as_ref()
-        .ok_or_else(|| DataFusionError::Plan("exchange schema is required".to_string()))?
-        .fields
-        .len();
-    if plan.transport_routing_key {
-        transport_column_count = transport_column_count.saturating_add(1);
-    }
-    let frames = frame_hash_exchange_batch_projected(
-        batch,
-        keys,
-        plan.max_parallelism,
-        plan.parallelism,
-        plan.preserve_key_groups,
-        transport_column_count,
-    )?;
-    let frame_bytes = frames.iter().try_fold(
-        frames
-            .capacity()
-            .saturating_mul(size_of::<crate::exchange::RoutedFrame>()),
-        |bytes, routed| {
-            bytes
-                .checked_add(routed.frame().metadata.capacity())
-                .and_then(|bytes| bytes.checked_add(routed.frame().body.capacity()))
-                .ok_or_else(|| {
-                    DataFusionError::ResourcesExhausted(
-                        "native exchange frame accounting overflowed usize".to_string(),
-                    )
-                })
-        },
-    )?;
-    reservation.resize(frame_bytes)?;
-
-    Ok(AccountedFrames {
-        frames,
-        _reservation: reservation,
-    })
+    route_record_batch(plan, keys, batch, broker)
 }
 
 /// Copy IPC parts directly into their final Java transport array. Building a concatenated Rust

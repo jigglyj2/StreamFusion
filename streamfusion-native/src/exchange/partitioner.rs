@@ -31,7 +31,11 @@ impl KeyGroupBatch {
     }
 
     pub fn materialize(&self) -> Result<RecordBatch> {
-        materialize(&self.batch, &self.rows)
+        materialize(&self.batch, &self.rows, self.batch.num_columns())
+    }
+
+    pub(super) fn materialize_projected(&self, columns: usize) -> Result<RecordBatch> {
+        materialize(&self.batch, &self.rows, columns)
     }
 }
 
@@ -50,10 +54,14 @@ impl RoutedBatch {
 
     /// Materializes this destination immediately before network serialization.
     ///
-    /// Routing itself remains a zero-copy selection over the input batch. A network edge must own
-    /// contiguous Arrow arrays, so this is the single intentional gather in the exchange path.
+    /// Routing retains a zero-copy selection over the input. Contiguous destinations share Arrow
+    /// slices; only scattered destinations gather values immediately before IPC serialization.
     pub fn materialize(&self) -> Result<RecordBatch> {
-        materialize(&self.batch, &self.rows)
+        materialize(&self.batch, &self.rows, self.batch.num_columns())
+    }
+
+    pub(super) fn materialize_projected(&self, columns: usize) -> Result<RecordBatch> {
+        materialize(&self.batch, &self.rows, columns)
     }
 }
 
@@ -89,13 +97,44 @@ pub fn route_batch_by_key_group(
         .collect())
 }
 
-fn materialize(batch: &RecordBatch, rows: &UInt32Array) -> Result<RecordBatch> {
-    let columns = batch
+fn materialize(
+    batch: &RecordBatch,
+    rows: &UInt32Array,
+    column_count: usize,
+) -> Result<RecordBatch> {
+    if column_count > batch.num_columns() {
+        return Err(ArrowError::InvalidArgumentError(
+            "exchange transport column count exceeds input schema".into(),
+        ));
+    }
+    let projected = if column_count == batch.num_columns() {
+        batch.clone()
+    } else {
+        // Drop input-only routing columns before any gather can copy their payloads.
+        batch.project(&(0..column_count).collect::<Vec<_>>())?
+    };
+    if rows.is_empty() {
+        return Ok(projected.slice(0, 0));
+    }
+    let start = rows.value(0) as usize;
+    if start < projected.num_rows()
+        && rows.len() <= projected.num_rows() - start
+        && rows
+            .values()
+            .iter()
+            .enumerate()
+            .all(|(offset, &row)| row as usize == start + offset)
+    {
+        // Arrow IPC handles slice offsets itself. No Java-safe normalization or gather is needed
+        // when the destination already owns a contiguous selection, including the whole batch.
+        return Ok(projected.slice(start, rows.len()));
+    }
+    let columns = projected
         .columns()
         .iter()
         .map(|column| take(column.as_ref(), rows, None))
         .collect::<Result<Vec<_>>>()?;
-    RecordBatch::try_new(batch.schema(), columns)
+    RecordBatch::try_new(projected.schema(), columns)
 }
 
 /// Routes rows by Flink key group without serializing or eagerly gathering Arrow columns.
@@ -214,3 +253,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod materialization_tests;

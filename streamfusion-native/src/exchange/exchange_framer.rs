@@ -1,10 +1,8 @@
 // Copyright 2026 StreamFusion Authors
 // Licensed under the Apache License, Version 2.0.
 
-use arrow::datatypes::Schema;
 use arrow::error::Result;
 use arrow::record_batch::RecordBatch;
-use std::sync::Arc;
 
 use super::{route_batch, route_batch_by_key_group, IpcBatchFrame, KeyField};
 
@@ -60,10 +58,9 @@ pub fn frame_hash_exchange_batch_projected(
             .map(|routed| {
                 Ok(RoutedFrame {
                     key_group: routed.key_group(),
-                    frame: IpcBatchFrame::encode(&transport_batch(
-                        routed.materialize()?,
-                        transport_column_count,
-                    )?)?,
+                    frame: IpcBatchFrame::encode(
+                        &routed.materialize_projected(transport_column_count)?,
+                    )?,
                 })
             })
             .collect()
@@ -78,28 +75,13 @@ pub fn frame_hash_exchange_batch_projected(
                     / parallelism;
                 Ok(RoutedFrame {
                     key_group,
-                    frame: IpcBatchFrame::encode(&transport_batch(
-                        routed.materialize()?,
-                        transport_column_count,
-                    )?)?,
+                    frame: IpcBatchFrame::encode(
+                        &routed.materialize_projected(transport_column_count)?,
+                    )?,
                 })
             })
             .collect()
     }
-}
-
-fn transport_batch(batch: RecordBatch, column_count: usize) -> Result<RecordBatch> {
-    if column_count == batch.num_columns() {
-        return Ok(batch);
-    }
-    let fields = batch.schema().fields()[..column_count]
-        .iter()
-        .map(|field| field.as_ref().clone())
-        .collect::<Vec<_>>();
-    RecordBatch::try_new(
-        Arc::new(Schema::new(fields)),
-        batch.columns()[..column_count].to_vec(),
-    )
 }
 
 #[cfg(test)]
