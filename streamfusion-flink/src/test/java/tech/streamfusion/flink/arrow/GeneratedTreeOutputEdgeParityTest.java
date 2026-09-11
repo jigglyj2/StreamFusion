@@ -14,18 +14,6 @@ import tech.streamfusion.nativebridge.NativeExecutionContext;
 import tech.streamfusion.proto.plan.v1.*;
 
 class GeneratedTreeOutputEdgeParityTest {
-    private static byte[] tree() throws Exception {
-        var root = NativeRegionPlan.parseFrom(plan()).getStages(0).getOperator();
-        return NativePlan.newBuilder()
-                .setProtocolVersion(3)
-                .setRoot(root.toBuilder()
-                        .setCalc(root.getCalc().toBuilder()
-                                .setInput(Operator.newBuilder()
-                                        .setInput(Input.newBuilder().setInputIndex(0)))))
-                .build()
-                .toByteArray();
-    }
-
     @Test
     void treePortPreservesFlinkBytesEnvelopesZeroCopyAndRepeatedInvocations() throws Exception {
         for (int seed : List.of(3, 19, 71)) {
@@ -33,7 +21,7 @@ class GeneratedTreeOutputEdgeParityTest {
             try (var allocator = new RootAllocator(64L << 20);
                     var source = input(allocator, seed);
                     var empty = ArrowRowDataBatch.empty(TYPE, allocator);
-                    var context = new NativeExecutionContext(tree(), memory)) {
+                    var context = new NativeExecutionContext(treePlan(), memory)) {
                 assertThat(context.hasRegionOutputs()).isFalse();
                 var edge = new ArrowNativeRegionBridge(context, List.of(TYPE), allocator);
                 var serializer = new RowDataSerializer(TYPE);

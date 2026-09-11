@@ -195,7 +195,21 @@ pub(super) fn export_frames(
     env: &mut jni::Env<'_>,
     frames: &[crate::exchange::RoutedFrame],
 ) -> jni::errors::Result<jbyteArray> {
-    let size = encode_frames_size(frames).map_err(|error| super::common::throw(env, error))?;
+    export_frames_prefixed(env, frames, &[])
+}
+
+pub(super) fn export_frames_prefixed(
+    env: &mut jni::Env<'_>,
+    frames: &[crate::exchange::RoutedFrame],
+    prefix: &[u8],
+) -> jni::errors::Result<jbyteArray> {
+    let size = encode_frames_size(frames)
+        .and_then(|size| {
+            size.checked_add(prefix.len()).ok_or_else(|| {
+                DataFusionError::ResourcesExhausted("exchange output size overflow".into())
+            })
+        })
+        .map_err(|error| super::common::throw(env, error))?;
     if size > i32::MAX as usize {
         return Err(super::common::throw(
             env,
@@ -203,8 +217,14 @@ pub(super) fn export_frames(
         ));
     }
     let output = env.new_byte_array(size)?;
-    put_bytes(env, &output, 0, &(frames.len() as u32).to_le_bytes())?;
-    let mut offset = 4;
+    put_bytes(env, &output, 0, prefix)?;
+    put_bytes(
+        env,
+        &output,
+        prefix.len(),
+        &(frames.len() as u32).to_le_bytes(),
+    )?;
+    let mut offset = prefix.len() + 4;
     for routed in frames {
         let frame = routed.frame();
         let mut header = [0u8; 12];

@@ -10,7 +10,9 @@ mod key_group;
 pub(crate) mod managed_routing;
 mod native_channel;
 mod network_stream;
+pub(crate) mod output_bindings;
 mod partitioner;
+pub(crate) mod prepared_router;
 mod record_metadata;
 
 pub use batch_frame::IpcBatchFrame;

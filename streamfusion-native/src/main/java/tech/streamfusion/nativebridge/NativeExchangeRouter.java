@@ -24,6 +24,11 @@ public final class NativeExchangeRouter implements AutoCloseable {
         return route(handle, array, schema);
     }
 
+    synchronized long handle() {
+        if (handle == 0) throw new IllegalStateException("Native exchange router is closed");
+        return handle;
+    }
+
     @Override
     public synchronized void close() {
         if (handle == 0) return;

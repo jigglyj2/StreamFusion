@@ -23,6 +23,8 @@ final class NativeRegionTestHarness extends MultiInputStreamOperatorTestHarness<
     final List<List<RowData>> outputRows = new ArrayList<>();
     final List<List<Long>> outputTimes = new ArrayList<>();
     final List<StreamElement> controls = new ArrayList<>();
+    final java.util.Map<org.apache.flink.util.OutputTag<?>, List<tech.streamfusion.flink.exchange.NativeExchangeFrame>>
+            frameOutputs = new java.util.HashMap<>();
     RuntimeException sinkFailure;
     boolean cancelOnClose;
 
@@ -48,6 +50,14 @@ final class NativeRegionTestHarness extends MultiInputStreamOperatorTestHarness<
 
             @Override
             public <X> void collect(org.apache.flink.util.OutputTag<X> tag, StreamRecord<X> record) {
+                if (record.getValue() instanceof tech.streamfusion.flink.exchange.NativeExchangeFrame) {
+                    metrics().getIOMetricGroup().getNumRecordsOutCounter().inc();
+                    if (sinkFailure != null) throw sinkFailure;
+                    frameOutputs
+                            .computeIfAbsent(tag, ignored -> new ArrayList<>())
+                            .add((tech.streamfusion.flink.exchange.NativeExchangeFrame) record.getValue());
+                    return;
+                }
                 for (int port = 1; port < outputTypes.size(); port++)
                     if (factory.outputTag(port).equals(tag)) {
                         capture(port, (ArrowRowDataBatch) record.getValue());

@@ -16,7 +16,15 @@ public final class NativeExchangeFrames {
     private NativeExchangeFrames() {}
 
     public static List<NativeExchangeFrame> decode(byte[] encoded) {
-        ByteBuffer input = ByteBuffer.wrap(encoded).order(ByteOrder.LITTLE_ENDIAN);
+        return decode(encoded, 0);
+    }
+
+    /** Decodes frames after a native output header while retaining the same payload array. */
+    public static List<NativeExchangeFrame> decode(byte[] encoded, int offset) {
+        if (offset < 0 || offset > encoded.length)
+            throw new IllegalArgumentException("Invalid exchange envelope offset");
+        ByteBuffer input =
+                ByteBuffer.wrap(encoded, offset, encoded.length - offset).order(ByteOrder.LITTLE_ENDIAN);
         int count = readLength(input, "frame count");
         if (count > input.remaining() / FRAME_HEADER_BYTES) {
             throw new IllegalArgumentException("Native exchange frame count exceeds its JNI envelope");

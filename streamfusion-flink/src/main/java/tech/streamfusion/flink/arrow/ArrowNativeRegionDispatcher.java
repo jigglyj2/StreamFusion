@@ -19,6 +19,9 @@ public final class ArrowNativeRegionDispatcher implements AutoCloseable {
     private final List<RowType> inputTypes;
     private final List<ArrowRowDataBatch> emptyInputs = new ArrayList<>();
     private final List<ArrowRowDataBatch> inputs = new ArrayList<>();
+    private java.util.function.Consumer<ArrowNativeRegionOutput.Batch> frameOutput = ignored -> {
+        throw new IllegalStateException("Native frame output has no Flink consumer");
+    };
     private boolean processing;
     private boolean closed;
 
@@ -57,6 +60,13 @@ public final class ArrowNativeRegionDispatcher implements AutoCloseable {
                 throw failure;
             }
         }
+    }
+
+    public ArrowNativeRegionDispatcher withFrameOutput(
+            java.util.function.Consumer<ArrowNativeRegionOutput.Batch> output) {
+        requireIdle();
+        frameOutput = Objects.requireNonNull(output);
+        return this;
     }
 
     public void process(int port, ArrowRowDataBatch input, BiConsumer<Integer, ArrowRowDataBatch> output) {
@@ -108,7 +118,8 @@ public final class ArrowNativeRegionDispatcher implements AutoCloseable {
             ArrowNativeRegionOutput.Batch next;
             while ((next = stream.next()) != null) {
                 try (var value = next) {
-                    if (value.batch().size() != 0) output.accept(value.port(), value.batch());
+                    if (value.isFramed()) frameOutput.accept(value);
+                    else if (value.batch().size() != 0) output.accept(value.port(), value.batch());
                 }
             }
         } finally {

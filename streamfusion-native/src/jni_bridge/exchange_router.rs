@@ -2,7 +2,6 @@
 // Licensed under the Apache License, Version 2.0.
 
 use super::common::throw;
-use crate::exchange::{decode_exchange_plan, exchange_key_fields, KeyField};
 use crate::memory_pool::{
     HostMemoryReservation, JvmMemoryReservationBroker, MemoryReservationBroker,
 };
@@ -16,12 +15,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-struct Router {
-    plan: crate::proto::NativeExchangePlan,
-    keys: Vec<(usize, KeyField)>,
-    broker: Arc<dyn MemoryReservationBroker>,
-    _memory: HostMemoryReservation,
-}
+use crate::exchange::prepared_router::PreparedRouter as Router;
 static ROUTERS: OnceLock<Mutex<HashMap<i64, Arc<Router>>>> = OnceLock::new();
 static NEXT: AtomicI64 = AtomicI64::new(1);
 fn registry() -> &'static Mutex<HashMap<i64, Arc<Router>>> {
@@ -30,7 +24,7 @@ fn registry() -> &'static Mutex<HashMap<i64, Arc<Router>>> {
 fn invalid() -> DataFusionError {
     DataFusionError::Execution("Native exchange router is closed or invalid".into())
 }
-fn get(handle: i64) -> Result<Arc<Router>> {
+pub(super) fn get(handle: i64) -> Result<Arc<Router>> {
     registry()
         .lock()
         .map_err(|_| invalid())?
@@ -65,14 +59,7 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeExchangeRouter_
             .resize(plan.len(env)?.saturating_mul(16).saturating_add(65536))
             .map_err(|e| throw(env, e))?;
         let bytes = env.convert_byte_array(plan)?;
-        let plan = decode_exchange_plan(&bytes).map_err(|e| throw(env, e))?;
-        let keys = exchange_key_fields(&plan).map_err(|e| throw(env, e))?;
-        let router = Arc::new(Router {
-            plan,
-            keys,
-            broker,
-            _memory: memory,
-        });
+        let router = Arc::new(Router::new(&bytes, broker, memory).map_err(|e| throw(env, e))?);
         let handle = NEXT
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
             .map_err(|_| throw(env, "native exchange router handles exhausted"))?;
@@ -95,16 +82,14 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeExchangeRouter_
 ) -> jbyteArray {
     env.with_env(|env| -> jni::errors::Result<_> {
         let router = get(handle).map_err(|e| throw(env, e))?;
-        let frames = unsafe {
-            super::exchange::route_prepared(
-                &router.plan,
-                &router.keys,
+        let batch = unsafe {
+            crate::jni_bridge::common::import_record_batch(
                 array as *mut FFI_ArrowArray,
                 schema as *mut FFI_ArrowSchema,
-                router.broker.clone(),
             )
         }
         .map_err(|e| throw(env, e))?;
+        let frames = router.route(batch).map_err(|e| throw(env, e))?;
         super::exchange::export_frames(env, &frames.frames)
     })
     .resolve::<ThrowRuntimeExAndDefault>()

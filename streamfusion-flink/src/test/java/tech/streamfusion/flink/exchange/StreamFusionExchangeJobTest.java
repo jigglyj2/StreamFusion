@@ -27,6 +27,20 @@ import tech.streamfusion.flink.arrow.StreamFusionArrowBoundaries;
 class StreamFusionExchangeJobTest {
     @Test
     void runsNativeHashExchangeThroughARealFlinkRunner() throws Exception {
+        run(false, false);
+    }
+
+    @Test
+    void nativeProducerFramesDirectlyAcrossARealFlinkNetworkEdge() throws Exception {
+        run(true, false);
+    }
+
+    @Test
+    void nativeProducerPreservesItsArrowConsumerAlongsideTheNetworkEdge() throws Exception {
+        run(true, true);
+    }
+
+    private static void run(boolean nativeProducer, boolean mixed) throws Exception {
         RowType rowType = RowType.of(new IntType(false));
         List<RowData> rows = new ArrayList<>();
         for (int value = -100; value < 100; value++) {
@@ -35,17 +49,30 @@ class StreamFusionExchangeJobTest {
         StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();
         environment.setParallelism(2);
         DataStream<RowData> source = environment.fromCollection(rows).returns(InternalTypeInfo.of(rowType));
+        Transformation<RowData> producer = source.getTransformation();
+        if (nativeProducer)
+            producer = tech.streamfusion.flink.operator.StreamFusionNativeRegionTranslator.translateInputs(
+                    List.of(producer),
+                    List.of(rowType),
+                    rowType,
+                    tech.streamfusion.flink.operator.StreamFusionNativeRegionTranslator.inputPlan(0));
         Transformation<RowData> arrowExchange =
-                StreamFusionExchangeTranslator.hash(source.getTransformation(), rowType, new int[] {0}, 128);
+                StreamFusionExchangeTranslator.hash(producer, rowType, new int[] {0}, 128);
         Transformation<RowData> exchange = StreamFusionArrowBoundaries.toRowData(arrowExchange, rowType);
 
-        List<RoutedValue> results = new DataStream<>(environment, exchange)
-                .map(new CaptureSubtask())
-                .executeAndCollect(200);
-
-        assertThat(results).hasSize(200);
+        var routed = new DataStream<>(environment, exchange).map(new CaptureSubtask());
+        if (mixed) {
+            var direct = new DataStream<>(environment, StreamFusionArrowBoundaries.toRowData(producer, rowType))
+                    .map(row -> new RoutedValue(row.getInt(0), -1))
+                    .returns(RoutedValue.class);
+            routed = routed.union(direct).map(value -> value).returns(RoutedValue.class);
+        }
+        List<RoutedValue> results = routed.executeAndCollect(mixed ? 400 : 200);
+        assertThat(results).hasSize(mixed ? 400 : 200);
+        assertThat(results.stream().filter(result -> result.subtask >= 0).count())
+                .isEqualTo(200);
         for (RoutedValue result : results) {
-            assertThat(result.subtask).isEqualTo(flinkSubtask(result.value, 128, 2));
+            if (result.subtask >= 0) assertThat(result.subtask).isEqualTo(flinkSubtask(result.value, 128, 2));
         }
     }
 

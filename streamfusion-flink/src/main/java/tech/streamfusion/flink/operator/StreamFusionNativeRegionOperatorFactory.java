@@ -16,6 +16,7 @@ public final class StreamFusionNativeRegionOperatorFactory extends AbstractStrea
     private final List<RowType> inputTypes;
     private final List<RowType> outputTypes;
     private final boolean sharedRegion;
+    private NativeRegionExchangeOutputs frameOutputs = new NativeRegionExchangeOutputs();
     private final byte[] plan;
     private final List<Long> stateIds;
     private tech.streamfusion.flink.join.NativeLookupSources lookupSources =
@@ -82,6 +83,19 @@ public final class StreamFusionNativeRegionOperatorFactory extends AbstractStrea
     public org.apache.flink.util.OutputTag<ArrowRowDataBatch> outputTag(int port) {
         java.util.Objects.checkIndex(port, outputTypes.size());
         return NativeSharedRegionOutputs.tag(port);
+    }
+
+    int outputPort(org.apache.flink.util.OutputTag<?> tag) {
+        if (tag == null) return 0;
+        for (int port = 1; port < outputTypes.size(); port++)
+            if (NativeSharedRegionOutputs.tag(port).equals(tag)) return port;
+        return -1;
+    }
+
+    int bindFrameOutput(int port, RowType type, byte[] exchange) {
+        if (!outputTypes.get(port).equals(type))
+            throw new IllegalArgumentException("Native exchange output type mismatch");
+        return frameOutputs.bind(port, exchange);
     }
 
     private StreamFusionNativeRegionOperatorFactory(
@@ -161,6 +175,7 @@ public final class StreamFusionNativeRegionOperatorFactory extends AbstractStrea
                 localWindowResources.resolvedFrom(shares),
                 sharedRegion);
         result.withLookupSources(lookupSources);
+        result.frameOutputs = new NativeRegionExchangeOutputs(frameOutputs);
         result.setChainingStrategy(getChainingStrategy());
         return result;
     }
@@ -193,7 +208,8 @@ public final class StreamFusionNativeRegionOperatorFactory extends AbstractStrea
                 exchangePlans,
                 localWindowResources,
                 sharedRegion,
-                lookupSources);
+                lookupSources,
+                new NativeRegionExchangeOutputs(frameOutputs));
     }
 
     @Override

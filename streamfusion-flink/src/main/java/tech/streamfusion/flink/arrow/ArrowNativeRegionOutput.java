@@ -49,11 +49,18 @@ public final class ArrowNativeRegionOutput implements AutoCloseable {
                 var schema = ArrowSchema.allocateNew(allocator)) {
             // Keep the descriptor wrappers open so finally can release unconsumed exports.
             try {
-                int port = stream.next(array.memoryAddress(), schema.memoryAddress());
-                if (port == -1) {
+                var event = NativeRegionOutputEnvelope.read(
+                        stream.nextOutput(array.memoryAddress(), schema.memoryAddress()));
+                if (event == null) {
                     finished = true;
                     return null;
                 }
+                if (event.frames != null) {
+                    if (array.snapshot().release != 0 || schema.snapshot().release != 0)
+                        throw new IllegalStateException("Framed native output unexpectedly exported Arrow descriptors");
+                    return new Batch(event.port, event.rows, event.frames);
+                }
+                int port = event.port;
                 if (port < 0 || port >= outputTypes.size())
                     throw new IllegalStateException("Native region returned an unknown output port");
                 if (invocationSchemas[port] == null) {
@@ -68,7 +75,7 @@ public final class ArrowNativeRegionOutput implements AutoCloseable {
                     throw new IllegalStateException("Native region repeated an output schema within one invocation");
                 }
                 var snapshot = array.snapshot();
-                if (snapshot.release == 0 || snapshot.length < 0 || snapshot.length > Integer.MAX_VALUE)
+                if (snapshot.release == 0 || snapshot.length != event.rows)
                     throw new IllegalStateException("Native region returned an invalid Arrow batch");
                 var root = VectorSchemaRoot.create(invocationSchemas[port], allocator);
                 try {
@@ -117,10 +124,33 @@ public final class ArrowNativeRegionOutput implements AutoCloseable {
     public static final class Batch implements AutoCloseable {
         private final int port;
         private final ArrowRowDataBatch batch;
+        private final List<tech.streamfusion.flink.exchange.NativeExchangeFrame> frames;
+        private final int rows;
 
         private Batch(int port, ArrowRowDataBatch batch) {
             this.port = port;
             this.batch = batch;
+            frames = null;
+            rows = batch.size();
+        }
+
+        private Batch(int port, int rows, List<tech.streamfusion.flink.exchange.NativeExchangeFrame> frames) {
+            this.port = port;
+            this.rows = rows;
+            this.frames = frames;
+            batch = null;
+        }
+
+        public boolean isFramed() {
+            return frames != null;
+        }
+
+        public int rows() {
+            return rows;
+        }
+
+        public List<tech.streamfusion.flink.exchange.NativeExchangeFrame> frames() {
+            return frames;
         }
 
         public int port() {
@@ -133,7 +163,7 @@ public final class ArrowNativeRegionOutput implements AutoCloseable {
 
         @Override
         public void close() {
-            batch.close();
+            if (batch != null) batch.close();
         }
     }
 }

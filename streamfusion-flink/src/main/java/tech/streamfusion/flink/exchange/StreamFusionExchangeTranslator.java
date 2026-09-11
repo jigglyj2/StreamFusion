@@ -61,16 +61,21 @@ public final class StreamFusionExchangeTranslator {
     /** Frames one Arrow input before a Flink multi-input network gate such as UNION ALL. */
     public static Transformation<NativeExchangeFrame> frameForMultiInput(
             Transformation<RowData> input, RowType rowType, byte[] plan) {
+        return frame(input, rowType, new int[0], plan);
+    }
+
+    private static Transformation<NativeExchangeFrame> frame(
+            Transformation<RowData> input, RowType rowType, int[] keys, byte[] plan) {
+        var nativeFrames = tech.streamfusion.flink.operator.NativeRegionExchangeOutputs.frame(input, rowType, plan);
+        if (nativeFrames != null) return nativeFrames;
         OneInputTransformation<ArrowRowDataBatch, NativeExchangeFrame> writer = new OneInputTransformation<>(
                 StreamFusionArrowBoundaries.toArrow(input, rowType),
                 "StreamFusionExchangeWriter",
-                SimpleOperatorFactory.of(new NativeExchangeWriterOperator(rowType, plan)),
+                SimpleOperatorFactory.of(new NativeExchangeWriterOperator(rowType, keys, plan)),
                 NativeExchangeFrameTypeInfo.INSTANCE,
                 input.getParallelism());
         int upstreamMaxParallelism = inheritedMaxParallelism(input);
-        if (upstreamMaxParallelism > 0) {
-            writer.setMaxParallelism(upstreamMaxParallelism);
-        }
+        if (upstreamMaxParallelism > 0) writer.setMaxParallelism(upstreamMaxParallelism);
         writer.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
         return writer;
     }
@@ -82,19 +87,7 @@ public final class StreamFusionExchangeTranslator {
             byte[] plan,
             StreamPartitioner<NativeExchangeFrame> partitioner,
             boolean singleton) {
-        OneInputTransformation<ArrowRowDataBatch, NativeExchangeFrame> writer = new OneInputTransformation<>(
-                StreamFusionArrowBoundaries.toArrow(input, rowType),
-                "StreamFusionExchangeWriter",
-                SimpleOperatorFactory.of(new NativeExchangeWriterOperator(rowType, keys, plan)),
-                NativeExchangeFrameTypeInfo.INSTANCE,
-                input.getParallelism());
-        int upstreamMaxParallelism = inheritedMaxParallelism(input);
-        if (upstreamMaxParallelism > 0) {
-            // The writer must remain chained to its raw Arrow producer. Only the framed output
-            // below is legal on a Flink network edge.
-            writer.setMaxParallelism(upstreamMaxParallelism);
-        }
-        writer.declareManagedMemoryUseCaseAtOperatorScope(ManagedMemoryUseCase.OPERATOR, 1);
+        Transformation<NativeExchangeFrame> writer = frame(input, rowType, keys, plan);
         PartitionTransformation<NativeExchangeFrame> exchange = new PartitionTransformation<>(writer, partitioner);
         exchange.setOutputType(NativeExchangeFrameTypeInfo.INSTANCE);
         exchange.setParallelism(singleton ? 1 : ExecutionConfig.PARALLELISM_DEFAULT);

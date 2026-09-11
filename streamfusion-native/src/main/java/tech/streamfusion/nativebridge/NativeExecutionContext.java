@@ -91,7 +91,7 @@ public final class NativeExecutionContext implements AutoCloseable {
                     "Flink denied " + controlBytes + " bytes for native plan/state-binding JNI copies");
         }
         try {
-            if (ownedOutputEnvelope && NativeRegionStream.edgeVersion() != 3)
+            if (ownedOutputEnvelope && NativeRegionStream.edgeVersion() != 4)
                 throw new IllegalStateException("Unsupported native region C Data edge version");
             if (lookupIds != null) {
                 if (NativeLookupResources.edgeVersion() != 1)

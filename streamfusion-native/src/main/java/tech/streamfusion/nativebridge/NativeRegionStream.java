@@ -17,7 +17,7 @@ public final class NativeRegionStream implements AutoCloseable {
     }
 
     private static void requireEdgeVersion() {
-        if (edgeVersion() != 3) throw new IllegalStateException("Unsupported native port-tagged output edge version");
+        if (edgeVersion() != 4) throw new IllegalStateException("Unsupported native port-tagged output edge version");
     }
 
     private long handle;
@@ -46,6 +46,12 @@ public final class NativeRegionStream implements AutoCloseable {
         if (array == 0 || schema == 0)
             throw new IllegalArgumentException("Native region output requires fresh C Data descriptors");
         return nextBatch(handle, array, schema);
+    }
+
+    /** One JNI pull returns either C Data descriptors or an IPC envelope, never both. */
+    public synchronized byte[] nextOutput(long array, long schema) {
+        if (handle == 0) throw new IllegalStateException("Native region output is closed");
+        return nextOutputBatch(handle, array, schema);
     }
 
     @Override
@@ -99,6 +105,8 @@ public final class NativeRegionStream implements AutoCloseable {
             int metadataLength,
             long[] arrays,
             long[] schemas);
+
+    private static native byte[] nextOutputBatch(long handle, long array, long schema);
 
     private static native int nativeEdgeVersion();
 

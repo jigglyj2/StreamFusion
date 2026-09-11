@@ -187,7 +187,7 @@ class SharedNativeRegionRuntimeTest {
                 NativeLocalWindowResources.NONE);
     }
 
-    private static FlinkManagedMemory memory(NativeRegionTestHarness harness) throws Exception {
+    static FlinkManagedMemory memory(NativeRegionTestHarness harness) throws Exception {
         var field = StreamFusionArrowNativeRegionOperator.class.getDeclaredField("memory");
         field.setAccessible(true);
         return (FlinkManagedMemory) ((StreamFusionTaskMemory) field.get(harness.region())).nativeMemoryManager();

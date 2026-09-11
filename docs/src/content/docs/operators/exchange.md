@@ -85,9 +85,18 @@ until their Java transport envelopes have been exported; admission or encoding f
 partial frames and their reservations. This uses Flink's existing native execution budget and has
 no separate tuning option or per-row reservation callback.
 
-The writer still runs as a separate Java runtime operator: an upstream native output is imported
-into Arrow Java and exported back through C Data for routing. This is a remaining integration
-limitation; the shared Rust routing entry point alone does not remove that boundary crossing.
+For native producers with scalar native-encoded keys or singleton distribution, routing is bound
+to the producing native plan. Its output driver builds the IPC frames directly from native Arrow
+batches and returns them on Flink transport side outputs. There is no separate Java writer or
+Arrow Java export/import round trip on that path. Multiple exchange consumers reuse the producer
+batch's reference-counted buffers. A simultaneous Arrow consumer keeps its own C Data output;
+the finalized Flink graph determines which outputs are needed. Routing plans are prepared once
+at task open and released with the native context, including cancellation paths.
+
+Java control/source edges and keys requiring the opaque Flink key sidecar still use the separate
+Java writer. For those complex-key native outputs, the Arrow Java round trip remains a limitation
+until the native key encoder has the required exchange parity coverage. Both paths use the same
+Rust routing and memory-admission implementation; this does not change the network frame format.
 
 Flink's record counters continue to report logical rows on both sides of the exchange;
 internal Arrow IPC frames are transport units and are not published as record counts.

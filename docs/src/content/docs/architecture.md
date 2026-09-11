@@ -30,11 +30,13 @@ Flink operators             Native execution operators
 
 Adjacent Rust operators form one native DataFusion execution-plan tree and pass Arrow record batches directly through native batch streams. Arrow's reference-counted arrays allow an operator to hand the next operator the same underlying buffers without serializing or copying the batch. JVM/native conversion happens only at the outer edges of the fused native plan through lightweight batch views and an Arrow C Stream-style ownership boundary.
 
-Production native trees and shared regions use one port-tagged Arrow C Data output driver.
+Production native trees and shared regions use one port-tagged output driver. Arrow consumers
+receive C Data; eligible exchange consumers receive standard Arrow IPC frames directly from Rust,
+without exporting and reimporting the producer batch through Arrow Java.
 A tree emits on port zero; shared regions retain their independently typed exits and cooperative
 scheduling. Each port negotiates its schema once per invocation. The original native stream owns
 completion, cancellation, and state lifecycle, and exported batches can outlive the invocation.
-This edge uses protocol version 3, which requires matching Java and native artifacts. Legacy
+This edge uses protocol version 4, which requires matching Java and native artifacts. Legacy
 selection-based callers without an owned record envelope retain the Arrow C Stream adapter.
 
 At an input boundary, StreamFusion transposes Flink internal `RowData` into Arrow vectors.

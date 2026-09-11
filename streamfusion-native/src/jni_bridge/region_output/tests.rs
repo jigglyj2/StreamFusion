@@ -284,3 +284,5 @@ fn tree_exit_uses_port_zero_and_preserves_stream_completion_and_ownership() {
     drop(context);
     assert_eq!(broker.reserved(), 0);
 }
+
+mod framed;
