@@ -4,13 +4,13 @@
  */
 package tech.streamfusion.flink.exchange;
 
-import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.flink.proto.FlinkLogicalTypeProto;
 import tech.streamfusion.proto.plan.v1.ExchangeDistribution;
 import tech.streamfusion.proto.plan.v1.ExchangeMetadataColumns;
 import tech.streamfusion.proto.plan.v1.ExchangeTransport;
 import tech.streamfusion.proto.plan.v1.Field;
+import tech.streamfusion.proto.plan.v1.LogicalType;
 import tech.streamfusion.proto.plan.v1.NativeExchangePlan;
 import tech.streamfusion.proto.plan.v1.Schema;
 
@@ -51,7 +51,7 @@ public final class NativeExchangePlanSerializer {
             // Version 2 can encode nested keys and, when requested by a native consumer,
             // append the canonical key directly in Rust without a Java key-selector pass.
             boolean nested = java.util.Arrays.stream(keys).anyMatch(key -> {
-                switch (rowType.getTypeAt(key).getTypeRoot()) {
+                switch (plan.getSchema().getFields(key).getType().getTypeCase()) {
                     case ARRAY:
                     case MAP:
                     case ROW:
@@ -94,12 +94,15 @@ public final class NativeExchangePlanSerializer {
     }
 
     static boolean requiresPreencodedKeys(RowType rowType, int[] keys) {
-        for (int key : keys) if (!nativeKey(rowType.getTypeAt(key))) return true;
+        for (int key : keys) if (!nativeKey(FlinkLogicalTypeProto.serialize(rowType.getTypeAt(key)))) return true;
         return false;
     }
 
+    // Use the exact physical contract Rust receives. Flink intervals, distinct types,
+    // multisets and structured types already lower to supported scalar/map/row encodings;
+    // checking their original logical roots would add a redundant Java key-selector pass.
     private static boolean nativeKey(LogicalType type) {
-        switch (type.getTypeRoot()) {
+        switch (type.getTypeCase()) {
             case BOOLEAN:
             case TINYINT:
             case SMALLINT:
@@ -107,20 +110,23 @@ public final class NativeExchangePlanSerializer {
             case BIGINT:
             case FLOAT:
             case DOUBLE:
-            case CHAR:
+            case FIXED_CHAR:
             case VARCHAR:
+            case FIXED_BINARY:
             case BINARY:
-            case VARBINARY:
             case DECIMAL:
             case DATE:
-            case TIME_WITHOUT_TIME_ZONE:
-            case TIMESTAMP_WITHOUT_TIME_ZONE:
-            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
+            case TIME:
+            case TIMESTAMP:
+            case TIMESTAMP_LTZ:
                 return true;
             case ARRAY:
+                return nativeKey(type.getArray().getElementType());
             case MAP:
+                return nativeKey(type.getMap().getKeyType())
+                        && nativeKey(type.getMap().getValueType());
             case ROW:
-                return type.getChildren().stream().allMatch(NativeExchangePlanSerializer::nativeKey);
+                return type.getRow().getFieldsList().stream().allMatch(field -> nativeKey(field.getType()));
             default:
                 return false;
         }

@@ -23,7 +23,6 @@ import tech.streamfusion.flink.metrics.FlinkMetricParity;
 public final class NativeExchangeWriterOperator extends AbstractStreamOperator<NativeExchangeFrame>
         implements OneInputStreamOperator<ArrowRowDataBatch, NativeExchangeFrame> {
     private final RowType inputType;
-    private final int[] keys;
     private final byte[] serializedPlan;
     private final NativeExchangeBatchRouter router;
     private transient FlinkManagedMemory managedMemory;
@@ -45,7 +44,6 @@ public final class NativeExchangeWriterOperator extends AbstractStreamOperator<N
     NativeExchangeWriterOperator(
             RowType inputType, int[] keys, byte[] serializedPlan, NativeExchangeBatchRouter router) {
         this.inputType = inputType;
-        this.keys = keys.clone();
         this.serializedPlan = serializedPlan.clone();
         this.router = router;
     }
@@ -56,9 +54,15 @@ public final class NativeExchangeWriterOperator extends AbstractStreamOperator<N
         managedMemory = FlinkManagedMemory.create(
                 getContainingTask().getEnvironment(), getOperatorConfig(), getMetricGroup(), "streamfusion-exchange");
         routing = router.open(serializedPlan, managedMemory);
-        if (NativeExchangePlanSerializer.requiresPreencodedKeys(inputType, keys)) {
+        var plan = tech.streamfusion.proto.plan.v1.NativeExchangePlan.parseFrom(serializedPlan);
+        if (plan.getMetadataColumns().hasRoutingKeyIndex()) {
+            // Honor older explicitly preencoded plans even when the current planner can now
+            // encode this logical type natively. The protobuf owns the transport contract.
+            int[] plannedKeys = plan.getKeyIndicesList().stream()
+                    .mapToInt(Integer::intValue)
+                    .toArray();
             keySelector = KeySelectorUtil.getRowDataSelector(
-                    getContainingTask().getUserCodeClassLoader(), keys, InternalTypeInfo.of(inputType));
+                    getContainingTask().getUserCodeClassLoader(), plannedKeys, InternalTypeInfo.of(inputType));
         }
     }
 

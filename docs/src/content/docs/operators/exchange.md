@@ -40,12 +40,13 @@ are supported.
 Hash distribution is eligible for nullable or composite keys across supported Flink SQL types,
 including intervals, `ARRAY`, `MAP`, `MULTISET`, `ROW`, distinct types, and nested combinations.
 Scalar keys and recursively supported `ARRAY`, `MAP`, and `ROW` keys are encoded directly in
-Rust using one reusable scratch buffer per batch. Both
-key-group and destination routing use the same key loop. For key shapes without an independently proven native
-encoder, the Java writer adds one input-only opaque `BinaryRowData` key sidecar. Rust hashes those
-canonical bytes in place without copying each key and strips the sidecar before network transport.
-Null or non-word-aligned opaque keys produce a recoverable routing error. Singleton distribution is
-also eligible.
+Rust using one reusable scratch buffer per batch. Admission uses the existing physical protobuf
+mapping: intervals use integers, multisets use maps with integer counts, distinct types use their
+source type, and structured types use rows. These aliases do not require a Java key-selector pass
+or an extra input-side key vector. Key-group and destination routing use the same key loop.
+Singleton distribution is also eligible. Older protocol 1 plans with an opaque `BinaryRowData`
+key sidecar remain readable; Rust hashes those bytes in place and strips input-only keys before
+network transport. Null or non-word-aligned opaque keys produce a recoverable routing error.
 
 The shared native key codec also supports Arrow lists, maps, and structs recursively for native
 state consumers after an exchange strips its routing sidecar. It writes Flink's nested container
@@ -57,8 +58,11 @@ Binary vector, hashes those same bytes, and carries the vector in IPC. Payload b
 Generated tests compare complete canonical key bytes with Flink for sliced nullable nested input,
 including array null-word boundaries, array NaNs, decimals, timestamps, maps, and rows; the same
 key groups map to Flink's destinations at multiple parallelisms. The generated cases also compare
-complete serialized changelog records and record timestamps. Existing protocol 1 opaque-key
-frames remain supported.
+complete serialized changelog records and record timestamps. Alias cases include scalar and nested
+intervals, multisets, distinct scalar/array types, and structured rows. A native-output topology test
+compares a composite alias key and every RowKind with Flink while asserting that no Java writer is
+inserted. The tests materialize Flink's physical rows before passing them to the original logical
+type's key selector, as Flink's generic BinaryWriter does not directly accept DISTINCT_TYPE.
 
 Unsupported distributions, Arrow-incompatible boundary types, dictionary-encoded IPC batches, or
 any other unsupported node in the graph cause whole-plan fallback. EXPLAIN identifies the rejected
@@ -100,10 +104,10 @@ batch's reference-counted buffers. A simultaneous Arrow consumer keeps its own C
 the finalized Flink graph determines which outputs are needed. Routing plans are prepared once
 at task open and released with the native context, including cancellation paths.
 
-Java control/source edges and keys requiring the opaque Flink key sidecar still use the separate
-Java writer. This remaining path covers key types outside the verified recursive encoder, such as
-interval, multiset, and distinct logical types. Both paths use the same
-Rust routing and memory-admission implementation; this does not change the network frame format.
+Java control/source edges still use the separate Java writer. Older explicitly preencoded plans
+retain their key adapter for compatibility. Newly planned supported aliases use the producing
+native plan's output route, just like their physical scalar/map/row types. Both paths use the same
+Rust routing and memory-admission implementation; the network frame format is unchanged.
 
 Flink's record counters continue to report logical rows on both sides of the exchange;
 internal Arrow IPC frames are transport units and are not published as record counts. Failure

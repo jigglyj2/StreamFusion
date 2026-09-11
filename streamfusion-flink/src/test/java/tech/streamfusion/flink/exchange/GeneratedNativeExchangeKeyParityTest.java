@@ -1,27 +1,13 @@
 /* Copyright 2026 StreamFusion Authors. Licensed under the Apache License, Version 2.0. */
 package tech.streamfusion.flink.exchange;
 
-import static org.assertj.core.api.Assertions.assertThat;
-
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.Random;
-import org.apache.arrow.memory.RootAllocator;
-import org.apache.flink.runtime.state.KeyGroupRangeAssignment;
 import org.apache.flink.table.data.*;
-import org.apache.flink.table.data.binary.BinaryRowData;
-import org.apache.flink.table.data.binary.BinarySegmentUtils;
-import org.apache.flink.table.planner.plan.utils.KeySelectorUtil;
-import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
 import org.apache.flink.table.types.logical.*;
 import org.junit.jupiter.api.Test;
-import tech.streamfusion.flink.TestingNativeMemoryManager;
-import tech.streamfusion.flink.arrow.ArrowExchangeCDataBridge;
-import tech.streamfusion.flink.arrow.ArrowExchangeInputCDataBridge;
-import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
-import tech.streamfusion.nativebridge.NativeExchangeRouter;
-import tech.streamfusion.proto.plan.v1.NativeExchangePlan;
 
 class GeneratedNativeExchangeKeyParityTest {
     @Test
@@ -99,16 +85,7 @@ class GeneratedNativeExchangeKeyParityTest {
                         ? RowType.of(new ArrayType(element), new IntType(), new VarCharType())
                         : new MapType(new VarCharType(false, VarCharType.MAX_LENGTH), new ArrayType(element));
         RowType type = RowType.of(new IntType(false), keyType);
-        var selector = KeySelectorUtil.getRowDataSelector(
-                getClass().getClassLoader(), new int[] {1, 0}, InternalTypeInfo.of(type));
         var rows = new ArrayList<RowData>();
-        var expected = new ArrayList<byte[]>();
-        var groups = new ArrayList<Integer>();
-        var changelog = new ArrayList<byte[]>();
-        var serializer = new org.apache.flink.table.runtime.typeutils.RowDataSerializer(type);
-        var kinds = new org.apache.flink.types.RowKind[36];
-        var hasTimestamps = new boolean[36];
-        var timestamps = new long[36];
         var random = new Random(seed);
         for (int row = 0; row < 36; row++) {
             var values = new Object[new int[] {0, 1, 7, 8, 31, 32, 33, 63, 64, 65}[row % 10]];
@@ -123,60 +100,9 @@ class GeneratedNativeExchangeKeyParityTest {
                 key = new GenericMapData(entries);
             }
             var input = GenericRowData.of(row, row % 7 == 0 ? null : key);
-            kinds[row] = org.apache.flink.types.RowKind.values()[row % 4];
-            input.setRowKind(kinds[row]);
-            hasTimestamps[row] = row % 2 == 0;
-            timestamps[row] = -1000L + row;
-            var encoded = new org.apache.flink.core.memory.DataOutputSerializer(128);
-            serializer.serialize(input, encoded);
-            changelog.add(encoded.getCopyOfBuffer());
             rows.add(input);
-            var binary = (BinaryRowData) selector.getKey(input);
-            expected.add(
-                    BinarySegmentUtils.copyToBytes(binary.getSegments(), binary.getOffset(), binary.getSizeInBytes()));
-            groups.add(KeyGroupRangeAssignment.assignToKeyGroup(binary, 128));
         }
-        byte[] plan = NativeExchangePlanSerializer.hash(type, new int[] {1, 0}, 128, 4, true, true);
-        var decodedPlan = NativeExchangePlan.parseFrom(plan);
-        assertThat(decodedPlan.getProtocolVersion()).isEqualTo(2);
-        assertThat(decodedPlan.getMetadataColumns().hasRoutingKeyIndex()).isFalse();
-        var memory = TestingNativeMemoryManager.create();
-        int count = 0;
-        try (var allocator = new RootAllocator();
-                var original = ArrowRowDataBatch.transpose(rows, type, allocator)
-                        .withEnvelope(kinds, hasTimestamps, timestamps);
-                var slice = original.slice(1, rows.size() - 2);
-                var envelope = ArrowExchangeBatch.withEnvelope(slice, type);
-                var router = new NativeExchangeRouter(plan, memory)) {
-            for (var frame : ArrowExchangeCDataBridge.route(router, envelope.batch())) {
-                try (var output = ArrowExchangeInputCDataBridge.decode(plan, frame, type, allocator, memory)) {
-                    var keys = output.routingKeys();
-                    for (int row = 0; row < output.size(); row++) {
-                        var value = output.rowView(row);
-                        int index = value.getInt(0);
-                        var encoded = new org.apache.flink.core.memory.DataOutputSerializer(128);
-                        serializer.serialize(value, encoded);
-                        assertThat(encoded.getCopyOfBuffer())
-                                .as("complete changelog family %s seed %s row %s", family, seed, index)
-                                .containsExactly(changelog.get(index));
-                        assertThat(output.hasTimestamp(row)).isEqualTo(hasTimestamps[index]);
-                        if (hasTimestamps[index])
-                            assertThat(output.timestamp(row)).isEqualTo(timestamps[index]);
-                        assertThat(keys.get(row))
-                                .as("family %s seed %s row %s", family, seed, index)
-                                .containsExactly(expected.get(index));
-                        assertThat(frame.keyGroup()).isEqualTo(groups.get(index));
-                        for (int parallelism : new int[] {1, 4, 11, 128})
-                            assertThat(frame.keyGroup() * parallelism / 128)
-                                    .isEqualTo(KeyGroupRangeAssignment.computeOperatorIndexForKeyGroup(
-                                            128, parallelism, groups.get(index)));
-                        count++;
-                    }
-                }
-            }
-        }
-        assertThat(count).isEqualTo(rows.size() - 2);
-        assertThat(memory.available()).isEqualTo(memory.limit());
+        ExchangeKeyParityFixture.verify(type, rows, "family " + family + " seed " + seed);
     }
 
     private Object value(int family, Random random, int index) {
