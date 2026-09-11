@@ -8,6 +8,7 @@
 
 pub(crate) mod absolute_value;
 pub(crate) mod arbitrary_logarithm;
+mod flink_math_domain;
 pub(crate) mod arc_cosine;
 pub(crate) mod arc_sine;
 pub(crate) mod arc_tangent;

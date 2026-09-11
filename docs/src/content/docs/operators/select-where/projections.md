@@ -420,6 +420,12 @@ Each remains a distinct protobuf expression and DataFusion vectorized operator; 
 includes signed zero, infinities, NaN, and nulls.
 `COT` is accelerated as a distinct DataFusion vector expression after the same `DOUBLE` coercion.
 Parity coverage includes signed zero, multiples of pi, infinities, NaN, and nulls.
+`ASIN`, `ACOS`, and `LOG10` retain DataFusion computation with a shared Flink adaptation for
+domain-error NaN sign bits. On the verified Linux/x86-64 runtime, Java Math returns a negative quiet
+NaN for non-NaN inputs outside these functions' domains. The adaptation preserves input NaNs and
+normal results, evaluates the operand once, and shares the DataFusion output buffers when no
+correction is needed. SQL parity compares typed serialized bits, including the NaN sign.
+
 `LN` and `LOG10` are accelerated as separate DataFusion vector expressions after Flink coerces the
 operand to `DOUBLE`. They preserve Flink's IEEE-754 domain behavior: negative inputs produce NaN,
 positive and negative zero produce negative infinity, positive infinity remains infinite, and null
