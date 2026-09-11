@@ -16,6 +16,7 @@ mod jni_bridge;
 mod memory_pool;
 mod plan_metrics;
 pub mod planner;
+mod spill;
 mod state;
 
 #[cfg(test)]

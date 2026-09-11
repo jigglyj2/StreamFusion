@@ -93,8 +93,10 @@ without materializing a complete key-group snapshot. Small inputs remain in admi
 larger inputs use a temporary Arrow IPC stream. DataFusion's external `SortExec` then sorts those
 pages with its memory pool backed by Flink managed memory and bounded spill-merge fan-in. Counts stay
 compressed until output is requested, and output batches contain at most 16,384 logical rows.
-Temporary input and sort files use Flink's IO-manager directories and are removed on completion,
-failure, or close. `numSpillFiles` and `spillInBytes` report actual native spilling. The
+Temporary input and sort files share DataFusion's disk manager and its byte accounting, use the
+Flink-assigned IO-manager directory, and are removed on completion, failure, or close. Both paths
+follow the available filesystem capacity; there is no additional DataFusion 100 GiB spill quota or
+StreamFusion disk-budget setting. `numSpillFiles` and `spillInBytes` report actual native spilling. The
 operator advertises Flink's internal-sort capability so the runtime does not insert a second
 `SortingDataInput` ahead of the native sorter.
 
