@@ -30,6 +30,13 @@ Flink operators             Native execution operators
 
 Adjacent Rust operators form one native DataFusion execution-plan tree and pass Arrow record batches directly through native batch streams. Arrow's reference-counted arrays allow an operator to hand the next operator the same underlying buffers without serializing or copying the batch. JVM/native conversion happens only at the outer edges of the fused native plan through lightweight batch views and an Arrow C Stream-style ownership boundary.
 
+Production native trees and shared regions use one port-tagged Arrow C Data output driver.
+A tree emits on port zero; shared regions retain their independently typed exits and cooperative
+scheduling. Each port negotiates its schema once per invocation. The original native stream owns
+completion, cancellation, and state lifecycle, and exported batches can outlive the invocation.
+This edge uses protocol version 3, which requires matching Java and native artifacts. Legacy
+selection-based callers without an owned record envelope retain the Arrow C Stream adapter.
+
 At an input boundary, StreamFusion transposes Flink internal `RowData` into Arrow vectors.
 At an output boundary, Flink reads those vectors through reusable `RowData`, `ArrayData`,
 `MapData`, and nested-row views; values are not copied back into `GenericRowData`. The
@@ -46,11 +53,12 @@ identity, metrics and control policy; DataFusion still evaluates the predicate a
 expressions. Existing Arrow inputs retain their layout and shared buffers. This source
 projection also applies to mixed unary regions, such as Calc followed by expansion.
 
-For filtered Calc batches, Rust is the sole authority on row selection. StreamFusion adds
-a hidden zero-based input ordinal before DataFusion execution, carries it through the
-native filter and projection, and returns the selected ordinals with the output batch.
-The JVM uses that lightweight mapping to attach each original Flink `RowKind`; it never
-runs a parallel Java predicate or copies row payloads to discover which rows survived.
+For filtered Calc batches, DataFusion is the authority on row selection. Production regions
+carry owned RowKind and timestamp vectors through the native filter and projection with the
+payload. Their outputs use detached ordinal `-1`; Java reads the returned envelope directly.
+Legacy callers with borrowed envelopes carry zero-based input ordinals and use those ordinals
+to select the original record metadata. Neither path runs a parallel Java predicate or copies
+row payloads to discover which rows survived.
 
 Arrow C Data owns the cross-language contract. StreamFusion keeps one coherent,
 unrelocated Arrow Java implementation: although Java package shading cannot change C

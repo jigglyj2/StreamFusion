@@ -3,20 +3,23 @@
 
 //! Port-tagged C Data at a region edge. One pull drives all native exits cooperatively;
 //! schemas are negotiated once per output per invocation, including outputs arriving late.
+use crate::planner::region::RegionBatch;
 use crate::{execution_context::NativeExecutionContext, planner::region::RegionOutput};
 use arrow::datatypes::SchemaRef;
 use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::memory_pool::MemoryReservation;
-use futures::StreamExt;
+use datafusion::physical_plan::RecordBatchStream;
+use futures::{Stream, StreamExt};
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::{
     atomic::{AtomicI64, Ordering},
     Arc, Mutex, OnceLock,
 };
 
 pub(super) struct Output {
-    stream: Option<RegionOutput>,
+    stream: Option<Pin<Box<dyn Stream<Item = Result<RegionBatch>> + Send>>>,
     schemas: Vec<SchemaRef>,
     emitted_schema: Vec<bool>,
     failed: bool,
@@ -32,7 +35,7 @@ impl Output {
         let schemas = stream.schemas();
         let emitted_schema = vec![false; schemas.len()];
         Self {
-            stream: Some(stream),
+            stream: Some(Box::pin(stream)),
             schemas,
             emitted_schema,
             failed: false,
@@ -40,6 +43,43 @@ impl Output {
             context,
         }
     }
+    /// One edge driver for a tree or DAG. The underlying streams keep their own completion
+    /// and cancellation contracts; tagging a tree's sole exit never changes execution.
+    pub(super) fn start(
+        context: Arc<NativeExecutionContext>,
+        batches: Vec<arrow::record_batch::RecordBatch>,
+        events: Option<&[(u64, crate::planner::persistent::control::ControlEvent)]>,
+        inputs: Vec<MemoryReservation>,
+    ) -> Result<Self> {
+        if context.protocol_version() < crate::RECORD_POLICY_PLAN_PROTOCOL_VERSION {
+            return Err(DataFusionError::Plan(
+                "port-tagged output requires an owned-envelope plan".into(),
+            ));
+        }
+        if context.region_input_count().is_some() {
+            let stream = match events {
+                Some(events) => context.start_region_control(batches, events)?,
+                None => context.start_region(batches)?,
+            };
+            return Ok(Self::new(context, stream, inputs));
+        }
+        let stream = match events {
+            Some(events) => context.start_control(batches, events)?,
+            None => context.start(batches)?,
+        };
+        let schema = stream.schema();
+        Ok(Self {
+            stream: Some(Box::pin(
+                stream.map(|result| result.map(|batch| RegionBatch { port: 0, batch })),
+            )),
+            schemas: vec![schema],
+            emitted_schema: vec![false],
+            failed: false,
+            _inputs: inputs,
+            context,
+        })
+    }
+
     /// Caller supplies fresh empty C descriptors. On failure, all native cleanup finishes
     /// before JNI installs a Java exception; no output descriptor is partially published.
     pub(super) unsafe fn next(

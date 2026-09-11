@@ -28,7 +28,7 @@ public final class NativeSharedRegionTranslation {
 
     public static void validate(byte[] bytes, int outputCount) {
         NativeSharedRegionOutputs.validate(decode(bytes), outputCount);
-        if (tech.streamfusion.nativebridge.NativeRegionStream.edgeVersion() != 2)
+        if (tech.streamfusion.nativebridge.NativeRegionStream.edgeVersion() != 3)
             throw new IllegalArgumentException("Shared native regions require Arrow/IPC region edge version 2");
     }
 

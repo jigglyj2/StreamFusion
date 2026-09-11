@@ -26,6 +26,7 @@ public final class NativeExecutionContext implements AutoCloseable {
     private final boolean stateful;
     private final boolean region;
     private final boolean inputEnvelopeRequired;
+    private final boolean ownedOutputEnvelope;
     private final NativeExchangeInputs exchangeInputs = new NativeExchangeInputs(this);
 
     public NativeExecutionContext(byte[] serializedPlan, NativeMemoryManager memoryManager) {
@@ -80,6 +81,7 @@ public final class NativeExecutionContext implements AutoCloseable {
         }
         identifiedPlan = region ? serializedPlan.clone() : NativePlanNodeIdentity.assign(serializedPlan);
         rootPlanNodeId = region ? 0 : NativePlanNodeIdentity.rootId(identifiedPlan);
+        ownedOutputEnvelope = region || ownsEnvelope(identifiedPlan);
         long controlBytes = Math.addExact(
                 Math.addExact((long) identifiedPlan.length, stateBindings == null ? 0 : stateBindings.length),
                 taskBindings == null ? 0 : taskBindings.length);
@@ -89,7 +91,7 @@ public final class NativeExecutionContext implements AutoCloseable {
                     "Flink denied " + controlBytes + " bytes for native plan/state-binding JNI copies");
         }
         try {
-            if (region && NativeRegionStream.edgeVersion() != 2)
+            if (ownedOutputEnvelope && NativeRegionStream.edgeVersion() != 3)
                 throw new IllegalStateException("Unsupported native region C Data edge version");
             if (lookupIds != null) {
                 if (NativeLookupResources.edgeVersion() != 1)
@@ -146,6 +148,19 @@ public final class NativeExecutionContext implements AutoCloseable {
 
     public boolean hasRegionOutputs() {
         return region;
+    }
+
+    /** Protocol 2 may require input RowKinds while still borrowing output envelopes by ordinal. */
+    public boolean hasOwnedOutputEnvelope() {
+        return ownedOutputEnvelope;
+    }
+
+    private static boolean ownsEnvelope(byte[] plan) {
+        try {
+            return tech.streamfusion.proto.plan.v1.NativePlan.parseFrom(plan).getProtocolVersion() >= 3;
+        } catch (com.google.protobuf.InvalidProtocolBufferException failure) {
+            throw new IllegalArgumentException("Invalid native plan", failure);
+        }
     }
 
     public boolean hasStateBindings() {

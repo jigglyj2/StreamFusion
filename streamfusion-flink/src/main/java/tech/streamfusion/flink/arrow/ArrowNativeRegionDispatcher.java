@@ -14,8 +14,8 @@ import tech.streamfusion.nativebridge.NativeExecutionContext;
 
 /** One arrival driver for tree or shared-region edges; computation stays in the native plan. */
 public final class ArrowNativeRegionDispatcher implements AutoCloseable {
-    private final ArrowNativePlanDispatcher tree;
-    private final ArrowNativeRegionBridge shared;
+    private final ArrowNativePlanDispatcher legacy;
+    private final ArrowNativeRegionBridge ports;
     private final List<RowType> inputTypes;
     private final List<ArrowRowDataBatch> emptyInputs = new ArrayList<>();
     private final List<ArrowRowDataBatch> inputs = new ArrayList<>();
@@ -36,13 +36,15 @@ public final class ArrowNativeRegionDispatcher implements AutoCloseable {
             java.util.function.LongSupplier clock) {
         inputTypes = List.copyOf(inputs);
         if (inputs.isEmpty()) throw new IllegalArgumentException("Native region requires external inputs");
-        if (!context.hasRegionOutputs()) {
+        // Legacy callers without owned record envelopes keep the selection-based C Stream
+        // adapter. Production tree and DAG factories both negotiate owned envelopes.
+        if (!context.hasOwnedOutputEnvelope()) {
             if (outputs.size() != 1) throw new IllegalArgumentException("Native tree requires one output");
-            tree = new ArrowNativePlanDispatcher(context, inputs, outputs.get(0), allocator, clockPorts, clock);
-            shared = null;
+            legacy = new ArrowNativePlanDispatcher(context, inputs, outputs.get(0), allocator, clockPorts, clock);
+            ports = null;
         } else {
-            tree = null;
-            shared = new ArrowNativeRegionBridge(context, outputs, allocator, clockPorts, clock);
+            legacy = null;
+            ports = new ArrowNativeRegionBridge(context, outputs, allocator, clockPorts, clock);
             try {
                 for (var type : inputTypes) emptyInputs.add(ArrowRowDataBatch.empty(type, allocator));
                 this.inputs.addAll(emptyInputs);
@@ -59,8 +61,8 @@ public final class ArrowNativeRegionDispatcher implements AutoCloseable {
 
     public void process(int port, ArrowRowDataBatch input, BiConsumer<Integer, ArrowRowDataBatch> output) {
         Objects.requireNonNull(output, "output");
-        if (tree != null) {
-            tree.process(port, input, batch -> output.accept(0, batch));
+        if (legacy != null) {
+            legacy.process(port, input, batch -> output.accept(0, batch));
             return;
         }
         requireIdle();
@@ -69,7 +71,7 @@ public final class ArrowNativeRegionDispatcher implements AutoCloseable {
             throw new IllegalArgumentException("Native input type changed at port " + port);
         inputs.set(port, input);
         try {
-            invoke(() -> shared.executeStream(inputs), output);
+            invoke(() -> ports.executeStream(inputs), output);
         } finally {
             inputs.set(port, emptyInputs.get(port));
         }
@@ -82,20 +84,20 @@ public final class ArrowNativeRegionDispatcher implements AutoCloseable {
             LongConsumer rows,
             BiConsumer<Integer, ArrowRowDataBatch> output) {
         Objects.requireNonNull(output, "output");
-        if (tree != null) {
-            tree.processFrame(port, plan, frame, rows, batch -> output.accept(0, batch));
+        if (legacy != null) {
+            legacy.processFrame(port, plan, frame, rows, batch -> output.accept(0, batch));
             return;
         }
-        invoke(() -> shared.executeExchangeStream(emptyInputs, port, plan, frame, rows), output);
+        invoke(() -> ports.executeExchangeStream(emptyInputs, port, plan, frame, rows), output);
     }
 
     public void control(byte[] controls, BiConsumer<Integer, ArrowRowDataBatch> output) {
         Objects.requireNonNull(output, "output");
-        if (tree != null) {
-            tree.control(controls, batch -> output.accept(0, batch));
+        if (legacy != null) {
+            legacy.control(controls, batch -> output.accept(0, batch));
             return;
         }
-        invoke(() -> shared.executeControlStream(emptyInputs, controls), output);
+        invoke(() -> ports.executeControlStream(emptyInputs, controls), output);
     }
 
     private void invoke(Supplier<ArrowNativeRegionOutput> invocation, BiConsumer<Integer, ArrowRowDataBatch> output) {
@@ -124,7 +126,7 @@ public final class ArrowNativeRegionDispatcher implements AutoCloseable {
         if (closed) return;
         closed = true;
         try {
-            org.apache.flink.util.IOUtils.closeAll(tree, () -> org.apache.flink.util.IOUtils.closeAll(emptyInputs));
+            org.apache.flink.util.IOUtils.closeAll(legacy, () -> org.apache.flink.util.IOUtils.closeAll(emptyInputs));
         } catch (Exception failure) {
             throw new IllegalStateException("Could not release native region inputs", failure);
         } finally {

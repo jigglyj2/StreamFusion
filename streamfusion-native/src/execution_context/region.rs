@@ -30,12 +30,10 @@ impl Drop for Completion {
 }
 
 impl NativeExecutionContext {
-    pub(crate) fn region_input_count(&self) -> Result<usize> {
+    pub(crate) fn region_input_count(&self) -> Option<usize> {
         match &self.plan {
-            Definition::Region(plan) => Ok(plan.message.input_count as usize),
-            Definition::Tree(_) => Err(DataFusionError::Plan(
-                "native tree requires the single-output execution API".into(),
-            )),
+            Definition::Region(plan) => Some(plan.message.input_count as usize),
+            Definition::Tree(_) => None,
         }
     }
 

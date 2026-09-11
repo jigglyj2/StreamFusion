@@ -9,7 +9,7 @@ import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.nativebridge.NativeExecutionContext;
 import tech.streamfusion.nativebridge.NativeRegionStream;
 
-/** Arrow edge for one native owner with multiple, independently typed exits. */
+/** Arrow edge for one native owner with one or more independently typed exits. */
 public final class ArrowNativeRegionBridge {
     private final NativeExecutionContext context;
     private final List<RowType> outputTypes;
@@ -29,9 +29,11 @@ public final class ArrowNativeRegionBridge {
             List<Integer> clockPorts,
             java.util.function.LongSupplier clock) {
         inputEdge = new NativePlanInputs(true, clockPorts, clock);
-        if (!context.hasRegionOutputs() || !context.requiresInputEnvelope())
-            throw new IllegalArgumentException("Native region edge requires an owned-envelope region context");
+        if (!context.hasOwnedOutputEnvelope())
+            throw new IllegalArgumentException("Native region edge requires an owned-envelope context");
         if (outputTypes.isEmpty()) throw new IllegalArgumentException("Native region requires output ports");
+        if (!context.hasRegionOutputs() && outputTypes.size() != 1)
+            throw new IllegalArgumentException("Native tree requires exactly one output port");
         this.context = context;
         this.outputTypes = List.copyOf(outputTypes);
         this.allocator = Objects.requireNonNull(allocator, "allocator");

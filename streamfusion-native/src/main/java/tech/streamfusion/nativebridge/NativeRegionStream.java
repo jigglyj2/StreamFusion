@@ -5,12 +5,19 @@ import java.util.Objects;
 
 /** One cooperative native invocation with port-tagged, independently typed Arrow C Data outputs. */
 public final class NativeRegionStream implements AutoCloseable {
+    private static final int EDGE_VERSION;
+
     static {
         NativeLibraryLoader.load();
+        EDGE_VERSION = nativeEdgeVersion();
     }
 
     public static int edgeVersion() {
-        return nativeEdgeVersion();
+        return EDGE_VERSION;
+    }
+
+    private static void requireEdgeVersion() {
+        if (edgeVersion() != 3) throw new IllegalStateException("Unsupported native port-tagged output edge version");
     }
 
     private long handle;
@@ -25,8 +32,10 @@ public final class NativeRegionStream implements AutoCloseable {
         Objects.requireNonNull(context, "context");
         Objects.requireNonNull(arrays, "arrays");
         Objects.requireNonNull(schemas, "schemas");
-        if (!context.hasRegionOutputs() || arrays.length != schemas.length)
-            throw new IllegalArgumentException("Native region requires its own plan and matching input ports");
+        if (!context.hasOwnedOutputEnvelope() || arrays.length != schemas.length)
+            throw new IllegalArgumentException(
+                    "Port-tagged output requires an owned-envelope plan and matching input ports");
+        requireEdgeVersion();
         var stream = new NativeRegionStream(open(context.handle(), arrays, schemas, controls));
         NativeExecutionDiagnostics.PLAN_STREAMS.incrementAndGet();
         return stream;
@@ -60,8 +69,9 @@ public final class NativeRegionStream implements AutoCloseable {
             long[] schemas,
             java.util.function.LongConsumer inputRows) {
         Objects.requireNonNull(inputRows, "inputRows");
-        if (!context.hasRegionOutputs())
-            throw new IllegalArgumentException("Native exchange requires a region context");
+        if (!context.hasOwnedOutputEnvelope())
+            throw new IllegalArgumentException("Native exchange requires an owned-envelope context");
+        requireEdgeVersion();
         context.prepareExchangeInput(port, plan);
         long[] opened =
                 openExchangeInputs(context.handle(), port, payload, offset, length, metadataLength, arrays, schemas);
