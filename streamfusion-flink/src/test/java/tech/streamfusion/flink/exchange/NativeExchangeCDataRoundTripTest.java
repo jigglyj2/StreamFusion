@@ -66,15 +66,14 @@ class NativeExchangeCDataRoundTripTest {
     }
 
     @Test
-    void hidesATransportedOpaqueComplexRoutingKeyFromAnOrdinaryReader() {
+    void hidesANativelyGeneratedComplexRoutingKeyFromAnOrdinaryReader() {
         RowType rowType = RowType.of(new ArrayType(false, new IntType(false)));
         byte[] plan = NativeExchangePlanSerializer.hash(rowType, new int[] {0}, 128, 4, false, true);
         GenericRowData insert = GenericRowData.of(new GenericArrayData(new int[] {7, 9}));
         insert.setRowKind(RowKind.INSERT);
         try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
                 ArrowRowDataBatch input = ArrowRowDataBatch.transpose(List.of(insert), rowType, allocator);
-                ArrowExchangeBatch.EnvelopeBatch envelope =
-                        ArrowExchangeBatch.withEnvelope(input, rowType, List.of(new byte[] {1, 2, 3, 4}))) {
+                ArrowExchangeBatch.EnvelopeBatch envelope = ArrowExchangeBatch.withEnvelope(input, rowType)) {
             NativeMemoryManager memoryManager = TestingNativeMemoryManager.create();
             List<NativeExchangeFrame> frames =
                     ArrowExchangeCDataBridge.route(plan, envelope.batch(), allocator, memoryManager);

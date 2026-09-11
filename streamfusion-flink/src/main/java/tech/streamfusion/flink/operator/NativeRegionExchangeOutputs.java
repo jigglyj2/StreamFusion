@@ -55,7 +55,7 @@ public final class NativeRegionExchangeOutputs implements Serializable {
     public static Transformation<NativeExchangeFrame> frame(Transformation<RowData> input, RowType type, byte[] plan) {
         try {
             var exchange = NativeExchangePlan.parseFrom(plan);
-            if (exchange.getMetadataColumns().hasRoutingKeyIndex() || exchange.getTransportRoutingKey()) return null;
+            if (exchange.getMetadataColumns().hasRoutingKeyIndex()) return null;
         } catch (com.google.protobuf.InvalidProtocolBufferException failure) {
             throw new IllegalArgumentException("Invalid native exchange plan", failure);
         }

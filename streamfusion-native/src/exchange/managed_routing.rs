@@ -5,6 +5,7 @@
 use super::exchange_framer::{frame_hash_exchange_batch_accounted, FrameMemory};
 use super::RoutedFrame;
 use arrow::error::ArrowError;
+mod generated_keys;
 #[cfg(test)]
 mod tests;
 mod workspace;
@@ -25,6 +26,31 @@ pub(crate) fn route_record_batch(
     batch: RecordBatch,
     broker: Arc<dyn MemoryReservationBroker>,
 ) -> Result<AccountedFrames> {
+    let generated = plan.transport_routing_key
+        && plan
+            .metadata_columns
+            .as_ref()
+            .is_some_and(|metadata| metadata.routing_key_index.is_none());
+    let (batch, _key_memory) = if generated {
+        if plan
+            .schema
+            .as_ref()
+            .is_none_or(|schema| schema.fields.len() != batch.num_columns())
+        {
+            return Err(DataFusionError::Execution(
+                "native routing-key generation requires exactly the declared input columns".into(),
+            ));
+        }
+        let (batch, memory) = generated_keys::append(batch, keys, broker.clone())?;
+        (batch, Some(memory))
+    } else {
+        (batch, None)
+    };
+    let generated_key = [(
+        batch.num_columns() - 1,
+        crate::exchange::KeyField::PreencodedBinaryRow,
+    )];
+    let keys = if generated { &generated_key[..] } else { keys };
     let mut transport_column_count = plan
         .schema
         .as_ref()

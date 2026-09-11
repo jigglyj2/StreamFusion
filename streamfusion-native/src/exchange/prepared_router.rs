@@ -26,7 +26,8 @@ impl PreparedRouter {
     ) -> Result<Self> {
         let plan = decode_exchange_plan(bytes)?;
         let keys = exchange_key_fields(&plan)?;
-        let schema = super::transport_schema(&plan)?;
+        let schema =
+            crate::planner::arrow_schema(plan.schema.as_ref().expect("validated exchange schema"))?;
         Ok(Self {
             plan,
             keys,
@@ -43,7 +44,6 @@ impl PreparedRouter {
             .keys
             .iter()
             .any(|(_, key)| *key == KeyField::PreencodedBinaryRow)
-            || self.plan.transport_routing_key
         {
             return Err(DataFusionError::Plan(
                 "native output routing requires an independently verified native key encoder"

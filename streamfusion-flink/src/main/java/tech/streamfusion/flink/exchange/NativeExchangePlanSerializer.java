@@ -4,7 +4,7 @@
  */
 package tech.streamfusion.flink.exchange;
 
-import org.apache.flink.table.types.logical.LogicalTypeRoot;
+import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.RowType;
 import tech.streamfusion.flink.proto.FlinkLogicalTypeProto;
 import tech.streamfusion.proto.plan.v1.ExchangeDistribution;
@@ -47,6 +47,20 @@ public final class NativeExchangePlanSerializer {
                     .setRoutingKeyIndex(
                             ArrowExchangeBatch.exchangeRowType(rowType).getFieldCount()));
             plan.setTransportRoutingKey(transportRoutingKey);
+        } else {
+            // Version 2 can encode nested keys and, when requested by a native consumer,
+            // append the canonical key directly in Rust without a Java key-selector pass.
+            boolean nested = java.util.Arrays.stream(keys).anyMatch(key -> {
+                switch (rowType.getTypeAt(key).getTypeRoot()) {
+                    case ARRAY:
+                    case MAP:
+                    case ROW:
+                        return true;
+                    default:
+                        return false;
+                }
+            });
+            plan.setProtocolVersion(2).setTransportRoutingKey(transportRoutingKey && nested);
         }
         return plan.build().toByteArray();
     }
@@ -80,30 +94,35 @@ public final class NativeExchangePlanSerializer {
     }
 
     static boolean requiresPreencodedKeys(RowType rowType, int[] keys) {
-        for (int key : keys) {
-            LogicalTypeRoot root = rowType.getTypeAt(key).getTypeRoot();
-            switch (root) {
-                case BOOLEAN:
-                case TINYINT:
-                case SMALLINT:
-                case INTEGER:
-                case BIGINT:
-                case FLOAT:
-                case DOUBLE:
-                case CHAR:
-                case VARCHAR:
-                case BINARY:
-                case VARBINARY:
-                case DECIMAL:
-                case DATE:
-                case TIME_WITHOUT_TIME_ZONE:
-                case TIMESTAMP_WITHOUT_TIME_ZONE:
-                case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
-                    break;
-                default:
-                    return true;
-            }
-        }
+        for (int key : keys) if (!nativeKey(rowType.getTypeAt(key))) return true;
         return false;
+    }
+
+    private static boolean nativeKey(LogicalType type) {
+        switch (type.getTypeRoot()) {
+            case BOOLEAN:
+            case TINYINT:
+            case SMALLINT:
+            case INTEGER:
+            case BIGINT:
+            case FLOAT:
+            case DOUBLE:
+            case CHAR:
+            case VARCHAR:
+            case BINARY:
+            case VARBINARY:
+            case DECIMAL:
+            case DATE:
+            case TIME_WITHOUT_TIME_ZONE:
+            case TIMESTAMP_WITHOUT_TIME_ZONE:
+            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
+                return true;
+            case ARRAY:
+            case MAP:
+            case ROW:
+                return type.getChildren().stream().allMatch(NativeExchangePlanSerializer::nativeKey);
+            default:
+                return false;
+        }
     }
 }

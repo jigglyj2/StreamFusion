@@ -39,7 +39,8 @@ are supported.
 
 Hash distribution is eligible for nullable or composite keys across supported Flink SQL types,
 including intervals, `ARRAY`, `MAP`, `MULTISET`, `ROW`, distinct types, and nested combinations.
-Scalar keys are encoded directly in Rust using one reusable scratch buffer per batch. Both
+Scalar keys and recursively supported `ARRAY`, `MAP`, and `ROW` keys are encoded directly in
+Rust using one reusable scratch buffer per batch. Both
 key-group and destination routing use the same key loop. For key shapes without an independently proven native
 encoder, the Java writer adds one input-only opaque `BinaryRowData` key sidecar. Rust hashes those
 canonical bytes in place without copying each key and strips the sidecar before network transport.
@@ -50,8 +51,14 @@ The shared native key codec also supports Arrow lists, maps, and structs recursi
 state consumers after an exchange strips its routing sidecar. It writes Flink's nested container
 layouts into one caller-owned scratch buffer, with container-relative offsets and array-specific
 NaN normalization. Exact array/map/row byte fixtures are checked against Flink's serializers.
-This does not change the exchange planner's existing sidecar selection or claim full nested-type
-rescaling coverage; native state consumers and exchange routing share the key-group hash code.
+Exchange protocol 2 selects that encoder for recursively supported nested keys. When a native
+consumer still expects the canonical key column, Rust encodes it once into an admitted Arrow
+Binary vector, hashes those same bytes, and carries the vector in IPC. Payload buffers stay shared.
+Generated tests compare complete canonical key bytes with Flink for sliced nullable nested input,
+including array null-word boundaries, array NaNs, decimals, timestamps, maps, and rows; the same
+key groups map to Flink's destinations at multiple parallelisms. The generated cases also compare
+complete serialized changelog records and record timestamps. Existing protocol 1 opaque-key
+frames remain supported.
 
 Unsupported distributions, Arrow-incompatible boundary types, dictionary-encoded IPC batches, or
 any other unsupported node in the graph cause whole-plan fallback. EXPLAIN identifies the rejected
@@ -85,7 +92,7 @@ until their Java transport envelopes have been exported; admission or encoding f
 partial frames and their reservations. This uses Flink's existing native execution budget and has
 no separate tuning option or per-row reservation callback.
 
-For native producers with scalar native-encoded keys or singleton distribution, routing is bound
+For native producers with native-encoded scalar/nested keys or singleton distribution, routing is bound
 to the producing native plan. Its output driver builds the IPC frames directly from native Arrow
 batches and returns them on Flink transport side outputs. There is no separate Java writer or
 Arrow Java export/import round trip on that path. Multiple exchange consumers reuse the producer
@@ -94,8 +101,8 @@ the finalized Flink graph determines which outputs are needed. Routing plans are
 at task open and released with the native context, including cancellation paths.
 
 Java control/source edges and keys requiring the opaque Flink key sidecar still use the separate
-Java writer. For those complex-key native outputs, the Arrow Java round trip remains a limitation
-until the native key encoder has the required exchange parity coverage. Both paths use the same
+Java writer. This remaining path covers key types outside the verified recursive encoder, such as
+interval, multiset, and distinct logical types. Both paths use the same
 Rust routing and memory-admission implementation; this does not change the network frame format.
 
 Flink's record counters continue to report logical rows on both sides of the exchange;

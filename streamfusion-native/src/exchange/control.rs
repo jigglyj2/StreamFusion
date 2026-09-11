@@ -62,6 +62,11 @@ pub fn exchange_key_fields(plan: &proto::NativeExchangePlan) -> Result<Vec<(usiz
                 proto::logical_type::Type::Decimal(decimal) => KeyField::Decimal {
                     precision: decimal.precision as u8,
                 },
+                proto::logical_type::Type::Array(_) | proto::logical_type::Type::Map(_)
+                | proto::logical_type::Type::Row(_) => {
+                    let schema = crate::planner::arrow_schema(schema)?;
+                    KeyField::from_arrow_type(schema.field(*index as usize).data_type())?
+                }
                 unsupported => {
                     return Err(DataFusionError::Plan(format!(
                         "exchange key {index} type {unsupported:?} has no exact Flink BinaryRow encoding"
@@ -74,11 +79,10 @@ pub fn exchange_key_fields(plan: &proto::NativeExchangePlan) -> Result<Vec<(usiz
 }
 
 fn validate(plan: &proto::NativeExchangePlan) -> Result<()> {
-    if plan.protocol_version != crate::PLAN_PROTOCOL_VERSION {
+    if !matches!(plan.protocol_version, 1 | 2) {
         return Err(DataFusionError::Plan(format!(
-            "unsupported StreamFusion exchange protocol version {}, expected {}",
-            plan.protocol_version,
-            crate::PLAN_PROTOCOL_VERSION
+            "unsupported StreamFusion exchange protocol version {}, expected 1 or 2",
+            plan.protocol_version
         )));
     }
     let distribution = proto::ExchangeDistribution::try_from(plan.distribution).map_err(|_| {
@@ -147,7 +151,9 @@ fn validate(plan: &proto::NativeExchangePlan) -> Result<()> {
                 "exchange routing-key sidecar index {routing_key_index} must immediately follow the transport schema"
             )));
         }
-    } else if plan.transport_routing_key {
+    } else if plan.transport_routing_key
+        && (plan.protocol_version < 2 || distribution != proto::ExchangeDistribution::Hash)
+    {
         return Err(DataFusionError::Plan(
             "exchange cannot transport a missing routing-key sidecar".to_string(),
         ));
@@ -253,6 +259,31 @@ mod tests {
     fn accepts_complete_flink_hash_contract() {
         let encoded = plan().encode_to_vec();
         assert_eq!(decode_exchange_plan(&encoded).unwrap(), plan());
+    }
+
+    #[test]
+    fn native_generated_routing_keys_require_explicit_protocol_two() {
+        let mut value = plan();
+        value.transport_routing_key = true;
+        assert!(validate(&value).is_err());
+        value.protocol_version = 2;
+        assert!(validate(&value).is_ok());
+        assert_eq!(
+            exchange_key_fields(&value).unwrap(),
+            [(0, KeyField::Integer)]
+        );
+        value.protocol_version = 3;
+        assert!(validate(&value).is_err());
+        value.protocol_version = 1;
+        value.metadata_columns.as_mut().unwrap().routing_key_index = Some(2);
+        assert!(
+            validate(&value).is_ok(),
+            "retain existing opaque sidecar contracts"
+        );
+        assert_eq!(
+            exchange_key_fields(&value).unwrap(),
+            [(2, KeyField::PreencodedBinaryRow)]
+        );
     }
 
     #[test]

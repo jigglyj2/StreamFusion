@@ -132,7 +132,7 @@ fn array_workspace(data: &ArrayData, child: bool) -> arrow::error::Result<usize>
     Ok(bytes)
 }
 
-fn nested_key_bytes(data: &ArrayData) -> arrow::error::Result<usize> {
+pub(super) fn nested_key_bytes(data: &ArrayData) -> arrow::error::Result<usize> {
     // A single nested key may span the whole child array. Flink uses fixed slots, null
     // words, and eight-byte padding rather than Arrow's compact bool/string offsets.
     let mut bytes = data
