@@ -244,7 +244,7 @@ pub(super) fn decode_entries(
             if compact {
                 break;
             }
-            for &page in &manifest.pages[side] {
+            for page in manifest.pages[side].iter() {
                 let key = entry_key(&logical, side, page, manifest.layout);
                 let bytes = index.get(key.key.as_slice()).ok_or_else(|| {
                     DataFusionError::Execution("missing regular join snapshot page".into())

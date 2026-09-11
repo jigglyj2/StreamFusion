@@ -1,8 +1,10 @@
 // Copyright 2026 StreamFusion Authors
 // Licensed under the Apache License, Version 2.0
 
+use super::tests::coarse_memory::CountingBroker;
 use super::*;
 use crate::memory_pool::tests_support::TestBroker;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn fixture() -> StagedState {
     let value = JoinState {
@@ -39,7 +41,11 @@ fn fixture() -> StagedState {
 #[test]
 fn paged_decode_reserves_payload_and_row_vectors_within_a_bounded_share() {
     for width in [0, 16, 1024] {
-        let broker = Arc::new(TestBroker::new(10 << 20));
+        let broker = Arc::new(CountingBroker {
+            inner: TestBroker::new(10 << 20),
+            calls: AtomicUsize::new(0),
+            peak: AtomicUsize::new(0),
+        });
         let mut state = MemoryKeyedState::new(
             0,
             0,
@@ -55,6 +61,8 @@ fn paged_decode_reserves_payload_and_row_vectors_within_a_bounded_share() {
             .write_batch(paged_state::mutations(&entry).unwrap())
             .unwrap();
         let mut workspace = HostMemoryReservation::new(broker.clone(), "decoded join pages");
+        let baseline = broker.inner.reserved();
+        broker.peak.store(baseline, Ordering::Relaxed);
         let ((loaded, reads), observed) = crate::allocation_test_support::measure(|| {
             paged_state::load(&state, vec![entry.key.clone()], &mut workspace).unwrap()
         });
@@ -62,8 +70,12 @@ fn paged_decode_reserves_payload_and_row_vectors_within_a_bounded_share() {
         assert_eq!(loaded[0].value, entry.value);
         assert_eq!(loaded[0].original, entry.value);
         assert!(
-            observed.peak <= workspace.size(),
-            "width={width} {observed:?}"
+            observed.peak <= broker.peak.load(Ordering::Relaxed) - baseline,
+            "width={width} {observed:?}: transient transport must remain admitted"
+        );
+        assert!(
+            observed.live.max(0) as usize <= workspace.size(),
+            "width={width} {observed:?}: retained rows must remain admitted"
         );
         for (before, after) in loaded[0].original.left.iter().zip(&loaded[0].value.left) {
             assert!(Arc::ptr_eq(&before.row, &after.row));
@@ -71,7 +83,7 @@ fn paged_decode_reserves_payload_and_row_vectors_within_a_bounded_share() {
         drop(loaded);
         drop(workspace);
         drop(state);
-        assert_eq!(broker.reserved(), 0);
+        assert_eq!(broker.inner.reserved(), 0);
     }
 }
 

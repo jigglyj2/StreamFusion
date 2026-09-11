@@ -138,11 +138,7 @@ pub(super) fn workspace(entry: &StagedState) -> usize {
         }
         count += 1;
         if layout != Layout::Compact {
-            let retained_pages = entry.unloaded.as_ref().map_or(0, |u| {
-                u.ids
-                    .chunk_by(|a, b| a / PAGE_ROWS == b / PAGE_ROWS)
-                    .count()
-            });
+            let retained_pages = entry.unloaded.as_ref().map_or(0, |u| u.ids.bitmap_count());
             let bytes = 39
                 + 16 * (pages(&state.left).count() + pages(&state.right).count() + retained_pages);
             directory_bytes = directory_bytes.saturating_add(bytes.saturating_sub(512));

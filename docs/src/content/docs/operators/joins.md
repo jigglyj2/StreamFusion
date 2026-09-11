@@ -492,6 +492,15 @@ adopts the current layout atomically; canonical restore preserves existing bytes
 Restoring whole-key `SFRJ` v1/v2 snapshots migrates them to the current layout. A runtime predating
 `SFJI/1` cannot restore the new directories. Tests cover both-backend restore, sparse stable IDs,
 malformed bitmaps and payload identity mismatches, representation transitions and complete deletion.
+Runtime directory decoding keeps `SFJI/1` presence bitmaps compressed. Payload reads expand only
+the bounded chunk of IDs being requested, and accumulating input leaves its old-side payloads in
+the backend without expanding their identity vector. Mutation encoding copies retained bitmaps and
+merges new rows into the final partial bitmap directly. This changes no persisted bytes. A
+million-row directory regression covers sparse/dense identity iteration and allocation size; an
+actual 64,003-row RocksDB history accepts another row with 256 KiB of scratch, one directory read,
+and two writes. Opposite-side historical payloads are still retained for batch computation and can
+exceed the managed budget; the compressed directory does not resolve that separate limitation.
+
 A repeated-key mutation regression appends 256 one-KiB rows in separate batches and writes less
 than twice the new payload volume, then checks that changing an association count writes only
 that row. This is storage-byte evidence, not a throughput measurement. Singleton keys retain

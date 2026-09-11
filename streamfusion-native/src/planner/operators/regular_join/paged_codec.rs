@@ -4,6 +4,8 @@
 use super::*;
 
 mod compact;
+mod entry_ids;
+pub(super) use entry_ids::EntryIds;
 mod row_entries;
 pub(super) use row_entries::{
     encode as encode_rows_manifest, encode_with_unloaded as encode_rows_with_unloaded, row_key,
@@ -25,7 +27,7 @@ pub(super) struct Manifest {
     pub(super) layout: Layout,
     pub(super) next_row_id: [u64; 2],
     pub(super) matchable: [Option<bool>; 2],
-    pub(super) pages: [Vec<u64>; 2],
+    pub(super) pages: [EntryIds; 2],
     pub(super) inline: Option<[Vec<StoredRow>; 2]>,
 }
 
@@ -126,7 +128,7 @@ fn read_manifest(reader: &mut Reader<'_>) -> Result<Manifest> {
         layout: Layout::Pages,
         next_row_id,
         matchable,
-        pages,
+        pages: pages.map(EntryIds::explicit),
         inline: None,
     })
 }
@@ -308,7 +310,7 @@ pub(super) fn visit_manifest_entries(
     }
     let mut count = 0;
     for (side, pages) in manifest.pages.iter().enumerate() {
-        for &id in pages {
+        for id in pages.iter() {
             entry(side, id, manifest.next_row_id[side], manifest.layout)?;
             count += 1;
         }

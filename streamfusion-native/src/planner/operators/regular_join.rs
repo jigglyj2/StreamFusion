@@ -88,7 +88,7 @@ struct JoinState {
 
 struct UnloadedRows {
     side: usize,
-    ids: Vec<u64>,
+    ids: paged_codec::EntryIds,
 }
 
 struct StagedState {

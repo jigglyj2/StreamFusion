@@ -10,7 +10,7 @@ const READ_ROWS: usize = 4096;
 pub(super) fn load_entries(
     state: &dyn KeyedState,
     staged: &mut [StagedState],
-    requests: Vec<(usize, usize, Layout, Vec<u64>)>,
+    requests: Vec<(usize, usize, Layout, EntryIds)>,
     owner: &mut HostMemoryReservation,
 ) -> Result<u64> {
     let mut remaining = requests

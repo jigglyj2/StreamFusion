@@ -7,7 +7,7 @@ use arrow::array::{ArrayRef, Int64Array, Int8Array, ListArray, StringArray};
 use arrow::datatypes::Int32Type;
 use prost::Message;
 mod candidate_batch;
-mod coarse_memory;
+pub(super) mod coarse_memory;
 mod compact_state;
 mod input_memory;
 mod output_pressure;

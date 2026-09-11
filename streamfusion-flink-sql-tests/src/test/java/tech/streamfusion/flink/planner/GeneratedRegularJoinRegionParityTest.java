@@ -383,6 +383,19 @@ class GeneratedRegularJoinRegionParityTest {
             }
             events.add(new Event(batch % 2, rows));
         }
+        // Cross several presence-bitmap boundaries, append into a partial bitmap, then retract
+        // the same history. This exercises both lazy payload-ID iteration and compact reencoding.
+        for (int batch = 0; batch < 3; batch++) {
+            List<RowData> rows = new ArrayList<>();
+            for (int index = 0; index < 67; index++) {
+                GenericRowData row =
+                        GenericRowData.of(19L, StringData.fromString("hot-" + seed + "-" + batch + "-" + index));
+                row.setRowKind(index % 2 == 0 ? RowKind.INSERT : RowKind.UPDATE_AFTER);
+                rows.add(row);
+            }
+            events.add(new Event(0, rows));
+        }
+        events.add(new Event(1, List.of(GenericRowData.of(19L, StringData.fromString("probe")))));
         for (Event inserted : new ArrayList<>(events)) {
             List<RowData> rows = new ArrayList<>();
             for (RowData row : inserted.rows) {
