@@ -18,19 +18,19 @@ use super::window_table_function::timestamp_millis;
 use crate::memory_pool::HostMemoryReservation;
 use crate::planner::arrow_schema;
 use crate::state::{
-    KeyedState, MemoryKeyedState, NativeTimerService, RocksPluginKeyedState, StateKey, StateKeyRef,
-    StateMutation, TimerDomain, TimerKey,
+    KeyedState, NativeTimerService, OrderedMemoryKeyedState, RocksPluginKeyedState, StateKey,
+    StateKeyRef, StateMutation, TimerDomain, TimerKey,
 };
 use crate::{decode_plan, proto};
 
+mod legacy_state;
+mod row_state;
 mod sorting;
 
 const INSERT: i8 = 0;
 const UPDATE_BEFORE: i8 = 1;
 const UPDATE_AFTER: i8 = 2;
 const DELETE: i8 = 3;
-const STATE_MAGIC: &[u8; 4] = b"SFTS";
-const STATE_VERSION: u8 = 2;
 const ROWS_KEY_PREFIX: u8 = 7;
 const PROCESSING_TIME_ROWS_KEY: &[u8] = b"\x07processing-time-rows";
 const TIMER_STATE_KEY: &[u8] = b"\0streamfusion-temporal-sort-timers";
@@ -78,7 +78,7 @@ impl TemporalSortProcessor {
     ) -> Result<Self> {
         let timers = state_reservation.sibling("native temporal sort timers");
         let scratch = state_reservation.sibling("native temporal sort batch scratch and output");
-        let state = Box::new(MemoryKeyedState::new(
+        let state = Box::new(OrderedMemoryKeyedState::new(
             first_key_group,
             last_key_group,
             state_reservation,
@@ -291,38 +291,28 @@ impl TemporalSortProcessor {
         }
         let mut timestamps = groups.keys().copied().collect::<Vec<_>>();
         timestamps.sort_unstable();
-        let keys = timestamps
+        let incoming = timestamps
             .iter()
-            .map(|&timestamp| rows_state_key(self.key_group, timestamp))
-            .collect::<Vec<_>>();
-        let refs = keys
-            .iter()
-            .map(|key| StateKeyRef {
-                key_group: key.key_group,
-                key: &key.key,
+            .map(|&timestamp| {
+                (
+                    rows_state_key(self.key_group, timestamp),
+                    groups.remove(&timestamp).unwrap(),
+                )
             })
-            .collect::<Vec<_>>();
-        let existing = self.state.get_batch(&refs, &self.scratch_reservation)?;
-        let _loaded_state_workspace =
-            crate::state::reserve_decoded_values(&existing, &self.scratch_reservation)?;
+            .collect();
+        let mut pending =
+            row_state::append(self.state.as_ref(), incoming, &self.scratch_reservation)?;
         self.state_read_batches = self.state_read_batches.saturating_add(1);
         let domain = self.domain();
         let mut timer_dirty = false;
-        let mut mutations = Vec::with_capacity(keys.len() + 1);
-        for ((timestamp, key), existing) in timestamps.into_iter().zip(keys).zip(existing) {
-            let mut rows = existing
-                .map(|bytes| decode_rows(bytes.as_ref()))
-                .transpose()?
-                .unwrap_or_default();
-            let was_empty = rows.is_empty();
-            rows.append(groups.get_mut(&timestamp).expect("timestamp was grouped"));
-            if was_empty
+        for (timestamp, was_empty) in timestamps.into_iter().zip(&pending.was_empty) {
+            if *was_empty
                 && self.timers.register(
                     self.key_group,
                     domain,
                     TimerKey {
                         timestamp,
-                        key: key.key.clone(),
+                        key: rows_state_key(self.key_group, timestamp).key,
                         namespace: Vec::new(),
                     },
                 )?
@@ -330,15 +320,11 @@ impl TemporalSortProcessor {
                 self.timer_registrations = self.timer_registrations.saturating_add(1);
                 timer_dirty = true;
             }
-            mutations.push(StateMutation {
-                key,
-                value: Some(encode_rows(&rows)?),
-            });
         }
         if timer_dirty {
-            self.append_timer_mutation(&mut mutations)?;
+            self.append_timer_mutation(&mut pending.mutations)?;
         }
-        self.state.write_batch(mutations)?;
+        self.state.write_batch(pending.mutations)?;
         self.state_write_batches = self.state_write_batches.saturating_add(1);
         Ok(())
     }
@@ -351,30 +337,16 @@ impl TemporalSortProcessor {
         if incoming.is_empty() {
             return Ok(());
         }
-        // Flink's ProcTimeSortOperator stores every pending row in one ListState. The first due
-        // callback sorts and clears that complete list; later callbacks registered before that
-        // firing consequently observe an empty list. Keep the same state shape, including when a
-        // delayed mailbox callback lets more than one processing-time timestamp accumulate.
+        // Flink clears the entire pending list at the first due callback, even when a delayed
+        // mailbox has accumulated several processing-time timers. Keep that logical scope while
+        // storing each row independently so append cost does not grow with the pending list.
         let key = processing_time_rows_state_key(self.key_group);
-        let existing = self.state.get_batch(
-            &[StateKeyRef {
-                key_group: key.key_group,
-                key: &key.key,
-            }],
+        let mut pending = row_state::append(
+            self.state.as_ref(),
+            vec![(key.clone(), incoming)],
             &self.scratch_reservation,
         )?;
-        let _loaded_state_workspace =
-            crate::state::reserve_decoded_values(&existing, &self.scratch_reservation)?;
         self.state_read_batches = self.state_read_batches.saturating_add(1);
-        let mut rows = existing
-            .into_iter()
-            .next()
-            .flatten()
-            .map(|bytes| decode_rows(bytes.as_ref()))
-            .transpose()?
-            .unwrap_or_default();
-        rows.extend(incoming);
-
         let mut timer_dirty = false;
         for timestamp in timer_timestamps {
             if self.timers.register(
@@ -390,14 +362,10 @@ impl TemporalSortProcessor {
                 timer_dirty = true;
             }
         }
-        let mut mutations = vec![StateMutation {
-            key,
-            value: Some(encode_rows(&rows)?),
-        }];
         if timer_dirty {
-            self.append_timer_mutation(&mut mutations)?;
+            self.append_timer_mutation(&mut pending.mutations)?;
         }
-        self.state.write_batch(mutations)?;
+        self.state.write_batch(pending.mutations)?;
         self.state_write_batches = self.state_write_batches.saturating_add(1);
         Ok(())
     }
@@ -422,7 +390,8 @@ impl TemporalSortProcessor {
 
     fn advance(&mut self, domain: TimerDomain, progress: i64) -> Result<RecordBatch> {
         // A watermark can make many timestamp groups ready at once. Drain a bounded group of them
-        // with one backend multi-get/write and one Arrow C Data export, preserving timer order.
+        // with bounded backend range reads, one mutation batch and one Arrow C Data export,
+        // preserving timer order.
         // One timer per callback degenerates into thousands of JNI calls, while an unbounded drain
         // can exceed the task's output-memory slice. Processing time deliberately retains Flink's
         // one shared ListState callback semantics.
@@ -452,31 +421,10 @@ impl TemporalSortProcessor {
                 keys.push(key);
             }
         }
-        let refs = keys
-            .iter()
-            .map(|key| StateKeyRef {
-                key_group: key.key_group,
-                key: &key.key,
-            })
-            .collect::<Vec<_>>();
-        let state = self.state.get_batch(&refs, &self.scratch_reservation)?;
-        let _loaded_state_workspace =
-            crate::state::reserve_decoded_values(&state, &self.scratch_reservation)?;
+        let loaded = row_state::load(self.state.as_ref(), &keys, &self.scratch_reservation)?;
         self.state_read_batches = self.state_read_batches.saturating_add(1);
-        let mut row_groups = Vec::with_capacity(keys.len());
-        for value in state {
-            let rows = value
-                .map(|bytes| decode_rows(bytes.as_ref()))
-                .transpose()?
-                .unwrap_or_default();
-            if !rows.is_empty() {
-                row_groups.push(rows);
-            }
-        }
-        let mut mutations = keys
-            .into_iter()
-            .map(|key| StateMutation { key, value: None })
-            .collect::<Vec<_>>();
+        let row_groups = loaded.groups;
+        let mut mutations = loaded.mutations;
         if domain == TimerDomain::EventTime && !row_groups.is_empty() {
             self.last_triggering_timestamp = last_event_timestamp;
             mutations.push(StateMutation {
@@ -775,94 +723,6 @@ fn processing_time_rows_state_key(key_group: u32) -> StateKey {
     }
 }
 
-fn encode_rows(rows: &[BufferedRow]) -> Result<Vec<u8>> {
-    let count = u32::try_from(rows.len()).map_err(|_| {
-        DataFusionError::Execution("temporal sort timestamp group is too large".to_string())
-    })?;
-    let capacity = rows.iter().try_fold(9usize, |capacity, row| {
-        capacity
-            .checked_add(1 + 4 + row.sort_key.len() + 4 + row.row.len())
-            .ok_or_else(|| {
-                DataFusionError::Execution(
-                    "temporal sort encoded timestamp group is too large".to_string(),
-                )
-            })
-    })?;
-    let mut output = Vec::with_capacity(capacity);
-    output.extend_from_slice(STATE_MAGIC);
-    output.push(STATE_VERSION);
-    output.extend_from_slice(&count.to_le_bytes());
-    for row in rows {
-        output.push(row.kind as u8);
-        let sort_key_length = u32::try_from(row.sort_key.len()).map_err(|_| {
-            DataFusionError::Execution("temporal sort key is too large".to_string())
-        })?;
-        output.extend_from_slice(&sort_key_length.to_le_bytes());
-        output.extend_from_slice(&row.sort_key);
-        let length = u32::try_from(row.row.len()).map_err(|_| {
-            DataFusionError::Execution("temporal sort row is too large".to_string())
-        })?;
-        output.extend_from_slice(&length.to_le_bytes());
-        output.extend_from_slice(&row.row);
-    }
-    Ok(output)
-}
-
-fn decode_rows(bytes: &[u8]) -> Result<Vec<BufferedRow>> {
-    if bytes.len() < 9 || &bytes[..4] != STATE_MAGIC || bytes[4] != STATE_VERSION {
-        return Err(DataFusionError::Execution(
-            "invalid temporal sort row state".to_string(),
-        ));
-    }
-    let mut offset = 5;
-    let count = read_u32(bytes, &mut offset)? as usize;
-    let mut rows = Vec::with_capacity(count);
-    for _ in 0..count {
-        let kind = *bytes.get(offset).ok_or_else(|| {
-            DataFusionError::Execution("truncated temporal sort RowKind".to_string())
-        })? as i8;
-        offset += 1;
-        let sort_key_length = read_u32(bytes, &mut offset)? as usize;
-        let sort_key_end = offset.checked_add(sort_key_length).ok_or_else(|| {
-            DataFusionError::Execution("temporal sort key length overflow".to_string())
-        })?;
-        let sort_key = bytes
-            .get(offset..sort_key_end)
-            .ok_or_else(|| DataFusionError::Execution("truncated temporal sort key".to_string()))?;
-        offset = sort_key_end;
-        let length = read_u32(bytes, &mut offset)? as usize;
-        let end = offset.checked_add(length).ok_or_else(|| {
-            DataFusionError::Execution("temporal sort row length overflow".to_string())
-        })?;
-        let row = bytes
-            .get(offset..end)
-            .ok_or_else(|| DataFusionError::Execution("truncated temporal sort row".to_string()))?;
-        rows.push(BufferedRow {
-            kind,
-            sort_key: sort_key.to_vec(),
-            row: row.to_vec(),
-        });
-        offset = end;
-    }
-    if offset != bytes.len() {
-        return Err(DataFusionError::Execution(
-            "temporal sort state has trailing bytes".to_string(),
-        ));
-    }
-    Ok(rows)
-}
-
-fn read_u32(bytes: &[u8], offset: &mut usize) -> Result<u32> {
-    let end = offset.checked_add(4).ok_or_else(|| {
-        DataFusionError::Execution("temporal sort state offset overflow".to_string())
-    })?;
-    let value = bytes
-        .get(*offset..end)
-        .ok_or_else(|| DataFusionError::Execution("truncated temporal sort state".to_string()))?;
-    *offset = end;
-    Ok(u32::from_le_bytes(value.try_into().unwrap()))
-}
-
 fn metadata_index(schema: &SchemaRef, name: &str) -> Option<usize> {
     schema
         .fields()
@@ -871,273 +731,7 @@ fn metadata_index(schema: &SchemaRef, name: &str) -> Option<usize> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::memory_pool::{tests_support::TestBroker, HostMemoryReservation};
-    use arrow::array::{ArrayRef, Int32Array, StringArray, TimestampMillisecondArray};
-    use prost::Message;
+mod tests;
 
-    #[test]
-    fn row_state_round_trips_every_changelog_kind() {
-        let rows = vec![
-            BufferedRow {
-                kind: INSERT,
-                sort_key: b"sort-insert".to_vec(),
-                row: b"insert".to_vec(),
-            },
-            BufferedRow {
-                kind: UPDATE_BEFORE,
-                sort_key: b"sort-before".to_vec(),
-                row: b"before".to_vec(),
-            },
-            BufferedRow {
-                kind: UPDATE_AFTER,
-                sort_key: b"sort-after".to_vec(),
-                row: b"after".to_vec(),
-            },
-            BufferedRow {
-                kind: DELETE,
-                sort_key: b"sort-delete".to_vec(),
-                row: b"delete".to_vec(),
-            },
-        ];
-        assert_eq!(decode_rows(&encode_rows(&rows).unwrap()).unwrap(), rows);
-    }
-
-    #[test]
-    fn event_time_sorts_secondary_fields_stably_and_drops_already_fired_rows() {
-        let broker = Arc::new(TestBroker::new(64 << 20));
-        let mut processor = processor(false, broker.clone());
-        processor
-            .process_arrow(batch(
-                &[1_000, 1_000, 2_000],
-                &[2, 1, 9],
-                &["second", "first", "later"],
-                &[UPDATE_AFTER, DELETE, INSERT],
-                None,
-            ))
-            .unwrap();
-        let output = processor.advance_event_time(1_000).unwrap();
-
-        assert_eq!(
-            output
-                .column(1)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
-                .values(),
-            &[1, 2]
-        );
-        assert_eq!(
-            output
-                .column(3)
-                .as_any()
-                .downcast_ref::<Int8Array>()
-                .unwrap()
-                .values(),
-            &[DELETE, UPDATE_AFTER]
-        );
-        processor
-            .process_arrow(batch(&[1_000], &[0], &["late"], &[INSERT], None))
-            .unwrap();
-        assert_eq!(processor.statistics()[7], 1);
-        assert_eq!(processor.next_event_time_timer(), 2_000);
-        drop(output);
-        drop(processor);
-        assert_eq!(broker.reserved(), 0);
-    }
-
-    #[test]
-    fn event_time_coalesces_all_due_timestamp_groups_in_timer_order() {
-        let broker = Arc::new(TestBroker::new(64 << 20));
-        let mut processor = processor(false, broker.clone());
-        processor
-            .process_arrow(batch(
-                &[3_000, 1_000, 2_000, 1_000],
-                &[1, 2, 4, 1],
-                &["last", "second", "middle", "first"],
-                &[INSERT, INSERT, INSERT, INSERT],
-                None,
-            ))
-            .unwrap();
-
-        let output = processor.advance_event_time(3_000).unwrap();
-        assert_eq!(output.num_rows(), 4);
-        assert_eq!(
-            output
-                .column(1)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
-                .values(),
-            &[1, 2, 4, 1]
-        );
-        assert_eq!(processor.statistics()[4], 3);
-        assert_eq!(processor.statistics()[5], 0);
-        drop(output);
-        drop(processor);
-        assert_eq!(broker.reserved(), 0);
-    }
-
-    #[test]
-    fn processing_time_and_timer_state_restore_from_canonical_key_group_bytes() {
-        let source_broker = Arc::new(TestBroker::new(64 << 20));
-        let mut source = processor(true, source_broker);
-        source
-            .process_arrow(batch(
-                &[0, 0, 0],
-                &[3, 1, 2],
-                &["third", "first", "second"],
-                &[INSERT, UPDATE_BEFORE, UPDATE_AFTER],
-                Some(&[40, 40, 40]),
-            ))
-            .unwrap();
-        let snapshot = source.snapshot_key_group(0).unwrap();
-
-        let target_broker = Arc::new(TestBroker::new(64 << 20));
-        let mut target = processor(true, target_broker.clone());
-        target.restore_key_group(0, &snapshot).unwrap();
-        assert_eq!(target.next_processing_time_timer(), 41);
-        let output = target.advance_processing_time(41).unwrap();
-        assert_eq!(
-            output
-                .column(1)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
-                .values(),
-            &[1, 2, 3]
-        );
-        assert_eq!(target.statistics()[6], 0);
-        drop(output);
-        drop(target);
-        assert_eq!(target_broker.reserved(), 0);
-    }
-
-    #[test]
-    fn first_processing_time_callback_sorts_and_clears_the_complete_flink_list_state() {
-        let broker = Arc::new(TestBroker::new(64 << 20));
-        let mut processor = processor(true, broker.clone());
-        processor
-            .process_arrow(batch(
-                &[0, 0, 0],
-                &[3, 1, 2],
-                &["third", "first", "second"],
-                &[INSERT, INSERT, INSERT],
-                Some(&[42, 40, 42]),
-            ))
-            .unwrap();
-
-        let output = processor.advance_processing_time(41).unwrap();
-        assert_eq!(
-            output
-                .column(1)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
-                .values(),
-            &[1, 2, 3]
-        );
-        assert_eq!(processor.next_processing_time_timer(), 43);
-        assert_eq!(processor.advance_processing_time(43).unwrap().num_rows(), 0);
-        drop(output);
-        drop(processor);
-        assert_eq!(broker.reserved(), 0);
-    }
-
-    fn processor(processing_time: bool, broker: Arc<TestBroker>) -> TemporalSortProcessor {
-        TemporalSortProcessor::new(
-            &plan(processing_time),
-            1,
-            0,
-            0,
-            HostMemoryReservation::new(broker, "temporal sort test"),
-        )
-        .unwrap()
-    }
-
-    fn plan(processing_time: bool) -> Vec<u8> {
-        proto::NativePlan {
-            protocol_version: crate::PLAN_PROTOCOL_VERSION,
-            root: Some(proto::Operator {
-                plan_node_id: 0,
-                metric_name: String::new(),
-                clear_record_timestamps: false,
-                metric_uid: None,
-                operator: Some(proto::operator::Operator::TemporalSort(Box::new(
-                    proto::TemporalSort {
-                        input: None,
-                        input_schema: Some(proto::Schema {
-                            fields: vec![
-                                proto_field(
-                                    "rowtime",
-                                    proto::logical_type::Type::Timestamp(proto::PrecisionType {
-                                        precision: 3,
-                                    }),
-                                ),
-                                proto_field(
-                                    "number",
-                                    proto::logical_type::Type::Integer(proto::EmptyType::default()),
-                                ),
-                                proto_field(
-                                    "payload",
-                                    proto::logical_type::Type::Varchar(proto::EmptyType::default()),
-                                ),
-                            ],
-                        }),
-                        time_index: 0,
-                        processing_time,
-                        secondary_key_indices: vec![1],
-                        secondary_ascending: vec![true],
-                        secondary_nulls_last: vec![true],
-                    },
-                ))),
-            }),
-        }
-        .encode_to_vec()
-    }
-
-    fn proto_field(name: &str, r#type: proto::logical_type::Type) -> proto::Field {
-        proto::Field {
-            name: name.to_string(),
-            r#type: Some(proto::LogicalType {
-                nullable: false,
-                r#type: Some(r#type),
-            }),
-        }
-    }
-
-    fn batch(
-        timestamps: &[i64],
-        values: &[i32],
-        payloads: &[&str],
-        kinds: &[i8],
-        processing_times: Option<&[i64]>,
-    ) -> RecordBatch {
-        let mut columns = vec![
-            (
-                "rowtime",
-                Arc::new(TimestampMillisecondArray::from(timestamps.to_vec())) as ArrayRef,
-            ),
-            (
-                "number",
-                Arc::new(Int32Array::from(values.to_vec())) as ArrayRef,
-            ),
-            (
-                "payload",
-                Arc::new(StringArray::from(payloads.to_vec())) as ArrayRef,
-            ),
-            (
-                INPUT_KIND_COLUMN,
-                Arc::new(Int8Array::from(kinds.to_vec())) as ArrayRef,
-            ),
-        ];
-        if let Some(processing_times) = processing_times {
-            columns.push((
-                PROCESSING_TIME_COLUMN,
-                Arc::new(Int64Array::from(processing_times.to_vec())) as ArrayRef,
-            ));
-        }
-        RecordBatch::try_from_iter(columns).unwrap()
-    }
-}
+#[cfg(test)]
+mod row_state_tests;

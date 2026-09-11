@@ -77,7 +77,7 @@ import tech.streamfusion.flink.deduplicate.ArrowBatchKeySelector;
 import tech.streamfusion.flink.state.StreamFusionStateBackend;
 
 class StreamFusionArrowTemporalSortOperatorTest {
-    private static final RowType ROW_TYPE = RowType.of(
+    static final RowType ROW_TYPE = RowType.of(
             new LogicalType[] {
                 new TimestampType(false, TimestampKind.ROWTIME, 3),
                 new IntType(false),
@@ -122,7 +122,13 @@ class StreamFusionArrowTemporalSortOperatorTest {
                 "row_value",
                 "null_value"
             });
-    private static final SortSpec SORT_SPEC =
+    // Flink's serializer requires a concrete logical type even for an always-null field.
+    // Keep the native NULL vector coverage and compare its null bit through nullable INT.
+    static final RowType PARITY_ROW_TYPE = new RowType(ROW_TYPE.getFields().stream()
+            .map(field -> new RowType.RowField(
+                    field.getName(), field.getType() instanceof NullType ? new IntType() : field.getType()))
+            .collect(java.util.stream.Collectors.toList()));
+    static final SortSpec SORT_SPEC =
             SortSpec.builder().addField(0, true, true).addField(1, true, true).build();
 
     @Test
@@ -327,7 +333,7 @@ class StreamFusionArrowTemporalSortOperatorTest {
                 .getJobManagerOwnedState();
     }
 
-    private static Harness harness(boolean processingTime, OperatorSubtaskState state, boolean rocks) throws Exception {
+    static Harness harness(boolean processingTime, OperatorSubtaskState state, boolean rocks) throws Exception {
         byte[] plan = StreamFusionTemporalSortPlan.create(ROW_TYPE, SORT_SPEC, processingTime);
         StreamFusionArrowTemporalSortOperator operator =
                 new StreamFusionArrowTemporalSortOperator(ROW_TYPE, processingTime, plan);
@@ -342,7 +348,7 @@ class StreamFusionArrowTemporalSortOperatorTest {
         return harness;
     }
 
-    private static void process(
+    static void process(
             KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> harness,
             RootAllocator allocator,
             GenericRowData... rows)
@@ -355,7 +361,7 @@ class StreamFusionArrowTemporalSortOperatorTest {
         }
     }
 
-    private static GenericRowData row(long timestamp, int number, String payload, RowKind kind) {
+    static GenericRowData row(long timestamp, int number, String payload, RowKind kind) {
         Map<StringData, Integer> map = new LinkedHashMap<>();
         map.put(StringData.fromString("one"), number);
         GenericRowData row = GenericRowData.of(
@@ -389,9 +395,11 @@ class StreamFusionArrowTemporalSortOperatorTest {
         CANONICAL
     }
 
-    private static final class Harness
+    static final class Harness
             extends KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> {
         private final List<String> captured = new ArrayList<>();
+        final org.apache.flink.core.memory.DataOutputSerializer bytes =
+                new org.apache.flink.core.memory.DataOutputSerializer(1024);
 
         private Harness(StreamFusionArrowTemporalSortOperator operator) throws Exception {
             super(
@@ -401,7 +409,7 @@ class StreamFusionArrowTemporalSortOperatorTest {
                     1,
                     1,
                     0);
-            setOutputCreator(ignored -> new CapturingOutput(captured));
+            setOutputCreator(ignored -> new CapturingOutput(captured, bytes));
         }
 
         private List<String> take() {
@@ -414,9 +422,15 @@ class StreamFusionArrowTemporalSortOperatorTest {
     /** Captures borrowed Arrow output synchronously before its producer-owned release callback. */
     private static final class CapturingOutput implements Output<StreamRecord<ArrowRowDataBatch>> {
         private final List<String> captured;
+        private final org.apache.flink.core.memory.DataOutputSerializer bytes;
 
         private CapturingOutput(List<String> captured) {
+            this(captured, new org.apache.flink.core.memory.DataOutputSerializer(1024));
+        }
+
+        private CapturingOutput(List<String> captured, org.apache.flink.core.memory.DataOutputSerializer bytes) {
             this.captured = captured;
+            this.bytes = bytes;
         }
 
         @Override
@@ -424,6 +438,13 @@ class StreamFusionArrowTemporalSortOperatorTest {
             ArrowRowDataBatch batch = record.getValue();
             for (int index = 0; index < batch.size(); index++) {
                 RowData row = batch.rowView(index);
+                row.setRowKind(batch.rowKind(index));
+                try {
+                    new org.apache.flink.table.runtime.typeutils.RowDataSerializer(PARITY_ROW_TYPE)
+                            .serialize(row, bytes);
+                } catch (java.io.IOException error) {
+                    throw new java.io.UncheckedIOException(error);
+                }
                 captured.add(batch.rowKind(index).shortString() + ":" + row.getInt(1) + ":" + row.getString(2));
             }
         }

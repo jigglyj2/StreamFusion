@@ -15,6 +15,19 @@ impl RocksPluginKeyedState {
         owner: &HostMemoryReservation,
         visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<()>,
     ) -> Result<()> {
+        self.visit_range_admitted(group, &[], None, max_rows, target_bytes, owner, visitor)
+    }
+
+    pub(crate) fn visit_range_admitted(
+        &self,
+        group: u32,
+        start: &[u8],
+        end: Option<&[u8]>,
+        max_rows: usize,
+        target_bytes: usize,
+        owner: &HostMemoryReservation,
+        visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<()>,
+    ) -> Result<()> {
         let rows = u32::try_from(max_rows).map_err(|_| {
             DataFusionError::Execution("state scan row limit exceeds UInt32".into())
         })?;
@@ -25,6 +38,12 @@ impl RocksPluginKeyedState {
             let mut page_memory = owner.sibling("RocksDB restore scan page");
             page_memory.resize(
                 4096usize
+                    .saturating_add(
+                        start
+                            .len()
+                            .saturating_add(end.map_or(0, |end| end.len()))
+                            .saturating_mul(3),
+                    )
                     .saturating_add(after.as_ref().map_or(0, |key| key.len().saturating_mul(3))),
             )?;
             let input = scan_input(
@@ -33,8 +52,8 @@ impl RocksPluginKeyedState {
                 after.as_deref(),
                 rows,
                 target_bytes,
-                &[],
-                None,
+                start,
+                end,
             )?;
             let page =
                 self.invoke_admitted(self.api.scan_key_group_admitted, input, &mut page_memory)?;

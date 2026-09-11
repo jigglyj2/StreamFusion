@@ -102,6 +102,29 @@ impl KeyedState for Observed {
             })
     }
 
+    fn visit_prefix_admitted(
+        &self,
+        group: u32,
+        prefix: &[u8],
+        rows: usize,
+        bytes: usize,
+        owner: &HostMemoryReservation,
+        f: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<()>,
+    ) -> Result<()> {
+        self.io.range_reads.fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .visit_prefix_admitted(group, prefix, rows, bytes, owner, &mut |page| {
+                self.io
+                    .scanned_rows
+                    .fetch_add(page.len(), Ordering::Relaxed);
+                self.io.read_bytes.fetch_add(
+                    page.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>(),
+                    Ordering::Relaxed,
+                );
+                f(page)
+            })
+    }
+
     fn visit_range(
         &self,
         group: u32,

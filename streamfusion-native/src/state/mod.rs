@@ -109,6 +109,26 @@ pub(crate) trait KeyedState: Send {
         })
     }
 
+    /// Borrow a prefix in bounded pages while admitting external payload allocations. A single
+    /// large entry may exceed the normal page target when its actual size can be admitted.
+    fn visit_prefix_admitted(
+        &self,
+        group: u32,
+        prefix: &[u8],
+        rows: usize,
+        bytes: usize,
+        owner: &crate::memory_pool::HostMemoryReservation,
+        visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<()>,
+    ) -> Result<()> {
+        let mut memory = owner.sibling("state prefix page");
+        memory.resize(
+            bytes
+                .saturating_add(rows.saturating_mul(32))
+                .saturating_add(4096),
+        )?;
+        self.visit_prefix(group, prefix, rows, bytes, visitor)
+    }
+
     /// Visits [start, end) in bytewise key order. Pages are bounded by both limits;
     /// returning false stops without visiting another page. The caller reserves the page
     /// budget and retained results before reading, and holds state stable during visitation.

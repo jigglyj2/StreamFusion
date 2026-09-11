@@ -161,6 +161,21 @@ impl KeyedState for OrderedMemoryKeyedState {
         })
     }
 
+    fn visit_prefix_admitted(
+        &self,
+        group: u32,
+        prefix: &[u8],
+        rows: usize,
+        _bytes: usize,
+        owner: &HostMemoryReservation,
+        visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<()>,
+    ) -> Result<()> {
+        let mut descriptors = owner.sibling("ordered state borrowed page");
+        descriptors.resize(rows.saturating_mul(32))?;
+        // Payloads already belong to the retained state reservation; the visitor admits any copies.
+        self.visit_prefix(group, prefix, rows, usize::MAX, visitor)
+    }
+
     fn visit_range(
         &self,
         group: u32,

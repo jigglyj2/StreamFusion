@@ -66,8 +66,9 @@ input RowKind, Flink 2.3 only constructs this physical node for insert-only inpu
 Rows and timers use the selected native memory or direct RocksDB backend. Aligned and unaligned
 checkpoints preserve pending timestamp groups; canonical savepoints move them between both
 backends, and RocksDB checkpoints reuse unchanged SSTs. Event-time rows at or behind the last fired
-timestamp are dropped exactly where Flink drops them. Processing-time rows are grouped by Flink's
-millisecond timer boundary.
+timestamp are dropped exactly where Flink drops them. Processing-time timers use Flink's
+millisecond boundary. The first due callback sorts and clears all pending processing-time rows,
+including rows collected for later timers while the mailbox callback was delayed.
 
 The operator keeps Flink's logical-record I/O counters and task timing/rate metrics. Its
 `StreamFusion` subgroup additionally reports processed batches and rows, output RowKinds, state
@@ -108,7 +109,21 @@ physical RowKinds and cutoff ties. Both make one backend batch read and one atom
 incoming Arrow batch; direct RocksDB state never crosses JNI.
 
 Temporal sort has its own versioned protobuf node, persistent native processor, raw keyed state,
-and timer service. It stores the secondary keys
+and timer service. Its version 3 row state stores a small arrival counter per timestamp group
+(or one shared processing-time group) and a separate entry for each row. Appending an Arrow batch
+reads those counters once and writes only new row entries and changed counters; it does not load
+or rewrite the historical payload. Both backends expose the same ordered prefix access. Keys frame
+the group prefix, Arrow secondary ordering key, and stable arrival ordinal; values contain the
+RowKind and encoded payload. Timer firing reads admitted pages of up to 1,024 entries with a
+256 KiB normal byte target. A larger individual row is admitted separately. Version 2 list state
+remains readable and migrates when its group next receives rows; that legacy conversion still
+requires memory for the old list. Canonical snapshots preserve either layout across backends.
+
+The complete fired row set and DataFusion output workspace are still materialized under the memory
+budget, and timer persistence still rewrites the timer snapshot when it changes. Those are remaining
+scalability limits of this gated implementation; these storage changes do not enable SQL admission.
+
+Temporal sort stores the secondary keys
 in Arrow's order-preserving row encoding with the planned direction and null placement, so firing a
 timer delegates ordering to DataFusion's batch sort over group IDs, encoded keys, and arrival
 ordinals, followed by one final Arrow decode. Explicit arrival ordinals retain Flink's stable tie
@@ -140,8 +155,9 @@ native-allocation JFRs, collapsed stacks, flame graphs, steady-state views, and 
 graphs are retained under
 `streamfusion-nexmark-benchmarks/target/profiles/temporal-sort/1e1e98d/`. Profiling exposed repeated
 growth of the canonical state buffer; exact checked pre-sizing removed that reallocation stack.
-The remaining encoding allocation is the one durable opaque state value, and its native allocation
-share fell from 8.0% to 2.9%. Profiler timings are excluded from the throughput results above.
+In that historical implementation, the remaining encoding allocation was one durable opaque
+state value, and its native allocation share fell from 8.0% to 2.9%. The version 3 row-entry layout
+described above has not been rebenchmarked. Profiler timings are excluded from the throughput results above.
 
 The September 4, 2026 bounded-full-sort release/native-CPU run used the Kafka-free NEXMark RowData
 boundary, 250,000 events, parallelism four upstream of Flink's required singleton exchange, and

@@ -325,6 +325,19 @@ impl KeyedState for RocksPluginKeyedState {
         self.scan_range(key_group, start, end, max_rows, max_bytes, visitor)
     }
 
+    fn visit_prefix_admitted(
+        &self,
+        group: u32,
+        prefix: &[u8],
+        rows: usize,
+        bytes: usize,
+        owner: &HostMemoryReservation,
+        visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<()>,
+    ) -> Result<()> {
+        let end = super::prefix_end(prefix);
+        self.visit_range_admitted(group, prefix, end.as_deref(), rows, bytes, owner, visitor)
+    }
+
     fn snapshot_key_group(
         &self,
         key_group: u32,
