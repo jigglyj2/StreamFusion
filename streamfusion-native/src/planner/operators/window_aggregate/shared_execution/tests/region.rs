@@ -62,7 +62,7 @@ fn region_context(
     let memory = HostMemoryReservation::new(broker, "shared window DAG");
     let mut context = NativeExecutionContext::new_region(
         &region_plan().encode_to_vec(),
-        memory.datafusion_pool(256 << 20),
+        memory.datafusion_pool().unwrap(),
     )
     .unwrap();
     context

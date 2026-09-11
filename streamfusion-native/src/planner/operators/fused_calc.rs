@@ -45,14 +45,11 @@ impl FusedCalcPipeline {
                 "a fused Calc pipeline must contain at least one stage".to_string(),
             ));
         }
-        let memory_limit = control_reservation
-            .available_capacity()?
-            .unwrap_or(usize::MAX);
         control_reservation.try_grow(
             PIPELINE_CONTROL_BYTES
                 .saturating_add(stages.len().saturating_mul(CALC_STAGE_CONTROL_BYTES)),
         )?;
-        let memory_pool = control_reservation.datafusion_pool(memory_limit);
+        let memory_pool = control_reservation.datafusion_pool()?;
         let runtime_env = RuntimeEnvBuilder::new()
             .with_memory_pool(memory_pool)
             .build()

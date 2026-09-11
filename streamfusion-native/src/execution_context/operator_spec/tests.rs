@@ -236,7 +236,7 @@ fn installing_more_state_owners_has_linear_retained_configuration_cost() {
         let broker = Arc::new(TestBroker::new(64 << 20));
         let memory = HostMemoryReservation::new(broker.clone(), "state copy scaling");
         let mut context =
-            NativeExecutionContext::new(&bytes, memory.datafusion_pool(64 << 20)).unwrap();
+            NativeExecutionContext::new(&bytes, memory.datafusion_pool().unwrap()).unwrap();
         let before = broker.reserved();
         let (_, observed) = measure(|| context.install_state(&options, memory).unwrap());
         let additional = broker.reserved() - before;

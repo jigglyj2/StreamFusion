@@ -88,7 +88,7 @@ fn create(
             inputs: vec![reference(4)],
         });
         plan.output_stage_ids = vec![3, 5];
-        NativeExecutionContext::new_region(&plan.encode_to_vec(), memory.datafusion_pool(256 << 20))
+        NativeExecutionContext::new_region(&plan.encode_to_vec(), memory.datafusion_pool().unwrap())
             .unwrap()
     } else {
         let mut root = local();
@@ -104,7 +104,7 @@ fn create(
                 root: Some(root),
             }
             .encode_to_vec(),
-            memory.datafusion_pool(256 << 20),
+            memory.datafusion_pool().unwrap(),
         )
         .unwrap()
     };

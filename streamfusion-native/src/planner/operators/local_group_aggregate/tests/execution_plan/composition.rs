@@ -57,7 +57,7 @@ fn non_keyed_and_keyed_factories_share_tree_controls_metrics_and_recovery() {
         let (broker, memory) = memory();
         let mut context = NativeExecutionContext::new(
             &composed_plan().encode_to_vec(),
-            memory.datafusion_pool(256 << 20),
+            memory.datafusion_pool().unwrap(),
         )
         .unwrap();
         let bindings = proto::NativeStateBindings {

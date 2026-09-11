@@ -87,6 +87,14 @@ combine memory across slots or jobs, or borrow from the STATE_BACKEND/PYTHON por
 Existing Flink allocations remain charged in the underlying MemoryManager. The pool reserves
 actual growing buffers/state on demand, rather than preallocating the full allowance.
 
+DataFusion sub-pools created by native joins, deduplication, sorting and fused expressions inherit
+that assigned host ceiling. They do not freeze the currently free byte count as a private limit:
+capacity released by another consumer remains usable. The host assignment is read once during
+pool construction, without adding an availability query to each reservation. Local pool usage
+remains distinct from aggregate host usage, and every growth still requires host admission.
+A host that cannot report its ceiling is represented as an unknown DataFusion limit, with its
+reservation callback still enforcing the real budget; setup errors are propagated.
+
 Pool ownership uses Flink's shared-resource lifecycle. Closing an operator rejects new work
 but retains its pool lease while Arrow or native buffers still own reservations. The last
 release returns the credit; only the last lease destroys the empty pool. Native-to-Arrow

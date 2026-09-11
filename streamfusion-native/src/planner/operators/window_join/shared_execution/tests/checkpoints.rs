@@ -74,7 +74,7 @@ fn shared_restore_rejects_changed_contract_and_restored_clock_bindings() {
     let broker = Arc::new(TestBroker::new(256 << 20));
     let memory = HostMemoryReservation::new(broker, "invalid window join clock");
     let mut target =
-        NativeExecutionContext::new(&plan().encode_to_vec(), memory.datafusion_pool(256 << 20))
+        NativeExecutionContext::new(&plan().encode_to_vec(), memory.datafusion_pool().unwrap())
             .unwrap();
     assert!(target
         .install_state(&resources(None, Some(99), 0, 127).encode_to_vec(), memory)

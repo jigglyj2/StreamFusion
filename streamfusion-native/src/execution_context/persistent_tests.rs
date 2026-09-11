@@ -112,7 +112,7 @@ fn shared_context_composes_multiple_state_owners_without_operator_pair_rules() {
         ))
     });
     let mut context =
-        NativeExecutionContext::new(&serialized(root), memory.datafusion_pool(32 << 20)).unwrap();
+        NativeExecutionContext::new(&serialized(root), memory.datafusion_pool().unwrap()).unwrap();
     context
         .bind_persistent(vec![
             (2, Arc::new(DeduplicateFactory(processors[0].clone()))),
@@ -178,7 +178,7 @@ fn persistent_setup_failure_can_retry_but_lazy_stream_error_or_cancel_requires_r
             DeduplicateProcessor::new(&plan, 128, 0, 127, memory.sibling("state")).unwrap(),
         ));
         let mut context =
-            NativeExecutionContext::new(&plan, memory.datafusion_pool(32 << 20)).unwrap();
+            NativeExecutionContext::new(&plan, memory.datafusion_pool().unwrap()).unwrap();
         context
             .bind_persistent(vec![(2, Arc::new(DeduplicateFactory(processor.clone())))])
             .unwrap();

@@ -127,7 +127,7 @@ impl SpillableSort {
         let mut control = owner.sibling("bounded sort DataFusion runtime and plan");
         control.resize(32 << 10)?;
         let runtime_env = RuntimeEnvBuilder::new()
-            .with_memory_pool(owner.datafusion_pool(capacity))
+            .with_memory_pool(owner.datafusion_pool()?)
             .with_disk_manager_builder(crate::spill::disk_manager(vec![directory.to_path_buf()])?)
             .with_max_spill_merge_fan_in(8)
             .build_arc()?;

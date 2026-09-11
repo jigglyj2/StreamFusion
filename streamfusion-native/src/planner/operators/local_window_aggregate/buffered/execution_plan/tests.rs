@@ -56,7 +56,7 @@ fn context() -> (Arc<NativeExecutionContext>, Arc<TestBroker>, SchemaRef) {
         root: Some(calc(4, local, 4)),
     };
     let mut context =
-        NativeExecutionContext::new(&plan.encode_to_vec(), memory.datafusion_pool(256 << 20))
+        NativeExecutionContext::new(&plan.encode_to_vec(), memory.datafusion_pool().unwrap())
             .unwrap();
     context
         .install_task_resources(
@@ -300,7 +300,7 @@ fn resource_binding_rejects_invalid_requests_transactionally() {
         let broker = Arc::new(TestBroker::new(256 << 20));
         let memory = HostMemoryReservation::new(broker.clone(), "resource validation");
         let mut context =
-            NativeExecutionContext::new(&wire, memory.datafusion_pool(256 << 20)).unwrap();
+            NativeExecutionContext::new(&wire, memory.datafusion_pool().unwrap()).unwrap();
         let baseline = broker.reserved();
         let mut invalid = resources(3);
         match case {

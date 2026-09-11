@@ -11,7 +11,7 @@ use futures::StreamExt;
 
 pub(super) fn context(owner: &HostMemoryReservation, rows: usize) -> Arc<TaskContext> {
     let runtime = RuntimeEnvBuilder::new()
-        .with_memory_pool(owner.datafusion_pool(512 << 20))
+        .with_memory_pool(owner.datafusion_pool().unwrap())
         .build_arc()
         .unwrap();
     SessionContext::new_with_config_rt(SessionConfig::new().with_batch_size(rows), runtime)

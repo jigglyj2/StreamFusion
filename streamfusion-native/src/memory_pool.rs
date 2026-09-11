@@ -20,6 +20,9 @@ pub(crate) mod c_data;
 pub(crate) mod c_stream;
 pub(crate) mod selection;
 
+#[cfg(test)]
+mod shared_tests;
+
 pub(crate) trait MemoryReservationBroker: Debug + Send + Sync {
     fn rocks_scope(&self) -> Result<[u64; 2]> {
         Ok([0, 0])
@@ -33,6 +36,12 @@ pub(crate) trait MemoryReservationBroker: Debug + Send + Sync {
     fn release(&self, bytes: usize) -> Result<()>;
 
     fn available(&self) -> Result<Option<usize>> {
+        Ok(None)
+    }
+
+    /// Assigned host budget, independent of reservations currently held by other consumers.
+    /// Queried when creating a DataFusion pool, never for each allocation.
+    fn limit(&self) -> Result<Option<usize>> {
         Ok(None)
     }
 
@@ -154,9 +163,14 @@ impl HostMemoryReservation {
             .map(|available| available.map(|available| self.size.saturating_add(available)))
     }
 
-    /** Creates a DataFusion pool governed by the same Flink-side reservation broker. */
-    pub(crate) fn datafusion_pool(&self, limit: usize) -> Arc<dyn MemoryPool> {
-        Arc::new(FlinkMemoryPool::new(Arc::clone(&self.broker), limit))
+    /// Sub-pools inherit Flink's assigned budget, not a snapshot of currently free capacity.
+    /// Every admission still passes through the shared broker, including when its limit is unknown.
+    pub(crate) fn datafusion_pool(&self) -> Result<Arc<dyn MemoryPool>> {
+        Ok(Arc::new(FlinkMemoryPool {
+            broker: Arc::clone(&self.broker),
+            limit: self.broker.limit()?,
+            reserved: Mutex::new(0),
+        }))
     }
 
     pub(crate) fn rocks_scope(&self) -> Result<[u64; 2]> {
@@ -196,6 +210,26 @@ impl JvmMemoryReservationBroker {
 }
 
 impl MemoryReservationBroker for JvmMemoryReservationBroker {
+    fn limit(&self) -> Result<Option<usize>> {
+        let bytes = self
+            .java_vm
+            .attach_current_thread(|env| -> jni::errors::Result<i64> {
+                env.call_method(
+                    &self.memory_manager,
+                    jni_str!("limit"),
+                    jni_sig!("()J"),
+                    &[],
+                )?
+                .j()
+            })
+            .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        usize::try_from(bytes).map(Some).map_err(|_| {
+            DataFusionError::Internal(format!(
+                "JVM reported an invalid native-memory limit of {bytes}"
+            ))
+        })
+    }
+
     fn rocks_scope(&self) -> Result<[u64; 2]> {
         self.java_vm
             .attach_current_thread(|env| -> jni::errors::Result<[u64; 2]> {
@@ -309,7 +343,7 @@ impl MemoryReservationBroker for JvmMemoryReservationBroker {
 
 pub(crate) struct FlinkMemoryPool {
     broker: Arc<dyn MemoryReservationBroker>,
-    limit: usize,
+    limit: Option<usize>,
     reserved: Mutex<usize>,
 }
 
@@ -334,7 +368,7 @@ impl FlinkMemoryPool {
     pub(crate) fn new(broker: Arc<dyn MemoryReservationBroker>, limit: usize) -> Self {
         Self {
             broker,
-            limit,
+            limit: Some(limit),
             reserved: Mutex::new(0),
         }
     }
@@ -354,7 +388,7 @@ impl Display for FlinkMemoryPool {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             formatter,
-            "FlinkMemoryPool(reserved: {}, limit: {})",
+            "FlinkMemoryPool(reserved: {}, assigned limit: {:?})",
             self.reserved(),
             self.limit
         )
@@ -401,18 +435,17 @@ impl MemoryPool for FlinkMemoryPool {
                 "native memory reservation overflowed usize".to_string(),
             )
         })?;
-        if requested > self.limit {
+        if let Some(limit) = self.limit.filter(|limit| requested > *limit) {
             return Err(DataFusionError::ResourcesExhausted(format!(
                 "{} requested {additional} bytes with {reserved} already reserved; Flink assigned {} bytes",
                 reservation.consumer().name(),
-                self.limit
+                limit
             )));
         }
         if !self.broker.try_reserve(additional)? {
             return Err(DataFusionError::ResourcesExhausted(format!(
-                "Flink denied {additional} bytes for {}; {reserved} of {} bytes are reserved",
-                reservation.consumer().name(),
-                self.limit
+                "Flink denied {additional} bytes for {}; {reserved} bytes are reserved by this DataFusion pool",
+                reservation.consumer().name()
             )));
         }
         *reserved = requested;
@@ -427,7 +460,7 @@ impl MemoryPool for FlinkMemoryPool {
     }
 
     fn memory_limit(&self) -> MemoryLimit {
-        MemoryLimit::Finite(self.limit)
+        self.limit.map_or(MemoryLimit::Unknown, MemoryLimit::Finite)
     }
 }
 
@@ -473,6 +506,10 @@ pub(crate) mod tests_support {
     }
 
     impl MemoryReservationBroker for TestBroker {
+        fn limit(&self) -> Result<Option<usize>> {
+            Ok(Some(self.limit))
+        }
+
         fn try_reserve(&self, bytes: usize) -> Result<bool> {
             self.reserved
                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |reserved| {

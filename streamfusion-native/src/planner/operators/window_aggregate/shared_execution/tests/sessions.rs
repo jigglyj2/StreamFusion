@@ -51,7 +51,7 @@ fn session_calc_tree_uses_common_controls_and_keeps_output_credit_after_close() 
         let memory = HostMemoryReservation::new(broker.clone(), "session shared context");
         let mut context = NativeExecutionContext::new(
             &session_plan().encode_to_vec(),
-            memory.datafusion_pool(256 << 20),
+            memory.datafusion_pool().unwrap(),
         )
         .unwrap();
         context

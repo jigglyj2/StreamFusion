@@ -359,7 +359,7 @@ fn invalid_global_lifecycle_is_rejected_before_opening_state() {
         let broker = Arc::new(TestBroker::new(32 << 20));
         let memory = HostMemoryReservation::new(broker.clone(), "invalid global plan");
         let mut context =
-            NativeExecutionContext::new(&plan.encode_to_vec(), memory.datafusion_pool(32 << 20))
+            NativeExecutionContext::new(&plan.encode_to_vec(), memory.datafusion_pool().unwrap())
                 .unwrap();
         let error = context
             .install_state(
