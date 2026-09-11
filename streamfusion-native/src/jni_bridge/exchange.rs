@@ -2,7 +2,6 @@
 // Licensed under the Apache License, Version 2.0.
 
 use arrow::array::{Array, StructArray};
-use arrow::datatypes::{DataType, Field, Schema};
 use std::mem::size_of;
 use std::sync::Arc;
 
@@ -323,22 +322,7 @@ pub(super) fn decode_batch(
     metadata_length: usize,
 ) -> Result<arrow::record_batch::RecordBatch> {
     let plan = decode_exchange_plan(plan_bytes)?;
-    let visible_schema = crate::planner::arrow_schema(
-        plan.schema
-            .as_ref()
-            .ok_or_else(|| DataFusionError::Plan("exchange schema is required".to_string()))?,
-    )?;
-    let transport_schema = if plan.transport_routing_key {
-        let mut fields = visible_schema.fields().iter().cloned().collect::<Vec<_>>();
-        fields.push(Arc::new(Field::new(
-            "__streamfusion_key",
-            DataType::Binary,
-            false,
-        )));
-        Arc::new(Schema::new(fields))
-    } else {
-        visible_schema.clone()
-    };
+    let transport_schema = crate::exchange::transport_schema(&plan)?;
     let transport_batch = crate::exchange::IpcBatchFrame::decode_contiguous(
         payload,
         metadata_length,

@@ -62,8 +62,9 @@ public final class NativeRegionStream implements AutoCloseable {
         Objects.requireNonNull(inputRows, "inputRows");
         if (!context.hasRegionOutputs())
             throw new IllegalArgumentException("Native exchange requires a region context");
-        long[] opened = openExchangeInputs(
-                context.handle(), port, plan, payload, offset, length, metadataLength, arrays, schemas);
+        context.prepareExchangeInput(port, plan);
+        long[] opened =
+                openExchangeInputs(context.handle(), port, payload, offset, length, metadataLength, arrays, schemas);
         var stream = new NativeRegionStream(opened[0]);
         NativeExecutionDiagnostics.PLAN_STREAMS.incrementAndGet();
         try {
@@ -82,7 +83,6 @@ public final class NativeRegionStream implements AutoCloseable {
     private static native long[] openExchangeInputs(
             long handle,
             int port,
-            byte[] plan,
             byte[] payload,
             int offset,
             int length,

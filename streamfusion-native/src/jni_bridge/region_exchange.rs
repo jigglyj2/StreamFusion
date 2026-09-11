@@ -15,7 +15,6 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeRegionStream_op
     _: JClass<'a>,
     handle: jlong,
     port: jint,
-    plan: JByteArray<'a>,
     payload: JByteArray<'a>,
     offset: jint,
     length: jint,
@@ -33,7 +32,7 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeRegionStream_op
         // Allocate the small response before consuming any producer-owned C Data handles.
         let response = env.new_long_array(2)?;
         let (batches, reservations, rows) = super::plan_exchange::prepare_exchange(
-            env, &context, port, plan, payload, offset, length, metadata, arrays, schemas,
+            env, &context, port, payload, offset, length, metadata, arrays, schemas,
         )?;
         let opened: datafusion::error::Result<_> = (|| {
             let stream = context.start_region(batches)?;

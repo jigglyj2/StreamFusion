@@ -26,6 +26,7 @@ public final class NativeExecutionContext implements AutoCloseable {
     private final boolean stateful;
     private final boolean region;
     private final boolean inputEnvelopeRequired;
+    private final NativeExchangeInputs exchangeInputs = new NativeExchangeInputs(this);
 
     public NativeExecutionContext(byte[] serializedPlan, NativeMemoryManager memoryManager) {
         this(serializedPlan, memoryManager, null);
@@ -231,16 +232,21 @@ public final class NativeExecutionContext implements AutoCloseable {
             long[] arrays,
             long[] schemas,
             long output) {
+        prepareExchangeInput(port, plan);
         long rows = executeExchangeStreamInputs(
-                handle(), port, plan, payload, offset, length, metadataLength, arrays, schemas, output);
+                handle(), port, payload, offset, length, metadataLength, arrays, schemas, output);
         OPENED_STREAMS.incrementAndGet();
         return rows;
+    }
+
+    /** Bind an immutable network schema once, before processing frames on this input port. */
+    public void prepareExchangeInput(int port, byte[] plan) {
+        exchangeInputs.prepare(port, plan);
     }
 
     private static native long executeExchangeStreamInputs(
             long handle,
             int port,
-            byte[] plan,
             byte[] payload,
             int offset,
             int length,

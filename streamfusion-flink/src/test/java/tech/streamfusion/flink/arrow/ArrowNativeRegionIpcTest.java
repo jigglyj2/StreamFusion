@@ -32,6 +32,19 @@ class ArrowNativeRegionIpcTest {
                     var referenceContext = NativeExecutionContext.region(plan, memory, null, null)) {
                 var direct = new ArrowNativeRegionBridge(context, List.of(TYPE, TEXT), allocator);
                 var reference = new ArrowNativeRegionBridge(referenceContext, List.of(TYPE, TEXT), allocator);
+                context.prepareExchangeInput(0, exchange);
+                context.prepareExchangeInput(1, exchange);
+                long prepared = memory.available();
+                for (int repetition = 0; repetition < 20; repetition++) {
+                    context.prepareExchangeInput(0, exchange.clone());
+                    context.prepareExchangeInput(1, exchange.clone());
+                }
+                assertThat(memory.available()).isEqualTo(prepared);
+                byte[] changed = exchange.clone();
+                changed[0] ^= 1;
+                assertThatThrownBy(() -> context.prepareExchangeInput(0, changed))
+                        .hasMessageContaining("plan changed");
+                assertThat(memory.available()).isEqualTo(prepared);
                 for (int arrival = 0; arrival < 6; arrival++) {
                     try (var input = input(allocator, 3 + arrival * 17);
                             var envelope = ArrowExchangeBatch.withEnvelope(input, TYPE)) {
@@ -74,6 +87,7 @@ class ArrowNativeRegionIpcTest {
             var direct = new ArrowNativeRegionBridge(context, List.of(TYPE, TEXT), allocator);
             var frame = ArrowExchangeCDataBridge.route(exchange, envelope.batch(), allocator, memory)
                     .get(0);
+            context.prepareExchangeInput(0, exchange);
             long available = memory.available();
             long arrow = allocator.getAllocatedMemory();
             assertThatThrownBy(() -> NativeRegionStream.openExchange(

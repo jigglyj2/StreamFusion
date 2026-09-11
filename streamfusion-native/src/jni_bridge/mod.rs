@@ -14,6 +14,7 @@ mod common;
 mod deduplicate;
 mod exchange;
 mod exchange_router;
+mod exchange_input;
 mod execution_context;
 mod group_aggregate;
 mod interval_join;

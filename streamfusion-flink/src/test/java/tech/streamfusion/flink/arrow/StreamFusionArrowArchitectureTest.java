@@ -230,6 +230,9 @@ class StreamFusionArrowArchitectureTest {
         assertThat(Files.readString(arrow.resolve("ArrowNativeRegionBridge.java")))
                 .contains("frame.executeNativeRegion(")
                 .doesNotContain("decodeNative(", "ArrowExchangeInputCDataBridge", "ipcPayload()");
+        assertThat(Files.readString(Path.of("../streamfusion-native/src/jni_bridge/plan_exchange.rs")))
+                .contains(".exchange_input_schema(port as usize)")
+                .doesNotContain("convert_byte_array(plan)", "decode_exchange_plan(", "decode_batch(&plan");
         assertThat(Files.readString(Path.of("../streamfusion-native/src/jni_bridge/region_exchange.rs")))
                 .contains("plan_exchange::prepare_exchange(", "context.start_region(batches)")
                 .doesNotContain("export_plan_stream", "decode_batch(");

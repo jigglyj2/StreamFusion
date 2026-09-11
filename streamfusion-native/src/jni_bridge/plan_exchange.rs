@@ -18,7 +18,6 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeExecutionContex
     _class: JClass<'a>,
     handle: jlong,
     port: jint,
-    plan: JByteArray<'a>,
     payload: JByteArray<'a>,
     offset: jint,
     length: jint,
@@ -36,7 +35,6 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeExecutionContex
             env,
             &context,
             port,
-            plan,
             payload,
             offset,
             length,
@@ -67,7 +65,6 @@ pub(super) fn prepare_exchange<'a>(
     env: &mut jni::Env<'a>,
     context: &std::sync::Arc<crate::execution_context::NativeExecutionContext>,
     port: jint,
-    plan: JByteArray<'a>,
     payload: JByteArray<'a>,
     offset: jint,
     length: jint,
@@ -102,7 +99,9 @@ pub(super) fn prepare_exchange<'a>(
     let memory = context.reservation("native exchange input payload");
     let (mut storage, padding) =
         input_storage(length as usize, metadata as usize, &memory).map_err(|e| throw(env, e))?;
-    let plan = env.convert_byte_array(plan)?;
+    let transport_schema = context
+        .exchange_input_schema(port as usize)
+        .map_err(|error| throw(env, error))?;
     // Copy once into a body-aligned allocation; decimal/nested IPC buffers then stay shared.
     let bytes = &mut storage.as_slice_mut()[padding..padding + length as usize];
     payload.get_region(env, offset, unsafe {
@@ -110,7 +109,11 @@ pub(super) fn prepare_exchange<'a>(
     })?;
     let bytes = arrow::buffer::Buffer::from(storage).slice(padding);
     let decoded: Result<_> = (|| {
-        let mut batch = super::exchange::decode_batch(&plan, bytes, metadata as usize)?;
+        let mut batch = crate::exchange::IpcBatchFrame::decode_contiguous(
+            bytes,
+            metadata as usize,
+            transport_schema,
+        )?;
         // Routing has already selected the Flink subtask. This edge uses SQL keys natively.
         if batch
             .schema()

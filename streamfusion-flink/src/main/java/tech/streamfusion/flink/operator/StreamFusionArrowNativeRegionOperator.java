@@ -199,6 +199,10 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
                                     ignored -> null,
                                     resources);
         }
+        for (int port = 0; port < exchangePlans.size(); port++) {
+            if (exchangePlans.get(port).length != 0)
+                memory.executionContext().prepareExchangeInput(port, exchangePlans.get(port));
+        }
         metricTree = sharedPlan == null
                 ? StreamFusionNativeMetricTree.forRegion(
                         memory.executionContext().identifiedPlan(),

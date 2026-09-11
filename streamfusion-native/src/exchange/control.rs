@@ -346,3 +346,24 @@ mod tests {
         );
     }
 }
+
+/// Visible SQL fields plus the optional versioned routing sidecar carried inside IPC.
+pub(crate) fn transport_schema(
+    plan: &proto::NativeExchangePlan,
+) -> Result<arrow::datatypes::SchemaRef> {
+    let visible = crate::planner::arrow_schema(
+        plan.schema
+            .as_ref()
+            .ok_or_else(|| DataFusionError::Plan("exchange schema is required".into()))?,
+    )?;
+    if !plan.transport_routing_key {
+        return Ok(visible);
+    }
+    let mut fields = visible.fields().iter().cloned().collect::<Vec<_>>();
+    fields.push(std::sync::Arc::new(arrow::datatypes::Field::new(
+        "__streamfusion_key",
+        arrow::datatypes::DataType::Binary,
+        false,
+    )));
+    Ok(std::sync::Arc::new(arrow::datatypes::Schema::new(fields)))
+}

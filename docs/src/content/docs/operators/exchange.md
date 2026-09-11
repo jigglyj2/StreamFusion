@@ -13,6 +13,14 @@ failures release any unconsumed Arrow C Data exports before their descriptor sto
 
 **Current status:** Hash and singleton exchanges are accelerated when the entire physical plan is eligible.
 
+Exchange input plans and Arrow transport schemas are bound to native input ports at task open.
+The receiver reuses those schemas for every frame; it does not send a protobuf plan through JNI
+or rebuild the schema for each network message. Rebinding a port to a different exchange plan is
+an error. Binding memory belongs to the native context and is released on close. A failed frame
+releases its temporary buffers while retaining that prepared schema for a valid retry. IPC still
+has one body-aligned payload copy at the receiving plan edge,
+then shares its buffers through the native operators.
+
 ## SQL example
 
 Exchange is not SQL syntax of its own. Flink inserts it when an operation needs data redistributed,
