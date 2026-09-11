@@ -15,7 +15,6 @@ import java.util.stream.Collectors;
 import org.apache.flink.runtime.state.KeyGroupRange;
 import org.apache.flink.runtime.state.StateInitializationContext;
 import org.apache.flink.runtime.state.StateSnapshotContext;
-import tech.streamfusion.nativebridge.NativeMemoryManager;
 import tech.streamfusion.nativebridge.NativePlanState;
 
 /** One Flink checkpoint participant for all independently named state in a native region. */
@@ -25,14 +24,9 @@ public final class NativeRegionStateParticipant implements NativeIncrementalStat
     private final List<Long> nodeIds;
     private final KeyGroupRange assignedRange;
     private final Path checkpointParent;
-    private final NativeMemoryManager memory;
 
     public NativeRegionStateParticipant(
-            NativePlanState state,
-            List<Long> nodeIds,
-            KeyGroupRange assignedRange,
-            Path checkpointParent,
-            NativeMemoryManager memory) {
+            NativePlanState state, List<Long> nodeIds, KeyGroupRange assignedRange, Path checkpointParent) {
         this.state = java.util.Objects.requireNonNull(state);
         this.nodeIds = nodeIds.stream().sorted().collect(Collectors.toUnmodifiableList());
         if (this.nodeIds.isEmpty()
@@ -45,7 +39,6 @@ public final class NativeRegionStateParticipant implements NativeIncrementalStat
         this.assignedRange = assignedRange;
         this.checkpointParent =
                 java.util.Objects.requireNonNull(checkpointParent).toAbsolutePath();
-        this.memory = java.util.Objects.requireNonNull(memory);
     }
 
     /** Canonical savepoints and memory checkpoints use Flink's raw keyed stream, not Java keyed values. */
@@ -60,10 +53,7 @@ public final class NativeRegionStateParticipant implements NativeIncrementalStat
             for (long id : nodeIds) output.writeLong(id);
             bytes += 2L * Integer.BYTES + (long) Long.BYTES * nodeIds.size();
             for (long id : nodeIds) {
-                byte[] snapshot = state.snapshot(id, group);
-                output.writeInt(snapshot.length);
-                output.write(snapshot);
-                bytes += Integer.BYTES + (long) snapshot.length;
+                bytes += state.writeSnapshot(id, group, output);
             }
         }
         return bytes;
@@ -87,18 +77,7 @@ public final class NativeRegionStateParticipant implements NativeIncrementalStat
             }
             bytes += 2L * Integer.BYTES + (long) Long.BYTES * nodeIds.size();
             for (long id : nodeIds) {
-                int length = input.readInt();
-                if (length < 0 || !memory.tryReserve(length)) {
-                    throw new IOException("Invalid or unadmitted native region snapshot length " + length);
-                }
-                try {
-                    byte[] snapshot = new byte[length];
-                    input.readFully(snapshot);
-                    state.restore(id, group, snapshot);
-                } finally {
-                    memory.release(length);
-                }
-                bytes += Integer.BYTES + (long) length;
+                bytes += state.restoreFrame(id, group, input);
             }
         }
         return bytes;

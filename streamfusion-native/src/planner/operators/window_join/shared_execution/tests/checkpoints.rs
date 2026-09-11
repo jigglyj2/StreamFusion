@@ -74,7 +74,7 @@ fn shared_restore_rejects_changed_contract_and_restored_clock_bindings() {
     let broker = Arc::new(TestBroker::new(256 << 20));
     let memory = HostMemoryReservation::new(broker, "invalid window join clock");
     let mut target =
-        NativeExecutionContext::new(&plan().encode_to_vec(), memory.datafusion_pool(256 << 20))
+        NativeExecutionContext::new(&plan().encode_to_vec(), memory.datafusion_pool().unwrap())
             .unwrap();
     assert!(target
         .install_state(&resources(None, Some(99), 0, 127).encode_to_vec(), memory)
@@ -172,6 +172,43 @@ fn shared_rocks_checkpoint_import_retains_contract_and_timers_with_reset_clock()
         ),
         vec![(b"a".to_vec(), b"x".to_vec())]
     );
+}
+
+#[test]
+fn shared_streamed_snapshot_matches_canonical_bytes_and_releases_failed_sink_workspace() {
+    for rocks in backends() {
+        let (source, broker, _directory) = context(rocks, None, 0, 127);
+        run(
+            &source,
+            input(&[9], &[200], &[b"retained"], &[INSERT]),
+            empty(),
+            None,
+        )
+        .unwrap();
+        for group in 0..128 {
+            let expected = source.snapshot_state(3, group).unwrap();
+            let mut actual = Vec::new();
+            let size = source
+                .write_snapshot_state(3, group, &mut |bytes| {
+                    actual.extend_from_slice(bytes);
+                    Ok(())
+                })
+                .unwrap();
+            assert_eq!(size, actual.len());
+            assert_eq!(&actual[..4], &(expected.len() as i32).to_be_bytes());
+            assert_eq!(&actual[4..], &*expected);
+        }
+        let baseline = broker.reserved();
+        assert!(source
+            .write_snapshot_state(3, 0, &mut |_| Err(invalid("failed checkpoint sink")))
+            .unwrap_err()
+            .to_string()
+            .contains("failed checkpoint sink"));
+        assert_eq!(broker.reserved(), baseline);
+        // A failed sink must leave the retained timers and state available for checkpoint retry.
+        source.snapshot_state(3, 0).unwrap();
+        assert_eq!(broker.reserved(), baseline);
+    }
 }
 
 #[test]

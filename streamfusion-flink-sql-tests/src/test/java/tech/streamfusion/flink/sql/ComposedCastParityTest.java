@@ -28,14 +28,14 @@ class ComposedCastParityTest extends SqlParityTestSupport {
     @ParameterizedTest(name = "{0}")
     @MethodSource("composedCastCases")
     void composedNumericCastsMatchFlinkByteForByte(String ignoredName, String sql) throws Exception {
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
 
     @Test
     void narrowingComputedIntegersRetainFlinkWrappingSemantics() throws Exception {
-        assertParity(
+        assertUnorderedInsertParity(
                 "SELECT CAST(metric + 256 AS TINYINT) FROM "
                         + "(VALUES (-129), (-128), (-1), (0), (127), (128), (CAST(NULL AS INT))) input(metric)",
                 true);

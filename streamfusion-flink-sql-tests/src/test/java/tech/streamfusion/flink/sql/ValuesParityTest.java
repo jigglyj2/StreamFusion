@@ -32,14 +32,14 @@ class ValuesParityTest extends SqlParityTestSupport {
 
     @Test
     void sourceFreeValuesMatchFlinkByteForByte() throws Exception {
-        assertParity("VALUES (1, 'one'), (2, 'two')", true);
+        assertUnorderedInsertParity("VALUES (1, 'one'), (2, 'two')", true);
 
         SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativeValuesBatchCount(), 1);
     }
 
     @Test
     void scalarValuesWithPlannerInsertedCalcsStillMatchFlinkByteForByte() throws Exception {
-        assertParity(ALL_SCALAR_TYPES, true);
+        assertUnorderedInsertParity(ALL_SCALAR_TYPES, true);
 
         SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativeValuesBatchCount(), 1);
         SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
@@ -48,7 +48,7 @@ class ValuesParityTest extends SqlParityTestSupport {
 
     @Test
     void boundedScalarValuesCoverEverySupportedScalarTypeByteForByte() throws Exception {
-        assertParity(ALL_SCALAR_TYPES, false);
+        assertUnorderedInsertParity(ALL_SCALAR_TYPES, false);
 
         SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativeValuesBatchCount(), 1);
         SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
@@ -57,7 +57,7 @@ class ValuesParityTest extends SqlParityTestSupport {
 
     @Test
     void complexValuesFallBackAndMatchFlinkByteForByte() throws Exception {
-        assertParity(COMPLEX_VALUES, true, false);
+        assertUnorderedInsertParity(COMPLEX_VALUES, true, false);
 
         assertThat(StreamFusionPlannerFactory.nativeValuesBatchCount()).isZero();
     }

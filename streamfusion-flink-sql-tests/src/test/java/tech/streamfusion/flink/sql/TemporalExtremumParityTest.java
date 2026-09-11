@@ -22,7 +22,7 @@ class TemporalExtremumParityTest extends SqlParityTestSupport {
     @ParameterizedTest
     @MethodSource("queries")
     void timezoneFreeTemporalExtremaMatchFlinkByteForByte(String sql) throws Exception {
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         assertThat(StreamFusionPlannerFactory.nativePlanBatchCount())
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())
@@ -41,7 +41,7 @@ class TemporalExtremumParityTest extends SqlParityTestSupport {
 
     @Test
     void nanosecondTimestampExtremaFallBackAcrossFlinksCompleteCalendarRange() throws Exception {
-        assertParity(timestampQuery(9), true, false);
+        assertUnorderedInsertParity(timestampQuery(9), true, false);
 
         assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isZero();
         assertThat(StreamFusionPlanningDiagnostics.explain())

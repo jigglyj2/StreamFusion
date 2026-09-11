@@ -23,6 +23,8 @@ import org.junit.jupiter.api.io.TempDir;
 import tech.streamfusion.flink.TestingNativeMemoryManager;
 import tech.streamfusion.flink.operator.StreamFusionNativeRegionTranslator;
 import tech.streamfusion.nativebridge.NativeDeduplicateBridge;
+import tech.streamfusion.proto.plan.v1.Arithmetic;
+import tech.streamfusion.proto.plan.v1.ArithmeticOperator;
 import tech.streamfusion.proto.plan.v1.Calc;
 import tech.streamfusion.proto.plan.v1.Comparison;
 import tech.streamfusion.proto.plan.v1.ComparisonOperator;
@@ -67,6 +69,50 @@ class ArrowDeduplicateCDataBridgeTest {
         } finally {
             NativeDeduplicateBridge.destroy(handle);
         }
+    }
+
+    @Test
+    void nativeSubPoolUsesCapacityReleasedAfterConstruction() {
+        var memory = TestingNativeMemoryManager.create(256L << 20);
+        long peerReservation = 254L << 20;
+        assertThat(memory.tryReserve(peerReservation)).isTrue();
+        var calc = Calc.newBuilder().setInput(Operator.newBuilder().setInput(Input.newBuilder()));
+        calc.addProjections(Expression.newBuilder()
+                .setArithmetic(Arithmetic.newBuilder()
+                        .setLeft(reference(0))
+                        .setRight(Expression.newBuilder()
+                                .setLongLiteral(LongLiteral.newBuilder().setValue(1)))
+                        .setOperator(ArithmeticOperator.ARITHMETIC_OPERATOR_ADD)));
+        for (int index : new int[] {1, 2, 3, 4}) calc.addProjections(reference(index));
+        byte[] tail = NativePlan.newBuilder()
+                .setProtocolVersion(1)
+                .setRoot(Operator.newBuilder().setCalc(calc))
+                .build()
+                .toByteArray();
+        byte[] composed = StreamFusionNativeRegionTranslator.compose(List.of(plan(), tail));
+        long handle = NativeDeduplicateBridge.create(composed, 128, 0, 127, memory);
+        memory.release(peerReservation);
+        int count = 100_000;
+        try (RootAllocator allocator = new RootAllocator(64L << 20)) {
+            var rows = new java.util.ArrayList<RowData>(count);
+            for (int index = 0; index < count; index++) rows.add(row(7, 9, index));
+            try (ArrowRowDataBatch input = ArrowRowDataBatch.transpose(rows, ROW_TYPE, allocator);
+                    NativeArrowDeduplicateResult result =
+                            ArrowDeduplicateCDataBridge.executeArrow(handle, input, null, ROW_TYPE, allocator)) {
+                ArrowRowDataBatch output = result.selectEnvelopeFrom(input);
+                assertThat(output.size()).isEqualTo(count);
+                for (int index = 0; index < count; index++) {
+                    assertThat(output.rowView(index).getLong(0)).isEqualTo(8);
+                    assertThat(output.rowView(index).getLong(1)).isEqualTo(9);
+                    assertThat(output.rowView(index).getTimestamp(2, 3).getMillisecond())
+                            .isEqualTo(index);
+                    assertThat(output.rowKind(index)).isEqualTo(index == 0 ? RowKind.INSERT : RowKind.UPDATE_AFTER);
+                }
+            }
+        } finally {
+            NativeDeduplicateBridge.destroy(handle);
+        }
+        assertThat(memory.available()).isEqualTo(memory.limit());
     }
 
     private static GenericRowData row(long bidder, long auction, long timestamp) {

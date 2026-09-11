@@ -221,52 +221,89 @@ fn per_record_assignment_publishes_future_partials_but_only_fires_due_timers_in_
 #[test]
 fn restore_switches_backends_and_rescales_absolute_timers_independently_of_watermarks() {
     for rocks in backends() {
-        let directory = tempfile::tempdir().unwrap();
-        let broker = Arc::new(TestBroker::new(128 << 20));
-        let bytes = plan(1000);
-        let mut source = window(
-            &bytes,
-            broker.clone(),
-            rocks.then_some(directory.path()),
-            0,
-            127,
-        );
-        let keys = (0..64).map(Some).chain([None]).collect::<Vec<_>>();
-        push(&mut source, keys.clone(), vec![1; keys.len()]);
-        source.control(ControlEvent::Watermark(i64::MAX)).unwrap();
-        source.control(ControlEvent::BeforeCheckpoint(11)).unwrap();
-        let snapshots = (0..128)
-            .map(|group| source.snapshot(group).unwrap())
-            .collect::<Vec<_>>();
-        drop(source);
-        let mut actual = Vec::new();
-        for (first, last) in [(0, 63), (64, 127)] {
-            let restored_directory = tempfile::tempdir().unwrap();
-            let mut restored = window(
+        for physical in [false, true] {
+            if physical && !rocks {
+                continue;
+            }
+            let directory = tempfile::tempdir().unwrap();
+            let broker = Arc::new(TestBroker::new(128 << 20));
+            let bytes = plan(1000);
+            let mut source = window(
                 &bytes,
                 broker.clone(),
-                (!rocks && backends().len() > 1).then_some(restored_directory.path()),
-                first,
-                last,
+                rocks.then_some(directory.path()),
+                0,
+                127,
             );
-            for group in first..=last {
-                restored
-                    .restore(group, &snapshots[group as usize], i64::MAX)
-                    .unwrap();
+            let keys = (0..64).map(Some).chain([None]).collect::<Vec<_>>();
+            push(&mut source, keys.clone(), vec![1; keys.len()]);
+            source.control(ControlEvent::Watermark(i64::MAX)).unwrap();
+            source.control(ControlEvent::BeforeCheckpoint(11)).unwrap();
+            let snapshots = (0..128)
+                .map(|group| source.snapshot(group).unwrap())
+                .collect::<Vec<_>>();
+            let checkpoint_dir = tempfile::tempdir().unwrap();
+            let reader = if physical {
+                let checkpoint = checkpoint_dir.path().join("checkpoint");
+                source.checkpoint(&checkpoint).unwrap();
+                let plugin = std::path::PathBuf::from(
+                    std::env::var("STREAMFUSION_TEST_ROCKSDB_PLUGIN").unwrap(),
+                );
+                Some(
+                    crate::state::RocksPluginKeyedState::open_checkpoint(
+                        &plugin,
+                        &checkpoint,
+                        0,
+                        127,
+                        1 << 20,
+                    )
+                    .unwrap(),
+                )
+            } else {
+                None
+            };
+            drop(source);
+            let mut actual = Vec::new();
+            for (first, last) in [(0, 63), (64, 127)] {
+                let restored_directory = tempfile::tempdir().unwrap();
+                let mut restored = window(
+                    &bytes,
+                    broker.clone(),
+                    (!rocks && backends().len() > 1).then_some(restored_directory.path()),
+                    first,
+                    last,
+                );
+                for group in first..=last {
+                    if let Some(reader) = &reader {
+                        restored.restore_physical(group, reader, i64::MAX).unwrap();
+                    } else {
+                        restored
+                            .restore(group, &snapshots[group as usize], i64::MAX)
+                            .unwrap();
+                    }
+                    let mut streamed = Vec::new();
+                    restored
+                        .write_snapshot(group, &mut |chunk| {
+                            streamed.extend_from_slice(chunk);
+                            Ok(())
+                        })
+                        .unwrap();
+                    assert_eq!(&streamed[4..], &*snapshots[group as usize]);
+                }
+                assert_eq!(restored.next_timer(), Some(999));
+                actual.extend(fire(&mut restored, 999));
+                assert_eq!(restored.next_timer(), None);
             }
-            assert_eq!(restored.next_timer(), Some(999));
-            actual.extend(fire(&mut restored, 999));
-            assert_eq!(restored.next_timer(), None);
+            actual.sort();
+            let mut expected = keys
+                .into_iter()
+                .map(|key| (key, 1, 0, 1000))
+                .collect::<Vec<_>>();
+            expected.sort();
+            assert_eq!(actual, expected);
+            drop(snapshots);
+            assert_eq!(broker.reserved(), 0);
         }
-        actual.sort();
-        let mut expected = keys
-            .into_iter()
-            .map(|key| (key, 1, 0, 1000))
-            .collect::<Vec<_>>();
-        expected.sort();
-        assert_eq!(actual, expected);
-        drop(snapshots);
-        assert_eq!(broker.reserved(), 0);
     }
 }
 
@@ -281,6 +318,11 @@ fn malformed_clock_is_rejected_before_state_or_timer_mutation() {
     push_count(&mut window, Some(9), 2, 1);
     assert!(window
         .snapshot(0)
+        .unwrap_err()
+        .to_string()
+        .contains("pre-checkpoint"));
+    assert!(window
+        .write_snapshot(0, &mut |_| Ok(()))
         .unwrap_err()
         .to_string()
         .contains("pre-checkpoint"));

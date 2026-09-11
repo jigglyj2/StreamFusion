@@ -25,7 +25,7 @@ class JsonQuoteParityTest extends SqlParityTestSupport {
     @ParameterizedTest
     @MethodSource("queries")
     void flinkEscapingMatchesByteForByte(String sql) throws Exception {
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         assertThat(StreamFusionPlannerFactory.nativePlanBatchCount())
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())

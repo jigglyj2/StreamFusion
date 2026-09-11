@@ -79,7 +79,10 @@ class StreamFusionRegularJoinStreamTest {
                         assertThat(batches).isGreaterThan(1);
                     }
                 }
-                assertThat(NativeRegularJoinBridge.statistics(handle)).containsExactly(5L, 3L, 0L);
+                // Five 1,024-row state slices seed the hot key; each opposite-side arrival
+                // reads one manifest and two payload chunks. Each seed slice includes its
+                // directory in one write, followed by one write per opposite-side arrival.
+                assertThat(NativeRegularJoinBridge.statistics(handle)).containsExactly(11L, 7L, 0L);
                 NativeRegularJoinBridge.snapshot(handle, 0);
             } finally {
                 NativeRegularJoinBridge.destroy(handle);

@@ -31,9 +31,9 @@ class RegularJoinFallbackParityTest extends SqlParityTestSupport {
         byte[] streamFusion = execute(query, true);
 
         assertThat(streamFusion).isEqualTo(flink);
-        SqlFallbackAssertions.nativeBatchesAreZero(StreamFusionPlannerFactory.nativeRegularJoinBatchCount());
-        SqlFallbackAssertions.nativeBatchesAreZero(StreamFusionPlannerFactory.nativePlanBatchCount());
-        SqlFallbackAssertions.admission();
+        assertThat(StreamFusionPlannerFactory.nativeRegularJoinBatchCount()).isZero();
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isPositive();
+        SqlArchitectureAssertions.admission();
     }
 
     @Test

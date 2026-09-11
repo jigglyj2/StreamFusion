@@ -181,9 +181,14 @@ fn physical_presence_checkpoint_rejects_retractable_restore_before_processing() 
     let directory = tempfile::tempdir().unwrap();
     let checkpoint = directory.path().join("checkpoint");
     source.checkpoint(&checkpoint).unwrap();
-    let reader =
-        RocksPluginKeyedState::open(std::path::Path::new(&plugin), &checkpoint, 0, 15, 1 << 20)
-            .unwrap();
+    let reader = RocksPluginKeyedState::open_checkpoint(
+        std::path::Path::new(&plugin),
+        &checkpoint,
+        0,
+        15,
+        1 << 20,
+    )
+    .unwrap();
     for rocks in backends() {
         let (target, _target_dir, _) = processor(rocks, false, &owner);
         let factory =

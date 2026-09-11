@@ -47,7 +47,7 @@ class SharedDeduplicateEnvelopeParityTest {
             throws Exception {
         var type = RowType.of(keyType, new TimestampType(false, 3), new BigIntType(false));
         var info = InternalTypeInfo.<RowData>of(type);
-        var serializer = new RowDataSerializer(StreamFusionDeduplicateKeyTypeParityTest.physicalRowType(type));
+        var serializer = new RowDataSerializer(tech.streamfusion.flink.TestingPhysicalRowType.physicalRowType(type));
         for (boolean rocks : List.of(false, true))
             for (boolean before : List.of(false, true)) {
                 var selector = KeySelectorUtil.getRowDataSelector(getClass().getClassLoader(), new int[] {0}, info);

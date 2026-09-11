@@ -24,7 +24,7 @@ pub(super) struct JoinRuntime {
 }
 impl JoinRuntime {
     pub(super) fn new(owner: &HostMemoryReservation) -> Result<Self> {
-        let pool = owner.datafusion_pool(owner.available_capacity()?.unwrap_or(64 << 20));
+        let pool = owner.datafusion_pool()?;
         let env = RuntimeEnvBuilder::new()
             .with_memory_pool(pool)
             .build_arc()?;

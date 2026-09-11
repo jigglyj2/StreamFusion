@@ -4,9 +4,12 @@
 use super::*;
 
 mod compact;
+mod entry_ids;
+pub(super) use entry_ids::EntryIds;
 mod row_entries;
 pub(super) use row_entries::{
-    encode as encode_rows_manifest, encode_with_unloaded as encode_rows_with_unloaded, row_key,
+    encode as encode_rows_manifest, encode_dense as encode_dense_manifest,
+    encode_with_unloaded as encode_rows_with_unloaded, row_key,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -15,7 +18,9 @@ pub(super) enum Layout {
     Pages,
     Rows,
 }
-pub(super) use compact::{eligible as compact_eligible, encode as encode_compact};
+pub(super) use compact::{
+    eligible as compact_eligible, encode as encode_compact, MAX_BYTES as MAX_COMPACT_BYTES,
+};
 
 pub(super) const PAGE_ROWS: u64 = 64;
 const MANIFEST_MAGIC: &[u8] = b"SFJM\x01";
@@ -25,7 +30,7 @@ pub(super) struct Manifest {
     pub(super) layout: Layout,
     pub(super) next_row_id: [u64; 2],
     pub(super) matchable: [Option<bool>; 2],
-    pub(super) pages: [Vec<u64>; 2],
+    pub(super) pages: [EntryIds; 2],
     pub(super) inline: Option<[Vec<StoredRow>; 2]>,
 }
 
@@ -126,7 +131,7 @@ fn read_manifest(reader: &mut Reader<'_>) -> Result<Manifest> {
         layout: Layout::Pages,
         next_row_id,
         matchable,
-        pages,
+        pages: pages.map(EntryIds::explicit),
         inline: None,
     })
 }
@@ -149,11 +154,26 @@ fn append_page(bytes: &mut Vec<u8>, rows: &[StoredRow]) {
     bytes.extend_from_slice(PAGE_MAGIC);
     bytes.extend_from_slice(&(rows.len() as u32).to_le_bytes());
     for row in rows {
-        bytes.extend_from_slice(&row.id.to_le_bytes());
-        bytes.extend_from_slice(&row.associations.to_le_bytes());
-        bytes.extend_from_slice(&(row.row.len() as u32).to_le_bytes());
-        bytes.extend_from_slice(&row.row);
+        append_row(bytes, row.id, row.associations, &row.row);
     }
+}
+
+fn append_row(bytes: &mut Vec<u8>, id: u64, associations: i32, row: &[u8]) {
+    bytes.extend_from_slice(&id.to_le_bytes());
+    bytes.extend_from_slice(&associations.to_le_bytes());
+    bytes.extend_from_slice(&(row.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(row);
+}
+
+pub(super) fn encode_row(id: u64, associations: i32, row: &[u8]) -> Result<Vec<u8>> {
+    if row.len() > u32::MAX as usize {
+        return Err(invalid());
+    }
+    let mut bytes = Vec::with_capacity(25 + row.len());
+    bytes.extend_from_slice(PAGE_MAGIC);
+    bytes.extend_from_slice(&1u32.to_le_bytes());
+    append_row(&mut bytes, id, associations, row);
+    Ok(bytes)
 }
 
 pub(super) fn decode_page(bytes: &[u8], page: u64, next_id: u64) -> Result<Vec<StoredRow>> {
@@ -280,4 +300,41 @@ pub(super) fn decode_entry(
         return Err(invalid());
     }
     Ok(rows)
+}
+
+/// Visit persisted references without expanding row-layout bitmaps into a hot-key-sized vector.
+/// The visitor must drop decoded payloads between pages. Compact payloads are intrinsically bounded.
+pub(super) fn visit_manifest_entries(
+    bytes: &[u8],
+    owner: &HostMemoryReservation,
+    mut entry: impl FnMut(usize, u64, u64, Layout) -> Result<()>,
+) -> Result<usize> {
+    if row_entries::is_manifest(bytes) {
+        let (_, _, count) =
+            row_entries::scan(bytes, |side, id, next| entry(side, id, next, Layout::Rows))?;
+        if count == 0 {
+            return Err(invalid());
+        }
+        return Ok(count);
+    }
+    let mut memory = owner.sibling("join checkpoint manifest validation");
+    memory.resize(manifest_workspace(bytes)?)?;
+    let manifest = decode_manifest(bytes)?;
+    if let Some(rows) = manifest.inline {
+        if rows.iter().all(Vec::is_empty) {
+            return Err(invalid());
+        }
+        return Ok(0);
+    }
+    let mut count = 0;
+    for (side, pages) in manifest.pages.iter().enumerate() {
+        for id in pages.iter() {
+            entry(side, id, manifest.next_row_id[side], manifest.layout)?;
+            count += 1;
+        }
+    }
+    if count == 0 {
+        return Err(invalid());
+    }
+    Ok(count)
 }

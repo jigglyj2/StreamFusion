@@ -41,7 +41,8 @@ fn checkpoint_import_reads_a_group_larger_than_the_transfer_budget_in_bounded_pa
     // Charge the source reader and destination caches separately from transfer pages.
     let mut caches = owner.sibling("test source and destination caches");
     caches.resize(2 << 20).unwrap();
-    let reader = RocksPluginKeyedState::open(&plugin, &checkpoint, 2, 3, 1 << 20).unwrap();
+    let reader =
+        RocksPluginKeyedState::open_checkpoint(&plugin, &checkpoint, 2, 3, 1 << 20).unwrap();
     let mut destination =
         RocksPluginKeyedState::open(&plugin, &directory.path().join("target"), 2, 3, 1 << 20)
             .unwrap();

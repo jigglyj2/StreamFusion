@@ -64,9 +64,8 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeRegionStream_op
         let count = input_arrays.len(env)?;
         let expected = context
             .region_input_count()
-            .map_err(|error| throw(env, error))?
-            + context.clock_input_bindings().len();
-        if count != expected || count != input_schemas.len(env)? {
+            .map(|inputs| inputs + context.clock_input_bindings().len());
+        if expected.is_some_and(|expected| count != expected) || count != input_schemas.len(env)? {
             return Err(throw(env, "native region input arity mismatch"));
         }
         let memory = context.reservation("native region edge controls");
@@ -102,15 +101,12 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeRegionStream_op
             let (batches, reservations) = unsafe {
                 super::plan_stream::import_inputs(&context, &arrays, &schemas, memory, None)
             }?;
-            let stream = match events.as_deref() {
-                Some(events) => context.start_region_control(batches, events)?,
-                None => context.start_region(batches)?,
-            };
-            region_output::register(region_output::Output::new(
+            region_output::register(region_output::Output::start(
                 context.clone(),
-                stream,
+                batches,
+                events.as_deref(),
                 reservations,
-            ))
+            )?)
         })();
         result.map_err(|error| throw(env, error))
     })
@@ -154,5 +150,5 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeRegionStream_na
     _: EnvUnowned<'_>,
     _: JClass<'_>,
 ) -> jint {
-    2
+    4
 }

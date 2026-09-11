@@ -61,6 +61,7 @@ fn resources(
     last: u32,
 ) -> proto::NativeStateBindings {
     proto::NativeStateBindings {
+        spill_directories: Vec::new(),
         protocol_version: 3,
         bindings: vec![proto::NativeStateBinding {
             plan_node_id: 3,
@@ -109,7 +110,7 @@ fn context_with_plan(
     let broker = Arc::new(TestBroker::new(256 << 20));
     let memory = HostMemoryReservation::new(broker.clone(), "shared window join test");
     let mut context =
-        NativeExecutionContext::new(&plan.encode_to_vec(), memory.datafusion_pool(256 << 20))
+        NativeExecutionContext::new(&plan.encode_to_vec(), memory.datafusion_pool().unwrap())
             .unwrap();
     context
         .install_state(
@@ -345,7 +346,7 @@ fn shared_invalid_contract_is_rejected_before_opening_rocksdb() {
     let memory =
         HostMemoryReservation::new(Arc::new(TestBroker::new(256 << 20)), "invalid contract");
     let mut context =
-        NativeExecutionContext::new(&plan.encode_to_vec(), memory.datafusion_pool(256 << 20))
+        NativeExecutionContext::new(&plan.encode_to_vec(), memory.datafusion_pool().unwrap())
             .unwrap();
     let error = context
         .install_state(

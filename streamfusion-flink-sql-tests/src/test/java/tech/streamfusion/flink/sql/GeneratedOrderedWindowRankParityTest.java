@@ -58,23 +58,33 @@ class GeneratedOrderedWindowRankParityTest extends NativeComputeParitySupport {
                             + "(PARTITION BY k,o ORDER BY v DESC NULLS FIRST) AS r FROM "
                             + timestampRelation(finalRows) + ") WHERE r BETWEEN 2 AND 4",
                     output);
-            for (boolean rocksFirst : List.of(false, true)) {
+            // Canonical restore in both directions, then physical restore to memory and RocksDB.
+            for (int restoreMode = 0; restoreMode < 4; restoreMode++) {
+                boolean rocksFirst = restoreMode != 0;
+                boolean rocksAfter = restoreMode == 0 || restoreMode == 3;
+                boolean physical = restoreMode >= 2;
+                var checkpoint = directory.resolve(seed + "-" + restoreMode + "-checkpoint");
                 var memory = new Memory();
-                long handle = create(plan, rocksFirst, directory.resolve(seed + "-" + rocksFirst + "-before"), memory);
+                long handle = create(plan, rocksFirst, directory.resolve(seed + "-" + restoreMode + "-before"), memory);
                 var actual = new ArrayList<byte[]>();
                 try (var allocator = new RootAllocator(128L << 20)) {
                     for (int offset = 0; offset < rows.size(); offset += 7) {
                         if (offset == 14) {
                             var snapshots = new ArrayList<byte[]>();
-                            for (int group = 0; group < 16; group++)
-                                snapshots.add(NativeWindowRankBridge.snapshot(handle, group));
+                            if (physical) NativeWindowRankBridge.checkpointRocks(handle, checkpoint);
+                            else
+                                for (int group = 0; group < 16; group++)
+                                    snapshots.add(NativeWindowRankBridge.snapshot(handle, group));
                             NativeWindowRankBridge.destroy(handle);
                             handle = 0;
                             assertThat(memory.reserved).isZero();
                             handle = create(
-                                    plan, !rocksFirst, directory.resolve(seed + "-" + rocksFirst + "-after"), memory);
-                            for (int group = 0; group < 16; group++)
-                                NativeWindowRankBridge.restore(handle, group, snapshots.get(group));
+                                    plan, rocksAfter, directory.resolve(seed + "-" + restoreMode + "-after"), memory);
+                            if (physical)
+                                NativeWindowRankBridge.importRocksCheckpoint(handle, checkpoint, 0, 15, 8L << 20);
+                            else
+                                for (int group = 0; group < 16; group++)
+                                    NativeWindowRankBridge.restore(handle, group, snapshots.get(group));
                         }
                         try (var input = ArrowRowDataBatch.transpose(
                                         timestampRows(rows.subList(offset, Math.min(offset + 7, rows.size()))),

@@ -14,6 +14,17 @@ pub(super) trait SharedWindowKernel: Send {
     fn next_timer(&self) -> Option<i64>;
     fn snapshot(&mut self, group: u32) -> Result<crate::state::SnapshotBytes>;
     fn restore(&mut self, group: u32, bytes: &[u8], watermark: i64) -> Result<()>;
+    fn write_snapshot(
+        &mut self,
+        group: u32,
+        sink: &mut crate::state::snapshot_stream::SnapshotSink<'_>,
+    ) -> Result<usize>;
+    fn restore_physical(
+        &mut self,
+        group: u32,
+        source: &dyn crate::state::KeyedState,
+        watermark: i64,
+    ) -> Result<()>;
     fn checkpoint(&mut self, directory: &std::path::Path) -> Result<()>;
 
     fn input_schema(&self) -> Result<SchemaRef> {

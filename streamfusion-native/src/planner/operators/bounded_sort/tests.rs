@@ -235,33 +235,16 @@ fn missing_retraction_fails_with_flinks_contract() {
 fn spills_large_unique_state_and_removes_temporary_files_after_drain() {
     let directory = tempfile::tempdir().unwrap();
     let broker = Arc::new(TestBroker::new(16 << 20));
-    let mut processor = BoundedSortProcessor::new(
-        &plan(),
-        0,
-        0,
-        HostMemoryReservation::new(broker.clone(), "bounded sort forced spill"),
-    )
-    .unwrap();
-    processor
-        .configure_spill_directory(directory.path().to_path_buf())
-        .unwrap();
-    let label = "x".repeat(256);
-    for start in (0..20_000).step_by(100) {
-        let values = (start..start + 100).rev().collect::<Vec<_>>();
-        processor
-            .process_arrow(batch(
-                &values,
-                &vec![label.as_str(); 100],
-                &vec![INSERT; 100],
-            ))
-            .unwrap();
-    }
+    let mut processor = spill_processor(directory.path(), broker.clone());
     let mut expected = 0;
     loop {
         let output = processor.finish().unwrap();
         if output.num_rows() == 0 {
             break;
         }
+        let (quota, _, input_bytes) = processor.spillable.as_ref().unwrap().disk_accounting();
+        assert_eq!(quota, u64::MAX);
+        assert!(input_bytes > 0);
         assert!(output.num_rows() <= OUTPUT_BATCH_ROWS);
         for value in integers(&output) {
             assert_eq!(value, expected);
@@ -274,6 +257,83 @@ fn spills_large_unique_state_and_removes_temporary_files_after_drain() {
     drop(processor);
     assert_eq!(broker.reserved(), 0);
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn spilled_sort_releases_files_on_cancellation_and_memory_failure() {
+    for stop in ["before-poll", "after-poll", "memory-failure"] {
+        let directory = tempfile::tempdir().unwrap();
+        let broker = Arc::new(TestBroker::new(16 << 20));
+        let mut processor = spill_processor(directory.path(), broker.clone());
+        processor.scratch.resize(0).unwrap();
+        let mut sort = spill::SpillableSort::prepare(
+            processor.state.as_ref(),
+            0..=0,
+            Arc::clone(&processor.input_schema),
+            &processor.row_converter,
+            &processor.plan,
+            &processor.scratch,
+            directory.path(),
+        )
+        .unwrap();
+        let (quota, disk_bytes, input_bytes) = sort.disk_accounting();
+        assert_eq!(quota, u64::MAX);
+        assert!(input_bytes > 0 && disk_bytes >= input_bytes);
+        assert!(std::fs::read_dir(directory.path()).unwrap().count() > 0);
+        if stop == "memory-failure" {
+            let mut pressure = processor
+                .scratch
+                .sibling("another Flink operator consumes capacity");
+            pressure
+                .resize(pressure.available_capacity().unwrap().unwrap())
+                .unwrap();
+            let error = sort
+                .next(Arc::clone(&processor.output_schema), &mut processor.scratch)
+                .unwrap_err();
+            assert!(
+                error.to_string().to_lowercase().contains("memory")
+                    || error.to_string().contains("Resources exhausted"),
+                "{error}"
+            );
+            drop(pressure);
+        } else if stop == "after-poll" {
+            let output = sort
+                .next(Arc::clone(&processor.output_schema), &mut processor.scratch)
+                .unwrap()
+                .unwrap();
+            assert!(output.num_rows() > 0);
+            drop(output);
+        }
+        drop(sort);
+        drop(processor);
+        assert_eq!(broker.reserved(), 0);
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+    }
+}
+
+fn spill_processor(directory: &std::path::Path, broker: Arc<TestBroker>) -> BoundedSortProcessor {
+    let mut processor = BoundedSortProcessor::new(
+        &plan(),
+        0,
+        0,
+        HostMemoryReservation::new(broker.clone(), "bounded sort forced spill"),
+    )
+    .unwrap();
+    processor
+        .configure_spill_directory(directory.to_path_buf())
+        .unwrap();
+    let label = "x".repeat(256);
+    for start in (0..20_000).step_by(100) {
+        let values = (start..start + 100).rev().collect::<Vec<_>>();
+        processor
+            .process_arrow(batch(
+                &values,
+                &vec![label.as_str(); 100],
+                &vec![INSERT; 100],
+            ))
+            .unwrap();
+    }
+    processor
 }
 
 #[test]

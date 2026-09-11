@@ -32,42 +32,79 @@ pub(in super::super) fn encode(state: &JoinState) -> Vec<u8> {
 
 pub(in super::super) fn encode_with_unloaded(
     state: &JoinState,
-    unloaded: Option<&UnloadedRows>,
+    unloaded: Option<&[EntryIds; 2]>,
 ) -> Vec<u8> {
+    let mut bytes = header(
+        [state.left_matchable, state.right_matchable],
+        state.next_row_id,
+    );
+    for (side, rows) in [&state.left, &state.right].into_iter().enumerate() {
+        // Preserve old bitmaps directly. Only new rows are grouped, including an append into
+        // the retained directory's final partial bitmap; historical IDs are never enumerated.
+        let bitmaps = unloaded
+            .into_iter()
+            .flat_map(|ids| ids[side].bitmaps())
+            .chain(
+                rows.chunk_by(|a, b| a.id / PAGE_ROWS == b.id / PAGE_ROWS)
+                    .map(|rows| {
+                        (
+                            rows[0].id / PAGE_ROWS,
+                            rows.iter()
+                                .fold(0u64, |bits, row| bits | (1 << (row.id % PAGE_ROWS))),
+                        )
+                    }),
+            );
+        append_bitmaps(&mut bytes, bitmaps);
+    }
+    bytes
+}
+
+fn header(matchable: [Option<bool>; 2], next: [u64; 2]) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(MAGIC);
-    for value in [state.left_matchable, state.right_matchable] {
+    for value in matchable {
         bytes.push(match value {
             None => 0,
             Some(false) => 1,
             Some(true) => 2,
         });
     }
-    for id in state.next_row_id {
+    for id in next {
         bytes.extend_from_slice(&id.to_le_bytes());
-    }
-    for (side, rows) in [&state.left, &state.right].into_iter().enumerate() {
-        let retained = unloaded
-            .filter(|u| u.side == side)
-            .map_or(&[][..], |u| u.ids.as_slice());
-        // Retained IDs precede the new accumulating rows. Opposite-side payloads are fully loaded.
-        let ids = retained
-            .iter()
-            .copied()
-            .chain(rows.iter().map(|row| row.id));
-        append_bitmaps(&mut bytes, ids);
     }
     bytes
 }
 
-fn append_bitmaps(bytes: &mut Vec<u8>, ids: impl Iterator<Item = u64>) {
+/// Legacy SFRJ assigns dense identities while decoding. Emit the same presence bitmaps directly,
+/// without allocating an ID per row or retaining the payloads used to derive them.
+pub(in super::super) fn encode_dense(matchable: [Option<bool>; 2], counts: [u64; 2]) -> Vec<u8> {
+    let mut bytes = header(matchable, counts);
+    for count in counts {
+        append_bitmaps(
+            &mut bytes,
+            (0..count.div_ceil(PAGE_ROWS)).map(|page| {
+                let rows = (count - page * PAGE_ROWS).min(PAGE_ROWS);
+                (
+                    page,
+                    if rows == 64 {
+                        u64::MAX
+                    } else {
+                        (1u64 << rows) - 1
+                    },
+                )
+            }),
+        );
+    }
+    bytes
+}
+
+fn append_bitmaps(bytes: &mut Vec<u8>, pages: impl Iterator<Item = (u64, u64)>) {
     let position = bytes.len();
     bytes.extend_from_slice(&0u64.to_le_bytes());
     let mut count = 0u64;
     let mut pending: Option<u64> = None;
     let mut bits = 0u64;
-    for id in ids {
-        let page = id / PAGE_ROWS;
+    for (page, page_bits) in pages {
         if pending.is_some_and(|previous| previous != page) {
             bytes.extend_from_slice(&pending.unwrap().to_le_bytes());
             bytes.extend_from_slice(&bits.to_le_bytes());
@@ -75,7 +112,7 @@ fn append_bitmaps(bytes: &mut Vec<u8>, ids: impl Iterator<Item = u64>) {
             bits = 0;
         }
         pending = Some(page);
-        bits |= 1 << (id % PAGE_ROWS);
+        bits |= page_bits;
     }
     if let Some(page) = pending {
         bytes.extend_from_slice(&page.to_le_bytes());
@@ -85,10 +122,10 @@ fn append_bitmaps(bytes: &mut Vec<u8>, ids: impl Iterator<Item = u64>) {
     bytes[position..position + 8].copy_from_slice(&count.to_le_bytes());
 }
 
-/// Validate before allocating expanded identity vectors, including hostile persisted bitmaps.
-fn scan(
+/// Validate bitmap framing without expanding the historical identity directory.
+fn scan_bitmaps(
     bytes: &[u8],
-    mut row: impl FnMut(usize, u64),
+    mut page_visit: impl FnMut(usize, u64, u64, u64) -> Result<()>,
 ) -> Result<([Option<bool>; 2], [u64; 2], usize)> {
     let mut r = Reader::new(bytes, MAGIC)?;
     let mut matchable = [None; 2];
@@ -110,43 +147,62 @@ fn scan(
         let mut previous = None;
         for _ in 0..count {
             let page = r.u64()?;
-            let mut bits = r.u64()?;
+            let bits = r.u64()?;
             if page > u64::MAX / PAGE_ROWS || bits == 0 || previous.is_some_and(|p| p >= page) {
                 return Err(invalid());
             }
             previous = Some(page);
-            while bits != 0 {
-                let id = page * PAGE_ROWS + u64::from(bits.trailing_zeros());
-                if id >= next {
-                    return Err(invalid());
-                }
-                total = total.checked_add(1).ok_or_else(invalid)?;
-                row(side, id);
-                bits &= bits - 1;
+            let highest = page * PAGE_ROWS + u64::from(63 - bits.leading_zeros());
+            if highest >= next {
+                return Err(invalid());
             }
+            total = total
+                .checked_add(bits.count_ones() as usize)
+                .ok_or_else(invalid)?;
+            page_visit(side, page, bits, next)?;
         }
     }
     r.finish()?;
     Ok((matchable, next, total))
 }
 
+/// Snapshot validators may visit each referenced payload, without retaining an expanded directory.
+pub(super) fn scan(
+    bytes: &[u8],
+    mut row: impl FnMut(usize, u64, u64) -> Result<()>,
+) -> Result<([Option<bool>; 2], [u64; 2], usize)> {
+    scan_bitmaps(bytes, |side, page, mut bits, next| {
+        while bits != 0 {
+            row(
+                side,
+                page * PAGE_ROWS + u64::from(bits.trailing_zeros()),
+                next,
+            )?;
+            bits &= bits - 1;
+        }
+        Ok(())
+    })
+}
+
 pub(super) fn workspace(bytes: &[u8]) -> Result<usize> {
-    let (_, _, count) = scan(bytes, |_, _| {})?;
-    Ok(bytes
-        .len()
-        .saturating_mul(8)
-        .saturating_add(count.saturating_mul(16)))
+    scan_bitmaps(bytes, |_, _, _, _| Ok(()))?;
+    // The decoded directory stores one pair per persisted bitmap, with vector growth headroom.
+    // A dense bitmap must never be charged or allocated as 64 individual row identities.
+    Ok(bytes.len().saturating_mul(4).saturating_add(512))
 }
 
 pub(super) fn decode(bytes: &[u8]) -> Result<Manifest> {
-    scan(bytes, |_, _| {})?;
-    let mut ids: [Vec<u64>; 2] = Default::default();
-    let (matchable, next_row_id, _) = scan(bytes, |side, id| ids[side].push(id))?;
+    scan_bitmaps(bytes, |_, _, _, _| Ok(()))?;
+    let mut bitmaps: [Vec<(u64, u64)>; 2] = Default::default();
+    let (matchable, next_row_id, _) = scan_bitmaps(bytes, |side, page, bits, _| {
+        bitmaps[side].push((page, bits));
+        Ok(())
+    })?;
     Ok(Manifest {
         layout: Layout::Rows,
         next_row_id,
         matchable,
-        pages: ids,
+        pages: bitmaps.map(EntryIds::from_bitmaps),
         inline: None,
     })
 }

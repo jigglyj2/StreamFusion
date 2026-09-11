@@ -18,11 +18,24 @@ pub(super) struct StreamingCursor {
     matches: Option<CandidateMatches>,
     candidate_batch: CandidateBatch,
     pair_bytes: usize,
+    prepared: Option<prepared_history::Prepared>,
+    history_row: Option<usize>,
+    reader: Option<spilled_rows::Reader>,
+    page: Option<spilled_rows::Page>,
     // Keep decoded state, input encodings and lookup metadata admitted between pulls.
     _memory: HostMemoryReservation,
 }
 
 impl RegularJoinProcessor {
+    pub(crate) fn set_spill_resources(
+        &mut self,
+        resources: Option<Arc<crate::spill::Resources>>,
+    ) -> Result<()> {
+        self.require_idle_stream()?;
+        self.spill_resources = resources;
+        Ok(())
+    }
+
     pub(crate) fn cancel_streaming_batch(&mut self) {
         if self.streaming_cursor.take().is_some() {
             self.streaming_failed = true;
@@ -48,81 +61,6 @@ impl RegularJoinProcessor {
             ));
         }
         self.begin_streaming_batch_impl(side, batch, input_offset)
-    }
-
-    fn begin_streaming_batch_impl(
-        &mut self,
-        side: usize,
-        batch: RecordBatch,
-        input_offset: usize,
-    ) -> Result<()> {
-        if side > 1 || self.plan.bounded_final_output {
-            return Err(DataFusionError::Execution(
-                "invalid streaming regular join input".into(),
-            ));
-        }
-        self.prepare_schema(side, batch.schema())?;
-        let visible = self.visible_schemas[side].fields().len();
-        let mut memory = self
-            .scratch_reservation
-            .sibling("regular join in-flight batch state");
-        memory.resize(input_memory::workspace(&batch, visible)?)?;
-        let encoded = self.row_converters[side].convert_columns(&batch.columns()[..visible])?;
-        let mut unique = HashMap::<StateKey, usize, RandomState>::with_capacity_and_hasher(
-            batch.num_rows(),
-            RandomState::new(),
-        );
-        let mut indices = Vec::with_capacity(batch.num_rows());
-        for row in 0..batch.num_rows() {
-            let key = self.group_key(side, &batch, row)?;
-            let key = StateKey {
-                key_group: assign_key_group(&key, self.max_parallelism),
-                key,
-            };
-            let index = unique.len();
-            indices.push(*unique.entry(key).or_insert(index));
-        }
-        let mut keys = vec![None; unique.len()];
-        for (key, index) in unique {
-            keys[index] = Some(key);
-        }
-        let keys = keys
-            .into_iter()
-            .map(|key| key.expect("populated join key"))
-            .collect::<Vec<_>>();
-        let kinds = batch
-            .column(self.input_kind_indices[side].expect("prepared schema"))
-            .as_any()
-            .downcast_ref::<Int8Array>()
-            .ok_or_else(|| {
-                DataFusionError::Execution("regular join RowKinds are not Int8".into())
-            })?;
-        let accumulating = kinds.null_count() == 0
-            && kinds
-                .values()
-                .iter()
-                .all(|kind| matches!(*kind, INSERT | UPDATE_AFTER));
-        let (staged, reads) = if accumulating {
-            paged_state::load_for_accumulation(self.state.as_ref(), keys, &mut memory, side)?
-        } else {
-            paged_state::load(self.state.as_ref(), keys, &mut memory)?
-        };
-        self.state_read_batches = self.state_read_batches.saturating_add(reads);
-        self.streaming_cursor = Some(StreamingCursor {
-            side,
-            batch,
-            encoded,
-            staged,
-            indices,
-            row: 0,
-            input_offset,
-            change: None,
-            matches: None,
-            candidate_batch: CandidateBatch::default(),
-            pair_bytes: 0,
-            _memory: memory,
-        });
-        Ok(())
     }
 
     #[cfg(test)]
@@ -186,8 +124,20 @@ impl RegularJoinProcessor {
             let mut admitted = 4096usize;
             'rows: while cursor.row < cursor.batch.num_rows() {
                 let state_index = cursor.indices[cursor.row];
-                if cursor.change.is_none() {
-                    if self.residual_condition.is_some() && cursor.candidate_batch.is_empty() {
+                if cursor.matches.is_none() {
+                    if cursor.prepared.is_some() {
+                        match cursor.load_history_page() {
+                            Ok(()) => {}
+                            Err(DataFusionError::ResourcesExhausted(_)) if !output.is_empty() => {
+                                break
+                            }
+                            Err(error) => return Err(error),
+                        }
+                    }
+                    if cursor.prepared.is_none()
+                        && self.residual_condition.is_some()
+                        && cursor.candidate_batch.is_empty()
+                    {
                         // The previous transition is complete, so release its exhausted cache
                         // before admitting the next predicate chunk.
                         cursor.candidate_batch = CandidateBatch::default();
@@ -254,18 +204,28 @@ impl RegularJoinProcessor {
                         .saturating_mul(2)
                         .saturating_add(input.len())
                         .saturating_add(512);
-                    cursor.change = Some(ChangeCursor::new(
-                        self.join_type,
-                        cursor.side,
-                        kind,
-                        accumulate,
-                        Arc::from(input),
-                        i32::try_from(cursor.input_offset + cursor.row).map_err(|_| {
-                            DataFusionError::Execution(
-                                "regular join input exceeds Int32 ordinals".into(),
-                            )
-                        })?,
-                    ));
+                    if cursor.change.is_none() {
+                        let mut change = ChangeCursor::new(
+                            self.join_type,
+                            cursor.side,
+                            kind,
+                            accumulate,
+                            Arc::from(input),
+                            i32::try_from(cursor.input_offset + cursor.row).map_err(|_| {
+                                DataFusionError::Execution(
+                                    "regular join input exceeds Int32 ordinals".into(),
+                                )
+                            })?,
+                        );
+                        if cursor
+                            .prepared
+                            .as_ref()
+                            .is_some_and(|prepared| prepared.retracted_history[cursor.row])
+                        {
+                            change.retracted_history();
+                        }
+                        cursor.change = Some(change);
+                    }
                 }
                 // A byte target complements the row cap for wide rows. One candidate transition
                 // may produce a padding retract and a pair, so progress always permits two rows.
@@ -306,12 +266,21 @@ impl RegularJoinProcessor {
                     }
                 }
                 let before = output.len();
-                let done = cursor.change.as_mut().expect("initialized change").drain(
-                    &mut cursor.staged[state_index].value,
-                    cursor.matches.as_ref().expect("initialized mask"),
-                    &mut output,
-                    limit,
-                )?;
+                let final_page = cursor
+                    .reader
+                    .as_ref()
+                    .is_none_or(|reader| !reader.has_more());
+                let done = cursor
+                    .change
+                    .as_mut()
+                    .expect("initialized change")
+                    .drain_page(
+                        &mut cursor.staged[state_index].value,
+                        cursor.matches.as_ref().expect("initialized mask"),
+                        &mut output,
+                        limit,
+                        final_page,
+                    )?;
                 admitted = admitted.saturating_add(
                     output[before..]
                         .iter()
@@ -327,38 +296,42 @@ impl RegularJoinProcessor {
                 if !done {
                     break;
                 }
-                cursor.change = None;
                 cursor.matches = None;
-                cursor.row += 1;
+                cursor.clear_history_page();
+                if final_page {
+                    cursor.change = None;
+                    cursor.reader = None;
+                    cursor.row += 1;
+                }
             }
-            let done = cursor.row == cursor.batch.num_rows();
+            // Flush on the exhaustion pull, after the last output's temporary encoding has
+            // been handed off. Keeping it live here can starve legacy migration/write admission.
+            // The cursor remains active until then, so checkpoints still reject partial batches.
+            let done = cursor.row == cursor.batch.num_rows() && output.is_empty();
             if done {
-                let mutations = paged_state::batch_mutations(&cursor.staged, &mut cursor._memory)?;
-                // The write owns its encoded keys and values. Final output rows own payload
-                // Arcs under output_memory, so decoded state and input encodings can now go.
-                // Do not overlap an entire drained batch's workspace with backend growth.
-                let mutation_bytes = mutations.iter().fold(
-                    mutations
-                        .capacity()
-                        .saturating_mul(std::mem::size_of::<StateMutation>())
-                        .saturating_add(4096),
-                    |bytes, mutation| {
-                        bytes
-                            .saturating_add(mutation.key.key.capacity())
-                            .saturating_add(mutation.value.as_ref().map_or(0, Vec::capacity))
-                            .saturating_add(64)
-                    },
-                );
-                cursor.staged = Vec::new();
+                // The complete changelog transition has drained. Release input/predicate
+                // workspace, then encode dirty state in bounded pages at this batch boundary.
+                // No input or checkpoint can interleave with this flush; failure poisons the
+                // invocation and requires recovery from the previous Flink checkpoint.
                 cursor.indices = Vec::new();
                 cursor.encoded = self.row_converters[cursor.side].empty_rows(0, 0);
                 cursor.batch = RecordBatch::new_empty(cursor.batch.schema());
                 cursor.candidate_batch = CandidateBatch::default();
-                cursor._memory.resize(mutation_bytes)?;
-                if !mutations.is_empty() {
-                    self.state.write_batch(mutations)?;
-                    self.state_write_batches = self.state_write_batches.saturating_add(1);
+                if let Some(mut prepared) = cursor.prepared.take() {
+                    prepared.migrate(
+                        self.state.as_mut(),
+                        &cursor.staged,
+                        &cursor._memory,
+                        &mut self.state_write_batches,
+                    )?;
+                    prepared.transfer_directory_memory(&mut cursor._memory)?;
                 }
+                paged_state::flush(
+                    self.state.as_mut(),
+                    std::mem::take(&mut cursor.staged),
+                    &mut cursor._memory,
+                    &mut self.state_write_batches,
+                )?;
             }
             if output.is_empty() {
                 return Ok((None, done));
@@ -406,3 +379,6 @@ fn admit_output_capacity(memory: &mut HostMemoryReservation, required: usize) ->
         result => result,
     }
 }
+
+mod admission;
+mod history;

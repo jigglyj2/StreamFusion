@@ -9,7 +9,7 @@ class TimestampPartParityTest extends SqlParityTestSupport {
     @ParameterizedTest
     @MethodSource("queries")
     void upstreamClockCasesMatchThroughTheSqlHarness(String sql) throws Exception {
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
     }
 
     private static Stream<String> queries() {

@@ -95,6 +95,7 @@ class StreamFusionArrowChangelogNormalizeOperatorTest {
                                 selector.getProducedType(),
                                 environment)) {
             harness.setStateBackend(new StreamFusionStateBackend(new HashMapStateBackend()));
+            captureRows(harness);
             harness.setup(ArrowRowDataBatchSerializer.INSTANCE);
             harness.open();
 
@@ -179,17 +180,44 @@ class StreamFusionArrowChangelogNormalizeOperatorTest {
                     process(source.operator, inputs, row(7, "before", RowKind.INSERT));
                     takeKinds(source.operator);
                     state = snapshot(source.operator, kind);
-                    assertThat(state.getRawKeyedState()).isNotEmpty();
-                    assertThat(state.getManagedKeyedState())
-                            .noneMatch(IncrementalRemoteKeyedStateHandle.class::isInstance);
+                    if (kind == SnapshotKind.CANONICAL) {
+                        assertThat(state.getRawKeyedState()).isNotEmpty();
+                        assertThat(state.getManagedKeyedState())
+                                .noneMatch(IncrementalRemoteKeyedStateHandle.class::isInstance);
+                    } else {
+                        var handle = incremental(state);
+                        assertThat(handle.getSharedState()).isEmpty();
+                        assertThat(handle.getPrivateState()).isNotEmpty();
+                        assertThat(handle.getCheckpointedSize()).isPositive();
+                    }
                 }
                 try (Harness restored = harness(state, true, false)) {
                     process(restored.operator, inputs, row(7, "after", RowKind.UPDATE_AFTER));
-                    assertThat(takeKinds(restored.operator))
-                            .containsExactly(RowKind.UPDATE_BEFORE, RowKind.UPDATE_AFTER);
+                    var expected = new org.apache.flink.core.memory.DataOutputSerializer(64);
+                    var serializer = new org.apache.flink.table.runtime.typeutils.RowDataSerializer(ROW_TYPE);
+                    serializer.serialize(row(7, "before", RowKind.UPDATE_BEFORE), expected);
+                    serializer.serialize(row(7, "after", RowKind.UPDATE_AFTER), expected);
+                    assertThat(takeSerializedRows(restored.operator)).containsExactly(expected.getCopyOfBuffer());
+                } finally {
+                    state.discardState();
                 }
             }
         }
+    }
+
+    private static byte[] takeSerializedRows(
+            KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> harness)
+            throws Exception {
+        var bytes = new org.apache.flink.core.memory.DataOutputSerializer(64);
+        var serializer = new org.apache.flink.table.runtime.typeutils.RowDataSerializer(ROW_TYPE);
+        Object event;
+        while ((event = harness.getOutput().poll()) != null) {
+            if (event instanceof StreamRecord<?>) {
+                StreamRecord<?> record = (StreamRecord<?>) event;
+                serializer.serialize((RowData) record.getValue(), bytes);
+            }
+        }
+        return bytes.getCopyOfBuffer();
     }
 
     private static IncrementalRemoteKeyedStateHandle incremental(OperatorSubtaskState state) {
@@ -232,6 +260,7 @@ class StreamFusionArrowChangelogNormalizeOperatorTest {
                         0);
         harness.setStateBackend(new StreamFusionStateBackend(
                 rocks ? new EmbeddedRocksDBStateBackend(incremental) : new HashMapStateBackend()));
+        captureRows(harness);
         harness.setup(ArrowRowDataBatchSerializer.INSTANCE);
         if (state != null) {
             harness.initializeState(state);
@@ -283,17 +312,31 @@ class StreamFusionArrowChangelogNormalizeOperatorTest {
         List<RowKind> kinds = new ArrayList<>();
         Object value;
         while ((value = harness.getOutput().poll()) != null) {
-            if (value instanceof StreamRecord) {
-                @SuppressWarnings("unchecked")
-                ArrowRowDataBatch batch = ((StreamRecord<ArrowRowDataBatch>) value).getValue();
-                try (batch) {
-                    for (int row = 0; row < batch.size(); row++) {
-                        kinds.add(batch.rowKind(row));
-                    }
-                }
+            if (value instanceof StreamRecord<?>) {
+                StreamRecord<?> record = (StreamRecord<?>) value;
+                kinds.add(((RowData) record.getValue()).getRowKind());
             }
         }
         return kinds;
+    }
+
+    private static void captureRows(
+            KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> harness) {
+        // Native output is borrowed for the duration of collect; the default harness queues it
+        // after its Arrow vectors have been released. Capture stable Flink rows synchronously.
+        var serializer = new org.apache.flink.table.runtime.typeutils.RowDataSerializer(ROW_TYPE);
+        harness.setOutputCreator(
+                ignored -> new org.apache.flink.streaming.util.MockOutput<ArrowRowDataBatch>(new ArrayList<>()) {
+                    @Override
+                    public void collect(StreamRecord<ArrowRowDataBatch> record) {
+                        ArrowRowDataBatch batch = record.getValue();
+                        for (int index = 0; index < batch.size(); index++) {
+                            RowData row = serializer.copy(batch.rowView(index));
+                            row.setRowKind(batch.rowKind(index));
+                            harness.getOutput().add(new StreamRecord<>(row));
+                        }
+                    }
+                });
     }
 
     private enum SnapshotKind {

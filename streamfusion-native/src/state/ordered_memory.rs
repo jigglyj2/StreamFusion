@@ -23,6 +23,58 @@ pub(crate) struct OrderedMemoryKeyedState {
 }
 
 impl OrderedMemoryKeyedState {
+    fn range(
+        &self,
+        group: u32,
+        start: &[u8],
+        end: Option<&[u8]>,
+        max_rows: usize,
+        max_bytes: usize,
+        allow_large_entry: bool,
+        visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<bool>,
+    ) -> Result<bool> {
+        let group = &self.groups[self.index(group)?];
+        if max_rows == 0 || max_bytes == 0 {
+            return Err(DataFusionError::Execution(
+                "state scan bounds must be positive".into(),
+            ));
+        }
+        if end.is_some_and(|end| start >= end) {
+            return Ok(true);
+        }
+        let upper = end.map(Bound::Excluded).unwrap_or(Bound::Unbounded);
+        let mut page = Vec::with_capacity(max_rows.min(max_bytes / 96));
+        let mut bytes = 0usize;
+        for (k, v) in group.range::<[u8], _>((Bound::Included(start), upper)) {
+            if page.len() == max_rows {
+                if !visitor(&page)? {
+                    return Ok(false);
+                }
+                page.clear();
+                bytes = 0;
+            }
+            let size = k.len().saturating_add(v.len()).saturating_add(100);
+            if size > max_bytes && !allow_large_entry {
+                return Err(DataFusionError::ResourcesExhausted(
+                    "state scan entry exceeds the admitted page budget".into(),
+                ));
+            }
+            if !page.is_empty() && bytes.saturating_add(size) > max_bytes {
+                if !visitor(&page)? {
+                    return Ok(false);
+                }
+                page.clear();
+                bytes = 0;
+            }
+            page.push((k.as_ref(), v.as_ref()));
+            bytes += size;
+        }
+        if !page.is_empty() {
+            visitor(&page)?;
+        }
+        Ok(true)
+    }
+
     pub(crate) fn new(
         first: u32,
         last: u32,
@@ -161,6 +213,21 @@ impl KeyedState for OrderedMemoryKeyedState {
         })
     }
 
+    fn visit_prefix_admitted(
+        &self,
+        group: u32,
+        prefix: &[u8],
+        rows: usize,
+        _bytes: usize,
+        owner: &HostMemoryReservation,
+        visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<()>,
+    ) -> Result<()> {
+        let mut descriptors = owner.sibling("ordered state borrowed page");
+        descriptors.resize(rows.saturating_mul(32))?;
+        // Payloads already belong to the retained state reservation; the visitor admits any copies.
+        self.visit_prefix(group, prefix, rows, usize::MAX, visitor)
+    }
+
     fn visit_range(
         &self,
         group: u32,
@@ -170,46 +237,24 @@ impl KeyedState for OrderedMemoryKeyedState {
         max_bytes: usize,
         visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<bool>,
     ) -> Result<()> {
-        let group = &self.groups[self.index(group)?];
-        if max_rows == 0 || max_bytes == 0 {
-            return Err(DataFusionError::Execution(
-                "state scan bounds must be positive".into(),
-            ));
-        }
-        if end.is_some_and(|end| start >= end) {
-            return Ok(());
-        }
-        let upper = end.map(Bound::Excluded).unwrap_or(Bound::Unbounded);
-        let mut page = Vec::with_capacity(max_rows.min(max_bytes / 96));
-        let mut bytes = 0usize;
-        for (k, v) in group.range::<[u8], _>((Bound::Included(start), upper)) {
-            if page.len() == max_rows {
-                if !visitor(&page)? {
-                    return Ok(());
-                }
-                page.clear();
-                bytes = 0;
-            }
-            let size = k.len().saturating_add(v.len()).saturating_add(100);
-            if size > max_bytes {
-                return Err(DataFusionError::ResourcesExhausted(
-                    "state scan entry exceeds the admitted page budget".into(),
-                ));
-            }
-            if bytes.saturating_add(size) > max_bytes {
-                if !visitor(&page)? {
-                    return Ok(());
-                }
-                page.clear();
-                bytes = 0;
-            }
-            page.push((k.as_ref(), v.as_ref()));
-            bytes += size;
-        }
-        if !page.is_empty() {
-            visitor(&page)?;
-        }
-        Ok(())
+        self.range(group, start, end, max_rows, max_bytes, false, visitor)
+            .map(|_| ())
+    }
+
+    fn visit_range_admitted(
+        &self,
+        group: u32,
+        start: &[u8],
+        end: Option<&[u8]>,
+        rows: usize,
+        bytes: usize,
+        owner: &HostMemoryReservation,
+        visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<bool>,
+    ) -> Result<bool> {
+        let mut descriptors = owner.sibling("ordered state borrowed range page");
+        descriptors.resize(rows.saturating_mul(32))?;
+        // Values already belong to the retained state budget. Only page descriptors are new.
+        self.range(group, start, end, rows, bytes, true, visitor)
     }
 
     fn snapshot_key_group(
@@ -236,41 +281,29 @@ impl KeyedState for OrderedMemoryKeyedState {
         Ok(SnapshotBytes::owned(encoded, reservation))
     }
 
+    fn write_snapshot(
+        &self,
+        group: u32,
+        _owner: &HostMemoryReservation,
+        sink: &mut super::snapshot_stream::SnapshotSink<'_>,
+    ) -> Result<usize> {
+        let entries = &self.groups[self.index(group)?];
+        super::snapshot_stream::write_entries(
+            group,
+            entries
+                .iter()
+                .map(|(key, value)| (key.as_ref(), value.as_ref())),
+            sink,
+        )
+    }
+
     fn restore_key_group(
         &mut self,
         group: u32,
         bytes: &[u8],
         owner: &HostMemoryReservation,
     ) -> Result<()> {
-        let index = self.index(group)?;
-        if !self.groups[index].is_empty() {
-            return Err(DataFusionError::Execution(format!(
-                "key group {group} was restored more than once"
-            )));
-        }
-        let count = streamfusion_state_abi::validate_key_group_snapshot(group, bytes)
-            .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-        let mut scratch = owner.sibling("ordered state restore");
-        scratch.resize(
-            bytes
-                .len()
-                .saturating_mul(2)
-                .saturating_add(count.saturating_mul(128)),
-        )?;
-        let entries = streamfusion_state_abi::decode_key_group_snapshot(group, bytes)
-            .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-        self.write_batch(
-            entries
-                .into_iter()
-                .map(|(key, value)| StateMutation {
-                    key: super::StateKey {
-                        key_group: group,
-                        key,
-                    },
-                    value: Some(value),
-                })
-                .collect(),
-        )
+        super::canonical_restore::restore(self, group, bytes, owner)
     }
 }
 

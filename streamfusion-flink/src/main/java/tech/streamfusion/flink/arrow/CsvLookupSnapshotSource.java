@@ -2,7 +2,6 @@
 package tech.streamfusion.flink.arrow;
 
 import java.io.IOException;
-import java.io.Serializable;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.flink.api.common.io.InputFormat;
@@ -28,7 +27,7 @@ import org.apache.flink.util.InstantiationUtil;
  * this finite source during operator open, before accepting probe records, just like CsvLookupFunction.
  */
 @SuppressWarnings("deprecation")
-public final class CsvLookupSnapshotSource implements Serializable {
+public final class CsvLookupSnapshotSource implements ArrowLookupSnapshotSource {
     private static final long serialVersionUID = 1L;
     private final RowCsvInputFormat format;
     private final DataType dataType;
@@ -85,7 +84,7 @@ public final class CsvLookupSnapshotSource implements Serializable {
     }
 
     /** Owns only the active Flink reader. Returned Arrow batches have independent buffer ownership. */
-    public static final class Cursor implements AutoCloseable {
+    public static final class Cursor implements ArrowLookupSnapshotSource.Cursor {
         private final RowCsvInputFormat reader;
         private final BufferAllocator allocator;
         private final RowType rowType;

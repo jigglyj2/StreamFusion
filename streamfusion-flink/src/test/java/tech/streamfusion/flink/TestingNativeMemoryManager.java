@@ -16,16 +16,26 @@ public final class TestingNativeMemoryManager implements NativeMemoryManager {
     private static final long TEST_LIMIT = 1L << 30;
 
     private long reserved;
+    private final long limit;
 
     public static NativeMemoryManager create() {
-        return new TestingNativeMemoryManager();
+        return create(TEST_LIMIT);
     }
 
-    private TestingNativeMemoryManager() {}
+    public static NativeMemoryManager create(long limit) {
+        if (limit <= 0) {
+            throw new IllegalArgumentException("Test memory limit must be positive");
+        }
+        return new TestingNativeMemoryManager(limit);
+    }
+
+    private TestingNativeMemoryManager(long limit) {
+        this.limit = limit;
+    }
 
     @Override
     public synchronized boolean tryReserve(long bytes) {
-        if (bytes < 0 || bytes > TEST_LIMIT - reserved) {
+        if (bytes < 0 || bytes > limit - reserved) {
             return false;
         }
         reserved += bytes;
@@ -42,11 +52,11 @@ public final class TestingNativeMemoryManager implements NativeMemoryManager {
 
     @Override
     public synchronized long available() {
-        return TEST_LIMIT - reserved;
+        return limit - reserved;
     }
 
     @Override
     public long limit() {
-        return TEST_LIMIT;
+        return limit;
     }
 }

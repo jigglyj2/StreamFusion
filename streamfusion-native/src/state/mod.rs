@@ -1,8 +1,18 @@
 // Copyright 2026 StreamFusion Authors
 // Licensed under the Apache License, Version 2.0
 
+mod batch_writer;
+pub(crate) use batch_writer::StateBatchWriter;
+mod checkpoint_source;
+pub(crate) use checkpoint_source::CheckpointSource;
+mod canonical_file;
+pub(crate) use canonical_file::CanonicalFile;
+mod canonical_restore;
+pub(crate) use canonical_restore::require_empty as require_empty_key_group;
 mod checkpoint_import;
 pub(crate) use checkpoint_import::import_key_group;
+#[cfg(test)]
+mod admitted_range_tests;
 mod memory;
 #[cfg(test)]
 pub(crate) mod observed_tests;
@@ -16,6 +26,7 @@ pub(crate) use read_batch::StateReadBatch;
 mod rocks_plugin;
 mod snapshot;
 mod snapshot_bytes;
+pub(crate) mod snapshot_stream;
 pub(crate) use snapshot_bytes::SnapshotBytes;
 mod timer;
 mod value;
@@ -51,7 +62,7 @@ pub(crate) struct StateMutation {
     pub(crate) value: Option<Vec<u8>>,
 }
 
-fn prefix_end(prefix: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn prefix_end(prefix: &[u8]) -> Option<Vec<u8>> {
     let index = prefix.iter().rposition(|&byte| byte != u8::MAX)?;
     let mut end = prefix[..=index].to_vec();
     end[index] += 1;
@@ -71,7 +82,9 @@ pub(crate) trait KeyedState: Send {
         owner: &crate::memory_pool::HostMemoryReservation,
     ) -> Result<StateReadBatch<'a>>;
 
-    /// Applies one atomic operator batch. Backends should use their native batch primitive.
+    /// Applies one atomic backend write batch using the backend's native batch primitive.
+    /// An operator may flush several pages only while checkpoints/input cannot interleave and
+    /// any partial-flush failure makes the execution context unusable until checkpoint recovery.
     fn write_batch(&mut self, mutations: Vec<StateMutation>) -> Result<()>;
 
     /// Visits a stable key group in bounded pages, without constructing a canonical snapshot.
@@ -83,6 +96,19 @@ pub(crate) trait KeyedState: Send {
         max_bytes: usize,
         visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<()>,
     ) -> Result<()>;
+
+    /// A stable read source may own external buffers. Admit their actual pages, including an
+    /// oversized single entry, through the same host budget as the restoring operator.
+    fn visit_key_group_admitted(
+        &self,
+        group: u32,
+        rows: usize,
+        bytes: usize,
+        owner: &crate::memory_pool::HostMemoryReservation,
+        visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<()>,
+    ) -> Result<()> {
+        self.visit_prefix_admitted(group, &[], rows, bytes, owner, visitor)
+    }
 
     /// Visits matching entries in bounded pages, without requiring an ordering-capable
     /// in-memory backend. External ordered stores should seek directly to the prefix.
@@ -107,6 +133,26 @@ pub(crate) trait KeyedState: Send {
         })
     }
 
+    /// Borrow a prefix in bounded pages while admitting external payload allocations. A single
+    /// large entry may exceed the normal page target when its actual size can be admitted.
+    fn visit_prefix_admitted(
+        &self,
+        group: u32,
+        prefix: &[u8],
+        rows: usize,
+        bytes: usize,
+        owner: &crate::memory_pool::HostMemoryReservation,
+        visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<()>,
+    ) -> Result<()> {
+        let mut memory = owner.sibling("state prefix page");
+        memory.resize(
+            bytes
+                .saturating_add(rows.saturating_mul(32))
+                .saturating_add(4096),
+        )?;
+        self.visit_prefix(group, prefix, rows, bytes, visitor)
+    }
+
     /// Visits [start, end) in bytewise key order. Pages are bounded by both limits;
     /// returning false stops without visiting another page. The caller reserves the page
     /// budget and retained results before reading, and holds state stable during visitation.
@@ -124,11 +170,51 @@ pub(crate) trait KeyedState: Send {
         ))
     }
 
+    /// Ordered pages with external payload admission and early termination. A single entry may
+    /// exceed the byte target when its actual allocation fits the host budget. Returning false
+    /// releases the current page without fetching a following page. A true result proves the
+    /// range is exhausted; backends without completion metadata may conservatively return false.
+    fn visit_range_admitted(
+        &self,
+        group: u32,
+        start: &[u8],
+        end: Option<&[u8]>,
+        rows: usize,
+        bytes: usize,
+        owner: &crate::memory_pool::HostMemoryReservation,
+        visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<bool>,
+    ) -> Result<bool> {
+        let mut memory = owner.sibling("state ordered page");
+        memory.resize(
+            bytes
+                .saturating_add(rows.saturating_mul(32))
+                .saturating_add(4096),
+        )?;
+        let mut stopped = false;
+        self.visit_range(group, start, end, rows, bytes, &mut |page| {
+            let keep_going = visitor(page)?;
+            stopped = !keep_going;
+            Ok(keep_going)
+        })?;
+        Ok(!stopped)
+    }
+
     fn snapshot_key_group(
         &self,
         key_group: u32,
         owner: &crate::memory_pool::HostMemoryReservation,
     ) -> Result<SnapshotBytes>;
+
+    /// Streams the existing length-framed canonical representation while state is held stable.
+    /// Backends override this to avoid materializing their complete key group.
+    fn write_snapshot(
+        &self,
+        group: u32,
+        owner: &crate::memory_pool::HostMemoryReservation,
+        sink: &mut snapshot_stream::SnapshotSink<'_>,
+    ) -> Result<usize> {
+        snapshot_stream::write_materialized(&self.snapshot_key_group(group, owner)?, sink)
+    }
 
     fn restore_key_group(
         &mut self,

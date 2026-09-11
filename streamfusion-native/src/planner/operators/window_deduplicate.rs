@@ -500,6 +500,22 @@ impl WindowDeduplicateProcessor {
         )
     }
 
+    pub(crate) fn restore_physical_key_group(
+        &mut self,
+        key_group: u32,
+        source: &dyn crate::state::KeyedState,
+    ) -> Result<()> {
+        super::stateful_utils::restore_timer_checkpoint(
+            self.state.as_mut(),
+            &mut self.timers,
+            key_group,
+            source,
+            TIMER_STATE_KEY,
+            &mut self.state_read_batches,
+            &self.scratch_reservation,
+        )
+    }
+
     pub(crate) fn checkpoint(&self, directory: &std::path::Path) -> Result<()> {
         self.state.checkpoint(directory)
     }

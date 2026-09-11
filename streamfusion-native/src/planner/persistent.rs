@@ -65,24 +65,31 @@ pub(crate) trait PersistentOperatorFactory: Send + Sync {
         ))
     }
 
+    fn write_snapshot(
+        &self,
+        group: u32,
+        sink: &mut crate::state::snapshot_stream::SnapshotSink<'_>,
+    ) -> Result<usize> {
+        crate::state::snapshot_stream::write_materialized(&self.snapshot(group)?, sink)
+    }
+
     fn restore(&self, _key_group: u32, _bytes: &[u8]) -> Result<()> {
         Err(DataFusionError::Plan(
             "persistent node has no shared restore binding".into(),
         ))
     }
 
-    /// Flink owns file materialization and assignment. Factories with opaque keyed state can
-    /// override this to import bounded entry pages; semantic restore adapters retain canonical
-    /// decoding until their timer/index rebuild contracts support a paged import.
+    /// Flink owns source materialization and assignment. Stateful factories must import through
+    /// bounded keyed reads; canonical staging and physical checkpoints share this contract.
     fn restore_from_checkpoint(
         &self,
-        key_group: u32,
-        source: &crate::state::RocksPluginKeyedState,
-        owner: &crate::memory_pool::HostMemoryReservation,
+        _key_group: u32,
+        _source: &dyn crate::state::KeyedState,
+        _owner: &crate::memory_pool::HostMemoryReservation,
     ) -> Result<()> {
-        use crate::state::KeyedState;
-        let bytes = source.snapshot_key_group(key_group, owner)?;
-        self.restore(key_group, &bytes)
+        Err(DataFusionError::Plan(
+            "persistent node has no bounded restore binding".into(),
+        ))
     }
 
     fn checkpoint(&self, _directory: &std::path::Path) -> Result<()> {

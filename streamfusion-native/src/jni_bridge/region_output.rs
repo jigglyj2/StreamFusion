@@ -3,23 +3,33 @@
 
 //! Port-tagged C Data at a region edge. One pull drives all native exits cooperatively;
 //! schemas are negotiated once per output per invocation, including outputs arriving late.
+use crate::exchange::{
+    managed_routing::AccountedFrames, output_bindings::OutputBindings,
+    prepared_router::PreparedRouter,
+};
+use crate::planner::region::RegionBatch;
 use crate::{execution_context::NativeExecutionContext, planner::region::RegionOutput};
 use arrow::datatypes::SchemaRef;
 use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
+use arrow::record_batch::RecordBatch;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::memory_pool::MemoryReservation;
-use futures::StreamExt;
-use std::collections::HashMap;
+use datafusion::physical_plan::RecordBatchStream;
+use futures::{Stream, StreamExt};
+use std::collections::{HashMap, VecDeque};
+use std::pin::Pin;
 use std::sync::{
     atomic::{AtomicI64, Ordering},
     Arc, Mutex, OnceLock,
 };
 
 pub(super) struct Output {
-    stream: Option<RegionOutput>,
+    stream: Option<Pin<Box<dyn Stream<Item = Result<RegionBatch>> + Send>>>,
     schemas: Vec<SchemaRef>,
     emitted_schema: Vec<bool>,
     failed: bool,
+    bindings: Option<Arc<OutputBindings>>,
+    pending: VecDeque<Pending>,
     _inputs: Vec<MemoryReservation>,
     context: Arc<NativeExecutionContext>,
 }
@@ -28,32 +38,75 @@ impl Output {
         context: Arc<NativeExecutionContext>,
         stream: RegionOutput,
         inputs: Vec<MemoryReservation>,
-    ) -> Self {
+    ) -> Result<Self> {
+        let bindings = context.exchange_output_bindings()?;
         let schemas = stream.schemas();
         let emitted_schema = vec![false; schemas.len()];
-        Self {
-            stream: Some(stream),
+        Ok(Self {
+            stream: Some(Box::pin(stream)),
             schemas,
             emitted_schema,
             failed: false,
+            bindings,
+            pending: VecDeque::new(),
             _inputs: inputs,
             context,
-        }
+        })
     }
-    /// Caller supplies fresh empty C descriptors. On failure, all native cleanup finishes
-    /// before JNI installs a Java exception; no output descriptor is partially published.
-    pub(super) unsafe fn next(
+    /// One edge driver for a tree or DAG. The underlying streams keep their own completion
+    /// and cancellation contracts; tagging a tree's sole exit never changes execution.
+    pub(super) fn start(
+        context: Arc<NativeExecutionContext>,
+        batches: Vec<arrow::record_batch::RecordBatch>,
+        events: Option<&[(u64, crate::planner::persistent::control::ControlEvent)]>,
+        inputs: Vec<MemoryReservation>,
+    ) -> Result<Self> {
+        if context.protocol_version() < crate::RECORD_POLICY_PLAN_PROTOCOL_VERSION {
+            return Err(DataFusionError::Plan(
+                "port-tagged output requires an owned-envelope plan".into(),
+            ));
+        }
+        if context.region_input_count().is_some() {
+            let stream = match events {
+                Some(events) => context.start_region_control(batches, events)?,
+                None => context.start_region(batches)?,
+            };
+            return Self::new(context, stream, inputs);
+        }
+        let stream = match events {
+            Some(events) => context.start_control(batches, events)?,
+            None => context.start(batches)?,
+        };
+        let schema = stream.schema();
+        let bindings = context.exchange_output_bindings()?;
+        Ok(Self {
+            stream: Some(Box::pin(
+                stream.map(|result| result.map(|batch| RegionBatch { port: 0, batch })),
+            )),
+            schemas: vec![schema],
+            emitted_schema: vec![false],
+            failed: false,
+            bindings,
+            pending: VecDeque::new(),
+            _inputs: inputs,
+            context,
+        })
+    }
+
+    /// Caller supplies empty C descriptors for Arrow outputs. Frame outputs leave them untouched.
+    pub(super) unsafe fn next_event(
         &mut self,
         array: *mut FFI_ArrowArray,
         schema: *mut FFI_ArrowSchema,
-    ) -> Result<i32> {
+    ) -> Result<Event> {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
             self.next_inner(array, schema)
         }));
         match result {
-            Ok(Ok(port)) => Ok(port),
+            Ok(Ok(event)) => Ok(event),
             other => {
                 self.failed = true;
+                self.pending.clear();
                 drop(self.stream.take());
                 match other {
                     Ok(Err(error)) => Err(error),
@@ -68,62 +121,91 @@ impl Output {
         &mut self,
         array: *mut FFI_ArrowArray,
         schema: *mut FFI_ArrowSchema,
-    ) -> Result<i32> {
+    ) -> Result<Event> {
         if self.failed {
             return Err(DataFusionError::Execution(
                 "native region output has failed".into(),
             ));
         }
-        if array.is_null() || schema.is_null() {
-            return Err(DataFusionError::Execution(
-                "native region output C Data addresses must be non-null".into(),
-            ));
-        }
-        let Some(stream) = &mut self.stream else {
-            return Ok(-1);
-        };
-        let Some(next) = self.context.runtime().block_on(stream.next()) else {
-            drop(self.stream.take());
-            return Ok(-1);
-        };
-        let next = next?;
-        let port = i32::try_from(next.port).map_err(|_| {
-            DataFusionError::Execution(
-                "native region output port exceeds Java integer range".into(),
-            )
-        })?;
-        let expected = self.schemas.get(next.port).ok_or_else(|| {
-            DataFusionError::Execution("native region returned an unknown output port".into())
-        })?;
-        if next.batch.schema() != *expected {
-            return Err(DataFusionError::Execution(
-                "native region output schema changed during invocation".into(),
-            ));
-        }
-        let output = self.context.reservation("native region Arrow output");
-        let batch = crate::memory_pool::arrow_lease::edge_batch(
-            next.batch,
-            output.new_empty(),
-            crate::memory_pool::buffer_registry(self.context.task_context().memory_pool()),
-        )?;
-        let exported_schema = if !self.emitted_schema[next.port] {
-            Some(crate::memory_pool::c_data::schema(
-                expected,
-                output.new_empty(),
-            )?)
-        } else {
-            None
-        };
-        let exported_array = crate::memory_pool::c_data::array(batch, output)?;
-        unsafe {
-            array.write(exported_array);
-            if let Some(exported) = exported_schema {
-                schema.write(exported);
-                self.emitted_schema[next.port] = true;
+        while self.pending.is_empty() {
+            let Some(stream) = &mut self.stream else {
+                return Ok(Event::End);
+            };
+            let Some(next) = self.context.runtime().block_on(stream.next()) else {
+                drop(self.stream.take());
+                return Ok(Event::End);
+            };
+            let next = next?;
+            let expected = self.schemas.get(next.port).ok_or_else(|| {
+                DataFusionError::Execution("native region returned an unknown output port".into())
+            })?;
+            if next.batch.schema() != *expected {
+                return Err(DataFusionError::Execution(
+                    "native region output schema changed during invocation".into(),
+                ));
+            }
+            let batch = crate::memory_pool::arrow_lease::edge_batch(
+                next.batch,
+                self.context.reservation("native output batch ownership"),
+                crate::memory_pool::buffer_registry(self.context.task_context().memory_pool()),
+            )?;
+            if let Some(bindings) = &self.bindings {
+                let outputs = &bindings.ports[next.port];
+                if outputs.arrow {
+                    self.pending
+                        .push_back(Pending::Arrow(next.port, batch.clone()));
+                }
+                for (id, router) in &outputs.frames {
+                    self.pending
+                        .push_back(Pending::Frames(*id, router.clone(), batch.clone()));
+                }
+            } else {
+                self.pending.push_back(Pending::Arrow(next.port, batch));
             }
         }
-        Ok(port)
+        match self.pending.pop_front().unwrap() {
+            Pending::Frames(id, router, batch) => {
+                let rows = batch.num_rows();
+                Ok(Event::Frames(id, rows, router.route_owned(batch)?))
+            }
+            Pending::Arrow(port, batch) => {
+                if array.is_null() || schema.is_null() {
+                    return Err(DataFusionError::Execution(
+                        "native region output C Data addresses must be non-null".into(),
+                    ));
+                }
+                let rows = batch.num_rows();
+                let output = self.context.reservation("native region Arrow output");
+                let exported_schema = if !self.emitted_schema[port] {
+                    Some(crate::memory_pool::c_data::schema(
+                        &self.schemas[port],
+                        output.new_empty(),
+                    )?)
+                } else {
+                    None
+                };
+                let exported_array = crate::memory_pool::c_data::array(batch, output)?;
+                unsafe {
+                    array.write(exported_array);
+                    if let Some(exported) = exported_schema {
+                        schema.write(exported);
+                        self.emitted_schema[port] = true;
+                    }
+                }
+                Ok(Event::Arrow(port, rows))
+            }
+        }
     }
+}
+
+enum Pending {
+    Arrow(usize, RecordBatch),
+    Frames(usize, Arc<PreparedRouter>, RecordBatch),
+}
+pub(super) enum Event {
+    End,
+    Arrow(usize, usize),
+    Frames(usize, usize, AccountedFrames),
 }
 
 struct Slot {
@@ -160,6 +242,23 @@ pub(super) unsafe fn next(
     array: *mut FFI_ArrowArray,
     schema: *mut FFI_ArrowSchema,
 ) -> Result<i32> {
+    with_output(handle, |output| unsafe {
+        match output.next_event(array, schema)? {
+            Event::End => Ok(-1),
+            Event::Arrow(port, _) => {
+                i32::try_from(port).map_err(|e| DataFusionError::External(Box::new(e)))
+            }
+            Event::Frames(_, _, _) => Err(DataFusionError::Execution(
+                "framed outputs require the tagged transport API".into(),
+            )),
+        }
+    })
+}
+
+pub(super) fn with_output<T>(
+    handle: i64,
+    action: impl FnOnce(&mut Output) -> Result<T>,
+) -> Result<T> {
     let entry = outputs()
         .lock()
         .map_err(|_| poisoned())?
@@ -174,7 +273,7 @@ pub(super) unsafe fn next(
             DataFusionError::Execution("native region output is busy or closed".into())
         })?
     };
-    let result = unsafe { output.next(array, schema) };
+    let result = action(&mut output);
     let mut slot = entry.lock().unwrap_or_else(|e| e.into_inner());
     if !slot.closed {
         slot.output = Some(output);

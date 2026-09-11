@@ -84,6 +84,7 @@ fn plan(changelog: bool) -> proto::NativePlan {
 }
 fn binding(rocks: Option<(&str, &std::path::Path)>) -> proto::NativeStateBindings {
     proto::NativeStateBindings {
+        spill_directories: Vec::new(),
         protocol_version: 1,
         bindings: vec![proto::NativeStateBinding {
             restored_watermark: None,
@@ -148,7 +149,7 @@ fn context(
     memory: &HostMemoryReservation,
 ) -> Arc<NativeExecutionContext> {
     let mut context =
-        NativeExecutionContext::new(&plan.encode_to_vec(), memory.datafusion_pool(32 << 20))
+        NativeExecutionContext::new(&plan.encode_to_vec(), memory.datafusion_pool().unwrap())
             .unwrap();
     context
         .install_state(&binding.encode_to_vec(), memory.sibling("bindings"))
@@ -295,7 +296,7 @@ fn bounded_and_incomplete_mini_plans_are_rejected_before_opening_rocksdb() {
         let broker = Arc::new(TestBroker::new(32 << 20));
         let memory = HostMemoryReservation::new(broker.clone(), "control rejection");
         let mut context =
-            NativeExecutionContext::new(&plan.encode_to_vec(), memory.datafusion_pool(32 << 20))
+            NativeExecutionContext::new(&plan.encode_to_vec(), memory.datafusion_pool().unwrap())
                 .unwrap();
         let path = directory.path().join(format!("unopened-{bounded}"));
         let error = context

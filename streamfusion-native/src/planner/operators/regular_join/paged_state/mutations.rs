@@ -30,11 +30,18 @@ fn entries(rows: &[StoredRow], layout: Layout) -> impl Iterator<Item = (u64, &[S
         })
 }
 
-fn changed_rows(
+pub(super) fn changed_rows(
     entry: &StagedState,
     mut visit: impl FnMut(usize, u64, Layout, &[StoredRow]) -> Result<()>,
 ) -> Result<()> {
     let new_layout = layout(entry);
+    if let Some(unloaded) = &entry.unloaded {
+        for side in 0..2 {
+            for id in unloaded.ids[side].removed_from(&unloaded.original_ids[side]) {
+                visit(side, id, Layout::Rows, &[])?;
+            }
+        }
+    }
     for (side, (before, after)) in [
         (&entry.original.left, &entry.value.left),
         (&entry.original.right, &entry.value.right),
@@ -77,12 +84,15 @@ fn changed_rows(
     Ok(())
 }
 
-fn root(
+pub(super) fn root(
     state: &JoinState,
     layout: Layout,
-    unloaded: Option<&UnloadedRows>,
+    unloaded: Option<&[EntryIds; 2]>,
 ) -> Result<Option<Vec<u8>>> {
-    if state.left.is_empty() && state.right.is_empty() && unloaded.is_none() {
+    if state.left.is_empty()
+        && state.right.is_empty()
+        && unloaded.is_none_or(|ids| ids.iter().all(EntryIds::is_empty))
+    {
         return Ok(None);
     }
     Ok(Some(match layout {
@@ -111,13 +121,22 @@ pub(in super::super) fn mutations(entry: &StagedState) -> Result<Vec<StateMutati
         });
         Ok(())
     })?;
-    let old = root(
-        &entry.original,
-        entry.original_layout,
-        entry.unloaded.as_ref(),
+    let changed_layout = entry.original_layout != layout(entry);
+    let old = if changed_layout {
+        None
+    } else {
+        root(
+            &entry.original,
+            entry.original_layout,
+            entry.unloaded.as_ref().map(|rows| &rows.original_ids),
+        )?
+    };
+    let new = root(
+        &entry.value,
+        layout(entry),
+        entry.unloaded.as_ref().map(|rows| &rows.ids),
     )?;
-    let new = root(&entry.value, layout(entry), entry.unloaded.as_ref())?;
-    if old != new {
+    if changed_layout || old != new {
         changes.push(StateMutation {
             key: manifest_key(&entry.key),
             value: new,
@@ -139,9 +158,10 @@ pub(super) fn workspace(entry: &StagedState) -> usize {
         count += 1;
         if layout != Layout::Compact {
             let retained_pages = entry.unloaded.as_ref().map_or(0, |u| {
-                u.ids
-                    .chunk_by(|a, b| a / PAGE_ROWS == b / PAGE_ROWS)
-                    .count()
+                u.original_ids
+                    .iter()
+                    .map(EntryIds::bitmap_count)
+                    .sum::<usize>()
             });
             let bytes = 39
                 + 16 * (pages(&state.left).count() + pages(&state.right).count() + retained_pages);

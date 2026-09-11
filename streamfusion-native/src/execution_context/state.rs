@@ -29,6 +29,7 @@ use std::sync::{Arc, Mutex};
 pub(super) struct StateResources {
     options: proto::NativeStateBindings,
     memory: HostMemoryReservation,
+    spill: Option<Arc<crate::spill::Resources>>,
     // Setup admission is transactional and follows the decoded bindings after success.
     // Drop options before returning their credit, including on constructor failure.
     _control_memory: MemoryReservation,
@@ -62,12 +63,28 @@ impl NativeExecutionContext {
         )?;
         let options = proto::NativeStateBindings::decode(bytes)
             .map_err(|error| invalid(format!("invalid state-binding protobuf: {error}")))?;
-        if !matches!(options.protocol_version, 1 | 2 | 3)
+        if !matches!(options.protocol_version, 1 | 2 | 3 | 4)
             || self.protocol_version() < crate::ENVELOPE_PLAN_PROTOCOL_VERSION
             || options.bindings.is_empty()
         {
             return Err(invalid("unsupported state-binding protocol version"));
         }
+        let spill = if options.protocol_version == 4 {
+            Some(crate::spill::Resources::new(
+                options
+                    .spill_directories
+                    .iter()
+                    .map(std::path::PathBuf::from)
+                    .collect(),
+            )?)
+        } else {
+            if !options.spill_directories.is_empty() {
+                return Err(invalid(
+                    "spill directories require state-binding protocol 4",
+                ));
+            }
+            None
+        };
         let mut ids = HashSet::new();
         let mut directories = HashSet::new();
         // Validate the entire request before opening any database or constructing operator state.
@@ -201,13 +218,14 @@ impl NativeExecutionContext {
                 .iter()
                 .find(|(id, _)| *id == binding.plan_node_id)
                 .map(|(_, buffer)| *buffer);
-            let factory = create(node, &bare, binding, state_memory, buffer)?;
+            let factory = create(node, &bare, binding, state_memory, buffer, spill.clone())?;
             bindings.push((binding.plan_node_id, factory));
         }
         self.bind_persistent(bindings)?;
         self.state_resources = Some(StateResources {
             options,
             memory,
+            spill,
             _control_memory: control_memory,
         });
         Ok(())
@@ -237,8 +255,57 @@ impl NativeExecutionContext {
         self.state_control(id, false, |owner| owner.snapshot(key_group))
     }
 
+    pub(crate) fn write_snapshot_state(
+        &self,
+        id: u64,
+        group: u32,
+        sink: &mut crate::state::snapshot_stream::SnapshotSink<'_>,
+    ) -> Result<usize> {
+        self.state_control(id, false, |owner| owner.write_snapshot(group, sink))
+    }
+
     pub(crate) fn restore_state(&self, id: u64, key_group: u32, bytes: &[u8]) -> Result<()> {
         self.state_control(id, true, |owner| owner.restore(key_group, bytes))
+    }
+
+    /// Prepare and validate canonical input without mutating the destination. A failure during
+    /// import then follows the same recovery-only contract as a materialized Flink checkpoint.
+    pub(crate) fn restore_state_reader(
+        &self,
+        id: u64,
+        group: u32,
+        length: u64,
+        input: &mut dyn std::io::Read,
+    ) -> Result<()> {
+        let mut invocation = InvocationGuard::begin(self)?;
+        let (_, factory) = self
+            .persistent
+            .iter()
+            .find(|(node, _)| *node == id)
+            .ok_or_else(|| invalid(format!("native state node {id} is not bound")))?;
+        let resources = self
+            .state_resources
+            .as_ref()
+            .ok_or_else(|| invalid("canonical stream restore requires state resources"))?;
+        let owner = resources.memory.sibling("canonical restore preparation");
+        let result = if let Some(spill) = &resources.spill {
+            let source = crate::state::CanonicalFile::read(group, length, input, spill, &owner)?;
+            invocation.executing();
+            factory.restore_from_checkpoint(group, &source, &owner)
+        } else {
+            // Legacy embedded callers have no Flink IOManager assignment. Preserve their admitted
+            // materialized API; production task bindings always provide protocol-four resources.
+            let length = usize::try_from(length)
+                .map_err(|_| invalid("canonical frame exceeds host range"))?;
+            let mut memory = owner.sibling("legacy canonical restore bytes");
+            memory.resize(length)?;
+            let mut bytes = vec![0; length];
+            input.read_exact(&mut bytes)?;
+            invocation.executing();
+            factory.restore(group, &bytes)
+        };
+        invocation.successful = result.is_ok();
+        result
     }
 
     pub(crate) fn checkpoint_state(&self, id: u64, directory: &Path) -> Result<()> {
@@ -308,7 +375,8 @@ impl NativeExecutionContext {
                 memory_limit: reader_limit as u64,
                 log_directory,
             };
-            let source = RocksPluginKeyedState::open_configured(&reader, first, last, None)?;
+            let source =
+                RocksPluginKeyedState::open_checkpoint_configured(&reader, first, last, None)?;
             for group in first..=last {
                 owner.restore_from_checkpoint(group, &source, &memory)?;
             }
@@ -325,6 +393,7 @@ fn create(
     binding: &proto::NativeStateBinding,
     memory: HostMemoryReservation,
     buffer: Option<super::task_resources::WindowBuffer>,
+    spill: Option<Arc<crate::spill::Resources>>,
 ) -> Result<Arc<dyn PersistentOperatorFactory>> {
     use crate::state::{KeyedState, MemoryKeyedState, RocksPluginKeyedState};
     let max = binding.max_parallelism;
@@ -377,8 +446,11 @@ fn create(
             )))))
         }
         Some(proto::operator::Operator::RegularJoin(_)) => {
+            let mut processor =
+                RegularJoinProcessor::with_state(bytes, max, first, last, state, scratch)?;
+            processor.set_spill_resources(spill)?;
             Ok(Arc::new(RegularJoinFactory(Arc::new(Mutex::new(
-                RegularJoinProcessor::with_state(bytes, max, first, last, state, scratch)?,
+                processor,
             )))))
         }
         _ => Err(invalid("unsupported native state binding")),

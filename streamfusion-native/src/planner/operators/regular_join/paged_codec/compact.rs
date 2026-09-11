@@ -4,7 +4,7 @@
 use super::*;
 
 const MAGIC: &[u8] = b"SFJC\x01";
-const MAX_BYTES: usize = 8 * 1024;
+pub(in super::super) const MAX_BYTES: usize = 8 * 1024;
 
 /// Small equality keys share one backend entry for their directory and payloads. Hot/large
 /// keys retain stable independently writable pages. The cap bounds rewrite amplification.
@@ -56,7 +56,7 @@ pub(super) fn decode(bytes: &[u8]) -> Result<Manifest> {
     let mut inline: [Vec<StoredRow>; 2] = Default::default();
     let mut count = 0;
     for (side, rows) in inline.iter_mut().enumerate() {
-        for &page in &manifest.pages[side] {
+        for page in manifest.pages[side].iter() {
             let length = reader.u32()? as usize;
             let decoded = decode_page(reader.take(length)?, page, manifest.next_row_id[side])?;
             count += decoded.len();

@@ -77,7 +77,7 @@ import tech.streamfusion.flink.deduplicate.ArrowBatchKeySelector;
 import tech.streamfusion.flink.state.StreamFusionStateBackend;
 
 class StreamFusionArrowTemporalSortOperatorTest {
-    private static final RowType ROW_TYPE = RowType.of(
+    static final RowType ROW_TYPE = RowType.of(
             new LogicalType[] {
                 new TimestampType(false, TimestampKind.ROWTIME, 3),
                 new IntType(false),
@@ -122,7 +122,13 @@ class StreamFusionArrowTemporalSortOperatorTest {
                 "row_value",
                 "null_value"
             });
-    private static final SortSpec SORT_SPEC =
+    // Flink's serializer requires a concrete logical type even for an always-null field.
+    // Keep the native NULL vector coverage and compare its null bit through nullable INT.
+    static final RowType PARITY_ROW_TYPE = new RowType(ROW_TYPE.getFields().stream()
+            .map(field -> new RowType.RowField(
+                    field.getName(), field.getType() instanceof NullType ? new IntType() : field.getType()))
+            .collect(java.util.stream.Collectors.toList()));
+    static final SortSpec SORT_SPEC =
             SortSpec.builder().addField(0, true, true).addField(1, true, true).build();
 
     @Test
@@ -327,22 +333,36 @@ class StreamFusionArrowTemporalSortOperatorTest {
                 .getJobManagerOwnedState();
     }
 
-    private static Harness harness(boolean processingTime, OperatorSubtaskState state, boolean rocks) throws Exception {
+    static Harness harness(boolean processingTime, OperatorSubtaskState state, boolean rocks) throws Exception {
+        return harness(processingTime, state, rocks, 3L << 20);
+    }
+
+    static Harness harness(boolean processingTime, OperatorSubtaskState state, boolean rocks, long managedBytes)
+            throws Exception {
         byte[] plan = StreamFusionTemporalSortPlan.create(ROW_TYPE, SORT_SPEC, processingTime);
         StreamFusionArrowTemporalSortOperator operator =
                 new StreamFusionArrowTemporalSortOperator(ROW_TYPE, processingTime, plan);
-        Harness harness = new Harness(operator);
-        harness.setStateBackend(new StreamFusionStateBackend(
-                rocks ? new EmbeddedRocksDBStateBackend(true) : new HashMapStateBackend()));
-        harness.setup(ArrowRowDataBatchSerializer.INSTANCE);
-        if (state != null) {
-            harness.initializeState(state);
+        Harness harness = new Harness(operator, managedBytes);
+        try {
+            harness.setStateBackend(new StreamFusionStateBackend(
+                    rocks ? new EmbeddedRocksDBStateBackend(true) : new HashMapStateBackend()));
+            harness.setup(ArrowRowDataBatchSerializer.INSTANCE);
+            if (state != null) {
+                harness.initializeState(state);
+            }
+            harness.open();
+            return harness;
+        } catch (Exception | Error failure) {
+            try {
+                harness.close();
+            } catch (Exception closeFailure) {
+                failure.addSuppressed(closeFailure);
+            }
+            throw failure;
         }
-        harness.open();
-        return harness;
     }
 
-    private static void process(
+    static void process(
             KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> harness,
             RootAllocator allocator,
             GenericRowData... rows)
@@ -355,7 +375,7 @@ class StreamFusionArrowTemporalSortOperatorTest {
         }
     }
 
-    private static GenericRowData row(long timestamp, int number, String payload, RowKind kind) {
+    static GenericRowData row(long timestamp, int number, String payload, RowKind kind) {
         Map<StringData, Integer> map = new LinkedHashMap<>();
         map.put(StringData.fromString("one"), number);
         GenericRowData row = GenericRowData.of(
@@ -389,19 +409,59 @@ class StreamFusionArrowTemporalSortOperatorTest {
         CANONICAL
     }
 
-    private static final class Harness
+    static final class Harness
             extends KeyedOneInputStreamOperatorTestHarness<RowData, ArrowRowDataBatch, ArrowRowDataBatch> {
         private final List<String> captured = new ArrayList<>();
+        final org.apache.flink.core.memory.DataOutputSerializer bytes =
+                new org.apache.flink.core.memory.DataOutputSerializer(1024);
 
-        private Harness(StreamFusionArrowTemporalSortOperator operator) throws Exception {
+        private final MockEnvironment ownedEnvironment;
+
+        private Harness(StreamFusionArrowTemporalSortOperator operator, long managedBytes) throws Exception {
+            this(
+                    operator,
+                    new MockEnvironmentBuilder()
+                            .setTaskName("Temporal sort generated parity")
+                            .setManagedMemorySize(managedBytes)
+                            .setInputSplitProvider(new MockInputSplitProvider())
+                            .setBufferSize(1024)
+                            .setMaxParallelism(1)
+                            .setParallelism(1)
+                            .setSubtaskIndex(0)
+                            .build());
+        }
+
+        private Harness(StreamFusionArrowTemporalSortOperator operator, MockEnvironment environment) throws Exception {
             super(
                     operator,
                     new ArrowBatchKeySelector(EmptyRowDataKeySelector.INSTANCE),
                     EmptyRowDataKeySelector.INSTANCE.getProducedType(),
-                    1,
-                    1,
-                    0);
-            setOutputCreator(ignored -> new CapturingOutput(captured));
+                    environment);
+            ownedEnvironment = environment;
+            setOutputCreator(ignored -> new CapturingOutput(captured, bytes, () -> operator.getMetricGroup()
+                    .getIOMetricGroup()
+                    .getNumRecordsOutCounter()
+                    .inc()));
+        }
+
+        @Override
+        public void close() throws Exception {
+            try {
+                super.close();
+            } finally {
+                ownedEnvironment.close();
+            }
+        }
+
+        @Override
+        public void processElement(StreamRecord<ArrowRowDataBatch> element) throws Exception {
+            // Match Flink's framework counter before the operator replaces batches with rows.
+            getOperator()
+                    .getMetricGroup()
+                    .getIOMetricGroup()
+                    .getNumRecordsInCounter()
+                    .inc();
+            super.processElement(element);
         }
 
         private List<String> take() {
@@ -414,16 +474,37 @@ class StreamFusionArrowTemporalSortOperatorTest {
     /** Captures borrowed Arrow output synchronously before its producer-owned release callback. */
     private static final class CapturingOutput implements Output<StreamRecord<ArrowRowDataBatch>> {
         private final List<String> captured;
+        private final org.apache.flink.core.memory.DataOutputSerializer bytes;
+        private final Runnable countOutput;
 
         private CapturingOutput(List<String> captured) {
+            this(captured, new org.apache.flink.core.memory.DataOutputSerializer(1024));
+        }
+
+        private CapturingOutput(List<String> captured, org.apache.flink.core.memory.DataOutputSerializer bytes) {
+            this(captured, bytes, () -> {});
+        }
+
+        private CapturingOutput(
+                List<String> captured, org.apache.flink.core.memory.DataOutputSerializer bytes, Runnable countOutput) {
             this.captured = captured;
+            this.bytes = bytes;
+            this.countOutput = countOutput;
         }
 
         @Override
         public void collect(StreamRecord<ArrowRowDataBatch> record) {
+            countOutput.run();
             ArrowRowDataBatch batch = record.getValue();
             for (int index = 0; index < batch.size(); index++) {
                 RowData row = batch.rowView(index);
+                row.setRowKind(batch.rowKind(index));
+                try {
+                    new org.apache.flink.table.runtime.typeutils.RowDataSerializer(PARITY_ROW_TYPE)
+                            .serialize(row, bytes);
+                } catch (java.io.IOException error) {
+                    throw new java.io.UncheckedIOException(error);
+                }
                 captured.add(batch.rowKind(index).shortString() + ":" + row.getInt(1) + ":" + row.getString(2));
             }
         }

@@ -129,8 +129,7 @@ impl RegularJoinRegion {
                 return Err(DataFusionError::Plan("regular join region currently requires explicit Input(0) and Input(1) boundaries".into()));
             }
         }
-        let memory_pool =
-            control.datafusion_pool(control.available_capacity()?.unwrap_or(usize::MAX));
+        let memory_pool = control.datafusion_pool()?;
         let mut context = NativeExecutionContext::new(&plan.encode_to_vec(), memory_pool)?;
         context.bind_persistent(vec![(
             join_node.plan_node_id,

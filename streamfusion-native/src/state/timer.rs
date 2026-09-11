@@ -378,6 +378,11 @@ fn decode_snapshot(key_group: u32, bytes: &[u8]) -> Result<Vec<(TimerDomain, Tim
         )));
     }
     let count = input.read_u32("timer count")? as usize;
+    if count > bytes.len().saturating_sub(input.offset) / 17 {
+        return Err(DataFusionError::Execution(
+            "invalid native timer snapshot count".into(),
+        ));
+    }
     let mut timers = Vec::with_capacity(count);
     for _ in 0..count {
         let domain = match input.read_u8("timer domain")? {

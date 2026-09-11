@@ -175,6 +175,21 @@ impl AggregateProcessor {
         }
     }
 
+    fn restore_physical_key_group(
+        &mut self,
+        group: u32,
+        source: &dyn crate::state::KeyedState,
+        owner: &HostMemoryReservation,
+    ) -> datafusion::error::Result<()> {
+        match self {
+            Self::Group(processor) => processor.restore_physical_key_group(group, source, owner),
+            Self::Global(processor) => processor.restore_physical_key_group(group, source, owner),
+            Self::Incremental(processor) => {
+                processor.restore_physical_key_group(group, source, owner)
+            }
+        }
+    }
+
     fn checkpoint(&self, directory: &std::path::Path) -> datafusion::error::Result<()> {
         match self {
             Self::Group(processor) => processor.checkpoint(directory),
@@ -513,23 +528,18 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeGroupAggregateB
                 )
             })?;
             (|| -> datafusion::error::Result<()> {
-                use crate::state::{KeyedState, RocksPluginKeyedState};
-                let source = RocksPluginKeyedState::open(
+                let target = unsafe { processor(target_handle) }?;
+                let owner = target.state_memory();
+                super::checkpoint_reader::import(
                     std::path::Path::new(&plugin_path),
                     std::path::Path::new(&checkpoint_path),
                     non_negative(first_key_group, "first key group")?,
                     non_negative(last_key_group, "last key group")?,
                     memory_limit,
-                )?;
-                let target = unsafe { processor(target_handle) }?;
-                for key_group in first_key_group..=last_key_group {
-                    let key_group = non_negative(key_group, "key group")?;
-                    target.restore_key_group(
-                        key_group,
-                        &source.snapshot_key_group(key_group, &target.state_memory())?,
-                    )?;
-                }
-                Ok(())
+                    |key_group, source| {
+                        target.restore_physical_key_group(key_group, source, &owner)
+                    },
+                )
             })()
             .map_err(|error| throw(env, error))?;
             Ok(())

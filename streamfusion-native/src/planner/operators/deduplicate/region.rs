@@ -24,7 +24,7 @@ impl DeduplicateHandle {
         control: HostMemoryReservation,
         create: impl FnOnce(&[u8]) -> Result<DeduplicateProcessor>,
     ) -> Result<Self> {
-        let pool = control.datafusion_pool(control.available_capacity()?.unwrap_or(usize::MAX));
+        let pool = control.datafusion_pool()?;
         let mut context = NativeExecutionContext::new(bytes, pool)?;
         let node = find_unique(context.tree_plan()?, |node| {
             matches!(

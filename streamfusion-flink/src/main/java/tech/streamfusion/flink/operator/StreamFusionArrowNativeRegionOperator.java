@@ -49,6 +49,9 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
     private StreamFusionNativeMetricTree metricTree;
     private NativeRegionControlScheduler controls;
     private NativeRegionProcessingTimeScheduler processingTimers;
+    private final NativeRegionExchangeOutputs frameOutputs;
+    private NativeRegionExchangeOutputs.Runtime frameRuntime;
+    private boolean closed;
 
     StreamFusionArrowNativeRegionOperator(
             StreamOperatorParameters<ArrowRowDataBatch> parameters,
@@ -59,7 +62,8 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
             List<byte[]> exchangePlans,
             tech.streamfusion.flink.window.NativeLocalWindowResources localWindowResources,
             boolean sharedRegion,
-            tech.streamfusion.flink.join.NativeLookupSources lookupSources) {
+            tech.streamfusion.flink.join.NativeLookupSources lookupSources,
+            NativeRegionExchangeOutputs frameOutputs) {
         super(parameters, inputTypes.size());
         environment = parameters.getContainingTask().getEnvironment();
         subtaskIndex = parameters.getContainingTask().getIndexInSubtaskGroup();
@@ -93,6 +97,7 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
             tech.streamfusion.flink.state.NativeStateOwnership.register(environment, config, getClass());
         }
         this.lookupSources = lookupSources;
+        this.frameOutputs = frameOutputs;
         ended = new boolean[inputTypes.size()];
         List<Input> ports = new ArrayList<>();
         this.exchangePlans = exchangePlans.stream().map(byte[]::clone).collect(java.util.stream.Collectors.toList());
@@ -198,6 +203,10 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
                                     ignored -> null,
                                     resources);
         }
+        for (int port = 0; port < exchangePlans.size(); port++) {
+            if (exchangePlans.get(port).length != 0)
+                memory.executionContext().prepareExchangeInput(port, exchangePlans.get(port));
+        }
         metricTree = sharedPlan == null
                 ? StreamFusionNativeMetricTree.forRegion(
                         memory.executionContext().identifiedPlan(),
@@ -259,13 +268,15 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
                         restored,
                         this::dispatchControl,
                         listener);
+        frameRuntime = frameOutputs.open(config, getUserCodeClassloader(), outputTypes.size(), memory);
         dispatcher = new ArrowNativeRegionDispatcher(
-                memory.executionContext(),
-                inputTypes,
-                outputTypes,
-                memory.allocator(),
-                controls.processingTimeInputPorts(),
-                getProcessingTimeService()::getCurrentProcessingTime);
+                        memory.executionContext(),
+                        inputTypes,
+                        outputTypes,
+                        memory.allocator(),
+                        controls.processingTimeInputPorts(),
+                        getProcessingTimeService()::getCurrentProcessingTime)
+                .withFrameOutput(this::emitFrames);
         processingTimers = new NativeRegionProcessingTimeScheduler(
                 controls, getProcessingTimeService(), memory.executionContext()::processingTimeDeadlines);
         processingTimers.refresh();
@@ -347,6 +358,9 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
 
     @Override
     public void finish() throws Exception {
+        // Cancellation may close the region before the enclosing Flink harness/task finishes.
+        // Its native resources and pending timers have already been released.
+        if (closed) return;
         controls.finish();
         processingTimers.close();
         java.util.Arrays.fill(ended, true);
@@ -370,11 +384,36 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
         metricTree.update(memory.executionContext());
     }
 
+    private void emitFrames(tech.streamfusion.flink.arrow.ArrowNativeRegionOutput.Batch outputBatch) {
+        int id = outputBatch.port();
+        for (NativeExchangeFrame frame : outputBatch.frames()) {
+            // Flink counts the attempted collect even when a downstream consumer fails.
+            FlinkMetricParity.replacePhysicalRecords(
+                    getMetricGroup().getIOMetricGroup().getNumRecordsOutCounter(),
+                    1,
+                    frameRuntime.countsRows(id) ? frame.logicalRowCount() : 0);
+            output.collect(NativeRegionExchangeOutputs.tag(id), new StreamRecord<>(frame));
+        }
+    }
+
     private void emitOutput(int port, ArrowRowDataBatch batch) {
         FlinkMetricParity.replacePhysicalRecords(
                 getMetricGroup().getIOMetricGroup().getNumRecordsOutCounter(), 1, batch.size());
         if (port == 0) output.collect(new StreamRecord<>(batch));
         else output.collect(sharedOutputs.outputTag(port), new StreamRecord<>(batch));
+    }
+
+    private void refreshNativeObservations() {
+        final tech.streamfusion.nativebridge.NativeInvocationSnapshot snapshot;
+        try {
+            snapshot = memory.executionContext()
+                    .invocationSnapshot(metricTree.hasNativeGauges(), processingTimers.requiresDeadlines());
+        } catch (RuntimeException | Error failure) {
+            metricTree.updateAfterFailure(memory.executionContext(), failure);
+            throw failure;
+        }
+        metricTree.update(snapshot);
+        processingTimers.refresh(snapshot.deadlines());
     }
 
     private void process(int port, ArrowRowDataBatch input) {
@@ -387,12 +426,13 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
             metricTree.updateAfterFailure(memory.executionContext(), failure);
             throw failure;
         }
-        metricTree.update(memory.executionContext());
-        processingTimers.refresh();
+        refreshNativeObservations();
     }
 
     @Override
     public void close() throws Exception {
+        if (closed) return;
+        closed = true;
         try {
             org.apache.flink.util.IOUtils.closeAll(
                     processingTimers, dispatcher, metricTree, stateLifecycle == null ? memory : stateLifecycle);
@@ -434,8 +474,7 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
                     metricTree.updateAfterFailure(memory.executionContext(), failure);
                     throw failure;
                 }
-                metricTree.update(memory.executionContext());
-                processingTimers.refresh();
+                refreshNativeObservations();
             } else {
                 throw new IllegalArgumentException("Native region input must be Arrow or an exchange-edge IPC frame");
             }

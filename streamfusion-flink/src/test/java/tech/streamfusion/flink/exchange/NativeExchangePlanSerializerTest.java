@@ -48,25 +48,34 @@ class NativeExchangePlanSerializerTest {
     }
 
     @Test
-    void recordsAnInputOnlyCanonicalRoutingKeyForComplexKeys() throws Exception {
+    void encodesComplexRoutingKeysNatively() throws Exception {
         RowType rowType = RowType.of(new ArrayType(new IntType()));
 
         NativeExchangePlan plan =
                 NativeExchangePlan.parseFrom(NativeExchangePlanSerializer.hash(rowType, new int[] {0}, 128));
 
-        assertThat(plan.getMetadataColumns().hasRoutingKeyIndex()).isTrue();
-        assertThat(plan.getMetadataColumns().getRoutingKeyIndex()).isEqualTo(3);
+        assertThat(plan.getMetadataColumns().hasRoutingKeyIndex()).isFalse();
+        assertThat(plan.getProtocolVersion()).isEqualTo(2);
         assertThat(plan.getTransportRoutingKey()).isFalse();
     }
 
     @Test
-    void transportsTheOpaqueComplexKeyForADirectNativeConsumer() throws Exception {
+    void avoidsRedundantScalarKeySerializationForNativeConsumers() throws Exception {
+        var plan = NativeExchangePlan.parseFrom(
+                NativeExchangePlanSerializer.hash(RowType.of(new IntType()), new int[] {0}, 128, 4, true, true));
+        assertThat(plan.getTransportRoutingKey()).isFalse();
+        assertThat(plan.getMetadataColumns().hasRoutingKeyIndex()).isFalse();
+    }
+
+    @Test
+    void generatesTheCanonicalComplexKeyForADirectNativeConsumer() throws Exception {
         RowType rowType = RowType.of(new ArrayType(new IntType()));
 
         NativeExchangePlan plan = NativeExchangePlan.parseFrom(
                 NativeExchangePlanSerializer.hash(rowType, new int[] {0}, 128, 4, false, true));
 
-        assertThat(plan.getMetadataColumns().hasRoutingKeyIndex()).isTrue();
+        assertThat(plan.getMetadataColumns().hasRoutingKeyIndex()).isFalse();
+        assertThat(plan.getProtocolVersion()).isEqualTo(2);
         assertThat(plan.getTransportRoutingKey()).isTrue();
         assertThat(plan.getPreserveKeyGroups()).isFalse();
     }

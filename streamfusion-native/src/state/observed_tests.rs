@@ -15,6 +15,7 @@ pub(crate) struct Io {
     pub(crate) duplicate_read_keys: AtomicUsize,
     pub(crate) max_read_rows: AtomicUsize,
     pub(crate) write_batches: AtomicUsize,
+    pub(crate) fail_write_batch: AtomicUsize,
     pub(crate) range_reads: AtomicUsize,
     pub(crate) read_bytes: AtomicUsize,
     pub(crate) scanned_rows: AtomicUsize,
@@ -26,6 +27,7 @@ impl Io {
         self.duplicate_read_keys.store(0, Ordering::Relaxed);
         self.max_read_rows.store(0, Ordering::Relaxed);
         self.write_batches.store(0, Ordering::Relaxed);
+        self.fail_write_batch.store(0, Ordering::Relaxed);
         self.range_reads.store(0, Ordering::Relaxed);
         self.read_bytes.store(0, Ordering::Relaxed);
         self.scanned_rows.store(0, Ordering::Relaxed);
@@ -61,7 +63,12 @@ impl KeyedState for Observed {
         Ok(result)
     }
     fn write_batch(&mut self, mutations: Vec<StateMutation>) -> Result<()> {
-        self.io.write_batches.fetch_add(1, Ordering::Relaxed);
+        let write = self.io.write_batches.fetch_add(1, Ordering::Relaxed) + 1;
+        if self.io.fail_write_batch.load(Ordering::Relaxed) == write {
+            return Err(datafusion::error::DataFusionError::Execution(
+                "injected state write failure".into(),
+            ));
+        }
         self.io.written_bytes.fetch_add(
             mutations
                 .iter()
@@ -102,6 +109,29 @@ impl KeyedState for Observed {
             })
     }
 
+    fn visit_prefix_admitted(
+        &self,
+        group: u32,
+        prefix: &[u8],
+        rows: usize,
+        bytes: usize,
+        owner: &HostMemoryReservation,
+        f: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<()>,
+    ) -> Result<()> {
+        self.io.range_reads.fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .visit_prefix_admitted(group, prefix, rows, bytes, owner, &mut |page| {
+                self.io
+                    .scanned_rows
+                    .fetch_add(page.len(), Ordering::Relaxed);
+                self.io.read_bytes.fetch_add(
+                    page.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>(),
+                    Ordering::Relaxed,
+                );
+                f(page)
+            })
+    }
+
     fn visit_range(
         &self,
         group: u32,
@@ -124,6 +154,29 @@ impl KeyedState for Observed {
                 f(page)
             })
     }
+    fn visit_range_admitted(
+        &self,
+        group: u32,
+        start: &[u8],
+        end: Option<&[u8]>,
+        rows: usize,
+        bytes: usize,
+        owner: &HostMemoryReservation,
+        f: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<bool>,
+    ) -> Result<bool> {
+        self.io.range_reads.fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .visit_range_admitted(group, start, end, rows, bytes, owner, &mut |page| {
+                self.io
+                    .scanned_rows
+                    .fetch_add(page.len(), Ordering::Relaxed);
+                self.io.read_bytes.fetch_add(
+                    page.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>(),
+                    Ordering::Relaxed,
+                );
+                f(page)
+            })
+    }
     fn checkpoint(&self, directory: &std::path::Path) -> Result<()> {
         self.inner.checkpoint(directory)
     }
@@ -135,6 +188,15 @@ impl KeyedState for Observed {
     ) -> Result<SnapshotBytes> {
         self.inner.snapshot_key_group(group, owner)
     }
+    fn write_snapshot(
+        &self,
+        group: u32,
+        owner: &HostMemoryReservation,
+        sink: &mut snapshot_stream::SnapshotSink<'_>,
+    ) -> Result<usize> {
+        self.inner.write_snapshot(group, owner, sink)
+    }
+
     fn restore_key_group(
         &mut self,
         group: u32,

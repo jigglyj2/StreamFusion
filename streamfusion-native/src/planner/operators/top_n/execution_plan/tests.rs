@@ -52,6 +52,7 @@ fn plan(owned: bool) -> proto::NativePlan {
 }
 fn resources(rocks: Option<(&str, &std::path::Path)>) -> proto::NativeStateBindings {
     proto::NativeStateBindings {
+        spill_directories: Vec::new(),
         protocol_version: 1,
         bindings: vec![proto::NativeStateBinding {
             plan_node_id: 3,
@@ -123,7 +124,7 @@ fn context(
     owner: &HostMemoryReservation,
 ) -> Arc<NativeExecutionContext> {
     let mut context =
-        NativeExecutionContext::new(&plan.encode_to_vec(), owner.datafusion_pool(64 << 20))
+        NativeExecutionContext::new(&plan.encode_to_vec(), owner.datafusion_pool().unwrap())
             .unwrap();
     context
         .install_state(&resources.encode_to_vec(), owner.sibling("Top-1 bindings"))
@@ -368,7 +369,7 @@ fn unsupported_top_one_bindings_fail_before_opening_backend_resources() {
         let broker = Arc::new(TestBroker::new(64 << 20));
         let owner = HostMemoryReservation::new(broker.clone(), "Top-1 invalid binding test");
         let mut context =
-            NativeExecutionContext::new(&plan.encode_to_vec(), owner.datafusion_pool(64 << 20))
+            NativeExecutionContext::new(&plan.encode_to_vec(), owner.datafusion_pool().unwrap())
                 .unwrap();
         let directory = tempfile::tempdir().unwrap();
         let database = directory.path().join("must-not-open");

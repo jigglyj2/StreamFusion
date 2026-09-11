@@ -33,29 +33,8 @@ pub(super) fn timer_statistics(
     ]
 }
 
-pub(super) fn restore_timer_state(
-    state: &mut dyn KeyedState,
-    timers: &mut NativeTimerService,
-    key_group: u32,
-    bytes: &[u8],
-    timer_state_key: &[u8],
-    state_read_batches: &mut u64,
-    owner: &HostMemoryReservation,
-) -> Result<()> {
-    state.restore_key_group(key_group, bytes, owner)?;
-    let timer = state.get_batch(
-        &[StateKeyRef {
-            key_group,
-            key: timer_state_key,
-        }],
-        owner,
-    )?;
-    *state_read_batches = state_read_batches.saturating_add(1);
-    if let Some(bytes) = timer.into_iter().next().flatten() {
-        timers.restore_key_group(key_group, bytes.as_ref())?;
-    }
-    Ok(())
-}
+mod checkpoint;
+pub(super) use checkpoint::{restore_timer_checkpoint, restore_timer_state};
 
 pub(super) fn append_timer_mutations(
     timers: &NativeTimerService,

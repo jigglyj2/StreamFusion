@@ -2,8 +2,6 @@
 // Licensed under the Apache License, Version 2.0.
 
 use arrow::array::{Array, StructArray};
-use arrow::datatypes::{DataType, Field, Schema};
-use std::mem::size_of;
 use std::sync::Arc;
 
 use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
@@ -16,17 +14,12 @@ use jni::sys::{jbyteArray, jint, jlong};
 use jni::EnvUnowned;
 
 use super::common::import_record_batch;
-use crate::exchange::{
-    decode_exchange_plan, exchange_key_fields, frame_hash_exchange_batch_projected,
-};
+use crate::exchange::{decode_exchange_plan, exchange_key_fields};
 use crate::memory_pool::{
     HostMemoryReservation, JvmMemoryReservationBroker, MemoryReservationBroker,
 };
 
-struct AccountedBytes {
-    bytes: Vec<u8>,
-    _reservation: HostMemoryReservation,
-}
+use crate::exchange::managed_routing::{route_record_batch, AccountedFrames};
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeExchangeBridge_routeArrowBatch<
@@ -62,8 +55,7 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeExchangeBridge_
                 );
                 jni::errors::Error::JavaException
             })?;
-            env.byte_array_from_slice(&encoded.bytes)
-                .map(|array| array.into_raw())
+            export_frames(env, &encoded.frames)
         })
         .resolve::<ThrowRuntimeExAndDefault>()
 }
@@ -171,58 +163,99 @@ unsafe fn route(
     input_array_address: *mut FFI_ArrowArray,
     input_schema_address: *mut FFI_ArrowSchema,
     broker: Arc<dyn MemoryReservationBroker>,
-) -> Result<AccountedBytes> {
+) -> Result<AccountedFrames> {
     let plan = decode_exchange_plan(plan_bytes)?;
     let keys = exchange_key_fields(&plan)?;
+    unsafe {
+        route_prepared(
+            &plan,
+            &keys,
+            input_array_address,
+            input_schema_address,
+            broker,
+        )
+    }
+}
+
+pub(super) unsafe fn route_prepared(
+    plan: &crate::proto::NativeExchangePlan,
+    keys: &[(usize, crate::exchange::KeyField)],
+    input_array_address: *mut FFI_ArrowArray,
+    input_schema_address: *mut FFI_ArrowSchema,
+    broker: Arc<dyn MemoryReservationBroker>,
+) -> Result<AccountedFrames> {
     let batch = unsafe { import_record_batch(input_array_address, input_schema_address) }?;
 
-    // Routing materializes at most one copy of the input columns across the key-group
-    // batches. Reserve that working set before asking Arrow to allocate it.
-    let mut reservation = HostMemoryReservation::new(broker, "native exchange buffers");
-    reservation.try_grow(batch.get_array_memory_size())?;
-    let mut transport_column_count = plan
-        .schema
-        .as_ref()
-        .ok_or_else(|| DataFusionError::Plan("exchange schema is required".to_string()))?
-        .fields
-        .len();
-    if plan.transport_routing_key {
-        transport_column_count = transport_column_count.saturating_add(1);
-    }
-    let frames = frame_hash_exchange_batch_projected(
-        batch,
-        &keys,
-        plan.max_parallelism,
-        plan.parallelism,
-        plan.preserve_key_groups,
-        transport_column_count,
-    )?;
-    let frame_bytes = frames.iter().try_fold(
-        frames
-            .capacity()
-            .saturating_mul(size_of::<crate::exchange::RoutedFrame>()),
-        |bytes, routed| {
-            bytes
-                .checked_add(routed.frame().metadata.capacity())
-                .and_then(|bytes| bytes.checked_add(routed.frame().body.capacity()))
-                .ok_or_else(|| {
-                    DataFusionError::ResourcesExhausted(
-                        "native exchange frame accounting overflowed usize".to_string(),
-                    )
-                })
-        },
-    )?;
-    reservation.resize(frame_bytes)?;
+    route_record_batch(plan, keys, batch, broker)
+}
 
-    let encoded_size = encode_frames_size(&frames)?;
-    reservation.try_grow(encoded_size)?;
-    let bytes = encode_frames_with_capacity(&frames, encoded_size)?;
-    drop(frames);
-    reservation.resize(bytes.capacity())?;
-    Ok(AccountedBytes {
-        bytes,
-        _reservation: reservation,
-    })
+/// Copy IPC parts directly into their final Java transport array. Building a concatenated Rust
+/// envelope first would copy every payload once more and retain a second full-batch workspace.
+pub(super) fn export_frames(
+    env: &mut jni::Env<'_>,
+    frames: &[crate::exchange::RoutedFrame],
+) -> jni::errors::Result<jbyteArray> {
+    export_frames_prefixed(env, frames, &[])
+}
+
+pub(super) fn export_frames_prefixed(
+    env: &mut jni::Env<'_>,
+    frames: &[crate::exchange::RoutedFrame],
+    prefix: &[u8],
+) -> jni::errors::Result<jbyteArray> {
+    let size = encode_frames_size(frames)
+        .and_then(|size| {
+            size.checked_add(prefix.len()).ok_or_else(|| {
+                DataFusionError::ResourcesExhausted("exchange output size overflow".into())
+            })
+        })
+        .map_err(|error| super::common::throw(env, error))?;
+    if size > i32::MAX as usize {
+        return Err(super::common::throw(
+            env,
+            "exchange JNI output exceeds Java's array limit",
+        ));
+    }
+    let output = env.new_byte_array(size)?;
+    put_bytes(env, &output, 0, prefix)?;
+    put_bytes(
+        env,
+        &output,
+        prefix.len(),
+        &(frames.len() as u32).to_le_bytes(),
+    )?;
+    let mut offset = prefix.len() + 4;
+    for routed in frames {
+        let frame = routed.frame();
+        let mut header = [0u8; 12];
+        header[..4].copy_from_slice(&routed.key_group().to_le_bytes());
+        header[4..8].copy_from_slice(&(frame.metadata.len() as u32).to_le_bytes());
+        header[8..].copy_from_slice(&(frame.body.len() as u32).to_le_bytes());
+        for part in [
+            header.as_slice(),
+            frame.metadata.as_slice(),
+            frame.body.as_slice(),
+        ] {
+            if !part.is_empty() {
+                put_bytes(env, &output, offset, part)?;
+            }
+            offset += part.len();
+        }
+    }
+    Ok(output.into_raw())
+}
+
+fn put_bytes(
+    env: &mut jni::Env<'_>,
+    output: &JByteArray<'_>,
+    offset: usize,
+    bytes: &[u8],
+) -> jni::errors::Result<()> {
+    // JNI's jbyte is signed, with the same size/alignment and all the same bit patterns as u8.
+    let signed = unsafe {
+        std::slice::from_raw_parts(bytes.as_ptr().cast::<jni::sys::jbyte>(), bytes.len())
+    };
+    output.set_region(env, offset as i32, signed)
 }
 
 unsafe fn decode(
@@ -262,22 +295,7 @@ pub(super) fn decode_batch(
     metadata_length: usize,
 ) -> Result<arrow::record_batch::RecordBatch> {
     let plan = decode_exchange_plan(plan_bytes)?;
-    let visible_schema = crate::planner::arrow_schema(
-        plan.schema
-            .as_ref()
-            .ok_or_else(|| DataFusionError::Plan("exchange schema is required".to_string()))?,
-    )?;
-    let transport_schema = if plan.transport_routing_key {
-        let mut fields = visible_schema.fields().iter().cloned().collect::<Vec<_>>();
-        fields.push(Arc::new(Field::new(
-            "__streamfusion_key",
-            DataType::Binary,
-            false,
-        )));
-        Arc::new(Schema::new(fields))
-    } else {
-        visible_schema.clone()
-    };
+    let transport_schema = crate::exchange::transport_schema(&plan)?;
     let transport_batch = crate::exchange::IpcBatchFrame::decode_contiguous(
         payload,
         metadata_length,
@@ -339,6 +357,7 @@ fn encode_frames_size(frames: &[crate::exchange::RoutedFrame]) -> Result<usize> 
     })
 }
 
+#[cfg(test)]
 fn encode_frames_with_capacity(
     frames: &[crate::exchange::RoutedFrame],
     capacity: usize,
@@ -359,6 +378,7 @@ fn encode_frames_with_capacity(
     Ok(bytes)
 }
 
+#[cfg(test)]
 fn write_u32(bytes: &mut Vec<u8>, value: usize, label: &str) -> Result<()> {
     let value = u32::try_from(value).map_err(|_| {
         DataFusionError::Execution(format!("exchange {label} exceeds the JNI frame limit"))

@@ -51,9 +51,7 @@ class SelectDistinctFallbackParityTest extends SqlParityTestSupport {
                 "distinct_input");
         assertThat(StreamFusionPlanningDiagnostics.explain())
                 .contains(
-                        "Accelerated: no",
-                        "StreamExecGroupAggregate",
-                        "native persistent state is temporarily disabled");
+                        "Accelerated: no", "StreamExecGroupAggregate", "architecture: aggregate persistent admission:");
     }
 
     @Test

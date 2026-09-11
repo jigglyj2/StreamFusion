@@ -298,61 +298,76 @@ fn a_payload_larger_than_the_normal_page_budget_is_admitted_as_one_entry() {
 
 #[test]
 fn legacy_sfwj2_snapshots_migrate_once_on_both_backends_without_reordering_duplicates() {
-    for rocks in backends() {
-        let (mut source, _, _dir) = processor(false, 0, 127);
-        let input = batch(&[7, 7, 7], &[100; 3], &[b"b", b"a", b"b"], &[INSERT; 3]);
-        source.prepare_schema(0, input.schema()).unwrap();
-        let group_key = source.group_key(0, &input, 0).unwrap();
-        let group = assign_key_group(&group_key, 128);
-        let timer_key = window_state_key(group, &group_key, 100);
-        let encoded = source.row_converters[0]
-            .convert_columns(&input.columns()[..3])
-            .unwrap();
-        let state = JoinWindowState {
-            left: (0..3).map(|i| encoded.row(i).data().to_vec()).collect(),
-            right: vec![],
-        };
-        source
-            .state
-            .write_batch(vec![StateMutation {
-                key: timer_key.clone(),
-                value: Some(encode_state(&state)),
-            }])
-            .unwrap();
-        source
-            .timers
-            .register(
-                group,
-                TimerDomain::EventTime,
-                TimerKey {
-                    timestamp: 99,
-                    key: timer_key.key,
-                    namespace: 100i64.to_le_bytes().to_vec(),
-                },
-            )
-            .unwrap();
-        source.dirty_timer_groups.insert(group);
-        let legacy = source.snapshot_key_group(group).unwrap();
-        let (mut target, _, _target_dir) = processor(rocks, 0, 127);
-        target.restore_key_group(group, &legacy).unwrap();
-        let migrated = target.snapshot_key_group(group).unwrap();
-        assert_ne!(migrated, legacy);
-        assert!(crate::state::decode_key_group_snapshot(group, &migrated)
-            .unwrap()
-            .iter()
-            .all(|(k, _)| k[0] != WINDOW_KEY_PREFIX));
-        let (mut restored, _, _restored_dir) = processor(other_backend(rocks), 0, 127);
-        restored.restore_key_group(group, &migrated).unwrap();
-        assert_eq!(restored.snapshot_key_group(group).unwrap(), migrated);
-        restored
-            .process_arrow(0, batch(&[7], &[100], &[b"c"], &[UPDATE_AFTER]))
-            .unwrap();
-        assert_eq!(
-            contents(&[restored.advance_event_time(99).unwrap()])
-                .get(&(7, 100, 0))
-                .unwrap(),
-            &vec![b"b".to_vec(), b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]
-        );
+    for physical in backends() {
+        for rocks in backends() {
+            let (mut source, _, _dir) = processor(physical, 0, 127);
+            let input = batch(&[7, 7, 7], &[100; 3], &[b"b", b"a", b"b"], &[INSERT; 3]);
+            source.prepare_schema(0, input.schema()).unwrap();
+            let group_key = source.group_key(0, &input, 0).unwrap();
+            let group = assign_key_group(&group_key, 128);
+            let timer_key = window_state_key(group, &group_key, 100);
+            let encoded = source.row_converters[0]
+                .convert_columns(&input.columns()[..3])
+                .unwrap();
+            let state = JoinWindowState {
+                left: (0..3).map(|i| encoded.row(i).data().to_vec()).collect(),
+                right: vec![],
+            };
+            source
+                .state
+                .write_batch(vec![StateMutation {
+                    key: timer_key.clone(),
+                    value: Some(encode_state(&state)),
+                }])
+                .unwrap();
+            source
+                .timers
+                .register(
+                    group,
+                    TimerDomain::EventTime,
+                    TimerKey {
+                        timestamp: 99,
+                        key: timer_key.key,
+                        namespace: 100i64.to_le_bytes().to_vec(),
+                    },
+                )
+                .unwrap();
+            source.dirty_timer_groups.insert(group);
+            let legacy = source.snapshot_key_group(group).unwrap();
+            let (mut target, _, _target_dir) = processor(rocks, 0, 127);
+            if physical {
+                let directory = tempfile::tempdir().unwrap();
+                let checkpoint = directory.path().join("checkpoint");
+                source.checkpoint(&checkpoint).unwrap();
+                let plugin = std::path::PathBuf::from(
+                    std::env::var("STREAMFUSION_TEST_ROCKSDB_PLUGIN").unwrap(),
+                );
+                let reader =
+                    RocksPluginKeyedState::open_checkpoint(&plugin, &checkpoint, 0, 127, 1 << 20)
+                        .unwrap();
+                target.restore_physical_key_group(group, &reader).unwrap();
+            } else {
+                target.restore_key_group(group, &legacy).unwrap();
+            }
+            let migrated = target.snapshot_key_group(group).unwrap();
+            assert_ne!(migrated, legacy);
+            assert!(crate::state::decode_key_group_snapshot(group, &migrated)
+                .unwrap()
+                .iter()
+                .all(|(k, _)| k[0] != WINDOW_KEY_PREFIX));
+            let (mut restored, _, _restored_dir) = processor(other_backend(rocks), 0, 127);
+            restored.restore_key_group(group, &migrated).unwrap();
+            assert_eq!(restored.snapshot_key_group(group).unwrap(), migrated);
+            restored
+                .process_arrow(0, batch(&[7], &[100], &[b"c"], &[UPDATE_AFTER]))
+                .unwrap();
+            assert_eq!(
+                contents(&[restored.advance_event_time(99).unwrap()])
+                    .get(&(7, 100, 0))
+                    .unwrap(),
+                &vec![b"b".to_vec(), b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]
+            );
+        }
     }
 }
 

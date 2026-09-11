@@ -6,10 +6,10 @@ use crate::memory_pool::MemoryReservationBroker;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Debug)]
-pub(super) struct CountingBroker {
-    pub(super) inner: TestBroker,
-    pub(super) calls: AtomicUsize,
-    pub(super) peak: AtomicUsize,
+pub(in super::super) struct CountingBroker {
+    pub(in super::super) inner: TestBroker,
+    pub(in super::super) calls: AtomicUsize,
+    pub(in super::super) peak: AtomicUsize,
 }
 
 impl MemoryReservationBroker for CountingBroker {

@@ -47,6 +47,8 @@ message NativeExchangePlan {
   uint32 parallelism = 8;
   bool preserve_key_groups = 9;
   // Retain an opaque routing-key sidecar for a directly fused keyed consumer.
+  // Exchange protocol 2: when routing_key_index is absent, Rust generates the canonical
+  // Flink key directly from Arrow key columns and transports it for the native consumer.
   bool transport_routing_key = 10;
 }
 

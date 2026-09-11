@@ -106,8 +106,7 @@ fn open(context: &Arc<NativeExecutionContext>, negotiate: bool) -> i64 {
     }
     .unwrap();
     assert!(left.is_released() && right.is_released());
-    let stream = context.start_region(batches).unwrap();
-    register(Output::new(context.clone(), stream, memory)).unwrap()
+    register(Output::start(context.clone(), batches, None, memory).unwrap()).unwrap()
 }
 #[test]
 fn c_data_outputs_negotiate_each_schema_once_preserve_slices_and_outlive_the_stream() {
@@ -203,3 +202,87 @@ fn output_handle_keeps_the_context_alive_and_exported_arrays_survive_close() {
     drop(schema);
     assert_eq!(broker.reserved(), 0);
 }
+
+fn tree_context() -> (Arc<NativeExecutionContext>, Arc<TestBroker>) {
+    let plan = proto::NativePlan {
+        protocol_version: 3,
+        root: Some(proto::Operator {
+            plan_node_id: 11,
+            operator: Some(proto::operator::Operator::Union(proto::Union {
+                inputs: (0..2)
+                    .map(|index| proto::Operator {
+                        operator: Some(proto::operator::Operator::Input(proto::Input {
+                            input_index: index,
+                            ..Default::default()
+                        })),
+                        ..Default::default()
+                    })
+                    .collect(),
+            })),
+            ..Default::default()
+        }),
+    };
+    let broker = Arc::new(TestBroker::new(16 << 20));
+    let pool = Arc::new(FlinkMemoryPool::new(broker.clone(), 16 << 20));
+    (
+        Arc::new(NativeExecutionContext::new(&plan.encode_to_vec(), pool).unwrap()),
+        broker,
+    )
+}
+
+#[test]
+fn tree_exit_uses_port_zero_and_preserves_stream_completion_and_ownership() {
+    let (context, broker) = tree_context();
+    for invocation in 0..3 {
+        let handle = open(&context, invocation == 0);
+        let mut rows = Vec::new();
+        let mut negotiated = None;
+        loop {
+            let mut array = FFI_ArrowArray::empty();
+            let mut schema = FFI_ArrowSchema::empty();
+            let port = unsafe { next(handle, &mut array, &mut schema) }.unwrap();
+            if port < 0 {
+                break;
+            }
+            assert_eq!(port, 0);
+            if negotiated.is_none() {
+                negotiated = Some(arrow::datatypes::Schema::try_from(&schema).unwrap());
+            } else {
+                assert!(schema.release.is_none());
+            }
+            let data = unsafe {
+                arrow::ffi::from_ffi_and_data_type(
+                    array,
+                    arrow::datatypes::DataType::Struct(
+                        negotiated.as_ref().unwrap().fields().clone(),
+                    ),
+                )
+            }
+            .unwrap();
+            rows.push(RecordBatch::from(StructArray::from(data)));
+        }
+        close(handle).unwrap();
+        context.require_idle().unwrap();
+        assert_eq!(rows.len(), 2);
+        for (batch, value) in rows.iter().zip([11, 29]) {
+            assert_eq!(
+                batch.column(0).as_ref(),
+                &Int32Array::from(vec![Some(value), None])
+            );
+            assert_eq!(batch.column(2).as_ref(), &Int8Array::from(vec![1, 2]));
+            assert_eq!(
+                batch.column(1).as_ref(),
+                &Int64Array::from(vec![Some(123), None])
+            );
+        }
+    }
+    let handle = open(&context, false);
+    close(handle).unwrap();
+    // Stateless trees allow a new invocation after cancellation; persistent trees and DAGs
+    // retain their stricter recovery contract. The output adapter must not change either.
+    context.require_idle().unwrap();
+    drop(context);
+    assert_eq!(broker.reserved(), 0);
+}
+
+mod framed;

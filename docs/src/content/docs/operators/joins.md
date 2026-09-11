@@ -34,6 +34,15 @@ in-memory budget limits in larger profiles.
 Admission combines active and persisted configuration, so async state, mini-batching and
 changelog-state wrapping cannot evade fallback when an option is absent from persisted metadata.
 
+Current paged regular-join RocksDB checkpoints restore through bounded state scans and batched
+imports. Validation checks every manifest reference and payload identity, rejects missing/orphaned
+records, and releases each decoded page instead of reconstructing a complete key group or hot-key
+history. Row-layout bitmaps are traversed without expanding a whole identity vector. Canonical
+snapshot validation borrows keys and values from its admitted frame and decodes one payload page
+at a time. Canonical snapshot transport still holds a complete key-group frame; legacy opaque
+`SFRJ` migration retains its separate workspace reservation. Neither path changes Flink's checkpoint
+ownership, key-group assignment, or backend-switch format.
+
 Streaming regular joins explicitly clear record timestamps in the version-3 native plan, matching
 Flink's `StreamingJoinOperator`. Their Arrow output owns its RowKind and absent-timestamp envelope,
 including when a bare join ends a native region before an exchange. A following Calc is not required
@@ -197,8 +206,9 @@ and preserves original input-row origins, per-record changelog order and logical
 The full input invocation must reach EOF before checkpoints or another input are accepted;
 cancellation between slices still requires recovery. Repeated keys in separate slices incur
 additional batched state access, so this trades some batching efficiency for lower staging peaks.
-It does not bound retained join state or the history of one hot key; those still must fit Flink's
-allowance. A native regression accepts and retracts a sliced 16,387-key input within a 10 MiB
+Retained in-memory state still consumes Flink's allowance. Streaming inner joins can prepare
+oversized historical payloads in bounded spill pages, as described below; other join families
+retain their existing managed-memory admission limits. A native regression accepts and retracts a sliced 16,387-key input within a 10 MiB
 state/workspace allowance, verifies ordered output and canonical state against an unsplit reference,
 and confirms that the original whole-input workspace request exceeds that allowance.
 
@@ -486,10 +496,34 @@ allowance and require recovery; the change does not bypass Flink's budget or add
 Canonical SFS1 snapshots carry versioned `SFJI/1` bitmap directories and single-row `SFJP/1`
 payloads, or `SFJC/1` compact singleton values, identically on native memory and RocksDB.
 Existing `SFJM/1` paged and multi-row `SFJC/1` snapshots remain readable. A touched legacy key
-adopts the current layout atomically; canonical restore preserves existing bytes until then.
-Restoring whole-key `SFRJ` v1/v2 snapshots migrates them to the current layout. A runtime predating
+adopts the current layout at the completed input-batch boundary; canonical restore preserves
+existing bytes until then.
+Restoring whole-key `SFRJ` v1/v2 snapshots migrates them to the current layout. Migration validates
+all legacy values before its first write, borrows their payloads, and constructs dense presence
+bitmaps without expanding row identities. It uses the same bounded state writer as streaming
+flushes. Canonical input no longer becomes a second owned key group, a decoded history, a full
+mutation collection, and another canonical frame. Physical migration reads bounded source pages
+and preserves the existing compact-singleton and external-row bytes on both backends. Duplicate
+legacy canonical keys and malformed records are rejected before destination mutation.
+A large individual legacy RocksDB value must still fit its admitted read buffer; migration does
+not make the old opaque value independently seekable. Canonical input frames retain their own
+reservation for their complete lifetime. An 8 MiB canonical hot-key fixture migrates with less
+than 3 MiB of new allocations, with its input frame and destination cache separately charged.
+A physical legacy key group larger than 8 MiB restores within a 4 MiB allowance including both
+RocksDB caches. Corrupt later records leave the destination unchanged in both input formats.
+
+A runtime predating
 `SFJI/1` cannot restore the new directories. Tests cover both-backend restore, sparse stable IDs,
 malformed bitmaps and payload identity mismatches, representation transitions and complete deletion.
+Runtime directory decoding keeps `SFJI/1` presence bitmaps compressed. Payload reads expand only
+the bounded chunk of IDs being requested, and accumulating input leaves its old-side payloads in
+the backend without expanding their identity vector. Mutation encoding copies retained bitmaps and
+merges new rows into the final partial bitmap directly. This changes no persisted bytes. A
+million-row directory regression covers sparse/dense identity iteration and allocation size; an
+actual 64,003-row RocksDB history accepts another row with 256 KiB of scratch, one directory read,
+and two writes. Streaming inner joins also have a bounded prepared-history path for opposite-side
+payloads that cannot remain resident within the managed budget.
+
 A repeated-key mutation regression appends 256 one-KiB rows in separate batches and writes less
 than twice the new payload volume, then checks that changing an association count writes only
 that row. This is storage-byte evidence, not a throughput measurement. Singleton keys retain
@@ -499,8 +533,53 @@ row-vector/Arc headroom. It does not apply the external-directory multiplier to 
 The first decoded page moves directly into its state vector. An 8 MiB regression loads 2,048
 compact keys with 512-byte payloads in one state read, verifies original/current payload sharing,
 and releases all credit; the previous directory estimate requested more than 9 MiB for decoding.
-Mutation staging admits encoded roots, large directory buffers and changed external-entry metadata
-at the batch boundary. It does not reserve mutation descriptors for unchanged row payloads.
+
+For streaming regular joins, dirty-state encoding at the completed input-batch boundary emits
+write pages of at most 4,096 mutations or 256 KiB, admitting an oversized individual record
+separately. It does not build a
+second complete collection of encoded hot-key payloads. Decoded groups release their credit as
+they are consumed, and encoding scratch is released before backend write admission. State reads
+remain confined to input admission. No checkpoint or next input can interleave with these writes;
+a failure after any page invalidates the operator until recovery from the previous Flink checkpoint.
+An 8 MiB dirty-payload regression fits a 14 MiB allowance including the RocksDB cache and keeps
+new flush allocations below 3 MiB. Injected second-page failures on both backends reject snapshots
+and further input, and replay from the preceding checkpoint preserves the full output changelog.
+Streaming inner joins first attempt resident batch preparation while reserving room for bounded
+predicate/output work. If that admission fails, they release the attempt's decoded rows and batch
+all required state reads into a temporary Arrow IPC history. This can repeat reads from the rejected
+attempt; diagnostic read counts include those calls. Replay performs no RocksDB reads. It admits
+one history page at a time, evaluates residuals through DataFusion, and preserves each input's
+complete ordered changelog before advancing to the next input. Historical retractions resolve
+against stable row identities during preparation, so duplicate rows inserted in the same batch
+are not accidentally removed twice.
+
+The task passes all of Flink IOManager's spill directories through state-binding protocol 4.
+A lazily created DataFusion disk manager owns the temporary files and disk accounting. There is
+no new deployment setting or independent disk quota. Shared directory metadata, read/decode pages,
+Arrow IPC encoding, residuals and output remain admitted through Flink's existing memory pool.
+Current row-layout state keeps payloads in RocksDB; legacy compact/page records migrate through
+bounded writes only after computation completes. The final dirty flush runs on stream exhaustion,
+after the last output encoding has been handed off. Checkpoints and new inputs remain excluded
+until that flush succeeds. Cancellation or a write failure releases prepared history and requires
+Flink recovery; the temporary files are not checkpoint state.
+
+Native pressure tests replay more than 6 MiB of historical payload with 4 MiB of available
+workspace on both backends, compare ordered output and canonical state against the resident path,
+and cover both input sides, all four RowKinds, duplicates, absent retractions, residual predicates,
+null-filtered/null-safe keys, legacy formats, cancellation and flush failure. Generated Arrow C Stream tests compare complete
+serialized changelogs and logical-record counters against Flink on both backends while requiring
+an actual spill file. This path applies to streaming inner joins with task resource bindings;
+outer/semi/anti joins and standalone legacy bridge handles retain their existing admission behavior.
+Large individual rows, directories, retained in-memory backend state or another workspace can
+still exhaust the assigned budget. These tests are correctness and allocation-limit evidence,
+not throughput measurements.
+
+The corresponding upstream Flink duplicate-key inner-join and retracting left-join cases pass
+across ten parameterized executions covering the upstream mini-batch/backend/async combinations.
+Two plans accelerate and the remaining cases retain whole-plan fallback; generated native-region
+tests separately verify
+the complete changelog against Flink on both native backends.
+
 A 16,384-key batch now fits a 20 MiB share; its allocation peak is covered by coarse reservations,
 and retained payloads are probed after flushing. The previous estimate added almost 25 MiB for
 mutation metadata alone by counting absent roots and external pages. Layout transitions and
@@ -515,7 +594,9 @@ requires an opposite-side read to enforce its full budget. All required payloads
 this does not introduce per-row state calls.
 The `StreamFusion.stateReadBatches` diagnostic counts actual backend lookups: one for a batch of
 new or compact keys, plus one for each external payload read group. `stateWriteBatches` counts non-empty backend write batches, so a
-missing-row retraction that changes no state need not increment it.
+large dirty batch can increment it more than once, and a missing-row retraction that changes no
+state need not increment it. Successful pages are counted even if a later page fails. These are
+StreamFusion diagnostics; Flink logical-record metrics and checkpoint semantics are unchanged.
 
 Flink `BatchExecHashJoin`, `BatchExecAdaptiveJoin`, and `BatchExecSortMergeJoin` equality joins use
 the same native two-sided counted state with terminal output while retaining distinct physical-node

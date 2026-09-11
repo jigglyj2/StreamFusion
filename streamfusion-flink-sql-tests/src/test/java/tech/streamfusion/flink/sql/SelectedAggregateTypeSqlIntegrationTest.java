@@ -95,7 +95,9 @@ class SelectedAggregateTypeSqlIntegrationTest extends SqlParityTestSupport {
         System.setProperty(
                 StreamFusionPlannerFactory.EXEC_GRAPH_PROCESSOR_PROPERTY, SelectedAggregateSqlProbe.class.getName());
         try {
-            return collect(tables.executeSql(sql));
+            return collectByKey(
+                    tables.executeSql(sql),
+                    java.util.stream.IntStream.range(0, types.size()).toArray());
         } finally {
             System.clearProperty(StreamFusionPlannerFactory.EXEC_GRAPH_PROCESSOR_PROPERTY);
         }

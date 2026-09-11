@@ -28,6 +28,15 @@ Unlisted large expression workspaces still need admission coverage. Bounded buff
 do not require separate reservations. See
 [memory accounting](/StreamFusion/development/memory-and-configuration/) for the exact scope.
 
+Interval literals and typed nulls materialized by Calc or VALUES use Flink's physical integer
+months or long milliseconds. This keeps the native Arrow output compatible with the RowData view
+and subsequent native stages; DataFusion temporal interval values remain internal to supported
+date/time arithmetic. Identity projections of interval columns still forward their existing
+buffers. Computed interval outputs, including newly constructed containers holding intervals,
+currently trigger whole-plan fallback with an explicit months/milliseconds storage reason.
+Generated parity covers negative literals, week/quarter normalization, typed nulls, streaming and
+bounded execution, and the unsupported computed-output fallback.
+
 Timezone-free millisecond timestamp addition/subtraction with a literal day-time interval uses
 DataFusion wrapping `BIGINT` arithmetic between zero-copy Arrow timestamp casts. This matches
 Flink's internal signed-long millisecond behavior across negative epochs and overflow; it avoids
@@ -420,6 +429,12 @@ Each remains a distinct protobuf expression and DataFusion vectorized operator; 
 includes signed zero, infinities, NaN, and nulls.
 `COT` is accelerated as a distinct DataFusion vector expression after the same `DOUBLE` coercion.
 Parity coverage includes signed zero, multiples of pi, infinities, NaN, and nulls.
+`ASIN`, `ACOS`, and `LOG10` retain DataFusion computation with a shared Flink adaptation for
+domain-error NaN sign bits. On the verified Linux/x86-64 runtime, Java Math returns a negative quiet
+NaN for non-NaN inputs outside these functions' domains. The adaptation preserves input NaNs and
+normal results, evaluates the operand once, and shares the DataFusion output buffers when no
+correction is needed. SQL parity compares typed serialized bits, including the NaN sign.
+
 `LN` and `LOG10` are accelerated as separate DataFusion vector expressions after Flink coerces the
 operand to `DOUBLE`. They preserve Flink's IEEE-754 domain behavior: negative inputs produce NaN,
 positive and negative zero produce negative infinity, positive infinity remains infinite, and null

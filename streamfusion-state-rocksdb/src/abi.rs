@@ -40,6 +40,7 @@ static API: StateBackendApiV1 = StateBackendApiV1 {
     scan_key_group,
     last_error,
     scan_key_group_admitted,
+    open_checkpoint,
 };
 
 #[unsafe(no_mangle)]
@@ -57,6 +58,21 @@ pub unsafe extern "C" fn streamfusion_state_backend_init(
 unsafe extern "C" fn open(
     options: *const StateBackendOpenOptions,
     output: *mut *mut c_void,
+) -> i32 {
+    unsafe { open_backend(options, output, false) }
+}
+
+unsafe extern "C" fn open_checkpoint(
+    options: *const StateBackendOpenOptions,
+    output: *mut *mut c_void,
+) -> i32 {
+    unsafe { open_backend(options, output, true) }
+}
+
+unsafe fn open_backend(
+    options: *const StateBackendOpenOptions,
+    output: *mut *mut c_void,
+    checkpoint: bool,
 ) -> i32 {
     if !output.is_null() {
         unsafe { ptr::write(output, ptr::null_mut()) };
@@ -89,7 +105,12 @@ unsafe extern "C" fn open(
                 .map_err(|error| error.to_string())?,
             ))
         };
-        let backend = RocksStateBackend::open_configured(
+        let open = if checkpoint {
+            RocksStateBackend::open_checkpoint_configured
+        } else {
+            RocksStateBackend::open_configured
+        };
+        let backend = open(
             Path::new(path),
             options.first_key_group,
             options.last_key_group,

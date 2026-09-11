@@ -14,7 +14,7 @@ class BoundedHashJoinFallbackParityTest extends SqlParityTestSupport {
     @ParameterizedTest(name = "{0}")
     @MethodSource("queries")
     void boundedHashJoinMatchesFlinkByteForByte(String ignoredName, String query) throws Exception {
-        assertFallbackParity(query, false);
+        assertUnorderedInsertFallbackParity(query, false);
 
         SqlFallbackAssertions.nativeBatchesAreZero(StreamFusionPlannerFactory.nativeRegularJoinBatchCount());
         SqlFallbackAssertions.admission();

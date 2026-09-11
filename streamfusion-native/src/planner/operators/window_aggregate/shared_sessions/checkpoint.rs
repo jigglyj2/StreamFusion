@@ -2,6 +2,8 @@
 // Licensed under the Apache License, Version 2.0.
 
 use super::*;
+mod validation;
+use validation::CurrentState;
 
 pub(super) const MARKER_KEY: &[u8] = b"\0streamfusion-shared-sessions";
 
@@ -15,38 +17,29 @@ impl SharedSessions {
     }
 
     fn flush_timers(&mut self, groups: std::ops::RangeInclusive<u32>) -> Result<()> {
-        let size = groups.clone().try_fold(0usize, |bytes, group| {
-            Ok::<_, DataFusionError>(
-                bytes
-                    .saturating_add(self.kernel.timers.snapshot_size(group)?)
-                    .saturating_add(512),
-            )
-        })?;
-        self.admit(size.saturating_mul(2))?;
-        let mut mutations = Vec::new();
-        for group in groups {
-            mutations.push(StateMutation {
-                key: StateKey {
-                    key_group: group,
-                    key: TIMER_STATE_KEY.to_vec(),
-                },
-                value: Some(self.kernel.timers.snapshot_key_group(group)?),
-            });
-            mutations.push(StateMutation {
-                key: StateKey {
-                    key_group: group,
-                    key: MARKER_KEY.to_vec(),
-                },
-                value: Some(self.marker()),
-            });
-        }
-        self.kernel.state.write_batch(mutations)
+        let marker = self.marker();
+        super::super::shared_checkpoint::flush_timers(&mut self.kernel, groups, MARKER_KEY, &marker)
     }
 
     pub(super) fn snapshot(&mut self, group: u32) -> Result<crate::state::SnapshotBytes> {
         self.require_healthy()?;
         self.flush_timers(group..=group)?;
         let result = self.kernel.snapshot_key_group(group);
+        self.kernel.scratch_reservation.resize(0)?;
+        result
+    }
+
+    pub(super) fn write_snapshot(
+        &mut self,
+        group: u32,
+        sink: &mut crate::state::snapshot_stream::SnapshotSink<'_>,
+    ) -> Result<usize> {
+        self.require_healthy()?;
+        self.flush_timers(group..=group)?;
+        let result =
+            self.kernel
+                .state
+                .write_snapshot(group, &self.kernel.scratch_reservation, sink);
         self.kernel.scratch_reservation.resize(0)?;
         result
     }
@@ -60,6 +53,112 @@ impl SharedSessions {
     }
 
     pub(super) fn restore(&mut self, group: u32, bytes: &[u8], watermark: i64) -> Result<()> {
+        self.require_restore_ready(watermark)?;
+        let entries = streamfusion_state_abi::key_group_snapshot_entries(group, bytes)
+            .map_err(|error| DataFusionError::Execution(error.to_string()))?;
+        if !entries.into_iter().any(|(key, _)| key == MARKER_KEY) {
+            self.migrate_legacy(
+                group,
+                crate::state::CheckpointSource::Canonical(bytes),
+                watermark,
+            )?;
+            return self.finish_restore(watermark);
+        }
+        let entries = || {
+            streamfusion_state_abi::key_group_snapshot_entries(group, bytes)
+                .map_err(|error| DataFusionError::Execution(error.to_string()))
+        };
+        // Current writers order keys. Older canonical frames are allowed to contain the same
+        // entries in another order: sort only borrowed descriptors, never accumulator payloads.
+        let mut previous: Option<&[u8]> = None;
+        let ordered = entries()?.all(|(key, _)| {
+            let ordered = previous.is_none_or(|previous| previous <= key);
+            previous = Some(key);
+            ordered
+        });
+        {
+            let marker = self.marker();
+            let mut validator = CurrentState::new(
+                &self.kernel.calls,
+                &mut self.end_codec,
+                self.kernel
+                    .scratch_reservation
+                    .sibling("session checkpoint validation"),
+                &marker,
+                watermark,
+            );
+            if ordered {
+                for (key, value) in entries()? {
+                    validator.entry(key, value)?;
+                }
+            } else {
+                let entries = entries()?;
+                let mut descriptors = self
+                    .kernel
+                    .scratch_reservation
+                    .sibling("unordered session checkpoint descriptors");
+                descriptors.resize(entries.len().saturating_mul(64).saturating_add(4096))?;
+                let mut entries = entries.collect::<Vec<_>>();
+                entries.sort_unstable_by(|left, right| left.0.cmp(right.0));
+                for (key, value) in entries {
+                    validator.entry(key, value)?;
+                }
+            }
+        }
+        self.kernel.restore_key_group(group, bytes)?;
+        self.finish_restore(watermark)
+    }
+
+    pub(super) fn restore_physical(
+        &mut self,
+        group: u32,
+        source: &dyn crate::state::KeyedState,
+        watermark: i64,
+    ) -> Result<()> {
+        self.require_restore_ready(watermark)?;
+        let marker_key = StateKeyRef {
+            key_group: group,
+            key: MARKER_KEY,
+        };
+        let marker = source.get_batch(&[marker_key], &self.kernel.scratch_reservation)?;
+        if marker[0].is_none() {
+            drop(marker);
+            self.migrate_legacy(
+                group,
+                crate::state::CheckpointSource::Keyed(source),
+                watermark,
+            )?;
+            return self.finish_restore(watermark);
+        }
+        {
+            let marker = self.marker();
+            let mut validator = CurrentState::new(
+                &self.kernel.calls,
+                &mut self.end_codec,
+                self.kernel
+                    .scratch_reservation
+                    .sibling("session checkpoint validation"),
+                &marker,
+                watermark,
+            );
+            source.visit_key_group_admitted(
+                group,
+                1024,
+                256 << 10,
+                &self.kernel.scratch_reservation,
+                &mut |page| {
+                    for (key, value) in page {
+                        validator.entry(key, value)?;
+                    }
+                    Ok(())
+                },
+            )?;
+        }
+        self.kernel.restore_physical_key_group(group, source)?;
+        self.finish_restore(watermark)
+    }
+
+    fn require_restore_ready(&self, watermark: i64) -> Result<()> {
         self.require_healthy()?;
         if self.started
             || self
@@ -70,56 +169,12 @@ impl SharedSessions {
                 "shared session restore needs one Flink watermark before input".into(),
             ));
         }
-        self.admit(bytes.len().saturating_mul(8).saturating_add(64 * 1024))?;
-        let entries = crate::state::decode_key_group_snapshot(group, bytes)?;
-        let marker = self.marker();
-        if !entries.iter().any(|(key, _)| key == MARKER_KEY) {
-            self.migrate_legacy(group, bytes, &entries, watermark)?;
-            self.restored_watermark = Some(watermark);
-            self.kernel.current_event_time = watermark;
-            self.kernel.scratch_reservation.resize(0)?;
-            return Ok(());
-        }
-        if !entries
-            .iter()
-            .any(|(key, value)| key == MARKER_KEY && *value == marker)
-        {
-            return Err(DataFusionError::Execution(
-                "shared session state plan/version marker differs".into(),
-            ));
-        }
-        let mut partitions = std::collections::BTreeMap::<Vec<u8>, assignments::Assignments>::new();
-        for (key, value) in &entries {
-            if key == MARKER_KEY || key == TIMER_STATE_KEY {
-                continue;
-            }
-            if key.len() < 20 || key[key.len() - 9] != 1 {
-                return Err(DataFusionError::Execution(
-                    "invalid ordered session end key".into(),
-                ));
-            }
-            let prefix = &key[..key.len() - 9];
-            codec::grouping(prefix)?;
-            let (start, end, _) = codec::decode(value, &self.kernel.calls)?;
-            let row = self
-                .end_codec
-                .convert_columns(&[Arc::new(Int64Array::from(vec![end])) as ArrayRef])?;
-            if &key[key.len() - 9..] != row.row(0).as_ref() || end - 1 <= watermark {
-                return Err(DataFusionError::Execution(
-                    "session key or restored watermark differs from live interval".into(),
-                ));
-            }
-            partitions
-                .entry(prefix.to_vec())
-                .or_default()
-                .existing(start, end)?;
-        }
-        drop(partitions);
-        drop(entries);
-        self.kernel.restore_key_group(group, bytes)?;
+        Ok(())
+    }
+
+    fn finish_restore(&mut self, watermark: i64) -> Result<()> {
         self.restored_watermark = Some(watermark);
         self.kernel.current_event_time = watermark;
-        self.kernel.scratch_reservation.resize(0)?;
-        Ok(())
+        self.kernel.scratch_reservation.resize(0)
     }
 }

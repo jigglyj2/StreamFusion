@@ -3,6 +3,25 @@
 
 use crate::{SnapshotError, SNAPSHOT_MAGIC, SNAPSHOT_VERSION};
 
+/// Shared canonical header for contiguous and streamed encoders.
+pub fn key_group_snapshot_header(
+    key_group: u32,
+    entries: usize,
+    bytes: usize,
+) -> Result<[u8; 16], SnapshotError> {
+    let entries = u32::try_from(entries)
+        .map_err(|_| SnapshotError("canonical snapshot entry count exceeds UInt32".into()))?;
+    if bytes < 16 || (bytes - 16) / 8 < entries as usize {
+        return Err(SnapshotError("invalid canonical snapshot size".into()));
+    }
+    let mut header = [0; 16];
+    header[..4].copy_from_slice(SNAPSHOT_MAGIC);
+    header[4..8].copy_from_slice(&SNAPSHOT_VERSION.to_le_bytes());
+    header[8..12].copy_from_slice(&key_group.to_le_bytes());
+    header[12..16].copy_from_slice(&entries.to_le_bytes());
+    Ok(header)
+}
+
 /// Builds canonical bytes after a caller has measured and admitted their exact size.
 /// In particular, no copied collection of historical keys/values is required.
 pub struct SnapshotWriter {
@@ -13,20 +32,13 @@ pub struct SnapshotWriter {
 
 impl SnapshotWriter {
     pub fn new(key_group: u32, entries: usize, bytes: usize) -> Result<Self, SnapshotError> {
-        let entries = u32::try_from(entries)
-            .map_err(|_| SnapshotError("canonical snapshot entry count exceeds UInt32".into()))?;
-        if bytes < 16 || bytes.checked_sub(16).unwrap() / 8 < entries as usize {
-            return Err(SnapshotError("invalid canonical snapshot size".into()));
-        }
+        let header = key_group_snapshot_header(key_group, entries, bytes)?;
         let mut output = Vec::with_capacity(bytes);
-        output.extend_from_slice(SNAPSHOT_MAGIC);
-        output.extend_from_slice(&SNAPSHOT_VERSION.to_le_bytes());
-        output.extend_from_slice(&key_group.to_le_bytes());
-        output.extend_from_slice(&entries.to_le_bytes());
+        output.extend_from_slice(&header);
         Ok(Self {
             bytes: output,
             expected_bytes: bytes,
-            remaining_entries: entries,
+            remaining_entries: entries as u32,
         })
     }
 

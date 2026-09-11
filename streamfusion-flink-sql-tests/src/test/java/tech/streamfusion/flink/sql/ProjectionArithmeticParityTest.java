@@ -36,7 +36,7 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
                 + "FROM (VALUES (1, 'a'), (2, 'Beta'), (3, CAST(NULL AS STRING))) AS input(id, label) "
                 + "WHERE id >= 2";
 
-        assertParity(sql, false);
+        assertUnorderedInsertParity(sql, false);
 
         SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativeValuesBatchCount(), 1);
         SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
@@ -45,7 +45,7 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
 
     @Test
     void boundedIdentityCalcRunsNativelyAndMatchesFlinkByteForByte() throws Exception {
-        assertParity(IDENTITY_CALC_SQL, true);
+        assertUnorderedInsertParity(IDENTITY_CALC_SQL, true);
 
         SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
@@ -54,7 +54,7 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
     @MethodSource("nativeProjectionCases")
     void nativeInputReferenceProjectionsMatchFlinkByteForByte(
             String ignoredName, String sql, boolean nativeExecutionExpected) throws Exception {
-        assertParity(sql, true, nativeExecutionExpected);
+        assertUnorderedInsertParity(sql, true, nativeExecutionExpected);
 
         if (nativeExecutionExpected) {
             SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
@@ -70,7 +70,7 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
 
     @Test
     void nativeIntegerArithmeticMatchesFlinkByteForByte() throws Exception {
-        assertParity(INTEGER_ARITHMETIC_SQL, true);
+        assertUnorderedInsertParity(INTEGER_ARITHMETIC_SQL, true);
 
         SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
@@ -79,7 +79,7 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
     void nativeIntegerToBigintCastMatchesFlinkByteForByte() throws Exception {
         String sql =
                 "SELECT CAST(id AS BIGINT) FROM " + "(VALUES (-2147483648), (-1), (0), (1), (2147483647)) AS input(id)";
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
@@ -88,7 +88,7 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
     void nativeIntegerToDoubleCastMatchesFlinkByteForByte() throws Exception {
         String sql =
                 "SELECT CAST(id AS DOUBLE) FROM " + "(VALUES (-2147483648), (-1), (0), (1), (2147483647)) AS input(id)";
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
@@ -97,7 +97,7 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
     void nativeBooleanLiteralProjectionsMatchFlinkByteForByte() throws Exception {
         String sql = "SELECT enabled, TRUE, FALSE FROM "
                 + "(VALUES (1, TRUE), (2, FALSE)) AS input(id, enabled) WHERE id >= 1";
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
@@ -105,7 +105,7 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
     @ParameterizedTest(name = "{0} literal projections")
     @MethodSource("narrowIntegerLiteralProjectionCases")
     void nativeNarrowIntegerLiteralProjectionsMatchFlinkByteForByte(String ignoredName, String sql) throws Exception {
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
@@ -126,7 +126,7 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
     @MethodSource("typedNullProjectionTypes")
     void nativeTypedNullProjectionsMatchFlinkByteForByte(String type) throws Exception {
         String sql = "SELECT CAST(NULL AS " + type + ") FROM (VALUES (1), (2)) AS input(id) WHERE id >= 1";
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
@@ -156,7 +156,7 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
                 + "NOT (left_flag AND right_flag), (left_flag OR FALSE) AND TRUE "
                 + "FROM (VALUES (TRUE, TRUE), (TRUE, FALSE), (FALSE, TRUE), (FALSE, FALSE)) "
                 + "AS input(left_flag, right_flag)";
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
@@ -166,7 +166,7 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
         String sql = "SELECT id = 2, id <> 2, id < 2, id <= 2, id > 2, id >= 2, "
                 + "(id >= 2 AND enabled), NOT (id = 2 OR enabled) "
                 + "FROM (VALUES (1, TRUE), (2, FALSE), (3, TRUE)) AS input(id, enabled)";
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
@@ -175,7 +175,7 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
     void nativeBooleanTruthTestsMatchFlinkByteForByte() throws Exception {
         String sql = "SELECT flag IS TRUE, flag IS FALSE, flag IS NOT TRUE, flag IS NOT FALSE "
                 + "FROM (VALUES (TRUE), (FALSE)) AS input(flag)";
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
@@ -188,7 +188,7 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
                 + "FROM (VALUES (1, 1, 2, TRUE, FALSE), (2, 2, 2, TRUE, TRUE), "
                 + "(3, 3, 2, FALSE, FALSE)) "
                 + "AS input(id, left_id, right_id, left_flag, right_flag)";
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
@@ -197,7 +197,7 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
     void nativeDateLiteralProjectionsMatchFlinkByteForByte() throws Exception {
         String sql = "SELECT DATE '1969-12-31', DATE '1970-01-01', DATE '2026-08-27' "
                 + "FROM (VALUES (1), (2)) AS input(id) WHERE id >= 1";
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
@@ -206,7 +206,7 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
     void nativeTimeLiteralProjectionsMatchFlinkByteForByte() throws Exception {
         String sql = "SELECT TIME '00:00:00', TIME '12:34:56.123', TIME '23:59:59.999' "
                 + "FROM (VALUES (1), (2)) AS input(id) WHERE id >= 1";
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
@@ -217,7 +217,7 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
                 + "CAST('1970-01-01 00:00:00' AS TIMESTAMP(6)), "
                 + "CAST('2026-08-27 12:34:56.123456' AS TIMESTAMP(6)) "
                 + "FROM (VALUES (1), (2)) AS input(id) WHERE id >= 1";
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
@@ -230,7 +230,7 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
                 + "(TIMESTAMP '2024-02-29 12:34:56.123'), "
                 + "(TIMESTAMP '2026-08-27 00:00:05.000')) AS input(ts) "
                 + "WHERE ts >= TIMESTAMP '1969-12-31 23:59:59.999' - INTERVAL '10' SECOND";
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
@@ -238,7 +238,7 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
     @Test
     void nativeCharacterLiteralProjectionsMatchFlinkByteForByte() throws Exception {
         String sql = "SELECT '', 'alpha', 'élan', '東京' " + "FROM (VALUES (1), (2)) AS input(id) WHERE id >= 1";
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
@@ -246,7 +246,7 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
     @Test
     void nativeBinaryLiteralProjectionsMatchFlinkByteForByte() throws Exception {
         String sql = "SELECT X'00', X'0102', X'80FF' " + "FROM (VALUES (1), (2)) AS input(id) WHERE id >= 1";
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
@@ -254,7 +254,7 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
     @ParameterizedTest(name = "{0} unary minus")
     @MethodSource("nativeUnaryMinusCases")
     void nativeUnaryMinusMatchesFlinkByteForByte(String ignoredName, String sql) throws Exception {
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
@@ -271,7 +271,7 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
     @ParameterizedTest(name = "{0} division")
     @MethodSource("nativeFloatingDivisionCases")
     void nativeFloatingDivisionMatchesFlinkByteForByte(String ignoredName, String sql) throws Exception {
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
@@ -294,7 +294,7 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
 
     @Test
     void nativeBigintArithmeticMatchesFlinkByteForByte() throws Exception {
-        assertParity(BIGINT_ARITHMETIC_SQL, true);
+        assertUnorderedInsertParity(BIGINT_ARITHMETIC_SQL, true);
 
         SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
@@ -304,7 +304,7 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
         String sql = "SELECT id + 2147483648 FROM "
                 + "(VALUES (9223372034707292159), (9223372034707292160)) AS input(id) "
                 + "WHERE id >= 9223372034707292159";
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
@@ -312,7 +312,7 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
     @ParameterizedTest(name = "{0} decimal arithmetic")
     @MethodSource("nativeDecimalArithmeticCases")
     void nativeDecimalArithmeticMatchesFlinkByteForByte(String ignoredName, String sql) throws Exception {
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
@@ -320,7 +320,7 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
     @ParameterizedTest(name = "{0} column comparison")
     @MethodSource("nativeColumnComparisonCases")
     void nativeColumnComparisonsMatchFlinkByteForByte(String ignoredName, String sql) throws Exception {
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
@@ -426,7 +426,7 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
     @MethodSource("nativeFloatingPointArithmeticCases")
     void floatingPointArithmeticMatchesFlinkByteForByte(String ignoredName, String sql, boolean nativeExecutionExpected)
             throws Exception {
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         if (nativeExecutionExpected) {
             SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
@@ -473,21 +473,22 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
         String sql = "SELECT metric + 1.5E0, metric * -1.0E0 FROM (VALUES "
                 + "(CAST('NaN' AS DOUBLE)), (CAST('Infinity' AS DOUBLE)), "
                 + "(CAST('-Infinity' AS DOUBLE)), (-0.0E0)) AS input(metric)";
-        assertParity(sql, true, false);
+        assertUnorderedInsertParity(sql, true, false);
 
         assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isZero();
     }
 
     @Test
     void nativeIntegerDivisionByNonzeroLiteralMatchesFlinkByteForByte() throws Exception {
-        assertParity("SELECT id / 2, id / -2 FROM (VALUES (-7), (-1), (0), (1), (7)) AS input(id)", true);
+        assertUnorderedInsertParity(
+                "SELECT id / 2, id / -2 FROM (VALUES (-7), (-1), (0), (1), (7)) AS input(id)", true);
 
         SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
 
     @Test
     void nativeBigintDivisionByNonzeroLiteralMatchesFlinkByteForByte() throws Exception {
-        assertParity(
+        assertUnorderedInsertParity(
                 "SELECT id / 2147483648, id / -2147483648 "
                         + "FROM (VALUES (-9223372036854775807), (-2147483649), (0), "
                         + "(2147483649), (9223372036854775807)) AS input(id)",
@@ -498,7 +499,7 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
 
     @Test
     void nativeIntegerDivisionByColumnMatchesFlinkByteForByte() throws Exception {
-        assertParity(
+        assertUnorderedInsertParity(
                 "SELECT numerator / denominator FROM (VALUES (4, 2), (9, 3)) " + "AS input(numerator, denominator)",
                 true);
 
@@ -507,7 +508,7 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
 
     @Test
     void nativeNarrowIntegerDivisionByColumnMatchesFlinkByteForByte() throws Exception {
-        assertParity(
+        assertUnorderedInsertParity(
                 "SELECT tiny_n / tiny_d, small_n / small_d FROM (VALUES "
                         + "(CAST(-7 AS TINYINT), CAST(2 AS TINYINT), CAST(-32767 AS SMALLINT), CAST(3 AS SMALLINT)), "
                         + "(CAST(7 AS TINYINT), CAST(-2 AS TINYINT), CAST(32767 AS SMALLINT), CAST(-3 AS SMALLINT))) "
@@ -519,14 +520,15 @@ class ProjectionArithmeticParityTest extends SqlParityTestSupport {
 
     @Test
     void nativeIntegerRemainderByNonzeroLiteralMatchesFlinkByteForByte() throws Exception {
-        assertParity("SELECT MOD(id, 3), MOD(id, -3) " + "FROM (VALUES (-7), (-1), (0), (1), (7)) AS input(id)", true);
+        assertUnorderedInsertParity(
+                "SELECT MOD(id, 3), MOD(id, -3) " + "FROM (VALUES (-7), (-1), (0), (1), (7)) AS input(id)", true);
 
         SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
     }
 
     @Test
     void nativeBigintRemainderByNonzeroLiteralMatchesFlinkByteForByte() throws Exception {
-        assertParity(
+        assertUnorderedInsertParity(
                 "SELECT MOD(id, 2147483648) "
                         + "FROM (VALUES (-9223372036854775807), (-2147483649), (0), "
                         + "(2147483649), (9223372036854775807)) AS input(id)",

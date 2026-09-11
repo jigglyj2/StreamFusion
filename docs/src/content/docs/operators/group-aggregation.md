@@ -623,7 +623,7 @@ Shared group aggregation imports physical files as admitted Arrow key/value page
 state writes, preserving large individual legacy values when the host budget permits them.
 Generated parity tests also cover full/incremental restore of an 8,192-member hot group followed by
 complete retraction and recreation. Canonical savepoints still require whole-key-group buffers;
-see [native state](/StreamFusion/development/native-state/) for the limits and ABI-9 upgrade requirement.
+see [native state](/StreamFusion/development/native-state/) for the limits and ABI-10 upgrade requirement.
 
 Global aggregate recovery is independently tested for all four memory/RocksDB source-to-target
 backend pairs with canonical savepoints and with both aligned and unaligned checkpoints. Global

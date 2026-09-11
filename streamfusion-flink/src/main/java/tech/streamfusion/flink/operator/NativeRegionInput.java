@@ -58,7 +58,7 @@ final class NativeRegionInput {
     NativeExchangePlan contract() {
         try {
             NativeExchangePlan result = NativeExchangePlan.parseFrom(exchangePlan);
-            if (result.getProtocolVersion() != 1) {
+            if (result.getProtocolVersion() != 1 && result.getProtocolVersion() != 2) {
                 throw new IllegalArgumentException("Unsupported native region exchange protocol");
             }
             return result;

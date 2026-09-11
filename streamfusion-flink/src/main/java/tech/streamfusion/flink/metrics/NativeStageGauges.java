@@ -138,7 +138,14 @@ final class NativeStageGauges {
         if (descriptors.isEmpty()) {
             return;
         }
-        long[] next = source.get();
+        update(source.get());
+    }
+
+    boolean isEmpty() {
+        return descriptors.isEmpty();
+    }
+
+    void update(long[] next) {
         if (next.length != descriptors.size()) {
             throw new IllegalArgumentException("Native gauge snapshot has an invalid shape");
         }

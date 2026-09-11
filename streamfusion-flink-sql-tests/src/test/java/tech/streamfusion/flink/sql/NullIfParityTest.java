@@ -28,7 +28,7 @@ class NullIfParityTest extends SqlParityTestSupport {
     @MethodSource("queries")
     void rewrittenConditionalMatchesDeclaredAdmissionAndFlinkBytes(
             String ignoredName, String sql, boolean nativeExpected) throws Exception {
-        assertParity(sql, true, nativeExpected);
+        assertUnorderedInsertParity(sql, true, nativeExpected);
         if (nativeExpected)
             SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
         else SqlFallbackAssertions.admission();

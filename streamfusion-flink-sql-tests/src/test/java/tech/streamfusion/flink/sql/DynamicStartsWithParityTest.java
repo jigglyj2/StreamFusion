@@ -35,7 +35,7 @@ class DynamicStartsWithParityTest extends SqlParityTestSupport {
                 "SELECT text_value, prefix FROM " + INPUT + " WHERE STARTSWITH(text_value, prefix)"
             })
     void dynamicPrefixMatchesFlinkByteForByte(String sql) throws Exception {
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }

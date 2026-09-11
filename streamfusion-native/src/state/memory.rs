@@ -9,7 +9,9 @@ use datafusion::error::{DataFusionError, Result};
 
 use crate::memory_pool::HostMemoryReservation;
 
-use super::{snapshot, KeyedState, StateKeyRef, StateMutation};
+#[cfg(test)]
+use super::snapshot;
+use super::{KeyedState, StateKeyRef, StateMutation};
 
 mod entry;
 mod table;
@@ -292,48 +294,36 @@ impl KeyedState for MemoryKeyedState {
         Ok(super::SnapshotBytes::owned(bytes, reservation))
     }
 
+    fn write_snapshot(
+        &self,
+        group: u32,
+        owner: &HostMemoryReservation,
+        sink: &mut super::snapshot_stream::SnapshotSink<'_>,
+    ) -> Result<usize> {
+        let group_state = self.group(group)?;
+        let mut memory = owner.sibling("canonical snapshot sorted references");
+        memory.resize(
+            group_state
+                .len()
+                .saturating_mul(size_of::<&entry::PackedEntry>()),
+        )?;
+        let mut entries = Vec::with_capacity(group_state.len());
+        entries.extend(group_state.entries());
+        entries.sort_unstable_by(|a, b| a.key().cmp(b.key()));
+        super::snapshot_stream::write_entries(
+            group,
+            entries.iter().map(|entry| (entry.key(), entry.value())),
+            sink,
+        )
+    }
+
     fn restore_key_group(
         &mut self,
         key_group: u32,
         bytes: &[u8],
-        _owner: &HostMemoryReservation,
+        owner: &HostMemoryReservation,
     ) -> Result<()> {
-        if !self.group(key_group)?.is_empty() {
-            return Err(DataFusionError::Execution(format!(
-                "key group {key_group} was restored more than once"
-            )));
-        }
-        let count = streamfusion_state_abi::validate_key_group_snapshot(key_group, bytes)
-            .map_err(|error| DataFusionError::Execution(error.to_string()))?;
-        let current = self.estimated_heap_size();
-        self.reservation.resize(
-            current
-                .saturating_add(bytes.len().saturating_mul(3))
-                .saturating_add(count.saturating_mul(192))
-                .saturating_add(self.group(key_group)?.directory_growth()),
-        )?;
-        let entries = match snapshot::decode(key_group, bytes) {
-            Ok(entries) => entries,
-            Err(error) => {
-                self.reservation.resize(current)?;
-                return Err(error);
-            }
-        };
-        if !self.group(key_group)?.is_empty() {
-            self.reservation.resize(current)?;
-            return Err(DataFusionError::Execution(format!(
-                "key group {key_group} was restored more than once"
-            )));
-        }
-        self.entry_bytes = self.entry_bytes.saturating_add(
-            entries
-                .iter()
-                .map(|(key, value)| key.len().saturating_add(value.len()))
-                .sum::<usize>(),
-        );
-        self.group_mut(key_group)?.extend(entries.into_iter())?;
-        self.reservation.resize(self.estimated_heap_size())?;
-        Ok(())
+        super::canonical_restore::restore(self, key_group, bytes, owner)
     }
 }
 

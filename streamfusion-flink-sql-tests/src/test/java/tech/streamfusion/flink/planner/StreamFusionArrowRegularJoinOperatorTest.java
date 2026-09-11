@@ -126,9 +126,10 @@ class StreamFusionArrowRegularJoinOperatorTest {
                 assertThat(((Counter) metrics.get("processedRows")).getCount()).isEqualTo(3L);
                 assertThat(((Counter) metrics.get("emittedRows")).getCount()).isEqualTo(2L);
                 assertThat(((Counter) metrics.get("emittedInserts")).getCount()).isEqualTo(2L);
-                // These small groups stay inline in their manifest: one batched read per arrival.
+                // The second left row moves the singleton to external row state. The right
+                // arrival reads its manifest and both payloads in one additional batch.
                 assertThat(((Counter) metrics.get("stateReadBatches")).getCount())
-                        .isEqualTo(3L);
+                        .isEqualTo(4L);
                 assertThat(((Counter) metrics.get("stateWriteBatches")).getCount())
                         .isEqualTo(3L);
                 assertThat(((Gauge<?>) metrics.get("pendingEventTimeTimers")).getValue())

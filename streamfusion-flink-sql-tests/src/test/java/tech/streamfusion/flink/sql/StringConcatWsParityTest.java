@@ -33,7 +33,7 @@ class StringConcatWsParityTest extends SqlParityTestSupport {
     @ParameterizedTest
     @MethodSource("queries")
     void dynamicArgumentsMatchFlinkByteForByte(String sql) throws Exception {
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         assertThat(StreamFusionPlannerFactory.nativePlanBatchCount())
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())

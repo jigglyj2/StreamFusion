@@ -812,6 +812,24 @@ impl IntervalJoinProcessor {
         Ok(())
     }
 
+    pub(crate) fn restore_physical_key_group(
+        &mut self,
+        key_group: u32,
+        source: &dyn crate::state::KeyedState,
+    ) -> Result<()> {
+        super::stateful_utils::restore_timer_checkpoint(
+            self.state.as_mut(),
+            &mut self.timers,
+            key_group,
+            source,
+            TIMER_STATE_KEY,
+            &mut self.state_read_batches,
+            &self.scratch_reservation,
+        )?;
+        self.dirty_timer_groups.remove(&key_group);
+        Ok(())
+    }
+
     pub(crate) fn checkpoint(&mut self, directory: &std::path::Path) -> Result<()> {
         let dirty = self.dirty_timer_groups.iter().copied().collect::<Vec<_>>();
         self.flush_timer_groups(dirty)?;

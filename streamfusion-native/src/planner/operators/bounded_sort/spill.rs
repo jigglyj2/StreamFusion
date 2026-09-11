@@ -12,6 +12,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::ipc::{reader::StreamReader, writer::StreamWriter};
 use arrow::record_batch::RecordBatch;
 use datafusion::error::{DataFusionError, Result};
+use datafusion::execution::spill_file::{SpillFile, SpillWriter};
 use datafusion::execution::{runtime_env::RuntimeEnvBuilder, TaskContext};
 use datafusion::physical_expr::{expressions::Column, LexOrdering, PhysicalSortExpr};
 use datafusion::physical_plan::sorts::sort::SortExec;
@@ -44,7 +45,7 @@ enum Source {
     Memory(VecDeque<RecordBatch>, HostMemoryReservation),
     File(
         StreamReader<File>,
-        tempfile::NamedTempFile,
+        Arc<dyn SpillFile>,
         HostMemoryReservation,
     ),
 }
@@ -125,6 +126,11 @@ impl SpillableSort {
         let mut cache = owner.sibling("bounded sort cached Arrow input");
         let mut control = owner.sibling("bounded sort DataFusion runtime and plan");
         control.resize(32 << 10)?;
+        let runtime_env = RuntimeEnvBuilder::new()
+            .with_memory_pool(owner.datafusion_pool()?)
+            .with_disk_manager_builder(crate::spill::disk_manager(vec![directory.to_path_buf()])?)
+            .with_max_spill_merge_fan_in(8)
+            .build_arc()?;
         let mut fields = visible_schema.fields().to_vec();
         fields.push(Arc::new(Field::new(
             "__streamfusion_sort_count",
@@ -133,7 +139,7 @@ impl SpillableSort {
         )));
         let schema = Arc::new(Schema::new(fields));
         let mut batches = VecDeque::new();
-        let mut spill: Option<(tempfile::NamedTempFile, StreamWriter<File>)> = None;
+        let mut spill: Option<(Arc<dyn SpillFile>, StreamWriter<Box<dyn SpillWriter>>)> = None;
         for group in groups {
             state.visit_key_group(group, PAGE_ROWS, page_bytes, &mut |entries| {
                 let parser = converter.parser();
@@ -158,10 +164,11 @@ impl SpillableSort {
                     batches.push_back(batch);
                 } else {
                     if spill.is_none() {
-                        let file = tempfile::Builder::new()
-                            .prefix("streamfusion-sort-input-")
-                            .tempfile_in(directory)?;
-                        let mut writer = StreamWriter::try_new(file.reopen()?, schema.as_ref())?;
+                        let file = runtime_env
+                            .disk_manager
+                            .create_tmp_file("bounded sort state input")?;
+                        let mut writer =
+                            StreamWriter::try_new(file.open_writer()?, schema.as_ref())?;
                         for retained in batches.drain(..) {
                             writer.write(&retained)?;
                         }
@@ -175,20 +182,22 @@ impl SpillableSort {
         }
         let (source, input_spills, input_spill_bytes) = if let Some((file, mut writer)) = spill {
             writer.finish()?;
+            writer.get_mut().finish()?;
             drop(writer);
-            let bytes = file.as_file().metadata()?.len();
-            let reader = StreamReader::try_new(file.reopen()?, None)?;
+            let path = file.path().ok_or_else(|| {
+                DataFusionError::Execution(
+                    "Flink assigned local spilling returned a non-local file".into(),
+                )
+            })?;
+            let bytes = file.size().ok_or_else(|| {
+                DataFusionError::Execution("local sort spill has no accounted size".into())
+            })?;
+            let reader = StreamReader::try_new(File::open(path)?, None)?;
             (Source::File(reader, file, workspace), 1, bytes)
         } else {
             drop(workspace);
             (Source::Memory(batches, cache), 0, 0)
         };
-        let pool = owner.datafusion_pool(capacity);
-        let runtime_env = RuntimeEnvBuilder::new()
-            .with_memory_pool(pool)
-            .with_temp_file_path(directory)
-            .with_max_spill_merge_fan_in(8)
-            .build_arc()?;
         let mut config = SessionConfig::new().with_batch_size(PAGE_ROWS);
         config.options_mut().execution.sort_spill_reservation_bytes = (capacity / 8).min(10 << 20);
         config.options_mut().execution.sort_in_place_threshold_bytes = page_bytes;
@@ -260,6 +269,16 @@ impl SpillableSort {
                     .as_ref()
                     .and_then(|m| m.spilled_bytes())
                     .unwrap_or(0) as u64,
+        )
+    }
+
+    #[cfg(test)]
+    pub(super) fn disk_accounting(&self) -> (u64, u64, u64) {
+        let manager = &self._context.runtime_env().disk_manager;
+        (
+            manager.max_temp_directory_size(),
+            manager.used_disk_space(),
+            self.input_spill_bytes,
         )
     }
 

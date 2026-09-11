@@ -15,7 +15,6 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeRegionStream_op
     _: JClass<'a>,
     handle: jlong,
     port: jint,
-    plan: JByteArray<'a>,
     payload: JByteArray<'a>,
     offset: jint,
     length: jint,
@@ -25,23 +24,25 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeRegionStream_op
 ) -> jlongArray {
     env.with_env(|env| -> jni::errors::Result<_> {
         let context = crate::execution_context::get(handle).map_err(|e| throw(env, e))?;
-        let expected = context.region_input_count().map_err(|e| throw(env, e))?
-            + context.clock_input_bindings().len();
-        if arrays.len(env)? != expected || schemas.len(env)? != expected {
+        let expected = context
+            .region_input_count()
+            .map(|inputs| inputs + context.clock_input_bindings().len());
+        let count = arrays.len(env)?;
+        if expected.is_some_and(|expected| count != expected) || schemas.len(env)? != count {
             return Err(throw(env, "native region input arity mismatch"));
         }
         // Allocate the small response before consuming any producer-owned C Data handles.
         let response = env.new_long_array(2)?;
         let (batches, reservations, rows) = super::plan_exchange::prepare_exchange(
-            env, &context, port, plan, payload, offset, length, metadata, arrays, schemas,
+            env, &context, port, payload, offset, length, metadata, arrays, schemas,
         )?;
         let opened: datafusion::error::Result<_> = (|| {
-            let stream = context.start_region(batches)?;
-            region_output::register(region_output::Output::new(
+            region_output::register(region_output::Output::start(
                 context.clone(),
-                stream,
+                batches,
+                None,
                 reservations,
-            ))
+            )?)
         })();
         let output = opened.map_err(|e| throw(env, e))?;
         if let Err(error) = response.set_region(env, 0, &[output, rows as jlong]) {

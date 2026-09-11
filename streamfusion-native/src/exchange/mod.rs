@@ -7,13 +7,17 @@ mod control;
 mod exchange_framer;
 mod exchange_writer;
 mod key_group;
+pub(crate) mod managed_routing;
 mod native_channel;
 mod network_stream;
+pub(crate) mod output_bindings;
 mod partitioner;
+pub(crate) mod prepared_router;
 mod record_metadata;
 
 pub use batch_frame::IpcBatchFrame;
 pub use binary_row::{encode_binary_row, encode_binary_row_into, KeyField};
+pub(crate) use control::transport_schema;
 pub use control::{decode_exchange_plan, exchange_key_fields};
 pub use exchange_framer::{
     frame_hash_exchange_batch, frame_hash_exchange_batch_projected, RoutedFrame,

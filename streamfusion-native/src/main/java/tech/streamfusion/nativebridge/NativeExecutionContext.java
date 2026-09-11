@@ -26,6 +26,8 @@ public final class NativeExecutionContext implements AutoCloseable {
     private final boolean stateful;
     private final boolean region;
     private final boolean inputEnvelopeRequired;
+    private final boolean ownedOutputEnvelope;
+    private final NativeExchangeInputs exchangeInputs = new NativeExchangeInputs(this);
 
     public NativeExecutionContext(byte[] serializedPlan, NativeMemoryManager memoryManager) {
         this(serializedPlan, memoryManager, null);
@@ -79,6 +81,7 @@ public final class NativeExecutionContext implements AutoCloseable {
         }
         identifiedPlan = region ? serializedPlan.clone() : NativePlanNodeIdentity.assign(serializedPlan);
         rootPlanNodeId = region ? 0 : NativePlanNodeIdentity.rootId(identifiedPlan);
+        ownedOutputEnvelope = region || ownsEnvelope(identifiedPlan);
         long controlBytes = Math.addExact(
                 Math.addExact((long) identifiedPlan.length, stateBindings == null ? 0 : stateBindings.length),
                 taskBindings == null ? 0 : taskBindings.length);
@@ -88,7 +91,7 @@ public final class NativeExecutionContext implements AutoCloseable {
                     "Flink denied " + controlBytes + " bytes for native plan/state-binding JNI copies");
         }
         try {
-            if (region && NativeRegionStream.edgeVersion() != 2)
+            if (ownedOutputEnvelope && NativeRegionStream.edgeVersion() != 4)
                 throw new IllegalStateException("Unsupported native region C Data edge version");
             if (lookupIds != null) {
                 if (NativeLookupResources.edgeVersion() != 1)
@@ -147,6 +150,19 @@ public final class NativeExecutionContext implements AutoCloseable {
         return region;
     }
 
+    /** Protocol 2 may require input RowKinds while still borrowing output envelopes by ordinal. */
+    public boolean hasOwnedOutputEnvelope() {
+        return ownedOutputEnvelope;
+    }
+
+    private static boolean ownsEnvelope(byte[] plan) {
+        try {
+            return tech.streamfusion.proto.plan.v1.NativePlan.parseFrom(plan).getProtocolVersion() >= 3;
+        } catch (com.google.protobuf.InvalidProtocolBufferException failure) {
+            throw new IllegalArgumentException("Invalid native plan", failure);
+        }
+    }
+
     public boolean hasStateBindings() {
         return stateful;
     }
@@ -167,6 +183,14 @@ public final class NativeExecutionContext implements AutoCloseable {
     }
 
     /** Reads cumulative (plan ID, logical input rows, logical output rows) triples in one call. */
+    public static native int invocationSnapshotEdgeVersion();
+
+    public NativeInvocationSnapshot invocationSnapshot(boolean gauges, boolean deadlines) {
+        return new NativeInvocationSnapshot(readInvocationSnapshot(handle(), gauges, deadlines));
+    }
+
+    private static native long[] readInvocationSnapshot(long handle, boolean gauges, boolean deadlines);
+
     public long[] metricSnapshot() {
         return readMetricSnapshot(handle());
     }
@@ -223,16 +247,21 @@ public final class NativeExecutionContext implements AutoCloseable {
             long[] arrays,
             long[] schemas,
             long output) {
+        prepareExchangeInput(port, plan);
         long rows = executeExchangeStreamInputs(
-                handle(), port, plan, payload, offset, length, metadataLength, arrays, schemas, output);
+                handle(), port, payload, offset, length, metadataLength, arrays, schemas, output);
         OPENED_STREAMS.incrementAndGet();
         return rows;
+    }
+
+    /** Bind an immutable network schema once, before processing frames on this input port. */
+    public void prepareExchangeInput(int port, byte[] plan) {
+        exchangeInputs.prepare(port, plan);
     }
 
     private static native long executeExchangeStreamInputs(
             long handle,
             int port,
-            byte[] plan,
             byte[] payload,
             int offset,
             int length,

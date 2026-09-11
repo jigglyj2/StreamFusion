@@ -60,6 +60,7 @@ fn resources(
     rocks: Option<&std::path::Path>,
 ) -> proto::NativeStateBindings {
     proto::NativeStateBindings {
+        spill_directories: Vec::new(),
         protocol_version: if watermark.is_some() { 3 } else { 1 },
         bindings: vec![proto::NativeStateBinding {
             plan_node_id: 3,
@@ -88,7 +89,7 @@ fn context(
 ) -> Arc<NativeExecutionContext> {
     let memory = HostMemoryReservation::new(broker, "shared window context");
     let mut context =
-        NativeExecutionContext::new(&plan().encode_to_vec(), memory.datafusion_pool(256 << 20))
+        NativeExecutionContext::new(&plan().encode_to_vec(), memory.datafusion_pool().unwrap())
             .unwrap();
     context
         .install_state(&resources(watermark, rocks).encode_to_vec(), memory)
@@ -254,7 +255,7 @@ fn malformed_clock_bindings_and_invalid_input_fail_before_reuse() {
     let broker = Arc::new(TestBroker::new(256 << 20));
     let memory = HostMemoryReservation::new(broker.clone(), "window binding validation");
     let mut unbound =
-        NativeExecutionContext::new(&plan().encode_to_vec(), memory.datafusion_pool(256 << 20))
+        NativeExecutionContext::new(&plan().encode_to_vec(), memory.datafusion_pool().unwrap())
             .unwrap();
     let baseline = broker.reserved();
     let mut invalid = resources(Some(1999), None);
@@ -385,7 +386,7 @@ fn planner_partial_field_names_remain_payload_through_the_native_tree() {
     }
     let memory = HostMemoryReservation::new(broker.clone(), "planner partial fields");
     let mut context =
-        NativeExecutionContext::new(&plan.encode_to_vec(), memory.datafusion_pool(256 << 20))
+        NativeExecutionContext::new(&plan.encode_to_vec(), memory.datafusion_pool().unwrap())
             .unwrap();
     context
         .install_state(&resources(None, None).encode_to_vec(), memory)

@@ -9,19 +9,13 @@
 use std::sync::Arc;
 
 use arrow::datatypes::Schema;
-use datafusion::common::config::ConfigOptions;
 use datafusion::error::Result;
-use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr};
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion_functions::math::asin;
 
 pub(crate) fn create(
     operand: Arc<dyn PhysicalExpr>,
     schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    Ok(Arc::new(ScalarFunctionExpr::try_new(
-        asin(),
-        vec![operand],
-        schema,
-        Arc::new(ConfigOptions::new()),
-    )?))
+    super::flink_math_domain::create(asin(), operand, schema)
 }

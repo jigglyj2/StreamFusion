@@ -92,7 +92,7 @@ fn context(
 ) -> Arc<NativeExecutionContext> {
     let memory = HostMemoryReservation::new(broker, "processing-time factory");
     let mut context =
-        NativeExecutionContext::new(&plan().encode_to_vec(), memory.datafusion_pool(64 << 20))
+        NativeExecutionContext::new(&plan().encode_to_vec(), memory.datafusion_pool().unwrap())
             .unwrap();
     context
         .install_task_resources(&buffers(2), memory.sibling("buffer resources"))
@@ -173,7 +173,7 @@ fn buffer_resources_are_required_versioned_and_transactional_before_state_bindin
     let broker = Arc::new(TestBroker::new(64 << 20));
     let memory = HostMemoryReservation::new(broker.clone(), "resource failure");
     let mut context =
-        NativeExecutionContext::new(&plan().encode_to_vec(), memory.datafusion_pool(64 << 20))
+        NativeExecutionContext::new(&plan().encode_to_vec(), memory.datafusion_pool().unwrap())
             .unwrap();
     let before = broker.reserved();
     assert!(context
@@ -275,7 +275,7 @@ fn shared_region_clock_owner_emits_one_timer_result_to_both_arrow_exits() {
     };
     let mut context = NativeExecutionContext::new_region(
         &region.encode_to_vec(),
-        memory.datafusion_pool(64 << 20),
+        memory.datafusion_pool().unwrap(),
     )
     .unwrap();
     context

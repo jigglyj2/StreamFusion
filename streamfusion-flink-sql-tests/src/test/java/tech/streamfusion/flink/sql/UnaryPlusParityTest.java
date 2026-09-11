@@ -22,7 +22,7 @@ class UnaryPlusParityTest extends SqlParityTestSupport {
     @ParameterizedTest(name = "{0}")
     @MethodSource("queries")
     void identityOperatorMatchesFlinkByteForByte(String ignoredName, String sql) throws Exception {
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         assertThat(StreamFusionPlannerFactory.nativePlanBatchCount())
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())

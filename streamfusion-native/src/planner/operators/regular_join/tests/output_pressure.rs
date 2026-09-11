@@ -69,6 +69,13 @@ fn pressure_drains_output_prefixes_and_hot_key_transitions_without_repeating_sta
                 let mut batches = Vec::new();
                 while let Some(output) = actual.next_streaming_batch().unwrap() {
                     batches.push(output);
+                    if actual.streaming_cursor.is_some() {
+                        assert_eq!(
+                            actual.statistics()[1],
+                            writes,
+                            "no state flush before input transitions finish"
+                        );
+                    }
                     // The competing consumer releases after the first output makes progress;
                     // final state mutation admission is a separate workspace contract.
                     pressure.resize(0).unwrap();
@@ -84,7 +91,10 @@ fn pressure_drains_output_prefixes_and_hot_key_transitions_without_repeating_sta
                         "memory pressure must produce smaller outputs"
                     );
                 }
-                assert_eq!(actual.statistics()[1], writes + 1);
+                assert!(
+                    actual.statistics()[1] > writes,
+                    "completed input flushes one or more bounded backend pages"
+                );
                 drop(pressure);
                 for group in 0..128 {
                     assert_eq!(

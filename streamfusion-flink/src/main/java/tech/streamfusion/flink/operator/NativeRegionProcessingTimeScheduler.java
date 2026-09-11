@@ -34,12 +34,24 @@ final class NativeRegionProcessingTimeScheduler implements AutoCloseable {
         refresh(List.of(), 0);
     }
 
+    boolean requiresDeadlines() {
+        return !stages.isEmpty();
+    }
+
+    void refresh(long[] snapshot) {
+        refresh(List.of(), 0, () -> snapshot);
+    }
+
     private void refresh(List<Long> fired, long firedTime) {
+        refresh(fired, firedTime, deadlines);
+    }
+
+    private void refresh(List<Long> fired, long firedTime, Supplier<long[]> source) {
         if (closed) return;
         controls.requireHealthy();
         if (stages.isEmpty()) return;
         try {
-            long[] values = deadlines.get();
+            long[] values = source.get();
             if (values == null || values.length % 2 != 0 || values.length / 2 > stages.size())
                 throw new IllegalArgumentException("Invalid native processing-time deadline snapshot");
             var seen = new HashSet<Long>();

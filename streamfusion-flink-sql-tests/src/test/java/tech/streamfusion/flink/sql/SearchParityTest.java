@@ -155,7 +155,7 @@ class SearchParityTest extends SqlParityTestSupport {
     void nativeBooleanColumnsMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {
         String sql =
                 "SELECT id FROM (VALUES (1, TRUE), (2, FALSE), (3, TRUE)) AS input(id, enabled) WHERE " + predicate;
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }

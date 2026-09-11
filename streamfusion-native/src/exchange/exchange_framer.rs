@@ -1,10 +1,8 @@
 // Copyright 2026 StreamFusion Authors
 // Licensed under the Apache License, Version 2.0.
 
-use arrow::datatypes::Schema;
 use arrow::error::Result;
 use arrow::record_batch::RecordBatch;
-use std::sync::Arc;
 
 use super::{route_batch, route_batch_by_key_group, IpcBatchFrame, KeyField};
 
@@ -54,16 +52,52 @@ pub fn frame_hash_exchange_batch_projected(
     preserve_key_groups: bool,
     transport_column_count: usize,
 ) -> Result<Vec<RoutedFrame>> {
+    frame_hash_exchange_batch_accounted(
+        batch,
+        key_fields,
+        max_parallelism,
+        parallelism,
+        preserve_key_groups,
+        transport_column_count,
+        &mut (),
+    )
+}
+
+/// Admission occurs before gathering/encoding, and retention is transferred before the next frame.
+pub(super) trait FrameMemory {
+    fn before_frame(&mut self) -> Result<()> {
+        Ok(())
+    }
+    fn retain_frame(&mut self, _frame: &RoutedFrame) -> Result<()> {
+        Ok(())
+    }
+}
+impl FrameMemory for () {}
+
+pub(super) fn frame_hash_exchange_batch_accounted(
+    batch: RecordBatch,
+    key_fields: &[(usize, KeyField)],
+    max_parallelism: u32,
+    parallelism: u32,
+    preserve_key_groups: bool,
+    transport_column_count: usize,
+    memory: &mut impl FrameMemory,
+) -> Result<Vec<RoutedFrame>> {
+    let mut encode = |key_group, materialize: &dyn Fn() -> Result<RecordBatch>| {
+        memory.before_frame()?;
+        let frame = RoutedFrame {
+            key_group,
+            frame: IpcBatchFrame::encode(&materialize()?)?,
+        };
+        memory.retain_frame(&frame)?;
+        Ok(frame)
+    };
     if preserve_key_groups {
         route_batch_by_key_group(batch, key_fields, max_parallelism)?
             .into_iter()
             .map(|routed| {
-                Ok(RoutedFrame {
-                    key_group: routed.key_group(),
-                    frame: IpcBatchFrame::encode(&transport_batch(
-                        routed.materialize()?,
-                        transport_column_count,
-                    )?)?,
+                encode(routed.key_group(), &|| {
+                    routed.materialize_projected(transport_column_count)
                 })
             })
             .collect()
@@ -71,35 +105,17 @@ pub fn frame_hash_exchange_batch_projected(
         route_batch(batch, key_fields, max_parallelism, parallelism)?
             .into_iter()
             .map(|routed| {
-                let destination = routed.destination();
-                let key_group = destination
+                let key_group = routed
+                    .destination()
                     .saturating_mul(max_parallelism)
                     .saturating_add(parallelism - 1)
                     / parallelism;
-                Ok(RoutedFrame {
-                    key_group,
-                    frame: IpcBatchFrame::encode(&transport_batch(
-                        routed.materialize()?,
-                        transport_column_count,
-                    )?)?,
+                encode(key_group, &|| {
+                    routed.materialize_projected(transport_column_count)
                 })
             })
             .collect()
     }
-}
-
-fn transport_batch(batch: RecordBatch, column_count: usize) -> Result<RecordBatch> {
-    if column_count == batch.num_columns() {
-        return Ok(batch);
-    }
-    let fields = batch.schema().fields()[..column_count]
-        .iter()
-        .map(|field| field.as_ref().clone())
-        .collect::<Vec<_>>();
-    RecordBatch::try_new(
-        Arc::new(Schema::new(fields)),
-        batch.columns()[..column_count].to_vec(),
-    )
 }
 
 #[cfg(test)]

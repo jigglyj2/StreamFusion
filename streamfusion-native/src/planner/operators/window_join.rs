@@ -534,15 +534,44 @@ impl WindowJoinProcessor {
 
     pub(crate) fn restore_key_group(&mut self, key_group: u32, bytes: &[u8]) -> Result<()> {
         self.require_idle()?;
-        self.state
-            .restore_key_group(key_group, bytes, &self.scratch_reservation)?;
-        indexed_state::migrate_legacy(
+        indexed_state::restore_canonical(
             self.state.as_mut(),
             key_group,
             bytes,
             &mut self.window_key_converter,
             &self.scratch_reservation,
         )?;
+        self.finish_key_group_restore(key_group)
+    }
+
+    pub(crate) fn restore_physical_key_group(
+        &mut self,
+        key_group: u32,
+        source: &dyn crate::state::KeyedState,
+    ) -> Result<()> {
+        self.require_idle()?;
+        indexed_state::restore_physical(
+            self.state.as_mut(),
+            key_group,
+            source,
+            &mut self.window_key_converter,
+            &self.scratch_reservation,
+        )?;
+        self.finish_key_group_restore(key_group)
+    }
+
+    pub(crate) fn write_snapshot(
+        &mut self,
+        key_group: u32,
+        sink: &mut crate::state::snapshot_stream::SnapshotSink<'_>,
+    ) -> Result<usize> {
+        self.require_idle()?;
+        self.flush_timers(key_group)?;
+        self.state
+            .write_snapshot(key_group, &self.scratch_reservation, sink)
+    }
+
+    fn finish_key_group_restore(&mut self, key_group: u32) -> Result<()> {
         let timer = self.state.get_batch(
             &[StateKeyRef {
                 key_group,
@@ -817,6 +846,8 @@ fn row_converter(schema: &SchemaRef) -> Result<RowConverter> {
 #[cfg(test)]
 mod datafusion_probe;
 
+#[cfg(test)]
+mod checkpoint_tests;
 #[cfg(test)]
 mod indexed_tests;
 #[cfg(test)]

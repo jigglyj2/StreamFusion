@@ -3,6 +3,15 @@ title: Metric compatibility
 description: How accelerated operators preserve Flink's metric contract.
 ---
 
+After a shared Arrow region drains a successful data invocation, one versioned JNI snapshot returns
+stage I/O counters, negotiated typed gauge values, and optional processing-time deadlines. The
+Java metric tree and Flink timer scheduler consume that same sample. Stages without processing-time
+capability do not request deadlines. The common metric-tree helper also reads counters and gauges
+in one snapshot for successful control callbacks and single-input native plans. Control callbacks
+retain their existing ordered deadline polling, and
+failed invocations retain independent best-effort metric reads so an observation failure cannot hide
+already-produced counters. This changes polling overhead, not metric names, scopes, or definitions.
+
 StreamFusion treats metrics as part of Flink runtime compatibility. An accelerated
 physical operator publishes every metric that its Flink counterpart publishes with the
 same name, type, unit, scope, lifecycle, and meaning. Given the same records, control

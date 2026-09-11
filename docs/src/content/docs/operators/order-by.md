@@ -66,8 +66,9 @@ input RowKind, Flink 2.3 only constructs this physical node for insert-only inpu
 Rows and timers use the selected native memory or direct RocksDB backend. Aligned and unaligned
 checkpoints preserve pending timestamp groups; canonical savepoints move them between both
 backends, and RocksDB checkpoints reuse unchanged SSTs. Event-time rows at or behind the last fired
-timestamp are dropped exactly where Flink drops them. Processing-time rows are grouped by Flink's
-millisecond timer boundary.
+timestamp are dropped exactly where Flink drops them. Processing-time timers use Flink's
+millisecond boundary. The first due callback sorts and clears all pending processing-time rows,
+including rows collected for later timers while the mailbox callback was delayed.
 
 The operator keeps Flink's logical-record I/O counters and task timing/rate metrics. Its
 `StreamFusion` subgroup additionally reports processed batches and rows, output RowKinds, state
@@ -92,8 +93,10 @@ without materializing a complete key-group snapshot. Small inputs remain in admi
 larger inputs use a temporary Arrow IPC stream. DataFusion's external `SortExec` then sorts those
 pages with its memory pool backed by Flink managed memory and bounded spill-merge fan-in. Counts stay
 compressed until output is requested, and output batches contain at most 16,384 logical rows.
-Temporary input and sort files use Flink's IO-manager directories and are removed on completion,
-failure, or close. `numSpillFiles` and `spillInBytes` report actual native spilling. The
+Temporary input and sort files share DataFusion's disk manager and its byte accounting, use the
+Flink-assigned IO-manager directory, and are removed on completion, failure, or close. Both paths
+follow the available filesystem capacity; there is no additional DataFusion 100 GiB spill quota or
+StreamFusion disk-budget setting. `numSpillFiles` and `spillInBytes` report actual native spilling. The
 operator advertises Flink's internal-sort capability so the runtime does not insert a second
 `SortingDataInput` ahead of the native sorter.
 
@@ -108,12 +111,44 @@ physical RowKinds and cutoff ties. Both make one backend batch read and one atom
 incoming Arrow batch; direct RocksDB state never crosses JNI.
 
 Temporal sort has its own versioned protobuf node, persistent native processor, raw keyed state,
-and timer service. It stores the secondary keys
-in Arrow's order-preserving row encoding with the planned direction and null placement, so firing a
-timer uses one stable byte-key sort and one final Arrow decode rather than materializing and taking a
-second batch. Java constructs the physical plan and owns watermarks, barriers, distribution,
-recovery, and metric publication; Arrow C Data crosses only at the fused-plan edge. This follows
-Comet's distinct replacement-node and protobuf control-plane model.
+and timer service. Its version 3 row state stores a small arrival counter per timestamp group
+(or one shared processing-time group) and a separate entry for each row. Appending an Arrow batch
+reads those counters once and writes only new row entries and changed counters; it does not load
+or rewrite the historical payload. Both backends expose the same ordered prefix access. Keys frame
+the group prefix, Arrow secondary ordering key, and stable arrival ordinal; values contain the
+RowKind and encoded payload. Timer firing reads admitted pages of up to 1,024 entries with a
+256 KiB normal byte target. A larger individual row is admitted separately. Version 2 list state
+remains readable and migrates to the ordered layout during operator restore. Migration borrows row
+frames from the old encoded value and writes the new index in bounded batches; it does not construct
+a decoded list or retain all replacement entries. The old opaque value and its migration copy must
+still fit the managed budget. Canonical snapshots remain compatible across backends.
+
+Timer registrations write versioned 11-byte markers in the same mutation batch as the new rows.
+Firing removes emitted rows in bounded batches and deletes the due markers with the final output
+page. The native timer index reserves registrations once per input batch;
+checkpoint restore rebuilds it from bounded marker pages. Old timer snapshots migrate once during
+restore, preserving the original timer identities and last-fired event timestamp. Physical RocksDB
+restore imports bounded state pages without constructing a canonical copy of the whole key group.
+Both time domains select at most 4,096 due timers at a time. Each native invocation returns at most
+1,024 rows with a 256 KiB normal encoded-state byte target, including key and descriptor overhead;
+a larger single row is allowed when its actual workspace can be admitted. The first processing-time
+callback still drains the complete pending list before returning control to Flink; subsequent
+already-registered callbacks see an empty list, as in Flink.
+
+An unfinished callback retains its next deadline while Java drains additional Arrow batches.
+New input, snapshots, and restore are rejected until the pending output is drained. A failure during
+execution or restore invalidates that processor: Flink must recreate it and restore the last
+checkpoint. Watermarks are forwarded only after all due output is collected. The live row payloads,
+deletion entries, and DataFusion output workspace are bounded by the output page, rather than the
+complete fired result set. These changes do not enable SQL admission.
+
+Temporal sort stores secondary keys in Arrow's order-preserving row encoding with the planned
+direction and null placement. The persisted ordering index establishes order across pages, including
+stable arrival ordinals for ties. Each page delegates ordering to DataFusion's batch sort over group
+IDs, encoded keys, and arrival ordinals before Arrow decoding. The key arrays and sort workspace are
+admitted before sorting, and payloads are decoded only after DataFusion has selected their order. Java constructs the physical plan and owns watermarks, barriers, distribution,
+recovery, and metric publication. The retained temporal-sort test operator uses Arrow C Data at its
+Java/native boundary; temporal sort is still excluded from accelerated fused plans.
 
 ## Benchmark evidence
 
@@ -138,8 +173,9 @@ native-allocation JFRs, collapsed stacks, flame graphs, steady-state views, and 
 graphs are retained under
 `streamfusion-nexmark-benchmarks/target/profiles/temporal-sort/1e1e98d/`. Profiling exposed repeated
 growth of the canonical state buffer; exact checked pre-sizing removed that reallocation stack.
-The remaining encoding allocation is the one durable opaque state value, and its native allocation
-share fell from 8.0% to 2.9%. Profiler timings are excluded from the throughput results above.
+In that historical implementation, the remaining encoding allocation was one durable opaque
+state value, and its native allocation share fell from 8.0% to 2.9%. The version 3 row-entry layout
+described above has not been rebenchmarked. Profiler timings are excluded from the throughput results above.
 
 The September 4, 2026 bounded-full-sort release/native-CPU run used the Kafka-free NEXMark RowData
 boundary, 250,000 events, parallelism four upstream of Flink's required singleton exchange, and

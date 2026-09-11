@@ -15,6 +15,31 @@ impl RocksPluginKeyedState {
         owner: &HostMemoryReservation,
         visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<()>,
     ) -> Result<()> {
+        self.scan_range_admitted(
+            group,
+            &[],
+            None,
+            max_rows,
+            target_bytes,
+            owner,
+            &mut |page| {
+                visitor(page)?;
+                Ok(true)
+            },
+        )
+        .map(|_| ())
+    }
+
+    pub(crate) fn scan_range_admitted(
+        &self,
+        group: u32,
+        start: &[u8],
+        end: Option<&[u8]>,
+        max_rows: usize,
+        target_bytes: usize,
+        owner: &HostMemoryReservation,
+        visitor: &mut dyn FnMut(&[(&[u8], &[u8])]) -> Result<bool>,
+    ) -> Result<bool> {
         let rows = u32::try_from(max_rows).map_err(|_| {
             DataFusionError::Execution("state scan row limit exceeds UInt32".into())
         })?;
@@ -25,6 +50,12 @@ impl RocksPluginKeyedState {
             let mut page_memory = owner.sibling("RocksDB restore scan page");
             page_memory.resize(
                 4096usize
+                    .saturating_add(
+                        start
+                            .len()
+                            .saturating_add(end.map_or(0, |end| end.len()))
+                            .saturating_mul(3),
+                    )
                     .saturating_add(after.as_ref().map_or(0, |key| key.len().saturating_mul(3))),
             )?;
             let input = scan_input(
@@ -33,15 +64,15 @@ impl RocksPluginKeyedState {
                 after.as_deref(),
                 rows,
                 target_bytes,
-                &[],
-                None,
+                start,
+                end,
             )?;
             let page =
                 self.invoke_admitted(self.api.scan_key_group_admitted, input, &mut page_memory)?;
             let complete = scan_complete(&page)?;
             if page.num_rows() == 0 {
                 return if complete {
-                    Ok(())
+                    Ok(true)
                 } else {
                     Err(DataFusionError::Execution(
                         "admitted state scan returned an empty incomplete page".into(),
@@ -58,9 +89,8 @@ impl RocksPluginKeyedState {
             let entries = (0..page.num_rows())
                 .map(|row| (keys.value(row), values.value(row)))
                 .collect::<Vec<_>>();
-            visitor(&entries)?;
-            if complete {
-                return Ok(());
+            if !visitor(&entries)? || complete {
+                return Ok(complete);
             }
             let next = keys.value(keys.len() - 1);
             if after.as_ref().is_some_and(|after| next <= after.as_slice()) {

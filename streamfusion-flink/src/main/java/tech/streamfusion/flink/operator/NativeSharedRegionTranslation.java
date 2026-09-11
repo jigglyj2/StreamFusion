@@ -28,7 +28,7 @@ public final class NativeSharedRegionTranslation {
 
     public static void validate(byte[] bytes, int outputCount) {
         NativeSharedRegionOutputs.validate(decode(bytes), outputCount);
-        if (tech.streamfusion.nativebridge.NativeRegionStream.edgeVersion() != 2)
+        if (tech.streamfusion.nativebridge.NativeRegionStream.edgeVersion() != 4)
             throw new IllegalArgumentException("Shared native regions require Arrow/IPC region edge version 2");
     }
 
@@ -52,7 +52,7 @@ public final class NativeSharedRegionTranslation {
             List<Long> stateIds,
             StreamExecutionEnvironment environment,
             Function<List<Transformation<?>>, Map<Long, FlinkOperatorMemoryShare>> resolver,
-            Map<Long, tech.streamfusion.flink.arrow.CsvLookupSnapshotSource> sources) {
+            Map<Long, tech.streamfusion.flink.arrow.ArrowLookupSnapshotSource> sources) {
         var lookupSources = new tech.streamfusion.flink.join.NativeLookupSources(sources);
         var plan = decode(bytes);
         NativeSharedRegionOutputs.validate(plan, outputTypes.size());

@@ -12,26 +12,33 @@ pub(super) fn load(
     keys: Vec<StateKey>,
     owner: &mut HostMemoryReservation,
 ) -> Result<(Vec<StagedState>, u64)> {
-    load_impl(state, keys, owner, None)
+    let mut reads = 0;
+    let staged = load_counted(state, keys, owner, None, &mut reads)?;
+    Ok((staged, reads))
 }
 
+#[cfg(test)]
 pub(super) fn load_for_accumulation(
     state: &dyn KeyedState,
     keys: Vec<StateKey>,
     owner: &mut HostMemoryReservation,
     side: usize,
 ) -> Result<(Vec<StagedState>, u64)> {
-    load_impl(state, keys, owner, Some(side))
+    let mut reads = 0;
+    let staged = load_counted(state, keys, owner, Some(side), &mut reads)?;
+    Ok((staged, reads))
 }
 
-fn load_impl(
+pub(super) fn load_counted(
     state: &dyn KeyedState,
     keys: Vec<StateKey>,
     owner: &mut HostMemoryReservation,
     accumulating_side: Option<usize>,
-) -> Result<(Vec<StagedState>, u64)> {
+    reads: &mut u64,
+) -> Result<Vec<StagedState>> {
     let manifest_keys = keys.iter().map(manifest_key).collect::<Vec<_>>();
     let manifest_refs = refs(&manifest_keys);
+    *reads = reads.saturating_add(1);
     let values = state.get_batch(&manifest_refs, owner)?;
     owner.try_grow(values.iter().flatten().try_fold(0usize, |bytes, value| {
         Ok::<_, DataFusionError>(bytes.saturating_add(manifest_workspace(value)?))
@@ -57,7 +64,9 @@ fn load_impl(
                         && manifest.layout == Layout::Rows
                         && !ids.is_empty()
                     {
-                        unloaded = Some(UnloadedRows { side, ids });
+                        let mut directories: [EntryIds; 2] = Default::default();
+                        directories[side] = ids;
+                        unloaded = Some(UnloadedRows::new(directories));
                     } else {
                         requests.push((index, side, manifest.layout, ids));
                     }
@@ -83,15 +92,22 @@ fn load_impl(
             touched: false,
         });
     }
-    let reads = loading::load_entries(state, &mut staged, requests, owner)?;
+    loading::load_entries(state, &mut staged, requests, owner, reads)?;
     for entry in &mut staged {
         entry.original = entry.value.clone();
     }
-    Ok((staged, 1 + reads))
+    Ok(staged)
 }
 
+mod flushing;
+mod legacy_restore;
 mod loading;
+pub(super) use flushing::flush;
+mod restore;
+pub(super) use restore::restore_from_checkpoint;
 mod mutations;
+#[cfg(test)]
+mod unloaded_tests;
 pub(super) use mutations::mutations;
 
 pub(super) fn batch_mutations(
@@ -142,62 +158,23 @@ pub(super) fn restore(
     bytes: &[u8],
     owner: &HostMemoryReservation,
 ) -> Result<()> {
-    let count = streamfusion_state_abi::validate_key_group_snapshot(group, bytes)
+    let entries = streamfusion_state_abi::key_group_snapshot_entries(group, bytes)
         .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-    let mut memory = owner.sibling("regular join canonical page validation and migration");
-    memory.resize(
-        bytes
-            .len()
-            .saturating_mul(16)
-            .saturating_add(count.saturating_mul(512)),
-    )?;
-    let entries = decode_key_group_snapshot(group, bytes)?;
-    let legacy = !entries.is_empty()
+    let count = entries.len();
+    let legacy = count > 0
         && entries
-            .iter()
+            .into_iter()
             .all(|(_, value)| value.starts_with(STATE_MAGIC));
     if !legacy {
-        decode_entries(group, &entries)?;
-        // Validation is finished. The backend consumes the original canonical bytes, not
-        // these decoded keys/pages; do not retain both workspaces through restore.
-        drop(entries);
-        drop(memory);
+        restore::validate_snapshot(group, bytes, owner)?;
         return state.restore_key_group(group, bytes, owner);
     }
-    let mut migrated = Vec::new();
-    for (key, value) in entries {
-        let value = decode_state(&value)?;
-        let entry = StagedState {
-            key: StateKey {
-                key_group: group,
-                key,
-            },
-            value,
-            original: JoinState::default(),
-            original_layout: Layout::Pages,
-            unloaded: None,
-            touched: true,
-        };
-        memory.try_grow(mutation_workspace(&entry))?;
-        migrated.extend(mutations(&entry)?);
-    }
-    migrated.sort_by(|left, right| left.key.key.cmp(&right.key.key));
-    let size = 16
-        + migrated
-            .iter()
-            .map(|entry| 8 + entry.key.key.len() + entry.value.as_ref().unwrap().len())
-            .sum::<usize>();
-    let mut writer = streamfusion_state_abi::SnapshotWriter::new(group, migrated.len(), size)
-        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-    for entry in migrated {
-        writer
-            .append(&entry.key.key, entry.value.as_ref().unwrap())
-            .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-    }
-    let bytes = writer
-        .finish()
-        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-    state.restore_key_group(group, &bytes, owner)
+    legacy_restore::restore(
+        state,
+        legacy_restore::Source::Canonical(bytes),
+        group,
+        owner,
+    )
 }
 
 pub(super) fn decode_entries(
@@ -243,7 +220,7 @@ pub(super) fn decode_entries(
             if compact {
                 break;
             }
-            for &page in &manifest.pages[side] {
+            for page in manifest.pages[side].iter() {
                 let key = entry_key(&logical, side, page, manifest.layout);
                 let bytes = index.get(key.key.as_slice()).ok_or_else(|| {
                     DataFusionError::Execution("missing regular join snapshot page".into())

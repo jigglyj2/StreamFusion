@@ -23,13 +23,32 @@ public final class ArrowExchangeCDataBridge {
             ArrowRowDataBatch input,
             BufferAllocator allocator,
             NativeMemoryManager memoryManager) {
+        return route(
+                input,
+                (array, schema) -> NativeExchangeBridge.routeArrowBatch(serializedPlan, array, schema, memoryManager));
+    }
+
+    public static List<NativeExchangeFrame> route(
+            tech.streamfusion.nativebridge.NativeExchangeRouter router, ArrowRowDataBatch input) {
+        return route(input, router::route);
+    }
+
+    @FunctionalInterface
+    private interface NativeCall {
+        byte[] route(long array, long schema);
+    }
+
+    private static List<NativeExchangeFrame> route(ArrowRowDataBatch input, NativeCall call) {
         BufferAllocator inputAllocator = input.allocator();
         try (ArrowArray inputArray = ArrowArray.allocateNew(inputAllocator);
                 ArrowSchema inputSchema = ArrowSchema.allocateNew(inputAllocator)) {
-            Data.exportVectorSchemaRoot(inputAllocator, input.root(), null, inputArray, inputSchema);
-            byte[] encoded = NativeExchangeBridge.routeArrowBatch(
-                    serializedPlan, inputArray.memoryAddress(), inputSchema.memoryAddress(), memoryManager);
-            return NativeExchangeFrames.decode(encoded);
+            try {
+                Data.exportVectorSchemaRoot(inputAllocator, input.root(), null, inputArray, inputSchema);
+                byte[] encoded = call.route(inputArray.memoryAddress(), inputSchema.memoryAddress());
+                return NativeExchangeFrames.decode(encoded);
+            } finally {
+                ArrowCDataBridge.releaseInputExports(inputArray, inputSchema);
+            }
         }
     }
 }

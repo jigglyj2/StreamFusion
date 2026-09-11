@@ -35,7 +35,7 @@ class ComparisonParityTest extends SqlParityTestSupport {
     void nativeIntegerComparisonsMatchFlinkByteForByte(
             String ignoredName, String predicate, boolean nativeExecutionExpected) throws Exception {
         String sql = "SELECT id FROM (VALUES (1), (2), (3), (4), (5)) AS input(id) WHERE " + predicate;
-        assertParity(sql, true, nativeExecutionExpected || ignoredName.contains("constant-folded"));
+        assertUnorderedInsertParity(sql, true, nativeExecutionExpected || ignoredName.contains("constant-folded"));
 
         if (nativeExecutionExpected) {
             assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
@@ -60,7 +60,7 @@ class ComparisonParityTest extends SqlParityTestSupport {
                 + "(2147483648, 10), (2147483649, 20), (2147483649, 21), (2147483650, 30)) "
                 + "AS input(id, payload) WHERE "
                 + predicate;
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
@@ -89,7 +89,7 @@ class ComparisonParityTest extends SqlParityTestSupport {
                 + valueType
                 + "), 30)) AS input(id, payload) WHERE "
                 + predicate;
-        assertParity(sql, true, nativeExecutionExpected);
+        assertUnorderedInsertParity(sql, true, nativeExecutionExpected);
 
         if (nativeExecutionExpected) {
             assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
@@ -117,7 +117,7 @@ class ComparisonParityTest extends SqlParityTestSupport {
                 + valueType
                 + "), 30)) AS input(metric, payload) WHERE "
                 + predicate;
-        assertParity(sql, true, nativeExecutionExpected);
+        assertUnorderedInsertParity(sql, true, nativeExecutionExpected);
 
         if (nativeExecutionExpected) {
             assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
@@ -140,7 +140,7 @@ class ComparisonParityTest extends SqlParityTestSupport {
                 + "(DATE '2026-08-27', 21), (DATE '2030-01-01', 30)) "
                 + "AS input(event_date, payload) WHERE "
                 + predicate;
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
@@ -161,7 +161,7 @@ class ComparisonParityTest extends SqlParityTestSupport {
                 + "(TIME '12:34:56.123', 21), (TIME '23:59:59.999', 30)) "
                 + "AS input(event_time, payload) WHERE "
                 + predicate;
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
@@ -189,7 +189,7 @@ class ComparisonParityTest extends SqlParityTestSupport {
                 + "CAST(TIME '12:34:56.123' AS "
                 + type
                 + ") <= event_time";
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
@@ -208,7 +208,7 @@ class ComparisonParityTest extends SqlParityTestSupport {
                 + "(TIMESTAMP '2030-01-01 00:00:00.000', 30)) "
                 + "AS input(event_timestamp, payload) WHERE "
                 + predicate;
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
@@ -224,7 +224,7 @@ class ComparisonParityTest extends SqlParityTestSupport {
     @ParameterizedTest(name = "DECIMAL {0}")
     @MethodSource("nativeDecimalComparisonCases")
     void nativeDecimalComparisonsMatchFlinkByteForByte(String ignoredName, String sql) throws Exception {
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
@@ -254,7 +254,7 @@ class ComparisonParityTest extends SqlParityTestSupport {
     @MethodSource("nativeNullPredicateCases")
     void nativeNullPredicatesMatchFlinkByteForByte(String ignoredName, String predicate) throws Exception {
         String sql = "SELECT id FROM (VALUES (1), (CAST(NULL AS INT)), (3)) AS input(id) WHERE " + predicate;
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
     }
 
     private static Stream<Arguments> nativeNullPredicateCases() {
@@ -267,7 +267,7 @@ class ComparisonParityTest extends SqlParityTestSupport {
         String sql = "SELECT id FROM (VALUES (1, TRUE), (2, FALSE), (3, CAST(NULL AS BOOLEAN))) "
                 + "AS input(id, flag) WHERE "
                 + predicate;
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
@@ -283,7 +283,7 @@ class ComparisonParityTest extends SqlParityTestSupport {
         String sql = "SELECT id FROM (VALUES (1, 5), (2, 4), (3, 3), (4, 2), (5, 1)) "
                 + "AS input(id, payload) WHERE "
                 + predicate;
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }

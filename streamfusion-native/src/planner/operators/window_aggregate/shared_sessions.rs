@@ -132,8 +132,23 @@ impl super::shared_kernel::SharedWindowKernel for SharedSessions {
     fn snapshot(&mut self, group: u32) -> Result<crate::state::SnapshotBytes> {
         SharedSessions::snapshot(self, group)
     }
+    fn write_snapshot(
+        &mut self,
+        group: u32,
+        sink: &mut crate::state::snapshot_stream::SnapshotSink<'_>,
+    ) -> Result<usize> {
+        Self::write_snapshot(self, group, sink)
+    }
     fn restore(&mut self, group: u32, bytes: &[u8], watermark: i64) -> Result<()> {
         SharedSessions::restore(self, group, bytes, watermark)
+    }
+    fn restore_physical(
+        &mut self,
+        group: u32,
+        source: &dyn crate::state::KeyedState,
+        watermark: i64,
+    ) -> Result<()> {
+        Self::restore_physical(self, group, source, watermark)
     }
     fn checkpoint(&mut self, directory: &std::path::Path) -> Result<()> {
         SharedSessions::checkpoint(self, directory)

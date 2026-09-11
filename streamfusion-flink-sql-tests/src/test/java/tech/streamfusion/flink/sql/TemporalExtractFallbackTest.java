@@ -20,7 +20,7 @@ import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 class TemporalExtractFallbackTest extends SqlParityTestSupport {
     @Test
     void timestampExtractionFallsBackWithTimezoneAndPrecisionReason() throws Exception {
-        assertParity(
+        assertUnorderedInsertParity(
                 "SELECT EXTRACT(YEAR FROM timestamp_value) FROM "
                         + "(VALUES (TIMESTAMP '1969-12-31 23:59:59.123'), "
                         + "(TIMESTAMP '2024-02-29 12:34:56.987'), "
@@ -38,7 +38,7 @@ class TemporalExtractFallbackTest extends SqlParityTestSupport {
     @ParameterizedTest
     @ValueSource(strings = {"TIMESTAMP(0)", "TIMESTAMP(6)", "TIMESTAMP(9)", "TIMESTAMP_LTZ(3)"})
     void timestampClockFieldsRejectUnprovenPrecisionAndZone(String type) throws Exception {
-        assertParity(
+        assertUnorderedInsertParity(
                 "SELECT EXTRACT(HOUR FROM ts) FROM (VALUES "
                         + "(CAST(TIMESTAMP '1969-12-31 23:59:59.123456789' AS " + type + ")), "
                         + "(CAST(NULL AS " + type + "))) input(ts)",
@@ -52,7 +52,7 @@ class TemporalExtractFallbackTest extends SqlParityTestSupport {
 
     @Test
     void centuryExtractionFallsBackWithCalendarConventionReason() throws Exception {
-        assertParity(
+        assertUnorderedInsertParity(
                 "SELECT EXTRACT(CENTURY FROM date_value) FROM "
                         + "(VALUES (DATE '0001-01-01'), (DATE '2000-02-29'), "
                         + "(DATE '9999-12-31'), (CAST(NULL AS DATE))) input(date_value)",

@@ -175,6 +175,21 @@ impl super::shared_kernel::SharedWindowKernel for SharedSlices {
     fn snapshot(&mut self, group: u32) -> Result<crate::state::SnapshotBytes> {
         SharedSlices::snapshot(self, group)
     }
+    fn write_snapshot(
+        &mut self,
+        group: u32,
+        sink: &mut crate::state::snapshot_stream::SnapshotSink<'_>,
+    ) -> Result<usize> {
+        Self::write_snapshot(self, group, sink)
+    }
+    fn restore_physical(
+        &mut self,
+        group: u32,
+        source: &dyn crate::state::KeyedState,
+        watermark: i64,
+    ) -> Result<()> {
+        Self::restore_physical(self, group, source, watermark)
+    }
     fn restore(&mut self, group: u32, bytes: &[u8], watermark: i64) -> Result<()> {
         SharedSlices::restore(self, group, bytes, watermark)
     }

@@ -70,7 +70,6 @@ import org.apache.flink.table.types.logical.VarBinaryType;
 import org.apache.flink.table.types.logical.VarCharType;
 import org.apache.flink.table.types.logical.YearMonthIntervalType;
 import org.apache.flink.table.types.logical.YearMonthIntervalType.YearMonthResolution;
-import org.apache.flink.table.types.logical.utils.LogicalTypeChecks;
 import org.apache.flink.types.RowKind;
 import org.apache.flink.util.OutputTag;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -94,7 +93,8 @@ public class StreamFusionDeduplicateKeyTypeParityTest {
         InternalTypeInfo<RowData> typeInfo = InternalTypeInfo.of(rowType);
         RowDataKeySelector nativeSelector = selector(typeInfo);
         RowDataKeySelector flinkSelector = selector(typeInfo);
-        RowDataSerializer serializer = new RowDataSerializer(physicalRowType(rowType));
+        RowDataSerializer serializer =
+                new RowDataSerializer(tech.streamfusion.flink.TestingPhysicalRowType.physicalRowType(rowType));
 
         try (RootAllocator allocator = new RootAllocator(64L << 20);
                 NativeHarness nativeHarness = nativeHarness(rowType, nativeSelector, serializer, 1, 0);
@@ -133,8 +133,12 @@ public class StreamFusionDeduplicateKeyTypeParityTest {
         int owner = KeyGroupRangeAssignment.assignKeyToParallelOperator(selector.getKey(input), MAX_PARALLELISM, 2);
 
         try (RootAllocator allocator = new RootAllocator(64L << 20);
-                NativeHarness harness =
-                        nativeHarness(rowType, selector, new RowDataSerializer(physicalRowType(rowType)), 2, owner)) {
+                NativeHarness harness = nativeHarness(
+                        rowType,
+                        selector,
+                        new RowDataSerializer(tech.streamfusion.flink.TestingPhysicalRowType.physicalRowType(rowType)),
+                        2,
+                        owner)) {
             harness.open();
             processNative(
                     harness,
@@ -291,46 +295,6 @@ public class StreamFusionDeduplicateKeyTypeParityTest {
             }
         }
         return bytes;
-    }
-
-    static RowType physicalRowType(RowType rowType) {
-        List<RowType.RowField> fields = new ArrayList<>(rowType.getFieldCount());
-        for (RowType.RowField field : rowType.getFields()) {
-            fields.add(new RowType.RowField(
-                    field.getName(),
-                    physicalType(field.getType()),
-                    field.getDescription().orElse(null)));
-        }
-        return new RowType(rowType.isNullable(), fields);
-    }
-
-    private static LogicalType physicalType(LogicalType type) {
-        if (type instanceof DistinctType) {
-            return physicalType(((DistinctType) type).getSourceType()).copy(type.isNullable());
-        }
-        if (type instanceof StructuredType) {
-            List<LogicalType> types = LogicalTypeChecks.getFieldTypes(type);
-            List<String> names = LogicalTypeChecks.getFieldNames(type);
-            List<RowType.RowField> fields = new ArrayList<>(types.size());
-            for (int index = 0; index < types.size(); index++) {
-                fields.add(new RowType.RowField(names.get(index), physicalType(types.get(index))));
-            }
-            return new RowType(type.isNullable(), fields);
-        }
-        if (type instanceof ArrayType) {
-            return new ArrayType(type.isNullable(), physicalType(((ArrayType) type).getElementType()));
-        }
-        if (type instanceof MapType) {
-            MapType map = (MapType) type;
-            return new MapType(type.isNullable(), physicalType(map.getKeyType()), physicalType(map.getValueType()));
-        }
-        if (type instanceof MultisetType) {
-            return new MultisetType(type.isNullable(), physicalType(((MultisetType) type).getElementType()));
-        }
-        if (type instanceof RowType) {
-            return physicalRowType((RowType) type);
-        }
-        return type;
     }
 
     private static final class NativeHarness

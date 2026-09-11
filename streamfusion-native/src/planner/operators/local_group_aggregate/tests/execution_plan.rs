@@ -145,7 +145,7 @@ fn local_registers_before_lowering_and_retains_bundle_until_explicit_control() {
     let context = Arc::new(
         NativeExecutionContext::new(
             &tree(100_000, true).encode_to_vec(),
-            memory.datafusion_pool(256 << 20),
+            memory.datafusion_pool().unwrap(),
         )
         .unwrap(),
     );
@@ -221,7 +221,7 @@ fn count_trigger_and_retractions_match_existing_local_kernel_byte_for_byte() {
         let context = Arc::new(
             NativeExecutionContext::new(
                 &tree(trigger, true).encode_to_vec(),
-                memory.datafusion_pool(256 << 20),
+                memory.datafusion_pool().unwrap(),
             )
             .unwrap(),
         );
@@ -262,7 +262,7 @@ fn cancellation_requires_recovery_and_output_lease_outlives_tree() {
     let context = Arc::new(
         NativeExecutionContext::new(
             &tree(100_000, true).encode_to_vec(),
-            memory.datafusion_pool(256 << 20),
+            memory.datafusion_pool().unwrap(),
         )
         .unwrap(),
     );
@@ -299,7 +299,7 @@ fn native_constructor_count_and_control_paths_cover_observed_heap() {
         let input = input((0..5000).collect(), (0..5000).collect(), vec![0; 5000]);
         let ((context, output), observed) = measure(|| {
             let context = Arc::new(
-                NativeExecutionContext::new(&plan, memory.datafusion_pool(256 << 20)).unwrap(),
+                NativeExecutionContext::new(&plan, memory.datafusion_pool().unwrap()).unwrap(),
             );
             let mut output = run(&context, input.clone(), &[]);
             output.extend(run(
@@ -331,7 +331,7 @@ fn invalid_input_contract_does_not_mutate_an_existing_bundle() {
         let context = Arc::new(
             NativeExecutionContext::new(
                 &tree(100_000, changelog).encode_to_vec(),
-                memory.datafusion_pool(256 << 20),
+                memory.datafusion_pool().unwrap(),
             )
             .unwrap(),
         );

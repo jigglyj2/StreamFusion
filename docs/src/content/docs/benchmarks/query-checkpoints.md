@@ -609,7 +609,7 @@ an 8,192-member hot group, full/incremental files and aligned/unaligned restore 
 retraction. This is restore correctness/capacity evidence, not a new throughput measurement or a
 20M Nexmark restore result. Canonical savepoints and retained HashMap growth remain open limits;
 other operator factories retain their existing canonical import adapters. Both native libraries
-must now implement state-component ABI 9; see [native state](/StreamFusion/development/native-state/).
+must now implement state-component ABI 10; see [native state](/StreamFusion/development/native-state/).
 
 Artifacts and complete machine/runtime/command metadata are under
 `streamfusion-nexmark-benchmarks/target/measurements/q15/54a5e5c0/`. The native artifact hashes,

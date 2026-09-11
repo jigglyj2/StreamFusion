@@ -4,6 +4,7 @@
 mod append_state;
 mod batch;
 mod bounded;
+mod checkpoint;
 pub(crate) mod compare;
 mod datafusion_append;
 mod datafusion_top_one;
@@ -336,27 +337,6 @@ impl TopNProcessor {
 
     pub(crate) fn is_append_limit_saturated(&self) -> bool {
         self.saturated_append_limit
-    }
-
-    pub(crate) fn state_memory(&self) -> HostMemoryReservation {
-        self.scratch_reservation.sibling("native state transfer")
-    }
-
-    pub(crate) fn snapshot_key_group(&self, key_group: u32) -> Result<crate::state::SnapshotBytes> {
-        self.state
-            .snapshot_key_group(key_group, &self.scratch_reservation)
-    }
-
-    pub(crate) fn restore_key_group(&mut self, key_group: u32, bytes: &[u8]) -> Result<()> {
-        self.saturated_append_limit = false;
-        self.bounded_output = None;
-        self.bounded_drained = false;
-        self.state
-            .restore_key_group(key_group, bytes, &self.scratch_reservation)
-    }
-
-    pub(crate) fn checkpoint(&self, directory: &std::path::Path) -> Result<()> {
-        self.state.checkpoint(directory)
     }
 
     fn prepare_schema(&mut self, schema: SchemaRef) -> Result<()> {

@@ -5,7 +5,9 @@ use super::*;
 use crate::memory_pool::tests_support::TestBroker;
 use prost::Message;
 
+mod checkpoint;
 mod io;
+mod migration;
 mod workspace;
 
 pub(in crate::planner::operators::window_aggregate) fn plan() -> Vec<u8> {

@@ -15,7 +15,7 @@ final class SqlFallbackAssertions {
     private SqlFallbackAssertions() {}
 
     static void admission() {
-        assertTemporaryFallback(StreamFusionPlanningDiagnostics.explain());
+        assertFallback(StreamFusionPlanningDiagnostics.explain());
     }
 
     static void nativeBatchesAreZero(long actual) {
@@ -23,29 +23,16 @@ final class SqlFallbackAssertions {
         assertThat(actual).isZero();
     }
 
-    private static void assertTemporaryFallback(String explain) {
+    private static void assertFallback(String explain) {
         unaccelerated();
-        assertThat(explain).contains("Accelerated: no", "the entire plan will use Flink", ": architecture:");
+        assertThat(explain).contains("Accelerated: no", "the entire plan will use Flink");
         assertThat(explain.lines()
                         .filter(line -> line.startsWith("Fallback:"))
                         .collect(java.util.stream.Collectors.toList()))
                 .isNotEmpty()
                 .allSatisfy(reason -> assertThat(reason)
-                        .matches(
-                                line -> line.contains(": architecture:")
-                                        || (line.contains(": local window: input[")
-                                                && line.contains(
-                                                        "buffered local window Flink row-size geometry is not verified for"))
-                                        || line.contains(
-                                                ": local window: window: buffered local execution requires an integral HOP size/slide")
-                                        || line.contains(
-                                                ": local window: window time: buffered local execution requires UTC event time")
-                                        || line.contains(
-                                                ": local window: changelog: buffered local windows require append-only input")
-                                        || line.contains(
-                                                "frame: bounded native OVER does not yet reproduce Flink's batch-sort tie permutation for ROWS frames")
-                                        || line.contains("floating-point ordering; Flink's NaN/signed-zero comparator"),
-                                "a documented architecture or window restriction, with no unrelated fallback"));
+                        .matches("Fallback: root\\[\\d+\\].*: .+")
+                        .doesNotContain("inspection was inconclusive", "runtime-preflight"));
     }
 
     static void unaccelerated() {

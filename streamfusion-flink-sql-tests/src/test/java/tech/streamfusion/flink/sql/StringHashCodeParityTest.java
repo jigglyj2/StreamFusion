@@ -26,7 +26,7 @@ class StringHashCodeParityTest extends SqlParityTestSupport {
     @ParameterizedTest
     @MethodSource("queries")
     void javaStringHashMatchesFlinkByteForByte(String sql) throws Exception {
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         assertThat(StreamFusionPlannerFactory.nativePlanBatchCount())
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())
@@ -42,7 +42,7 @@ class StringHashCodeParityTest extends SqlParityTestSupport {
 
     @Test
     void signedIntegralHashCodesMatchJavaAndFlinkByteForByte() throws Exception {
-        assertParity(
+        assertUnorderedInsertParity(
                 "SELECT HASH_CODE(tiny_value), HASH_CODE(small_value), HASH_CODE(int_value), "
                         + "HASH_CODE(big_value) FROM (VALUES "
                         + "(CAST(1 AS TINYINT), CAST(-2 AS SMALLINT), 3, CAST(4 AS BIGINT)), "

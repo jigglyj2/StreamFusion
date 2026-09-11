@@ -63,6 +63,9 @@ pub(crate) mod stream;
 mod stream_tests;
 pub(crate) mod task_resources;
 
+mod exchange_input;
+mod exchange_output;
+
 pub(crate) struct NativeExecutionContext {
     plan: Definition,
     runtime: Arc<tokio::runtime::Runtime>,
@@ -73,7 +76,9 @@ pub(crate) struct NativeExecutionContext {
     physical_plan: Mutex<Option<CachedPhysicalPlan>>,
     stream_creations: std::sync::atomic::AtomicUsize,
     input_schemas: Mutex<Vec<SchemaRef>>,
+    exchange_inputs: Mutex<std::collections::HashMap<usize, exchange_input::PreparedInput>>,
     schema_reservation: Mutex<MemoryReservation>,
+    exchange_outputs: Mutex<Option<Arc<crate::exchange::output_bindings::OutputBindings>>>,
     persistent: Vec<PersistentBinding>,
     clock_inputs: Vec<(u64, usize)>,
     state_resources: Option<state::StateResources>,
@@ -173,7 +178,9 @@ impl NativeExecutionContext {
             retained_stream: Mutex::new(None),
             stream_creations: std::sync::atomic::AtomicUsize::new(0),
             input_schemas: Mutex::new(Vec::new()),
+            exchange_inputs: Mutex::new(Default::default()),
             schema_reservation: Mutex::new(schema_reservation),
+            exchange_outputs: Mutex::new(None),
             persistent,
             clock_inputs,
             state_resources: None,

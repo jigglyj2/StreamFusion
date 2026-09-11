@@ -23,11 +23,11 @@ import tech.streamfusion.flink.metrics.FlinkMetricParity;
 public final class NativeExchangeWriterOperator extends AbstractStreamOperator<NativeExchangeFrame>
         implements OneInputStreamOperator<ArrowRowDataBatch, NativeExchangeFrame> {
     private final RowType inputType;
-    private final int[] keys;
     private final byte[] serializedPlan;
     private final NativeExchangeBatchRouter router;
     private transient FlinkManagedMemory managedMemory;
     private transient RowDataKeySelector keySelector;
+    private transient NativeExchangeBatchRouter.Session routing;
 
     public NativeExchangeWriterOperator(RowType inputType, int[] keys, byte[] serializedPlan) {
         this(inputType, keys, serializedPlan, NativeExchangeBatchRouter.JNI);
@@ -44,7 +44,6 @@ public final class NativeExchangeWriterOperator extends AbstractStreamOperator<N
     NativeExchangeWriterOperator(
             RowType inputType, int[] keys, byte[] serializedPlan, NativeExchangeBatchRouter router) {
         this.inputType = inputType;
-        this.keys = keys.clone();
         this.serializedPlan = serializedPlan.clone();
         this.router = router;
     }
@@ -54,26 +53,33 @@ public final class NativeExchangeWriterOperator extends AbstractStreamOperator<N
         super.open();
         managedMemory = FlinkManagedMemory.create(
                 getContainingTask().getEnvironment(), getOperatorConfig(), getMetricGroup(), "streamfusion-exchange");
-        if (NativeExchangePlanSerializer.requiresPreencodedKeys(inputType, keys)) {
+        routing = router.open(serializedPlan, managedMemory);
+        var plan = tech.streamfusion.proto.plan.v1.NativeExchangePlan.parseFrom(serializedPlan);
+        if (plan.getMetadataColumns().hasRoutingKeyIndex()) {
+            // Honor older explicitly preencoded plans even when the current planner can now
+            // encode this logical type natively. The protobuf owns the transport contract.
+            int[] plannedKeys = plan.getKeyIndicesList().stream()
+                    .mapToInt(Integer::intValue)
+                    .toArray();
             keySelector = KeySelectorUtil.getRowDataSelector(
-                    getContainingTask().getUserCodeClassLoader(), keys, InternalTypeInfo.of(inputType));
+                    getContainingTask().getUserCodeClassLoader(), plannedKeys, InternalTypeInfo.of(inputType));
         }
     }
 
     @Override
     public void processElement(StreamRecord<ArrowRowDataBatch> element) throws Exception {
         ArrowRowDataBatch input = element.getValue();
+        FlinkMetricParity.replacePhysicalRecords(
+                getMetricGroup().getIOMetricGroup().getNumRecordsInCounter(), 1, input.size());
         try (ArrowExchangeBatch.EnvelopeBatch envelope =
                 ArrowExchangeBatch.withEnvelope(input, inputType, preencodedKeys(input))) {
-            List<NativeExchangeFrame> frames =
-                    router.route(serializedPlan, envelope.batch(), managedMemory.allocator(), managedMemory);
+            List<NativeExchangeFrame> frames = routing.route(envelope.batch(), managedMemory.allocator());
             for (NativeExchangeFrame frame : frames) {
+                // CountingOutput counts an attempted collect before invoking the consumer.
+                FlinkMetricParity.replacePhysicalRecords(
+                        getMetricGroup().getIOMetricGroup().getNumRecordsOutCounter(), 1, frame.logicalRowCount());
                 output.collect(new StreamRecord<>(frame));
             }
-            FlinkMetricParity.replacePhysicalRecords(
-                    getMetricGroup().getIOMetricGroup().getNumRecordsInCounter(), 1, input.size());
-            FlinkMetricParity.replacePhysicalRecords(
-                    getMetricGroup().getIOMetricGroup().getNumRecordsOutCounter(), frames.size(), input.size());
         }
     }
 
@@ -97,11 +103,10 @@ public final class NativeExchangeWriterOperator extends AbstractStreamOperator<N
     @Override
     public void close() throws Exception {
         try {
-            if (managedMemory != null) {
-                managedMemory.close();
-                managedMemory = null;
-            }
+            org.apache.flink.util.IOUtils.closeAll(routing, managedMemory);
         } finally {
+            routing = null;
+            managedMemory = null;
             super.close();
         }
     }

@@ -135,13 +135,18 @@ impl SharedProcessingWindows {
     }
 
     pub(super) fn snapshot(&mut self, group: u32) -> Result<crate::state::SnapshotBytes> {
+        self.require_snapshot_ready()?;
+        self.slices.snapshot(group)
+    }
+
+    fn require_snapshot_ready(&self) -> Result<()> {
         self.require_healthy()?;
         if self.buffer.has_buffered_updates() {
             return Err(DataFusionError::Execution(
                 "processing-time snapshot requires Flink's pre-checkpoint buffer flush".into(),
             ));
         }
-        self.slices.snapshot(group)
+        Ok(())
     }
 
     pub(super) fn restore(&mut self, group: u32, bytes: &[u8], watermark: i64) -> Result<()> {

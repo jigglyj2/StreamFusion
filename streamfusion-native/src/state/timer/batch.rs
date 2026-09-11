@@ -22,6 +22,22 @@ impl NativeTimerService {
         self.first_key_group..=self.first_key_group + self.groups.len() as u32 - 1
     }
 
+    /// Borrow an immutable timer group for state-format migration without encoding or cloning it.
+    pub(crate) fn visit_key_group(
+        &self,
+        key_group: u32,
+        visitor: &mut dyn FnMut(TimerDomain, &TimerKey) -> Result<()>,
+    ) -> Result<()> {
+        let group = self.group(key_group)?;
+        for timer in &group.event_time {
+            visitor(TimerDomain::EventTime, timer)?;
+        }
+        for timer in &group.processing_time {
+            visitor(TimerDomain::ProcessingTime, timer)?;
+        }
+        Ok(())
+    }
+
     /// Serialized size is available without constructing the checkpoint buffer.
     pub(crate) fn snapshot_size(&self, key_group: u32) -> Result<usize> {
         let group = self.group(key_group)?;

@@ -42,6 +42,18 @@ final class NativeRegionArrowFixtures {
         return region.build().toByteArray();
     }
 
+    static byte[] treePlan() throws Exception {
+        var root = NativeRegionPlan.parseFrom(plan()).getStages(0).getOperator();
+        return NativePlan.newBuilder()
+                .setProtocolVersion(3)
+                .setRoot(root.toBuilder()
+                        .setCalc(root.getCalc().toBuilder()
+                                .setInput(Operator.newBuilder()
+                                        .setInput(Input.newBuilder().setInputIndex(0)))))
+                .build()
+                .toByteArray();
+    }
+
     static ArrowRowDataBatch input(RootAllocator allocator, int seed) {
         var rows = new ArrayList<RowData>();
         RowKind[] kinds = new RowKind[37];

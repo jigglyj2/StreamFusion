@@ -9,9 +9,9 @@ use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 mod snapshot_entries;
 pub use snapshot_entries::key_group_snapshot_entries;
 mod snapshot_writer;
-pub use snapshot_writer::SnapshotWriter;
+pub use snapshot_writer::{key_group_snapshot_header, SnapshotWriter};
 
-pub const STATE_BACKEND_ABI_VERSION: u32 = 9;
+pub const STATE_BACKEND_ABI_VERSION: u32 = 10;
 pub const STATE_BACKEND_OK: i32 = 0;
 
 /// Optional ABI-8 Arrow schema metadata on scan replies. "true" declares the requested range
@@ -116,6 +116,8 @@ pub struct StateBackendApiV1 {
     /// alone after admission succeeds. This preserves large legacy values during paged restore.
     /// The caller retains the resulting reservation until the output Arrow buffers are released.
     pub scan_key_group_admitted: AdmittedArrowOperation,
+    /// ABI 10: open an existing checkpoint read-only; never create or repair a database.
+    pub open_checkpoint: OpenBackend,
 }
 
 pub type InitializeStateBackend =

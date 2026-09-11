@@ -65,7 +65,7 @@ unrelated binding extensions. Remove it once upstream bindings provide the equiv
 Default log relocation is now resolved in the TaskManager JVM using Flink's `log.file`
 property, readable-file checks and database-path length limit. Tests compare this resolution
 with Flink's actual `RocksDBResourceContainer`. The resolved path crosses state-binding protocol
-2; legacy bindings without relocation still use protocol 1. The current state-component ABI is 9,
+2; legacy bindings without relocation still use protocol 1. The current state-component ABI is 10,
 and both native libraries must implement it. Closing a database removes only its current and rotated log
 files after RocksDB closes its logger. Unlike Flink's broad prefix cleanup, neighboring database
 names are preserved; this narrows cleanup ownership without changing execution or checkpoint
@@ -184,8 +184,9 @@ Physical RocksDB checkpoints put each owner's files in a `node-<id>` directory. 
 file-checkpoint adapter uploads those directories in one handle and retains each namespace in
 its SST reuse keys when incremental checkpoints are enabled. Shared-context checkpoint import uses the canonical key-group contract for the assigned
 range and charges its temporary RocksDB reader and transfer buffers to the task's memory budget.
-Shared group aggregation imports bounded entry pages; other factories retain their canonical
-snapshot adapter until their semantic restore hooks support a paged import.
+Shared group aggregation, deduplication, Top-N, and regular join import bounded entry pages;
+other factories retain their canonical snapshot adapter until their semantic restore hooks
+support a paged import.
 There is no operator-specific checkpoint-import JNI bridge on this path.
 Missing RocksDB `CURRENT` files are rejected rather than opening a new empty database during restore.
 
@@ -254,7 +255,8 @@ Keys are prefixed or partitioned by the key group computed with StreamFusion's F
 Rust key-group logic. This makes key-group ownership independent of the backend and lets Flink's
 normal redistribution assign intersections during rescaling.
 
-State component ABI version 8 transports read results and owned mutation keys/values as Arrow
+The current state component retains the transport introduced in ABI version 8: read results and
+owned mutation keys/values cross the component boundary as Arrow
 `BinaryView` arrays. Large payloads retain producer-owned buffers across the C Data boundary;
 the runtime does not concatenate mutations or copy every returned value into a second byte
 vector. Inline values use Arrow's standard short-value representation. Runtime and plugin ABI
@@ -272,8 +274,9 @@ A scan reply may carry optional Arrow schema metadata `streamfusion.state.scan.c
 `false` says pagination must continue. This avoids another component call and RocksDB iterator
 just to discover an empty final page. Absence retains legacy pagination until an empty result, so
 this metadata extension was compatible with earlier ABI-8 components without changing their
-function table. ABI 9 adds a separate admitted scan operation and requires matching core/component
-libraries; it rejects ABI-8 components at initialization. BinaryView column schemas and persisted
+function table. ABI 10 adds a read-only checkpoint opener alongside the ABI-9 admitted scan
+operation and requires matching core/component libraries; it rejects older components at
+initialization. BinaryView column schemas and persisted
 checkpoint encodings remain unchanged. The C Data bridge preserves this schema metadata;
 invalid completion values fail explicitly. Distinct partition ranges still have separate scans.
 
@@ -386,15 +389,76 @@ Previously, disabling incremental checkpoints routed native RocksDB state throug
 canonical buffer. Large Q15 state exposed that mismatch with Flink. Regular checkpoints now avoid
 that buffer while retaining Flink's synchronous consistency boundary, asynchronous upload,
 cancellation and key-group restore lifecycle. Canonical savepoints still use the portable raw-keyed
-format, and memory checkpoints retain their canonical path. Whole-group canonical savepoint
-buffering remains a capacity limitation. Factories other than shared group aggregation still import physical files through whole-key-group
-canonical buffers. Shared group aggregation now uses the paged import described below. A completed
-large checkpoint or benchmark does not by itself establish restore capacity at that size.
-Canonical savepoint buffering and retained HashMap growth remain separate limits.
+format, and memory checkpoints retain their canonical path. Shared deduplication, Top-N, regular
+join, and group aggregation stream canonical snapshot output and page physical imports. Temporal
+sort also pages physical imports and rebuilds its timer markers separately. Other operator paths
+still need migration from whole-group buffers. Canonical restore still retains its input frame,
+and retained in-memory state growth remains a separate limit. A completed large checkpoint or
+benchmark does not by itself establish restore capacity at that size.
 Legacy operator checkpoint diagnostics count full uploads in checkpoint bytes but do not label
 them as incremental checkpoints or increment SST-reuse counters.
 
-Shared group aggregation now imports physical RocksDB checkpoints through ABI-9 admitted scans.
+The standalone JNI bridges for deduplication, regular join, Top-N, and grouped aggregation now
+share their processors' paged physical restore implementation with fused-plan factories. Global
+aggregation delegates to the same grouped processor; incremental aggregation also imports pages
+and rejects restoration while a bundle is pending. Join page-reference validation, aggregate
+membership-header validation, and Top-N output-state reset remain part of their owning processors.
+The legacy regular-join state format still uses its existing whole-group migration path.
+A JNI regression restores over 10 MiB of retained deduplication rows with a 4 MiB native working
+budget on a RocksDB destination, then checks every key and the restored update-before payload.
+The same checkpoint also restores to the in-memory backend with enough budget for retained state;
+RocksDB cache allowances remain separate from this working-memory measurement.
+
+Window Rank, Window Deduplicate, Interval Join, and Temporal Join standalone bridges also import
+physical checkpoints in bounded pages. They share the canonical restore path's timer reload logic,
+preserve both timer domains and assigned key groups, and clear dirty timer markers after a successful
+import. An 8 MiB payload fixture restores to RocksDB with a 4 MiB budget including reader/target
+cache allowances, then verifies every payload and timer firing; the same fixture restores to memory
+with an adequate retained-state budget. Timer records themselves remain admitted whole values,
+and the timer index remains managed memory. These changes do not unlock gated SQL operators or
+remove canonical savepoint input buffers.
+
+The standalone Changelog Normalize, MultiJoin, MATCH_RECOGNIZE, OVER Aggregate, Window Aggregate,
+Session Window Table Function, and bounded Sort bridges use the same paged importer as well.
+OVER and window aggregation share timer reload logic with the timer-based restore helpers;
+OVER's pending terminal output and bounded Sort's heap/cursor state reset after restoration just
+as they do for canonical snapshots. Generated bounded-sort changelogs exercise physical restore
+to both backends, followed by additional updates and final output comparison against Flink.
+Shared slicing and current session-window factories now page physical imports. Only legacy
+session interval/index migration still materializes its canonical input.
+
+Window Join now pages physical imports in both its standalone bridge and fused factory, and
+streams canonical snapshot output from the fused factory. Current indexed checkpoints validate
+borrowed entries without a whole-group decoding reservation. Legacy SFWJ/2 snapshots migrate one
+window value at a time; each old opaque window still requires its own admitted decoding workspace.
+Unknown keys, mixed legacy/indexed encodings, and incompatible shared plan contracts fail restore.
+The shared contract is checked before target mutation, and restored timer clocks still start at
+Flink's minimum watermark. Tests cover a group larger than 8 MiB restored and streamed with a
+4 MiB destination budget, legacy migration on both backends, and failed checkpoint sink cleanup.
+
+Shared slicing and session-window factories stream canonical snapshot output directly from state.
+Slicing windows validate one accumulator at a time with a reusable reservation, then import pages
+and restore timers. Processing-time windows use the same slice adapter and continue to require
+Flink's pre-checkpoint buffer flush before emitting a snapshot. Plan/version markers and Flink's
+union-operator watermark remain mandatory restore inputs; invalid markers fail before target
+mutation. Current session checkpoints validate consecutive intervals in key order, retaining only
+one partition prefix and end rather than a second full interval index. Unordered older canonical
+frames sort admitted borrowed descriptors without copying accumulator payloads. Current-session
+validation preserves inclusive overlap rejection and checks encoded ends against the restored
+watermark before importing state. A 10,000-session fixture verifies canonical and physical restore
+under a budget that rejects the previous whole-group reservation, including both RocksDB caches.
+Legacy SFWS/SFWI session migration still uses its existing complete migration validator. Its
+interval and event decoders reject counts that exceed the remaining encoded payload before
+allocating vectors, so truncated or corrupt checkpoints cannot drive allocations from those counts.
+
+All physical restore entry points now open existing checkpoints read-only through state-component
+ABI 10. Missing directories, missing CURRENT files, and corrupt/missing manifests fail restoration;
+restore must never create an empty database or repair a checkpoint. Ordinary new-task database
+creation keeps its existing behavior. Read-only readers retain the configured default column-family
+cache and memory ownership. Their small temporary cache remains covered by the restore-reader
+reservation, including restoration into an in-memory destination.
+
+These physical RocksDB imports use ABI-9 admitted scans.
 Each call selects at most 1,024 entries with a 256 KiB page target, admits payload and conversion
 workspace once, and transfers key/value Arrow BinaryViews directly between the native components.
 A single larger legacy key or value may occupy a page by itself after the host admits it. The
@@ -404,10 +468,11 @@ and copied write buffers have separate bounded reservations. The ordinary strict
 retains its existing hard byte limit.
 
 Flink still materializes file handles, supplies key-group assignments and coordinates recovery.
-The aggregate factory validates its idle state boundary and the destination group must be empty.
+Each processor validates its restore boundary and the destination group must be empty.
 Successful pages populate the assigned backend directly without assembling or decoding a whole
 canonical snapshot. A failed initialization may have installed earlier pages; the execution context
-is poisoned and Flink must discard it. It cannot resume processing partially restored state.
+must be discarded by Flink. Fused contexts poison failed initialization; standalone handle callers
+must also discard the failed handle instead of processing partially restored state.
 Canonical savepoint formats, stored aggregate/member encodings and the checkpoint file format do
 not change as a consequence of paging. No intermediate Java batches or per-record JNI callbacks
 are introduced.

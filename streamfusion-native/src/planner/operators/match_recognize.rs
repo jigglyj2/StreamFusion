@@ -354,6 +354,20 @@ impl MatchRecognizeProcessor {
             .restore_key_group(key_group, bytes, &self.scratch_reservation)
     }
 
+    pub(crate) fn restore_physical_key_group(
+        &mut self,
+        key_group: u32,
+        source: &dyn crate::state::KeyedState,
+    ) -> Result<()> {
+        crate::state::import_key_group(
+            self.state.as_mut(),
+            source,
+            key_group,
+            &self.scratch_reservation,
+            &mut |_, _| Ok(()),
+        )
+    }
+
     pub(crate) fn checkpoint(&self, directory: &std::path::Path) -> Result<()> {
         self.state.checkpoint(directory)
     }

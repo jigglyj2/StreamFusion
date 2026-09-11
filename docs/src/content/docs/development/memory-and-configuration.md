@@ -52,6 +52,42 @@ input needs no gathered payload. Partial selections reserve gather space from th
 logical buffer spans, avoiding multiplication of a shared IPC allocation by the schema width.
 Operations that expand output, such as `REPEAT`, must reserve their large output before allocation.
 
+Raw keyed checkpoints use bounded 64 KiB transport buffers to write Flink's checkpoint streams.
+Joins, aggregates, deduplication, Top-N, and shared window factories stream canonical entries
+without materializing the whole native key group. Timer-bearing windows persist their timer
+updates through bounded state writes before capture. RocksDB makes one bounded scan for the
+frame size and a second for the entries while the operator holds state stable; unordered
+in-memory state sorts borrowed entry references, and ordered-memory state walks its existing
+index. Java callbacks occur per transport chunk rather than per state entry.
+
+Small frames retain their existing positive 32-bit length and canonical `SFS1` payload bytes.
+Larger frames use an explicit `-1` marker followed by a positive 64-bit length. The stream JNI
+edge is version 2; current readers accept both frame forms, while older readers cannot consume
+large-frame savepoints. The canonical payload still uses 32-bit entry counts and individual
+key/value lengths. Length framing tests cover the 2 GiB boundary and larger declarations without
+allocating multi-gigabyte test payloads.
+
+Production restore streams a key group into a DataFusion-owned temporary file under Flink's
+IOManager directories. DataFusion sorts bounded Arrow batches containing only keys and file
+offsets, spilling under the same native memory reservation pool. A framing scan sizes merge batches
+from the widest key and available budget, so wide keys cannot turn a fixed row count into an
+oversized merge allocation. Payloads stay in the input file;
+the sorted offset directory stays on disk rather than growing an in-memory lookup table.
+Framing and duplicate-key validation finish before the source reaches a state factory. Factories
+then validate their operator encoding and import bounded pages through the same read-only
+checkpoint interface used for physical RocksDB restore. A single large key, value, or write page
+still requires admission; restore does not exempt retained in-memory backend state from its budget.
+Low-level embedded callers without task spill resources retain the admitted materialized restore
+path. Production tasks supply spill directories through state-binding protocol 4.
+
+Regression fixtures restore canonical payloads larger than 12 MiB with 4 MiB of free native memory
+into RocksDB, verify generated Flink changelog parity after restore, and force DataFusion sorting
+to spill for a high-cardinality key directory. Both state backends, unordered older payloads,
+truncation, duplicate keys, cross-backend recovery, and temporary-file cleanup are covered.
+Reservations cover scan pages, sort state, transport, and retained output values. Preparation
+failures leave state unchanged; an error after operator import begins requires task recovery.
+Flink continues to own checkpoint streams, checkpoint completion/failure, and recovery.
+
 ## Flink budgets and settings
 
 The TaskManager's `taskmanager.memory.managed.size` or
@@ -70,6 +106,14 @@ combine memory across slots or jobs, or borrow from the STATE_BACKEND/PYTHON por
 Existing Flink allocations remain charged in the underlying MemoryManager. The pool reserves
 actual growing buffers/state on demand, rather than preallocating the full allowance.
 
+DataFusion sub-pools created by native joins, deduplication, sorting and fused expressions inherit
+that assigned host ceiling. They do not freeze the currently free byte count as a private limit:
+capacity released by another consumer remains usable. The host assignment is read once during
+pool construction, without adding an availability query to each reservation. Local pool usage
+remains distinct from aggregate host usage, and every growth still requires host admission.
+A host that cannot report its ceiling is represented as an unknown DataFusion limit, with its
+reservation callback still enforcing the real budget; setup errors are propagated.
+
 Pool ownership uses Flink's shared-resource lifecycle. Closing an operator rejects new work
 but retains its pool lease while Arrow or native buffers still own reservations. The last
 release returns the credit; only the last lease destroys the empty pool. Native-to-Arrow
@@ -87,6 +131,13 @@ and local-group flush behavior. RocksDB retains its separately assigned STATE_BA
 and write-buffer-manager lease. Legacy embedded runners without that lease retain their
 original operator-share-based fallback sizing; sharing execution capacity does not enlarge
 their caches. No Flink dependency patch or deployment option is added by this change.
+
+Streaming inner joins can prepare historical payloads in bounded Arrow IPC spill pages when
+resident admission fails. Flink's IOManager directories are passed as internal task resources;
+DataFusion owns temporary files and disk accounting. Read, decode, predicate, output and directory
+workspace still require host reservations. Replay adds no per-row RocksDB or JNI calls, and state
+writes/checkpoints retain the completed-batch boundary. This does not spill the in-memory backend's
+retained state itself; see the [join memory and state contract](/operators/joins/).
 
 Sharing removes stranded private allowances; it does not guarantee unlimited in-memory state,
 automatic spill for every workspace, or equivalence to Flink's shared JVM heap. The full native

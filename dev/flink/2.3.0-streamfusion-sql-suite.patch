@@ -43,3 +43,213 @@ index 11a2f307277..e01b8608793 100644
 +		</profile>
 +	</profiles>
  </project>
+diff --git a/flink-table/flink-table-planner/src/test/scala/org/apache/flink/table/planner/utils/TableTestBase.scala b/flink-table/flink-table-planner/src/test/scala/org/apache/flink/table/planner/utils/TableTestBase.scala
+--- a/flink-table/flink-table-planner/src/test/scala/org/apache/flink/table/planner/utils/TableTestBase.scala
++++ b/flink-table/flink-table-planner/src/test/scala/org/apache/flink/table/planner/utils/TableTestBase.scala
+@@ -197,7 +197,7 @@
+   protected def isBounded: Boolean = !isStreamingMode
+
+   def getPlanner: PlannerBase = {
+-    getTableEnv.asInstanceOf[TableEnvironmentImpl].getPlanner.asInstanceOf[PlannerBase]
++    StreamFusionPlannerTestAccess.unwrap(getTableEnv.asInstanceOf[TableEnvironmentImpl].getPlanner)
+   }
+
+   /** Creates a table with the given DDL SQL string. */
+@@ -1691,7 +1691,7 @@
+     tableConfig: TableConfig,
+     executor: Executor,
+     functionCatalog: FunctionCatalog,
+-    planner: PlannerBase,
++    planner: org.apache.flink.table.delegation.Planner,
+     isStreamingMode: Boolean)
+   extends TableEnvironmentImpl(
+     catalogManager,
+@@ -1816,7 +1816,6 @@
+         moduleManager,
+         catalogMgr,
+         functionCatalog)
+-      .asInstanceOf[PlannerBase]
+
+     new TestingTableEnvironment(
+       catalogMgr,
+@@ -1857,12 +1856,13 @@
+
+   /** Convert operation tree in the given table to a RelNode tree. */
+   def toRelNode(table: Table): RelNode = {
+-    table
+-      .asInstanceOf[TableImpl]
+-      .getTableEnvironment
+-      .asInstanceOf[TableEnvironmentImpl]
+-      .getPlanner
+-      .asInstanceOf[PlannerBase]
++    StreamFusionPlannerTestAccess
++      .unwrap(
++        table
++          .asInstanceOf[TableImpl]
++          .getTableEnvironment
++          .asInstanceOf[TableEnvironmentImpl]
++          .getPlanner)
+       .createRelBuilder
+       .queryOperation(table.getQueryOperation)
+       .build()
+@@ -1870,13 +1870,13 @@
+
+   /** Convert modify operation to a RelNode tree. */
+   def toRelNode(tEnv: TableEnvironment, modifyOperation: ModifyOperation): RelNode = {
+-    val planner = tEnv.asInstanceOf[TableEnvironmentImpl].getPlanner.asInstanceOf[PlannerBase]
++    val planner = StreamFusionPlannerTestAccess.unwrap(tEnv.asInstanceOf[TableEnvironmentImpl].getPlanner)
+     planner.translateToRel(modifyOperation)
+   }
+
+   /** Convert a sql query to a ExecNodeGraph. */
+   def toExecNodeGraph(tEnv: TableEnvironment, sqlQuery: String): ExecNodeGraph = {
+-    val planner = tEnv.asInstanceOf[TableEnvironmentImpl].getPlanner.asInstanceOf[PlannerBase]
++    val planner = StreamFusionPlannerTestAccess.unwrap(tEnv.asInstanceOf[TableEnvironmentImpl].getPlanner)
+     val optimizedRel =
+       planner.optimize(toRelNode(tEnv.sqlQuery(sqlQuery))).asInstanceOf[FlinkPhysicalRel]
+     val generator = new ExecNodeGraphGenerator
+@@ -1890,7 +1890,7 @@
+       fields: Option[Array[Expression]] = None,
+       fieldNullables: Option[Array[Boolean]] = None,
+       statistic: Option[FlinkStatistic] = None): Unit = {
+-    val planner = tEnv.asInstanceOf[TableEnvironmentImpl].getPlanner.asInstanceOf[PlannerBase]
++    val planner = StreamFusionPlannerTestAccess.unwrap(tEnv.asInstanceOf[TableEnvironmentImpl].getPlanner)
+     val execEnv = planner.getExecEnv
+     val streamType = dataStream.getType
+     // get field names and types for all non-replaced fields
+diff --git a/flink-table/flink-table-planner/src/test/scala/org/apache/flink/table/planner/runtime/utils/BatchTestBase.scala b/flink-table/flink-table-planner/src/test/scala/org/apache/flink/table/planner/runtime/utils/BatchTestBase.scala
+--- a/flink-table/flink-table-planner/src/test/scala/org/apache/flink/table/planner/runtime/utils/BatchTestBase.scala
++++ b/flink-table/flink-table-planner/src/test/scala/org/apache/flink/table/planner/runtime/utils/BatchTestBase.scala
+@@ -36,7 +36,7 @@
+ import org.apache.flink.table.planner.plan.utils.FlinkRelOptUtil
+ import org.apache.flink.table.planner.runtime.utils.BatchAbstractTestBase.DEFAULT_PARALLELISM
+ import org.apache.flink.table.planner.runtime.utils.BatchTestBase._
+-import org.apache.flink.table.planner.utils.{TableTestUtil, TestingTableEnvironment}
++import org.apache.flink.table.planner.utils.{StreamFusionPlannerTestAccess, TableTestUtil, TestingTableEnvironment}
+ import org.apache.flink.table.runtime.typeutils.InternalTypeInfo
+ import org.apache.flink.table.runtime.util.RowDataTestUtil
+ import org.apache.flink.table.types.logical.{BigIntType, LogicalType}
+@@ -76,7 +76,7 @@
+       .create(settings, catalogManager = None, TableConfig.getDefault)
+     tEnv = testingTableEnv
+     tEnv.getConfig.set(BatchExecutionOptions.ADAPTIVE_AUTO_PARALLELISM_ENABLED, Boolean.box(false))
+-    planner = tEnv.asInstanceOf[TableEnvironmentImpl].getPlanner.asInstanceOf[PlannerBase]
++    planner = StreamFusionPlannerTestAccess.unwrap(tEnv.asInstanceOf[TableEnvironmentImpl].getPlanner)
+     env = planner.getExecEnv
+     env.getConfig.enableObjectReuse()
+     tableConfig = tEnv.getConfig
+@@ -533,7 +533,7 @@
+   }
+
+   private def getPlan(relNode: RelNode, tEnv: TableEnvironment): String = {
+-    val planner = tEnv.asInstanceOf[TableEnvironmentImpl].getPlanner.asInstanceOf[PlannerBase]
++    val planner = StreamFusionPlannerTestAccess.unwrap(tEnv.asInstanceOf[TableEnvironmentImpl].getPlanner)
+     val optimized = planner.optimize(relNode)
+     FlinkRelOptUtil.toString(optimized, SqlExplainLevel.EXPPLAN_ATTRIBUTES)
+   }
+diff --git a/flink-table/flink-table-planner/src/test/java/org/apache/flink/table/planner/utils/StreamFusionPlannerTestAccess.java b/flink-table/flink-table-planner/src/test/java/org/apache/flink/table/planner/utils/StreamFusionPlannerTestAccess.java
+new file mode 100644
+--- /dev/null
++++ b/flink-table/flink-table-planner/src/test/java/org/apache/flink/table/planner/utils/StreamFusionPlannerTestAccess.java
+@@ -0,0 +1,29 @@
++/*
++ * Copyright 2026 StreamFusion Authors
++ * Licensed under the Apache License, Version 2.0.
++ */
++package org.apache.flink.table.planner.utils;
++
++import org.apache.flink.table.delegation.Planner;
++import org.apache.flink.table.planner.delegation.PlannerBase;
++
++/** Test-only access to Flink planning internals; execution keeps the installed facade. */
++public final class StreamFusionPlannerTestAccess {
++    private StreamFusionPlannerTestAccess() {}
++
++    public static PlannerBase unwrap(Planner planner) {
++        if (planner instanceof PlannerBase) {
++            return (PlannerBase) planner;
++        }
++        if (!planner.getClass().getName().equals("tech.streamfusion.flink.StreamFusionPlanner")) {
++            throw new IllegalArgumentException("Unsupported test planner: " + planner.getClass());
++        }
++        try {
++            var delegate = planner.getClass().getDeclaredField("delegate");
++            delegate.setAccessible(true);
++            return (PlannerBase) delegate.get(planner);
++        } catch (ReflectiveOperationException failure) {
++            throw new IllegalStateException("Cannot inspect StreamFusion's Flink planner", failure);
++        }
++    }
++}
+diff --git a/flink-table/flink-table-planner/src/test/scala/org/apache/flink/table/planner/runtime/utils/BatchTableEnvUtil.scala b/flink-table/flink-table-planner/src/test/scala/org/apache/flink/table/planner/runtime/utils/BatchTableEnvUtil.scala
+--- a/flink-table/flink-table-planner/src/test/scala/org/apache/flink/table/planner/runtime/utils/BatchTableEnvUtil.scala
++++ b/flink-table/flink-table-planner/src/test/scala/org/apache/flink/table/planner/runtime/utils/BatchTableEnvUtil.scala
+@@ -27,7 +27,7 @@
+ import org.apache.flink.table.planner.delegation.PlannerBase
+ import org.apache.flink.table.planner.plan.nodes.exec.utils.ExecNodeUtil
+ import org.apache.flink.table.planner.plan.stats.FlinkStatistic
+-import org.apache.flink.table.planner.utils.TableTestUtil
++import org.apache.flink.table.planner.utils.{StreamFusionPlannerTestAccess, TableTestUtil}
+
+ import _root_.java.util.UUID
+ import _root_.scala.collection.JavaConverters._
+@@ -338,6 +338,6 @@
+   }
+
+   private def getPlanner(tEnv: TableEnvironment): PlannerBase = {
+-    tEnv.asInstanceOf[TableEnvironmentImpl].getPlanner.asInstanceOf[PlannerBase]
++    StreamFusionPlannerTestAccess.unwrap(tEnv.asInstanceOf[TableEnvironmentImpl].getPlanner)
+   }
+ }
+diff --git a/flink-table/flink-table-planner/src/test/scala/org/apache/flink/table/planner/runtime/utils/AdaptiveBatchTestBase.scala b/flink-table/flink-table-planner/src/test/scala/org/apache/flink/table/planner/runtime/utils/AdaptiveBatchTestBase.scala
+--- a/flink-table/flink-table-planner/src/test/scala/org/apache/flink/table/planner/runtime/utils/AdaptiveBatchTestBase.scala
++++ b/flink-table/flink-table-planner/src/test/scala/org/apache/flink/table/planner/runtime/utils/AdaptiveBatchTestBase.scala
+@@ -21,12 +21,11 @@
+ import org.apache.flink.table.api.{EnvironmentSettings, TableConfig, TableEnvironment}
+ import org.apache.flink.table.api.config.ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM
+ import org.apache.flink.table.api.internal.TableEnvironmentImpl
+-import org.apache.flink.table.planner.delegation.PlannerBase
+ import org.apache.flink.table.planner.factories.TestValuesTableFactory
+ import org.apache.flink.table.planner.runtime.utils.AdaptiveBatchAbstractTestBase.DEFAULT_PARALLELISM
+ import org.apache.flink.table.planner.runtime.utils.BatchTableEnvUtil.parseFieldNames
+ import org.apache.flink.table.planner.runtime.utils.BatchTestBase.{check, checkSame}
+-import org.apache.flink.table.planner.utils.TestingTableEnvironment
++import org.apache.flink.table.planner.utils.{StreamFusionPlannerTestAccess, TestingTableEnvironment}
+ import org.apache.flink.types.Row
+
+ import org.junit.jupiter.api.{AfterEach, BeforeEach}
+@@ -42,10 +41,8 @@
+         EnvironmentSettings.newInstance().inBatchMode().build(),
+         catalogManager = None,
+         TableConfig.getDefault)
+-    tEnv
+-      .asInstanceOf[TableEnvironmentImpl]
+-      .getPlanner
+-      .asInstanceOf[PlannerBase]
++    StreamFusionPlannerTestAccess
++      .unwrap(tEnv.asInstanceOf[TableEnvironmentImpl].getPlanner)
+       .getExecEnv
+       .getConfig
+       .enableObjectReuse()
+diff --git a/flink-table/flink-table-planner/src/test/scala/org/apache/flink/table/planner/runtime/batch/sql/join/JoinITCase.scala b/flink-table/flink-table-planner/src/test/scala/org/apache/flink/table/planner/runtime/batch/sql/join/JoinITCase.scala
+--- a/flink-table/flink-table-planner/src/test/scala/org/apache/flink/table/planner/runtime/batch/sql/join/JoinITCase.scala
++++ b/flink-table/flink-table-planner/src/test/scala/org/apache/flink/table/planner/runtime/batch/sql/join/JoinITCase.scala
+@@ -26,7 +26,6 @@
+ import org.apache.flink.table.api.config.OptimizerConfigOptions
+ import org.apache.flink.table.api.internal.StatementSetImpl
+ import org.apache.flink.table.connector.ChangelogMode
+-import org.apache.flink.table.planner.delegation.PlannerBase
+ import org.apache.flink.table.planner.expressions.utils.FuncWithOpen
+ import org.apache.flink.table.planner.factories.TestValuesTableFactory
+ import org.apache.flink.table.planner.runtime.batch.sql.join.JoinType.{BroadcastHashJoin, HashJoin, JoinType, NestedLoopJoin, SortMergeJoin}
+@@ -221,9 +220,7 @@
+       stmtSet.addInsert("outputTable", table)
+       val testingTEnv = tEnv.asInstanceOf[TestingTableEnvironment]
+       val testingStmtSet = stmtSet.asInstanceOf[StatementSetImpl[_]]
+-      val transforms = testingTEnv.getPlanner
+-        .asInstanceOf[PlannerBase]
+-        .translate(testingStmtSet.getOperations)
++      val transforms = testingTEnv.getPlanner.translate(testingStmtSet.getOperations)
+       var haveTwoOp = false
+
+       @scala.annotation.tailrec

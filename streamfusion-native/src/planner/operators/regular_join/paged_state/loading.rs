@@ -10,9 +10,10 @@ const READ_ROWS: usize = 4096;
 pub(super) fn load_entries(
     state: &dyn KeyedState,
     staged: &mut [StagedState],
-    requests: Vec<(usize, usize, Layout, Vec<u64>)>,
+    requests: Vec<(usize, usize, Layout, EntryIds)>,
     owner: &mut HostMemoryReservation,
-) -> Result<u64> {
+    reads: &mut u64,
+) -> Result<()> {
     let mut remaining = requests
         .iter()
         .map(|(_, _, _, ids)| ids.len())
@@ -20,7 +21,6 @@ pub(super) fn load_entries(
     let mut locations = requests.into_iter().flat_map(|(index, side, layout, ids)| {
         ids.into_iter().map(move |id| (index, side, id, layout))
     });
-    let mut reads = 0;
     while remaining != 0 {
         let count = remaining.min(READ_ROWS);
         let mut workspace = owner.sibling("regular join payload read transport");
@@ -34,6 +34,7 @@ pub(super) fn load_entries(
             .map(|&(index, side, id, layout)| entry_key(&staged[index].key, side, id, layout))
             .collect::<Vec<_>>();
         let refs = refs(&keys);
+        *reads = reads.saturating_add(1);
         let values = state.get_batch(&refs, owner)?;
         // Retained decoded payloads, growing row vectors and their shallow original-state clone.
         // Backend read buffers and this chunk's transport workspace drop before the next chunk.
@@ -54,8 +55,7 @@ pub(super) fn load_entries(
                 state.right.extend(rows);
             }
         }
-        reads += 1;
         remaining -= count;
     }
-    Ok(reads)
+    Ok(())
 }
