@@ -105,6 +105,7 @@ pub(in crate::planner::operators) fn decode_session_index(bytes: &[u8]) -> Resul
         ));
     }
     let count = reader.read_u32()? as usize;
+    reader.validate_count(count, 16, "session interval count")?;
     let mut intervals = Vec::with_capacity(count);
     for _ in 0..count {
         intervals.push((reader.read_i64()?, reader.read_i64()?));
@@ -162,6 +163,11 @@ pub(in crate::planner::operators) fn decode_session_state(
     let event_count = reader.read_u32()? as usize;
     let grouping = reader.read_exact(grouping_length)?.to_vec();
     let accumulator = decode_state(reader.read_exact(aggregate_length)?, calls)?;
+    reader.validate_count(
+        event_count,
+        12usize.saturating_add(calls.len()),
+        "session event count",
+    )?;
     let mut events = Vec::with_capacity(event_count);
     for _ in 0..event_count {
         let timestamp = reader.read_i64()?;
@@ -284,6 +290,15 @@ impl<'a> WindowBytesReader<'a> {
         Ok(i64::from_le_bytes(self.read_exact(8)?.try_into().unwrap()))
     }
 
+    fn validate_count(&self, count: usize, minimum_bytes: usize, description: &str) -> Result<()> {
+        if count > self.bytes.len().saturating_sub(self.offset) / minimum_bytes {
+            return Err(DataFusionError::Execution(format!(
+                "native {description} exceeds its encoded byte length"
+            )));
+        }
+        Ok(())
+    }
+
     fn is_empty(&self) -> bool {
         self.offset == self.bytes.len()
     }
@@ -351,3 +366,6 @@ pub(in crate::planner::operators) fn decode_window_state(
         decode_state(&bytes[aggregate_offset..], calls)?,
     ))
 }
+
+#[cfg(test)]
+mod tests;

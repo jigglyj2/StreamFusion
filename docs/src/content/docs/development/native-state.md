@@ -446,7 +446,9 @@ frames sort admitted borrowed descriptors without copying accumulator payloads. 
 validation preserves inclusive overlap rejection and checks encoded ends against the restored
 watermark before importing state. A 10,000-session fixture verifies canonical and physical restore
 under a budget that rejects the previous whole-group reservation, including both RocksDB caches.
-Legacy SFWS/SFWI session migration still uses its existing complete migration validator.
+Legacy SFWS/SFWI session migration still uses its existing complete migration validator. Its
+interval and event decoders reject counts that exceed the remaining encoded payload before
+allocating vectors, so truncated or corrupt checkpoints cannot drive allocations from those counts.
 
 All physical restore entry points now open existing checkpoints read-only through state-component
 ABI 10. Missing directories, missing CURRENT files, and corrupt/missing manifests fail restoration;
