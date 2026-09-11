@@ -17,14 +17,14 @@ use arrow::ffi::{from_ffi, FFI_ArrowArray, FFI_ArrowSchema};
 use datafusion::error::{DataFusionError, Result};
 use libloading::Library;
 use streamfusion_state_abi::{
-    ArrowOperation, InitializeStateBackend, StateBackendApiV1, StateBackendOpenOptions,
-    StateMemoryAdmission, STATE_BACKEND_ABI_VERSION, STATE_BACKEND_OK,
+    ArrowOperation, StateBackendApiV1, StateMemoryAdmission, STATE_BACKEND_OK,
 };
 
 use crate::memory_pool::HostMemoryReservation;
 
 use super::{KeyedState, StateKeyRef, StateMutation};
 
+mod open;
 mod scan;
 
 /// Dynamically loaded RocksDB component accessed exclusively through the versioned C/Arrow ABI.
@@ -38,124 +38,6 @@ pub(crate) struct RocksPluginKeyedState {
 unsafe impl Send for RocksPluginKeyedState {}
 
 impl RocksPluginKeyedState {
-    pub(crate) fn open(
-        library_path: &Path,
-        database_path: &Path,
-        first_key_group: u32,
-        last_key_group: u32,
-        memory_limit: usize,
-    ) -> Result<Self> {
-        Self::open_scoped(
-            library_path,
-            database_path,
-            first_key_group,
-            last_key_group,
-            memory_limit,
-            [0, 0],
-            None,
-        )
-    }
-
-    pub(crate) fn open_for_owner(
-        library_path: &Path,
-        database_path: &Path,
-        first_key_group: u32,
-        last_key_group: u32,
-        memory_limit: usize,
-        owner: &HostMemoryReservation,
-    ) -> Result<Self> {
-        Self::open_scoped(
-            library_path,
-            database_path,
-            first_key_group,
-            last_key_group,
-            memory_limit,
-            owner.rocks_scope()?,
-            None,
-        )
-    }
-
-    pub(crate) fn open_configured(
-        resources: &crate::proto::NativeRocksDbState,
-        first_key_group: u32,
-        last_key_group: u32,
-        owner: Option<&HostMemoryReservation>,
-    ) -> Result<Self> {
-        Self::open_scoped(
-            Path::new(&resources.plugin_path),
-            Path::new(&resources.database_path),
-            first_key_group,
-            last_key_group,
-            resources.memory_limit as usize,
-            owner
-                .map(HostMemoryReservation::rocks_scope)
-                .transpose()?
-                .unwrap_or([0, 0]),
-            resources.log_directory.as_deref(),
-        )
-    }
-
-    fn open_scoped(
-        library_path: &Path,
-        database_path: &Path,
-        first_key_group: u32,
-        last_key_group: u32,
-        memory_limit: usize,
-        scope: [u64; 2],
-        log_directory: Option<&str>,
-    ) -> Result<Self> {
-        let library = unsafe { Library::new(library_path) }
-            .map_err(|error| DataFusionError::External(Box::new(error)))?;
-        let initialize = unsafe {
-            library
-                .get::<InitializeStateBackend>(b"streamfusion_state_backend_init\0")
-                .map_err(|error| DataFusionError::External(Box::new(error)))?
-        };
-        let mut api = ptr::null();
-        let status = unsafe { initialize(STATE_BACKEND_ABI_VERSION, &mut api) };
-        if status != STATE_BACKEND_OK || api.is_null() {
-            return Err(DataFusionError::Execution(format!(
-                "RocksDB state plugin rejected ABI version {STATE_BACKEND_ABI_VERSION}"
-            )));
-        }
-        let api = unsafe { &*api };
-        if api.abi_version != STATE_BACKEND_ABI_VERSION {
-            return Err(DataFusionError::Execution(format!(
-                "RocksDB state plugin returned ABI version {}",
-                api.abi_version
-            )));
-        }
-        let database_path = database_path.to_str().ok_or_else(|| {
-            DataFusionError::Execution("RocksDB state path is not UTF-8".to_string())
-        })?;
-        let log_directory = log_directory.unwrap_or_default();
-        let options = StateBackendOpenOptions {
-            struct_size: std::mem::size_of::<StateBackendOpenOptions>(),
-            path: database_path.as_ptr(),
-            path_len: database_path.len(),
-            first_key_group,
-            last_key_group,
-            memory_limit,
-            memory_scope_high: scope[0],
-            memory_scope_low: scope[1],
-            log_directory: log_directory.as_ptr(),
-            log_directory_len: log_directory.len(),
-        };
-        let mut handle = ptr::null_mut();
-        let status = unsafe { (api.open)(&options, &mut handle) };
-        check(api, status)?;
-        if handle.is_null() {
-            return Err(DataFusionError::Execution(
-                "RocksDB state plugin returned a null handle".to_string(),
-            ));
-        }
-        Ok(Self {
-            library: Arc::new(library),
-            api,
-            handle,
-        })
-    }
-
     fn invoke(&self, operation: ArrowOperation, input: RecordBatch) -> Result<RecordBatch> {
         let input_data = StructArray::from(input).to_data();
         let input_array = ManuallyDrop::new(FFI_ArrowArray::new(&input_data));

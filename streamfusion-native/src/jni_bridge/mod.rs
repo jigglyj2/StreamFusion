@@ -10,6 +10,7 @@ mod bounded_rank;
 mod bounded_sort;
 mod calc;
 mod changelog_normalize;
+mod checkpoint_reader;
 mod common;
 mod deduplicate;
 mod exchange;

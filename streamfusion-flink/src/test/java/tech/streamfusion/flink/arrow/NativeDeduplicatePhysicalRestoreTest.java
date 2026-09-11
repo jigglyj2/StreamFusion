@@ -37,18 +37,7 @@ class NativeDeduplicatePhysicalRestoreTest {
 
     @Test
     void importsAPhysicalCheckpointLargerThanWorkingMemoryAndPreservesState(@TempDir Path directory) {
-        byte[] plan = NativePlan.newBuilder()
-                .setProtocolVersion(1)
-                .setRoot(Operator.newBuilder()
-                        .setDeduplicate(Deduplicate.newBuilder()
-                                .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
-                                .addKeyIndices(0)
-                                .setOrderIndex(1)
-                                .setKeepLast(true)
-                                .setGenerateUpdateBefore(true)
-                                .setGenerateInsert(true)))
-                .build()
-                .toByteArray();
+        byte[] plan = plan();
         Path checkpoint = directory.resolve("checkpoint");
         var sourceMemory = TestingNativeMemoryManager.create();
         long source = NativeDeduplicateBridge.createRocksDb(
@@ -115,6 +104,48 @@ class NativeDeduplicatePhysicalRestoreTest {
                 assertThat(targetMemory.available()).isEqualTo(targetMemory.limit());
             }
         }
+    }
+
+    @Test
+    void rejectsMissingAndIncompleteCheckpointsWithoutCreatingEmptyState(@TempDir Path directory) throws Exception {
+        var memory = TestingNativeMemoryManager.create();
+        long handle = NativeDeduplicateBridge.create(plan(), 1, 0, 0, memory);
+        Path missing = directory.resolve("missing");
+        Path empty = java.nio.file.Files.createDirectory(directory.resolve("empty"));
+        Path corrupt = java.nio.file.Files.createDirectory(directory.resolve("corrupt"));
+        byte[] invalidCurrent = "MANIFEST-999999\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        java.nio.file.Files.write(corrupt.resolve("CURRENT"), invalidCurrent);
+        try {
+            for (Path checkpoint : List.of(missing, empty, corrupt)) {
+                assertThatThrownBy(
+                                () -> NativeDeduplicateBridge.importRocksCheckpoint(handle, checkpoint, 0, 0, 1L << 20))
+                        .isInstanceOf(IllegalStateException.class);
+            }
+            assertThat(java.nio.file.Files.exists(missing.resolve("CURRENT"))).isFalse();
+            assertThat(java.nio.file.Files.exists(empty.resolve("CURRENT"))).isFalse();
+            assertThat(java.nio.file.Files.readAllBytes(corrupt.resolve("CURRENT")))
+                    .isEqualTo(invalidCurrent);
+            assertThat(java.nio.file.Files.exists(corrupt.resolve("MANIFEST-999999")))
+                    .isFalse();
+        } finally {
+            NativeDeduplicateBridge.destroy(handle);
+        }
+        assertThat(memory.available()).isEqualTo(memory.limit());
+    }
+
+    private static byte[] plan() {
+        return NativePlan.newBuilder()
+                .setProtocolVersion(1)
+                .setRoot(Operator.newBuilder()
+                        .setDeduplicate(Deduplicate.newBuilder()
+                                .setInput(Operator.newBuilder().setInput(Input.newBuilder()))
+                                .addKeyIndices(0)
+                                .setOrderIndex(1)
+                                .setKeepLast(true)
+                                .setGenerateUpdateBefore(true)
+                                .setGenerateInsert(true)))
+                .build()
+                .toByteArray();
     }
 
     private static GenericRowData row(long key, long timestamp) {

@@ -25,7 +25,7 @@ fn physical_restore_preserves_distinct_membership_and_rejects_pending_bundles() 
     source.process_arrow(input.clone()).unwrap();
     let path = directory.path().join("checkpoint");
     source.checkpoint(&path).unwrap();
-    let checkpoint = crate::state::RocksPluginKeyedState::open(
+    let checkpoint = crate::state::RocksPluginKeyedState::open_checkpoint(
         std::path::Path::new(&plugin),
         &path,
         0,

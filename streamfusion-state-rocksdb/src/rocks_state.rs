@@ -97,6 +97,45 @@ impl RocksStateBackend {
         scope: [u64; 2],
         log_directory: Option<&Path>,
     ) -> Result<Self> {
+        Self::open_configured_mode(
+            path,
+            first_key_group,
+            last_key_group,
+            memory_limit,
+            scope,
+            log_directory,
+            false,
+        )
+    }
+
+    pub(crate) fn open_checkpoint_configured(
+        path: &Path,
+        first_key_group: u32,
+        last_key_group: u32,
+        memory_limit: usize,
+        scope: [u64; 2],
+        log_directory: Option<&Path>,
+    ) -> Result<Self> {
+        Self::open_configured_mode(
+            path,
+            first_key_group,
+            last_key_group,
+            memory_limit,
+            scope,
+            log_directory,
+            true,
+        )
+    }
+
+    fn open_configured_mode(
+        path: &Path,
+        first_key_group: u32,
+        last_key_group: u32,
+        memory_limit: usize,
+        scope: [u64; 2],
+        log_directory: Option<&Path>,
+        checkpoint: bool,
+    ) -> Result<Self> {
         if first_key_group > last_key_group {
             return Err(Error::new(
                 ErrorKind::InvalidInput,
@@ -135,8 +174,19 @@ impl RocksStateBackend {
         // Open the default family explicitly so batched pinned reads can address it. `open_cf`
         // replaces column options with Options::default(), silently dropping this shared cache,
         // its charged index/filter blocks, compression, and the configured memtable limit.
-        let db = DB::open_cf_with_opts(&options, path, [("default", options.clone())])
-            .map_err(rocks_error)?;
+        let db = if checkpoint {
+            options.create_if_missing(false);
+            options.create_missing_column_families(false);
+            DB::open_cf_with_opts_for_read_only(
+                &options,
+                path,
+                [("default", options.clone())],
+                false,
+            )
+        } else {
+            DB::open_cf_with_opts(&options, path, [("default", options.clone())])
+        }
+        .map_err(rocks_error)?;
         Ok(Self {
             db,
             _shared_memory: shared_memory,

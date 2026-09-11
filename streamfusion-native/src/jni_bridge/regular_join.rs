@@ -328,21 +328,16 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeRegularJoinBrid
             let limit = usize::try_from(limit)
                 .map_err(|_| throw(env, "regular join restore limit must fit usize"))?;
             (|| -> datafusion::error::Result<()> {
-                use crate::state::RocksPluginKeyedState;
-                let source = RocksPluginKeyedState::open(
+                let mut target = unsafe { processor(target) }?;
+                let owner = target.state_memory();
+                super::checkpoint_reader::import(
                     std::path::Path::new(&plugin.to_string()),
                     std::path::Path::new(&checkpoint.to_string()),
                     non_negative(first, "first key group")?,
                     non_negative(last, "last key group")?,
                     limit,
-                )?;
-                let mut target = unsafe { processor(target) }?;
-                let owner = target.state_memory();
-                for group in first..=last {
-                    let group = non_negative(group, "key group")?;
-                    target.restore_physical_key_group(group, &source, &owner)?;
-                }
-                Ok(())
+                    |group, source| target.restore_physical_key_group(group, source, &owner),
+                )
             })()
             .map_err(|error| throw(env, error))
         })

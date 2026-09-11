@@ -299,23 +299,21 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeTemporalJoinBri
             let limit = usize::try_from(limit)
                 .map_err(|_| throw(env, "temporal join restore limit must fit usize"))?;
             (|| -> datafusion::error::Result<()> {
-                use crate::state::{KeyedState, RocksPluginKeyedState};
-                let source = RocksPluginKeyedState::open(
+                use crate::state::KeyedState;
+                let target = unsafe { processor(target) }?;
+                super::checkpoint_reader::import(
                     std::path::Path::new(&plugin.to_string()),
                     std::path::Path::new(&checkpoint.to_string()),
                     non_negative(first, "first key group")?,
                     non_negative(last, "last key group")?,
                     limit,
-                )?;
-                let target = unsafe { processor(target) }?;
-                for group in first..=last {
-                    let group = non_negative(group, "key group")?;
-                    target.restore_key_group(
-                        group,
-                        &source.snapshot_key_group(group, &target.state_memory())?,
-                    )?;
-                }
-                Ok(())
+                    |group, source| {
+                        target.restore_key_group(
+                            group,
+                            &source.snapshot_key_group(group, &target.state_memory())?,
+                        )
+                    },
+                )
             })()
             .map_err(|error| throw(env, error))
         })

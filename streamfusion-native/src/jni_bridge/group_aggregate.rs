@@ -528,21 +528,18 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeGroupAggregateB
                 )
             })?;
             (|| -> datafusion::error::Result<()> {
-                use crate::state::RocksPluginKeyedState;
-                let source = RocksPluginKeyedState::open(
+                let target = unsafe { processor(target_handle) }?;
+                let owner = target.state_memory();
+                super::checkpoint_reader::import(
                     std::path::Path::new(&plugin_path),
                     std::path::Path::new(&checkpoint_path),
                     non_negative(first_key_group, "first key group")?,
                     non_negative(last_key_group, "last key group")?,
                     memory_limit,
-                )?;
-                let target = unsafe { processor(target_handle) }?;
-                let owner = target.state_memory();
-                for key_group in first_key_group..=last_key_group {
-                    let key_group = non_negative(key_group, "key group")?;
-                    target.restore_physical_key_group(key_group, &source, &owner)?;
-                }
-                Ok(())
+                    |key_group, source| {
+                        target.restore_physical_key_group(key_group, source, &owner)
+                    },
+                )
             })()
             .map_err(|error| throw(env, error))?;
             Ok(())

@@ -247,23 +247,21 @@ pub extern "system" fn Java_tech_streamfusion_nativebridge_NativeChangelogNormal
             let memory_limit = usize::try_from(memory_limit)
                 .map_err(|_| throw(env, "RocksDB restore memory limit must fit usize"))?;
             (|| -> datafusion::error::Result<()> {
-                use crate::state::{KeyedState, RocksPluginKeyedState};
-                let source = RocksPluginKeyedState::open(
+                use crate::state::KeyedState;
+                let target = unsafe { processor(target_handle) }?;
+                super::checkpoint_reader::import(
                     std::path::Path::new(&plugin_path.to_string()),
                     std::path::Path::new(&checkpoint_path.to_string()),
                     non_negative(first_key_group, "first key group")?,
                     non_negative(last_key_group, "last key group")?,
                     memory_limit,
-                )?;
-                let target = unsafe { processor(target_handle) }?;
-                for key_group in first_key_group..=last_key_group {
-                    let key_group = non_negative(key_group, "key group")?;
-                    target.restore_key_group(
-                        key_group,
-                        &source.snapshot_key_group(key_group, &target.state_memory())?,
-                    )?;
-                }
-                Ok(())
+                    |key_group, source| {
+                        target.restore_key_group(
+                            key_group,
+                            &source.snapshot_key_group(key_group, &target.state_memory())?,
+                        )
+                    },
+                )
             })()
             .map_err(|error| throw(env, error))
         })

@@ -277,7 +277,8 @@ fn physical_restore_reads_large_pending_state_in_pages_and_rebuilds_timer_marker
     let owner = HostMemoryReservation::new(broker.clone(), "bounded temporal restore");
     let mut caches = owner.sibling("source and target caches");
     caches.resize(2 << 20).unwrap();
-    let source = RocksPluginKeyedState::open(plugin, &checkpoint, 0, 0, 1 << 20).unwrap();
+    let source =
+        RocksPluginKeyedState::open_checkpoint(plugin, &checkpoint, 0, 0, 1 << 20).unwrap();
     let target =
         RocksPluginKeyedState::open(plugin, &directory.path().join("target"), 0, 0, 1 << 20)
             .unwrap();

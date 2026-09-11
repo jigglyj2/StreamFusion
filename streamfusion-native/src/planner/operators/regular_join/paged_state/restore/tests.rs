@@ -97,9 +97,14 @@ fn physical_join_restore_does_not_materialize_the_key_group_or_hot_key() {
     let checkpoint = directory.path().join("checkpoint");
     source.checkpoint(&checkpoint).unwrap();
     drop(source);
-    let source =
-        RocksPluginKeyedState::open(std::path::Path::new(&plugin), &checkpoint, 2, 3, 1 << 20)
-            .unwrap();
+    let source = RocksPluginKeyedState::open_checkpoint(
+        std::path::Path::new(&plugin),
+        &checkpoint,
+        2,
+        3,
+        1 << 20,
+    )
+    .unwrap();
     let mut destination = RocksPluginKeyedState::open(
         std::path::Path::new(&plugin),
         &directory.path().join("target"),

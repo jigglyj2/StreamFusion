@@ -272,8 +272,9 @@ A scan reply may carry optional Arrow schema metadata `streamfusion.state.scan.c
 `false` says pagination must continue. This avoids another component call and RocksDB iterator
 just to discover an empty final page. Absence retains legacy pagination until an empty result, so
 this metadata extension was compatible with earlier ABI-8 components without changing their
-function table. ABI 9 adds a separate admitted scan operation and requires matching core/component
-libraries; it rejects ABI-8 components at initialization. BinaryView column schemas and persisted
+function table. ABI 10 adds a read-only checkpoint opener alongside the ABI-9 admitted scan
+operation and requires matching core/component libraries; it rejects older components at
+initialization. BinaryView column schemas and persisted
 checkpoint encodings remain unchanged. The C Data bridge preserves this schema metadata;
 invalid completion values fail explicitly. Distinct partition ranges still have separate scans.
 
@@ -405,6 +406,13 @@ A JNI regression restores over 10 MiB of retained deduplication rows with a 4 Mi
 budget on a RocksDB destination, then checks every key and the restored update-before payload.
 The same checkpoint also restores to the in-memory backend with enough budget for retained state;
 RocksDB cache allowances remain separate from this working-memory measurement.
+
+All physical restore entry points now open existing checkpoints read-only through state-component
+ABI 10. Missing directories, missing CURRENT files, and corrupt/missing manifests fail restoration;
+restore must never create an empty database or repair a checkpoint. Ordinary new-task database
+creation keeps its existing behavior. Read-only readers retain the configured default column-family
+cache and memory ownership. Their small temporary cache remains covered by the restore-reader
+reservation, including restoration into an in-memory destination.
 
 These physical RocksDB imports use ABI-9 admitted scans.
 Each call selects at most 1,024 entries with a 256 KiB page target, admits payload and conversion

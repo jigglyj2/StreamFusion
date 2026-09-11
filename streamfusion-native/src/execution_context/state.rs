@@ -317,7 +317,7 @@ impl NativeExecutionContext {
                 memory_limit: reader_limit as u64,
                 log_directory,
             };
-            let source = RocksPluginKeyedState::open_configured(&reader, first, last, None)?;
+            let source = RocksPluginKeyedState::open_checkpoint_configured(&reader, first, last, None)?;
             for group in first..=last {
                 owner.restore_from_checkpoint(group, &source, &memory)?;
             }
