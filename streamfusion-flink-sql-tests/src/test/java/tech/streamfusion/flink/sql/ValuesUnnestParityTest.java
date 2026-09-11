@@ -15,7 +15,7 @@ import tech.streamfusion.flink.StreamFusionPlannerFactory;
 class ValuesUnnestParityTest extends SqlParityTestSupport {
     @Test
     void sourceFreeArrayConstructorUnnestUsesRetainedExpansion() throws Exception {
-        assertParity(
+        assertUnorderedInsertParity(
                 "SELECT item, ord_idx FROM UNNEST(ARRAY[1, CAST(NULL AS INT), 3]) "
                         + "WITH ORDINALITY AS expanded(item, ord_idx)",
                 true);
@@ -26,7 +26,7 @@ class ValuesUnnestParityTest extends SqlParityTestSupport {
 
     @Test
     void sourceFreeMapConstructorUnnestUsesRetainedExpansion() throws Exception {
-        assertParity(
+        assertUnorderedInsertParity(
                 "SELECT map_key, map_value, ord_idx "
                         + "FROM UNNEST(MAP['first', 1, 'nullable', CAST(NULL AS INT)]) "
                         + "WITH ORDINALITY AS expanded(map_key, map_value, ord_idx)",

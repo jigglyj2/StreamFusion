@@ -32,7 +32,7 @@ class SetOperationParityTest extends SqlParityTestSupport {
         for (String branch : branches) {
             // Distinct sources keep type coverage separate from shared-internal-node ownership.
             String other = branch.replace("2026-08-27", "2026-08-28");
-            assertParity("(" + branch + ") UNION ALL (" + other + ")", streaming);
+            assertUnorderedInsertParity("(" + branch + ") UNION ALL (" + other + ")", streaming);
             assertThat(StreamFusionPlanningDiagnostics.explain()).startsWith("Accelerated: yes");
             assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isPositive();
             assertThat(StreamFusionPlannerFactory.nativeUnionBatchCount()).isZero();
@@ -46,7 +46,7 @@ class SetOperationParityTest extends SqlParityTestSupport {
 
     @Test
     void streamingUnionAllWithNativeBranchesMatchesFlinkByteForByte() throws Exception {
-        assertParity(LEFT + " UNION ALL " + RIGHT, true);
+        assertUnorderedInsertParity(LEFT + " UNION ALL " + RIGHT, true);
         assertThat(StreamFusionPlanningDiagnostics.explain()).startsWith("Accelerated: yes");
         assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThanOrEqualTo(2);
         assertThat(StreamFusionPlannerFactory.nativeUnionBatchCount()).isZero();
@@ -83,7 +83,7 @@ class SetOperationParityTest extends SqlParityTestSupport {
 
     @Test
     void unionDistinctFallsBackUntilStateAdmission() throws Exception {
-        assertFallbackParity(LEFT + " UNION " + RIGHT, true);
+        assertUnorderedInsertFallbackParity(LEFT + " UNION " + RIGHT, true);
 
         SqlFallbackAssertions.nativeBatchesAreZero(StreamFusionPlannerFactory.nativeUnionBatchCount());
         SqlFallbackAssertions.nativeBatchesAreZero(StreamFusionPlannerFactory.nativeGroupAggregateBatchCount());
@@ -99,7 +99,7 @@ class SetOperationParityTest extends SqlParityTestSupport {
         assertThat(tableEnvironment.explainSql(LEFT + " UNION " + RIGHT))
                 .contains("== StreamFusion Acceleration ==")
                 .contains("Accelerated: no")
-                .contains("native persistent state is temporarily disabled")
+                .contains("architecture: aggregate persistent admission: SELECT DISTINCT")
                 .doesNotContain("StreamFusionGroupAggregate", "StreamFusionUnionAll");
     }
 }

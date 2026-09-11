@@ -60,10 +60,10 @@ class StringTrimParityTest extends SqlParityTestSupport {
         // LTRIM/RTRIM/BTRIM retain distinct branches. Runtime arguments below cover all six natively.
         String sql = "SELECT " + expression + " FROM " + DYNAMIC_INPUT;
         if (expression.startsWith("TRIM(")) {
-            assertFallbackParity(sql, true);
+            assertUnorderedInsertFallbackParity(sql, true);
             SqlFallbackAssertions.nativeBatchesAreZero(StreamFusionPlannerFactory.nativePlanBatchCount());
         } else {
-            assertParity(sql, true);
+            assertUnorderedInsertParity(sql, true);
             SqlArchitectureAssertions.nativeBatchesAtLeast(StreamFusionPlannerFactory.nativePlanBatchCount(), 1);
         }
     }

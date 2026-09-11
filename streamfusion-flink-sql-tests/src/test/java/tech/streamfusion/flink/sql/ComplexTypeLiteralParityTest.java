@@ -29,7 +29,7 @@ class ComplexTypeLiteralParityTest extends SqlParityTestSupport {
     void nativeComplexTypedNullsMatchFlinkByteForByte(String ignoredName, String type) throws Exception {
         String sql = "SELECT CAST(NULL AS " + type + ") FROM (VALUES (1), (2)) AS input(id) WHERE id >= 1";
 
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
     }
@@ -39,7 +39,7 @@ class ComplexTypeLiteralParityTest extends SqlParityTestSupport {
     void boundedNativeComplexTypedNullsMatchFlinkByteForByte(String ignoredName, String type) throws Exception {
         String sql = "SELECT CAST(NULL AS " + type + ") " + "FROM (VALUES (1), (2)) AS input(id) WHERE id >= 1";
 
-        assertParity(sql, false);
+        assertUnorderedInsertParity(sql, false);
 
         assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isGreaterThan(0);
         assertThat(StreamFusionPlannerFactory.nativeValuesBatchCount()).isGreaterThan(0);

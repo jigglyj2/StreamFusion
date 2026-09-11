@@ -21,7 +21,7 @@ class TypeOfParityTest extends SqlParityTestSupport {
     @ParameterizedTest
     @MethodSource("queries")
     void specializedTypeNamesMatchFlinkByteForByte(String sql) throws Exception {
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         assertThat(StreamFusionPlannerFactory.nativePlanBatchCount())
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())

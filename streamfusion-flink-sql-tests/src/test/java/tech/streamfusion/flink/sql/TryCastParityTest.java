@@ -21,7 +21,7 @@ class TryCastParityTest extends SqlParityTestSupport {
     @ParameterizedTest
     @MethodSource("queries")
     void infallibleIntegerConversionsMatchFlinkByteForByte(String sql) throws Exception {
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         assertThat(StreamFusionPlannerFactory.nativePlanBatchCount())
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())

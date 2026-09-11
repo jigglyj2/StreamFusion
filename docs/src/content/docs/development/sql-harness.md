@@ -36,3 +36,9 @@ dev/integration/run-flink-sql-suite.sh /path/to/flink
 - Preserve exact byte-level output parity when data crosses external connectors.
 - Exercise normal Flink fallback for unsupported accelerated operators.
 - Do not use textual plan equality as a substitute for output correctness.
+
+SQL fixtures without an output ordering contract explicitly compare unordered INSERT relations.
+They reject updating records in that mode. Parallel or mini-batched keyed fixtures may compare
+independent keys in canonical key order while preserving every key's complete changelog sequence;
+they declare the key fields explicitly. Global sorting and single-key update-order tests keep ordered
+capture. These choices affect test interleaving only and do not canonicalize floating-point values.

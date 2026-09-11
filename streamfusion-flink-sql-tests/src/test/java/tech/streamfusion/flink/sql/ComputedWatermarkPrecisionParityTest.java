@@ -51,7 +51,7 @@ class ComputedWatermarkPrecisionParityTest extends SqlParityTestSupport {
             if (precision == 3) assertThat(explain).contains("Accelerated: yes");
             else assertThat(explain).contains("Accelerated: no", "timestamp precision conversion is not supported");
         }
-        byte[] result = collect(tables.executeSql(SQL));
+        byte[] result = collectUnorderedInserts(tables.executeSql(SQL));
         if (accelerated && precision == 3)
             assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isPositive();
         else assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isZero();

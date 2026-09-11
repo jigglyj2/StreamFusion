@@ -49,7 +49,7 @@ class GroupingSetsFallbackParityTest extends SqlParityTestSupport {
         assertThat(tableEnvironment.explainSql(sql))
                 .contains("== StreamFusion Acceleration ==")
                 .contains("Accelerated: no")
-                .contains("native persistent state is temporarily disabled")
+                .contains("architecture: aggregate persistent admission:")
                 .doesNotContain("StreamFusionExpand", "StreamFusionGroupAggregate");
     }
 

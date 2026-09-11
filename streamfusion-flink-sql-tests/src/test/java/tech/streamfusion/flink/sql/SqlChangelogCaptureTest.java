@@ -16,6 +16,25 @@ class SqlChangelogCaptureTest {
             DataTypes.ROW(DataTypes.FIELD("a", DataTypes.STRING()), DataTypes.FIELD("b", DataTypes.STRING()));
 
     @Test
+    void keyedCaptureIgnoresIndependentInterleavingButKeepsUpdateOrderAndDuplicates() throws Exception {
+        Row a = Row.ofKind(RowKind.INSERT, "a", "old");
+        Row b = Row.ofKind(RowKind.INSERT, "b", "other");
+        Row before = Row.ofKind(RowKind.UPDATE_BEFORE, "a", "old");
+        Row after = Row.ofKind(RowKind.UPDATE_AFTER, "a", "new");
+        byte[] expected = SqlKeyedChangelogCapture.encode(
+                STRINGS, List.of(a, b, before, after).iterator(), new int[] {0});
+        assertThat(SqlKeyedChangelogCapture.encode(
+                        STRINGS, List.of(b, a, before, after).iterator(), new int[] {0}))
+                .isEqualTo(expected);
+        assertThat(SqlKeyedChangelogCapture.encode(
+                        STRINGS, List.of(b, a, after, before).iterator(), new int[] {0}))
+                .isNotEqualTo(expected);
+        assertThat(SqlKeyedChangelogCapture.encode(
+                        STRINGS, List.of(a, a, b, before, after).iterator(), new int[] {0}))
+                .isNotEqualTo(expected);
+    }
+
+    @Test
     void distinguishesNullAndStringAndFieldBoundariesThatShareDisplayText() throws Exception {
         assertThat(encode(Row.of(null, "x"))).isNotEqualTo(encode(Row.of("null", "x")));
         assertThat(encode(Row.of("a, b", "c"))).isNotEqualTo(encode(Row.of("a", "b, c")));

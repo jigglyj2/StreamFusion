@@ -91,7 +91,7 @@ final class SelectedWindowSqlFixture {
         tables.createTemporaryView(
                 "window_input", input, schema.watermark("ts", "ts").build());
         try {
-            return SqlParityTestSupport.collect(tables.executeSql(sql));
+            return SqlParityTestSupport.collectUnorderedInserts(tables.executeSql(sql));
         } finally {
             System.clearProperty(StreamFusionPlannerFactory.EXEC_GRAPH_PROCESSOR_PROPERTY);
         }

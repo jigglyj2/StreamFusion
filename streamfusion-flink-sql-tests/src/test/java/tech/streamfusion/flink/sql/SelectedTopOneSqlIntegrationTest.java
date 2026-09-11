@@ -86,6 +86,6 @@ class SelectedTopOneSqlIntegrationTest extends SqlParityTestSupport {
                 + " FROM (SELECT *,ROW_NUMBER() OVER (PARTITION BY k ORDER BY score " + (seed == 3 ? "ASC" : "DESC")
                 + " NULLS LAST,ts ASC NULLS FIRST) rn FROM top_one_input) WHERE rn<=1";
         if (selected) assertThat(tables.explainSql(sql)).contains("Accelerated: yes", "StreamFusionRank");
-        return collect(tables.executeSql(sql));
+        return collectByKey(tables.executeSql(sql), 0);
     }
 }

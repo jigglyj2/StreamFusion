@@ -87,6 +87,11 @@ abstract class SqlParityTestSupport {
         SqlFallbackAssertions.admission();
     }
 
+    protected static void assertUnorderedInsertFallbackParity(String sql, boolean streaming) throws Exception {
+        assertUnorderedInsertParity(sql, streaming, false);
+        SqlFallbackAssertions.admission();
+    }
+
     protected static void assertFallbackBatchDataStreamParity(
             String sql, TypeInformation<?> type, DataType logicalType, List<Row> rows, String tableName)
             throws Exception {
@@ -285,6 +290,16 @@ abstract class SqlParityTestSupport {
 
     protected static byte[] collect(TableResult result) throws Exception {
         return collect(result, SqlChangelogCapture.Order.CHANGELOG);
+    }
+
+    protected static byte[] collectUnorderedInserts(TableResult result) throws Exception {
+        return collect(result, SqlChangelogCapture.Order.UNORDERED_INSERTS);
+    }
+
+    protected static byte[] collectByKey(TableResult result, int... keyFields) throws Exception {
+        try (CloseableIterator<Row> rows = result.collect()) {
+            return SqlKeyedChangelogCapture.encode(result.getResolvedSchema().toPhysicalRowDataType(), rows, keyFields);
+        }
     }
 
     private static byte[] collect(TableResult result, SqlChangelogCapture.Order order) throws Exception {

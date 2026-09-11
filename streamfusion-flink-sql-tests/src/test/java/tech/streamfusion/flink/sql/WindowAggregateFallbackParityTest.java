@@ -26,12 +26,13 @@ import tech.streamfusion.flink.StreamFusionPlannerFactory;
 
 class WindowAggregateFallbackParityTest extends SqlParityTestSupport {
     @org.junit.jupiter.api.Test
-    void processingTimeTumbleReportsTemporaryStateAdmissionFallback() {
+    void processingTimeTumbleReportsUnverifiedTimeZoneFallback() {
         System.setProperty(
                 StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY, StreamFusionPlannerFactory.class.getName());
         StreamTableEnvironment tables = StreamTableEnvironment.create(
                 StreamExecutionEnvironment.getExecutionEnvironment(),
                 EnvironmentSettings.newInstance().inStreamingMode().build());
+        tables.getConfig().setLocalTimeZone(java.time.ZoneId.of("America/New_York"));
         tables.executeSql("CREATE TABLE proc_window_input (category STRING, amount BIGINT, "
                 + "pt AS PROCTIME()) WITH ('connector'='datagen', 'number-of-rows'='1')");
 
@@ -40,7 +41,7 @@ class WindowAggregateFallbackParityTest extends SqlParityTestSupport {
                 + "GROUP BY category, window_start, window_end");
 
         assertThat(plan)
-                .contains("Accelerated: no", "architecture: native persistent state")
+                .contains("Accelerated: no", "processing-time window: non-UTC window assignment")
                 .doesNotContain("StreamFusionWindowAggregate");
         SqlFallbackAssertions.admission();
     }

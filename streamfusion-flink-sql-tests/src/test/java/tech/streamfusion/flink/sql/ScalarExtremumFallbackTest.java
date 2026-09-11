@@ -18,7 +18,7 @@ import tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics;
 class ScalarExtremumFallbackTest extends SqlParityTestSupport {
     @Test
     void floatingExtremumFallsBackWithSemanticReason() throws Exception {
-        assertParity(
+        assertUnorderedInsertParity(
                 "SELECT GREATEST(a / z, b / z), LEAST(a / z, b / z) FROM "
                         + "(VALUES (CAST(0 AS DOUBLE), CAST(1 AS DOUBLE), CAST(0 AS DOUBLE)), "
                         + "(CAST(-1 AS DOUBLE), CAST(0 AS DOUBLE), CAST(0 AS DOUBLE))) input(a, b, z)",

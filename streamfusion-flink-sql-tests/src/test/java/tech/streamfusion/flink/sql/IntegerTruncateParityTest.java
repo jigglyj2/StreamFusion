@@ -28,7 +28,7 @@ class IntegerTruncateParityTest extends SqlParityTestSupport {
     @ParameterizedTest
     @MethodSource("queries")
     void integerWidthsAndDynamicScalesMatchFlinkByteForByte(String sql) throws Exception {
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         assertThat(StreamFusionPlannerFactory.nativePlanBatchCount())
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())

@@ -21,7 +21,7 @@ class InetNtoaParityTest extends SqlParityTestSupport {
     @ParameterizedTest
     @MethodSource("queries")
     void numericIpv4FormattingMatchesFlinkByteForByte(String sql) throws Exception {
-        assertParity(sql, true);
+        assertUnorderedInsertParity(sql, true);
 
         assertThat(StreamFusionPlannerFactory.nativePlanBatchCount())
                 .withFailMessage(StreamFusionPlanningDiagnostics.explain())
