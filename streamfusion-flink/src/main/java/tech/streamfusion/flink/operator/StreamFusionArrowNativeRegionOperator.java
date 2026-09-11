@@ -49,6 +49,7 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
     private StreamFusionNativeMetricTree metricTree;
     private NativeRegionControlScheduler controls;
     private NativeRegionProcessingTimeScheduler processingTimers;
+    private boolean closed;
 
     StreamFusionArrowNativeRegionOperator(
             StreamOperatorParameters<ArrowRowDataBatch> parameters,
@@ -347,6 +348,9 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
 
     @Override
     public void finish() throws Exception {
+        // Cancellation may close the region before the enclosing Flink harness/task finishes.
+        // Its native resources and pending timers have already been released.
+        if (closed) return;
         controls.finish();
         processingTimers.close();
         java.util.Arrays.fill(ended, true);
@@ -405,6 +409,8 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
 
     @Override
     public void close() throws Exception {
+        if (closed) return;
+        closed = true;
         try {
             org.apache.flink.util.IOUtils.closeAll(
                     processingTimers, dispatcher, metricTree, stateLifecycle == null ? memory : stateLifecycle);
