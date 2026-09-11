@@ -30,6 +30,14 @@ To reproduce the upstream portion after installing StreamFusion artifacts and ap
 dev/integration/run-flink-sql-suite.sh /path/to/flink
 ```
 
+The downstream compatibility patch changes only the upstream test classpath and test helpers.
+Flink's helpers sometimes cast the installed planner directly to `PlannerBase`; StreamFusion
+installs a `Planner` facade. A test-only accessor unwraps that facade for relational-plan and
+execution-environment inspection. `TestingTableEnvironment` retains the facade as its actual
+planner, and translation still goes through StreamFusion, including native-state setup and
+whole-plan admission. This adaptation does not change Flink's operator implementations or SQL
+assertions, and it is not part of a production Flink dependency build.
+
 ## Correctness policy
 
 - Compare complete result sets, including changelog behavior where applicable.
