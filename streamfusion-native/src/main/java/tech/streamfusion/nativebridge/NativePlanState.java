@@ -4,6 +4,9 @@
  */
 package tech.streamfusion.nativebridge;
 
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Objects;
 
@@ -23,6 +26,19 @@ public final class NativePlanState {
     public void restore(long planNodeId, int keyGroup, byte[] canonicalState) {
         validate(planNodeId, keyGroup);
         restore(context.handle(), planNodeId, keyGroup, Objects.requireNonNull(canonicalState));
+    }
+
+    /** Writes the existing length-framed canonical state using bounded JVM transport buffers. */
+    public long writeSnapshot(long planNodeId, int keyGroup, DataOutputStream output) throws IOException {
+        validate(planNodeId, keyGroup);
+        return writeSnapshot(context.handle(), planNodeId, keyGroup, Objects.requireNonNull(output));
+    }
+
+    /** Reads one canonical payload without allocating a second key-group-sized Java array. */
+    public void restore(long planNodeId, int keyGroup, DataInputStream input, int length) throws IOException {
+        validate(planNodeId, keyGroup);
+        if (length < 0) throw new IOException("Invalid native snapshot length " + length);
+        restoreStream(context.handle(), planNodeId, keyGroup, Objects.requireNonNull(input), length);
     }
 
     public void checkpoint(long planNodeId, Path directory) {
@@ -57,11 +73,19 @@ public final class NativePlanState {
                 readerMemoryLimit);
     }
 
+    static native int streamEdgeVersion();
+
     static native long create(byte[] plan, byte[] bindings, NativeMemoryManager manager, long limit);
 
     private static native byte[] snapshot(long handle, long planNodeId, int keyGroup);
 
     private static native void restore(long handle, long planNodeId, int keyGroup, byte[] canonicalState);
+
+    private static native long writeSnapshot(long handle, long planNodeId, int keyGroup, DataOutputStream output)
+            throws IOException;
+
+    private static native void restoreStream(
+            long handle, long planNodeId, int keyGroup, DataInputStream input, int length) throws IOException;
 
     private static native void checkpoint(long handle, long planNodeId, String directory);
 

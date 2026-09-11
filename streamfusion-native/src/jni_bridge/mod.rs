@@ -28,6 +28,7 @@ mod plan_exchange;
 mod plan_gauges;
 mod plan_processing_time;
 mod plan_state;
+mod plan_state_stream;
 mod plan_stream;
 mod region;
 mod region_exchange;

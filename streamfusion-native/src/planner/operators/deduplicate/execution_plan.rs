@@ -31,6 +31,22 @@ impl PersistentOperatorFactory for DeduplicateFactory {
             .map_err(|_| poisoned())?
             .restore_key_group(key_group, bytes)
     }
+    fn restore_from_checkpoint(
+        &self,
+        group: u32,
+        source: &crate::state::RocksPluginKeyedState,
+        owner: &HostMemoryReservation,
+    ) -> Result<()> {
+        let mut processor = self.0.lock().map_err(|_| poisoned())?;
+        processor.require_idle()?;
+        crate::state::import_key_group(
+            processor.state.as_mut(),
+            source,
+            group,
+            owner,
+            &mut |_, _| Ok(()),
+        )
+    }
     fn checkpoint(&self, directory: &std::path::Path) -> Result<()> {
         self.0.lock().map_err(|_| poisoned())?.checkpoint(directory)
     }

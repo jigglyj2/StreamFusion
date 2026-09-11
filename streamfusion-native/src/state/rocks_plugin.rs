@@ -353,19 +353,7 @@ impl KeyedState for RocksPluginKeyedState {
         bytes: &[u8],
         owner: &HostMemoryReservation,
     ) -> Result<()> {
-        let count = streamfusion_state_abi::validate_key_group_snapshot(key_group, bytes)
-            .map_err(|error| DataFusionError::Execution(error.to_string()))?;
-        let mut reservation = owner.sibling("canonical RocksDB restore workspace");
-        reservation.resize(
-            bytes
-                .len()
-                .saturating_mul(4)
-                .saturating_add(count.saturating_mul(128))
-                .saturating_add(4096),
-        )?;
-        let input = key_group_batch(key_group, Some(bytes))?;
-        self.invoke(self.api.restore_key_group, input)?;
-        Ok(())
+        super::canonical_restore::restore(self, key_group, bytes, owner)
     }
 
     fn checkpoint(&self, directory: &Path) -> Result<()> {

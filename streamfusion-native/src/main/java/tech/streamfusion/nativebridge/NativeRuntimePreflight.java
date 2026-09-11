@@ -22,7 +22,8 @@ public final class NativeRuntimePreflight {
                 || NativeExecutionContext.nativeControlEdgeVersion() != 2
                 || NativeExecutionContext.nativeGaugeEdgeVersion() != 1
                 || NativeExecutionContext.invocationSnapshotEdgeVersion() != 1
-                || NativeExchangeRouter.edgeVersion() != 1) {
+                || NativeExchangeRouter.edgeVersion() != 1
+                || NativePlanState.streamEdgeVersion() != 1) {
             throw new IllegalStateException("Unsupported native plan Arrow stream edge version");
         }
     }

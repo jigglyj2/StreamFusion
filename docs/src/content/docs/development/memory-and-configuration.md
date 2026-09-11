@@ -52,6 +52,16 @@ input needs no gathered payload. Partial selections reserve gather space from th
 logical buffer spans, avoiding multiplication of a shared IPC allocation by the schema width.
 Operations that expand output, such as `REPEAT`, must reserve their large output before allocation.
 
+Raw keyed checkpoints transfer canonical bytes through a 64 KiB JVM buffer directly to or from
+Flink's checkpoint streams. The existing length-framed format remains compatible with older
+savepoints. Both native payloads and transport buffers use the task budget; I/O failures release
+the buffers and leave Flink responsible for checkpoint failure and cleanup. Canonical decoding
+still materializes one native key-group payload, so this removes the duplicate whole-key-group
+Java allocation without claiming bounded native snapshot memory. Canonical restore on memory, ordered-memory, and RocksDB backends now borrows entries from that
+input and writes bounded pages, avoiding whole-key-group decode vectors and RocksDB write batches.
+A single large entry is separately admitted before its write. Physical RocksDB restore for
+paged joins, aggregates, deduplication, and Top-N imports bounded entry pages.
+
 ## Flink budgets and settings
 
 The TaskManager's `taskmanager.memory.managed.size` or

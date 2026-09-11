@@ -1,6 +1,7 @@
 // Copyright 2026 StreamFusion Authors
 // Licensed under the Apache License, Version 2.0
 
+mod canonical_restore;
 mod checkpoint_import;
 pub(crate) use checkpoint_import::import_key_group;
 mod memory;

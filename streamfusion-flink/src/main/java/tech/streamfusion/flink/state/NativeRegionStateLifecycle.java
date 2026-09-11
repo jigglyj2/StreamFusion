@@ -171,7 +171,7 @@ public final class NativeRegionStateLifecycle implements AutoCloseable {
             // Flink owns staged checkpoint cleanup after asynchronous upload. Keep those files
             // outside the live database directory that this lifecycle deletes on close.
             participant = new NativeRegionStateParticipant(
-                    memory.executionContext().state(), stateIds, range, directory.getParent(), manager);
+                    memory.executionContext().state(), stateIds, range, directory.getParent());
             if (backend != null) backend.registerNativeStateParticipant(participant, rocks);
             participant.restoreRawState(initialization);
         } catch (Exception | Error failure) {

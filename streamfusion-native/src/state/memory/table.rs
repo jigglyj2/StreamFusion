@@ -93,6 +93,7 @@ impl KeyGroupMap {
     pub(super) fn len(&self) -> usize {
         self.shards.iter().map(|shard| shard.table.len()).sum()
     }
+    #[cfg(test)]
     pub(super) fn is_empty(&self) -> bool {
         self.shards.iter().all(|shard| shard.table.is_empty())
     }
@@ -163,17 +164,7 @@ impl KeyGroupMap {
         self.shards.iter().flat_map(|shard| shard.table.iter())
     }
 
-    pub(super) fn extend(
-        &mut self,
-        entries: impl Iterator<Item = (Vec<u8>, Vec<u8>)>,
-    ) -> Result<()> {
-        for (key, value) in entries {
-            let index = self.shard_index(&key);
-            self.reserve_shard(index, 1)?;
-            self.insert(key, value);
-        }
-        Ok(())
-    }
+
 }
 
 #[cfg(test)]

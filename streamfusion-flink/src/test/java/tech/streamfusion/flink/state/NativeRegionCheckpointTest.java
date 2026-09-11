@@ -58,6 +58,46 @@ class NativeRegionCheckpointTest {
     private static final List<Long> IDS = List.of(2L, 3L);
 
     @Test
+    void canonicalStreamTransfersBoundedChunksAndReleasesBuffersOnIoFailure(@TempDir Path directory) throws Exception {
+        try (var oracle = flink();
+                var source = new Region(false, ALL, directory.resolve("source"));
+                var target = new Region(true, ALL, directory.resolve("target"))) {
+            var input = new ArrayList<GenericRowData>();
+            for (long key = 0; key < 60_000; key++) input.add(GenericRowData.of(key, StringData.fromString("payload")));
+            compare(source, oracle, input);
+            byte[] expected = source.context.state().snapshot(2, 0);
+            assertThat(expected.length).isGreaterThan(64 << 10);
+            var bytes = new java.io.ByteArrayOutputStream();
+            var output = new java.io.DataOutputStream(new java.io.FilterOutputStream(bytes) {
+                @Override
+                public void write(byte[] value, int offset, int length) throws java.io.IOException {
+                    assertThat(length).isLessThanOrEqualTo(64 << 10);
+                    out.write(value, offset, length);
+                }
+            });
+            long available = source.memory.available();
+            assertThat(source.context.state().writeSnapshot(2, 0, output)).isEqualTo(4L + expected.length);
+            assertThat(source.memory.available()).isEqualTo(available);
+            var stream = new java.io.DataInputStream(new java.io.ByteArrayInputStream(bytes.toByteArray()));
+            int length = stream.readInt();
+            target.context.state().restore(2, 0, stream, length);
+            assertThat(target.context.state().snapshot(2, 0)).isEqualTo(expected);
+            assertThat(stream.read()).isEqualTo(-1);
+            var failed = new java.io.DataOutputStream(new java.io.OutputStream() {
+                @Override
+                public void write(int value) throws java.io.IOException {
+                    throw new java.io.IOException("injected checkpoint write failure");
+                }
+            });
+            assertThatThrownBy(() -> source.context.state().writeSnapshot(2, 0, failed))
+                    .isInstanceOf(java.io.IOException.class)
+                    .hasMessageContaining("injected checkpoint write failure");
+            assertThat(source.memory.available()).isEqualTo(available);
+            assertThat(source.context.state().snapshot(2, 0)).isEqualTo(expected);
+        }
+    }
+
+    @Test
     void malformedRawFramesCannotAllocateUnboundedBuffersOrLeakRestoreReservations(@TempDir Path directory)
             throws Exception {
         try (var region = new Region(false, ALL, directory)) {
@@ -357,7 +397,7 @@ class NativeRegionCheckpointTest {
                             : NativeStateResources.memory(id, GROUPS, range.getStartKeyGroup(), range.getEndKeyGroup()))
                     .collect(java.util.stream.Collectors.toList());
             context = new NativeExecutionContext(plan, memory, NativeStateResources.serialize(bindings));
-            participant = new NativeRegionStateParticipant(context.state(), IDS, range, directory, memory);
+            participant = new NativeRegionStateParticipant(context.state(), IDS, range, directory);
             edge = new ArrowNativePlanBridge(context, TYPE, allocator);
         }
 

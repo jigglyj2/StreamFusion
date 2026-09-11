@@ -120,6 +120,25 @@ impl PersistentOperatorFactory for TopNFactory {
         processor.invocation.require_idle("Top-N restore")?;
         processor.restore_key_group(group, bytes)
     }
+    fn restore_from_checkpoint(
+        &self,
+        group: u32,
+        source: &crate::state::RocksPluginKeyedState,
+        owner: &HostMemoryReservation,
+    ) -> Result<()> {
+        let mut processor = self.0.lock().map_err(|_| poisoned())?;
+        processor.invocation.require_idle("Top-N restore")?;
+        processor.saturated_append_limit = false;
+        processor.bounded_output = None;
+        processor.bounded_drained = false;
+        crate::state::import_key_group(
+            processor.state.as_mut(),
+            source,
+            group,
+            owner,
+            &mut |_, _| Ok(()),
+        )
+    }
     fn checkpoint(&self, directory: &std::path::Path) -> Result<()> {
         let processor = self.0.lock().map_err(|_| poisoned())?;
         processor.invocation.require_idle("Top-N checkpoint")?;

@@ -242,35 +242,7 @@ impl KeyedState for OrderedMemoryKeyedState {
         bytes: &[u8],
         owner: &HostMemoryReservation,
     ) -> Result<()> {
-        let index = self.index(group)?;
-        if !self.groups[index].is_empty() {
-            return Err(DataFusionError::Execution(format!(
-                "key group {group} was restored more than once"
-            )));
-        }
-        let count = streamfusion_state_abi::validate_key_group_snapshot(group, bytes)
-            .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-        let mut scratch = owner.sibling("ordered state restore");
-        scratch.resize(
-            bytes
-                .len()
-                .saturating_mul(2)
-                .saturating_add(count.saturating_mul(128)),
-        )?;
-        let entries = streamfusion_state_abi::decode_key_group_snapshot(group, bytes)
-            .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-        self.write_batch(
-            entries
-                .into_iter()
-                .map(|(key, value)| StateMutation {
-                    key: super::StateKey {
-                        key_group: group,
-                        key,
-                    },
-                    value: Some(value),
-                })
-                .collect(),
-        )
+        super::canonical_restore::restore(self, group, bytes, owner)
     }
 }
 
