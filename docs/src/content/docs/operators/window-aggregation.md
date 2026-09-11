@@ -362,7 +362,14 @@ Shared slicing windows import physical RocksDB checkpoints in bounded pages and 
 accumulators individually, avoiding a whole-key-group decoding copy. Shared slicing and session
 windows stream canonical snapshot output directly from state. Processing-time snapshots still
 require Flink's pre-checkpoint buffer flush. Large timer sets and individual accumulator values
-remain subject to admission. Current session checkpoints also import in pages and validate
+remain subject to admission. Shared session, event-time slice, and processing-time window
+checkpoints persist timer and plan-marker records through one bounded writer before taking the
+backend snapshot. They no longer encode all key groups' timers into a single mutation collection.
+Timer bytes and checkpoint ordering are unchanged; a failed control-record flush aborts that
+checkpoint and a retry refreshes every group from the live timer service. The checkpoint regression
+uses more than 8 MiB of serialized timers across 128 key groups with only 2 MiB of additional
+managed capacity on RocksDB, and checks exact timer bytes, memory release and write-failure retry.
+Current session checkpoints also import in pages and validate
 consecutive ordered intervals without retaining a second complete interval index. Older unordered
 canonical frames sort borrowed references.
 

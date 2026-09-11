@@ -8,6 +8,7 @@ mod partial;
 mod planning;
 mod session_batch;
 mod session_changes;
+mod shared_checkpoint;
 pub(crate) mod shared_execution;
 mod shared_kernel;
 mod shared_processing;

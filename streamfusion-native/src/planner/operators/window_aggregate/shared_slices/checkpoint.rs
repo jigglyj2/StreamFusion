@@ -17,33 +17,8 @@ impl SharedSlices {
     }
 
     fn flush_timers(&mut self, groups: std::ops::RangeInclusive<u32>) -> Result<()> {
-        let bytes = groups.clone().try_fold(0usize, |bytes, group| {
-            Ok::<_, DataFusionError>(
-                bytes
-                    .saturating_add(self.kernel.timers.snapshot_size(group)?)
-                    .saturating_add(512),
-            )
-        })?;
-        self.admit(bytes.saturating_mul(2))?;
-        let mut mutations = Vec::new();
-        for group in groups {
-            mutations.push(StateMutation {
-                key: StateKey {
-                    key_group: group,
-                    key: TIMER_STATE_KEY.to_vec(),
-                },
-                value: Some(self.kernel.timers.snapshot_key_group(group)?),
-            });
-            mutations.push(StateMutation {
-                key: StateKey {
-                    key_group: group,
-                    key: MARKER_KEY.to_vec(),
-                },
-                value: Some(self.marker()),
-            });
-        }
-        self.kernel.state.write_batch(mutations)?;
-        Ok(())
+        let marker = self.marker();
+        super::super::shared_checkpoint::flush_timers(&mut self.kernel, groups, MARKER_KEY, &marker)
     }
 
     pub(super) fn snapshot(&mut self, group: u32) -> Result<crate::state::SnapshotBytes> {
