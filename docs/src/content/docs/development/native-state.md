@@ -65,7 +65,7 @@ unrelated binding extensions. Remove it once upstream bindings provide the equiv
 Default log relocation is now resolved in the TaskManager JVM using Flink's `log.file`
 property, readable-file checks and database-path length limit. Tests compare this resolution
 with Flink's actual `RocksDBResourceContainer`. The resolved path crosses state-binding protocol
-2; legacy bindings without relocation still use protocol 1. The current state-component ABI is 9,
+2; legacy bindings without relocation still use protocol 1. The current state-component ABI is 10,
 and both native libraries must implement it. Closing a database removes only its current and rotated log
 files after RocksDB closes its logger. Unlike Flink's broad prefix cleanup, neighboring database
 names are preserved; this narrows cleanup ownership without changing execution or checkpoint
@@ -255,7 +255,8 @@ Keys are prefixed or partitioned by the key group computed with StreamFusion's F
 Rust key-group logic. This makes key-group ownership independent of the backend and lets Flink's
 normal redistribution assign intersections during rescaling.
 
-State component ABI version 8 transports read results and owned mutation keys/values as Arrow
+The current state component retains the transport introduced in ABI version 8: read results and
+owned mutation keys/values cross the component boundary as Arrow
 `BinaryView` arrays. Large payloads retain producer-owned buffers across the C Data boundary;
 the runtime does not concatenate mutations or copy every returned value into a second byte
 vector. Inline values use Arrow's standard short-value representation. Runtime and plugin ABI

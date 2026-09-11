@@ -115,8 +115,10 @@ terminal callbacks are tested through Flink's operator wrapper and network task 
 Control requests address stable stage IDs for watermarks, pre-checkpoint flush, and end-of-input.
 Ordinary invocation EOF does not substitute for a control event. Unknown stages, invalid bindings,
 and unsupported protocol versions fail closed. Plan protocol 3, control-edge API 2, and gauge-edge
-API 1 are required; the state plugin ABI is version 8, including the Flink resource-scope identity, bounded ordered
-ranges and task-resolved RocksDB log directory.
+API 1 are required. Production state bindings use protocol 4 to carry Flink spill directories,
+and canonical state streaming uses edge version 2. The state plugin ABI is version 10, including
+Flink resource-scope identity, admitted ordered scans, task-resolved RocksDB log directories,
+and a read-only checkpoint opener. Core and state-component ABI versions must match.
 
 ## Evidence and next milestone
 
