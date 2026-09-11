@@ -28,6 +28,15 @@ Unlisted large expression workspaces still need admission coverage. Bounded buff
 do not require separate reservations. See
 [memory accounting](/StreamFusion/development/memory-and-configuration/) for the exact scope.
 
+Interval literals and typed nulls materialized by Calc or VALUES use Flink's physical integer
+months or long milliseconds. This keeps the native Arrow output compatible with the RowData view
+and subsequent native stages; DataFusion temporal interval values remain internal to supported
+date/time arithmetic. Identity projections of interval columns still forward their existing
+buffers. Computed interval outputs, including newly constructed containers holding intervals,
+currently trigger whole-plan fallback with an explicit months/milliseconds storage reason.
+Generated parity covers negative literals, week/quarter normalization, typed nulls, streaming and
+bounded execution, and the unsupported computed-output fallback.
+
 Timezone-free millisecond timestamp addition/subtraction with a literal day-time interval uses
 DataFusion wrapping `BIGINT` arithmetic between zero-copy Arrow timestamp casts. This matches
 Flink's internal signed-long millisecond behavior across negative epochs and overflow; it avoids

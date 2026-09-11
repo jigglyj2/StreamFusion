@@ -31,7 +31,7 @@ public final class StreamFusionCalcTranslator extends StreamFusionExpressionTran
     /** Reuses Calc's parity-checked expression contract for another native physical operator. */
     public static Expression operatorExpression(
             Object expression, RowType inputType, org.apache.flink.table.types.logical.LogicalType expectedType) {
-        return projectionExpression(expression, inputType, expectedType);
+        return StreamFusionIntervalProjection.materialize(expression, inputType, expectedType);
     }
 
     /** Reuses Calc's nullable-boolean/SQL-UNKNOWN contract for an operator predicate. */
@@ -123,7 +123,7 @@ public final class StreamFusionCalcTranslator extends StreamFusionExpressionTran
             }
             List<Expression> nativeProjections = new ArrayList<>(stageProjections.size());
             for (int outputIndex = 0; outputIndex < stageProjections.size(); outputIndex++) {
-                nativeProjections.add(projectionExpression(
+                nativeProjections.add(StreamFusionIntervalProjection.materialize(
                         stageProjections.get(outputIndex), stageInputType, stageOutputType.getTypeAt(outputIndex)));
             }
             nativeProjectionStages.add(nativeProjections);
@@ -174,7 +174,7 @@ public final class StreamFusionCalcTranslator extends StreamFusionExpressionTran
             }
             List<Expression> expressions = new ArrayList<>(projections.size());
             for (int outputIndex = 0; outputIndex < projections.size(); outputIndex++) {
-                expressions.add(projectionExpression(
+                expressions.add(StreamFusionIntervalProjection.materialize(
                         projections.get(outputIndex), inputType, outputType.getTypeAt(outputIndex)));
             }
             nativeProjections.add(expressions);
@@ -241,7 +241,9 @@ public final class StreamFusionCalcTranslator extends StreamFusionExpressionTran
                         + (directInput < inputType.getFieldCount() ? inputType.getTypeAt(directInput) : "out of range")
                         + ", output=" + expectedType + ")";
             }
-            if (projectionExpression(projection, inputType, expectedType) == null) {
+            String intervalReason = StreamFusionIntervalProjection.unsupportedReason(projection, expectedType);
+            if (intervalReason != null) return "projection[" + outputIndex + "]: " + intervalReason;
+            if (StreamFusionIntervalProjection.materialize(projection, inputType, expectedType) == null) {
                 return expressionFailure(projection, inputType, expectedType, false, "projection[" + outputIndex + "]");
             }
         }
