@@ -73,7 +73,9 @@ pub(crate) trait KeyedState: Send {
         owner: &crate::memory_pool::HostMemoryReservation,
     ) -> Result<StateReadBatch<'a>>;
 
-    /// Applies one atomic operator batch. Backends should use their native batch primitive.
+    /// Applies one atomic backend write batch using the backend's native batch primitive.
+    /// An operator may flush several pages only while checkpoints/input cannot interleave and
+    /// any partial-flush failure makes the execution context unusable until checkpoint recovery.
     fn write_batch(&mut self, mutations: Vec<StateMutation>) -> Result<()>;
 
     /// Visits a stable key group in bounded pages, without constructing a canonical snapshot.

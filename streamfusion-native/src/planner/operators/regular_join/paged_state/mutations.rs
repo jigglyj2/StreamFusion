@@ -30,7 +30,7 @@ fn entries(rows: &[StoredRow], layout: Layout) -> impl Iterator<Item = (u64, &[S
         })
 }
 
-fn changed_rows(
+pub(super) fn changed_rows(
     entry: &StagedState,
     mut visit: impl FnMut(usize, u64, Layout, &[StoredRow]) -> Result<()>,
 ) -> Result<()> {
@@ -77,7 +77,7 @@ fn changed_rows(
     Ok(())
 }
 
-fn root(
+pub(super) fn root(
     state: &JoinState,
     layout: Layout,
     unloaded: Option<&UnloadedRows>,

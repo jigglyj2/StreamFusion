@@ -488,7 +488,8 @@ allowance and require recovery; the change does not bypass Flink's budget or add
 Canonical SFS1 snapshots carry versioned `SFJI/1` bitmap directories and single-row `SFJP/1`
 payloads, or `SFJC/1` compact singleton values, identically on native memory and RocksDB.
 Existing `SFJM/1` paged and multi-row `SFJC/1` snapshots remain readable. A touched legacy key
-adopts the current layout atomically; canonical restore preserves existing bytes until then.
+adopts the current layout at the completed input-batch boundary; canonical restore preserves
+existing bytes until then.
 Restoring whole-key `SFRJ` v1/v2 snapshots migrates them to the current layout. A runtime predating
 `SFJI/1` cannot restore the new directories. Tests cover both-backend restore, sparse stable IDs,
 malformed bitmaps and payload identity mismatches, representation transitions and complete deletion.
@@ -510,8 +511,25 @@ row-vector/Arc headroom. It does not apply the external-directory multiplier to 
 The first decoded page moves directly into its state vector. An 8 MiB regression loads 2,048
 compact keys with 512-byte payloads in one state read, verifies original/current payload sharing,
 and releases all credit; the previous directory estimate requested more than 9 MiB for decoding.
-Mutation staging admits encoded roots, large directory buffers and changed external-entry metadata
-at the batch boundary. It does not reserve mutation descriptors for unchanged row payloads.
+
+For streaming regular joins, dirty-state encoding at the completed input-batch boundary emits
+write pages of at most 4,096 mutations or 256 KiB, admitting an oversized individual record
+separately. It does not build a
+second complete collection of encoded hot-key payloads. Decoded groups release their credit as
+they are consumed, and encoding scratch is released before backend write admission. State reads
+remain confined to input admission. No checkpoint or next input can interleave with these writes;
+a failure after any page invalidates the operator until recovery from the previous Flink checkpoint.
+An 8 MiB dirty-payload regression fits a 14 MiB allowance including the RocksDB cache and keeps
+new flush allocations below 3 MiB. Injected second-page failures on both backends reject snapshots
+and further input, and replay from the preceding checkpoint preserves the full output changelog.
+These bounds cover write scratch; opposite-side historical payloads still must fit the managed budget.
+
+The corresponding upstream Flink duplicate-key inner-join and retracting left-join cases pass
+across ten parameterized executions covering the upstream mini-batch/backend/async combinations.
+Two plans accelerate and the remaining cases retain whole-plan fallback; generated native-region
+tests separately verify
+the complete changelog against Flink on both native backends.
+
 A 16,384-key batch now fits a 20 MiB share; its allocation peak is covered by coarse reservations,
 and retained payloads are probed after flushing. The previous estimate added almost 25 MiB for
 mutation metadata alone by counting absent roots and external pages. Layout transitions and
@@ -526,7 +544,9 @@ requires an opposite-side read to enforce its full budget. All required payloads
 this does not introduce per-row state calls.
 The `StreamFusion.stateReadBatches` diagnostic counts actual backend lookups: one for a batch of
 new or compact keys, plus one for each external payload read group. `stateWriteBatches` counts non-empty backend write batches, so a
-missing-row retraction that changes no state need not increment it.
+large dirty batch can increment it more than once, and a missing-row retraction that changes no
+state need not increment it. Successful pages are counted even if a later page fails. These are
+StreamFusion diagnostics; Flink logical-record metrics and checkpoint semantics are unchanged.
 
 Flink `BatchExecHashJoin`, `BatchExecAdaptiveJoin`, and `BatchExecSortMergeJoin` equality joins use
 the same native two-sided counted state with terminal output while retaining distinct physical-node

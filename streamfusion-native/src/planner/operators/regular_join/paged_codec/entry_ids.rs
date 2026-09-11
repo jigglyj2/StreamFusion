@@ -63,6 +63,17 @@ impl EntryIds {
         )
     }
 
+    pub(in super::super) fn allocated_bytes(&self) -> usize {
+        self.explicit
+            .capacity()
+            .saturating_mul(std::mem::size_of::<u64>())
+            .saturating_add(
+                self.bitmaps
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<(u64, u64)>()),
+            )
+    }
+
     pub(in super::super) fn iter(&self) -> impl Iterator<Item = u64> + '_ {
         self.explicit
             .iter()

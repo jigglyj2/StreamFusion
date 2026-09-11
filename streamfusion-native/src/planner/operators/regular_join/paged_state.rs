@@ -90,7 +90,9 @@ fn load_impl(
     Ok((staged, 1 + reads))
 }
 
+mod flushing;
 mod loading;
+pub(super) use flushing::flush;
 mod restore;
 pub(super) use restore::restore_from_checkpoint;
 mod mutations;
