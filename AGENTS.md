@@ -337,6 +337,10 @@ Immediately before each commit, run Palantir Java formatting and only the unit t
 relevant to that commit. Treat this like a focused commit hook; do not spend time
 running unrelated test suites.
 
+Remove temporary Git worktrees when their work is complete. Before removal, verify that
+the worktree is clean and that all intended changes are committed and preserved, then use
+`git worktree remove` and clean up any associated regenerable build artifacts.
+
 Advance production Nexmark coverage in increasing query order. Verify existing admission
 first, then focus on the next query's demonstrated blockers instead of expanding into
 unrelated operator work. Each unlocked query is a delivery checkpoint: ordinary planner
