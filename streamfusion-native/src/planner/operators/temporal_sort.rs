@@ -23,6 +23,8 @@ use crate::state::{
 };
 use crate::{decode_plan, proto};
 
+mod sorting;
+
 const INSERT: i8 = 0;
 const UPDATE_BEFORE: i8 = 1;
 const UPDATE_AFTER: i8 = 2;
@@ -491,17 +493,10 @@ impl TemporalSortProcessor {
         self.output_row_groups(row_groups)
     }
 
-    fn output_row_groups(&mut self, mut row_groups: Vec<Vec<BufferedRow>>) -> Result<RecordBatch> {
+    fn output_row_groups(&mut self, row_groups: Vec<Vec<BufferedRow>>) -> Result<RecordBatch> {
         let row_count = row_groups.iter().map(Vec::len).sum::<usize>();
         if row_count == 0 {
             return Ok(RecordBatch::new_empty(self.output_schema.clone()));
-        }
-        if self.secondary_converter.is_some() {
-            for rows in &mut row_groups {
-                // Arrow row keys encode the planned ascending/descending and null placement.
-                // Rust's stable sort retains input sequence for equal secondary keys.
-                rows.sort_by(|left, right| left.sort_key.cmp(&right.sort_key));
-            }
         }
         let row_bytes = row_groups
             .iter()
@@ -516,23 +511,31 @@ impl TemporalSortProcessor {
         // Encoded rows and the emitted arrays coexist until the C Data owner takes over. Admit the
         // complete sort keys plus both the encoded rows and their decoded-array equivalent before
         // allocation. Sort keys are not decoded into the result and therefore are not doubled.
-        let working_bytes = row_bytes.saturating_mul(2).saturating_add(sort_key_bytes);
+        let working_bytes = row_bytes
+            .saturating_mul(2)
+            .saturating_add(sort_key_bytes)
+            .saturating_add(if self.secondary_converter.is_some() {
+                // DataFusion's key arrays, sorted keys, row conversion and selection indices.
+                sort_key_bytes
+                    .saturating_mul(3)
+                    .saturating_add(row_count.saturating_mul(128))
+            } else {
+                row_count.saturating_mul(size_of::<&BufferedRow>())
+            });
         self.scratch_reservation.resize(working_bytes)?;
 
         let result = (|| {
+            let rows = if self.secondary_converter.is_some() {
+                sorting::ordered_rows(&row_groups)?
+            } else {
+                row_groups.iter().flatten().collect()
+            };
             let parser = self.row_converter.parser();
-            let mut output_columns = self.row_converter.convert_rows(
-                row_groups
-                    .iter()
-                    .flatten()
-                    .map(|row| parser.parse(&row.row)),
-            )?;
+            let mut output_columns = self
+                .row_converter
+                .convert_rows(rows.iter().map(|row| parser.parse(&row.row)))?;
             output_columns.push(Arc::new(Int8Array::from(
-                row_groups
-                    .iter()
-                    .flatten()
-                    .map(|row| row.kind)
-                    .collect::<Vec<_>>(),
+                rows.iter().map(|row| row.kind).collect::<Vec<_>>(),
             )));
             RecordBatch::try_new(self.output_schema.clone(), output_columns).map_err(Into::into)
         })();

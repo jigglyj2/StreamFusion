@@ -110,8 +110,10 @@ incoming Arrow batch; direct RocksDB state never crosses JNI.
 Temporal sort has its own versioned protobuf node, persistent native processor, raw keyed state,
 and timer service. It stores the secondary keys
 in Arrow's order-preserving row encoding with the planned direction and null placement, so firing a
-timer uses one stable byte-key sort and one final Arrow decode rather than materializing and taking a
-second batch. Java constructs the physical plan and owns watermarks, barriers, distribution,
+timer delegates ordering to DataFusion's batch sort over group IDs, encoded keys, and arrival
+ordinals, followed by one final Arrow decode. Explicit arrival ordinals retain Flink's stable tie
+order. The key arrays and sort workspace are admitted before sorting. Payloads are decoded only after
+DataFusion has selected their final order. Java constructs the physical plan and owns watermarks, barriers, distribution,
 recovery, and metric publication; Arrow C Data crosses only at the fused-plan edge. This follows
 Comet's distinct replacement-node and protobuf control-plane model.
 
