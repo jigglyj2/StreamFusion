@@ -222,8 +222,7 @@ public final class StreamFusionNativeMetricTree implements AutoCloseable {
     }
 
     public void update(NativeExecutionContext context) {
-        update(context.metricSnapshot());
-        if (gauges != null) gauges.update();
+        update(context.invocationSnapshot(hasNativeGauges(), false));
     }
 
     public void updateAfterFailure(NativeExecutionContext context, Throwable executionFailure) {
