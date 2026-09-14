@@ -57,7 +57,7 @@ final class SharedAggregateRuntimeHarness extends KeyedMultiInputStreamOperatorT
         this(rocks, restore, 1, 0, false, plan, 0, inputType);
     }
 
-    private SharedAggregateRuntimeHarness(
+    SharedAggregateRuntimeHarness(
             boolean rocks, OperatorSubtaskState restore, int parallelism, int subtask, boolean framed, byte[] plan)
             throws Exception {
         this(rocks, restore, parallelism, subtask, framed, plan, 0);

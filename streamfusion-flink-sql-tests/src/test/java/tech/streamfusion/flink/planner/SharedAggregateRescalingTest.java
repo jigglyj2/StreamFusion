@@ -62,7 +62,7 @@ class SharedAggregateRescalingTest {
             }
     }
 
-    private static List<RowData> changes(List<GenericRowData> live, int phase) {
+    static List<RowData> changes(List<GenericRowData> live, int phase) {
         var result = new ArrayList<RowData>();
         var random = new Random(42 + phase);
         int count = phase == 0 ? 384 : phase == 1 ? 256 : live.size();

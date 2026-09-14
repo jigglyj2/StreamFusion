@@ -49,14 +49,22 @@ memory budget, or runtime option changes are introduced.
   Actual channel replay, subsequent retractions, count-triggered output and final partial-bundle
   output match the SQL-generated Flink operator's complete record bytes and timestamp envelopes.
   The restored task neither re-emits checkpointed output nor loses the captured pending row.
+- `SharedMiniBatchRescalingTest` restores both the native tree and actual Flink aggregate
+  through 1 → 2 → 1 parallelism, with an independent bundle and metric surface for each subtask.
+  Generated nullable keys, mixed RowKinds and integer extrema exercise all 16 key groups.
+  Flink's own key selector routes the oracle independently of the native Arrow IPC exchange.
+  Tests compare complete ordered changelog bytes, timestamp envelopes and registered metrics
+  after every arrival, checkpoint flush and finish. Canonical savepoints switch memory/RocksDB
+  backends in both directions; aligned and unaligned state checkpoints retain their backend.
+  Original Flink savepoints are repartitioned separately from StreamFusion's snapshots.
 
 ## Remaining admission work
 
-Before ordinary selection can be enabled, complete the mini-batch ownership/admission audit,
-rescaling evidence, and end-to-end assigner/region control conformance. Extend channel recovery
-coverage as additional families and shapes qualify. Rescaling comparisons must use a Flink
-oracle per subtask: each operator instance owns its bundle count, so one global oracle cannot
-establish mini-batch parity after redistribution. Qualify one-phase and local/global/incremental families with their own Flink SQL,
+Before ordinary selection can be enabled, complete the mini-batch ownership/admission audit
+and end-to-end assigner/region control conformance. Extend channel recovery and rescaling
+coverage as additional families and shapes qualify. Each subtask owns its bundle count;
+one global oracle cannot establish mini-batch parity after redistribution. Qualify one-phase
+and local/global/incremental families with their own Flink SQL,
 generated changelog and complete metric coverage. Preserve precise fallback for any unresolved
 semantic or configuration subset. Release measurements and profiling must follow the repository's
 staged Nexmark requirements; correctness checks above establish no performance claim.

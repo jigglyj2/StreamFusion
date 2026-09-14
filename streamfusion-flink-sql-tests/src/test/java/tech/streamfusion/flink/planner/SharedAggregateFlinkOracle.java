@@ -80,13 +80,45 @@ final class SharedAggregateFlinkOracle {
             org.apache.flink.configuration.Configuration backendOptions,
             long managedMemoryBytes)
             throws Exception {
+        return create(rocks, bundleSize, retractable, backendOptions, managedMemoryBytes, 1, 0, null);
+    }
+
+    static KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> restored(
+            boolean rocks,
+            long bundleSize,
+            int parallelism,
+            int subtask,
+            org.apache.flink.runtime.checkpoint.OperatorSubtaskState state)
+            throws Exception {
+        return create(
+                rocks,
+                bundleSize,
+                true,
+                new org.apache.flink.configuration.Configuration(),
+                0,
+                parallelism,
+                subtask,
+                state);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> create(
+            boolean rocks,
+            long bundleSize,
+            boolean retractable,
+            org.apache.flink.configuration.Configuration backendOptions,
+            long managedMemoryBytes,
+            int parallelism,
+            int subtask,
+            org.apache.flink.runtime.checkpoint.OperatorSubtaskState state)
+            throws Exception {
         String factory = System.getProperty(StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY);
         String processor = System.getProperty(StreamFusionPlannerFactory.EXEC_GRAPH_PROCESSOR_PROPERTY);
         System.clearProperty(StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY);
         System.clearProperty(StreamFusionPlannerFactory.EXEC_GRAPH_PROCESSOR_PROPERTY);
         try {
             var env = StreamExecutionEnvironment.getExecutionEnvironment();
-            env.setParallelism(1);
+            env.setParallelism(parallelism);
             var tables = StreamTableEnvironment.create(env);
             tables.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ENABLED, bundleSize > 0);
             if (bundleSize > 0) {
@@ -129,8 +161,8 @@ final class SharedAggregateFlinkOracle {
                     (org.apache.flink.api.java.functions.KeySelector<RowData, RowData>) stage.getStateKeySelector(),
                     (InternalTypeInfo<RowData>) stage.getStateKeyType(),
                     16,
-                    1,
-                    0);
+                    parallelism,
+                    subtask);
             SharedAggregateHarnessMemory.configure(harness.getEnvironment(), managedMemoryBytes);
             harness.setStateBackend(
                     rocks
@@ -138,6 +170,7 @@ final class SharedAggregateFlinkOracle {
                                     .configure(backendOptions, SharedAggregateFlinkOracle.class.getClassLoader())
                             : new org.apache.flink.runtime.state.hashmap.HashMapStateBackend());
             harness.setup(new org.apache.flink.table.runtime.typeutils.RowDataSerializer(OUTPUT));
+            if (state != null) harness.initializeState(state);
             harness.open();
             return harness;
         } finally {
