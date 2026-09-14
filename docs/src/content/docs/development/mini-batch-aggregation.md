@@ -43,12 +43,20 @@ memory budget, or runtime option changes are introduced.
   This is retained-implementation coverage, not evidence that production fallback is removed.
 - Existing shared mini-batch tests separately cover control ordering, metric surfaces, downstream
   failure, canonical backend-switch restore, and aligned/unaligned state checkpoints.
+- `SharedMiniBatchChannelRecoveryTest` covers two input channels and a three-record bundle on
+  both backends. An unaligned checkpoint flushes at the first barrier and captures the next
+  channel's Arrow input; an aligned checkpoint includes that input before its pre-barrier flush.
+  Actual channel replay, subsequent retractions, count-triggered output and final partial-bundle
+  output match the SQL-generated Flink operator's complete record bytes and timestamp envelopes.
+  The restored task neither re-emits checkpointed output nor loses the captured pending row.
 
 ## Remaining admission work
 
 Before ordinary selection can be enabled, complete the mini-batch ownership/admission audit,
-real in-flight channel replay and rescaling evidence, and end-to-end assigner/region control
-conformance. Qualify one-phase and local/global/incremental families with their own Flink SQL,
+rescaling evidence, and end-to-end assigner/region control conformance. Extend channel recovery
+coverage as additional families and shapes qualify. Rescaling comparisons must use a Flink
+oracle per subtask: each operator instance owns its bundle count, so one global oracle cannot
+establish mini-batch parity after redistribution. Qualify one-phase and local/global/incremental families with their own Flink SQL,
 generated changelog and complete metric coverage. Preserve precise fallback for any unresolved
 semantic or configuration subset. Release measurements and profiling must follow the repository's
 staged Nexmark requirements; correctness checks above establish no performance claim.

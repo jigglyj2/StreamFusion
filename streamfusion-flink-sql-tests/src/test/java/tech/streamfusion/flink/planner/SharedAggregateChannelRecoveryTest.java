@@ -126,7 +126,7 @@ class SharedAggregateChannelRecoveryTest {
         return NativeExchangePlanSerializer.hash(inputType(), groupingIndices(), 1, 1, true);
     }
 
-    private StreamTaskMailboxTestHarness<RowData> create(boolean rocks, boolean unaligned, TaskStateSnapshot state)
+    protected StreamTaskMailboxTestHarness<RowData> create(boolean rocks, boolean unaligned, TaskStateSnapshot state)
             throws Exception {
         var factory = new StreamFusionNativeRegionOperatorFactory(
                 List.of(inputType()), outputType(), plan(), List.of(3L), List.of(exchange()));
@@ -143,7 +143,7 @@ class SharedAggregateChannelRecoveryTest {
                 backendOptions());
     }
 
-    private void send(
+    protected void send(
             StreamTaskMailboxTestHarness<RowData> task,
             RootAllocator allocator,
             SharedChannelStateIO.RoutingMemory memory,
@@ -161,13 +161,13 @@ class SharedAggregateChannelRecoveryTest {
         }
     }
 
-    private void drain(java.util.Queue<Object> events, DataOutputSerializer bytes) throws Exception {
+    protected void drain(java.util.Queue<Object> events, DataOutputSerializer bytes) throws Exception {
         for (var event : events)
             if (event instanceof StreamRecord) StageEventBytes.encode(outputType(), (StreamRecord<?>) event, bytes);
         events.clear();
     }
 
-    private byte[] bytes(StreamTaskMailboxTestHarness<RowData> task) throws Exception {
+    protected byte[] bytes(StreamTaskMailboxTestHarness<RowData> task) throws Exception {
         var bytes = new DataOutputSerializer(128);
         for (var event : task.getOutput())
             if (event instanceof StreamRecord) StageEventBytes.encode(outputType(), (StreamRecord<?>) event, bytes);
