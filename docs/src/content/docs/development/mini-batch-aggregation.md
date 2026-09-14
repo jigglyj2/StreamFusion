@@ -1,0 +1,54 @@
+---
+title: Mini-batch aggregation qualification
+description: Flink bundle semantics, native conformance evidence, and remaining production admission work.
+---
+
+## Current status
+
+Mini-batch aggregation remains **production-gated**. The retained shared native implementation
+accepts Arrow batches and uses DataFusion computation, but neither its direct tests nor the
+test-only SQL graph probe establishes ordinary planner admission. The
+[group aggregation page](/StreamFusion/operators/group-aggregation/) defines current support.
+
+## Retractions within a bundle
+
+Flink 2.3.0's `MiniBatchGroupAggFunction.finishBundle` removes leading retractions only when
+the key has no stored accumulator. After the first accumulation, it applies every remaining
+input for that key before deciding whether to emit or delete the aggregate. A count of zero
+halfway through a bundle does not reset the accumulator or restart that leading-retraction rule.
+
+For example, one bundle containing `INSERT(10), DELETE(10), UPDATE_BEFORE(20), UPDATE_AFTER(20)`
+for a previously absent key finishes with count zero and emits nothing. Skipping the third input
+would incorrectly emit an aggregate for one row. StreamFusion retains accumulator presence
+independently of its count until the bundle flush. Entirely retract-only absent keys still produce
+no output and do not prevent other keys in the bundle from being processed.
+
+DataFusion's COUNT accumulator supports signed retract updates. The shared row kernels continue
+to delegate compatible count/sum computation to DataFusion; the fix concerns Flink's accumulator
+lifecycle, not a replacement arithmetic implementation. Existing Flink-specific integer AVG,
+retractable-extremum, state and changelog adapters remain in place. No state encoding, boundary,
+memory budget, or runtime option changes are introduced.
+
+## Conformance coverage
+
+- Native mini-batch tests cover a zero crossing across Arrow chunk sizes one, two and four,
+  compare the final canonical state with an empty reference, and exercise memory and RocksDB.
+- `SharedMiniBatchRetractionParityTest` runs the same generated records through Flink's actual
+  SQL-generated mini-batch aggregate and the common native region. It compares complete ordered
+  changelog bytes, record timestamps and registered metrics on both backends, including nullable
+  keys/values, absent-state retractions, count triggers, checkpoint pre-barrier flush and finish.
+- `SelectedMiniBatchAggregateUpstreamTest` invokes the published Flink `AggregateITCase.testGroupByAgg`
+  body and assertions with mini-batching on both backends, including its failing-source recovery.
+  It uses the existing development graph probe and requires native activity and Arrow topology.
+  This is retained-implementation coverage, not evidence that production fallback is removed.
+- Existing shared mini-batch tests separately cover control ordering, metric surfaces, downstream
+  failure, canonical backend-switch restore, and aligned/unaligned state checkpoints.
+
+## Remaining admission work
+
+Before ordinary selection can be enabled, complete the mini-batch ownership/admission audit,
+real in-flight channel replay and rescaling evidence, and end-to-end assigner/region control
+conformance. Qualify one-phase and local/global/incremental families with their own Flink SQL,
+generated changelog and complete metric coverage. Preserve precise fallback for any unresolved
+semantic or configuration subset. Release measurements and profiling must follow the repository's
+staged Nexmark requirements; correctness checks above establish no performance claim.

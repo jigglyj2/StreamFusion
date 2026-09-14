@@ -232,12 +232,10 @@ impl GroupAggregateProcessor {
                             })
                         }
                     }
-                } else if accumulate
-                    || group
-                        .current
-                        .as_ref()
-                        .is_some_and(|state| state.row_count != 0)
-                {
+                } else if accumulate || group.current.is_some() {
+                    // Flink strips only leading retractions when the bundle has no
+                    // accumulator. Once initialized, it applies every remaining row,
+                    // even if the count crosses zero before the bundle is flushed.
                     let current = group
                         .current
                         .get_or_insert_with(|| AccumulatorState::new(&self.calls));

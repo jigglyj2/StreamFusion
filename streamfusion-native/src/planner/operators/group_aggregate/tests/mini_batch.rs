@@ -111,6 +111,39 @@ fn absent_retraction_crossing_a_bundle_can_be_followed_by_insert() {
 }
 
 #[test]
+fn zero_count_inside_a_bundle_does_not_restart_leading_retraction_suppression() {
+    // Flink MiniBatchGroupAggFunction skips leading retractions only before creating
+    // the accumulator. A zero count inside the bundle does not clear that accumulator.
+    for chunk_size in [1, 2, 4] {
+        with_backends(4, |mut processor| {
+            let input = batch(
+                vec![7; 4],
+                vec![Some(10), Some(10), Some(20), Some(20)],
+                Some(vec![INSERT, DELETE, UPDATE_BEFORE, UPDATE_AFTER]),
+            );
+            for offset in (0..4).step_by(chunk_size) {
+                assert_eq!(
+                    processor
+                        .process_arrow(input.slice(offset, chunk_size))
+                        .unwrap()
+                        .num_rows(),
+                    0,
+                    "chunk_size={chunk_size} offset={offset}"
+                );
+            }
+            assert_eq!(processor.finish_bundle().unwrap().num_rows(), 0);
+            let empty = mini_processor(4, true);
+            for group in 0..128 {
+                assert_eq!(
+                    processor.snapshot_key_group(group).unwrap(),
+                    empty.snapshot_key_group(group).unwrap()
+                );
+            }
+        });
+    }
+}
+
+#[test]
 fn bundle_changelog_and_canonical_state_are_independent_of_arrow_chunking() {
     for trigger in [1, 2, 3, 7, 31] {
         let input = batch(
