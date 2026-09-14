@@ -11,6 +11,12 @@ import java.nio.file.Path;
 final class NativeRocksDbLogDirectory {
     private NativeRocksDbLogDirectory() {}
 
+    static Path resolve(Path database, tech.streamfusion.proto.plan.v1.NativeRocksDbOptions options) {
+        // Explicit directories travel with database options and remain user-owned. Do not
+        // inspect log.file or apply the automatic-relocation path-length limit in this case.
+        return options != null && options.hasLogDirectory() ? null : resolve(database);
+    }
+
     static Path resolve(Path database) {
         // Flink leaves logs local when the flattened database name plus "_LOG" would be
         // longer than its 255-character filename limit (FLINK-31743).

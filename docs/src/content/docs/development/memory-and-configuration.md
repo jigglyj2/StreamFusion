@@ -78,7 +78,9 @@ then validate their operator encoding and import bounded pages through the same 
 checkpoint interface used for physical RocksDB restore. A single large key, value, or write page
 still requires admission; restore does not exempt retained in-memory backend state from its budget.
 Low-level embedded callers without task spill resources retain the admitted materialized restore
-path. Production tasks supply spill directories through state-binding protocol 4.
+path. Production tasks supply spill directories through state-binding protocols 4 through 11.
+RocksDB's existing [write-buffer and high-priority cache ratios](/StreamFusion/development/native-state/#configurable-rocksdb-shared-memory)
+are propagated within the assigned Flink lease; they do not create a separate memory budget.
 
 Regression fixtures restore canonical payloads larger than 12 MiB with 4 MiB of free native memory
 into RocksDB, verify generated Flink changelog parity after restore, and force DataFusion sorting
@@ -137,7 +139,7 @@ resident admission fails. Flink's IOManager directories are passed as internal t
 DataFusion owns temporary files and disk accounting. Read, decode, predicate, output and directory
 workspace still require host reservations. Replay adds no per-row RocksDB or JNI calls, and state
 writes/checkpoints retain the completed-batch boundary. This does not spill the in-memory backend's
-retained state itself; see the [join memory and state contract](/operators/joins/).
+retained state itself; see the [join memory and state contract](/StreamFusion/operators/joins/).
 
 Sharing removes stranded private allowances; it does not guarantee unlimited in-memory state,
 automatic spill for every workspace, or equivalence to Flink's shared JVM heap. The full native
@@ -151,7 +153,8 @@ only after the last owner closes; restore readers without a shared resource use 
 
 Flink's configured incremental-checkpoint setting determines whether the native RocksDB adapter
 uses incremental handles. Selecting RocksDB does not implicitly enable incremental checkpoints.
-Other RocksDB settings still require equivalent native handling before production stateful
+[Supported RocksDB database settings and presets](/StreamFusion/development/rocksdb-configuration/)
+share this budget. Other RocksDB settings still require equivalent native handling before production stateful
 admission. Unsupported configuration or uncertain semantics require whole-plan Flink fallback.
 
 The runtime configuration surface follows Flink. StreamFusion-specific runtime options are

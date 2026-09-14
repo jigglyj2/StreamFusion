@@ -78,7 +78,7 @@ class SharedAggregateCheckpointTest {
                 .getJobManagerOwnedState();
     }
 
-    private static void compare(
+    static void compare(
             SharedAggregateRuntimeHarness target,
             KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> oracle,
             RootAllocator allocator,

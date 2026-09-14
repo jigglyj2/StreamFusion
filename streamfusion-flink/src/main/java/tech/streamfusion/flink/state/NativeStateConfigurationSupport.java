@@ -3,7 +3,6 @@ package tech.streamfusion.flink.state;
 
 import java.lang.reflect.Modifier;
 import java.util.List;
-import java.util.Objects;
 import java.util.TreeMap;
 import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.configuration.ReadableConfig;
@@ -18,6 +17,10 @@ public final class NativeStateConfigurationSupport {
         if (!backend.equals("rocksdb")) {
             return "state backend: native keyed regions do not support configured backend " + backend;
         }
+        return rocksDbUnsupportedReason(config);
+    }
+
+    static String rocksDbUnsupportedReason(ReadableConfig config) {
         try {
             // Resolve Flink's typed options (including deprecated aliases) instead of checking
             // only raw option names. Keep RocksDB optional for in-memory deployments.
@@ -36,12 +39,24 @@ public final class NativeStateConfigurationSupport {
                     }
                 }
             }
+            NativeRocksDbMemoryConfiguration.fromConfig(config);
+            NativeRocksDbConfiguration.fromConfig(config);
+            NativeRocksDbStorageDirectories.validate(config);
+            NativeRocksDbManualCompactionConfiguration.validate(config);
+            var propagated = NativeRocksDbConfiguration.propagatedKeys();
+            propagated.add(NativeRocksDbStorageDirectories.key());
+            propagated.add(NativeRocksDbTransfers.validatedConfigurationKey(config));
             for (var option : options.values()) {
-                if (!Objects.equals(config.get(option), option.defaultValue())) {
-                    return "state backend: native RocksDB does not yet propagate " + option.key()
-                            + "; retain Flink for this configured option";
-                }
+                if (NativeRocksDbMemoryConfiguration.propagates(option.key())
+                        || propagated.contains(option.key())
+                        || NativeRocksDbManualCompactionConfiguration.keys().contains(option.key())) continue;
+                String reason = NativeRocksDbOptionSupport.unsupportedReason(config, option);
+                if (reason != null) return reason;
             }
+        } catch (UnsupportedOperationException failure) {
+            return "state backend: " + failure.getMessage();
+        } catch (IllegalArgumentException failure) {
+            return "state backend: invalid Flink RocksDB configuration: " + failure.getMessage();
         } catch (ReflectiveOperationException | LinkageError | RuntimeException failure) {
             return "state backend: cannot resolve Flink RocksDB configuration: "
                     + failure.getClass().getSimpleName();

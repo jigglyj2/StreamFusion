@@ -26,6 +26,8 @@ use super::{KeyedState, StateKeyRef, StateMutation};
 
 mod open;
 mod scan;
+mod statistics;
+pub(crate) use statistics::RocksPluginStatistics;
 
 /// Dynamically loaded RocksDB component accessed exclusively through the versioned C/Arrow ABI.
 pub(crate) struct RocksPluginKeyedState {
@@ -33,6 +35,7 @@ pub(crate) struct RocksPluginKeyedState {
     library: Arc<Library>,
     api: &'static StateBackendApiV1,
     handle: *mut c_void,
+    statistics_memory: Option<Arc<HostMemoryReservation>>,
 }
 
 unsafe impl Send for RocksPluginKeyedState {}
@@ -805,3 +808,5 @@ mod tests {
         }
     }
 }
+
+pub(crate) mod database_options;

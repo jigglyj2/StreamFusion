@@ -36,6 +36,7 @@ public final class StreamFusionNativeMetricTree implements AutoCloseable {
     private long ownerInput;
     private long ownerOutput;
     private NativeStageGauges gauges;
+    private NativeStageStatistics statistics;
 
     public StreamFusionNativeMetricTree(
             byte[] identifiedPlan,
@@ -211,6 +212,18 @@ public final class StreamFusionNativeMetricTree implements AutoCloseable {
                 processingTime);
     }
 
+    /** Flink's view updater samples RocksDB tickers independently of data-plane invocations. */
+    public void bindStateStatistics(byte[] schema, java.util.function.Supplier<long[]> snapshot) {
+        if (statistics != null) throw new IllegalStateException("Native state statistics are already bound");
+        statistics = new NativeStageStatistics(
+                schema,
+                id -> {
+                    Stage stage = stages.get(id);
+                    return stage == null ? null : stage.group;
+                },
+                snapshot);
+    }
+
     public boolean hasNativeGauges() {
         return gauges != null && !gauges.isEmpty();
     }
@@ -351,6 +364,7 @@ public final class StreamFusionNativeMetricTree implements AutoCloseable {
 
     @Override
     public void close() {
+        if (statistics != null) statistics.close();
         stages.values().forEach(stage -> stage.group.close());
     }
 

@@ -141,7 +141,7 @@ changelog, the complete default metric surface, and absence of an output waterma
 The common runtime preserves the sink exception, requires recovery and releases native memory
 when closed without finish. This does not prove arbitrary row-interior failure equivalence.
 Shared aggregate fragment admission no longer rejects raw mini-batching wholesale. It explicitly
-rejects enabled keyed-state latency histograms and enabled RocksDB property/statistics metrics;
+rejects enabled keyed-state latency histograms and enabled RocksDB column-family property metrics;
 Flink's option resolution is used, including the deprecated keyed-state latency option alias.
 Full production persistent-memory admission remains gated.
 
@@ -246,3 +246,15 @@ This does not assign the shared runtime owner's checkpoint UID, migrate operator
 changed region boundaries, or reproduce Flink's topology-generated IDs when no explicit UID exists.
 Those cases, full task-scope equivalence, and collision validation against source/sink boundaries
 remain part of the outstanding metric/recovery audit.
+
+## RocksDB ticker statistics
+
+The eleven existing Flink database ticker options are propagated to every native keyed stage.
+They register as `Gauge<Long>` and `View` in the physical operator's scope and follow Flink's
+cached periodic sampling and close lifecycle. Samples report actual native storage work;
+MultiGet does not increment the upstream Get-only byte ticker. The selected-region tests compare
+the complete registered surface and deterministic logical values, and check physical-counter
+definitions separately. Statistics allocation is admitted once and shared with checkpoint readers.
+See [RocksDB configuration](/StreamFusion/development/rocksdb-configuration/#rocksdb-ticker-metrics)
+for the options, units, memory requirement, restore behavior and failure handling. Column-family
+property metrics and keyed-state latency histograms remain whole-plan fallbacks.

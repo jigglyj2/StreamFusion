@@ -31,6 +31,7 @@ public final class NativeStateResources {
         return rocksDb(nodeId, maxParallelism, first, last, database, flinkMemoryLease, null);
     }
 
+    /** Automatic log relocation only; explicit user directories belong in NativeRocksDbOptions. */
     public static NativeStateBinding rocksDb(
             long nodeId,
             int maxParallelism,
@@ -51,14 +52,7 @@ public final class NativeStateResources {
 
     public static byte[] serialize(List<NativeStateBinding> bindings) {
         return NativeStateBindings.newBuilder()
-                .setProtocolVersion(
-                        bindings.stream().anyMatch(NativeStateBinding::hasRestoredWatermark)
-                                ? 3
-                                : bindings.stream()
-                                                .anyMatch(binding -> binding.hasRocksdb()
-                                                        && binding.getRocksdb().hasLogDirectory())
-                                        ? 2
-                                        : 1)
+                .setProtocolVersion(protocolVersion(bindings))
                 .addAllBindings(bindings)
                 .build()
                 .toByteArray();
@@ -68,13 +62,35 @@ public final class NativeStateResources {
     public static byte[] serialize(List<NativeStateBinding> bindings, List<Path> spillDirectories) {
         if (spillDirectories.isEmpty()) throw new IllegalArgumentException("Flink spill directories must not be empty");
         return NativeStateBindings.newBuilder()
-                .setProtocolVersion(4)
+                .setProtocolVersion(Math.max(4, protocolVersion(bindings)))
                 .addAllBindings(bindings)
                 .addAllSpillDirectories(spillDirectories.stream()
                         .map(path -> path.toAbsolutePath().normalize().toString())
                         .collect(java.util.stream.Collectors.toList()))
                 .build()
                 .toByteArray();
+    }
+
+    private static int protocolVersion(List<NativeStateBinding> bindings) {
+        int version = 1;
+        for (var binding : bindings) {
+            if (binding.hasRestoredWatermark()) version = Math.max(version, 3);
+            if (!binding.hasRocksdb()) continue;
+            var rocks = binding.getRocksdb();
+            if (rocks.getStatisticsTickersCount() != 0) version = Math.max(version, 11);
+            if (rocks.hasPartitionedIndexFilters()) version = Math.max(version, 8);
+            if (rocks.hasLogDirectory()) version = Math.max(version, 2);
+            if (rocks.hasWriteBufferRatio() || rocks.hasHighPriorityPoolRatio()) version = Math.max(version, 5);
+            if (rocks.hasDatabaseOptions()) {
+                var options = rocks.getDatabaseOptions();
+                if (options.hasLogDirectory()) version = Math.max(version, 9);
+                if (options.hasWriteBatchSize()) version = Math.max(version, 10);
+                if (options.hasCompactionStyle()) version = Math.max(version, 8);
+                version = Math.max(
+                        version, options.hasLogLevel() || options.hasBloomFilter() || options.hasCompression() ? 7 : 6);
+            }
+        }
+        return version;
     }
 
     private static NativeStateBinding.Builder binding(long nodeId, int maxParallelism, int first, int last) {

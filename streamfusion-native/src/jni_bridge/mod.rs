@@ -39,6 +39,7 @@ mod region_transport;
 mod regular_join;
 mod regular_join_stream;
 mod session_window_table_function;
+mod state_statistics;
 mod task_resources;
 mod temporal_join;
 mod temporal_sort;

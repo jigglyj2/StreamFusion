@@ -105,8 +105,18 @@ message NativeRocksDbState {
   string database_path = 2;
   // The existing Flink-managed STATE_BACKEND/OPERATOR lease, not an extra budget.
   uint64 memory_limit = 3;
-  // State-binding protocol v2: Flink's TaskManager-resolved RocksDB log directory.
+  // State-binding protocol v2: Flink's TaskManager-resolved automatic log relocation.
+  // Logs here are cleaned on close. Explicit user directories use NativeRocksDbOptions.
   optional string log_directory = 4;
+  // State-binding protocol v5: resolved Flink shared-cache geometry.
+  optional double write_buffer_ratio = 5;
+  optional double high_priority_pool_ratio = 6;
+  // Protocol 6: resolved Flink database and table options.
+  NativeRocksDbOptions database_options = 7;
+  // Protocol 8: flag resolved by the first owner of Flink's shared memory resource.
+  optional bool partitioned_index_filters = 8;
+  // Protocol 11: selected database ticker codes from state ABI 18; empty disables statistics.
+  repeated uint32 statistics_tickers = 9;
 }
 
 // Task-lifetime buffer resources resolved by Flink before keyed factories or native lowering.
@@ -128,4 +138,45 @@ message NativeLocalWindowBuffer {
   // boundaries only. Actual native allocations still consume the existing host memory pool.
   uint64 flink_buffer_memory_bytes = 1;
   uint32 flink_page_bytes = 2;
+}
+
+// Complete resolved settings; an absent message retains legacy Flink defaults.
+message NativeRocksDbOptions {
+  int32 max_background_jobs = 1;
+  int32 max_open_files = 2;
+  uint64 max_log_file_size = 3;
+  uint64 keep_log_file_num = 4;
+  bool dynamic_level_bytes = 5;
+  uint64 target_file_size_base = 6;
+  uint64 max_bytes_for_level_base = 7;
+  uint64 write_buffer_size = 8;
+  int32 max_write_buffer_number = 9;
+  int32 min_write_buffer_number_to_merge = 10;
+  uint64 periodic_compaction_seconds = 11;
+  uint64 block_size = 12;
+  uint64 metadata_block_size = 13;
+  // Protocol 7: absent fields retain the previous defaults.
+  optional uint32 log_level = 14;
+  NativeRocksDbBloomFilter bloom_filter = 15;
+  NativeRocksDbCompression compression = 16;
+  // Protocol 8: 0=level, 1=universal, 3=no background compaction. FIFO(2) is not admitted.
+  optional uint32 compaction_style = 17;
+  // Protocol 9: explicit Flink log directory. Logs here remain user-owned on close.
+  // Absent: retain the TaskManager-resolved automatic relocation in NativeRocksDbState.
+  optional string log_directory = 18;
+  // Protocol 10: bulk write threshold in bytes; zero disables only the byte threshold.
+  optional uint64 write_batch_size = 19;
+}
+
+message NativeRocksDbBloomFilter {
+  bool enabled = 1;
+  double bits_per_key = 2;
+  bool block_based_mode = 3;
+}
+
+message NativeRocksDbCompression {
+  // Explicit codes: none=0, Snappy=1, Zlib=2, BZip2=3, LZ4=4, LZ4HC=5, ZSTD=7.
+  // Unknown codes are rejected. An empty list uses RocksDB's
+  // configured base compression (Snappy), matching Flink's empty per-level list.
+  repeated int32 per_level = 1;
 }

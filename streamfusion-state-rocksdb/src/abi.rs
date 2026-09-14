@@ -22,6 +22,7 @@ use crate::RocksStateBackend;
 #[cfg(test)]
 mod open_tests;
 mod scan;
+mod statistics;
 use scan::{scan_key_group, scan_key_group_admitted};
 
 thread_local! {
@@ -41,6 +42,10 @@ static API: StateBackendApiV1 = StateBackendApiV1 {
     last_error,
     scan_key_group_admitted,
     open_checkpoint,
+    open_statistics: statistics::open_statistics,
+    read_statistics: statistics::read_statistics,
+    close_statistics: statistics::close_statistics,
+    statistics_memory_required: statistics::streamfusion_rocksdb_statistics_memory_required,
 };
 
 #[unsafe(no_mangle)]
@@ -105,18 +110,35 @@ unsafe fn open_backend(
                 .map_err(|error| error.to_string())?,
             ))
         };
-        let open = if checkpoint {
-            RocksStateBackend::open_checkpoint_configured
+        let compression = if options.compression_per_level_len == 0 {
+            &[][..]
         } else {
-            RocksStateBackend::open_configured
+            if options.compression_per_level.is_null()
+                || options.compression_per_level_len
+                    > isize::MAX as usize / std::mem::size_of::<i32>()
+            {
+                return Err("invalid RocksDB compression option span".into());
+            }
+            unsafe {
+                std::slice::from_raw_parts(
+                    options.compression_per_level,
+                    options.compression_per_level_len,
+                )
+            }
         };
-        let backend = open(
+        let backend = RocksStateBackend::open_with_statistics(
             Path::new(path),
             options.first_key_group,
             options.last_key_group,
             options.memory_limit,
             [options.memory_scope_high, options.memory_scope_low],
             log_directory,
+            checkpoint,
+            options.write_buffer_ratio,
+            options.high_priority_pool_ratio,
+            &options.database_options,
+            compression,
+            unsafe { statistics::owner(options.statistics_owner) },
         )
         .map_err(|error| error.to_string())?;
         unsafe { ptr::write(output, Box::into_raw(Box::new(backend)).cast()) };

@@ -126,6 +126,11 @@ public abstract class AbstractStreamFusionArrowKeyedStateOperatorV2 extends Abst
     }
 
     @Override
+    public final Path prepareIncrementalCheckpoint(long checkpointId, Path directory) {
+        return lifecycle.prepareIncrementalCheckpoint(checkpointId, directory);
+    }
+
+    @Override
     public final void completeIncrementalCheckpoint(long checkpointId, long uploadedBytes, long reusedBytes) {
         lifecycle.completeIncrementalCheckpoint(checkpointId, uploadedBytes, reusedBytes);
     }

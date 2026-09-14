@@ -30,13 +30,9 @@ class NativeStateConfigurationSupportTest {
         for (var option : new String[][] {
             {"state.backend.rocksdb.memory.managed", "false"},
             {"state.backend.rocksdb.memory.fixed-per-slot", "128 mb"},
-            {"state.backend.rocksdb.memory.write-buffer-ratio", "0.7"},
-            {"state.backend.rocksdb.memory.high-prio-pool-ratio", "0.2"},
-            {"state.backend.rocksdb.localdir", "/tmp/specific-rocks-dir"},
             {"state.backend.rocksdb.options-factory", "example.CustomFactory"},
-            {"state.backend.rocksdb.predefined-options", "FLASH_SSD_OPTIMIZED"},
-            {"state.backend.rocksdb.compression.per.level", "NO_COMPRESSION"},
-            {"state.backend.rocksdb.checkpoint.transfer.thread.num", "8"}
+            {"state.backend.rocksdb.log.level", "NUM_INFO_LOG_LEVELS"},
+            {"state.backend.rocksdb.compression.per.level", "XPRESS_COMPRESSION"}
         }) {
             var config = new Configuration();
             config.setString("state.backend", "rocksdb"); // Flink's deprecated backend alias.
@@ -68,10 +64,14 @@ class NativeStateConfigurationSupportTest {
     }
 
     @Test
-    void checkpointingDuringRecoveryRetainsFlinkUntilItsOverlappingLifecycleIsVerified() {
+    void checkpointingDuringRecoveryExplainsTheUpstreamRecaptureBoundary() {
         var config = new Configuration();
         config.set(CheckpointingOptions.CHECKPOINTING_DURING_RECOVERY_ENABLED, true);
-        assertThat(NativeStateSupport.unsupportedReason(config)).contains("checkpointing during channel recovery");
+        assertThat(NativeStateSupport.unsupportedReason(config))
+                .contains(
+                        "checkpointing during channel recovery",
+                        CheckpointingOptions.CHECKPOINTING_DURING_RECOVERY_ENABLED.key(),
+                        "Flink 2.3 local channels can recapture unread recovered buffers");
     }
 
     @Test

@@ -89,6 +89,199 @@ final class SharedAggregateRuntimeHarness extends KeyedMultiInputStreamOperatorT
             long managedMemoryBytes,
             RowType inputType)
             throws Exception {
+        this(
+                rocks,
+                restore,
+                parallelism,
+                subtask,
+                framed,
+                plan,
+                managedMemoryBytes,
+                inputType,
+                new org.apache.flink.configuration.Configuration());
+    }
+
+    SharedAggregateRuntimeHarness(boolean rocks, double write, double high) throws Exception {
+        this(
+                rocks,
+                null,
+                1,
+                0,
+                false,
+                SharedAggregateRegionParityTest.plan(),
+                0,
+                SharedAggregateFlinkOracle.INPUT,
+                memoryOptions(write, high));
+    }
+
+    static SharedAggregateRuntimeHarness configured(
+            boolean rocks, OperatorSubtaskState restore, org.apache.flink.configuration.Configuration options)
+            throws Exception {
+        return configured(rocks, restore, options, 0);
+    }
+
+    static SharedAggregateRuntimeHarness configured(
+            boolean rocks,
+            OperatorSubtaskState restore,
+            org.apache.flink.configuration.Configuration options,
+            long managedMemoryBytes)
+            throws Exception {
+        return new SharedAggregateRuntimeHarness(
+                rocks,
+                restore,
+                1,
+                0,
+                false,
+                SharedAggregateRegionParityTest.plan(),
+                managedMemoryBytes,
+                SharedAggregateFlinkOracle.INPUT,
+                options);
+    }
+
+    private static org.apache.flink.configuration.Configuration memoryOptions(double write, double high) {
+        var options = new org.apache.flink.configuration.Configuration();
+        options.set(org.apache.flink.state.rocksdb.RocksDBOptions.WRITE_BUFFER_RATIO, write);
+        options.set(org.apache.flink.state.rocksdb.RocksDBOptions.HIGH_PRIORITY_POOL_RATIO, high);
+        return options;
+    }
+
+    static SharedAggregateRuntimeHarness configuredBackend(
+            org.apache.flink.runtime.state.StateBackend backend, OperatorSubtaskState restore) throws Exception {
+        return new SharedAggregateRuntimeHarness(
+                true,
+                restore,
+                1,
+                0,
+                false,
+                SharedAggregateRegionParityTest.plan(),
+                16L << 20,
+                SharedAggregateFlinkOracle.INPUT,
+                new org.apache.flink.configuration.Configuration(),
+                backend);
+    }
+
+    private SharedAggregateRuntimeHarness(
+            boolean rocks,
+            OperatorSubtaskState restore,
+            int parallelism,
+            int subtask,
+            boolean framed,
+            byte[] plan,
+            long managedMemoryBytes,
+            RowType inputType,
+            org.apache.flink.configuration.Configuration backendOptions)
+            throws Exception {
+        this(rocks, restore, parallelism, subtask, framed, plan, managedMemoryBytes, inputType, backendOptions, null);
+    }
+
+    private SharedAggregateRuntimeHarness(
+            boolean rocks,
+            OperatorSubtaskState restore,
+            int parallelism,
+            int subtask,
+            boolean framed,
+            byte[] plan,
+            long managedMemoryBytes,
+            RowType inputType,
+            org.apache.flink.configuration.Configuration backendOptions,
+            org.apache.flink.runtime.state.StateBackend providedBackend)
+            throws Exception {
+        this(
+                rocks,
+                restore,
+                parallelism,
+                subtask,
+                framed,
+                plan,
+                managedMemoryBytes,
+                inputType,
+                backendOptions,
+                providedBackend,
+                null);
+    }
+
+    static SharedAggregateRuntimeHarness localBackup(
+            org.apache.flink.runtime.state.StateBackend backend,
+            OperatorSubtaskState restore,
+            org.apache.flink.runtime.state.LocalRecoveryConfig local)
+            throws Exception {
+        return new SharedAggregateRuntimeHarness(
+                true,
+                restore,
+                1,
+                0,
+                false,
+                SharedAggregateRegionParityTest.plan(),
+                16L << 20,
+                SharedAggregateFlinkOracle.INPUT,
+                new org.apache.flink.configuration.Configuration(),
+                backend,
+                local);
+    }
+
+    private SharedAggregateRuntimeHarness(
+            boolean rocks,
+            OperatorSubtaskState restore,
+            int parallelism,
+            int subtask,
+            boolean framed,
+            byte[] plan,
+            long managedMemoryBytes,
+            RowType inputType,
+            org.apache.flink.configuration.Configuration backendOptions,
+            org.apache.flink.runtime.state.StateBackend providedBackend,
+            org.apache.flink.runtime.state.LocalRecoveryConfig local)
+            throws Exception {
+        this(
+                rocks,
+                restore,
+                parallelism,
+                subtask,
+                framed,
+                plan,
+                managedMemoryBytes,
+                inputType,
+                backendOptions,
+                providedBackend,
+                local,
+                null);
+    }
+
+    static SharedAggregateRuntimeHarness localRecovery(
+            org.apache.flink.runtime.state.StateBackend backend,
+            OperatorSubtaskState restore,
+            OperatorSubtaskState backup,
+            org.apache.flink.runtime.state.LocalRecoveryConfig local)
+            throws Exception {
+        return new SharedAggregateRuntimeHarness(
+                true,
+                restore,
+                1,
+                0,
+                false,
+                SharedAggregateRegionParityTest.plan(),
+                16L << 20,
+                SharedAggregateFlinkOracle.INPUT,
+                new org.apache.flink.configuration.Configuration(),
+                backend,
+                local,
+                backup);
+    }
+
+    private SharedAggregateRuntimeHarness(
+            boolean rocks,
+            OperatorSubtaskState restore,
+            int parallelism,
+            int subtask,
+            boolean framed,
+            byte[] plan,
+            long managedMemoryBytes,
+            RowType inputType,
+            org.apache.flink.configuration.Configuration backendOptions,
+            org.apache.flink.runtime.state.StateBackend providedBackend,
+            org.apache.flink.runtime.state.LocalRecoveryConfig local,
+            OperatorSubtaskState localRestore)
+            throws Exception {
         super(
                 new StreamFusionNativeRegionOperatorFactory(
                         List.of(inputType),
@@ -103,19 +296,8 @@ final class SharedAggregateRuntimeHarness extends KeyedMultiInputStreamOperatorT
                 16,
                 parallelism,
                 subtask);
-        if (managedMemoryBytes > 0) {
-            // Flink's multi-input harness has no custom-environment constructor. Replace its
-            // empty 3 MiB test manager before any operator/backend initialization.
-            var manager = getEnvironment().getMemoryManager();
-            var field = getEnvironment().getClass().getDeclaredField("memManager");
-            field.setAccessible(true);
-            field.set(
-                    getEnvironment(),
-                    org.apache.flink.runtime.memory.MemoryManagerBuilder.newBuilder()
-                            .setMemorySize(managedMemoryBytes)
-                            .build());
-            manager.shutdown();
-        }
+        SharedAggregateHarnessMemory.configure(getEnvironment(), managedMemoryBytes);
+        SharedAggregateHarnessMemory.configureLocalRecovery(taskStateManager, local);
         config.setStateKeySerializer(IntSerializer.INSTANCE);
         var keys = new tech.streamfusion.flink.exchange.NativeExchangeFrameKeySelector(16);
         setKeySelector(
@@ -123,8 +305,17 @@ final class SharedAggregateRuntimeHarness extends KeyedMultiInputStreamOperatorT
                 (Object batch) -> batch instanceof tech.streamfusion.flink.exchange.NativeExchangeFrame
                         ? keys.getKey((tech.streamfusion.flink.exchange.NativeExchangeFrame) batch)
                         : 0);
-        setStateBackend(new StreamFusionStateBackend(
-                rocks ? new EmbeddedRocksDBStateBackend(true) : new HashMapStateBackend()));
+        setStateBackend(
+                providedBackend != null
+                        ? providedBackend
+                        : new StreamFusionStateBackend(
+                                rocks
+                                        ? new EmbeddedRocksDBStateBackend(true)
+                                                .configure(
+                                                        backendOptions,
+                                                        getClass().getClassLoader())
+                                        : new HashMapStateBackend(),
+                                backendOptions));
         setOutputCreator(ignored -> new CollectorOutput<ArrowRowDataBatch>(controls) {
             @Override
             public void collect(StreamRecord<ArrowRowDataBatch> record) {
@@ -152,7 +343,7 @@ final class SharedAggregateRuntimeHarness extends KeyedMultiInputStreamOperatorT
             }
         });
         setup(ArrowRowDataBatchSerializer.INSTANCE);
-        if (restore != null) initializeState(restore);
+        if (restore != null) initializeState(restore, localRestore);
         open();
         // Assert the production factory/constructor registered this exact Flink subtask. A
         // Java RocksDB delegate here would hide a second cache behind the native state path.

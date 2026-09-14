@@ -20,9 +20,17 @@ final class NativeRocksDbMemoryLease implements AutoCloseable {
 
     static NativeRocksDbMemoryLease reserve(org.apache.flink.runtime.memory.MemoryManager manager, double fraction)
             throws Exception {
+        return reserve(manager, fraction, NativeRocksDbMemoryConfiguration.DEFAULT);
+    }
+
+    static NativeRocksDbMemoryLease reserve(
+            org.apache.flink.runtime.memory.MemoryManager manager,
+            double fraction,
+            NativeRocksDbMemoryConfiguration configuration)
+            throws Exception {
         if (fraction <= 0) return null;
-        OpaqueMemoryResource<SharedBudget> resource =
-                manager.getSharedMemoryResourceForManagedMemory(RESOURCE_ID, SharedBudget::new, fraction);
+        OpaqueMemoryResource<SharedBudget> resource = manager.getSharedMemoryResourceForManagedMemory(
+                RESOURCE_ID, size -> new SharedBudget(size, configuration), fraction);
         return new NativeRocksDbMemoryLease(resource);
     }
 
@@ -32,6 +40,10 @@ final class NativeRocksDbMemoryLease implements AutoCloseable {
 
     java.util.UUID scopeId() {
         return resource.getResourceHandle().scopeId;
+    }
+
+    NativeRocksDbMemoryConfiguration configuration() {
+        return resource.getResourceHandle().configuration;
     }
 
     long size() {
@@ -55,8 +67,11 @@ final class NativeRocksDbMemoryLease implements AutoCloseable {
         private final java.util.UUID scopeId = java.util.UUID.randomUUID();
         private final long size;
 
-        private SharedBudget(long size) {
+        private final NativeRocksDbMemoryConfiguration configuration;
+
+        private SharedBudget(long size, NativeRocksDbMemoryConfiguration configuration) {
             this.size = size;
+            this.configuration = configuration;
         }
 
         @Override

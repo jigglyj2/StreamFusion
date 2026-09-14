@@ -24,6 +24,9 @@ import tech.streamfusion.nativebridge.NativeStateResources;
 
 /** Flink resource and checkpoint lifecycle for a shared native tree, independent of operator family. */
 public final class NativeRegionStateLifecycle implements AutoCloseable {
+    private final java.util.function.Function<tech.streamfusion.nativebridge.NativeExecutionContext, AutoCloseable>
+            beforeRestore;
+    private AutoCloseable metricsRegistration;
     private StreamFusionTaskMemory memory;
     private NativeMemoryManager manager;
     private NativeRegionStateParticipant participant;
@@ -32,6 +35,17 @@ public final class NativeRegionStateLifecycle implements AutoCloseable {
     private long fallbackReservation;
     private boolean rawSnapshot = true;
     private NativeRegionWindowClocks windowClocks;
+
+    public NativeRegionStateLifecycle() {
+        this(ignored -> null);
+    }
+
+    /** Register task-owned native metrics after DB creation and before any restore work. */
+    public NativeRegionStateLifecycle(
+            java.util.function.Function<tech.streamfusion.nativebridge.NativeExecutionContext, AutoCloseable>
+                    beforeRestore) {
+        this.beforeRestore = java.util.Objects.requireNonNull(beforeRestore);
+    }
 
     public void initialize(
             StateInitializationContext initialization,
@@ -106,6 +120,59 @@ public final class NativeRegionStateLifecycle implements AutoCloseable {
             byte[] taskBindings,
             boolean sharedRegion)
             throws Exception {
+        initialize(
+                initialization,
+                environment,
+                config,
+                metrics,
+                keyedBackend,
+                maxParallelism,
+                plan,
+                stateIds,
+                taskBindings,
+                sharedRegion,
+                true);
+    }
+
+    public void prepare(
+            StateInitializationContext initialization,
+            Environment environment,
+            StreamConfig config,
+            OperatorMetricGroup metrics,
+            KeyedStateBackend<?> keyedBackend,
+            int maxParallelism,
+            byte[] plan,
+            List<Long> stateIds,
+            byte[] taskBindings,
+            boolean sharedRegion)
+            throws Exception {
+        initialize(
+                initialization,
+                environment,
+                config,
+                metrics,
+                keyedBackend,
+                maxParallelism,
+                plan,
+                stateIds,
+                taskBindings,
+                sharedRegion,
+                false);
+    }
+
+    private void initialize(
+            StateInitializationContext initialization,
+            Environment environment,
+            StreamConfig config,
+            OperatorMetricGroup metrics,
+            KeyedStateBackend<?> keyedBackend,
+            int maxParallelism,
+            byte[] plan,
+            List<Long> stateIds,
+            byte[] taskBindings,
+            boolean sharedRegion,
+            boolean readRawState)
+            throws Exception {
         if (manager != null || stateIds.isEmpty()) {
             throw new IllegalStateException("Native region state must initialize once with state-node identities");
         }
@@ -128,8 +195,18 @@ public final class NativeRegionStateLifecycle implements AutoCloseable {
                     ? new NativeRegionWindowClocks(
                             initialization, tech.streamfusion.proto.plan.v1.NativeRegionPlan.parseFrom(plan), stateIds)
                     : new NativeRegionWindowClocks(initialization, plan, stateIds);
+            Path stateRoot = rocks
+                    ? backend != null && backend.nativeRocksDbStorageRoot() != null
+                            ? backend.nativeRocksDbStorageRoot()
+                            : environment
+                                    .getTaskManagerInfo()
+                                    .getTmpWorkingDirectory()
+                                    .toPath()
+                    : environment.getIOManager().getSpillingDirectories()[0].toPath();
+            // Resolve symlinks and parent components before the native binding normalizes
+            // paths. Lexical normalization alone can select a different filesystem root.
             directory = Files.createTempDirectory(
-                    environment.getIOManager().getSpillingDirectories()[0].toPath(), "streamfusion-region-state-");
+                    Files.createDirectories(stateRoot).toRealPath(), "streamfusion-region-state-");
             java.util.function.Function<NativeMemoryManager, byte[]> bindings = assigned -> {
                 manager = assigned;
                 if (backend != null && backend.nativeRocksDbMemoryScope() != null) {
@@ -158,9 +235,15 @@ public final class NativeRegionStateLifecycle implements AutoCloseable {
                                                 range.getEndKeyGroup(),
                                                 directory.resolve("node-" + id),
                                                 lease,
-                                                NativeRocksDbLogDirectory.resolve(directory.resolve("node-" + id)))
+                                                backend == null
+                                                        ? NativeRocksDbLogDirectory.resolve(
+                                                                directory.resolve("node-" + id))
+                                                        : backend.nativeRocksDbDefaultLogDirectory(
+                                                                directory.resolve("node-" + id)))
                                         : NativeStateResources.memory(
                                                 id, maxParallelism, range.getStartKeyGroup(), range.getEndKeyGroup()))
+                                .map(binding ->
+                                        backend == null ? binding : backend.bindNativeRocksDbConfiguration(binding))
                                 .map(windowClocks::bind)
                                 .collect(Collectors.toList()),
                         java.util.Arrays.stream(environment.getIOManager().getSpillingDirectories())
@@ -172,12 +255,13 @@ public final class NativeRegionStateLifecycle implements AutoCloseable {
                             environment, config, metrics, "streamfusion-native-region", plan, bindings, taskBindings)
                     : StreamFusionTaskMemory.createWithState(
                             environment, config, metrics, "streamfusion-native-region", plan, bindings, taskBindings);
+            metricsRegistration = beforeRestore.apply(memory.executionContext());
             // Flink owns staged checkpoint cleanup after asynchronous upload. Keep those files
             // outside the live database directory that this lifecycle deletes on close.
             participant = new NativeRegionStateParticipant(
                     memory.executionContext().state(), stateIds, range, directory.getParent());
             if (backend != null) backend.registerNativeStateParticipant(participant, rocks);
-            participant.restoreRawState(initialization);
+            if (readRawState) participant.restoreRawState(initialization);
         } catch (Exception | Error failure) {
             try {
                 close();
@@ -186,6 +270,30 @@ public final class NativeRegionStateLifecycle implements AutoCloseable {
             }
             throw failure;
         }
+    }
+
+    /** Attach Flink's actual operator state after an earlier physical restore in backend creation. */
+    public void finishPreparedInitialization(
+            StateInitializationContext initialization,
+            KeyedStateBackend<?> keyedBackend,
+            byte[] plan,
+            List<Long> stateIds,
+            boolean sharedRegion)
+            throws Exception {
+        if (memory == null || backend != keyedBackend)
+            throw new IllegalStateException("Native prepared backend changed");
+        var actual = sharedRegion
+                ? new NativeRegionWindowClocks(
+                        initialization, tech.streamfusion.proto.plan.v1.NativeRegionPlan.parseFrom(plan), stateIds)
+                : new NativeRegionWindowClocks(initialization, plan, stateIds);
+        if (!actual.restored().equals(windowClocks.restored())) {
+            throw new IllegalStateException("Flink restored different union clocks after native state preparation");
+        }
+        windowClocks = actual;
+        participant.restoreRawState(initialization);
+        // The operator now owns the context and its Arrow allocator. Closing a keyed backend
+        // must not invalidate batches still retained by the operator's dispatcher.
+        backend.claimPreparedNativeRegion();
     }
 
     public StreamFusionTaskMemory memory() {
@@ -218,8 +326,11 @@ public final class NativeRegionStateLifecycle implements AutoCloseable {
     @Override
     public void close() throws Exception {
         try {
-            // Close native databases before returning a fallback cache lease to Flink.
-            if (memory != null) memory.executionContext().close();
+            // Stop sampling before closing DBs, including initialization/restore failure.
+            // The region may already have closed this registration; it is idempotent.
+            org.apache.flink.util.IOUtils.closeAll(
+                    metricsRegistration, memory == null ? null : memory.executionContext());
+            metricsRegistration = null;
         } finally {
             try {
                 if (fallbackReservation != 0) {

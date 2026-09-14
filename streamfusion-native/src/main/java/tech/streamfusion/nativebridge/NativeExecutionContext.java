@@ -205,6 +205,20 @@ public final class NativeExecutionContext implements AutoCloseable {
         return readProcessingTimeDeadlines(handle());
     }
 
+    /** Independent RocksDB ticker channel; sampled periodically by Flink's view updater. */
+    public synchronized byte[] stateStatisticsSchema() {
+        return readStateStatisticsSchema(handle());
+    }
+
+    /** Synchronizes against close; the native reader does not acquire operator locks. */
+    public synchronized long[] stateStatisticsSnapshot() {
+        return readStateStatisticsSnapshot(handle());
+    }
+
+    private static native byte[] readStateStatisticsSchema(long handle);
+
+    private static native long[] readStateStatisticsSnapshot(long handle);
+
     /** Gauge names/types/scopes in snapshot order; discover once after state binding. */
     public byte[] gaugeSchema() {
         return readGaugeSchema(handle());

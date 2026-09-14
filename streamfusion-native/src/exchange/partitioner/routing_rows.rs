@@ -14,6 +14,21 @@ pub(super) fn routing_rows(
     max_parallelism: u32,
     destinations: u32,
 ) -> Result<Vec<Vec<u32>>> {
+    let mut rows = vec![Vec::new(); destinations as usize];
+    visit_key_groups(batch, fields, max_parallelism, |row, key_group| {
+        let destination = key_group * destinations / max_parallelism;
+        rows[destination as usize].push(row);
+    })?;
+    Ok(rows)
+}
+
+/// Visits keys in input order using one reusable Flink key-encoding scratch buffer.
+pub(super) fn visit_key_groups(
+    batch: &RecordBatch,
+    fields: &[(usize, KeyField)],
+    max_parallelism: u32,
+    mut visit: impl FnMut(u32, u32),
+) -> Result<()> {
     if batch.num_rows().saturating_sub(1) > u32::MAX as usize {
         return Err(ArrowError::InvalidArgumentError(
             "exchange batch exceeds UInt32 indexing".into(),
@@ -49,7 +64,6 @@ pub(super) fn routing_rows(
     } else {
         None
     };
-    let mut rows = vec![Vec::new(); destinations as usize];
     let mut scratch = Vec::new();
     for row in 0..batch.num_rows() {
         let key = if let Some(keys) = preencoded {
@@ -71,10 +85,9 @@ pub(super) fn routing_rows(
             scratch.as_slice()
         };
         let key_group = assign_key_group(key, max_parallelism);
-        let destination = key_group * destinations / max_parallelism;
-        rows[destination as usize].push(row as u32);
+        visit(row as u32, key_group);
     }
-    Ok(rows)
+    Ok(())
 }
 
 #[cfg(test)]

@@ -11,7 +11,7 @@ pub use snapshot_entries::key_group_snapshot_entries;
 mod snapshot_writer;
 pub use snapshot_writer::{key_group_snapshot_header, SnapshotWriter};
 
-pub const STATE_BACKEND_ABI_VERSION: u32 = 10;
+pub const STATE_BACKEND_ABI_VERSION: u32 = 19;
 pub const STATE_BACKEND_OK: i32 = 0;
 
 /// Optional ABI-8 Arrow schema metadata on scan replies. "true" declares the requested range
@@ -57,8 +57,32 @@ pub struct StateBackendOpenOptions {
     pub memory_limit: usize,
     pub memory_scope_high: u64,
     pub memory_scope_low: u64,
+    /// Effective log path; database_options.retain_log_files controls cleanup ownership.
     pub log_directory: *const u8,
     pub log_directory_len: usize,
+    /// ABI 11: Flink shared-cache geometry, validated before opening the database.
+    pub write_buffer_ratio: f64,
+    pub high_priority_pool_ratio: f64,
+    /// ABI 12: copied settings for this database, independent of shared cache geometry.
+    pub database_options: RocksDbDatabaseOptions,
+    /// ABI 16: borrowed compression codes, valid during open: none=0, Snappy=1,
+    /// Zlib=2, BZip2=3, LZ4=4, LZ4HC=5, ZSTD=7.
+    /// Empty selects base Snappy compression, matching an empty Flink per-level list.
+    pub compression_per_level: *const i32,
+    pub compression_per_level_len: usize,
+    /// ABI 18: optional borrowed statistics reader from this same component.
+    /// A checkpoint reader can contribute to its destination operator's statistics.
+    pub statistics_owner: *const c_void,
+}
+
+/// Valid values for ABI-11 shared-cache geometry, following Flink RocksDBMemoryConfiguration.
+pub fn validate_rocksdb_memory_ratios(write: f64, high: f64) -> Result<(), &'static str> {
+    if !(write > 0.0 && write < 1.0 && high > 0.0 && high < 1.0)
+        || 2.0 * write / (3.0 - write) + high >= 1.0
+    {
+        return Err("invalid Flink RocksDB write-buffer-ratio / high-prio-pool-ratio");
+    }
+    Ok(())
 }
 
 pub type OpenBackend =
@@ -118,6 +142,13 @@ pub struct StateBackendApiV1 {
     pub scan_key_group_admitted: AdmittedArrowOperation,
     /// ABI 10: open an existing checkpoint read-only; never create or repair a database.
     pub open_checkpoint: OpenBackend,
+    /// ABI 18: statistics readers retain only the upstream statistics object, not the database/cache.
+    pub open_statistics: OpenStatistics,
+    pub read_statistics: ReadStatistics,
+    pub close_statistics: CloseBackend,
+    /// ABI 19: coarse bytes required for one statistics owner on this host.
+    /// Query and reserve before enabling statistics; zero means the geometry is unsupported.
+    pub statistics_memory_required: unsafe extern "C" fn() -> usize,
 }
 
 pub type InitializeStateBackend =
@@ -296,3 +327,21 @@ mod tests {
         );
     }
 }
+
+mod rocksdb_options;
+pub use rocksdb_options::{validate_rocksdb_compression, RocksDbDatabaseOptions};
+
+/// Creates an independently owned, thread-safe reader for an enabled backend's statistics.
+pub type OpenStatistics =
+    unsafe extern "C" fn(backend: *mut c_void, output: *mut *mut c_void) -> i32;
+/// Reads at most eleven validated ticker codes into caller-owned values, preserving uint64 bits.
+/// The reader must remain alive until this synchronous call completes.
+pub type ReadStatistics = unsafe extern "C" fn(
+    reader: *const c_void,
+    codes: *const u32,
+    count: usize,
+    values: *mut u64,
+) -> i32;
+
+mod rocksdb_statistics;
+pub use rocksdb_statistics::{validate_rocksdb_tickers, ROCKSDB_TICKER_NAMES};

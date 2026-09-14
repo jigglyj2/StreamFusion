@@ -60,10 +60,15 @@ fn shared_ordered_state_writes_only_changed_candidates_and_preserves_losing_snap
             Box::new(
                 RocksPluginKeyedState::open_configured(
                     &proto::NativeRocksDbState {
+                        statistics_tickers: Vec::new(),
                         plugin_path: plugin.clone().unwrap(),
                         database_path: directory.path().to_str().unwrap().into(),
                         memory_limit: 8 << 20,
                         log_directory: None,
+                        write_buffer_ratio: None,
+                        high_priority_pool_ratio: None,
+                        database_options: None,
+                        partitioned_index_filters: None,
                     },
                     0,
                     127,
@@ -192,10 +197,15 @@ fn small_arrivals_cannot_bypass_retained_history_workspace_admission() {
             Box::new(
                 RocksPluginKeyedState::open_configured(
                     &proto::NativeRocksDbState {
+                        statistics_tickers: Vec::new(),
                         plugin_path: plugin.clone().unwrap(),
                         database_path: directory.path().to_str().unwrap().into(),
                         memory_limit: 8 << 20,
                         log_directory: None,
+                        write_buffer_ratio: None,
+                        high_priority_pool_ratio: None,
+                        database_options: None,
+                        partitioned_index_filters: None,
                     },
                     0,
                     127,

@@ -44,6 +44,7 @@ mod metrics;
 mod region;
 #[cfg(test)]
 mod region_tests;
+mod state_statistics;
 use crate::planner::region::{PhysicalRegion, RegionPlan};
 use definition::Definition;
 mod invocation;

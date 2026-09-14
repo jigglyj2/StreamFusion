@@ -175,7 +175,7 @@ class SharedWindowRuntimeRecoveryTest {
                 .getJobManagerOwnedState();
     }
 
-    private static void input(
+    static void input(
             boolean attached,
             KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> flink,
             KeyedNativeMetricHarness target,
@@ -197,7 +197,7 @@ class SharedWindowRuntimeRecoveryTest {
         compare(attached, flink, target);
     }
 
-    private static void watermark(
+    static void watermark(
             boolean attached,
             KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> flink,
             KeyedNativeMetricHarness target,

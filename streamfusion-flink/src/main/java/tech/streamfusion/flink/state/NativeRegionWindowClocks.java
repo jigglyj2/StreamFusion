@@ -17,7 +17,7 @@ import tech.streamfusion.proto.plan.v1.NativeStateBinding;
 import tech.streamfusion.proto.plan.v1.Operator;
 
 /** Flink union-operator clocks, kept separate from each window's rescalable keyed state. */
-final class NativeRegionWindowClocks {
+public final class NativeRegionWindowClocks {
     private final Map<Long, ListState<Long>> states = new LinkedHashMap<>();
     private final Map<Long, Long> current = new LinkedHashMap<>();
     private final Map<Long, Long> restored = new LinkedHashMap<>();
@@ -36,6 +36,31 @@ final class NativeRegionWindowClocks {
         for (var stage : plan.getStagesList()) initialize(context, stage.getOperator(), stateIds);
     }
 
+    public static java.util.Set<String> stateNames(byte[] bytes, List<Long> stateIds, boolean shared) {
+        try {
+            var names = new java.util.HashSet<String>();
+            if (shared) {
+                var plan = tech.streamfusion.proto.plan.v1.NativeRegionPlan.parseFrom(bytes);
+                for (var stage : plan.getStagesList()) collectNames(stage.getOperator(), stateIds, names);
+            } else {
+                var plan = NativePlan.parseFrom(bytes);
+                if (plan.hasRoot()) collectNames(plan.getRoot(), stateIds, names);
+            }
+            return java.util.Set.copyOf(names);
+        } catch (com.google.protobuf.InvalidProtocolBufferException failure) {
+            throw new IllegalArgumentException("Invalid native window-clock plan", failure);
+        }
+    }
+
+    private static void collectNames(Operator node, List<Long> ids, java.util.Set<String> names) {
+        if (node.hasWindowAggregate() && ids.contains(node.getPlanNodeId())) names.add(stateName(node.getPlanNodeId()));
+        for (var child : NativePhysicalPlan.children(node)) collectNames(child, ids, names);
+    }
+
+    private static String stateName(long id) {
+        return "streamfusion-window-watermark-v1-" + id;
+    }
+
     private void initialize(StateInitializationContext context, Operator node, List<Long> stateIds) throws Exception {
         if (node.hasWindowAggregate() && stateIds.contains(node.getPlanNodeId())) {
             long id = node.getPlanNodeId();
@@ -43,8 +68,7 @@ final class NativeRegionWindowClocks {
             // A fused Flink operator contains several original operators. Namespace their
             // union state by the same stable identity used for native keyed state and metrics.
             var state = context.getOperatorStateStore()
-                    .getUnionListState(new ListStateDescriptor<>(
-                            "streamfusion-window-watermark-v1-" + id, LongSerializer.INSTANCE));
+                    .getUnionListState(new ListStateDescriptor<>(stateName(id), LongSerializer.INSTANCE));
             long watermark = Long.MIN_VALUE;
             if (context.isRestored()) {
                 boolean found = false;

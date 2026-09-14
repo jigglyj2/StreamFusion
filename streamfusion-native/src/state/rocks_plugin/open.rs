@@ -24,6 +24,13 @@ impl RocksPluginKeyedState {
             [0, 0],
             None,
             false,
+            0.5,
+            0.1,
+            None,
+            false,
+            &[],
+            None,
+            None,
         )
     }
 
@@ -43,6 +50,13 @@ impl RocksPluginKeyedState {
             [0, 0],
             None,
             true,
+            0.5,
+            0.1,
+            None,
+            false,
+            &[],
+            None,
+            None,
         )
     }
 
@@ -63,6 +77,13 @@ impl RocksPluginKeyedState {
             owner.rocks_scope()?,
             None,
             false,
+            0.5,
+            0.1,
+            None,
+            false,
+            &[],
+            None,
+            None,
         )
     }
 
@@ -72,7 +93,14 @@ impl RocksPluginKeyedState {
         last_key_group: u32,
         owner: Option<&HostMemoryReservation>,
     ) -> Result<Self> {
-        Self::open_configured_mode(resources, first_key_group, last_key_group, owner, false)
+        Self::open_configured_mode(
+            resources,
+            first_key_group,
+            last_key_group,
+            owner,
+            false,
+            None,
+        )
     }
 
     pub(crate) fn open_checkpoint_configured(
@@ -80,8 +108,16 @@ impl RocksPluginKeyedState {
         first_key_group: u32,
         last_key_group: u32,
         owner: Option<&HostMemoryReservation>,
+        statistics: Option<&RocksPluginStatistics>,
     ) -> Result<Self> {
-        Self::open_configured_mode(resources, first_key_group, last_key_group, owner, true)
+        Self::open_configured_mode(
+            resources,
+            first_key_group,
+            last_key_group,
+            owner,
+            true,
+            statistics,
+        )
     }
 
     fn open_configured_mode(
@@ -90,6 +126,7 @@ impl RocksPluginKeyedState {
         last_key_group: u32,
         owner: Option<&HostMemoryReservation>,
         checkpoint: bool,
+        statistics: Option<&RocksPluginStatistics>,
     ) -> Result<Self> {
         Self::open_scoped(
             Path::new(&resources.plugin_path),
@@ -103,6 +140,13 @@ impl RocksPluginKeyedState {
                 .unwrap_or([0, 0]),
             resources.log_directory.as_deref(),
             checkpoint,
+            resources.write_buffer_ratio.unwrap_or(0.5),
+            resources.high_priority_pool_ratio.unwrap_or(0.1),
+            resources.database_options.as_ref(),
+            resources.partitioned_index_filters.unwrap_or(false),
+            &resources.statistics_tickers,
+            statistics,
+            owner,
         )
     }
 
@@ -116,7 +160,22 @@ impl RocksPluginKeyedState {
         scope: [u64; 2],
         log_directory: Option<&str>,
         checkpoint: bool,
+        write_buffer_ratio: f64,
+        high_priority_pool_ratio: f64,
+        database_options: Option<&crate::proto::NativeRocksDbOptions>,
+        partitioned_index_filters: bool,
+        tickers: &[u32],
+        statistics: Option<&RocksPluginStatistics>,
+        statistics_admission: Option<&HostMemoryReservation>,
     ) -> Result<Self> {
+        streamfusion_state_abi::validate_rocksdb_tickers(tickers).map_err(DataFusionError::Plan)?;
+        let log_directory = database_options
+            .and_then(|options| options.log_directory.as_deref())
+            .or(log_directory);
+        let compression = super::database_options::compression(database_options)?;
+        let mut database_options = super::database_options::resolve(database_options)?;
+        database_options.partitioned_index_filters = partitioned_index_filters as u8;
+        database_options.statistics_enabled = (!tickers.is_empty()) as u8;
         let library = unsafe { Library::new(library_path) }
             .map_err(|error| DataFusionError::External(Box::new(error)))?;
         let initialize = unsafe {
@@ -138,6 +197,13 @@ impl RocksPluginKeyedState {
                 api.abi_version
             )));
         }
+        if statistics.is_some_and(|reader| !std::ptr::eq(reader.api, api)) {
+            return Err(DataFusionError::Execution(
+                "RocksDB statistics owner belongs to a different component".into(),
+            ));
+        }
+        let statistics_memory =
+            super::statistics::admit(api, !tickers.is_empty(), statistics, statistics_admission)?;
         let database_path = database_path.to_str().ok_or_else(|| {
             DataFusionError::Execution("RocksDB state path is not UTF-8".to_string())
         })?;
@@ -153,6 +219,12 @@ impl RocksPluginKeyedState {
             memory_scope_low: scope[1],
             log_directory: log_directory.as_ptr(),
             log_directory_len: log_directory.len(),
+            write_buffer_ratio,
+            high_priority_pool_ratio,
+            database_options,
+            compression_per_level: compression.as_ptr(),
+            compression_per_level_len: compression.len(),
+            statistics_owner: statistics.map_or(ptr::null(), |reader| reader.handle),
         };
         let mut handle = ptr::null_mut();
         let open = if checkpoint {
@@ -171,6 +243,7 @@ impl RocksPluginKeyedState {
             library: Arc::new(library),
             api,
             handle,
+            statistics_memory,
         })
     }
 }

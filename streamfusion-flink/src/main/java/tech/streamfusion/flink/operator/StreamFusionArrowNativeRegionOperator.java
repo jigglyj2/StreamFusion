@@ -52,6 +52,8 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
     private final NativeRegionExchangeOutputs frameOutputs;
     private NativeRegionExchangeOutputs.Runtime frameRuntime;
     private boolean closed;
+    private boolean nativeRestorePrepared;
+    private tech.streamfusion.flink.state.NativeRegionRestoreBootstrap.Registration restoreBootstrap;
 
     StreamFusionArrowNativeRegionOperator(
             StreamOperatorParameters<ArrowRowDataBatch> parameters,
@@ -105,22 +107,80 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
             ports.add(new RegionInput(index + 1));
         }
         inputs = List.copyOf(ports);
+        if (!stateIds.isEmpty()) {
+            restoreBootstrap = tech.streamfusion.flink.state.NativeRegionRestoreBootstrap.register(
+                    environment,
+                    config,
+                    getClass(),
+                    tech.streamfusion.flink.state.NativeRegionWindowClocks.stateNames(plan, stateIds, sharedRegion),
+                    this::prepareNativeRestore);
+        }
     }
 
     @Override
     public void initializeState(org.apache.flink.runtime.state.StateInitializationContext context) throws Exception {
         if (stateIds.isEmpty()) {
             super.initializeState(context);
+        } else if (nativeRestorePrepared) {
+            if (stateLifecycle == null)
+                throw new IllegalStateException("Prepared native restore closed before initialization");
+            stateLifecycle.finishPreparedInitialization(
+                    context, getKeyedStateBackend(), plan, stateIds, sharedPlan != null);
+            memory = stateLifecycle.memory();
         } else {
-            stateLifecycle = new tech.streamfusion.flink.state.NativeRegionStateLifecycle();
-            if (sharedPlan != null) {
+            initializeNativeState(context, getKeyedStateBackend(), false);
+        }
+    }
+
+    private AutoCloseable prepareNativeRestore(
+            tech.streamfusion.flink.state.StreamFusionKeyedStateBackend<?> backend,
+            org.apache.flink.runtime.state.StateInitializationContext context)
+            throws Exception {
+        initializeNativeState(context, backend, true);
+        nativeRestorePrepared = true;
+        var prepared = stateLifecycle;
+        return () -> {
+            try {
+                prepared.close();
+            } finally {
+                if (stateLifecycle == prepared) {
+                    stateLifecycle = null;
+                    memory = null;
+                }
+            }
+        };
+    }
+
+    private void initializeNativeState(
+            org.apache.flink.runtime.state.StateInitializationContext context,
+            org.apache.flink.runtime.state.KeyedStateBackend<?> backend,
+            boolean preparing)
+            throws Exception {
+        stateLifecycle = new tech.streamfusion.flink.state.NativeRegionStateLifecycle(nativeContext -> {
+            initializeMetricTree(nativeContext);
+            return metricTree;
+        });
+        try {
+            if (preparing) {
+                stateLifecycle.prepare(
+                        context,
+                        environment,
+                        config,
+                        getMetricGroup(),
+                        backend,
+                        environment.getTaskInfo().getMaxNumberOfParallelSubtasks(),
+                        plan,
+                        stateIds,
+                        localWindowResources.resolve(environment, config),
+                        sharedPlan != null);
+            } else if (sharedPlan != null) {
                 stateLifecycle.initializeRegion(
                         context,
                         environment,
                         config,
                         getMetricGroup(),
-                        getKeyedStateBackend(),
-                        getRuntimeContext().getTaskInfo().getMaxNumberOfParallelSubtasks(),
+                        backend,
+                        environment.getTaskInfo().getMaxNumberOfParallelSubtasks(),
                         plan,
                         stateIds,
                         localWindowResources.resolve(environment, config));
@@ -130,13 +190,17 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
                         environment,
                         config,
                         getMetricGroup(),
-                        getKeyedStateBackend(),
-                        getRuntimeContext().getTaskInfo().getMaxNumberOfParallelSubtasks(),
+                        backend,
+                        environment.getTaskInfo().getMaxNumberOfParallelSubtasks(),
                         plan,
                         stateIds,
                         localWindowResources.resolve(environment, config));
             }
             memory = stateLifecycle.memory();
+        } catch (Exception | Error failure) {
+            stateLifecycle = null;
+            memory = null;
+            throw failure;
         }
     }
 
@@ -165,6 +229,30 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
     public void snapshotState(org.apache.flink.runtime.state.StateSnapshotContext context) throws Exception {
         if (stateLifecycle == null) super.snapshotState(context);
         else stateLifecycle.writeSnapshot(context);
+    }
+
+    private void initializeMetricTree(tech.streamfusion.nativebridge.NativeExecutionContext nativeContext) {
+        metricTree = sharedPlan == null
+                ? StreamFusionNativeMetricTree.forRegion(
+                        nativeContext.identifiedPlan(),
+                        getOperatorID(),
+                        environment.getMetricGroup(),
+                        environment.getTaskManagerInfo().getConfiguration(),
+                        subtaskIndex)
+                : StreamFusionNativeMetricTree.forSharedRegion(
+                        sharedPlan,
+                        getOperatorID(),
+                        environment.getMetricGroup(),
+                        environment.getTaskManagerInfo().getConfiguration(),
+                        subtaskIndex);
+        try {
+            metricTree.bindStateStatistics(
+                    nativeContext.stateStatisticsSchema(), nativeContext::stateStatisticsSnapshot);
+        } catch (RuntimeException | Error failure) {
+            metricTree.close();
+            metricTree = null;
+            throw failure;
+        }
     }
 
     @Override
@@ -207,19 +295,7 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
             if (exchangePlans.get(port).length != 0)
                 memory.executionContext().prepareExchangeInput(port, exchangePlans.get(port));
         }
-        metricTree = sharedPlan == null
-                ? StreamFusionNativeMetricTree.forRegion(
-                        memory.executionContext().identifiedPlan(),
-                        getOperatorID(),
-                        environment.getMetricGroup(),
-                        environment.getTaskManagerInfo().getConfiguration(),
-                        subtaskIndex)
-                : StreamFusionNativeMetricTree.forSharedRegion(
-                        sharedPlan,
-                        getOperatorID(),
-                        environment.getMetricGroup(),
-                        environment.getTaskManagerInfo().getConfiguration(),
-                        subtaskIndex);
+        if (metricTree == null) initializeMetricTree(memory.executionContext());
         metricTree.bindGauges(
                 memory.executionContext().gaugeSchema(),
                 memory.executionContext()::gaugeSnapshot,
@@ -435,7 +511,11 @@ public final class StreamFusionArrowNativeRegionOperator extends AbstractStreamO
         closed = true;
         try {
             org.apache.flink.util.IOUtils.closeAll(
-                    processingTimers, dispatcher, metricTree, stateLifecycle == null ? memory : stateLifecycle);
+                    restoreBootstrap,
+                    processingTimers,
+                    dispatcher,
+                    metricTree,
+                    stateLifecycle == null ? memory : stateLifecycle);
         } finally {
             processingTimers = null;
             dispatcher = null;

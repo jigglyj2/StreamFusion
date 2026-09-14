@@ -59,10 +59,15 @@ fn point_state_batches_reads_and_writes_only_final_changed_winners() {
             Some(Box::new(
                 RocksPluginKeyedState::open_configured(
                     &proto::NativeRocksDbState {
+                        statistics_tickers: Vec::new(),
                         plugin_path: plugin.clone().unwrap(),
                         database_path: directory.path().to_str().unwrap().into(),
                         memory_limit: 8 << 20,
                         log_directory: None,
+                        write_buffer_ratio: None,
+                        high_priority_pool_ratio: None,
+                        database_options: None,
+                        partitioned_index_filters: None,
                     },
                     0,
                     127,

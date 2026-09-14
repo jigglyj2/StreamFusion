@@ -74,7 +74,9 @@ Flink still owns the network topology, control events, checkpointing, recovery, 
 and rescaling. A native writer receives the existing Arrow batch, reuses its data buffers, adds only
 the Flink record-envelope vectors, and Rust computes exactly the same
 `BinaryRowData` hash, Murmur mix, and stable key group as Flink 2.3. Each schema-free Arrow IPC frame
-contains rows for one key group. Flink maps that key group to the current downstream subtask and can
+contains rows for one key group when unaligned checkpoints require rescalable channel state.
+These frames follow contiguous key-group runs in input order; recurring groups are not collected
+into a single frame. Flink maps each key group to the current downstream subtask and can
 remap restored frames after rescaling with its `RANGE` channel-state mapping. A native reader decodes
 the frame directly at the native-plan edge and restores its owned record envelope. The decoded
 batch stays in Rust; it is not imported into Arrow Java and exported back to Rust. Frame-consuming
@@ -86,8 +88,20 @@ rows form a contiguous range uses an Arrow slice, including non-zero offsets; IP
 slice without first copying it into another Arrow batch. Only scattered destination rows require
 a gather. Nullable, nested, variable-width, decimal, and changelog values retain their Flink bytes.
 
+This preserves Flink's per-channel FIFO ordering, including the order between different keys sent
+to the same downstream subtask. The previous unaligned routing grouped every occurrence of a key
+group across a batch, changing the complete changelog order. Aligned destination routing already
+preserves input order within each destination. Key-group runs use Arrow slices with shared buffers;
+when keys alternate, a run can contain one row and the batch can produce more frames than maximum
+parallelism. This is required by Flink's one-key-group-per-record recovery filter. It can increase
+IPC overhead; no throughput improvement is claimed. The frame format, routing tags, and decoder
+are unchanged. Source comparison uses Flink 2.3.0 `KeyGroupStreamPartitioner` and `RecordWriter`.
+Generated recovery tests now compare complete ordered channel bytes, including changelog kinds,
+timestamps, and control events, against Flink across fragmentation, disk spill, and rescaling.
+
 Routing reserves bucket descriptors, row selections, and reusable key scratch before allocating
-those workspaces. Before each destination is gathered and encoded, it reserves a conservative
+those workspaces. Unaligned admission includes up to one run/frame descriptor per input row.
+Before each destination is gathered and encoded, it reserves a conservative
 Arrow gather/IPC allowance while keeping previously encoded frames charged. The allowance covers
 nested child selections, validity and offset rebasing, IPC padding, and buffer growth. It counts
 transmitted buffer lengths rather than charging a shared input allocation once per column. Input

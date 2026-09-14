@@ -59,6 +59,27 @@ final class SharedAggregateFlinkOracle {
     @SuppressWarnings("unchecked")
     static KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> create(
             boolean rocks, long bundleSize, boolean retractable) throws Exception {
+        return create(rocks, bundleSize, retractable, new org.apache.flink.configuration.Configuration());
+    }
+
+    @SuppressWarnings("unchecked")
+    static KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> create(
+            boolean rocks,
+            long bundleSize,
+            boolean retractable,
+            org.apache.flink.configuration.Configuration backendOptions)
+            throws Exception {
+        return create(rocks, bundleSize, retractable, backendOptions, 0);
+    }
+
+    @SuppressWarnings("unchecked")
+    static KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> create(
+            boolean rocks,
+            long bundleSize,
+            boolean retractable,
+            org.apache.flink.configuration.Configuration backendOptions,
+            long managedMemoryBytes)
+            throws Exception {
         String factory = System.getProperty(StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY);
         String processor = System.getProperty(StreamFusionPlannerFactory.EXEC_GRAPH_PROCESSOR_PROPERTY);
         System.clearProperty(StreamFusionPlannerFactory.FACTORY_CLASS_PROPERTY);
@@ -110,9 +131,11 @@ final class SharedAggregateFlinkOracle {
                     16,
                     1,
                     0);
+            SharedAggregateHarnessMemory.configure(harness.getEnvironment(), managedMemoryBytes);
             harness.setStateBackend(
                     rocks
                             ? new org.apache.flink.state.rocksdb.EmbeddedRocksDBStateBackend(true)
+                                    .configure(backendOptions, SharedAggregateFlinkOracle.class.getClassLoader())
                             : new org.apache.flink.runtime.state.hashmap.HashMapStateBackend());
             harness.setup(new org.apache.flink.table.runtime.typeutils.RowDataSerializer(OUTPUT));
             harness.open();

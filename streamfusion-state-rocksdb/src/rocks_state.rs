@@ -8,10 +8,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, Weak};
 
 use rocksdb::checkpoint::Checkpoint;
-use rocksdb::{BlockBasedOptions, Cache, LruCacheOptions, WriteBatch, WriteBufferManager, DB};
+use rocksdb::{BlockBasedOptions, Cache, LruCacheOptions, WriteBufferManager, DB};
 use streamfusion_state_abi::decode_key_group_snapshot;
 
 mod scan;
+mod write;
 pub use scan::ScanPage;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,6 +43,8 @@ pub struct RocksCheckpoint {
 /// snapshots never require scanning unrelated groups.
 pub struct RocksStateBackend {
     db: DB,
+    write_batch_size: usize,
+    statistics: Option<rocksdb::Options>,
     _shared_memory: Arc<SharedRocksMemory>,
     first_key_group: u32,
     last_key_group: u32,
@@ -51,6 +54,9 @@ pub struct RocksStateBackend {
 
 struct SharedRocksMemory {
     limit: usize,
+    write_buffer_ratio: f64,
+    high_priority_pool_ratio: f64,
+    partitioned_index_filters: bool,
     cache: Cache,
     write_buffers: WriteBufferManager,
 }
@@ -105,29 +111,13 @@ impl RocksStateBackend {
             scope,
             log_directory,
             false,
+            0.5,
+            0.1,
         )
     }
 
-    pub(crate) fn open_checkpoint_configured(
-        path: &Path,
-        first_key_group: u32,
-        last_key_group: u32,
-        memory_limit: usize,
-        scope: [u64; 2],
-        log_directory: Option<&Path>,
-    ) -> Result<Self> {
-        Self::open_configured_mode(
-            path,
-            first_key_group,
-            last_key_group,
-            memory_limit,
-            scope,
-            log_directory,
-            true,
-        )
-    }
-
-    fn open_configured_mode(
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn open_configured_mode(
         path: &Path,
         first_key_group: u32,
         last_key_group: u32,
@@ -135,7 +125,107 @@ impl RocksStateBackend {
         scope: [u64; 2],
         log_directory: Option<&Path>,
         checkpoint: bool,
+        write_buffer_ratio: f64,
+        high_priority_pool_ratio: f64,
     ) -> Result<Self> {
+        Self::open_database_options(
+            path,
+            first_key_group,
+            last_key_group,
+            memory_limit,
+            scope,
+            log_directory,
+            checkpoint,
+            write_buffer_ratio,
+            high_priority_pool_ratio,
+            &streamfusion_state_abi::RocksDbDatabaseOptions::default(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn open_database_options(
+        path: &Path,
+        first_key_group: u32,
+        last_key_group: u32,
+        memory_limit: usize,
+        scope: [u64; 2],
+        log_directory: Option<&Path>,
+        checkpoint: bool,
+        write_buffer_ratio: f64,
+        high_priority_pool_ratio: f64,
+        database_options: &streamfusion_state_abi::RocksDbDatabaseOptions,
+    ) -> Result<Self> {
+        Self::open_database_configuration(
+            path,
+            first_key_group,
+            last_key_group,
+            memory_limit,
+            scope,
+            log_directory,
+            checkpoint,
+            write_buffer_ratio,
+            high_priority_pool_ratio,
+            database_options,
+            &[1],
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn open_database_configuration(
+        path: &Path,
+        first_key_group: u32,
+        last_key_group: u32,
+        memory_limit: usize,
+        scope: [u64; 2],
+        log_directory: Option<&Path>,
+        checkpoint: bool,
+        write_buffer_ratio: f64,
+        high_priority_pool_ratio: f64,
+        database_options: &streamfusion_state_abi::RocksDbDatabaseOptions,
+        compression: &[i32],
+    ) -> Result<Self> {
+        Self::open_with_statistics(
+            path,
+            first_key_group,
+            last_key_group,
+            memory_limit,
+            scope,
+            log_directory,
+            checkpoint,
+            write_buffer_ratio,
+            high_priority_pool_ratio,
+            database_options,
+            compression,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn open_with_statistics(
+        path: &Path,
+        first_key_group: u32,
+        last_key_group: u32,
+        memory_limit: usize,
+        scope: [u64; 2],
+        log_directory: Option<&Path>,
+        checkpoint: bool,
+        write_buffer_ratio: f64,
+        high_priority_pool_ratio: f64,
+        database_options: &streamfusion_state_abi::RocksDbDatabaseOptions,
+        compression: &[i32],
+        statistics_owner: Option<&rocksdb::Options>,
+    ) -> Result<Self> {
+        streamfusion_state_abi::validate_rocksdb_compression(compression)
+            .map_err(|error| Error::new(ErrorKind::InvalidInput, error))?;
+        database_options
+            .validate()
+            .map_err(|error| Error::new(ErrorKind::InvalidInput, error))?;
+        if statistics_owner.is_some() && database_options.statistics_enabled == 0 {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "shared RocksDB statistics require statistics to be enabled",
+            ));
+        }
         if first_key_group > last_key_group {
             return Err(Error::new(
                 ErrorKind::InvalidInput,
@@ -148,8 +238,22 @@ impl RocksStateBackend {
                 "RocksDB state memory limit must be at least 256 KiB",
             ));
         }
-        let shared_memory = shared_rocks_memory(memory_limit, scope)?;
-        let mut options = crate::flink_options::base_options().map_err(rocks_error)?;
+        let shared_memory = shared_rocks_memory_with_index_filters(
+            memory_limit,
+            scope,
+            write_buffer_ratio,
+            high_priority_pool_ratio,
+            database_options.partitioned_index_filters != 0,
+        )?;
+        let mut options = crate::flink_options::configured_options_with_statistics(
+            database_options,
+            compression,
+            statistics_owner,
+        )
+        .map_err(rocks_error)?;
+        // Capture before path-specific options and managed resources: restore readers share
+        // statistics, while their log directory, cache and WBM belong to their own opening.
+        let statistics = (database_options.statistics_enabled != 0).then(|| options.clone());
         if let Some(directory) = log_directory {
             if !directory.is_absolute() || !path.is_absolute() {
                 return Err(Error::new(
@@ -160,8 +264,25 @@ impl RocksStateBackend {
             options.set_db_log_dir(directory);
         }
         let mut table_options = BlockBasedOptions::default();
-        table_options.set_block_size(4096);
-        table_options.set_metadata_block_size(4096);
+        table_options.set_block_size(database_options.block_size as usize);
+        table_options.set_metadata_block_size(database_options.metadata_block_size as usize);
+        if database_options.bloom_enabled != 0 {
+            // Flink RocksDBResourceContainer.overwriteFilterIfExist deliberately replaces a
+            // configured filter with a ten-bit full filter when partitioning is enabled.
+            let bits = if shared_memory.partitioned_index_filters {
+                10.0
+            } else {
+                database_options.bloom_bits_per_key
+            };
+            let block_based = !shared_memory.partitioned_index_filters
+                && database_options.bloom_block_based_mode != 0;
+            table_options.set_bloom_filter(bits, block_based);
+        }
+        if shared_memory.partitioned_index_filters {
+            table_options.set_index_type(rocksdb::BlockBasedIndexType::TwoLevelIndexSearch);
+            table_options.set_partition_filters(true);
+            table_options.set_pin_top_level_index_and_filter(true);
+        }
         table_options.set_block_cache(&shared_memory.cache);
         // Keep index and filter blocks inside the same Flink-reserved cache instead of letting
         // RocksDB allocate an invisible second pool. Pinning L0 metadata avoids cache churn while
@@ -189,11 +310,22 @@ impl RocksStateBackend {
         .map_err(rocks_error)?;
         Ok(Self {
             db,
+            write_batch_size: database_options.write_batch_size as usize,
+            statistics,
             _shared_memory: shared_memory,
             first_key_group,
             last_key_group,
-            _logs: crate::log_directory::LogDirectory::new(path, log_directory),
+            _logs: crate::log_directory::LogDirectory::new(
+                path,
+                log_directory.filter(|_| database_options.retain_log_files == 0),
+            ),
         })
+    }
+
+    pub(crate) fn statistics_reader(&self) -> Result<rocksdb::Options> {
+        self.statistics
+            .clone()
+            .ok_or_else(|| Error::other("RocksDB statistics are not enabled"))
     }
 
     /// Performs one RocksDB multi-get for the entire incoming Arrow/operator batch.
@@ -259,7 +391,7 @@ impl RocksStateBackend {
             .collect()
     }
 
-    /// Applies one RocksDB WriteBatch for the entire incoming Arrow/operator batch.
+    /// Flushes all dirty mutations at the Arrow/operator batch boundary in bounded RocksDB writes.
     pub fn write_batch(&self, mutations: Vec<StateMutation>) -> Result<()> {
         self.write_batch_refs(mutations.iter().map(|mutation| {
             (
@@ -270,23 +402,21 @@ impl RocksStateBackend {
         }))
     }
 
-    /// Borrows Arrow-owned mutations until RocksDB copies them into its native WriteBatch.
-    pub fn write_batch_refs<'a>(
-        &self,
-        mutations: impl IntoIterator<Item = (u32, &'a [u8], Option<&'a [u8]>)>,
-    ) -> Result<()> {
-        let mut batch = WriteBatch::default();
-        for (key_group, key, value) in mutations {
+    /// Borrows Arrow-owned mutations. Validate the complete replayable iterator before writing,
+    /// so an invalid later key group cannot leave earlier chunks committed.
+    pub fn write_batch_refs<'a, I>(&self, mutations: I) -> Result<()>
+    where
+        I: IntoIterator<Item = (u32, &'a [u8], Option<&'a [u8]>)>,
+        I::IntoIter: Clone,
+    {
+        let mutations = mutations.into_iter();
+        for (key_group, _, _) in mutations.clone() {
             self.check_owned(key_group)?;
-            let key = database_key_parts(key_group, key);
-            match value {
-                Some(value) => batch.put(key, value),
-                None => batch.delete(key),
-            }
         }
-        // Flink's RocksDB state backend disables WAL as well: checkpoint state and input replay,
-        // rather than a task-local log, define recovery durability.
-        self.db.write_without_wal(batch).map_err(rocks_error)
+        write::flush_batches(mutations, self.write_batch_size, |batch| {
+            // Flink disables WAL too: completed checkpoints and replay establish durability.
+            self.db.write_without_wal(batch).map_err(rocks_error)
+        })
     }
 
     /// Emits the backend-neutral SFS1 key-group representation used by memory state as well.
@@ -389,15 +519,51 @@ impl RocksStateBackend {
     }
 }
 
+#[cfg(test)]
 fn shared_rocks_memory(memory_limit: usize, scope: [u64; 2]) -> Result<Arc<SharedRocksMemory>> {
+    shared_rocks_memory_configured(memory_limit, scope, 0.5, 0.1)
+}
+
+#[cfg(test)]
+fn shared_rocks_memory_configured(
+    memory_limit: usize,
+    scope: [u64; 2],
+    write_buffer_ratio: f64,
+    high_priority_pool_ratio: f64,
+) -> Result<Arc<SharedRocksMemory>> {
+    shared_rocks_memory_with_index_filters(
+        memory_limit,
+        scope,
+        write_buffer_ratio,
+        high_priority_pool_ratio,
+        false,
+    )
+}
+
+fn shared_rocks_memory_with_index_filters(
+    memory_limit: usize,
+    scope: [u64; 2],
+    write_buffer_ratio: f64,
+    high_priority_pool_ratio: f64,
+    partitioned_index_filters: bool,
+) -> Result<Arc<SharedRocksMemory>> {
+    streamfusion_state_abi::validate_rocksdb_memory_ratios(
+        write_buffer_ratio,
+        high_priority_pool_ratio,
+    )
+    .map_err(|error| Error::new(ErrorKind::InvalidInput, error))?;
     let mut pools = SHARED_ROCKS_MEMORY
         .lock()
         .map_err(|_| Error::other("native RocksDB shared-memory registry is poisoned"))?;
     if let Some(existing) = pools.get(&scope).and_then(Weak::upgrade) {
-        if existing.limit != memory_limit {
+        if existing.limit != memory_limit
+            || existing.write_buffer_ratio != write_buffer_ratio
+            || existing.high_priority_pool_ratio != high_priority_pool_ratio
+            || existing.partitioned_index_filters != partitioned_index_filters
+        {
             return Err(Error::new(
                 ErrorKind::InvalidInput,
-                "RocksDB resource identity reused with a different memory budget",
+                "RocksDB resource identity reused with a different memory budget or cache geometry",
             ));
         }
         return Ok(existing);
@@ -406,19 +572,22 @@ fn shared_rocks_memory(memory_limit: usize, scope: [u64; 2]) -> Result<Arc<Share
     // threshold: cache=(3-write_ratio)*budget/3, WBM=2*budget*write_ratio/3.
     // The default write ratio is 0.5 and high-priority cache ratio is 0.1. These pools
     // share one Flink resource across DBs; WBM charges its entries to that same cache.
-    let cache_capacity = (2.5 * memory_limit as f64 / 3.0) as usize;
+    let cache_capacity = ((3.0 - write_buffer_ratio) * memory_limit as f64 / 3.0) as usize;
     let mut cache_options = LruCacheOptions::default();
     cache_options.set_capacity(cache_capacity);
     cache_options.set_num_shard_bits(-1);
-    cache_options.set_high_pri_pool_ratio(0.1);
+    cache_options.set_high_pri_pool_ratio(high_priority_pool_ratio);
     let cache = Cache::new_lru_cache_opts(&cache_options);
     let write_buffers = WriteBufferManager::new_write_buffer_manager_with_cache(
-        (memory_limit as f64 / 3.0) as usize,
+        (2.0 * memory_limit as f64 * write_buffer_ratio / 3.0) as usize,
         false,
         cache.clone(),
     );
     let shared = Arc::new(SharedRocksMemory {
         limit: memory_limit,
+        write_buffer_ratio,
+        high_priority_pool_ratio,
+        partitioned_index_filters,
         cache,
         write_buffers,
     });
@@ -667,3 +836,21 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod memory_configuration_tests;
+
+#[cfg(test)]
+mod database_configuration_tests;
+
+#[cfg(test)]
+mod filter_configuration_tests;
+
+#[cfg(test)]
+mod partition_configuration_tests;
+
+#[cfg(test)]
+mod compression_configuration_tests;
+
+#[cfg(test)]
+mod statistics_configuration_tests;

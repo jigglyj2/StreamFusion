@@ -72,10 +72,15 @@ fn resources(
                 None => proto::native_state_binding::Backend::Memory(proto::NativeMemoryState {}),
                 Some(path) => {
                     proto::native_state_binding::Backend::Rocksdb(proto::NativeRocksDbState {
+                        statistics_tickers: Vec::new(),
                         plugin_path: std::env::var("STREAMFUSION_TEST_ROCKSDB_PLUGIN").unwrap(),
                         database_path: path.to_str().unwrap().into(),
                         memory_limit: 8 << 20,
                         log_directory: None,
+                        write_buffer_ratio: None,
+                        high_priority_pool_ratio: None,
+                        database_options: None,
+                        partitioned_index_filters: None,
                     })
                 }
             }),

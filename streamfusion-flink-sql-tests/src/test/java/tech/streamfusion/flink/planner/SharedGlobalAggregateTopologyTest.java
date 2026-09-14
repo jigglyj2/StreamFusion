@@ -131,7 +131,7 @@ class SharedGlobalAggregateTopologyTest {
                         .hasRootCauseMessage(
                                 option.contains("latency")
                                         ? "metrics: keyed-state latency histograms are not yet published by shared native state"
-                                        : "metrics: enabled RocksDB native metrics are not yet published by shared native state");
+                                        : "metrics: enabled RocksDB column-family property metrics are not yet published by shared native state");
                 assertThat(StreamFusionGlobalGroupAggregateSupport.unsupportedReason(
                                 original(config()), new ProcessorContext(planner)))
                         .startsWith("metrics:");

@@ -3,33 +3,74 @@
 
 use rocksdb::{DBCompactionStyle, DBCompressionType, LogLevel, Options};
 
-/// Flink 2.3 RocksDBResourceContainer / RocksDBConfigurableOptions defaults. Cache and
-/// write-buffer-manager pools are attached by the shared managed-memory owner; these defaults
-/// alone do not establish full configuration parity or permit production admission.
-pub(crate) fn base_options() -> Result<Options, rocksdb::Error> {
+/// Applies supported Flink 2.3 RocksDBResourceContainer / RocksDBConfigurableOptions settings.
+/// Cache and write-buffer-manager pools are attached by the shared managed-memory owner.
+/// Unimplemented configuration remains a planner fallback.
+pub(crate) fn configured_options_with_statistics(
+    config: &streamfusion_state_abi::RocksDbDatabaseOptions,
+    compression: &[i32],
+    statistics_owner: Option<&Options>,
+) -> Result<Options, rocksdb::Error> {
     // The safe upstream binding has no dedicated shutdown-flush setter. Parse this before
     // attaching resources with Rust-managed lifetimes (cache, WBM, callbacks, etc.).
-    let mut options =
-        Options::default().get_options_from_string("avoid_flush_during_shutdown=true;")?;
+    let mut options = statistics_owner
+        .cloned()
+        .unwrap_or_default()
+        .get_options_from_string(if config.compaction_style == 3 {
+            "avoid_flush_during_shutdown=true;compaction_style=kCompactionStyleNone;"
+        } else {
+            "avoid_flush_during_shutdown=true;"
+        })?;
+    if config.statistics_enabled != 0 && statistics_owner.is_none() {
+        options.enable_statistics();
+    }
     options.create_if_missing(true);
     options.set_use_fsync(false);
     options.set_stats_dump_period_sec(0);
-    options.set_max_background_jobs(2);
-    options.set_max_open_files(-1);
-    options.set_log_level(LogLevel::Info);
-    options.set_max_log_file_size(25 << 20);
-    options.set_keep_log_file_num(4);
-    options.set_compaction_style(DBCompactionStyle::Level);
-    options.set_level_compaction_dynamic_level_bytes(false);
-    options.set_target_file_size_base(64 << 20);
-    options.set_max_bytes_for_level_base(256 << 20);
-    options.set_min_write_buffer_number_to_merge(1);
-    options.set_write_buffer_size(64 << 20);
-    options.set_max_write_buffer_number(2);
-    options.set_periodic_compaction_seconds(30 * 24 * 60 * 60);
-    // Snappy must also be compiled into RocksDB; the checkpoint test verifies actual SSTs.
+    options.set_max_background_jobs(config.max_background_jobs);
+    options.set_max_open_files(config.max_open_files);
+    options.set_log_level(match config.log_level {
+        0 => LogLevel::Debug,
+        1 => LogLevel::Info,
+        2 => LogLevel::Warn,
+        3 => LogLevel::Error,
+        4 => LogLevel::Fatal,
+        5 => LogLevel::Header,
+        _ => unreachable!("database options validated before construction"),
+    });
+    options.set_max_log_file_size(config.max_log_file_size as usize);
+    options.set_keep_log_file_num(config.keep_log_file_num as usize);
+    match config.compaction_style {
+        0 => options.set_compaction_style(DBCompactionStyle::Level),
+        1 => options.set_compaction_style(DBCompactionStyle::Universal),
+        3 => {} // Set through the upstream options parser before attaching resources above.
+        _ => unreachable!("compaction style validated before construction"),
+    }
+    options.set_level_compaction_dynamic_level_bytes(config.dynamic_level_bytes != 0);
+    options.set_target_file_size_base(config.target_file_size_base);
+    options.set_max_bytes_for_level_base(config.max_bytes_for_level_base);
+    options.set_min_write_buffer_number_to_merge(config.min_write_buffer_number_to_merge);
+    options.set_write_buffer_size(config.write_buffer_size as usize);
+    options.set_max_write_buffer_number(config.max_write_buffer_number);
+    options.set_periodic_compaction_seconds(config.periodic_compaction_seconds);
+    // Flink retains base Snappy when the per-level list is empty. All admitted codecs
+    // are compiled into this component; checkpoint tests verify actual SSTs.
     options.set_compression_type(DBCompressionType::Snappy);
-    options.set_compression_per_level(&[DBCompressionType::Snappy]);
+    options.set_compression_per_level(
+        &compression
+            .iter()
+            .map(|level| match level {
+                0 => DBCompressionType::None,
+                1 => DBCompressionType::Snappy,
+                2 => DBCompressionType::Zlib,
+                3 => DBCompressionType::Bz2,
+                4 => DBCompressionType::Lz4,
+                5 => DBCompressionType::Lz4hc,
+                7 => DBCompressionType::Zstd,
+                _ => unreachable!("compression validated before construction"),
+            })
+            .collect::<Vec<_>>(),
+    );
     Ok(options)
 }
 

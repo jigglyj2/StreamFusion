@@ -15,6 +15,11 @@ public interface NativeIncrementalStateParticipant {
     /** Creates a stable local RocksDB checkpoint before asynchronous upload starts. */
     Path prepareIncrementalCheckpoint(long checkpointId) throws Exception;
 
+    /** Creates the checkpoint at Flink's selected local-backup path, which must not exist. */
+    default Path prepareIncrementalCheckpoint(long checkpointId, Path directory) throws Exception {
+        throw new UnsupportedOperationException("Native participant does not support Flink local backup");
+    }
+
     /** Records exact upload and shared-state reuse after Flink materializes its file handle. */
     default void completeIncrementalCheckpoint(long checkpointId, long uploadedBytes, long reusedBytes) {}
 

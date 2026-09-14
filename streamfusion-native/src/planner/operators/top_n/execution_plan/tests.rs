@@ -64,10 +64,15 @@ fn resources(rocks: Option<(&str, &std::path::Path)>) -> proto::NativeStateBindi
                 None => proto::native_state_binding::Backend::Memory(proto::NativeMemoryState {}),
                 Some((plugin, directory)) => {
                     proto::native_state_binding::Backend::Rocksdb(proto::NativeRocksDbState {
+                        statistics_tickers: Vec::new(),
                         plugin_path: plugin.into(),
                         database_path: directory.to_str().unwrap().into(),
                         memory_limit: 8 << 20,
                         log_directory: None,
+                        write_buffer_ratio: None,
+                        high_priority_pool_ratio: None,
+                        database_options: None,
+                        partitioned_index_filters: None,
                     })
                 }
             }),

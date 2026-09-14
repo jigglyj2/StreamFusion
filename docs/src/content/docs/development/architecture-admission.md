@@ -33,7 +33,8 @@ budget, and backend configuration constraints.
 
 Calc, UNION ALL, verified binary inner MultiJoin, and synchronous keyed BIGINT aggregation
 compose through the common native region. The join and aggregate subsets are admitted with
-in-memory or supported default RocksDB state. Aggregation admits BIGINT COUNT (including DISTINCT),
+in-memory or supported RocksDB state. The [RocksDB configuration table](/StreamFusion/development/rocksdb-configuration/)
+lists propagated settings and remaining fallback conditions. Aggregation admits BIGINT COUNT (including DISTINCT),
 non-DISTINCT SUM/SUM0/MIN/MAX/AVG, BIGINT arguments, and BIGINT/INTEGER/VARCHAR grouping keys.
 Mini-batch, singleton/global and other aggregate subsets retain explicit production restrictions.
 Two-phase UTC event-time TUMBLE/HOP windows also compose through this runtime: append-only BIGINT
@@ -117,10 +118,14 @@ terminal callbacks are tested through Flink's operator wrapper and network task 
 Control requests address stable stage IDs for watermarks, pre-checkpoint flush, and end-of-input.
 Ordinary invocation EOF does not substitute for a control event. Unknown stages, invalid bindings,
 and unsupported protocol versions fail closed. Plan protocol 3, control-edge API 2, and gauge-edge
-API 1 are required. Production state bindings use protocol 4 to carry Flink spill directories,
-and canonical state streaming uses edge version 2. The state plugin ABI is version 10, including
+API 1 are required. Production state bindings use protocol 4 for Flink spill directories and protocol 5 when
+carrying configured RocksDB memory ratios, protocol 6 for base database/table options, protocol 7 for filters/compression/log levels, protocol 8 for shared partitioning/compaction style, protocol 9 for explicit log-directory ownership, protocol 10 for bulk-write thresholds, or protocol 11 for RocksDB ticker selection,
+and canonical state streaming uses edge version 2. The state plugin ABI is version 19, including
 Flink resource-scope identity, admitted ordered scans, task-resolved RocksDB log directories,
-and a read-only checkpoint opener. Core and state-component ABI versions must match.
+a read-only checkpoint opener, statistics readers and their shared memory-admission query.
+The eleven Flink ticker options are supported; column-family properties and keyed-state latency
+histograms still require whole-plan fallback.
+Core and state-component ABI versions must match.
 
 ## Evidence and next milestone
 

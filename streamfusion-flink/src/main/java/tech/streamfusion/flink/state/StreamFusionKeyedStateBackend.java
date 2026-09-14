@@ -4,24 +4,14 @@
  */
 package tech.streamfusion.flink.state;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-import java.io.DataInputStream;
-import java.io.DataOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.RunnableFuture;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.apache.flink.api.common.state.InternalCheckpointListener;
 import org.apache.flink.api.common.state.State;
@@ -29,10 +19,9 @@ import org.apache.flink.api.common.state.StateDescriptor;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.runtime.checkpoint.CheckpointOptions;
+import org.apache.flink.runtime.state.AbstractIncrementalStateHandle;
 import org.apache.flink.runtime.state.CheckpointStreamFactory;
 import org.apache.flink.runtime.state.CheckpointableKeyedStateBackend;
-import org.apache.flink.runtime.state.CheckpointedStateScope;
-import org.apache.flink.runtime.state.IncrementalKeyedStateHandle.HandleAndLocalPath;
 import org.apache.flink.runtime.state.IncrementalRemoteKeyedStateHandle;
 import org.apache.flink.runtime.state.KeyGroupRange;
 import org.apache.flink.runtime.state.KeyGroupedInternalPriorityQueue;
@@ -44,33 +33,144 @@ import org.apache.flink.runtime.state.PriorityComparable;
 import org.apache.flink.runtime.state.SavepointResources;
 import org.apache.flink.runtime.state.SnapshotResult;
 import org.apache.flink.runtime.state.StateSnapshotTransformer;
-import org.apache.flink.runtime.state.StreamStateHandle;
 import org.apache.flink.runtime.state.heap.HeapPriorityQueueElement;
 
 /** Delegates Flink state while checkpointing a registered native RocksDB participant. */
 public final class StreamFusionKeyedStateBackend<K>
         implements CheckpointableKeyedStateBackend<K>, InternalCheckpointListener {
-    private static final byte[] META_MAGIC = new byte[] {'S', 'F', 'I', '1'};
 
     private final CheckpointableKeyedStateBackend<K> delegate;
-    private final List<IncrementalRemoteKeyedStateHandle> restoredNativeHandles;
+    private final List<AbstractIncrementalStateHandle> restoredNativeHandles;
+    private final org.apache.flink.runtime.state.LocalRecoveryConfig localRecovery;
     private final UUID backendIdentifier;
     private final String nativeBackendType;
     private final NativeRocksDbMemoryLease nativeRocksDbMemory;
-    private final Map<Long, Map<String, SharedFile>> pendingSharedFiles = new ConcurrentHashMap<>();
-    private volatile Map<String, SharedFile> completedSharedFiles = Map.of();
+    private final Path nativeRocksDbStorageRoot;
+    private final NativeRocksDbTransfers nativeRocksDbTransfers;
+    private final List<Integer> nativeRocksDbStatistics;
+    private final tech.streamfusion.proto.plan.v1.NativeRocksDbOptions nativeRocksDbOptions;
+    private final Map<Long, Map<String, NativeCheckpointUpload.SharedFile>> pendingSharedFiles =
+            new ConcurrentHashMap<>();
+    private volatile Map<String, NativeCheckpointUpload.SharedFile> completedSharedFiles = Map.of();
     private volatile long completedCheckpointId = -1;
     private volatile NativeIncrementalStateParticipant participant;
+    private NativeCheckpointRestore preparedRestore;
+    private java.io.Closeable preparedRegionOwner;
     private volatile boolean nativeFileSnapshotsEnabled;
     private final boolean configuredIncrementalCheckpoints;
     private final org.apache.flink.core.fs.CloseableRegistry uploads = new org.apache.flink.core.fs.CloseableRegistry();
 
     StreamFusionKeyedStateBackend(
             CheckpointableKeyedStateBackend<K> delegate,
-            List<IncrementalRemoteKeyedStateHandle> restoredNativeHandles,
+            List<? extends AbstractIncrementalStateHandle> restoredNativeHandles,
             String nativeBackendType,
             NativeRocksDbMemoryLease nativeRocksDbMemory,
             boolean configuredIncrementalCheckpoints) {
+        this(
+                delegate,
+                restoredNativeHandles,
+                nativeBackendType,
+                nativeRocksDbMemory,
+                configuredIncrementalCheckpoints,
+                null);
+    }
+
+    StreamFusionKeyedStateBackend(
+            CheckpointableKeyedStateBackend<K> delegate,
+            List<? extends AbstractIncrementalStateHandle> restoredNativeHandles,
+            String nativeBackendType,
+            NativeRocksDbMemoryLease nativeRocksDbMemory,
+            boolean configuredIncrementalCheckpoints,
+            tech.streamfusion.proto.plan.v1.NativeRocksDbOptions nativeRocksDbOptions) {
+        this(
+                delegate,
+                restoredNativeHandles,
+                nativeBackendType,
+                nativeRocksDbMemory,
+                configuredIncrementalCheckpoints,
+                nativeRocksDbOptions,
+                null);
+    }
+
+    StreamFusionKeyedStateBackend(
+            CheckpointableKeyedStateBackend<K> delegate,
+            List<? extends AbstractIncrementalStateHandle> restoredNativeHandles,
+            String nativeBackendType,
+            NativeRocksDbMemoryLease nativeRocksDbMemory,
+            boolean configuredIncrementalCheckpoints,
+            tech.streamfusion.proto.plan.v1.NativeRocksDbOptions nativeRocksDbOptions,
+            Path nativeRocksDbStorageRoot) {
+        this(
+                delegate,
+                restoredNativeHandles,
+                nativeBackendType,
+                nativeRocksDbMemory,
+                configuredIncrementalCheckpoints,
+                nativeRocksDbOptions,
+                nativeRocksDbStorageRoot,
+                null);
+    }
+
+    StreamFusionKeyedStateBackend(
+            CheckpointableKeyedStateBackend<K> delegate,
+            List<? extends AbstractIncrementalStateHandle> restoredNativeHandles,
+            String nativeBackendType,
+            NativeRocksDbMemoryLease nativeRocksDbMemory,
+            boolean configuredIncrementalCheckpoints,
+            tech.streamfusion.proto.plan.v1.NativeRocksDbOptions nativeRocksDbOptions,
+            Path nativeRocksDbStorageRoot,
+            NativeRocksDbTransfers nativeRocksDbTransfers) {
+        this(
+                delegate,
+                restoredNativeHandles,
+                nativeBackendType,
+                nativeRocksDbMemory,
+                configuredIncrementalCheckpoints,
+                nativeRocksDbOptions,
+                nativeRocksDbStorageRoot,
+                nativeRocksDbTransfers,
+                List.of());
+    }
+
+    StreamFusionKeyedStateBackend(
+            CheckpointableKeyedStateBackend<K> delegate,
+            List<? extends AbstractIncrementalStateHandle> restoredNativeHandles,
+            String nativeBackendType,
+            NativeRocksDbMemoryLease nativeRocksDbMemory,
+            boolean configuredIncrementalCheckpoints,
+            tech.streamfusion.proto.plan.v1.NativeRocksDbOptions nativeRocksDbOptions,
+            Path nativeRocksDbStorageRoot,
+            NativeRocksDbTransfers nativeRocksDbTransfers,
+            List<Integer> nativeRocksDbStatistics) {
+        this(
+                delegate,
+                restoredNativeHandles,
+                nativeBackendType,
+                nativeRocksDbMemory,
+                configuredIncrementalCheckpoints,
+                nativeRocksDbOptions,
+                nativeRocksDbStorageRoot,
+                nativeRocksDbTransfers,
+                nativeRocksDbStatistics,
+                org.apache.flink.runtime.state.LocalRecoveryConfig.BACKUP_AND_RECOVERY_DISABLED);
+    }
+
+    StreamFusionKeyedStateBackend(
+            CheckpointableKeyedStateBackend<K> delegate,
+            List<? extends AbstractIncrementalStateHandle> restoredNativeHandles,
+            String nativeBackendType,
+            NativeRocksDbMemoryLease nativeRocksDbMemory,
+            boolean configuredIncrementalCheckpoints,
+            tech.streamfusion.proto.plan.v1.NativeRocksDbOptions nativeRocksDbOptions,
+            Path nativeRocksDbStorageRoot,
+            NativeRocksDbTransfers nativeRocksDbTransfers,
+            List<Integer> nativeRocksDbStatistics,
+            org.apache.flink.runtime.state.LocalRecoveryConfig localRecovery) {
+        this.localRecovery = localRecovery;
+        this.nativeRocksDbStatistics = List.copyOf(nativeRocksDbStatistics);
+        this.nativeRocksDbTransfers = nativeRocksDbTransfers;
+        this.nativeRocksDbStorageRoot = nativeRocksDbStorageRoot;
+        this.nativeRocksDbOptions = nativeRocksDbOptions;
         this.delegate = delegate;
         this.configuredIncrementalCheckpoints = configuredIncrementalCheckpoints;
         this.restoredNativeHandles = new ArrayList<>(restoredNativeHandles);
@@ -88,17 +188,42 @@ public final class StreamFusionKeyedStateBackend<K>
         }
         this.participant = participant;
         this.nativeFileSnapshotsEnabled = nativeFileSnapshotsEnabled;
-        for (IncrementalRemoteKeyedStateHandle handle : restoredNativeHandles) {
-            Path directory = materialize(handle);
-            try {
-                KeyGroupRange assignedRange = handle.getKeyGroupRange().getIntersection(getKeyGroupRange());
-                if (!KeyGroupRange.EMPTY_KEY_GROUP_RANGE.equals(assignedRange)) {
-                    participant.restoreIncrementalCheckpoint(directory, assignedRange);
-                }
-            } finally {
-                deleteDirectory(directory);
-            }
+        if (preparedRestore == null && !restoredNativeHandles.isEmpty()) {
+            throw new IllegalStateException("Native checkpoint files must be prepared during keyed-backend creation");
         }
+        if (preparedRestore != null) preparedRestore.restore(participant);
+    }
+
+    void ownPreparedNativeRegion(AutoCloseable owner) throws IOException {
+        if (preparedRegionOwner != null) throw new IllegalStateException("Prepared native region already owned");
+        preparedRegionOwner = () -> {
+            try {
+                owner.close();
+            } catch (IOException failure) {
+                throw failure;
+            } catch (Exception failure) {
+                throw new IOException("Could not close prepared native region", failure);
+            }
+        };
+        uploads.registerCloseable(preparedRegionOwner);
+    }
+
+    void claimPreparedNativeRegion() throws IOException {
+        if (preparedRegionOwner == null || !uploads.unregisterCloseable(preparedRegionOwner)) {
+            throw new IOException("Prepared native region closed before operator initialization");
+        }
+        preparedRegionOwner = null;
+    }
+
+    void prepareNativeRestore(org.apache.flink.core.fs.CloseableRegistry cancellation) throws Exception {
+        if (preparedRestore != null) throw new IllegalStateException("Native restore already prepared");
+        preparedRestore = NativeCheckpointRestore.prepare(
+                restoredNativeHandles,
+                getKeyGroupRange(),
+                nativeRocksDbStorageRoot,
+                nativeRocksDbTransfers,
+                cancellation);
+        uploads.registerCloseable(preparedRestore);
         restoredNativeHandles.clear();
     }
 
@@ -115,26 +240,38 @@ public final class StreamFusionKeyedStateBackend<K>
         return nativeRocksDbMemory == null ? null : nativeRocksDbMemory.scopeId();
     }
 
+    NativeRocksDbMemoryConfiguration nativeRocksDbMemoryConfiguration() {
+        return nativeRocksDbMemory == null
+                ? NativeRocksDbMemoryConfiguration.DEFAULT
+                : nativeRocksDbMemory.configuration();
+    }
+
+    tech.streamfusion.proto.plan.v1.NativeStateBinding bindNativeRocksDbConfiguration(
+            tech.streamfusion.proto.plan.v1.NativeStateBinding binding) {
+        binding = NativeRocksDbConfiguration.bind(
+                nativeRocksDbMemoryConfiguration().bind(binding), nativeRocksDbOptions);
+        if (!binding.hasRocksdb()) return binding;
+        return binding.toBuilder()
+                .setRocksdb(binding.getRocksdb().toBuilder()
+                        .clearStatisticsTickers()
+                        .addAllStatisticsTickers(nativeRocksDbStatistics))
+                .build();
+    }
+
+    java.nio.file.Path nativeRocksDbDefaultLogDirectory(java.nio.file.Path database) {
+        return NativeRocksDbLogDirectory.resolve(database, nativeRocksDbOptions);
+    }
+
+    Path nativeRocksDbStorageRoot() {
+        return nativeRocksDbStorageRoot;
+    }
+
     long nativeRocksDbMemoryLimit() {
         return nativeRocksDbMemory == null ? 0 : nativeRocksDbMemory.size();
     }
 
     static boolean isNativeHandle(IncrementalRemoteKeyedStateHandle handle) {
-        StreamStateHandle metadata = handle.getMetaDataStateHandle();
-        try {
-            byte[] bytes;
-            if (metadata.asBytesIfInMemory().isPresent()) {
-                bytes = metadata.asBytesIfInMemory().get();
-            } else {
-                try (InputStream input = metadata.openInputStream()) {
-                    bytes = input.readNBytes(META_MAGIC.length);
-                }
-            }
-            return bytes.length >= META_MAGIC.length
-                    && java.util.Arrays.equals(java.util.Arrays.copyOf(bytes, META_MAGIC.length), META_MAGIC);
-        } catch (IOException ignored) {
-            return false;
-        }
+        return NativeCheckpointMetadata.isNativeHandle(handle);
     }
 
     @Override
@@ -151,182 +288,63 @@ public final class StreamFusionKeyedStateBackend<K>
             return delegate.snapshot(checkpointId, timestamp, streamFactory, checkpointOptions);
         }
         Path localCheckpoint;
+        Path backupDirectory = null;
         try {
-            localCheckpoint = current.prepareIncrementalCheckpoint(checkpointId);
+            backupDirectory = NativeCheckpointLocalBackup.prepare(localRecovery, backendIdentifier, checkpointId);
+            localCheckpoint = backupDirectory == null
+                    ? current.prepareIncrementalCheckpoint(checkpointId)
+                    : current.prepareIncrementalCheckpoint(checkpointId, backupDirectory);
         } catch (Exception | Error failure) {
+            if (backupDirectory != null) {
+                try {
+                    org.apache.flink.util.FileUtils.deleteDirectory(backupDirectory.toFile());
+                } catch (Exception cleanup) {
+                    failure.addSuppressed(cleanup);
+                }
+            }
             current.failIncrementalCheckpoint(checkpointId);
             throw failure;
         }
-        var resources = new NativeCheckpointUploadResources(localCheckpoint, streamFactory, () -> {
-            pendingSharedFiles.remove(checkpointId);
-            current.failIncrementalCheckpoint(checkpointId);
-        });
+        var resources = new NativeCheckpointUploadResources(
+                localCheckpoint,
+                streamFactory,
+                () -> {
+                    pendingSharedFiles.remove(checkpointId);
+                    current.failIncrementalCheckpoint(checkpointId);
+                },
+                localRecovery,
+                checkpointId);
         try {
             return new NativeCheckpointUploadTask(
                     () -> {
-                        IncrementalUpload upload =
-                                uploadIncrementalCheckpoint(checkpointId, localCheckpoint, resources);
+                        NativeCheckpointUpload.Result upload = NativeCheckpointUpload.upload(
+                                backendIdentifier,
+                                getKeyGroupRange(),
+                                checkpointId,
+                                configuredIncrementalCheckpoints,
+                                completedSharedFiles,
+                                localCheckpoint,
+                                resources,
+                                nativeRocksDbTransfers);
                         resources.onPublication(() -> {
                             current.completeIncrementalCheckpoint(
                                     checkpointId, upload.uploadedBytes, upload.reusedBytes);
                             pendingSharedFiles.put(checkpointId, upload.sharedFiles);
                         });
-                        return SnapshotResult.of(upload.handle);
+                        return upload.snapshotResult();
                     },
                     resources,
-                    uploads);
+                    uploads,
+                    nativeRocksDbTransfers);
         } catch (Exception | Error failure) {
             resources.close();
             throw failure;
         }
     }
 
-    private IncrementalUpload uploadIncrementalCheckpoint(
-            long checkpointId, Path directory, NativeCheckpointUploadResources resources) throws Exception {
-        List<HandleAndLocalPath> shared = new ArrayList<>();
-        List<HandleAndLocalPath> exclusive = new ArrayList<>();
-        Map<String, SharedFile> nextSharedFiles = new HashMap<>();
-        List<String> emptyFiles = new ArrayList<>();
-        long checkpointedSize = 0;
-        long reusedBytes = 0;
-        List<Path> files;
-        try (Stream<Path> paths = Files.walk(directory)) {
-            files = paths.filter(Files::isRegularFile).sorted().collect(Collectors.toList());
-        }
-        for (Path file : files) {
-            resources.checkCancelled();
-            String relativePath = safeRelativePath(directory, file);
-            long size = Files.size(file);
-            if (size == 0) {
-                emptyFiles.add(relativePath);
-                continue;
-            }
-            // Flink's RocksNativeFullSnapshotStrategy uploads every file privately. Only
-            // incremental checkpoints may share immutable SSTs across completed snapshots.
-            if (configuredIncrementalCheckpoints && relativePath.endsWith(".sst")) {
-                SharedFile previous = completedSharedFiles.get(relativePath);
-                StreamStateHandle handle;
-                if (previous != null && previous.size == size && resources.canReuse(previous.handle)) {
-                    handle = previous.handle;
-                    resources.reuse(handle);
-                    reusedBytes += size;
-                } else {
-                    handle = resources.upload(file, CheckpointedStateScope.SHARED);
-                    checkpointedSize += size;
-                }
-                shared.add(HandleAndLocalPath.of(handle, relativePath));
-                nextSharedFiles.put(relativePath, new SharedFile(handle, size));
-            } else {
-                exclusive.add(
-                        HandleAndLocalPath.of(resources.upload(file, CheckpointedStateScope.EXCLUSIVE), relativePath));
-                checkpointedSize += size;
-            }
-        }
-        byte[] metadataBytes = metadataBytes(emptyFiles);
-        StreamStateHandle metadata = resources.upload(metadataBytes, CheckpointedStateScope.EXCLUSIVE);
-        checkpointedSize += metadataBytes.length;
-        return new IncrementalUpload(
-                new IncrementalRemoteKeyedStateHandle(
-                        backendIdentifier,
-                        getKeyGroupRange(),
-                        checkpointId,
-                        shared,
-                        exclusive,
-                        metadata,
-                        checkpointedSize),
-                checkpointedSize,
-                reusedBytes,
-                nextSharedFiles);
-    }
-
-    private static Path materialize(IncrementalRemoteKeyedStateHandle handle) throws IOException {
-        Path directory = Files.createTempDirectory("streamfusion-rocks-restore-");
-        try {
-            List<HandleAndLocalPath> files = new ArrayList<>(handle.getSharedState());
-            files.addAll(handle.getPrivateState());
-            for (HandleAndLocalPath file : files) {
-                Path target = directory.resolve(file.getLocalPath()).normalize();
-                if (!target.startsWith(directory)) {
-                    throw new IOException("RocksDB checkpoint path escapes its restore directory");
-                }
-                Files.createDirectories(target.getParent());
-                try (InputStream input = file.getHandle().openInputStream()) {
-                    Files.copy(input, target, StandardCopyOption.REPLACE_EXISTING);
-                }
-            }
-            for (String emptyFile : emptyFiles(handle.getMetaDataStateHandle())) {
-                Path target = directory.resolve(emptyFile).normalize();
-                if (!target.startsWith(directory)) {
-                    throw new IOException("RocksDB metadata path escapes its restore directory");
-                }
-                Files.createDirectories(target.getParent());
-                Files.createFile(target);
-            }
-            return directory;
-        } catch (Throwable failure) {
-            deleteDirectory(directory);
-            throw failure;
-        }
-    }
-
-    private static byte[] metadataBytes(List<String> emptyFiles) throws IOException {
-        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-        try (DataOutputStream output = new DataOutputStream(bytes)) {
-            output.write(META_MAGIC);
-            output.writeInt(emptyFiles.size());
-            for (String path : emptyFiles) {
-                byte[] encoded = path.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-                output.writeInt(encoded.length);
-                output.write(encoded);
-            }
-        }
-        return bytes.toByteArray();
-    }
-
-    private static List<String> emptyFiles(StreamStateHandle metadata) throws IOException {
-        byte[] bytes;
-        if (metadata.asBytesIfInMemory().isPresent()) {
-            bytes = metadata.asBytesIfInMemory().get();
-        } else {
-            try (InputStream input = metadata.openInputStream()) {
-                bytes = input.readAllBytes();
-            }
-        }
-        try (DataInputStream input = new DataInputStream(new ByteArrayInputStream(bytes))) {
-            byte[] magic = new byte[META_MAGIC.length];
-            input.readFully(magic);
-            if (!java.util.Arrays.equals(magic, META_MAGIC)) {
-                throw new IOException("Not a StreamFusion incremental RocksDB manifest");
-            }
-            int count = input.readInt();
-            if (count < 0 || count > 10_000) {
-                throw new IOException("Invalid empty-file count in native RocksDB manifest");
-            }
-            List<String> paths = new ArrayList<>(count);
-            for (int index = 0; index < count; index++) {
-                int length = input.readInt();
-                if (length < 0 || length > 1 << 20) {
-                    throw new IOException("Invalid path length in native RocksDB manifest");
-                }
-                byte[] path = new byte[length];
-                input.readFully(path);
-                paths.add(new String(path, java.nio.charset.StandardCharsets.UTF_8));
-            }
-            return paths;
-        }
-    }
-
-    private static String safeRelativePath(Path directory, Path file) throws IOException {
-        Path relative = directory.relativize(file).normalize();
-        if (relative.isAbsolute() || relative.startsWith("..")) {
-            throw new IOException("RocksDB checkpoint path escapes its checkpoint directory");
-        }
-        return relative.toString().replace(file.getFileSystem().getSeparator(), "/");
-    }
-
     @Override
     public void notifyCheckpointComplete(long checkpointId) throws Exception {
-        Map<String, SharedFile> completed = pendingSharedFiles.remove(checkpointId);
+        Map<String, NativeCheckpointUpload.SharedFile> completed = pendingSharedFiles.remove(checkpointId);
         if (completed != null && checkpointId > completedCheckpointId) {
             completedCheckpointId = checkpointId;
             completedSharedFiles = Map.copyOf(completed);
@@ -350,17 +368,6 @@ public final class StreamFusionKeyedStateBackend<K>
         pendingSharedFiles.keySet().removeIf(id -> id <= checkpointId);
         if (delegate instanceof InternalCheckpointListener) {
             ((InternalCheckpointListener) delegate).notifyCheckpointSubsumed(checkpointId);
-        }
-    }
-
-    private static void deleteDirectory(Path directory) throws IOException {
-        if (directory == null || !Files.exists(directory)) {
-            return;
-        }
-        try (Stream<Path> paths = Files.walk(directory)) {
-            for (Path path : paths.sorted(Comparator.reverseOrder()).collect(Collectors.toList())) {
-                Files.deleteIfExists(path);
-            }
         }
     }
 
@@ -460,7 +467,13 @@ public final class StreamFusionKeyedStateBackend<K>
             try {
                 delegate.dispose();
             } finally {
-                if (nativeRocksDbMemory != null) nativeRocksDbMemory.close();
+                try {
+                    if (nativeRocksDbTransfers != null) nativeRocksDbTransfers.close();
+                } catch (IOException failure) {
+                    throw new java.io.UncheckedIOException(failure);
+                } finally {
+                    if (nativeRocksDbMemory != null) nativeRocksDbMemory.close();
+                }
             }
         }
     }
@@ -473,7 +486,11 @@ public final class StreamFusionKeyedStateBackend<K>
             try {
                 delegate.close();
             } finally {
-                if (nativeRocksDbMemory != null) nativeRocksDbMemory.close();
+                try {
+                    if (nativeRocksDbTransfers != null) nativeRocksDbTransfers.close();
+                } finally {
+                    if (nativeRocksDbMemory != null) nativeRocksDbMemory.close();
+                }
             }
         }
     }
@@ -496,30 +513,5 @@ public final class StreamFusionKeyedStateBackend<K>
     @Override
     public String getBackendTypeIdentifier() {
         return nativeBackendType;
-    }
-
-    private static final class SharedFile {
-        private final StreamStateHandle handle;
-        private final long size;
-
-        private SharedFile(StreamStateHandle handle, long size) {
-            this.handle = handle;
-            this.size = size;
-        }
-    }
-
-    private static final class IncrementalUpload {
-        private final KeyedStateHandle handle;
-        private final long uploadedBytes;
-        private final long reusedBytes;
-        private final Map<String, SharedFile> sharedFiles;
-
-        private IncrementalUpload(
-                KeyedStateHandle handle, long uploadedBytes, long reusedBytes, Map<String, SharedFile> sharedFiles) {
-            this.handle = handle;
-            this.uploadedBytes = uploadedBytes;
-            this.reusedBytes = reusedBytes;
-            this.sharedFiles = sharedFiles;
-        }
     }
 }

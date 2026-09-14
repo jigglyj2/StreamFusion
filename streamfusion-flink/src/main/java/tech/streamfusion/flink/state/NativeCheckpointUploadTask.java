@@ -19,6 +19,7 @@ final class NativeCheckpointUploadTask extends FutureTask<SnapshotResult<KeyedSt
     private final AtomicBoolean cleanupClaimed = new AtomicBoolean();
     private final NativeCheckpointUploadResources resources;
     private final CloseableRegistry owner;
+    private final NativeRocksDbTransfers transfers;
     private final Closeable cancelOnClose = () -> cancel(true);
 
     NativeCheckpointUploadTask(
@@ -26,10 +27,26 @@ final class NativeCheckpointUploadTask extends FutureTask<SnapshotResult<KeyedSt
             NativeCheckpointUploadResources resources,
             CloseableRegistry owner)
             throws IOException {
+        this(upload, resources, owner, null);
+    }
+
+    NativeCheckpointUploadTask(
+            Callable<SnapshotResult<KeyedStateHandle>> upload,
+            NativeCheckpointUploadResources resources,
+            CloseableRegistry owner,
+            NativeRocksDbTransfers transfers)
+            throws IOException {
         super(upload);
+        this.transfers = transfers;
         this.resources = resources;
         this.owner = owner;
         owner.registerCloseable(cancelOnClose);
+        try {
+            if (transfers != null) transfers.register(cancelOnClose);
+        } catch (IOException failure) {
+            owner.unregisterCloseable(cancelOnClose);
+            throw failure;
+        }
     }
 
     @Override
@@ -82,5 +99,6 @@ final class NativeCheckpointUploadTask extends FutureTask<SnapshotResult<KeyedSt
     @Override
     protected void done() {
         owner.unregisterCloseable(cancelOnClose);
+        if (transfers != null) transfers.unregister(cancelOnClose);
     }
 }

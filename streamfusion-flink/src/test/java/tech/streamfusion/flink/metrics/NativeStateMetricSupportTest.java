@@ -31,9 +31,12 @@ class NativeStateMetricSupportTest {
             if (!(option.defaultValue() instanceof Boolean)) continue;
             var config = new Configuration();
             config.setString(option.key(), "true");
-            boolean enabled = RocksDBNativeMetricOptions.fromConfig(config).isEnabled();
+            boolean properties = !RocksDBNativeMetricOptions.fromConfig(config)
+                    .getProperties()
+                    .isEmpty();
             String reason = NativeStateMetricSupport.unsupportedReason(config);
-            if (enabled) assertThat(reason).as(option.key()).contains("enabled RocksDB native metrics");
+            if (properties)
+                assertThat(reason).as(option.key()).contains("enabled RocksDB column-family property metrics");
             else assertThat(reason).as(option.key()).isNull();
             checked++;
         }

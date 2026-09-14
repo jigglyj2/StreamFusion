@@ -47,6 +47,12 @@ class NativeStateOwnershipTest {
                 assertThat(backend.nativeRocksDbMemoryScope()).isNotNull();
                 assertThat(backend.nativeRocksDbMemoryLimit()).isEqualTo(8L << 20);
                 assertThat(environment.getMemoryManager().verifyEmpty()).isFalse();
+                // StreamTaskStateInitializerImpl closes this registry after backend creation.
+                cancel.close();
+                var transfersField = StreamFusionKeyedStateBackend.class.getDeclaredField("nativeRocksDbTransfers");
+                transfersField.setAccessible(true);
+                var transfers = (NativeRocksDbTransfers) transfersField.get(backend);
+                assertThat(transfers.run(List.of(() -> 42), () -> {})).containsExactly(42);
             } finally {
                 backend.close();
                 backend.dispose();
@@ -139,6 +145,42 @@ class NativeStateOwnershipTest {
                 current.close();
                 current.dispose();
             }
+            assertThat(environment.getMemoryManager().verifyEmpty()).isTrue();
+        }
+    }
+
+    @Test
+    void unsupportedNativeCompactionStillOpensTheRealFlinkFallbackBackend() throws Exception {
+        try (var environment = new MockEnvironmentBuilder()
+                        .setManagedMemorySize(32L << 20)
+                        .build();
+                var cancel = new CloseableRegistry()) {
+            var configuration = new Configuration();
+            configuration.set(
+                    org.apache.flink.state.rocksdb.RocksDBConfigurableOptions.COMPACTION_STYLE,
+                    org.rocksdb.CompactionStyle.FIFO);
+            configuration.set(org.apache.flink.configuration.StateBackendOptions.STATE_BACKEND, "rocksdb");
+            StreamFusionStateBackendFactory.install(configuration);
+            var wrapper = new StreamFusionStateBackendFactory()
+                    .createFromConfig(configuration, getClass().getClassLoader());
+            wrapper = org.apache.flink.util.InstantiationUtil.clone(wrapper);
+            var config = new StreamConfig(new Configuration());
+            config.setOperatorID(new OperatorID());
+            var parameters = parameters(environment, identifier(config, 0, 1), cancel);
+            var ordinary = wrapper.createKeyedStateBackend(parameters);
+            try {
+                assertThat(((StreamFusionKeyedStateBackend<?>) ordinary).nativeRocksDbMemoryScope())
+                        .isNull();
+            } finally {
+                ordinary.close();
+                ordinary.dispose();
+            }
+            assertThat(environment.getMemoryManager().verifyEmpty()).isTrue();
+            NativeStateOwnership.register(environment, config, StreamFusionArrowNativeRegionOperator.class);
+            var restoredWrapper = wrapper;
+            assertThatThrownBy(() -> restoredWrapper.createKeyedStateBackend(parameters))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("FIFO");
             assertThat(environment.getMemoryManager().verifyEmpty()).isTrue();
         }
     }

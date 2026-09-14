@@ -247,17 +247,17 @@ class NativeRegionCheckpointTest {
                 assertThat(durable.getSharedState()).hasSameSizeAs(second.getSharedState());
                 assertThat(durable.getPrivateState()).hasSameSizeAs(second.getPrivateState());
                 try (var target = new Region(true, ALL, run.resolve("target"))) {
-                    backend(ALL, List.of(durable), !incremental)
-                            .registerNativeStateParticipant(target.participant, true);
+                    restoreInDirectory(ALL, durable, !incremental, run.resolve("restore-root"), target.participant);
                     compare(target, oracle, rows(11));
                 }
                 for (var range : List.of(new KeyGroupRange(0, 7), new KeyGroupRange(8, 15))) {
                     try (var target = new Region(true, range, run.resolve("split-" + range.getStartKeyGroup()))) {
-                        backend(
-                                        range,
-                                        List.of((IncrementalRemoteKeyedStateHandle) durable.getIntersection(range)),
-                                        !incremental)
-                                .registerNativeStateParticipant(target.participant, true);
+                        restoreInDirectory(
+                                range,
+                                (IncrementalRemoteKeyedStateHandle) durable.getIntersection(range),
+                                !incremental,
+                                run.resolve("split-restore-root-" + range.getStartKeyGroup()),
+                                target.participant);
                         for (long id : IDS)
                             for (int group : range)
                                 assertThat(target.context.state().snapshot(id, group))
@@ -267,6 +267,57 @@ class NativeRegionCheckpointTest {
                 // Shared handles are intentionally reused; discard only after every restore.
                 second.discardState();
                 first.discardState();
+            }
+        }
+    }
+
+    private static void restoreInDirectory(
+            KeyGroupRange range,
+            IncrementalRemoteKeyedStateHandle handle,
+            boolean incremental,
+            Path root,
+            NativeIncrementalStateParticipant target)
+            throws Exception {
+        Files.createDirectories(root.resolve("physical/child"));
+        Path alias = Files.createSymbolicLink(root.resolve("alias"), root.resolve("physical/child"));
+        Path configuredRoot = alias.resolve("..");
+        for (boolean fail : List.of(true, false)) {
+            var delegate = supplied(CheckpointableKeyedStateBackend.class, "getKeyGroupRange", range);
+            var backend = new StreamFusionKeyedStateBackend<>(
+                    delegate, List.of(handle), "rocksdb", null, incremental, null, configuredRoot);
+            try (var cancellation = new CloseableRegistry()) {
+                backend.prepareNativeRestore(cancellation);
+            }
+            var materialized = new java.util.concurrent.atomic.AtomicReference<Path>();
+            var participant = new NativeIncrementalStateParticipant() {
+                @Override
+                public Path prepareIncrementalCheckpoint(long id) {
+                    throw new AssertionError("restore only");
+                }
+
+                @Override
+                public void restoreIncrementalCheckpoint(Path directory, KeyGroupRange assigned) throws Exception {
+                    assertThat(directory.getParent()).isEqualTo(root.resolve("physical"));
+                    materialized.set(directory);
+                    if (fail) throw new java.io.IOException("injected restore failure");
+                    target.restoreIncrementalCheckpoint(directory, assigned);
+                }
+            };
+            try {
+                if (fail) {
+                    assertThatThrownBy(() -> backend.registerNativeStateParticipant(participant, true))
+                            .hasMessage("injected restore failure");
+                } else {
+                    backend.registerNativeStateParticipant(participant, true);
+                }
+                assertThat(materialized.get()).isNotNull().doesNotExist();
+                try (var entries = Files.list(root.resolve("physical"))) {
+                    assertThat(entries.map(Path::getFileName).collect(java.util.stream.Collectors.toList()))
+                            .containsExactly(Path.of("child"));
+                }
+            } finally {
+                backend.close();
+                backend.dispose();
             }
         }
     }
@@ -293,11 +344,16 @@ class NativeRegionCheckpointTest {
     }
 
     private static StreamFusionKeyedStateBackend<?> backend(
-            KeyGroupRange range, List<IncrementalRemoteKeyedStateHandle> restored, boolean incremental) {
+            KeyGroupRange range, List<IncrementalRemoteKeyedStateHandle> restored, boolean incremental)
+            throws Exception {
         // Only Flink's assigned range is stubbed. Native checkpoint upload, materialization,
         // shared-state reuse and key-group restoration use the real backend adapter below.
         var delegate = supplied(CheckpointableKeyedStateBackend.class, "getKeyGroupRange", range);
-        return new StreamFusionKeyedStateBackend<>(delegate, restored, "rocksdb", null, incremental);
+        var backend = new StreamFusionKeyedStateBackend<>(delegate, restored, "rocksdb", null, incremental);
+        try (var cancellation = new CloseableRegistry()) {
+            backend.prepareNativeRestore(cancellation);
+        }
+        return backend;
     }
 
     private static void restoreRaw(Region region, KeyGroupsStateHandle handle) throws Exception {
@@ -318,11 +374,14 @@ class NativeRegionCheckpointTest {
         return type.cast(java.lang.reflect.Proxy.newProxyInstance(
                 type.getClassLoader(), new Class<?>[] {type}, (proxy, method, arguments) -> {
                     if (method.getName().equals(getter)) return value;
+                    if (type == CheckpointableKeyedStateBackend.class
+                            && (method.getName().equals("close")
+                                    || method.getName().equals("dispose"))) return null;
                     throw new UnsupportedOperationException(method.toString());
                 }));
     }
 
-    private static List<GenericRowData> rows(int seed) {
+    static List<GenericRowData> rows(int seed) {
         var random = new Random(seed);
         List<GenericRowData> rows = new ArrayList<>();
         for (int index = 0; index < 100; index++)
@@ -332,7 +391,7 @@ class NativeRegionCheckpointTest {
         return rows;
     }
 
-    private static void compare(
+    static void compare(
             Region region,
             KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> oracle,
             List<GenericRowData> rows)
@@ -354,7 +413,7 @@ class NativeRegionCheckpointTest {
         assertThat(actual.getCopyOfBuffer()).isEqualTo(expected.getCopyOfBuffer());
     }
 
-    private static KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> flink() throws Exception {
+    static KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> flink() throws Exception {
         var keyType = RowType.of(new BigIntType(false));
         var keySerializer = new RowDataSerializer(keyType);
         var harness = new KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData>(
@@ -369,7 +428,7 @@ class NativeRegionCheckpointTest {
         return harness;
     }
 
-    private static final class Region implements AutoCloseable {
+    static final class Region implements AutoCloseable {
         final NativeMemoryManager memory = TestingNativeMemoryManager.create();
         final RootAllocator allocator = new RootAllocator(64L << 20);
         final NativeExecutionContext context;
@@ -377,6 +436,10 @@ class NativeRegionCheckpointTest {
         final ArrowNativePlanBridge edge;
 
         Region(boolean rocks, KeyGroupRange range, Path directory) throws Exception {
+            this(rocks, range, directory, false);
+        }
+
+        Region(boolean rocks, KeyGroupRange range, Path directory, boolean statistics) throws Exception {
             Files.createDirectories(directory);
             Operator node = Operator.newBuilder()
                     .setPlanNodeId(1)
@@ -407,6 +470,16 @@ class NativeRegionCheckpointTest {
                                     8L << 20)
                             : NativeStateResources.memory(id, GROUPS, range.getStartKeyGroup(), range.getEndKeyGroup()))
                     .collect(java.util.stream.Collectors.toList());
+            if (statistics && rocks) {
+                bindings = bindings.stream()
+                        .map(binding -> binding.toBuilder()
+                                .setRocksdb(binding.getRocksdb().toBuilder()
+                                        .addAllStatisticsTickers(java.util.stream.IntStream.range(0, 11)
+                                                .boxed()
+                                                .collect(java.util.stream.Collectors.toList())))
+                                .build())
+                        .collect(java.util.stream.Collectors.toList());
+            }
             context = new NativeExecutionContext(
                     plan, memory, NativeStateResources.serialize(bindings, List.of(directory)));
             participant = new NativeRegionStateParticipant(context.state(), IDS, range, directory);

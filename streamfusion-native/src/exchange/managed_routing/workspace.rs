@@ -34,7 +34,13 @@ pub(super) fn allowance(
     } else {
         parallelism
     } as usize;
-    let nonempty = batch.num_rows().min(destinations);
+    // Recovery frames preserve contiguous runs, so alternating key groups can require
+    // one descriptor per row, rather than at most one descriptor per key group.
+    let nonempty = if preserve_key_groups {
+        batch.num_rows()
+    } else {
+        batch.num_rows().min(destinations)
+    };
     // Vec index growth (<2x rows, with a four-index minimum per occupied bucket),
     // bucket headers, and simultaneously live selection/frame descriptors.
     let routing = destinations

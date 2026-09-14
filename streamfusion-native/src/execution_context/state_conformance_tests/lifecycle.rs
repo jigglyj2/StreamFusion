@@ -14,7 +14,7 @@ use arrow::array::{
 use arrow::datatypes::{DataType, Field, Schema};
 use futures::StreamExt;
 
-fn input(key: ArrayRef, payload_size: usize) -> RecordBatch {
+pub(super) fn input(key: ArrayRef, payload_size: usize) -> RecordBatch {
     let count = key.len();
     let text = "p".repeat(payload_size);
     RecordBatch::try_new(
@@ -51,7 +51,10 @@ fn admitted(broker: &TestBroker, phase: &str) {
     );
 }
 
-fn drain(context: &Arc<NativeExecutionContext>, input: &RecordBatch) -> Vec<RecordBatch> {
+pub(super) fn drain(
+    context: &Arc<NativeExecutionContext>,
+    input: &RecordBatch,
+) -> Vec<RecordBatch> {
     let mut stream = context.start(vec![input.clone()]).unwrap();
     let mut output = Vec::new();
     while let Some(batch) = context.runtime().block_on(stream.next()) {
@@ -61,7 +64,7 @@ fn drain(context: &Arc<NativeExecutionContext>, input: &RecordBatch) -> Vec<Reco
     output
 }
 
-fn bound(
+pub(super) fn bound(
     plan: &proto::NativePlan,
     bindings: &proto::NativeStateBindings,
     broker: &Arc<TestBroker>,
@@ -146,11 +149,15 @@ fn shared_stateful_lifecycle_covers_memory_ownership_and_cross_backend_restore()
                         let logs = directory.path().join("logs");
                         std::fs::create_dir(&logs).unwrap();
                         let mut rocks = resources();
-                        rocks.protocol_version = 2;
+                        rocks.protocol_version = 5;
                         rocks.bindings[0].backend =
                             Some(proto::native_state_binding::Backend::Rocksdb(
                                 proto::NativeRocksDbState {
+                                    statistics_tickers: Vec::new(),
                                     log_directory: Some(logs.to_str().unwrap().into()),
+                                    write_buffer_ratio: Some(0.7),
+                                    high_priority_pool_ratio: Some(0.2),
+                                    database_options: None,
                                     plugin_path: plugin.clone(),
                                     database_path: directory
                                         .path()
@@ -159,6 +166,7 @@ fn shared_stateful_lifecycle_covers_memory_ownership_and_cross_backend_restore()
                                         .unwrap()
                                         .into(),
                                     memory_limit: 4 << 20,
+                                    partitioned_index_filters: None,
                                 },
                             ));
                         let memory = resources();
@@ -194,5 +202,126 @@ fn physical_context_does_not_populate_an_unused_sql_function_registry() {
         });
         assert_eq!(observed.live, 0, "context retained heap: {observed:?}");
         assert_eq!(broker.reserved(), 0);
+    }
+}
+
+#[test]
+fn configured_physical_checkpoint_restore_keeps_destination_geometry_and_changelog() {
+    let plugin =
+        std::path::PathBuf::from(std::env::var("STREAMFUSION_TEST_ROCKSDB_PLUGIN").unwrap());
+    let directory = tempfile::tempdir().unwrap();
+    let broker = Arc::new(TestBroker::new(LIMIT));
+    let bindings = |name: &str, write, high| {
+        let mut options = resources();
+        options.protocol_version = 10;
+        let mut database_options =
+            super::partition_configuration::database_options(if name == "original" {
+                1
+            } else {
+                2
+            });
+        database_options.write_batch_size = Some(if name == "original" { 50 } else { 4096 });
+        database_options.compression = Some(proto::NativeRocksDbCompression {
+            per_level: if name == "original" {
+                vec![7, 0, 4]
+            } else {
+                vec![4, 0, 7]
+            },
+        });
+        database_options.log_directory = Some(
+            directory
+                .path()
+                .join(format!("{name}-logs"))
+                .to_str()
+                .unwrap()
+                .into(),
+        );
+        options.bindings[0].backend = Some(proto::native_state_binding::Backend::Rocksdb(
+            proto::NativeRocksDbState {
+                statistics_tickers: Vec::new(),
+                plugin_path: plugin.to_str().unwrap().into(),
+                database_path: directory.path().join(name).to_str().unwrap().into(),
+                memory_limit: 4 << 20,
+                log_directory: Some(
+                    directory
+                        .path()
+                        .join("unused-automatic-logs")
+                        .to_str()
+                        .unwrap()
+                        .into(),
+                ),
+                write_buffer_ratio: Some(write),
+                high_priority_pool_ratio: Some(high),
+                database_options: Some(database_options),
+                partitioned_index_filters: Some(name == "original"),
+            },
+        ));
+        options
+    };
+    let plan = plans().remove(1);
+    let batch = input(
+        Arc::new(Int64Array::from(vec![Some(1), Some(1), None, Some(3)])),
+        16384,
+    );
+    let original = bound(&plan, &bindings("original", 0.7, 0.2), &broker);
+    drop(drain(&original, &batch));
+    let checkpoint = directory.path().join("checkpoint");
+    original.checkpoint_state(2, &checkpoint).unwrap();
+    let restored = bound(&plan, &bindings("restored", 0.2, 0.3), &broker);
+    restored
+        .import_state_checkpoint(2, &plugin, &checkpoint, 0, 15, 2 << 20)
+        .unwrap();
+    for group in 0..16 {
+        assert_eq!(
+            &*original.snapshot_state(2, group).unwrap(),
+            &*restored.snapshot_state(2, group).unwrap()
+        );
+    }
+    assert_eq!(drain(&original, &batch), drain(&restored, &batch));
+    drop(restored);
+    drop(original);
+    assert_eq!(broker.reserved(), 0);
+    // Prove the protobuf -> ABI path uses the resolved values. Read-only checkpoint opens
+    // do not create LOG files; their cache capacity is checked in the component tests.
+    for (name, high) in [("original", "0.200"), ("restored", "0.300")] {
+        let options_path = std::fs::read_dir(directory.path().join(name))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .starts_with("OPTIONS-")
+            })
+            .max()
+            .unwrap();
+        let options = std::fs::read_to_string(options_path).unwrap();
+        let compression = if name == "original" {
+            "compression_per_level=kZSTD:kNoCompression:kLZ4Compression"
+        } else {
+            "compression_per_level=kLZ4Compression:kNoCompression:kZSTD"
+        };
+        assert!(
+            options.lines().any(|line| line.trim() == compression),
+            "{name}: {options}"
+        );
+        assert!(!directory.path().join(name).join("LOG").exists());
+        assert!(!directory.path().join("unused-automatic-logs").exists());
+        let logs = std::fs::read_dir(directory.path().join(format!("{name}-logs")))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        assert_eq!(logs.len(), 1);
+        let log = std::fs::read_to_string(&logs[0]).unwrap();
+        let block_size = if name == "original" { 8192 } else { 12288 };
+        assert!(
+            log.contains(&format!("block_size: {block_size}")),
+            "{name}: {log}"
+        );
+        assert!(
+            log.contains(&format!("high_pri_pool_ratio: {high}")),
+            "{name}: {log}"
+        );
     }
 }

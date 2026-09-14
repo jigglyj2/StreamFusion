@@ -4,29 +4,38 @@ description: Backend contract, checkpoint formats, and implementation references
 ---
 
 Native keyed state backs admitted stateful subsets, including synchronous binary equi-joins and
-supported grouped aggregation, on in-memory and default RocksDB backends. Admission remains
+supported grouped aggregation, on in-memory and supported RocksDB configurations. Admission remains
 specific to each operator's semantics; see [architecture admission](/StreamFusion/development/architecture-admission/)
 and the individual operator pages. The shared storage mechanisms below do not themselves admit
 an unsupported operator or remove its whole-plan fallback.
 
 Native keyed-region preflight now rejects non-default Flink RocksDB options that the component
-does not propagate, including custom option factories, local directories, memory ratios,
-fixed or unmanaged budgets, compression settings, and checkpoint transfer thread counts. It
+does not propagate, including custom option factories,
+fixed or unmanaged budgets, XPRESS and the disable-compression sentinel. It
 resolves Flink's typed options and aliases before graph replacement; it does not silently use
 native defaults. Ordinary Flink managed-memory size/consumer weights and incremental-checkpoint
-selection remain configurable. RocksDB-specific options do not reject an in-memory backend.
+selection remain configurable. Shared-cache ratios, database/table settings, supported presets,
+local/log directories, bulk-write thresholds and checkpoint-transfer executor settings are propagated; see
+[RocksDB configuration](/StreamFusion/development/rocksdb-configuration/). RocksDB-specific options do not reject an in-memory backend.
+Backend creation rechecks supplied unsupported configuration and public memory/factory/timer
+overrides before allocating native state resources, while preserving the wrapper's Flink fallback.
 This configuration guard supplements the existing metric and physical-family admission gates;
 default settings have separate runtime conformance coverage. A component guard checks the
 packaged RocksDB library's CPU compatibility and checksum before admission. The guard resolves
 the user's original backend even after the internal wrapper is installed, so repeated planning
 does not mistake that wrapper for a new backend. Checkpointing during channel recovery remains
 unsupported; ordinary aligned/unaligned recovery uses the tested non-overlapping lifecycle.
+The [RocksDB configuration page](/StreamFusion/development/rocksdb-configuration/#checkpointing-during-channel-recovery)
+records the reproduced Flink 2.3 local-channel recapture condition and the separately verified
+Arrow recovery-filter boundary. Registered fused native regions support Flink local RocksDB
+backup and local-first recovery, including remote retry after a failed local candidate; see
+[local checkpoint backup and recovery](/StreamFusion/development/rocksdb-configuration/#local-checkpoint-backup-and-recovery).
 
-The native RocksDB component now builds and explicitly selects Snappy compression on every SST
-level, matching Flink's default compression choice. Previously the codec was omitted from the
-native dependency build. A checkpoint test verifies actual compression of repetitive state and
-exact value recovery after reopening the saved SSTs. This is a format/configuration check, not
-a throughput result; non-default compression settings still require whole-plan fallback.
+The native RocksDB component defaults to Snappy and supports configured per-level lists of
+no compression, Snappy, Zlib, BZip2, LZ4, LZ4HC and ZSTD. Each codec is built through the
+upstream binding's existing features. Tests verify actual compression of repetitive state,
+exact values after reopening SSTs, and checkpoint reads under a different destination codec.
+These checks establish configuration and recovery behavior; no throughput result is claimed. See the [configuration table](/StreamFusion/development/rocksdb-configuration/).
 
 Opening the native database now applies the configured options explicitly to its default column
 family. The previous named-family open helper silently substituted RocksDB defaults there, leaving
@@ -42,13 +51,56 @@ WAL-disabled state: checkpoints establish durability. Tests inspect the opened d
 persisted OPTIONS file and verify both the absence of shutdown-created SSTs and successful
 restore from a physical checkpoint.
 
-The shared pools now use Flink's default sizing formula: five sixths of the assigned lease
-for the LRU cache and one third for the write-buffer manager, which charges its entries to
-that cache. The remaining one sixth allows for the write-buffer manager's over-capacity
-threshold. Each column family retains Flink's 64 MiB write-buffer setting and two-buffer limit;
-shared memory pressure can trigger flushing earlier. Index/filter blocks use the same cache,
-with a 0.1 high-priority pool, matching Flink's default. Tests check actual database cache
-capacity, the write-buffer manager and the cache description emitted by RocksDB.
+Native file-checkpoint materialization and path validation complete inside Flink's keyed-backend
+creation/retry procedure, with construction cancellation and cleanup of failed candidates.
+Registered fused native regions also create their context and import file state in that retry
+boundary. They read required union clocks through Flink's operator-state deserializer and verify
+those clocks against normal operator-state initialization. The backend owns the prepared context
+until the operator adopts it; the operator then owns the context and Arrow allocator. See [restore preparation](/StreamFusion/development/rocksdb-configuration/#restore-preparation-and-cancellation).
+
+Native RocksDB file checkpoints also support Flink's local-backup setting. Flink chooses the
+backup directories and owns published local handles; backend shutdown preserves these files.
+Registered fused native regions support local-first recovery and Flink remote retry after a
+failed local candidate. See [local checkpoint backup and recovery](/StreamFusion/development/rocksdb-configuration/#local-checkpoint-backup-and-recovery)
+for ownership, failure handling, metrics, and validation details.
+
+## Configurable RocksDB shared memory
+
+Ordinary planning now admits these existing Flink options for otherwise eligible RocksDB plans:
+
+| Flink option | Default | Native behavior |
+| --- | ---: | --- |
+| `state.backend.rocksdb.memory.write-buffer-ratio` | `0.5` | Sets the shared write-buffer manager and LRU cache capacities using Flink's formulas |
+| `state.backend.rocksdb.memory.high-prio-pool-ratio` | `0.1` | Sets the LRU high-priority pool for cached index/filter blocks |
+| `state.backend.rocksdb.memory.partitioned-index-filters` | `false` | Selects the shared partitioning policy and Flink's ten-bit full-filter override |
+
+For assigned Flink lease `M` and write ratio `w`, cache capacity is `(3 - w) * M / 3` and
+write-buffer-manager capacity is `2 * M * w / 3`, truncated to whole bytes in the same operation
+order as Flink. The write-buffer manager charges its entries to that cache. Both ratios must be
+strictly between zero and one and satisfy `2 * w / (3 - w) + high < 1`; invalid combinations
+retain a planning fallback. No additional memory is reserved beyond the existing lease. Each
+column family uses Flink's configured write-buffer size/count (64 MiB and two buffers by default);
+shared memory pressure can trigger flushing earlier.
+
+Flink's configured backend supplies the resolved cache settings. The first owner of a shared Flink
+memory resource establishes its geometry and partitioning policy; later owners use that resource's geometry, just as
+Flink's shared-resource allocator does. The ratios require state-binding protocol 5 or later and cross the current state ABI
+19 once during setup. Base database/table options use protocol 6; filters, compression and
+log level use protocol 7. Shared partitioning and compaction style use protocol 8; explicit
+log-directory ownership uses protocol 9; bulk-write thresholds use protocol 10. Native databases share the cache and write-buffer manager for that
+resource. Conflicting native requests for one resource are rejected rather than creating another
+pool. Checkpoint readers receive the destination task's resolved ratios, so restoring state does
+not silently reinstate defaults. Persisted state encodings are unchanged; legacy bindings without
+ratios retain the defaults.
+
+Generated tests check live database cache capacity, write-buffer-manager capacity, RocksDB's
+reported priority ratio, resource sharing, memory release and physical checkpoint reads. SQL and generated operator-metric
+coverage compare complete Flink/native changelogs and registered metric surfaces under multiple ratio combinations on both
+backends, and runs the published Flink aggregate test with nondefault ratios. Native lifecycle
+coverage restores between both backends with configured ratios. This is configuration and
+correctness evidence, not a performance claim. Unimplemented RocksDB settings, column-family properties, state-latency histograms and
+checkpointing during channel recovery retain their existing gates. The
+[configuration support table](/StreamFusion/development/rocksdb-configuration/) lists the admitted settings.
 
 Rust/RocksDB 0.25.0 does not expose the priority ratio through its C/Rust API. The optional
 state module carries a small documented binding extension, with the unmodified RocksDB 11.8.1
@@ -65,11 +117,18 @@ unrelated binding extensions. Remove it once upstream bindings provide the equiv
 Default log relocation is now resolved in the TaskManager JVM using Flink's `log.file`
 property, readable-file checks and database-path length limit. Tests compare this resolution
 with Flink's actual `RocksDBResourceContainer`. The resolved path crosses state-binding protocol
-2; legacy bindings without relocation still use protocol 1. The current state-component ABI is 10,
-and both native libraries must implement it. Closing a database removes only its current and rotated log
+2; legacy bindings without relocation still use protocol 1. The current state-component ABI is 19,
+and both native libraries must implement it. State-binding protocol 11 adds Flink ticker selection,
+independent JNI sampling and shared restore statistics. ABI 19 admits the shared statistics
+allocation before creation; column-family properties and state-latency metrics remain gated.
+Closing a database removes only its automatically relocated current and rotated log
 files after RocksDB closes its logger. Unlike Flink's broad prefix cleanup, neighboring database
 names are preserved; this narrows cleanup ownership without changing execution or checkpoint
-semantics. Cross-backend lifecycle tests exercise relocated logs and exact state restoration.
+semantics. Explicit `state.backend.rocksdb.log.dir` settings override automatic relocation and
+retain logs after close. Physical checkpoint readers receive the destination task's directory.
+See [RocksDB configuration](/StreamFusion/development/rocksdb-configuration/#log-directories)
+for directory validation and open-failure behavior. Cross-backend lifecycle tests exercise
+relocated logs and exact state restoration.
 Default RocksDB configuration is now admitted for the verified binary inner equi-join subset.
 Packaged libraries enforce their CPU requirements; see [Native modules and ABI](/StreamFusion/development/native-modules/).
 
@@ -204,6 +263,8 @@ region checkpoint participant, and restores before accepting records. RocksDB ow
 assigned cache/write-buffer lease; embedded runners without a separate state-backend lease reserve
 one fallback allowance from existing operator managed memory, not one allowance per state node.
 Database handles close before that fallback lease is returned, including initialization failures.
+Native RocksDB live state, checkpoint staging, and restore downloads honor
+[Flink local-directory configuration](/StreamFusion/development/rocksdb-configuration/#local-state-directories).
 Stable checkpoint staging lives outside the live database directory: Flink's asynchronous upload
 retains its files after native state-owner close and owns their cleanup after materialization.
 Closing the Flink keyed backend itself cancels its pending native uploads.

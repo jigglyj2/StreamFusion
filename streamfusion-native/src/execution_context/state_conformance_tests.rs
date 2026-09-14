@@ -13,6 +13,7 @@ mod canonical_stream;
 mod checkpoint_import;
 mod lifecycle;
 mod log_configuration;
+mod memory_configuration;
 mod spill_configuration;
 
 fn plans() -> Vec<proto::NativePlan> {
@@ -189,10 +190,15 @@ fn later_factory_failure_releases_already_constructed_state_and_allows_retry() {
         // Validation succeeds and the first owner is created; opening the second plugin fails.
         invalid.bindings[1].backend = Some(proto::native_state_binding::Backend::Rocksdb(
             proto::NativeRocksDbState {
+                statistics_tickers: Vec::new(),
                 log_directory: None,
+                write_buffer_ratio: None,
+                high_priority_pool_ratio: None,
+                database_options: None,
                 plugin_path: directory.path().join("missing.so").to_str().unwrap().into(),
                 database_path: directory.path().join("database").to_str().unwrap().into(),
                 memory_limit: 4 << 20,
+                partitioned_index_filters: None,
             },
         ));
         for _ in 0..3 {
@@ -208,3 +214,11 @@ fn later_factory_failure_releases_already_constructed_state_and_allows_retry() {
         assert_eq!(broker.reserved(), 0);
     }
 }
+
+mod filter_configuration;
+
+mod partition_configuration;
+
+mod write_configuration;
+
+mod statistics;

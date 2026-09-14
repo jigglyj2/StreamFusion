@@ -241,7 +241,9 @@ class SharedAggregateTopologyTest {
                     org.apache.flink.state.rocksdb.RocksDBNativeMetricOptions.ESTIMATE_NUM_KEYS,
                     org.apache.flink.state.rocksdb.RocksDBNativeMetricOptions.MONITOR_BYTES_READ)) {
                 config.set(option, true);
-                assertThat(stageReason(config, output)).contains("RocksDB native metrics");
+                if (option == org.apache.flink.state.rocksdb.RocksDBNativeMetricOptions.ESTIMATE_NUM_KEYS)
+                    assertThat(stageReason(config, output)).contains("RocksDB column-family property metrics");
+                else assertThat(stageReason(config, output)).isNull();
                 config.set(option, false);
                 assertThat(stageReason(config, output)).isNull();
             }

@@ -101,7 +101,11 @@ class SharedAggregateChannelRecoveryTest {
 
     protected org.apache.flink.streaming.util.KeyedOneInputStreamOperatorTestHarness<RowData, RowData, RowData> oracle(
             boolean rocks) throws Exception {
-        return SharedAggregateFlinkOracle.create(rocks);
+        return SharedAggregateFlinkOracle.create(rocks, 0, true, backendOptions());
+    }
+
+    protected org.apache.flink.configuration.Configuration backendOptions() {
+        return new org.apache.flink.configuration.Configuration();
     }
 
     protected GenericRowData row(long value, RowKind kind) {
@@ -126,7 +130,17 @@ class SharedAggregateChannelRecoveryTest {
             throws Exception {
         var factory = new StreamFusionNativeRegionOperatorFactory(
                 List.of(inputType()), outputType(), plan(), List.of(3L), List.of(exchange()));
-        return SharedKeyedChannelHarness.create(factory, outputType(), new int[] {2}, rocks, unaligned, state);
+        return SharedKeyedChannelHarness.createConfigured(
+                factory,
+                outputType(),
+                new int[] {2},
+                rocks,
+                unaligned,
+                state,
+                null,
+                outputType(),
+                null,
+                backendOptions());
     }
 
     private void send(

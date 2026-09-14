@@ -86,6 +86,15 @@ public final class NativeRegionStateParticipant implements NativeIncrementalStat
     @Override
     public Path prepareIncrementalCheckpoint(long checkpointId) throws Exception {
         Path directory = Files.createTempDirectory(checkpointParent, "native-region-" + checkpointId + "-");
+        return checkpointInto(directory);
+    }
+
+    @Override
+    public Path prepareIncrementalCheckpoint(long checkpointId, Path directory) throws Exception {
+        return checkpointInto(Files.createDirectory(directory));
+    }
+
+    private Path checkpointInto(Path directory) throws Exception {
         try {
             for (long id : nodeIds) state.checkpoint(id, directory.resolve("node-" + id));
             return directory;

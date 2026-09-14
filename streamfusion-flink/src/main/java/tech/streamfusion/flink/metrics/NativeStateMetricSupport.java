@@ -16,19 +16,9 @@ public final class NativeStateMetricSupport {
             return "metrics: keyed-state latency histograms are not yet published by shared native state";
         }
         try {
-            // RocksDB remains an optional Flink integration. Use its own option resolver,
-            // including defaults/aliases, rather than maintaining a second option-name list.
-            Class<?> options = Class.forName(
-                    "org.apache.flink.state.rocksdb.RocksDBNativeMetricOptions",
-                    false,
-                    Thread.currentThread().getContextClassLoader());
-            Object resolved =
-                    options.getMethod("fromConfig", ReadableConfig.class).invoke(null, config);
-            if ((boolean) options.getMethod("isEnabled").invoke(resolved)) {
-                return "metrics: enabled RocksDB native metrics are not yet published by shared native state";
-            }
-        } catch (ClassNotFoundException absentOptionalBackend) {
-            // No RocksDB implementation can be selected without that optional integration.
+            NativeRocksDbStatisticsConfiguration.fromConfig(config);
+        } catch (UnsupportedOperationException failure) {
+            return failure.getMessage();
         } catch (ReflectiveOperationException | LinkageError failure) {
             return "metrics: cannot resolve Flink RocksDB native metric configuration: "
                     + failure.getClass().getSimpleName();

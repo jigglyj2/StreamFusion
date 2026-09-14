@@ -71,10 +71,15 @@ fn non_keyed_and_keyed_factories_share_tree_controls_metrics_and_recovery() {
                 last_key_group: 15,
                 backend: Some(if rocks {
                     proto::native_state_binding::Backend::Rocksdb(proto::NativeRocksDbState {
+                        statistics_tickers: Vec::new(),
                         log_directory: None,
+                        write_buffer_ratio: None,
+                        high_priority_pool_ratio: None,
+                        database_options: None,
                         plugin_path: plugin.as_ref().unwrap().clone(),
                         database_path: directory.path().join("db").to_str().unwrap().into(),
                         memory_limit: 1 << 20,
+                        partitioned_index_filters: None,
                     })
                 } else {
                     proto::native_state_binding::Backend::Memory(proto::NativeMemoryState {})

@@ -93,6 +93,31 @@ final class SharedKeyedChannelHarness extends StreamTaskMailboxTestHarnessBuilde
             org.apache.flink.table.types.logical.RowType sideOutputType,
             TimerService clock)
             throws Exception {
+        return createConfigured(
+                factory,
+                output,
+                channels,
+                rocks,
+                unaligned,
+                restore,
+                sideOutput,
+                sideOutputType,
+                clock,
+                new org.apache.flink.configuration.Configuration());
+    }
+
+    static StreamTaskMailboxTestHarness<RowData> createConfigured(
+            StreamFusionNativeRegionOperatorFactory factory,
+            org.apache.flink.table.types.logical.RowType output,
+            int[] channels,
+            boolean rocks,
+            boolean unaligned,
+            TaskStateSnapshot restore,
+            java.util.Queue<Object> sideOutput,
+            org.apache.flink.table.types.logical.RowType sideOutputType,
+            TimerService clock,
+            org.apache.flink.configuration.Configuration backendOptions)
+            throws Exception {
         var builder = new SharedKeyedChannelHarness(output);
         for (int count : channels)
             builder.addInput(NativeExchangeFrameTypeInfo.INSTANCE, count, new NativeExchangeFrameKeySelector(1));
@@ -102,7 +127,11 @@ final class SharedKeyedChannelHarness extends StreamTaskMailboxTestHarnessBuilde
         builder.addJobConfig(CheckpointingOptions.ALIGNED_CHECKPOINT_TIMEOUT, Duration.ZERO);
         builder.modifyStreamConfig(config -> {
             config.setStateBackend(new StreamFusionStateBackend(
-                    rocks ? new EmbeddedRocksDBStateBackend(true) : new HashMapStateBackend()));
+                    rocks
+                            ? new EmbeddedRocksDBStateBackend(true)
+                                    .configure(backendOptions, SharedKeyedChannelHarness.class.getClassLoader())
+                            : new HashMapStateBackend(),
+                    backendOptions));
             config.setManagedMemoryFractionOperatorOfUseCase(ManagedMemoryUseCase.OPERATOR, 1.0);
             config.setManagedMemoryFractionOperatorOfUseCase(ManagedMemoryUseCase.STATE_BACKEND, 1.0);
         });

@@ -3,6 +3,8 @@
 
 use super::*;
 
+static SNAPPY: [i32; 1] = [1];
+
 #[test]
 fn rejects_old_abi_and_invalid_open_configuration_without_returning_a_handle() {
     unsafe {
@@ -30,6 +32,12 @@ fn rejects_old_abi_and_invalid_open_configuration_without_returning_a_handle() {
             memory_scope_low: 0,
             log_directory: ptr::null(),
             log_directory_len: 1,
+            write_buffer_ratio: 0.5,
+            high_priority_pool_ratio: 0.1,
+            database_options: Default::default(),
+            compression_per_level: SNAPPY.as_ptr(),
+            compression_per_level_len: 1,
+            statistics_owner: ptr::null(),
         };
         assert_ne!(((*api).open)(&options, &mut handle), STATE_BACKEND_OK);
         assert!(handle.is_null());
@@ -63,6 +71,12 @@ fn checkpoint_open_never_creates_a_database_and_preserves_existing_state() {
         memory_scope_low: 0,
         log_directory: ptr::null(),
         log_directory_len: 0,
+        write_buffer_ratio: 0.5,
+        high_priority_pool_ratio: 0.1,
+        database_options: Default::default(),
+        compression_per_level: SNAPPY.as_ptr(),
+        compression_per_level_len: 1,
+        statistics_owner: ptr::null(),
     };
     unsafe {
         let mut handle = ptr::null_mut();
@@ -161,5 +175,49 @@ fn checkpoint_open_never_creates_a_database_and_preserves_existing_state() {
             b"MANIFEST-999999\n"
         );
         assert!(!path.join("MANIFEST-999999").exists());
+    }
+}
+
+#[test]
+fn rejects_invalid_compression_spans_and_codes_without_creating_state() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("db");
+    let path = path.to_str().unwrap();
+    let unsupported = [6];
+    let mut options = StateBackendOpenOptions {
+        struct_size: std::mem::size_of::<StateBackendOpenOptions>(),
+        path: path.as_ptr(),
+        path_len: path.len(),
+        first_key_group: 0,
+        last_key_group: 0,
+        memory_limit: 16 << 20,
+        memory_scope_high: 0,
+        memory_scope_low: 0,
+        log_directory: ptr::null(),
+        log_directory_len: 0,
+        write_buffer_ratio: 0.5,
+        high_priority_pool_ratio: 0.1,
+        database_options: Default::default(),
+        compression_per_level: ptr::null(),
+        compression_per_level_len: 1,
+        statistics_owner: ptr::null(),
+    };
+    for (address, length, reason) in [
+        (ptr::null(), 1, "span"),
+        (SNAPPY.as_ptr(), usize::MAX, "span"),
+        (unsupported.as_ptr(), 1, "codec"),
+    ] {
+        options.compression_per_level = address;
+        options.compression_per_level_len = length;
+        let mut handle = ptr::dangling_mut();
+        unsafe {
+            assert_ne!((API.open)(&options, &mut handle), STATE_BACKEND_OK);
+            assert!(handle.is_null());
+            assert!(std::ffi::CStr::from_ptr(last_error())
+                .to_str()
+                .unwrap()
+                .contains(reason));
+        }
+        assert!(!Path::new(path).exists());
     }
 }

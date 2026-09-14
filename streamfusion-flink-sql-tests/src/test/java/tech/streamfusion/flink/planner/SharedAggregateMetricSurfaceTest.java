@@ -16,16 +16,45 @@ import org.apache.flink.streaming.api.watermark.Watermark;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.StringData;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import tech.streamfusion.flink.arrow.ArrowRowDataBatch;
 
 /** Compare registered metrics, not a hand-maintained list that can omit a Flink metric. */
 class SharedAggregateMetricSurfaceTest {
-    @Test
-    void synchronousStageMatchesSqlGeneratedFlinkMetricSurfaceAndDeterministicValues() throws Exception {
+    @org.junit.jupiter.api.io.TempDir
+    java.nio.file.Path logRoot;
+
+    @ParameterizedTest
+    @CsvSource({"0.5,0.1", "0.2,0.2", "0.7,0.2"})
+    void synchronousStageMatchesSqlGeneratedFlinkMetricSurfaceAndDeterministicValues(double write, double high)
+            throws Exception {
+        var options = RocksDbConfigurationProfiles.indexOptions(write == 0.5 ? 0 : write < 0.5 ? 1 : 2);
+        options.set(
+                org.apache.flink.state.rocksdb.RocksDBOptions.CHECKPOINT_TRANSFER_THREAD_NUM,
+                write < 0.5 ? -2 : write == 0.5 ? 1 : 2);
+        options.set(
+                org.apache.flink.state.rocksdb.RocksDBOptions.LOCAL_DIRECTORIES,
+                logRoot.resolve("state-a") + "," + logRoot.resolve("state-b"));
+        options.set(
+                org.apache.flink.state.rocksdb.RocksDBConfigurableOptions.LOG_DIR,
+                logRoot.resolve("rocks-logs").toString());
+        options.set(
+                org.apache.flink.state.rocksdb.RocksDBConfigurableOptions.COMPRESSION_PER_LEVEL,
+                java.util.List.of(
+                        write < 0.5
+                                ? org.rocksdb.CompressionType.ZLIB_COMPRESSION
+                                : write == 0.5
+                                        ? org.rocksdb.CompressionType.BZLIB2_COMPRESSION
+                                        : org.rocksdb.CompressionType.LZ4HC_COMPRESSION));
+        options.set(
+                org.apache.flink.state.rocksdb.RocksDBConfigurableOptions.WRITE_BATCH_SIZE,
+                new org.apache.flink.configuration.MemorySize(write < 0.5 ? 50 : write == 0.5 ? 0 : 4096));
+        options.set(org.apache.flink.state.rocksdb.RocksDBOptions.WRITE_BUFFER_RATIO, write);
+        options.set(org.apache.flink.state.rocksdb.RocksDBOptions.HIGH_PRIORITY_POOL_RATIO, high);
         for (boolean rocks : List.of(false, true)) {
-            try (var oracle = SharedAggregateFlinkOracle.create(rocks);
-                    var nativeHarness = new SharedAggregateRuntimeHarness(rocks, null);
+            try (var oracle = SharedAggregateFlinkOracle.create(rocks, 0, true, options);
+                    var nativeHarness = SharedAggregateRuntimeHarness.configured(rocks, null, options);
                     var allocator = new RootAllocator(64L << 20)) {
                 Object flinkGroup = oracle.getOperator().getMetricGroup();
                 Object nativeGroup = stageGroup(nativeHarness, 3);

@@ -11,7 +11,7 @@ use arrow::record_batch::RecordBatch;
 use super::KeyField;
 
 mod routing_rows;
-use routing_rows::routing_rows;
+use routing_rows::{routing_rows, visit_key_groups};
 
 /// One destination's lightweight selection over a shared Arrow batch.
 #[derive(Debug, Clone)]
@@ -25,7 +25,8 @@ pub struct RoutedBatch {
 pub struct KeyGroupBatch {
     key_group: u32,
     batch: Arc<RecordBatch>,
-    rows: UInt32Array,
+    start: usize,
+    len: usize,
 }
 
 impl KeyGroupBatch {
@@ -34,11 +35,21 @@ impl KeyGroupBatch {
     }
 
     pub fn materialize(&self) -> Result<RecordBatch> {
-        materialize(&self.batch, &self.rows, self.batch.num_columns())
+        self.materialize_projected(self.batch.num_columns())
     }
 
     pub(super) fn materialize_projected(&self, columns: usize) -> Result<RecordBatch> {
-        materialize(&self.batch, &self.rows, columns)
+        if columns > self.batch.num_columns() {
+            return Err(ArrowError::InvalidArgumentError(
+                "exchange transport column count exceeds input schema".into(),
+            ));
+        }
+        let batch = if columns == self.batch.num_columns() {
+            self.batch.as_ref().clone()
+        } else {
+            self.batch.project(&(0..columns).collect::<Vec<_>>())?
+        };
+        Ok(batch.slice(self.start, self.len))
     }
 }
 
@@ -68,7 +79,9 @@ impl RoutedBatch {
     }
 }
 
-/// Groups rows by stable Flink key group so in-flight frames remain rescalable on recovery.
+/// Tags contiguous input runs with their stable Flink key group for rescalable recovery.
+/// Grouping all occurrences of a key group would reorder records within the same network channel.
+/// Runs keep Flink's per-channel FIFO while retaining zero-copy Arrow slices until IPC encoding.
 pub fn route_batch_by_key_group(
     batch: RecordBatch,
     key_fields: &[(usize, KeyField)],
@@ -79,18 +92,21 @@ pub fn route_batch_by_key_group(
             "Flink exchange max parallelism {max_parallelism} is outside 1..=32768"
         )));
     }
-    let key_group_rows = routing_rows(&batch, key_fields, max_parallelism, max_parallelism)?;
     let batch = Arc::new(batch);
-    Ok(key_group_rows
-        .into_iter()
-        .enumerate()
-        .filter(|(_, rows)| !rows.is_empty())
-        .map(|(key_group, rows)| KeyGroupBatch {
-            key_group: key_group as u32,
-            batch: Arc::clone(&batch),
-            rows: UInt32Array::from(rows),
-        })
-        .collect())
+    let mut runs: Vec<KeyGroupBatch> = Vec::new();
+    visit_key_groups(&batch, key_fields, max_parallelism, |row, key_group| {
+        if let Some(last) = runs.last_mut().filter(|last| last.key_group == key_group) {
+            last.len += 1;
+        } else {
+            runs.push(KeyGroupBatch {
+                key_group,
+                batch: Arc::clone(&batch),
+                start: row as usize,
+                len: 1,
+            });
+        }
+    })?;
+    Ok(runs)
 }
 
 fn materialize(
@@ -244,3 +260,6 @@ mod tests {
 
 #[cfg(test)]
 mod materialization_tests;
+
+#[cfg(test)]
+mod key_group_runs_tests;

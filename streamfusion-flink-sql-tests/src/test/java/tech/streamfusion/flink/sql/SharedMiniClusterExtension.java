@@ -34,22 +34,46 @@ final class SharedMiniClusterExtension implements BeforeAllCallback {
 
     private static final class ClusterResource implements ExtensionContext.Store.CloseableResource, AutoCloseable {
         private final MiniClusterWithClientResource cluster;
+        private final java.nio.file.Path workingDirectory;
 
         private ClusterResource() {
+            try {
+                // Explicit RocksDB log names flatten the entire database path. JUnit's
+                // nested temporary roots can exceed the filesystem filename limit even
+                // before the test adds its own paths. Use the same short Flink working
+                // directory for both engines; overlong-name failures have separate tests.
+                workingDirectory = java.nio.file.Files.createTempDirectory("sf-sql-");
+            } catch (java.io.IOException exception) {
+                throw new java.io.UncheckedIOException(exception);
+            }
+            var config = new org.apache.flink.configuration.Configuration();
+            config.set(
+                    org.apache.flink.configuration.ClusterOptions.PROCESS_WORKING_DIR_BASE,
+                    workingDirectory.toString());
             cluster = new MiniClusterWithClientResource(new MiniClusterResourceConfiguration.Builder()
+                    .setConfiguration(config)
                     .setNumberTaskManagers(1)
                     .setNumberSlotsPerTaskManager(2)
                     .build());
             try {
                 cluster.before();
             } catch (Exception exception) {
+                try {
+                    org.apache.flink.util.FileUtils.deleteDirectory(workingDirectory.toFile());
+                } catch (java.io.IOException cleanup) {
+                    exception.addSuppressed(cleanup);
+                }
                 throw new IllegalStateException("Could not start the shared Flink mini-cluster", exception);
             }
         }
 
         @Override
-        public void close() {
-            cluster.after();
+        public void close() throws Exception {
+            try {
+                cluster.after();
+            } finally {
+                org.apache.flink.util.FileUtils.deleteDirectory(workingDirectory.toFile());
+            }
         }
     }
 }

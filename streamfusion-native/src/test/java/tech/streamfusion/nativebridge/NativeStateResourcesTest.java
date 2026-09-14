@@ -12,6 +12,18 @@ import tech.streamfusion.proto.plan.v1.NativeStateBindings;
 
 class NativeStateResourcesTest {
     @Test
+    void tickerSelectionRequiresProtocolElevenAndPreservesOrder() throws Exception {
+        var binding = NativeStateResources.memory(2, 16, 0, 15).toBuilder()
+                .setRocksdb(tech.streamfusion.proto.plan.v1.NativeRocksDbState.newBuilder()
+                        .addAllStatisticsTickers(List.of(7, 6, 5)))
+                .build();
+        var result = NativeStateBindings.parseFrom(NativeStateResources.serialize(List.of(binding)));
+        assertThat(result.getProtocolVersion()).isEqualTo(11);
+        assertThat(result.getBindings(0).getRocksdb().getStatisticsTickersList())
+                .containsExactly(7, 6, 5);
+    }
+
+    @Test
     void preservesStateAssignmentsAndRestoredClockWhileBindingAllFlinkSpillDirectories(@TempDir Path root)
             throws Exception {
         var binding = NativeStateResources.memory(2, 16, 0, 15).toBuilder()

@@ -82,7 +82,24 @@ final class KeyedNativeMetricHarness extends KeyedMultiInputStreamOperatorTestHa
             int subtask,
             boolean incremental)
             throws Exception {
+        this(rocks, factory, inputCount, types, restore, parallelism, subtask, incremental, null, null, null);
+    }
+
+    KeyedNativeMetricHarness(
+            boolean rocks,
+            StreamFusionNativeRegionOperatorFactory factory,
+            int inputCount,
+            List<RowType> types,
+            org.apache.flink.runtime.checkpoint.OperatorSubtaskState restore,
+            int parallelism,
+            int subtask,
+            boolean incremental,
+            org.apache.flink.runtime.state.LocalRecoveryConfig local,
+            org.apache.flink.runtime.checkpoint.OperatorSubtaskState localRestore,
+            org.apache.flink.runtime.state.StateBackend backend)
+            throws Exception {
         super(factory, 16, parallelism, subtask);
+        SharedAggregateHarnessMemory.configureLocalRecovery(taskStateManager, local);
         outputTypes = List.copyOf(types);
         for (var ignored : outputTypes) outputs.add(new DataOutputSerializer(128));
         output = outputs.get(0);
@@ -105,8 +122,11 @@ final class KeyedNativeMetricHarness extends KeyedMultiInputStreamOperatorTestHa
                     value -> value instanceof tech.streamfusion.flink.exchange.NativeExchangeFrame
                             ? frameKeys.getKey((tech.streamfusion.flink.exchange.NativeExchangeFrame) value)
                             : 0);
-        setStateBackend(new StreamFusionStateBackend(
-                rocks ? new EmbeddedRocksDBStateBackend(incremental) : new HashMapStateBackend()));
+        setStateBackend(
+                backend != null
+                        ? backend
+                        : new StreamFusionStateBackend(
+                                rocks ? new EmbeddedRocksDBStateBackend(incremental) : new HashMapStateBackend()));
         setOutputCreator(ignored -> new CollectorOutput<ArrowRowDataBatch>(controls) {
             @Override
             public void collect(StreamRecord<ArrowRowDataBatch> record) {
@@ -142,7 +162,7 @@ final class KeyedNativeMetricHarness extends KeyedMultiInputStreamOperatorTestHa
             }
         });
         setup(ArrowRowDataBatchSerializer.INSTANCE);
-        if (restore != null) initializeState(restore);
+        if (restore != null) initializeState(restore, localRestore);
         open();
         var memoryField = StreamFusionArrowNativeRegionOperator.class.getDeclaredField("memory");
         memoryField.setAccessible(true);

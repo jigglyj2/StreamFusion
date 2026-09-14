@@ -28,6 +28,7 @@ use std::sync::{Arc, Mutex};
 
 pub(super) struct StateResources {
     options: proto::NativeStateBindings,
+    pub(super) statistics: Vec<super::state_statistics::StateStatistics>,
     memory: HostMemoryReservation,
     spill: Option<Arc<crate::spill::Resources>>,
     // Setup admission is transactional and follows the decoded bindings after success.
@@ -63,13 +64,40 @@ impl NativeExecutionContext {
         )?;
         let options = proto::NativeStateBindings::decode(bytes)
             .map_err(|error| invalid(format!("invalid state-binding protobuf: {error}")))?;
-        if !matches!(options.protocol_version, 1 | 2 | 3 | 4)
-            || self.protocol_version() < crate::ENVELOPE_PLAN_PROTOCOL_VERSION
+        if !matches!(
+            options.protocol_version,
+            1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11
+        ) || self.protocol_version() < crate::ENVELOPE_PLAN_PROTOCOL_VERSION
             || options.bindings.is_empty()
         {
             return Err(invalid("unsupported state-binding protocol version"));
         }
-        let spill = if options.protocol_version == 4 {
+        // Decoding is covered above. Per-level lists also become native option vectors and
+        // RocksDB-owned copies; reserve their coarse setup/lifetime allowance before opening.
+        let codec_bytes = options
+            .bindings
+            .iter()
+            .filter_map(|binding| match binding.backend.as_ref() {
+                Some(proto::native_state_binding::Backend::Rocksdb(rocks)) => rocks
+                    .database_options
+                    .as_ref()
+                    .and_then(|options| options.compression.as_ref()),
+                _ => None,
+            })
+            .try_fold(0usize, |total, compression| {
+                compression
+                    .per_level
+                    .len()
+                    .checked_mul(16)
+                    .and_then(|bytes| total.checked_add(bytes))
+                    .ok_or_else(|| {
+                        invalid("RocksDB compression configuration reservation overflow")
+                    })
+            })?;
+        control_memory.try_grow(codec_bytes)?;
+        let spill = if options.protocol_version == 4
+            || (options.protocol_version >= 5 && !options.spill_directories.is_empty())
+        {
             Some(crate::spill::Resources::new(
                 options
                     .spill_directories
@@ -172,6 +200,69 @@ impl NativeExecutionContext {
             match binding.backend.as_ref() {
                 Some(proto::native_state_binding::Backend::Memory(_)) => {}
                 Some(proto::native_state_binding::Backend::Rocksdb(rocks)) => {
+                    super::state_statistics::validate(rocks, options.protocol_version)?;
+                    if (rocks.partitioned_index_filters.is_some()
+                        || rocks
+                            .database_options
+                            .as_ref()
+                            .is_some_and(|options| options.compaction_style.is_some()))
+                        && options.protocol_version < 8
+                    {
+                        return Err(invalid("RocksDB partitioning and compaction style require state-binding protocol 8"));
+                    }
+                    if rocks
+                        .database_options
+                        .as_ref()
+                        .is_some_and(|options| options.log_directory.is_some())
+                        && options.protocol_version < 9
+                    {
+                        return Err(invalid(
+                            "Explicit RocksDB log directory requires state-binding protocol 9",
+                        ));
+                    }
+                    if rocks
+                        .database_options
+                        .as_ref()
+                        .is_some_and(|options| options.write_batch_size.is_some())
+                        && options.protocol_version < 10
+                    {
+                        return Err(invalid(
+                            "RocksDB write-batch-size requires state-binding protocol 10",
+                        ));
+                    }
+                    if rocks.database_options.is_some() {
+                        if options.protocol_version < 6 {
+                            return Err(invalid(
+                                "RocksDB database options require state-binding protocol 6",
+                            ));
+                        }
+                        if rocks.database_options.as_ref().is_some_and(
+                            crate::state::rocks_plugin::database_options::requires_protocol_7,
+                        ) && options.protocol_version < 7
+                        {
+                            return Err(invalid("RocksDB filter, compression and log-level options require state-binding protocol 7"));
+                        }
+                        crate::state::rocks_plugin::database_options::compression(
+                            rocks.database_options.as_ref(),
+                        )?;
+                        crate::state::rocks_plugin::database_options::resolve(
+                            rocks.database_options.as_ref(),
+                        )?;
+                    }
+                    if rocks.write_buffer_ratio.is_some()
+                        || rocks.high_priority_pool_ratio.is_some()
+                    {
+                        if options.protocol_version < 5 {
+                            return Err(invalid(
+                                "RocksDB memory ratios require state-binding protocol 5",
+                            ));
+                        }
+                        streamfusion_state_abi::validate_rocksdb_memory_ratios(
+                            rocks.write_buffer_ratio.unwrap_or(0.5),
+                            rocks.high_priority_pool_ratio.unwrap_or(0.1),
+                        )
+                        .map_err(invalid)?;
+                    }
                     if let Some(directory) = &rocks.log_directory {
                         if options.protocol_version < 2 {
                             return Err(invalid(
@@ -199,6 +290,7 @@ impl NativeExecutionContext {
         for root in self.plan.roots() {
             require_bindings(root, &ids)?;
         }
+        let mut statistics = Vec::new();
         let mut bindings: Vec<PersistentBinding> = Vec::with_capacity(options.bindings.len());
         for binding in &options.bindings {
             let node = self
@@ -218,12 +310,24 @@ impl NativeExecutionContext {
                 .iter()
                 .find(|(id, _)| *id == binding.plan_node_id)
                 .map(|(_, buffer)| *buffer);
-            let factory = create(node, &bare, binding, state_memory, buffer, spill.clone())?;
+            let (factory, reader) =
+                create(node, &bare, binding, state_memory, buffer, spill.clone())?;
+            if let Some(reader) = reader {
+                if let Some(proto::native_state_binding::Backend::Rocksdb(rocks)) = &binding.backend
+                {
+                    statistics.push(super::state_statistics::StateStatistics {
+                        id: binding.plan_node_id,
+                        codes: rocks.statistics_tickers.clone(),
+                        reader,
+                    });
+                }
+            }
             bindings.push((binding.plan_node_id, factory));
         }
         self.bind_persistent(bindings)?;
         self.state_resources = Some(StateResources {
             options,
+            statistics,
             memory,
             spill,
             _control_memory: control_memory,
@@ -374,9 +478,48 @@ impl NativeExecutionContext {
                     .to_owned(),
                 memory_limit: reader_limit as u64,
                 log_directory,
+                write_buffer_ratio: match binding.backend.as_ref() {
+                    Some(proto::native_state_binding::Backend::Rocksdb(rocks)) => {
+                        rocks.write_buffer_ratio
+                    }
+                    _ => None,
+                },
+                high_priority_pool_ratio: match binding.backend.as_ref() {
+                    Some(proto::native_state_binding::Backend::Rocksdb(rocks)) => {
+                        rocks.high_priority_pool_ratio
+                    }
+                    _ => None,
+                },
+                database_options: match binding.backend.as_ref() {
+                    Some(proto::native_state_binding::Backend::Rocksdb(rocks)) => {
+                        rocks.database_options.clone()
+                    }
+                    _ => None,
+                },
+                statistics_tickers: match binding.backend.as_ref() {
+                    Some(proto::native_state_binding::Backend::Rocksdb(rocks)) => {
+                        rocks.statistics_tickers.clone()
+                    }
+                    _ => Vec::new(),
+                },
+                partitioned_index_filters: match binding.backend.as_ref() {
+                    Some(proto::native_state_binding::Backend::Rocksdb(rocks)) => {
+                        rocks.partitioned_index_filters
+                    }
+                    _ => None,
+                },
             };
-            let source =
-                RocksPluginKeyedState::open_checkpoint_configured(&reader, first, last, None)?;
+            let source = RocksPluginKeyedState::open_checkpoint_configured(
+                &reader,
+                first,
+                last,
+                None,
+                resources
+                    .statistics
+                    .iter()
+                    .find(|entry| entry.id == id)
+                    .map(|entry| &entry.reader),
+            )?;
             for group in first..=last {
                 owner.restore_from_checkpoint(group, &source, &memory)?;
             }
@@ -394,12 +537,16 @@ fn create(
     memory: HostMemoryReservation,
     buffer: Option<super::task_resources::WindowBuffer>,
     spill: Option<Arc<crate::spill::Resources>>,
-) -> Result<Arc<dyn PersistentOperatorFactory>> {
+) -> Result<(
+    Arc<dyn PersistentOperatorFactory>,
+    Option<crate::state::rocks_plugin::RocksPluginStatistics>,
+)> {
     use crate::state::{KeyedState, MemoryKeyedState, RocksPluginKeyedState};
     let max = binding.max_parallelism;
     let first = binding.first_key_group;
     let last = binding.last_key_group;
     let scratch = memory.sibling("native state batch scratch and output");
+    let mut statistics = None;
     let state: Box<dyn KeyedState> = match binding.backend.as_ref() {
         Some(proto::native_state_binding::Backend::Memory(_)) => {
             if matches!(
@@ -417,12 +564,16 @@ fn create(
                 Box::new(MemoryKeyedState::new(first, last, memory)?)
             }
         }
-        Some(proto::native_state_binding::Backend::Rocksdb(rocks)) => Box::new(
-            RocksPluginKeyedState::open_configured(rocks, first, last, Some(&memory))?,
-        ),
+        Some(proto::native_state_binding::Backend::Rocksdb(rocks)) => {
+            let state = RocksPluginKeyedState::open_configured(rocks, first, last, Some(&memory))?;
+            if !rocks.statistics_tickers.is_empty() {
+                statistics = Some(state.statistics_reader()?);
+            }
+            Box::new(state)
+        }
         None => return Err(invalid("unsupported native state binding")),
     };
-    match &node.operator {
+    let factory: Result<Arc<dyn PersistentOperatorFactory>> = match &node.operator {
         Some(proto::operator::Operator::WindowJoin(_)) => Ok(Arc::new(WindowJoinFactory::new(
             node, bytes, binding, state, scratch,
         )?)),
@@ -454,7 +605,8 @@ fn create(
             )))))
         }
         _ => Err(invalid("unsupported native state binding")),
-    }
+    };
+    Ok((factory?, statistics))
 }
 
 fn invalid(message: impl Into<String>) -> DataFusionError {

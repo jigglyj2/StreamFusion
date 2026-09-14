@@ -27,13 +27,7 @@ public final class NativeStateOwnership {
                 && operatorClass != StreamFusionArrowNativeRegionOperator.class) {
             throw new IllegalArgumentException("Only native state owners may register a keyed backend");
         }
-        var task = environment.getTaskInfo();
-        String identifier = new OperatorSubtaskDescriptionText(
-                        operatorConfig.getOperatorID(),
-                        operatorClass.getSimpleName(),
-                        task.getIndexOfThisSubtask(),
-                        task.getNumberOfParallelSubtasks())
-                .toString();
+        String identifier = identifier(environment, operatorConfig, operatorClass);
         var configuration = environment.getTaskConfiguration();
         synchronized (configuration) {
             var owners = new ArrayList<>(configuration.get(OWNERS));
@@ -42,6 +36,16 @@ public final class NativeStateOwnership {
                 configuration.set(OWNERS, owners);
             }
         }
+    }
+
+    static String identifier(Environment environment, StreamConfig operatorConfig, Class<?> operatorClass) {
+        var task = environment.getTaskInfo();
+        return new OperatorSubtaskDescriptionText(
+                        operatorConfig.getOperatorID(),
+                        operatorClass.getSimpleName(),
+                        task.getIndexOfThisSubtask(),
+                        task.getNumberOfParallelSubtasks())
+                .toString();
     }
 
     static boolean owns(StateBackend.KeyedStateBackendParameters<?> parameters) {

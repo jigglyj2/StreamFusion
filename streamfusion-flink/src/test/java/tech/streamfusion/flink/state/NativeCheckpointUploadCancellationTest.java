@@ -30,13 +30,13 @@ import org.junit.jupiter.api.io.TempDir;
 
 class NativeCheckpointUploadCancellationTest {
     @org.junit.jupiter.params.ParameterizedTest
-    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
-    void cancellationDuringStreamFinalizationDiscardsTheLateHandle(boolean incremental, @TempDir Path directory)
-            throws Exception {
+    @org.junit.jupiter.params.provider.CsvSource({"false,false", "false,true", "true,false", "true,true"})
+    void cancellationDuringStreamFinalizationDiscardsTheLateHandle(
+            boolean incremental, boolean backup, @TempDir Path directory) throws Exception {
         var owner = new Participant(directory);
         var factory = new Factory();
         factory.blockFinalizationAt = 1;
-        try (var backend = backend(owner, incremental)) {
+        try (var backend = backend(owner, incremental, backup)) {
             var future = backend.snapshot(1, 1, factory, CheckpointOptions.forCheckpointWithDefaultLocation());
             Thread worker = new Thread(future, "native-checkpoint-finalization-test");
             worker.start();
@@ -113,13 +113,13 @@ class NativeCheckpointUploadCancellationTest {
     }
 
     @org.junit.jupiter.params.ParameterizedTest
-    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    @org.junit.jupiter.params.provider.CsvSource({"false,false", "false,true", "true,false", "true,true"})
     void cancellationBeforeExecutionCleansStagingAndReportsFailureExactlyOnce(
-            boolean incremental, @TempDir Path directory) throws Exception {
+            boolean incremental, boolean backup, @TempDir Path directory) throws Exception {
         for (boolean interrupt : List.of(false, true)) {
             var owner = new Participant(directory);
             var factory = new Factory();
-            try (var backend = backend(owner, incremental)) {
+            try (var backend = backend(owner, incremental, backup)) {
                 var future = backend.snapshot(1, 1, factory, CheckpointOptions.forCheckpointWithDefaultLocation());
                 assertThat(Files.exists(owner.staging)).isTrue();
                 assertThat(future.cancel(interrupt)).isTrue();
@@ -134,14 +134,14 @@ class NativeCheckpointUploadCancellationTest {
     }
 
     @org.junit.jupiter.params.ParameterizedTest
-    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    @org.junit.jupiter.params.provider.CsvSource({"false,false", "false,true", "true,false", "true,true"})
     void cancellationClosesBlockedIoAndDiscardsPreviouslyUploadedNewHandles(
-            boolean incremental, @TempDir Path directory) throws Exception {
+            boolean incremental, boolean backup, @TempDir Path directory) throws Exception {
         for (boolean interrupt : List.of(false, true)) {
             var owner = new Participant(directory);
             var factory = new Factory();
             factory.blockAt = 2;
-            try (var backend = backend(owner, incremental)) {
+            try (var backend = backend(owner, incremental, backup)) {
                 var future = backend.snapshot(2, 2, factory, CheckpointOptions.forCheckpointWithDefaultLocation());
                 Thread worker = new Thread(future, "native-checkpoint-cancellation-test");
                 worker.start();
@@ -163,14 +163,16 @@ class NativeCheckpointUploadCancellationTest {
         }
     }
 
-    @Test
-    void failedUploadDiscardsNewStateButNeverReusedSsts(@TempDir Path directory) throws Exception {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void failedUploadDiscardsNewStateButNeverReusedSsts(boolean backup, @TempDir Path directory) throws Exception {
         var owner = new Participant(directory);
         var first = new Factory();
-        try (var backend = backend(owner)) {
+        try (var backend = backend(owner, true, backup)) {
             var complete = backend.snapshot(1, 1, first, CheckpointOptions.forCheckpointWithDefaultLocation());
             complete.run();
-            complete.get();
+            var published = complete.get();
+            Path firstDirectory = owner.staging;
             backend.notifyCheckpointComplete(1);
             assertThat(complete.cancel(true)).isFalse();
             assertThat(first.handles)
@@ -188,6 +190,8 @@ class NativeCheckpointUploadCancellationTest {
             assertThat(owner.completed.get()).isOne();
             assertThat(owner.failed.get()).isOne();
             assertThat(Files.exists(owner.staging)).isFalse();
+            assertThat(Files.exists(firstDirectory)).isEqualTo(backup);
+            published.discardState();
         }
     }
 
@@ -219,6 +223,22 @@ class NativeCheckpointUploadCancellationTest {
     }
 
     private static StreamFusionKeyedStateBackend<?> backend(Participant owner, boolean incremental) throws Exception {
+        return backend(owner, incremental, false);
+    }
+
+    static StreamFusionKeyedStateBackend<?> backend(Participant owner, boolean incremental, boolean backup)
+            throws Exception {
+        return backend(
+                owner,
+                incremental,
+                backup
+                        ? localConfig(owner.parent)
+                        : org.apache.flink.runtime.state.LocalRecoveryConfig.BACKUP_AND_RECOVERY_DISABLED);
+    }
+
+    static StreamFusionKeyedStateBackend<?> backend(
+            Participant owner, boolean incremental, org.apache.flink.runtime.state.LocalRecoveryConfig local)
+            throws Exception {
         var delegate = (CheckpointableKeyedStateBackend<?>) Proxy.newProxyInstance(
                 NativeCheckpointUploadCancellationTest.class.getClassLoader(),
                 new Class<?>[] {CheckpointableKeyedStateBackend.class},
@@ -227,12 +247,22 @@ class NativeCheckpointUploadCancellationTest {
                     if (method.getName().equals("close") || method.getName().equals("dispose")) return null;
                     throw new UnsupportedOperationException(method.toString());
                 });
-        var result = new StreamFusionKeyedStateBackend<>(delegate, List.of(), "rocksdb", null, incremental);
+        var result = new StreamFusionKeyedStateBackend<>(
+                delegate, List.of(), "rocksdb", null, incremental, null, null, null, List.of(), local);
         result.registerNativeStateParticipant(owner, true);
         return result;
     }
 
-    private static final class Participant implements NativeIncrementalStateParticipant {
+    static org.apache.flink.runtime.state.LocalRecoveryConfig localConfig(Path root) {
+        var provider = new org.apache.flink.runtime.state.LocalSnapshotDirectoryProviderImpl(
+                root.toFile(),
+                new org.apache.flink.api.common.JobID(),
+                new org.apache.flink.runtime.jobgraph.JobVertexID(),
+                0);
+        return new org.apache.flink.runtime.state.LocalRecoveryConfig(false, true, provider);
+    }
+
+    static final class Participant implements NativeIncrementalStateParticipant {
         final Path parent;
         Path staging;
         final AtomicInteger completed = new AtomicInteger();
@@ -244,7 +274,12 @@ class NativeCheckpointUploadCancellationTest {
 
         @Override
         public Path prepareIncrementalCheckpoint(long id) throws Exception {
-            staging = Files.createTempDirectory(parent, "checkpoint-");
+            return prepareIncrementalCheckpoint(id, parent.resolve("checkpoint-" + java.util.UUID.randomUUID()));
+        }
+
+        @Override
+        public Path prepareIncrementalCheckpoint(long id, Path directory) throws Exception {
+            staging = Files.createDirectory(directory);
             Files.write(staging.resolve("000001.sst"), new byte[] {1, 2, 3});
             Files.write(staging.resolve("CURRENT"), new byte[] {4, 5});
             return staging;
@@ -266,7 +301,7 @@ class NativeCheckpointUploadCancellationTest {
         }
     }
 
-    private static final class Handle extends ByteStreamStateHandle {
+    static final class Handle extends ByteStreamStateHandle {
         final AtomicInteger discards = new AtomicInteger();
 
         Handle(byte[] bytes) {
@@ -279,7 +314,7 @@ class NativeCheckpointUploadCancellationTest {
         }
     }
 
-    private static final class Factory extends MemCheckpointStreamFactory {
+    static final class Factory extends MemCheckpointStreamFactory {
         final AtomicInteger opened = new AtomicInteger();
         final AtomicInteger aborted = new AtomicInteger();
         final AtomicInteger reused = new AtomicInteger();

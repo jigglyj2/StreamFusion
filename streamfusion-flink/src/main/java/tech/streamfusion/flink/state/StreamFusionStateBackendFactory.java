@@ -62,7 +62,7 @@ public final class StreamFusionStateBackendFactory implements StateBackendFactor
         delegateConfig.set(StateBackendOptions.STATE_BACKEND, delegateName);
         try {
             StateBackend delegate = loadDelegate(delegateConfig, classLoader);
-            return new StreamFusionStateBackend(delegate);
+            return new StreamFusionStateBackend(delegate, delegateConfig);
         } catch (ReflectiveOperationException error) {
             throw new IllegalConfigurationException(
                     "Could not load delegated Flink state backend " + delegateName, error);

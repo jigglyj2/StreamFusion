@@ -23,7 +23,7 @@ pub(crate) use ordered_memory::OrderedMemoryKeyedState;
 mod read_batch;
 mod read_keys;
 pub(crate) use read_batch::StateReadBatch;
-mod rocks_plugin;
+pub(crate) mod rocks_plugin;
 mod snapshot;
 mod snapshot_bytes;
 pub(crate) mod snapshot_stream;

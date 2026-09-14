@@ -237,6 +237,13 @@ final class NativeKeyedStateLifecycle implements Serializable {
         }
         Path checkpointDirectory = rocksDbDirectory.resolveSibling(
                 "streamfusion-rocks-checkpoint-" + checkpointId + "-" + java.util.UUID.randomUUID());
+        return prepareIncrementalCheckpoint(checkpointId, checkpointDirectory);
+    }
+
+    Path prepareIncrementalCheckpoint(long checkpointId, Path checkpointDirectory) {
+        if (rocksDbDirectory == null) {
+            throw new IllegalStateException("Only native RocksDB state supports native file checkpoints");
+        }
         bridge.checkpointRocks(nativeHandle, checkpointDirectory);
         return checkpointDirectory;
     }

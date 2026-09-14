@@ -1,0 +1,11 @@
+rocksdb.block_cache_hit
+rocksdb.block_cache_miss
+rocksdb.bloom_filter_useful
+rocksdb.bloom_filter_full_positive
+rocksdb.bloom_filter_full_true_positive
+rocksdb.bytes_read
+rocksdb.iter_bytes_read
+rocksdb.bytes_written
+rocksdb.compact_read_bytes
+rocksdb.compact_write_bytes
+rocksdb.stall_micros
