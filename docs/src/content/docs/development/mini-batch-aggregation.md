@@ -31,6 +31,10 @@ memory budget, or runtime option changes are introduced.
 
 ## Conformance coverage
 
+- `GeneratedMiniBatchTimerParityTest` compares timer deadlines and watermark output with
+  Flink's actual processing-time assigner over generated clock advances, ordinary watermarks
+  and repeated terminal watermarks. Queued callbacks after end-of-input schedule from the
+  current clock interval, preserving Flink behavior without overflowing the terminal watermark.
 - Native mini-batch tests cover a zero crossing across Arrow chunk sizes one, two and four,
   compare the final canonical state with an empty reference, and exercise memory and RocksDB.
 - `SharedMiniBatchRetractionParityTest` runs the same generated records through Flink's actual

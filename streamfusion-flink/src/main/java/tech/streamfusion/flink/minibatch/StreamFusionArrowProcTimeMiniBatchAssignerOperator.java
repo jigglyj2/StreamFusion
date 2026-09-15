@@ -49,7 +49,10 @@ final class StreamFusionArrowProcTimeMiniBatchAssignerOperator extends AbstractS
     public void onProcessingTime(long timestamp) throws Exception {
         long now = getProcessingTimeService().getCurrentProcessingTime();
         advance(now);
-        getProcessingTimeService().registerTimer(currentBatch + intervalMillis, this);
+        // The emitted watermark may already be MAX_WATERMARK. Flink schedules
+        // from the clock interval even when a queued callback runs after that watermark.
+        long clockBatch = now - now % intervalMillis;
+        getProcessingTimeService().registerTimer(clockBatch + intervalMillis, this);
     }
 
     private void advance(long now) {
