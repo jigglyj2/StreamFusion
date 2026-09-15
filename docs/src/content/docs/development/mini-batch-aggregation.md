@@ -35,6 +35,15 @@ memory budget, or runtime option changes are introduced.
   Flink's actual processing-time assigner over generated clock advances, ordinary watermarks
   and repeated terminal watermarks. Queued callbacks after end-of-input schedule from the
   current clock interval, preserving Flink behavior without overflowing the terminal watermark.
+- `SharedMiniBatchAssignerRegionTest` composes the real processing-time and event-time assigners
+  with the shared native aggregate and compares them with Flink's corresponding operators.
+  It compares complete record bytes, timestamp envelopes, watermark ordering and registered
+  metrics for generated changes, Arrow chunks of one/seven/64 records, empty batches,
+  checkpoint pre-barrier flush and end-of-input on both backends. Processing-time assignment
+  samples the clock before each logical record and emits Arrow ranges around intervening
+  markers. An empty batch consumes no clock sample and cannot create a marker. The control
+  operator does not inspect or transpose payload rows; slices retain compatible Arrow buffers
+  and normalize only the buffers Arrow Java cannot represent at a nonzero offset.
 - Native mini-batch tests cover a zero crossing across Arrow chunk sizes one, two and four,
   compare the final canonical state with an empty reference, and exercise memory and RocksDB.
 - `SharedMiniBatchRetractionParityTest` runs the same generated records through Flink's actual
@@ -64,8 +73,16 @@ memory budget, or runtime option changes are introduced.
 
 ## Remaining admission work
 
-Before ordinary selection can be enabled, complete the mini-batch ownership/admission audit
-and end-to-end assigner/region control conformance. Extend channel recovery and rescaling
+Source inspection confirms that the shared raw bundle path reserves temporary key/accumulator,
+historical decode and output workspace before computation, keeps pending accumulators charged
+between arrivals, and performs at most one missing-key read and one mutation write per arrival.
+Watermark/checkpoint/finish drains admit at most 2,048 groups at a time and attach output leases
+before state commit. Existing admission tests cover retained hash-table storage after flush and
+denial before state reads or writes. This is the existing Flink-backed reservation model, with
+no separate mini-batch memory budget.
+
+Before ordinary selection can be enabled, bind this qualification evidence to explicit planner
+subsets and verify ordinary SQL selection, fallback and complete pipeline behavior. Extend channel recovery and rescaling
 coverage as additional families and shapes qualify. Each subtask owns its bundle count;
 one global oracle cannot establish mini-batch parity after redistribution. Qualify one-phase
 and local/global/incremental families with their own Flink SQL,

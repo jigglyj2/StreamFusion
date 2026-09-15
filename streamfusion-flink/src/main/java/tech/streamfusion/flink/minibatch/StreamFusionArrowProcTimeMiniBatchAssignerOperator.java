@@ -35,14 +35,42 @@ final class StreamFusionArrowProcTimeMiniBatchAssignerOperator extends AbstractS
 
     @Override
     public void processElement(StreamRecord<ArrowRowDataBatch> element) throws Exception {
-        long now = getProcessingTimeService().getCurrentProcessingTime();
-        advance(now);
         ArrowRowDataBatch batch = element.getValue();
-        output.collect(element);
+        int rangeStart = 0;
+        int emittedBatches = 0;
+        for (int row = 0; row < batch.size(); row++) {
+            long now = getProcessingTimeService().getCurrentProcessingTime();
+            long boundary = now - now % intervalMillis;
+            if (boundary > currentBatch) {
+                // Flink emits the marker before this logical record. Complete the preceding
+                // Arrow range first so downstream bundle drains see the same input prefix.
+                if (rangeStart < row) {
+                    emitRange(element, rangeStart, row - rangeStart);
+                    emittedBatches++;
+                }
+                rangeStart = row;
+                advance(now);
+            }
+        }
+        if (rangeStart < batch.size()) {
+            emitRange(element, rangeStart, batch.size() - rangeStart);
+            emittedBatches++;
+        }
         FlinkMetricParity.replacePhysicalRecords(
                 getMetricGroup().getIOMetricGroup().getNumRecordsInCounter(), 1, batch.size());
         FlinkMetricParity.replacePhysicalRecords(
-                getMetricGroup().getIOMetricGroup().getNumRecordsOutCounter(), 1, batch.size());
+                getMetricGroup().getIOMetricGroup().getNumRecordsOutCounter(), emittedBatches, batch.size());
+    }
+
+    private void emitRange(StreamRecord<ArrowRowDataBatch> element, int offset, int length) {
+        ArrowRowDataBatch batch = element.getValue();
+        if (offset == 0 && length == batch.size()) {
+            output.collect(element);
+            return;
+        }
+        try (ArrowRowDataBatch selected = batch.slice(offset, length)) {
+            output.collect(element.copy(selected));
+        }
     }
 
     @Override
