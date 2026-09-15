@@ -5,10 +5,16 @@ description: Flink bundle semantics, native conformance evidence, and remaining 
 
 ## Current status
 
-Mini-batch aggregation remains **production-gated**. The retained shared native implementation
-accepts Arrow batches and uses DataFusion computation, but neither its direct tests nor the
-test-only SQL graph probe establishes ordinary planner admission. The
-[group aggregation page](/StreamFusion/operators/group-aggregation/) defines current support.
+Ordinary planning admits **one-phase keyed mini-batch aggregation** for non-DISTINCT BIGINT
+`COUNT`, `SUM`, `SUM0`, `MIN`, `MAX` and `AVG` without aggregate `FILTER` clauses. Grouping keys
+may be BIGINT, INTEGER or VARCHAR. Both in-memory and supported RocksDB state use the shared
+Arrow/DataFusion execution tree. Flink's existing mini-batch size, latency and aggregate phase
+settings govern selection and runtime behavior. The
+[group aggregation page](/StreamFusion/operators/group-aggregation/) defines the complete subset.
+
+Global/singleton, SELECT DISTINCT, mini-batch DISTINCT/FILTER/VARCHAR extrema, wider types,
+local/global and incremental families retain their production gates. An unsupported physical
+node still causes the entire job to run with Flink.
 
 ## Retractions within a bundle
 
@@ -31,6 +37,13 @@ memory budget, or runtime option changes are introduced.
 
 ## Conformance coverage
 
+- `MiniBatchAdmissionParityTest` uses ordinary planning without a development graph override.
+  It compares generated complete append/retract changelogs at count triggers one, seven and
+  1,000 on both backends, including nullable keys/values and BIGINT overflow inputs. Native
+  plan activity is required for the admitted subset; global, DISTINCT, FILTER, VARCHAR extrema and two-phase
+  cases require complete fallback and zero native batches. `MiniBatchSqlTopologyTest` checks
+  ordinary SQL at parallelism one/three: the configured bundle survives protobuf lowering,
+  the original aggregate metric identity survives fusion, and the assigner exchanges Arrow.
 - `GeneratedMiniBatchTimerParityTest` compares timer deadlines and watermark output with
   Flink's actual processing-time assigner over generated clock advances, ordinary watermarks
   and repeated terminal watermarks. Queued callbacks after end-of-input schedule from the
@@ -81,8 +94,7 @@ before state commit. Existing admission tests cover retained hash-table storage 
 denial before state reads or writes. This is the existing Flink-backed reservation model, with
 no separate mini-batch memory budget.
 
-Before ordinary selection can be enabled, bind this qualification evidence to explicit planner
-subsets and verify ordinary SQL selection, fallback and complete pipeline behavior. Extend channel recovery and rescaling
+Extend this qualification beyond the admitted one-phase BIGINT subset. Extend channel recovery and rescaling
 coverage as additional families and shapes qualify. Each subtask owns its bundle count;
 one global oracle cannot establish mini-batch parity after redistribution. Qualify one-phase
 and local/global/incremental families with their own Flink SQL,

@@ -12,8 +12,16 @@ input directly consumes an original Flink HASH exchange. Grouping keys must be B
 or VARCHAR. Both in-memory and supported default RocksDB state use the common native execution tree. Existing semantic checks still
 reject unsupported TTL, async state, metrics, and backend configurations.
 
-Mini-batch, singleton/global, SELECT DISTINCT, other argument/result/key types, and other physical
-aggregate families retain whole-plan fallback under the
+One-phase mini-batch `StreamExecGroupAggregate` is also admitted for non-DISTINCT BIGINT
+`COUNT`, `SUM`, `SUM0`, `MIN`, `MAX` and `AVG`, without aggregate `FILTER` clauses. It preserves
+Flink's count triggers and processing-time/event-time mini-batch markers, including retractions,
+checkpoint flush, restore and rescaling on both backends. Use the existing Flink mini-batch
+settings; selecting `ONE_PHASE` with `table.optimizer.agg-phase-strategy` keeps Flink's planner
+on this qualified physical family. See the [qualification evidence](/StreamFusion/development/mini-batch-aggregation/).
+Mini-batch DISTINCT, FILTER and VARCHAR extrema retain specific fallback reasons.
+
+Singleton/global, SELECT DISTINCT, other argument/result/key types, and other physical
+aggregate families (including two-phase and incremental mini-batching) retain whole-plan fallback under the
 [architecture admission requirements](/StreamFusion/development/architecture-admission/).
 The broader native paths below remain development implementations, not production coverage.
 
@@ -662,7 +670,8 @@ sizing is allocation-free and shares the encoder with persistence, with no state
 The sparse-extremum unit case (2,048 groups) reserves less than a quarter of the previous scratch
 allowance. This is an admission-size comparison, not measured throughput. Controlled native heap
 observations cover shared-tree lifetimes with numeric groups and nullable/wide-string hot keys;
-production admission for mini-batch aggregation remains unfinished.
+one-phase production admission covers the qualified BIGINT subset above; the other mini-batch
+families remain gated.
 
 Stateful aggregate stages declare a larger Flink `OPERATOR` managed-memory weight than stateless
 Arrow stages, while the bounded local bundle declares a smaller intermediate weight. These are

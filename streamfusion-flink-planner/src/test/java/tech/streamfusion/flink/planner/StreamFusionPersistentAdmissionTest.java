@@ -59,12 +59,25 @@ class StreamFusionPersistentAdmissionTest {
     }
 
     @Test
-    void activeMiniBatchConfigurationCannotBypassTheBundleGate() {
-        var aggregate = aggregate(SqlStdOperatorTable.AVG, false, new BigIntType(), new VarCharType(), true);
+    void miniBatchAdmitsQualifiedOnePhaseCallsAndKeepsDistinctAndGlobalGates() {
         var config = new Configuration();
         config.set(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ENABLED, true);
-        assertThat(StreamFusionPersistentAdmission.unsupportedReason(aggregate, config))
-                .contains("mini-batch");
+        for (var function : List.of(
+                SqlStdOperatorTable.COUNT,
+                SqlStdOperatorTable.SUM,
+                SqlStdOperatorTable.SUM0,
+                SqlStdOperatorTable.MIN,
+                SqlStdOperatorTable.MAX,
+                SqlStdOperatorTable.AVG))
+            assertThat(StreamFusionPersistentAdmission.unsupportedReason(
+                            aggregate(function, false, new BigIntType(), new VarCharType(), true), config))
+                    .isNull();
+        assertThat(StreamFusionPersistentAdmission.unsupportedReason(
+                        aggregate(SqlStdOperatorTable.COUNT, true, new BigIntType(), new VarCharType(), true), config))
+                .contains("mini-batch DISTINCT");
+        assertThat(StreamFusionPersistentAdmission.unsupportedReason(
+                        aggregate(SqlStdOperatorTable.AVG, false, new BigIntType(), new VarCharType(), false), config))
+                .contains("singleton/global");
     }
 
     @Test

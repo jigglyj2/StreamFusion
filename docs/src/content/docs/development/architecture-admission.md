@@ -36,7 +36,11 @@ compose through the common native region. The join and aggregate subsets are adm
 in-memory or supported RocksDB state. The [RocksDB configuration table](/StreamFusion/development/rocksdb-configuration/)
 lists propagated settings and remaining fallback conditions. Aggregation admits BIGINT COUNT (including DISTINCT),
 non-DISTINCT SUM/SUM0/MIN/MAX/AVG, BIGINT arguments, and BIGINT/INTEGER/VARCHAR grouping keys.
-Mini-batch, singleton/global and other aggregate subsets retain explicit production restrictions.
+One-phase mini-batch aggregation is admitted for the same non-DISTINCT BIGINT calls without
+aggregate FILTER clauses. Its assigner preserves per-record clock boundaries within Arrow batches;
+count, watermark, checkpoint and finish controls retain Flink's bundle semantics.
+Mini-batch DISTINCT/FILTER/VARCHAR extrema, singleton/global and other aggregate families retain
+explicit production restrictions. See [mini-batch qualification](/StreamFusion/development/mini-batch-aggregation/).
 Two-phase UTC event-time TUMBLE/HOP windows also compose through this runtime: append-only BIGINT
 COUNT/MIN/MAX with BIGINT arguments and BIGINT/INTEGER keys (or no keys), synchronous state,
 and mini-batch disabled. Semantic lowering rejects other time, accumulator and buffer layouts.

@@ -36,10 +36,12 @@ class GroupAggregateFallbackParityTest extends SqlParityTestSupport {
         byte[] streamFusion = executeMiniBatch(true, AggregatePhaseStrategy.ONE_PHASE);
 
         assertThat(streamFusion).isEqualTo(flink);
-        SqlFallbackAssertions.nativeBatchesAreZero(StreamFusionPlannerFactory.nativeGroupAggregateBatchCount());
+        assertThat(StreamFusionPlannerFactory.nativePlanBatchCount()).isPositive();
+        assertThat(StreamFusionPlannerFactory.nativeGroupAggregateBatchCount()).isZero();
         assertThat(StreamFusionPlannerFactory.nativeLocalGroupAggregateBatchCount())
                 .isZero();
-        SqlFallbackAssertions.admission();
+        assertThat(tech.streamfusion.flink.planner.StreamFusionPlanningDiagnostics.explain())
+                .contains("Accelerated: yes");
     }
 
     @Test

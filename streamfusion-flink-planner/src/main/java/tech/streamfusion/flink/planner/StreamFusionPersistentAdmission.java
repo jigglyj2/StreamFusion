@@ -94,8 +94,7 @@ final class StreamFusionPersistentAdmission {
     private static String aggregateReason(StreamExecGroupAggregate aggregate, ReadableConfig activeConfig) {
         var config = activeConfig == null ? new Configuration() : Configuration.fromMap(activeConfig.toMap());
         config.addAll(Configuration.fromMap(aggregate.getPersistedConfig().toMap()));
-        if (config.get(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ENABLED))
-            return "aggregate persistent admission: mini-batch bundle lifecycle remains unverified for production";
+        boolean miniBatch = config.get(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_ENABLED);
         var input = (RowType) aggregate.getInputEdges().get(0).getOutputType();
         var keys = grouping(aggregate);
         if (keys.length == 0)
@@ -110,6 +109,18 @@ final class StreamFusionPersistentAdmission {
         if (calls.length == 0)
             return "aggregate persistent admission: SELECT DISTINCT retains its separate production gate";
         for (var call : calls) {
+            if (miniBatch) {
+                String unqualified = call.isDistinct()
+                        ? "DISTINCT"
+                        : call.filterArg >= 0
+                                ? "FILTER"
+                                : StreamFusionStringAggregateAdmission.isStringExtremum(call)
+                                        ? "VARCHAR extrema"
+                                        : null;
+                if (unqualified != null)
+                    return "aggregate persistent admission: mini-batch " + unqualified
+                            + " requires separate bundle metric/recovery qualification";
+            }
             if (StreamFusionStringAggregateAdmission.isStringExtremum(call)) {
                 String reason = StreamFusionStringAggregateAdmission.unsupportedReason(aggregate, call, input);
                 if (reason != null) return reason;

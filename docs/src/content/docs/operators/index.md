@@ -15,7 +15,7 @@ This matrix follows the query operations documented by Flink 2.3, including the 
 | [VALUES](values/) | **Partial** (streaming and bounded scalar literals) | Yes | Source-free native Arrow batch |
 | [Windowing TVFs](window-tvf/) | **Partial** (standalone aligned TVFs; `SESSION` gated) | Yes | Native aligned assignment and keyed session merging |
 | [Watermark assignment](watermark-assignment/) | **Plan-compatible** | Flink-owned | Distinct StreamFusion node delegating Flink's exact timer and idleness runtime |
-| [Group aggregation](group-aggregation/) | **Partial** (synchronous keyed BIGINT aggregates; memory and default RocksDB) | Yes | DataFusion accumulators with Flink keyed state and changelog adapters |
+| [Group aggregation](group-aggregation/) | **Partial** (keyed BIGINT aggregates, qualified one-phase mini-batching, and append-only VARCHAR extrema behind a HASH exchange; memory and supported RocksDB) | Yes | DataFusion accumulators with Flink keyed state and changelog adapters |
 | [Window aggregation](window-aggregation/) | **Partial** (verified UTC TUMBLE/HOP, DISTINCT-only TUMBLE, and SESSION/processing-time TUMBLE COUNT(*) subsets) | Yes | DataFusion grouped accumulators, native keyed slices and Flink control lifecycle |
 | [OVER aggregation](over-aggregation/) | **Temporarily gated** (whole-plan Flink fallback) | Yes | Native ordered state, timers, absorbed batch sort, and aggregate kernels |
 | [Joins](joins/) | **Partial** (binary inner regular/MultiJoin with bounded comparisons; memory and default RocksDB) | By join type | Native keyed state, vectorized predicates, and timers |
